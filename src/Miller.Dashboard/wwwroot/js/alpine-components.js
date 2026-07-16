@@ -7,7 +7,7 @@ document.addEventListener('alpine:init', function () {
         return {
             query: '',
             autoOpenedStale: false,
-            sortColumn: null, // 'workspace' | 'files' | 'symbols' | 'rev'
+            sortColumn: null, // 'workspace' | 'files' | 'symbols' | 'rev' | 'activity'
             sortDir: 'asc',   // 'asc' | 'desc'
 
             // The #workspace-index section is patched by a 30s htmx morph poll. State that must
@@ -132,12 +132,15 @@ document.addEventListener('alpine:init', function () {
             },
             reflectSortButtons: function () {
                 var self = this;
+                // aria-sort belongs on the columnheader, not the button inside it: a button is not a
+                // table header, so the state must land on the element carrying role="columnheader".
                 this.$el.querySelectorAll('[data-sort-col]').forEach(function (btn) {
                     var col = btn.getAttribute('data-sort-col');
+                    var header = btn.closest('[role="columnheader"]') || btn;
                     if (self.sortColumn === col) {
-                        btn.setAttribute('aria-sort', self.sortDir === 'desc' ? 'descending' : 'ascending');
+                        header.setAttribute('aria-sort', self.sortDir === 'desc' ? 'descending' : 'ascending');
                     } else {
-                        btn.setAttribute('aria-sort', 'none');
+                        header.setAttribute('aria-sort', 'none');
                     }
                 });
             },

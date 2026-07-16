@@ -41,7 +41,7 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/", (string? notice, string? detail) =>
             new RazorComponentResult<WorkspacesShell>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath),
+                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath),
                 Activity = DashboardData.ReadRecentActivity(
                     paths.TelemetryDbPath,
                     paths.RegistryDbPath,
@@ -127,7 +127,7 @@ internal static class DashboardEndpoints
         endpoints.MapGet("/fragments/workspaces", () =>
             new RazorComponentResult<WorkspaceIndex>(new
             {
-                Index = DashboardData.ReadIndex(paths.RegistryDbPath),
+                Index = DashboardData.ReadIndex(paths.RegistryDbPath, paths.TelemetryDbPath),
             })
             {
                 PreventStreamingRendering = true,
@@ -223,7 +223,7 @@ internal static class DashboardEndpoints
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/index.json", () => Results.Text(
-            DashboardData.RenderIndexJson(paths.RegistryDbPath),
+            DashboardData.RenderIndexJson(paths.RegistryDbPath, paths.TelemetryDbPath),
             "application/json; charset=utf-8"));
 
         endpoints.MapGet("/activity.json", (string? workspace_id) => Results.Text(

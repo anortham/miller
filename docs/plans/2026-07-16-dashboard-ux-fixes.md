@@ -229,10 +229,10 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 - Last used: `MAX(ts)` per workspace from the telemetry calls table, single grouped query, merged into entries by workspace id; rendered with the existing `rel-ts` `<time>` pattern; sortable via `data-sort-activity`.
 
 **Acceptance criteria:**
-- [ ] Rendered list carries table roles, columnheader-scoped `aria-sort`, idle sort carets, stretched-link rows, right-rail remove control, no-facts notes, and a Last used column.
-- [ ] `ReadIndex` returns last-activity timestamps with a missing telemetry DB degrading to nulls (test with temp DBs).
-- [ ] Client sort by Last used orders by the epoch key (attribute assertions on rendered rows).
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Rendered list carries table roles, columnheader-scoped `aria-sort`, idle sort carets, stretched-link rows, right-rail remove control, no-facts notes, and a Last used column.
+- [x] `ReadIndex` returns last-activity timestamps with a missing telemetry DB degrading to nulls (test with temp DBs).
+- [x] Client sort by Last used orders by the epoch key (attribute assertions on rendered rows).
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 6: Telemetry panel polish (sortable columns, recent-errors alignment)
 

@@ -860,6 +860,129 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("captures: route, verb", html);
     }
 
+    [Fact]
+    public async Task WorkspaceIndex_RendersLastUsedColumnWithRelativeTime()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: "2026-06-12T10:00:00.000Z"),
+        });
+
+        Assert.Contains("data-sort-col=\"activity\"", html);
+        Assert.Contains("Last used", html);
+        Assert.Contains("data-ts=\"2026-06-12T10:00:00.000Z\"", html);
+        Assert.Contains("class=\"rel-ts timestamp\"", html);
+        Assert.Contains(" ago</time>", html);
+        Assert.DoesNotContain(">2026-06-12T10:00:00.000Z</time>", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_LastUsedSortKeyIsEpochSecondsAndMinusOneWhenNever()
+    {
+        string withActivity = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: "2026-06-12T10:00:00.000Z"),
+        });
+
+        Assert.Contains("data-sort-activity=\"1781258400\"", withActivity);
+
+        string withoutActivity = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+        });
+
+        Assert.Contains("data-sort-activity=\"-1\"", withoutActivity);
+        Assert.Contains(">never<", withoutActivity);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_StretchedLinkRowsDropInlineTextDecorationStyle()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+        });
+
+        Assert.Contains("<a class=\"workspace-name\" href=\"/workspace?workspace_id=ws-a\"", html);
+        Assert.DoesNotContain("style=\"text-decoration: none\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_RemoveControlSitsInRightRailKeepingIssueDetailsAttributes()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+        });
+
+        Assert.Contains("class=\"ws-cell ws-row-actions\" role=\"cell\"", html);
+        Assert.Contains("data-issue-details", html);
+        Assert.Contains("data-issue-id=\"remove-ws-a\"", html);
+        Assert.Contains(">Remove…</summary>", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_FactlessRowsExplainMissingCountsAndEmptyIndexes()
+    {
+        string factless = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithFacts(FactsWithStatus("missing", fileCount: 0)),
+        });
+
+        Assert.Contains("no facts", factless);
+        // Blazor renders attribute values through HtmlEncoder.Default, so the em dash arrives as an entity.
+        Assert.Contains("title=\"index facts unavailable", factless);
+        Assert.Contains("open the workspace to inspect\"", factless);
+
+        string emptyIndex = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithFacts(FactsWithStatus("ready", fileCount: 0)),
+        });
+
+        Assert.Contains("empty index", emptyIndex);
+        Assert.DoesNotContain("no facts", emptyIndex);
+
+        string populated = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithFacts(FactsWithStatus("ready", fileCount: 4)),
+        });
+
+        Assert.DoesNotContain("no facts", populated);
+        Assert.DoesNotContain("empty index", populated);
+    }
+
+    private static DashboardWorkspaceFacts FactsWithStatus(string status, long fileCount) =>
+        new(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db", status, null,
+            FileCount: fileCount, SymbolCount: fileCount, LanguageCount: 1, ContentBytes: 100,
+            LastRevision: 42, LastScanAt: "2026-05-31T10:01:00Z", SearchSidecarStatus: "fresh",
+            Languages: [], SymbolKinds: []);
+
+    private static DashboardWorkspaceIndex IndexWithFacts(DashboardWorkspaceFacts facts)
+    {
+        var row = new DashboardWorkspaceRow(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", "2026-05-31T10:01:00Z", 42, "ready", null);
+
+        return new DashboardWorkspaceIndex(
+            Entries: [new DashboardWorkspaceIndexEntry(row, facts, RootExists: true)],
+            WorkspaceCount: 1, TotalFiles: facts.FileCount, TotalSymbols: facts.SymbolCount,
+            LanguageCount: 1, LiveCount: 1, MissingRootCount: 0, ErrorCount: 0);
+    }
+
+    private static DashboardWorkspaceIndex IndexWithActivity(string? lastActivityTs)
+    {
+        var row = new DashboardWorkspaceRow(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "2026-05-31T10:00:00Z", "2026-05-31T10:01:00Z", 42, "ready", null);
+        var facts = FactsWithStatus("ready", fileCount: 4);
+
+        return new DashboardWorkspaceIndex(
+            Entries: [new DashboardWorkspaceIndexEntry(row, facts, RootExists: true, lastActivityTs)],
+            WorkspaceCount: 1, TotalFiles: 4, TotalSymbols: 4,
+            LanguageCount: 1, LiveCount: 1, MissingRootCount: 0, ErrorCount: 0);
+    }
+
     private static async Task<string> RenderComponentAsync<TComponent>(Dictionary<string, object?> parameters)
         where TComponent : IComponent
     {

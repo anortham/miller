@@ -1295,21 +1295,64 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
-    public async Task WorkspaceIndex_DropsAriaTableAndRowRoles()
+    public async Task WorkspaceIndex_TableRolesAreWellFormed()
     {
         string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
         {
             ["Index"] = SampleWorkspaceIndex(),
         });
 
-        // A6/A1-a11y: rows must not carry malformed table/row ARIA roles.
-        Assert.DoesNotContain("role=\"table\"", html);
-        Assert.DoesNotContain("role=\"row\"", html);
-        // The workspace name is an honest link (the row itself hosts the remove form, so it is a div),
-        // and the grid classes (not roles) carry the visual layout.
+        Assert.Contains("<div class=\"ws-index\" role=\"table\"", html);
+        Assert.Contains("<div class=\"ws-index-head\" role=\"row\">", html);
         Assert.Contains("<div class=\"ws-index-row\"", html);
+        Assert.Contains("role=\"row\"", html);
+        Assert.Contains("role=\"columnheader\"", html);
+        Assert.Contains("role=\"cell\"", html);
         Assert.Contains("<a class=\"workspace-name\"", html);
-        Assert.Contains("class=\"ws-index\"", html);
+        Assert.DoesNotContain("<a class=\"ws-index-row\"", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_EveryRowHasSameCellCountAsHeaderColumns()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        int columnHeaders = CountOccurrences(html, "role=\"columnheader\"");
+        int dataRows = CountOccurrences(html, "<div class=\"ws-index-row\"");
+        int cells = CountOccurrences(html, "role=\"cell\"");
+
+        Assert.Equal(2, dataRows);
+        Assert.Equal(8, columnHeaders);
+        Assert.Equal(columnHeaders * dataRows, cells);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_AriaSortLivesOnColumnHeadersNotButtons()
+    {
+        string html = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+        });
+
+        Assert.Contains("role=\"columnheader\" aria-sort=\"none\"", html);
+        Assert.DoesNotContain("aria-sort=\"none\" x-on:click", html);
+        Assert.DoesNotContain("class=\"ws-sort\" data-sort-col=\"workspace\" aria-sort", html);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        int at = haystack.IndexOf(needle, StringComparison.Ordinal);
+        while (at >= 0)
+        {
+            count++;
+            at = haystack.IndexOf(needle, at + needle.Length, StringComparison.Ordinal);
+        }
+
+        return count;
     }
 
     [Fact]
@@ -1325,6 +1368,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("data-sort-col=\"files\"", html);
         Assert.Contains("data-sort-col=\"symbols\"", html);
         Assert.Contains("data-sort-col=\"rev\"", html);
+        Assert.Contains("data-sort-col=\"activity\"", html);
         Assert.Contains("aria-sort=\"none\"", html);
         Assert.Contains("class=\"ws-sort", html);
         // Rows expose clean numeric sort keys so JS sorts values, not formatted strings.
@@ -1723,6 +1767,109 @@ public sealed class DashboardRegistryReadTests : IDisposable
     {
         Assert.Empty(DashboardData.ReadWorkspaces(_registryDb));
         Assert.Equal(0, DashboardData.ReadTelemetrySummary(_telemetryDb, "missing").TotalCalls);
+    }
+
+    [Fact]
+    public void ReadIndex_JoinsNewestTelemetryTimestampPerWorkspace()
+    {
+        string busyRoot = Path.Combine(_dir, "root-busy");
+        string quietRoot = Path.Combine(_dir, "root-quiet");
+        Directory.CreateDirectory(busyRoot);
+        Directory.CreateDirectory(quietRoot);
+
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-busy", "busy-abcd1234", busyRoot, Path.Combine(busyRoot, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready, DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+            registry.UpsertSeen(
+                "ws-quiet", "quiet-abcd1234", quietRoot, Path.Combine(quietRoot, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready, DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        InsertTelemetryRow("ws-busy", "search", "ok", "2026-06-12T10:00:00.000Z", durationMs: 12);
+        InsertTelemetryRow("ws-busy", "inspect", "ok", "2026-06-12T12:30:00.000Z", durationMs: 8);
+        InsertTelemetryRow("ws-busy", "trace", "ok", "2026-06-12T09:00:00.000Z", durationMs: 5);
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb, _telemetryDb);
+
+        DashboardWorkspaceIndexEntry busy = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-busy");
+        Assert.Equal("2026-06-12T12:30:00.000Z", busy.LastActivityTs);
+
+        DashboardWorkspaceIndexEntry quiet = Assert.Single(index.Entries, e => e.Workspace.WorkspaceId == "ws-quiet");
+        Assert.Null(quiet.LastActivityTs);
+    }
+
+    [Fact]
+    public void ReadIndex_MissingTelemetryDbDegradesToNullLastActivity()
+    {
+        string root = Path.Combine(_dir, "root-b");
+        Directory.CreateDirectory(root);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a", "alpha-abcd1234", root, Path.Combine(root, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready, DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(
+            _registryDb,
+            Path.Combine(_dir, "no-such-telemetry.db"));
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(index.Entries);
+        Assert.Null(entry.LastActivityTs);
+        Assert.Equal(1, index.WorkspaceCount);
+    }
+
+    [Fact]
+    public void ReadIndex_CorruptTelemetryDbDegradesToNullLastActivity()
+    {
+        string root = Path.Combine(_dir, "root-c");
+        Directory.CreateDirectory(root);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a", "alpha-abcd1234", root, Path.Combine(root, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready, DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        File.WriteAllText(_telemetryDb, "not a sqlite database");
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb, _telemetryDb);
+
+        DashboardWorkspaceIndexEntry entry = Assert.Single(index.Entries);
+        Assert.Null(entry.LastActivityTs);
+        Assert.True(string.IsNullOrEmpty(index.Error));
+    }
+
+    [Fact]
+    public void ReadIndex_TelemetryDbWithoutToolTelemetryTableDegradesToNullLastActivity()
+    {
+        string root = Path.Combine(_dir, "root-d");
+        Directory.CreateDirectory(root);
+        using (var registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                "ws-a", "alpha-abcd1234", root, Path.Combine(root, ".miller", "symbols.db"),
+                WorkspaceRegistryState.Ready, DateTimeOffset.Parse("2026-05-31T10:00:00Z"));
+        }
+
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _telemetryDb,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            using var ddl = connection.CreateCommand();
+            ddl.CommandText = "CREATE TABLE unrelated (id TEXT PRIMARY KEY) STRICT;";
+            ddl.ExecuteNonQuery();
+        }
+
+        DashboardWorkspaceIndex index = DashboardData.ReadIndex(_registryDb, _telemetryDb);
+
+        Assert.Null(Assert.Single(index.Entries).LastActivityTs);
     }
 
     [Fact]

@@ -415,7 +415,9 @@ public sealed record DashboardSnapshot
 public sealed record DashboardWorkspaceIndexEntry(
     [property: JsonPropertyName("workspace")] DashboardWorkspaceRow Workspace,
     [property: JsonPropertyName("facts")] DashboardWorkspaceFacts Facts,
-    [property: JsonPropertyName("root_exists")] bool RootExists)
+    [property: JsonPropertyName("root_exists")] bool RootExists,
+    /// <summary>ISO timestamp of this workspace's newest recorded tool call, or null when telemetry has none.</summary>
+    [property: JsonPropertyName("last_activity_ts")] string? LastActivityTs = null)
 {
     /// <summary>True when the index DB was opened and its facts are real (not missing/unreadable).</summary>
     [JsonIgnore]
@@ -455,10 +457,13 @@ public static class DashboardData
     /// <summary>
     /// Landing-page view: every registered workspace paired with its index facts, plus machine-wide totals.
     /// Opens each workspace's symbols.db once (best effort — missing/unreadable ones still appear with their state).
+    /// When <paramref name="telemetryDbPath"/> is supplied, each entry also carries the newest recorded tool-call
+    /// timestamp; a missing/unreadable telemetry DB degrades those to null rather than failing the page.
     /// </summary>
-    public static DashboardWorkspaceIndex ReadIndex(string registryDbPath)
+    public static DashboardWorkspaceIndex ReadIndex(string registryDbPath, string? telemetryDbPath = null)
     {
         (IReadOnlyList<DashboardWorkspaceRow> workspaces, string? registryError) = TryReadWorkspaces(registryDbPath);
+        IReadOnlyDictionary<string, string> lastActivity = ReadLastActivityByWorkspace(telemetryDbPath);
         var entries = new List<DashboardWorkspaceIndexEntry>(workspaces.Count);
         long totalFiles = 0;
         long totalSymbols = 0;
@@ -472,7 +477,8 @@ public static class DashboardData
         {
             bool rootExists = Directory.Exists(workspace.CanonicalRoot);
             DashboardWorkspaceFacts facts = DashboardIndexFactsCache.Read(workspace);
-            var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists);
+            lastActivity.TryGetValue(workspace.WorkspaceId, out string? lastActivityTs);
+            var entry = new DashboardWorkspaceIndexEntry(workspace, facts, rootExists, lastActivityTs);
             entries.Add(entry);
             // Partition: live + missing_root + error == workspace_count. A row that is both
             // missing-root and errored counts as missing-root (prune is its remedy).
@@ -503,8 +509,50 @@ public static class DashboardData
             registryError);
     }
 
-    public static string RenderIndexJson(string registryDbPath) =>
-        JsonSerializer.Serialize(ReadIndex(registryDbPath), JsonContext.DashboardWorkspaceIndex);
+    /// <summary>
+    /// Newest tool-call timestamp per workspace, in one grouped pass over the shared telemetry ledger.
+    /// <c>tool_telemetry.ts</c> is fixed-width ISO-8601 UTC, so lexicographic MAX is chronological.
+    /// Every failure mode (no path, absent file, foreign schema, corruption) degrades to an empty map:
+    /// last-activity is decoration on the workspace list and must never fail the page.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> ReadLastActivityByWorkspace(string? telemetryDbPath)
+    {
+        var byWorkspace = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(telemetryDbPath) || !File.Exists(telemetryDbPath))
+            return byWorkspace;
+
+        try
+        {
+            using var connection = OpenReadOnly(telemetryDbPath);
+            if (!TableExists(connection, "tool_telemetry"))
+                return byWorkspace;
+
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT workspace_id, MAX(ts) FROM tool_telemetry
+                WHERE workspace_id IS NOT NULL
+                GROUP BY workspace_id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(0) || reader.IsDBNull(1))
+                    continue;
+
+                byWorkspace[reader.GetString(0)] = reader.GetString(1);
+            }
+
+            return byWorkspace;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    public static string RenderIndexJson(string registryDbPath, string? telemetryDbPath = null) =>
+        JsonSerializer.Serialize(ReadIndex(registryDbPath, telemetryDbPath), JsonContext.DashboardWorkspaceIndex);
 
     /// <summary>
     /// Registry rows for the page spine. A corrupt/truncated <c>workspaces.db</c> degrades to an EMPTY list

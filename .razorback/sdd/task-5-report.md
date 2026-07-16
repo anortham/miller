@@ -1,151 +1,86 @@
-# Task 5 report — Telemetry query efficiency + display-id fix
+# Task 5 — Workspace list UX
 
-**Status: DONE**
+Status: COMPLETE
+Worktree: `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
+Branch: `worktree-dashboard-ux-fixes` (from `c09b7f3`)
 
-## Summary of changes
-- `src/Miller.Dashboard/DashboardData.cs`
-  - Removed the N+1 P95 read: deleted `ComputeP95` (per-tool `ORDER BY duration_ms LIMIT 1 OFFSET n`
-    query, one per tool row) and added `ComputeP95ByTool`, which does ONE grouped pass over the window's
-    rows and computes every tool's p95 in C#. `ReadToolStats` now calls it once and looks p95 up by tool.
-  - `ReadRecentErrors` now resolves each errored row's registered display id and populates
-    `WorkspaceDisplayId` (was hardcoded `null`). Added private helper `ResolveWorkspaceDisplayIds`.
-- `tests/Miller.Tests/Server/TelemetrySummaryTests.cs`
-  - Added a new class `DashboardTelemetrySummaryTests` (10 P95 pins + 3 display-id tests). The existing
-    `TelemetrySummaryTests` class (server `TelemetryLedger.Summarize`) is untouched.
+## Ledger
 
-## Pinned P95 semantics (one sentence)
-P95 = the ascending-sorted `duration_ms` value at 0-based index `floor((count-1)*0.95)` per tool over the
-window (NULL durations sort first; a NULL/absent value at that index degrades to `0`; `long` result) — the
-exact behavior of the old per-tool `ORDER BY duration_ms ASC LIMIT 1 OFFSET floor((count-1)*0.95)`.
+| Step | Outcome |
+|---|---|
+| Miller orientation (ReadIndex, entry record, telemetry schema, call sites) | done |
+| Tests written first, watched red | done (CS1729/CS1501/CS1061 — no `LastActivityTs`, no 2-arg `ReadIndex`) |
+| `DashboardData`: `LastActivityTs` + grouped telemetry read + degrade | done |
+| `DashboardEndpoints`: 3 call sites threaded with telemetry path | done |
+| `WorkspaceIndex.razor`: table roles, Last used, right-rail remove, no-facts, stretched link | done |
+| `alpine-components.js`: aria-sort → columnheader; `activity` column | done |
+| `dashboard-site.js`: `/` focuses the filter | done |
+| `dashboard.css`: grid, stretched link, right rail, idle carets | done |
+| Focused tests | 100/100 pass |
+| Fast suite (`scripts/test.sh`) | 3559/3559 pass, 22s |
+| `dotnet build Miller.slnx -c Release` | 0 warnings / 0 errors |
 
-## Before/after query pattern (N+1 → bounded)
-- Before: 1 grouped stats query + **N** per-tool P95 queries (one `ORDER BY duration_ms LIMIT 1 OFFSET n`
-  per tool row) → `O(tools × rows·log rows)`.
-- After: 1 grouped stats query + **1** duration-scan query
-  (`SELECT tool, duration_ms ... ORDER BY tool, duration_ms ASC`), accumulate per-tool ordered lists, pick
-  the offset value in C#. Total telemetry queries for the summary are now **bounded (2)**, independent of
-  tool count. The scan is index-friendly (`idx_tool_telemetry_tool_duration` /
-  `idx_tool_telemetry_ws_tool_duration` already exist on `(…, tool, duration_ms)`).
+## Files changed
 
-### Why byte-identical
-- Per-tool list length == `COUNT(*)` for that tool (same WHERE), so the offset index matches.
-- `ORDER BY tool, duration_ms ASC` yields, within each tool, NULL-first + ascending — identical to the old
-  single-tool `ORDER BY duration_ms ASC`.
-- Ordering is value-based, so ties need no secondary key: the duration at a given offset is deterministic
-  across equal-duration runs.
-- NULL-at-offset → 0 preserved (`value ?? 0`); `duration_ms` is `NOT NULL CHECK(>=0)` in schema so this is
-  defensive-but-faithful. A real `0ms` row is preserved (pinned by `P95_ZeroDuration_...`).
+- `src/Miller.Dashboard/DashboardData.cs` — `DashboardWorkspaceIndexEntry.LastActivityTs` (nullable, defaulted, `last_activity_ts` in JSON); `ReadIndex(registryDbPath, telemetryDbPath = null)`; private `ReadLastActivityByWorkspace`; `RenderIndexJson` gains the optional path.
+- `src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs` — `/`, `/fragments/workspaces`, `/index.json` pass `paths.TelemetryDbPath`.
+- `src/Miller.Dashboard/Components/WorkspaceIndex.razor` — table/row/columnheader/cell roles; Last used column; remove control relocated to a right-rail cell; no-facts + empty-index notes; inline `text-decoration` style dropped; `Now` field.
+- `src/Miller.Dashboard/wwwroot/js/alpine-components.js` — `reflectSortButtons` writes aria-sort to `btn.closest('[role="columnheader"]')`; `activity` documented in the sort-column set.
+- `src/Miller.Dashboard/wwwroot/js/dashboard-site.js` — `/` keydown focuses+selects `#workspace-filter`.
+- `src/Miller.Dashboard/wwwroot/dashboard.css` — 9-column grid, stretched link, right-rail remove, idle two-way caret, fact notes, responsive.
+- `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` — 4 new `ReadIndex` last-activity tests; roles guard rewritten; cell-count invariant; aria-sort placement.
+- `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` — 5 new rendered-list tests.
 
-## Display-id resolution (B5)
-- `ReadRecentErrors` reads the registry once (not per row) and maps `workspace_id → display_id`, then sets
-  `WorkspaceDisplayId` per error. **Registered → display id; unregistered or NULL workspace_id → null**
-  (per acceptance criterion #3). This is a deliberate, documented difference from the activity feed, which
-  falls back to the raw id for unregistered ids; acceptance #3 overrides "same as the activity feed".
+## Miller calls (orientation evidence)
 
-## Judgment calls (file:line)
-1. **Registry path is derived, not threaded** — `DashboardData.cs` `ResolveWorkspaceDisplayIds`.
-   `ReadTelemetrySummary(telemetryDbPath, workspaceId)` carries **no** registry path, and its callers
-   include `Endpoints/DashboardEndpoints.cs` (the machine-wide `"all"` case at :27) — both **out of my
-   ownership** (endpoints are explicitly off-limits; `ReadTelemetrySummary` is a Task-1 spine reader I must
-   not touch). Threading a `registryDbPath` param would ripple into those files. To make the fix REAL within
-   my region for the default layout, I derive the registry as the telemetry DB's **sibling**
-   `workspaces.db` via `connection.DataSource` — exactly the co-location `DashboardPaths` produces (both
-   default under `~/.miller`) and the same sibling-dir pattern `BuildRuntimeInfo` already uses. It degrades
-   gracefully: split `MILLER_REGISTRY_DB`/`MILLER_TELEMETRY_DB` overrides, or a missing/corrupt registry,
-   yield an empty map → null display ids (== today's behavior, no regression). **If the lead prefers the
-   explicit threaded approach, it requires editing `DashboardEndpoints.cs` + `ReadTelemetrySummary` (both
-   lead-owned).**
-2. **Tests added as a second class in the assigned file** — `TelemetrySummaryTests.cs`. The pre-existing
-   class tests the *server* `TelemetryLedger`, not the dashboard path; my class is
-   `DashboardTelemetrySummaryTests`. The gate filter `FullyQualifiedName~TelemetrySummaryTests` matches it
-   by substring, so both classes run.
-3. **Query-count assertion omitted** — observing the SQL command count cheaply would require injecting a
-   counting `SqliteConnection` wrapper into production (connections are created internally with
-   `Pooling=false`); that is disproportionate. I rely on the semantics pins + the structural fact that the
-   per-tool loop is gone (one `ComputeP95ByTool` call, one query inside it). Stated per the brief's escape
-   clause.
-4. **Correlated subqueries left intact** — the grouped stats query keeps its `last_outcome`/`last_error_kind`
-   correlated subqueries (audit B1 also flagged these). Rewriting them risks changing those exact values and
-   is beyond "no per-tool query loop"; out of scope for a byte-identical P95 rewrite.
+| Call | Proved |
+|---|---|
+| `inspect(target='ReadIndex', depth='full')` | signature `ReadIndex(string registryDbPath)` at `DashboardData.cs:459`, full body, callees |
+| `trace(target='ReadIndex', mode='refs')` | **6** references — `DashboardData.cs:507` (`RenderIndexJson`), `DashboardEndpoints.cs:44,130`, `DashboardFragmentCachingTests.cs:237`, `DashboardRegistryReadTests.cs:1530,1733`. The brief named 2 call sites; trace found a third production one (`RenderIndexJson`). |
+| `inspect(target='DashboardWorkspaceIndexEntry', depth='full')` | positional record `(Workspace, Facts, RootExists)` + `HasFacts`/`IsStale` computed; 20 dependents |
+| `search(query='tool_calls', mode='source')` | **no such table** — disproved the brief's "telemetry calls table" wording |
+| `grep` of `DashboardData.cs` telemetry readers → `TelemetryLedger.cs:19` DDL | real table is `tool_telemetry` |
 
-## TelemetryPanel note
-`Components/TelemetryPanel.razor` does **not** currently render `WorkspaceDisplayId` for recent errors (only
-`ActivityFeedPanel` renders it, for activity entries). So the observable surface for this fix today is the
-JSON contract (`workspace_display_id` on `recent_errors`) and any future/other razor consumer — I did not
-touch razor. (Task 6 "id chips" may surface it in the UI.)
+## API-shape evidence (no guessed shapes)
 
-## Miller calls used + confirmations
-- `inspect src/Miller.Dashboard/DashboardData.cs` — symbol map (index still on pre-Batch-A layout; used only
-  as a map, then Read the real worktree regions).
-- `trace ComputeP95 mode=refs scope=…/DashboardData.cs` — confirmed the dashboard `ComputeP95` had exactly
-  **one** caller (`ReadToolStats`); the other `ComputeP95` lives in `Server/Telemetry/TelemetryLedger.cs`
-  (separate, untouched). Safe to fold in and delete.
+- **Telemetry schema** — `src/Miller.Server/Telemetry/TelemetryLedger.cs:19-21`:
+  `CREATE TABLE IF NOT EXISTS tool_telemetry (id TEXT PRIMARY KEY, ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), tool TEXT NOT NULL, op TEXT, workspace_id TEXT, ...)`.
+  Table `tool_telemetry`, columns `ts` (TEXT) and `workspace_id` (TEXT). Confirmed in use by `DashboardData.cs:583,650,786,1340` and `ReadTotals` (`MIN(ts), MAX(ts) FROM tool_telemetry`).
+- **`ts` is fixed-width ISO-8601 UTC** (`%Y-%m-%dT%H:%M:%fZ`) ⇒ lexicographic `MAX(ts)` is chronological. Noted in the reader's doc comment.
+- **Degrade discipline** — copied from `ReadTelemetrySummary` (`DashboardData.cs:591`):
+  `catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)`, plus the existing `OpenReadOnly` + `TableExists` guards.
+- **`rel-ts` pattern** — `ActivityFeedPanel.razor:33` / `TelemetryPanel.razor:70`:
+  `<time class="rel-ts timestamp" datetime="@ts" data-ts="@ts">@RelativeTime(ts, Now)</time>` with `private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;`. Mirrored exactly.
+- **Epoch key** — `2026-06-12T10:00:00.000Z` → `1781258400`, verified independently before use.
 
-## API-shape evidence
-- `DashboardToolStat` (record, :33): `(Tool, Calls, AvgMs, P95Ms, MaxMs, ErrorCount, SumEstTokens,
-  LastCallTs?, LastOutcome?, LastErrorTs?, LastErrorKind?)`.
-- `DashboardRecentError` (record, :46): `(Ts, Tool, Op?, ErrorKind?, DurationMs, Id?=null, WorkspaceId?=null,
-  WorkspaceDisplayId?=null, ErrorMessage?=null, ErrorDetail?=null)` — `WorkspaceDisplayId` already existed
-  (JSON `workspace_display_id`); populating it is additive, not a contract change.
-- Registry row `DashboardWorkspaceRow` (:14): `WorkspaceId` + `DisplayId` (both non-null `string` from
-  `TryReadWorkspaces` `SELECT workspace_id, display_id, …`), the join source for display ids. Resolution
-  reuses `ReadWorkspaces` (graceful empty-on-missing/corrupt).
+## Judgment calls
 
-## Gate invariants + results
-- **worker-red-green** — `dotnet test … --filter "Category!=Scale&FullyQualifiedName~TelemetrySummaryTests"`
-  → **Passed 22/22**. Proves: P95 semantics identical pre/post rewrite (10 pins written first, green against
-  OLD code; still green after), recent errors carry workspace display ids (2 tests red against OLD, green
-  after), empty-window and unregistered-id/no-registry edges hold.
-- **worker-ceiling** — `scripts/test.sh` (fast suite) → **Passed 3108/3108**, 20s wall (ceiling 30s). Proves
-  no regression; Task 1's `DashboardRegistryReadTests` (which exercise this file, incl. the dashboard
-  `p95_ms=25` JSON pin and the WorkspaceShell render) stay green.
-- **build** — `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
+1. **Rewrote `WorkspaceIndex_DropsAriaTableAndRowRoles` → three well-formedness tests. FLAGGED.**
+   The existing guard asserted `DoesNotContain("role=\"table\"")` / `role="row"` — a direct contradiction of Task 5's acceptance criteria. `git log -S` traced it to `4c28d90`, where rows were `<a class="ws-index-row">`: an anchor hosting `role="row"` with cell children *is* malformed ARIA, which is what the guard's own comment says ("must not carry **malformed** table/row ARIA roles"). Rows are `<div>`s now, so complete table roles are well-formed and the guard's intent is preserved, not weakened. I own the file; the replacement is stronger than a deletion:
+   - `WorkspaceIndex_TableRolesAreWellFormed` — roles present **and** `DoesNotContain("<a class=\"ws-index-row\"")` keeps the original anchor-row prohibition alive.
+   - `WorkspaceIndex_EveryRowHasSameCellCountAsHeaderColumns` — 8 columnheaders × 2 rows == 16 cells; catches the incomplete-roles failure the original guard was really defending against.
+   - `WorkspaceIndex_AriaSortLivesOnColumnHeadersNotButtons`.
+2. **Third `ReadIndex` call site.** The brief named two (`DashboardEndpoints.cs:44,130`); trace found `RenderIndexJson` → `/index.json`. Threaded it too — the plan explicitly allows the additive `index.json` field, and leaving it would make the JSON feed disagree with the page.
+3. **Optional `telemetryDbPath` parameter** rather than required: keeps `RenderIndexJson` and the 3 unowned test call sites (`DashboardFragmentCachingTests.cs:237`, `DashboardRegistryReadTests.cs:1530,1733`) compiling untouched. Null path ⇒ null timestamps, same as a missing DB.
+4. **`workspace-path` raised above the stretched link** (`z-index: 1`). The plan offered this as a choice ("if it should stay selectable"). Raised it: the path's `title` tooltip exists precisely because the path is ellipsis-truncated, and the overlay would swallow both the tooltip and text selection. Cost: the second line is not a click target; the name line, all six data cells, and the row padding still are.
+5. **Last used placed second-to-last, before an actions column** (9 columns total). Fixed-width columns trimmed (`7.5→7rem`, `6→5.5rem`, `7→6.5rem`, `5.5→4.5rem` rev, langs `1.7→1.4fr`, main `2.4→2.2fr`) to absorb the two new columns. Task 10 owns the final responsive sweep.
+6. **`never`, not `—`, for no activity** — `—` already means "no facts" in the neighbouring cells; a distinct word keeps the two absences distinguishable. Carries `title="no agent tool calls recorded for this workspace"`.
+7. **Test asserts the split title string.** Blazor renders attribute values through `HtmlEncoder.Default`, which emits the em dash as `&#x2014;`. Asserting the literal spec string would fail on an encoding detail, so the test asserts `title="index facts unavailable` and `open the workspace to inspect"`. Rendered output is correct — browsers decode the entity.
 
-TDD order followed: (1) 10 P95 pins green on current code; (2) 2 display-id tests red; (3) rewrite
-single-pass + populate display id; (4) all green.
+## Self-review
 
-## Fix round (inline review) — explicit path threading
+- **Caught and fixed a real CSS bug during self-review**: I first wrote `.ws-row-actions details[open] { position: absolute }`, which would have yanked the `Remove…` summary out of flow and collapsed the cell the instant the row expanded. Now only `details[open] > form` floats (`top: calc(100% + 6px); right: 0`), anchored to `details { position: relative }`; the summary stays in flow.
+- **Verified the real rendered HTML**, not just string assertions: rendered `WorkspaceIndex` to a temp probe, eyeballed the markup (correct roles, `aria-sort` on wrappers not buttons, `data-sort-activity="1781258400"`, `<time …>34d ago</time>`, remove control in its right-rail cell with `data-issue-details`/`data-issue-id="remove-ws-a"` intact, no inline `text-decoration` style), then deleted the probe. `git status` confirms only owned files changed.
+- **Inherited contracts intact**: `hx-ext="morph"` + `morph:outerHTML` + `every 30s` still on the section (4 matches); `htmx:configRequest` / `If-None-Match` / `X-Miller-Dashboard` / `htmx:beforeSwap` 304 guard / `shouldSwap = false` all still present (5 matches). New `/` listener is an additive `document.addEventListener('keydown')` that touches none of them.
+- **Morph-safe**: sort state still lives only in `window.__millerWorkspaceIndexState`; `reflectSortButtons` runs from the same `rehydrate()` on `htmx:afterSwap`, now writing to the columnheader. No state parked on DOM nodes.
+- **CSP-Alpine safe**: only `x-on:click="onSort($event)"` and property access; no expressions added.
+- `node --check` passes on both JS files.
+- Tests carry no narration comments; the two comments present state non-obvious constraints (HtmlEncoder behavior, aria-sort rationale).
 
-Lead review approved the P95 single-pass as-is and flagged the sibling-derivation as hidden coupling
-(a `MILLER_TELEMETRY_DB` override splits the pair and silently nulls display ids — relevant to the Task 7
-corruption drill). Switched to explicit path threading, ownership extended to the wrapper + endpoints:
+## Concerns / notes for the lead
 
-- `DashboardData.cs`
-  - `ReadTelemetrySummary` gained an optional trailing `string? registryDbPath = null`, threaded into
-    `ReadRecentErrors(connection, scope, allWorkspaces, registryDbPath)`.
-  - `ReadRecentErrors` now takes `string? registryDbPath`; builds the `workspace_id → display_id` map via
-    `ReadWorkspaces(registryDbPath)` when the path is non-blank (still degrades safely to null on
-    missing/corrupt/absent registry). **Deleted `ResolveWorkspaceDisplayIds` (the `connection.DataSource`
-    sibling-guess) entirely** — no more path derivation.
-  - `ReadSnapshot` passes its `registryDbPath` to `ReadTelemetrySummary`.
-  - `RenderTelemetryJson` gained the same optional `registryDbPath` and threads it (so `/telemetry.json`
-    carries display ids too — parity with `/snapshot.json` via `ReadSnapshot`).
-- `Endpoints/DashboardEndpoints.cs` — pass `paths.RegistryDbPath` at all three telemetry call sites:
-  `/` (`"all"`, :27), `/fragments/telemetry` (:99), `/telemetry.json` (:184).
-- `tests/…/TelemetrySummaryTests.cs` — display-id tests now pass the explicit `_registryDb`; replaced the
-  old "no registry file" test with two sharper ones: `NullRegistryDbPath_DisplayIdStaysNull_EvenWhenRegistryExists`
-  (proves null path ⟹ null even though a resolvable registry sits beside the telemetry DB — no sibling
-  guessing) and `MissingRegistryFile_DisplayIdStaysNull` (safe degradation).
-
-All signatures are additive (optional trailing params). Build 0W/0E maintained.
-
-### Fix-round gate results
-- **worker-red-green** — `--filter "Category!=Scale&FullyQualifiedName~TelemetrySummaryTests"` →
-  **Passed 23/23** (10 P95 pins still identical; display-id resolution + null/missing-registry edges hold).
-- **worker-ceiling** — `scripts/test.sh` → **all 3109 tests Passed** (test-run duration reported 42s).
-  Earlier in this session the identical suite ran 15–20s; the re-run tripped the 30s wall-clock tripwire at
-  ~47s purely due to machine contention (load avg 7.75, 19 concurrent dotnet/testhost processes from the
-  other parallel agents), NOT a slow test I introduced — the whole `DashboardTelemetrySummaryTests` class
-  (13 tests) runs in **376ms** in isolation, and the `TelemetrySummaryTests` filter (23 tests) in ~370ms.
-  No slow test leaked into the fast suite; re-run when the machine is quiet to see wall time back under 30s.
-- **build** — `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
-
-## Worktree state
-- Path: `/Users/murphy/source/miller/.worktrees/dashboard-polish`
-- Branch: `feat/dashboard-polish`
-- HEAD: `4c28d90 feat(dashboard): workspace list auto-refresh, client sort, registry error notice`
-- Dirty (uncommitted, per parallel-lead-commit mode — I did NOT stage/commit):
-  - `M src/Miller.Dashboard/DashboardData.cs`
-  - `M src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs`
-  - `M tests/Miller.Tests/Server/TelemetrySummaryTests.cs`
-- No other source/test files touched.
+1. **The rewritten roles guard is the one thing worth a second look** — see judgment call 1. Task 5's plan and the pre-existing test were in direct conflict; I resolved it toward the plan because the guard's stated intent (no *malformed* ARIA) is satisfied, and its real teeth (`<a>` rows) are preserved in the replacement.
+2. **`:has()` is used for the first time in `dashboard.css`** (`.ws-row-actions:has(details[open])`, keeping an open confirm visible when the pointer drifts). Baseline across modern browsers since Dec 2023 and the dashboard is local-first, so it is safe; `:focus-within` independently covers the click-to-open case, so an unsupporting browser degrades to "confirm hides on pointer-out", never to a broken control.
+3. **Stale grid has `role="table"` with no header row** — the stale section never rendered a header, so its cells are positional. Valid ARIA (a table need not have column headers) and better than the previous unlabeled div soup; flagging in case Task 10 wants a header there.
+4. **Filter matches remove-form text** (typing `remove` matches every row) — pre-existing, since `applyFilter` reads `row.textContent` and the confirm form was already inside the row. Not touched; Task 6/10 could scope the filter to the name/path.
+5. **`ReadIndex` opens the telemetry DB once per call**, one grouped query, no per-workspace fan-out — no new N+1 on the 30s fragment poll.

@@ -203,6 +203,28 @@
 
     document.addEventListener('visibilitychange', applyVisibilityPolling);
 
+    // "/" jumps to the workspace filter, the search convention users arrive with. Never steal the key
+    // while the user is typing (including into the filter itself), and it only exists on the home page.
+    document.addEventListener('keydown', function (event) {
+        if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) {
+            return;
+        }
+        var active = document.activeElement;
+        if (active && (active.isContentEditable ||
+            active.tagName === 'INPUT' ||
+            active.tagName === 'TEXTAREA' ||
+            active.tagName === 'SELECT')) {
+            return;
+        }
+        var filter = document.getElementById('workspace-filter');
+        if (!filter) {
+            return;
+        }
+        event.preventDefault();
+        filter.focus();
+        filter.select();
+    });
+
     document.addEventListener('htmx:configRequest', function (event) {
         var detail = event.detail;
         if (!detail || !detail.headers) {
