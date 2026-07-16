@@ -334,7 +334,7 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Measures description totals; must run after T4.2's final description edits (Batch 6).
 
 **Acceptance criteria:**
-- [ ] ADR figure matches a post-T4.2 measurement; measurement date recorded.
+- [x] ADR figure matches a post-T4.2 measurement; measurement date recorded.
 
 # Phase 4 — Guidance vocabulary rework
 
