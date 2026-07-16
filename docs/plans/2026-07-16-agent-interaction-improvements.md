@@ -537,7 +537,7 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Documents T6.1 output; runs after T6.1.
 
 **Acceptance criteria:**
-- [ ] README documents plugin-tier vs instruction-tier support and exact per-harness steps for shipped harnesses only.
+- [x] README documents plugin-tier vs instruction-tier support and exact per-harness steps for shipped harnesses only.
 
 # Phase 7 — Measurement and follow-up (report-only gates)
 

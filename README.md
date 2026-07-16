@@ -120,8 +120,9 @@ this alone: clients truncate them, and they only load after the server connects.
 
 The reliable fix is a short routing block in instructions that are always in the model's context: user-level
 `~/.claude/CLAUDE.md` or a project `CLAUDE.md` for Claude Code, `AGENTS.md` for Codex and other AGENTS.md-aware
-harnesses, or a Cursor rule. Copy this snippet (also kept at
-[`docs/agent-setup-snippet.md`](docs/agent-setup-snippet.md) for linking):
+harnesses, or a Cursor rule. `miller rules --harness <name>` prints that block already framed for a given
+harness's rules file — see [Other Harnesses](#other-harnesses-instruction-tier) below. To paste it by hand, copy
+this snippet (also kept at [`docs/agent-setup-snippet.md`](docs/agent-setup-snippet.md) for linking):
 
 ```markdown
 ## Miller — code intelligence (use it before shell search)
@@ -147,6 +148,45 @@ Rules:
    `workspace refresh` and retry.
 4. These rules also apply to any subagents you dispatch.
 ```
+
+### Other Harnesses (instruction tier)
+
+Miller installs at two tiers, and the difference is worth naming before you pick one. The MCP tools are identical
+in both; what an instruction-tier install gives up is the `miller-*` skills and automatic guidance injection.
+
+| Tier | Harnesses | MCP tools | `miller-*` skills | Routing block |
+|---|---|---|---|---|
+| Plugin | Claude Code, Codex | yes | yes | injected at session start (Codex: see the hook note in the Quickstart) |
+| Plugin | Cursor | yes | yes | add it yourself: `miller rules --harness cursor` |
+| Instruction | any other MCP-speaking harness | yes, via manual config | no | add it yourself: `miller rules --harness <name>` |
+
+Two steps replace what the plugin does for you:
+
+1. **Point the harness at `miller serve`** with an MCP config entry — the `~/.cursor/mcp.json` example in the
+   Quickstart shows the `command`/`args` shape most MCP-speaking harnesses use.
+2. **Write the routing block** into the file that harness always loads:
+
+```bash
+miller rules --harness cursor > .cursor/rules/miller.mdc
+miller rules --harness agents >> AGENTS.md
+```
+
+`miller rules` prints the file content to stdout and the target path to stderr, so redirecting produces a usable
+file. Run `miller rules` with no flag to print the bare block for pasting anywhere. Miller only prints — it never
+writes into your project.
+
+| `--harness` | Writes to |
+|---|---|
+| `cursor` | `.cursor/rules/miller.mdc` |
+| `windsurf` | `.windsurf/rules/miller.md` |
+| `cline` | `.clinerules/miller.md` |
+| `kiro` | `.kiro/steering/miller.md` |
+| `copilot` | `.github/copilot-instructions.md` |
+| `agents` | `AGENTS.md` (append) |
+
+Each harness's file format is verified against that harness's official documentation, with the source URL and any
+verification caveat recorded in [`docs/contracts/rules-v1.md`](docs/contracts/rules-v1.md). Vendors move these
+formats — check that contract before trusting a path you remember.
 
 ### Manual Binary Install
 
