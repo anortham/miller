@@ -115,10 +115,10 @@ The highest-leverage fix: the diagnosis Miller already computes must reach the a
 **What to build:** Replace the one-size static empty hint with diagnosis-driven output. `mode_mismatch` names the specific right mode (the classifier already knows it — e.g. docs-like query in `mode=source` → "this reads like docs/config prose — retry with mode=content" + the copyable call). `query_shape` explains what failed about the shape and shows one corrected example call. `true_no_hit` states plainly that the workspace text has no lexical match and (for natural-language shapes) says to retry with words that appear literally in code or docs. Wording is affirmative-redirect.
 
 **Acceptance criteria:**
-- [ ] Every *reachable* diagnosis×route pair renders its specific hint + exactly one primary `Next:` call (two only for documented ambiguous pairs); total empty output ≤6 lines / ≤400 chars excluding banner.
-- [ ] Empty JSON responses are byte-identical to current behavior; pin tests assert top-level `[]` / existing envelope per route.
-- [ ] No bare-NOT phrasing in any new string.
-- [ ] Focused SearchToolTests pass; change handed to lead per commit mode.
+- [x] Every *reachable* diagnosis×route pair renders its specific hint + exactly one primary `Next:` call (two only for documented ambiguous pairs); total empty output ≤6 lines / ≤400 chars excluding banner.
+- [x] Empty JSON responses are byte-identical to current behavior; pin tests assert top-level `[]` / existing envelope per route.
+- [x] No bare-NOT phrasing in any new string.
+- [x] Focused SearchToolTests pass; change handed to lead per commit mode.
 
 ### Task T1.2: Did-you-mean suggestions for identifier-like text-mode misses
 

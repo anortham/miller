@@ -16,9 +16,45 @@ namespace Miller.Tests.Server;
 /// <summary>
 /// Pins the <c>search</c> tool's behavior (M2 §4) against the M1 synthesized fixture index: compact + json
 /// rendering, <c>limit</c> + the <c>… N more</c> overflow note (never silently drop), the <c>exclude_tests</c>
-/// tri-state (null/true/false), empty → a compact one-line hint, and ordering preserved (the renderer must NOT
-/// re-sort — Core's score-DESC ordering is authoritative). Exercises <see cref="SearchTool.Run"/> directly
-/// (the pure core the MCP method delegates to), so it stays in the fast suite.
+/// tri-state (null/true/false), empty → a diagnosis-driven compact hint, and ordering preserved (the renderer
+/// must NOT re-sort — Core's score-DESC ordering is authoritative). Exercises <see cref="SearchTool.Run"/>
+/// directly (the pure core the MCP method delegates to), so it stays in the fast suite.
+///
+/// <para>Empty compact output is keyed on the same <c>empty_diagnosis</c> the telemetry ledger records. The
+/// REACHABLE diagnosis × route pairs below are derived from the actual branches of
+/// <c>EmptyDiagnosisFor</c> / <c>EmptyDiagnosisForContentSearch</c> / <c>EmptyDiagnosisForTextContent</c> — this
+/// is deliberately NOT the Cartesian product of six query shapes × five routes.</para>
+///
+/// <list type="table">
+/// <item><term>symbols (mode auto|text|symbol) and file (mode=file)</term><description>
+///   short → query_shape; path_like → query_shape; docs_like → mode_mismatch; source_like → mode_mismatch;
+///   natural_language → mode_mismatch; identifier_like → true_no_hit. Both renderers share the route's
+///   diagnosis table because <c>fileMode</c> lives inside <c>SearchRouteKind.Symbols</c>.</description></item>
+/// <item><term>content (mode=content, kinds docs+config)</term><description>
+///   short → query_shape; path_like → query_shape; source_like → mode_mismatch;
+///   docs_like → true_no_hit; natural_language → true_no_hit; identifier_like → true_no_hit.</description></item>
+/// <item><term>text_content kinds=[source] (mode=source)</term><description>
+///   short → query_shape; path_like → query_shape; docs_like → mode_mismatch;
+///   source_like → true_no_hit; natural_language → true_no_hit; identifier_like → true_no_hit.</description></item>
+/// <item><term>text_content kinds=[external] | [web] | all (mode=external|web|all-text)</term><description>
+///   short → query_shape; path_like → query_shape; every other shape → true_no_hit.</description></item>
+/// </list>
+///
+/// <para>UNREACHABLE pairs, never tested: <c>content + docs_like → mode_mismatch</c> (the content route calls
+/// <c>EmptyDiagnosisForContentSearch</c> with a hard-coded <c>WorkspaceDocs</c>, so its <c>WorkspaceSource</c>
+/// arm cannot fire); <c>text_content kinds=[source] + source_like → mode_mismatch</c> (that arm needs
+/// docs/config kinds WITHOUT source, which no mode plans); <c>text_content external|web|all-text + any shape →
+/// mode_mismatch</c> (imported kinds set neither bool; all-text sets both).</para>
+///
+/// <para>Two-action (<c>or:</c>) output renders ONLY for the genuinely mode-ambiguous pairs — a phrase can live
+/// in source bodies or in docs prose, and the classifier cannot tell which: <c>symbols + natural_language</c>
+/// and <c>file + natural_language</c>. Every other reachable pair renders exactly one primary
+/// <c>Next:</c> action.</para>
+///
+/// <para>Routing note: <c>symbols + path_like</c> reaches the SYMBOL renderer only for a path-shaped query that
+/// <c>IsPathLikeQuery</c> rejects (a <c>#</c>/<c>(</c>/<c>:</c> character, e.g. <c>src/utils#helper</c>). An
+/// unambiguous path under mode=auto (<c>src/Widget.cs</c>) flips <c>fileMode</c> on and renders through the FILE
+/// hint instead — both renderers are covered below.</para>
 /// </summary>
 public sealed class SearchToolTests
 {
@@ -413,7 +449,7 @@ public sealed class SearchToolTests
                 using var scope = ledger.Measure("search", op: null);
                 string output = tool.Search("x", mode: "content", limit: 3);
                 Assert.Contains("No text hits", output, StringComparison.Ordinal);
-                Assert.Contains("longer query", output, StringComparison.Ordinal);
+                Assert.Contains("3 characters up", output, StringComparison.Ordinal);
             }
 
             var row = ReadTelemetryOpMetadata(telemetryDb);
@@ -514,8 +550,8 @@ public sealed class SearchToolTests
 
         Assert.Equal(0, count);
         Assert.Equal(
-            "No indexed file matches 'does/not/exist.cs'. Try the basename `exist.cs` or a shorter path fragment first; " +
-            "then mode=auto or `search does/not/exist.cs` for symbols.",
+            "No indexed file matches 'does/not/exist.cs'. Indexed paths match on fragments.\n" +
+            "Next: search query=\"exist.cs\" mode=file — retry with the basename",
             output);
     }
 
@@ -532,7 +568,8 @@ public sealed class SearchToolTests
 
         Assert.Equal(0, count);
         Assert.Equal(
-            "No indexed file matches 'SearchWidget'. Try a shorter path fragment, mode=auto, or `search SearchWidget` for symbols.",
+            "No indexed file matches 'SearchWidget'. Indexed paths match on fragments.\n" +
+            "Next: search query=\"SearchWidget\" — search symbol names instead",
             output);
     }
 
@@ -922,8 +959,330 @@ public sealed class SearchToolTests
 
         Assert.Equal(0, count);
         Assert.Equal(
-            "No results. Try a shorter symbol query, mode=source for code text, or mode=content for docs/config.",
+            "No results. No indexed symbol name matches 'ZZTopNothingMatches'.\n" +
+            "Next: search query=\"ZZTopNothingMatches\" mode=source — find it as source-body text",
             output.Trim());
+    }
+
+    private static ISymbolLookupIndex EmptySymbolIndex() =>
+        SymbolSearchProjection.Build(Array.Empty<IndexedSymbol>());
+
+    private static string EmptySymbolCompact(string query, SearchToolMode mode = SearchToolMode.Auto)
+    {
+        string output = SearchTool.Run(EmptySymbolIndex(), query, mode, limit: 10,
+            excludeTests: null, json: false, out int count);
+        Assert.Equal(0, count);
+        return output;
+    }
+
+    private static string EmptyContentCompact(string query)
+    {
+        string output = SearchTool.RunContent(ContentIndex(), query, limit: 10, json: false, out int count);
+        Assert.Equal(0, count);
+        return output;
+    }
+
+    private static string EmptyTextContentCompact(string query, params string[] kinds)
+    {
+        string output = SearchTool.RunTextContent(
+            TextContentIndex(), query, kinds, limit: 10, excludeTests: false, json: false,
+            out int count, out long _);
+        Assert.Equal(0, count);
+        return output;
+    }
+
+    private static void AssertSinglePrimaryAction(string output)
+    {
+        Assert.Single(output.Split('\n'), static l => l.StartsWith("Next: ", StringComparison.Ordinal));
+        Assert.DoesNotContain("\n  or: ", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("ab", SearchToolMode.Auto)]
+    [InlineData("ab", SearchToolMode.File)]
+    public void Run_Empty_ShortQuery_ExplainsLengthAndOffersExtendedCall(string query, SearchToolMode mode)
+    {
+        string output = EmptySymbolCompact(query, mode);
+
+        Assert.Contains("3 characters", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"ab", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_SymbolEmpty_PathLikeQuery_RoutesToFileMode()
+    {
+        string output = EmptySymbolCompact("src/utils#helper");
+
+        Assert.StartsWith("No results.", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"src/utils#helper\" mode=file", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_AutoMode_UnambiguousPathQuery_UsesFileRendererNotSymbolRenderer()
+    {
+        string output = EmptySymbolCompact("src/Widget.cs");
+
+        Assert.StartsWith("No indexed file matches 'src/Widget.cs'.", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"Widget.cs\" mode=file", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolEmpty_DocsLikeQuery_NamesContentMode()
+    {
+        string output = EmptySymbolCompact("install guide");
+
+        Assert.Contains("docs/config prose", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"install guide\" mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_SymbolEmpty_SourceLikeQuery_NamesSourceMode()
+    {
+        string output = EmptySymbolCompact("if (value == null)");
+
+        Assert.Contains("Next: search query=\"if (value == null)\" mode=source", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_SymbolEmpty_NaturalLanguageQuery_OffersBothTextModes()
+    {
+        string output = EmptySymbolCompact("how does refresh work");
+
+        Assert.Contains("Next: search query=\"how does refresh work\" mode=source", output, StringComparison.Ordinal);
+        Assert.Contains("\n  or: search query=\"how does refresh work\" mode=content", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolEmpty_IdentifierLike_StatesNoSymbolMatchAndPivotsToSource()
+    {
+        string output = EmptySymbolCompact("ZZTopNothingMatches");
+
+        Assert.Contains("No indexed symbol name matches 'ZZTopNothingMatches'", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"ZZTopNothingMatches\" mode=source", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_FileEmpty_DocsLikeQuery_NamesContentMode()
+    {
+        string output = EmptySymbolCompact("install guide", SearchToolMode.File);
+
+        Assert.StartsWith("No indexed file matches 'install guide'.", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"install guide\" mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void Run_FileEmpty_NaturalLanguageQuery_OffersBothTextModes()
+    {
+        string output = EmptySymbolCompact("how does refresh work", SearchToolMode.File);
+
+        Assert.Contains("Next: search query=\"how does refresh work\" mode=source", output, StringComparison.Ordinal);
+        Assert.Contains("\n  or: search query=\"how does refresh work\" mode=content", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunContent_Empty_SourceLikeQuery_NamesSourceMode()
+    {
+        string output = EmptyContentCompact("if (value == null)");
+
+        Assert.StartsWith("No text hits.", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"if (value == null)\" mode=source", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunContent_Empty_PathLikeQuery_RoutesToFileMode()
+    {
+        string output = EmptyContentCompact("src/Widget.cs");
+
+        Assert.Contains("Next: search query=\"src/Widget.cs\" mode=file", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunContent_Empty_DocsLikeQuery_StatesTrueNoHit()
+    {
+        string output = EmptyContentCompact("install guide docs");
+
+        Assert.Contains("no literal match", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("mode=source", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunContent_Empty_NaturalLanguageQuery_NarrowsToALiteralWord()
+    {
+        string output = EmptyContentCompact("how does refresh work");
+
+        Assert.Contains("no literal match", output, StringComparison.Ordinal);
+        Assert.Contains("appear literally", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"refresh\" mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunTextContent_SourceKindEmpty_DocsLikeQuery_NamesContentMode()
+    {
+        string output = EmptyTextContentCompact("install guide", TextContentKind.WorkspaceSource);
+
+        Assert.Contains("Next: search query=\"install guide\" mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunTextContent_SourceKindEmpty_SourceLikeQuery_StatesTrueNoHit()
+    {
+        string output = EmptyTextContentCompact("if (value == null)", TextContentKind.WorkspaceSource);
+
+        Assert.Contains("no literal match", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunTextContent_SourceKindEmpty_NaturalLanguageQuery_NarrowsToALiteralWordInSameMode()
+    {
+        string output = EmptyTextContentCompact("how does refresh work", TextContentKind.WorkspaceSource);
+
+        Assert.Contains("Next: search query=\"refresh\" mode=source", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunTextContent_ImportedKindEmpty_DocsLikeQuery_PointsAtContentList()
+    {
+        string output = EmptyTextContentCompact("install guide", TextContentKind.ExternalFile);
+
+        Assert.Contains("content list", output, StringComparison.Ordinal);
+        Assert.Contains("Next: content operation=list", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("mode=content", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    [Fact]
+    public void RunTextContent_AllTextEmpty_DocsLikeQuery_StaysTrueNoHit()
+    {
+        string output = EmptyTextContentCompact(
+            "install guide",
+            TextContentKind.WorkspaceSource,
+            TextContentKind.WorkspaceDocs,
+            TextContentKind.WorkspaceConfig,
+            TextContentKind.ExternalFile,
+            TextContentKind.Web);
+
+        Assert.Contains("no literal match", output, StringComparison.Ordinal);
+        AssertSinglePrimaryAction(output);
+    }
+
+    public static TheoryData<string, string> ReachableEmptyCompactPairs()
+    {
+        var data = new TheoryData<string, string>();
+        foreach (string query in new[]
+                 {
+                     "ab", "src/Widget.cs", "src/utils#helper", "install guide", "if (value == null)",
+                     "how does refresh work", "ZZTopNothingMatches",
+                 })
+        {
+            foreach (string route in new[] { "auto", "file", "content", "source", "external", "all-text" })
+                data.Add(query, route);
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(ReachableEmptyCompactPairs))]
+    public void EmptyCompact_EveryReachablePair_RendersAPrimaryActionWithinBudget(string query, string route)
+    {
+        string output = route switch
+        {
+            "auto" => EmptySymbolCompact(query),
+            "file" => EmptySymbolCompact(query, SearchToolMode.File),
+            "content" => EmptyContentCompact(query),
+            "source" => EmptyTextContentCompact(query, TextContentKind.WorkspaceSource),
+            "external" => EmptyTextContentCompact(query, TextContentKind.ExternalFile),
+            _ => EmptyTextContentCompact(
+                query,
+                TextContentKind.WorkspaceSource,
+                TextContentKind.WorkspaceDocs,
+                TextContentKind.WorkspaceConfig,
+                TextContentKind.ExternalFile,
+                TextContentKind.Web),
+        };
+
+        string[] lines = output.Split('\n');
+        Assert.InRange(lines.Length, 2, 6);
+        Assert.InRange(output.Length, 1, 400);
+        Assert.Single(lines, static l => l.StartsWith("Next: ", StringComparison.Ordinal));
+        Assert.DoesNotContain("do NOT", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("auto")]
+    [InlineData("file")]
+    [InlineData("content")]
+    [InlineData("source")]
+    public void EmptyJson_EveryRoute_StaysAnEmptyArray(string route)
+    {
+        string output = route switch
+        {
+            "auto" => SearchTool.Run(EmptySymbolIndex(), "ZZTopNothingMatches", SearchToolMode.Auto,
+                limit: 10, excludeTests: null, json: true, out _),
+            "file" => SearchTool.Run(EmptySymbolIndex(), "does/not/exist.cs", SearchToolMode.File,
+                limit: 10, excludeTests: null, json: true, out _),
+            "content" => SearchTool.RunContent(ContentIndex(), "zzzznotpresent", limit: 10, json: true, out _),
+            _ => SearchTool.RunTextContent(TextContentIndex(), "zzzznotpresent",
+                new[] { TextContentKind.WorkspaceSource }, limit: 10, excludeTests: false, json: true,
+                out _, out long _),
+        };
+
+        Assert.Equal("[]", output);
+        Assert.Equal(JsonValueKind.Array, JsonDocument.Parse(output).RootElement.ValueKind);
+    }
+
+    /// <summary>
+    /// The suggestion-bearing symbol miss is the budget's worst case, so it is pinned to the SAME ≤400-char /
+    /// ≤6-line rule as every other empty shape. <c>EmptySuggestionLimit</c>=3 is what makes that reachable: the
+    /// <c>Try:</c> line measured ~378 chars alone at 5 (total ~529, and ~478 even pre-change with the old static
+    /// hint), versus ~228 at 3 for a total of ~379. The cap is on the SOURCE of the suggestions, so compact and
+    /// JSON agree and nothing is dropped silently.
+    /// </summary>
+    [Fact]
+    public void EmptyCompact_SymbolMissWithMaxSuggestions_StaysWithinBudget()
+    {
+        string[] names =
+        [
+            "ReadReferencesAsync", "eadReferencesAsyncc", "RadReferencesAsyncc",
+            "RedReferencesAsyncc", "ReaReferencesAsyncc",
+        ];
+        var candidates = names
+            .Select((name, i) => Symbol(
+                i,
+                $"aa11223344556677889900aabbccdd{i:D2}",
+                name,
+                "method",
+                $"src/Miller.Server/References/ReferenceReader{i}.cs",
+                12 + i,
+                $"Task {name}()"))
+            .ToArray();
+        var index = StubSymbolSearchIndex.WithSymbolsOnly(candidates);
+
+        string output = SearchTool.Run(index, "ReadReferencesAsyncc", SearchToolMode.Auto, limit: 10,
+            excludeTests: null, json: false, out int count);
+
+        Assert.Equal(0, count);
+        string[] lines = output.Split('\n');
+        Assert.InRange(lines.Length, 3, 6);
+        Assert.InRange(output.Length, 1, 400);
+        Assert.Single(lines, static l => l.StartsWith("Next: ", StringComparison.Ordinal));
+
+        string tryLine = Assert.Single(lines, static l => l.StartsWith("Try: ", StringComparison.Ordinal));
+        Assert.Equal(3, tryLine.Split(", ").Length);
     }
 
     [Fact]
@@ -1362,7 +1721,8 @@ public sealed class SearchToolTests
         Assert.Equal(0, count);
         Assert.StartsWith("No text hits.", output.Trim());
         Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
-        Assert.Contains("`search zzzznotpresent` for symbols", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"zzzznotpresent\" — search symbol names instead",
+            output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1731,7 +2091,8 @@ public sealed class SearchToolTests
         Assert.Equal(0, count);
         Assert.StartsWith("No text hits.", output.Trim());
         Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
-        Assert.Contains("`search zzzznotpresent` for symbols", output, StringComparison.Ordinal);
+        Assert.Contains("Next: search query=\"zzzznotpresent\" — search symbol names instead",
+            output, StringComparison.Ordinal);
     }
 
     [Fact]

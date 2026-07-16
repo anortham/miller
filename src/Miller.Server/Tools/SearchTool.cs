@@ -57,9 +57,10 @@ public enum SearchToolMode
 public sealed class SearchTool
 {
     internal const int DefaultLimit = 6;
-    private const string SymbolNoResultsHint =
-        "No results. Try a shorter symbol query, mode=source for code text, or mode=content for docs/config.";
-    private const int EmptySuggestionLimit = 5;
+    // Bounded by the compact empty budget (≤400 chars), not by taste: at 5 the `Try:` line alone measured ~378,
+    // which put every suggestion-bearing miss over budget before the diagnosis text was even added. Capping the
+    // SOURCE rather than the render keeps compact and JSON agreeing and drops nothing silently.
+    private const int EmptySuggestionLimit = 3;
     private const string RegionsUsageHint =
         "regions must be comment, doc_comment, or string_literal. Example: regions=comment or regions=doc_comment,string_literal.";
 
@@ -525,14 +526,25 @@ public sealed class SearchTool
 
         return route.Kind switch
         {
-            SearchRouteKind.Symbols when queryShape is "docs_like" or "source_like" or "natural_language" =>
-                "mode_mismatch",
+            SearchRouteKind.Symbols => EmptyDiagnosisForSymbols(queryShape),
             SearchRouteKind.Content => EmptyDiagnosisForContentSearch(TextContentKind.WorkspaceDocs, queryShape),
             SearchRouteKind.TextContent when route.ContentKinds is not null =>
                 EmptyDiagnosisForTextContent(route.ContentKinds, queryShape),
             _ => "true_no_hit",
         };
     }
+
+    /// <summary>
+    /// The symbol/file route's diagnosis arm, split out of <see cref="EmptyDiagnosisFor"/> so the compact empty
+    /// renderers key off the SAME classification the telemetry ledger records. <c>fileMode</c> lives inside
+    /// <see cref="SearchRouteKind.Symbols"/>, so both renderers share this table.
+    /// </summary>
+    private static string EmptyDiagnosisForSymbols(string queryShape) => queryShape switch
+    {
+        "short" or "path_like" => "query_shape",
+        "docs_like" or "source_like" or "natural_language" => "mode_mismatch",
+        _ => "true_no_hit",
+    };
 
     private static string EmptyDiagnosisForTextContent(IReadOnlyCollection<string> contentKinds, string queryShape)
     {
@@ -552,20 +564,99 @@ public sealed class SearchTool
     }
 
     private const int EmptyHintQueryLimit = 60;
+    private const string MinQueryLengthNote = "3 characters up";
+
+    /// <summary>One suggested recovery call for an empty result, plus why it is worth making.</summary>
+    private sealed record SearchNextAction(string Call, string Reason);
+
+    private static string SearchCall(string query, string? mode = null)
+    {
+        string call = $"search query=\"{EscapeCallString(Truncate(query, EmptyHintQueryLimit))}\"";
+        return mode is null ? call : call + " mode=" + mode;
+    }
+
+    /// <summary>
+    /// Render one diagnosis sentence followed by a primary <c>Next:</c> action, and an <c>or:</c> alternative only
+    /// where the diagnosis is genuinely ambiguous between two modes. Compact output only — JSON is frozen.
+    /// </summary>
+    private static string RenderEmptyHint(string sentence, params SearchNextAction[] actions)
+    {
+        var sb = new StringBuilder(sentence);
+        for (int i = 0; i < actions.Length; i++)
+        {
+            sb.Append('\n')
+              .Append(i == 0 ? "Next: " : "  or: ")
+              .Append(actions[i].Call)
+              .Append(" — ")
+              .Append(actions[i].Reason);
+        }
+
+        return sb.ToString();
+    }
+
+    // A mode_mismatch means the classifier already knows which mode fits, EXCEPT for a bare phrase: prose can sit
+    // in a source comment or in docs text, and nothing in the query distinguishes them — the only reachable
+    // two-action case.
+    private static string ModeMismatchHint(string lead, string q, string queryShape) => queryShape switch
+    {
+        "docs_like" => RenderEmptyHint(
+            $"{lead} '{q}' reads like docs/config prose; mode=content searches that text.",
+            new SearchNextAction(SearchCall(q, "content"), "search docs/config prose")),
+        "source_like" => RenderEmptyHint(
+            $"{lead} '{q}' reads like source syntax; mode=source searches source bodies.",
+            new SearchNextAction(SearchCall(q, "source"), "search source-body text")),
+        _ => RenderEmptyHint(
+            $"{lead} '{q}' is a phrase; the text modes match phrases, symbol names match identifiers.",
+            new SearchNextAction(SearchCall(q, "source"), "search source-body text"),
+            new SearchNextAction(SearchCall(q, "content"), "search docs/config prose")),
+    };
+
+    private static string SymbolEmptyHint(string query)
+    {
+        string q = Truncate(query, EmptyHintQueryLimit);
+        string queryShape = QueryShapeFor(query);
+        return EmptyDiagnosisForSymbols(queryShape) switch
+        {
+            "query_shape" when queryShape == "path_like" => RenderEmptyHint(
+                "No results. Symbol search ranks names; file paths resolve through mode=file.",
+                new SearchNextAction(SearchCall(q, "file"), "match the path fragment")),
+            "query_shape" => RenderEmptyHint(
+                $"No results. Symbol search ranks names from {MinQueryLengthNote}; '{q}' is {query.Trim().Length}.",
+                new SearchNextAction(SearchCall(q + "<more>"), "extend to a longer name fragment")),
+            "mode_mismatch" => ModeMismatchHint("No results.", q, queryShape),
+            _ => RenderEmptyHint(
+                $"No results. No indexed symbol name matches '{q}'.",
+                new SearchNextAction(SearchCall(q, "source"), "find it as source-body text")),
+        };
+    }
 
     private static string FileEmptyHint(string query)
     {
         string q = Truncate(query, EmptyHintQueryLimit);
-        if (QueryShapeFor(query) == "path_like")
+        string queryShape = QueryShapeFor(query);
+        return EmptyDiagnosisForSymbols(queryShape) switch
         {
-            string basename = Truncate(Path.GetFileName(query.Replace('\\', '/')), EmptyHintQueryLimit);
-            string recovery = string.IsNullOrWhiteSpace(basename)
-                ? "a shorter path fragment"
-                : $"the basename `{basename}` or a shorter path fragment";
-            return $"No indexed file matches '{q}'. Try {recovery} first; then mode=auto or `search {q}` for symbols.";
-        }
+            "query_shape" when queryShape == "path_like" => FilePathShapeHint(query, q),
+            "query_shape" => RenderEmptyHint(
+                $"No indexed file matches '{q}'. Path search matches fragments from {MinQueryLengthNote}; '{q}' is {query.Trim().Length}.",
+                new SearchNextAction(SearchCall(q + "<more>", "file"), "extend the path fragment")),
+            "mode_mismatch" => ModeMismatchHint($"No indexed file matches '{q}'.", q, queryShape),
+            _ => RenderEmptyHint(
+                $"No indexed file matches '{q}'. Indexed paths match on fragments.",
+                new SearchNextAction(SearchCall(q), "search symbol names instead")),
+        };
+    }
 
-        return $"No indexed file matches '{q}'. Try a shorter path fragment, mode=auto, or `search {q}` for symbols.";
+    private static string FilePathShapeHint(string query, string q)
+    {
+        string basename = Truncate(Path.GetFileName(query.Replace('\\', '/')), EmptyHintQueryLimit);
+        return string.IsNullOrWhiteSpace(basename)
+            ? RenderEmptyHint(
+                $"No indexed file matches '{q}'. Indexed paths match on fragments.",
+                new SearchNextAction(SearchCall(q), "search symbol names instead"))
+            : RenderEmptyHint(
+                $"No indexed file matches '{q}'. Indexed paths match on fragments.",
+                new SearchNextAction(SearchCall(basename, "file"), "retry with the basename"));
     }
 
     // search·source/content/all-text empty (36-47% empty): no text hits. The right "next call" depends on whether
@@ -575,40 +666,93 @@ public sealed class SearchTool
     {
         string q = Truncate(query, EmptyHintQueryLimit);
         string queryShape = QueryShapeFor(query);
+        return EmptyDiagnosisForTextContent(contentKinds, queryShape) switch
+        {
+            "query_shape" when queryShape == "path_like" => RenderEmptyHint(
+                "No text hits. Text search ranks words in file text; file paths resolve through mode=file.",
+                new SearchNextAction(SearchCall(q, "file"), "match the path fragment")),
+            "query_shape" => RenderEmptyHint(
+                $"No text hits. Text search ranks terms from {MinQueryLengthNote}; '{q}' is {query.Trim().Length}.",
+                new SearchNextAction(SearchCall(q + "<more>"), "extend the term")),
+            "mode_mismatch" => ModeMismatchHint("No text hits.", q, queryShape),
+            _ => TrueNoHitTextHint(contentKinds, query, q, queryShape),
+        };
+    }
+
+    private static string TrueNoHitTextHint(
+        IReadOnlyCollection<string> contentKinds, string query, string q, string queryShape)
+    {
         bool hasWorkspace = false;
         bool hasImported = false;
-        bool hasSource = false;
-        bool hasDocsOrConfig = false;
         foreach (string kind in contentKinds)
         {
             if (kind == TextContentKind.ExternalFile || kind == TextContentKind.Web)
                 hasImported = true;
             else
                 hasWorkspace = true;
-            if (kind == TextContentKind.WorkspaceSource)
-                hasSource = true;
-            if (kind == TextContentKind.WorkspaceDocs || kind == TextContentKind.WorkspaceConfig)
-                hasDocsOrConfig = true;
         }
+
         string where = (hasWorkspace, hasImported) switch
         {
-            (true, false) => "`workspace refresh`",
-            (false, true) => "`content list` to see imported sources",
-            _ => "`workspace refresh` or `content list` for imported sources",
+            (true, false) => "`workspace refresh` re-indexes changed files",
+            (false, true) => "`content list` shows imported sources",
+            _ => "`workspace refresh` and `content list` show what is indexed",
         };
 
-        string? shapeHint = queryShape switch
+        if (queryShape == "natural_language")
         {
-            "short" => "a longer query",
-            "path_like" => "mode=file for path fragments",
-            "docs_like" when hasSource && !hasDocsOrConfig => "mode=content for docs/config",
-            "source_like" when hasDocsOrConfig && !hasSource => "mode=source for source-body text",
-            _ => null,
-        };
+            string literal = Truncate(LongestWord(query), EmptyHintQueryLimit);
+            return RenderEmptyHint(
+                $"No text hits. Indexed text has no literal match for '{q}'; phrases match on literal words ({where}).",
+                new SearchNextAction(
+                    SearchCall(literal, ModeNameForContentKinds(contentKinds)),
+                    "retry with words that appear literally in code or docs"));
+        }
 
-        return shapeHint is null
-            ? $"No text hits. Try broader terms, {where}, or `search {q}` for symbols."
-            : $"No text hits. Try {shapeHint}, broader terms, {where}, or `search {q}` for symbols.";
+        return hasWorkspace
+            ? RenderEmptyHint(
+                $"No text hits. Indexed text has no literal match for '{q}' ({where}).",
+                new SearchNextAction(SearchCall(q), "search symbol names instead"))
+            : RenderEmptyHint(
+                $"No text hits. Indexed text has no literal match for '{q}' ({where}).",
+                new SearchNextAction("content operation=list", "see which sources are imported"));
+    }
+
+    /// <summary>
+    /// The mode a set of content kinds came from, so a narrowed retry stays on the SAME route. Null when the kinds
+    /// do not correspond to a mode the planner emits.
+    /// </summary>
+    private static string? ModeNameForContentKinds(IReadOnlyCollection<string> contentKinds)
+    {
+        bool source = contentKinds.Contains(TextContentKind.WorkspaceSource);
+        bool docs = contentKinds.Contains(TextContentKind.WorkspaceDocs);
+        bool config = contentKinds.Contains(TextContentKind.WorkspaceConfig);
+        bool external = contentKinds.Contains(TextContentKind.ExternalFile);
+        bool web = contentKinds.Contains(TextContentKind.Web);
+
+        if (source && docs && config && external && web)
+            return "all-text";
+        if (source && !docs && !config && !external && !web)
+            return "source";
+        if (!source && (docs || config) && !external && !web)
+            return "content";
+        if (external && !web && !source && !docs && !config)
+            return "external";
+        if (web && !external && !source && !docs && !config)
+            return "web";
+        return null;
+    }
+
+    private static string LongestWord(string query)
+    {
+        string best = string.Empty;
+        foreach (string word in query.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word.Length > best.Length)
+                best = word;
+        }
+
+        return best;
     }
 
     private const int OutsideScopeHintLimit = 3;
@@ -750,7 +894,7 @@ public sealed class SearchTool
                 return suggestions.Count > 0 ? RenderEmptyJson(suggestions) : "[]";
             return outsideScope.Count > 0
                 ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
-                : RenderEmptySymbolMissCompact(compactBanner, suggestions);
+                : RenderEmptySymbolMissCompact(compactBanner, query, suggestions);
         }
 
         IReadOnlySet<string>? hasDocSymbolIds = null;
@@ -1687,9 +1831,10 @@ public sealed class SearchTool
 
     private static string RenderEmptySymbolMissCompact(
         string? compactBanner,
+        string query,
         IReadOnlyList<IndexedSymbol> suggestions)
     {
-        string output = ReadToolWorkspaceRouting.PrefixCompact(SymbolNoResultsHint, compactBanner);
+        string output = ReadToolWorkspaceRouting.PrefixCompact(SymbolEmptyHint(query), compactBanner);
         if (suggestions.Count == 0)
             return output;
 
