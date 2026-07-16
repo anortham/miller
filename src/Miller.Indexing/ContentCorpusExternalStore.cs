@@ -274,12 +274,18 @@ public sealed class ContentCorpusExternalStore
             linesByNumber.Select(static kv => new ExternalContentLine(kv.Key, kv.Value)).ToArray());
     }
 
+    /// <summary>Largest number of ambiguous alias candidates reported back to the caller.</summary>
+    public const int MaxAliasCandidates = 5;
+
     /// <summary>
     /// Resolves a read/remove target that may be a real <c>source_id</c> (<c>external_file:&lt;hash&gt;</c> /
-    /// <c>web:&lt;hash&gt;</c>) OR a unique <c>display_path</c> alias. Direct source_id match wins; otherwise a
-    /// case-insensitive <c>display_path</c> match is accepted only when exactly one external/web source matches,
-    /// so an ambiguous display_path never silently picks the wrong source. Workspace-source ids are not aliased
-    /// here (they are routed by <c>ResolveReadContentDbPath</c> in the caller).
+    /// <c>web:&lt;hash&gt;</c>) OR a unique <c>display_path</c> alias. Direct source_id match wins; then a
+    /// case-insensitive whole <c>display_path</c> match; then a case-insensitive path-SUFFIX match on a segment
+    /// boundary (<c>plans/x.md</c> resolves <c>docs/plans/x.md</c>, while <c>ans/x.md</c> does not). Each alias
+    /// tier is accepted only when exactly one external/web source matches, so an ambiguous alias never silently
+    /// picks the wrong source; ambiguous suffix candidates are reported up to <see cref="MaxAliasCandidates"/>.
+    /// Workspace-source ids are not aliased here (they are routed by <c>ResolveReadContentDbPath</c> in the
+    /// caller).
     /// </summary>
     public SourceIdResolution ResolveSourceId(string contentDbPath, string sourceIdOrDisplayPath)
     {
@@ -316,8 +322,57 @@ public sealed class ContentCorpusExternalStore
 
         if (candidates.Count == 1)
             return new SourceIdResolution(sourceIdOrDisplayPath, candidates[0], candidates);
-        return new SourceIdResolution(sourceIdOrDisplayPath, SourceId: null, candidates);
+        if (candidates.Count > 1)
+            return new SourceIdResolution(sourceIdOrDisplayPath, SourceId: null, candidates);
+
+        IReadOnlyList<string> suffixMatches = SuffixCandidates(connection, sourceIdOrDisplayPath);
+        if (suffixMatches.Count == 1)
+            return new SourceIdResolution(sourceIdOrDisplayPath, suffixMatches[0], suffixMatches);
+        return new SourceIdResolution(sourceIdOrDisplayPath, SourceId: null, suffixMatches);
     }
+
+    private static IReadOnlyList<string> SuffixCandidates(SqliteConnection connection, string suffix)
+    {
+        string needle = NormalizePathSeparators(suffix);
+        if (needle.Length == 0)
+            return Array.Empty<string>();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT source_id, display_path FROM content_sources
+            WHERE content_kind IN ($external, $web)
+            ORDER BY display_path, source_id;
+            """;
+        command.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$web", TextContentKind.Web);
+
+        var matches = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read() && matches.Count < MaxAliasCandidates)
+        {
+            if (IsPathSuffixMatch(reader.GetString(1), needle))
+                matches.Add(reader.GetString(0));
+        }
+
+        return matches;
+    }
+
+    /// <summary>
+    /// True when <paramref name="displayPath"/> ends with <paramref name="normalizedSuffix"/> on a path-segment
+    /// boundary, so <c>plans/x.md</c> matches <c>docs/plans/x.md</c> but <c>ans/x.md</c> does not.
+    /// </summary>
+    internal static bool IsPathSuffixMatch(string displayPath, string normalizedSuffix)
+    {
+        string path = NormalizePathSeparators(displayPath);
+        if (path.Length < normalizedSuffix.Length)
+            return false;
+        if (!path.EndsWith(normalizedSuffix, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return path.Length == normalizedSuffix.Length
+            || path[path.Length - normalizedSuffix.Length - 1] == '/';
+    }
+
+    private static string NormalizePathSeparators(string value) => value.Replace('\\', '/').Trim();
 
     public ExternalContentRemoveResult Remove(string contentDbPath, string sourceId)
     {

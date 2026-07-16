@@ -135,6 +135,176 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("content_kind", afterRemove, StringComparison.Ordinal);
     }
 
+    private ContentTool ToolWithImportedSources(params string[] displayPaths)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        for (int i = 0; i < displayPaths.Length; i++)
+        {
+            string file = Path.Combine(_dir, $"import-{i}.txt");
+            File.WriteAllText(file, "alpha line one\nbeta line two\ngamma line three\n");
+            tool.Content("import", path: file, display_path: displayPaths[i]);
+        }
+
+        return tool;
+    }
+
+    private string ImportedSourceId(ContentTool tool, string displayPath)
+    {
+        string listJson = tool.Content("list", format: "json");
+        using JsonDocument doc = JsonDocument.Parse(listJson);
+        return doc.RootElement.EnumerateArray()
+            .Single(source => source.GetProperty("display_path").GetString() == displayPath)
+            .GetProperty("source_id").GetString()!;
+    }
+
+    [Fact]
+    public void Content_Read_ExactSourceId_StillResolves()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md");
+        string sourceId = ImportedSourceId(tool, "docs/plans/alpha.md");
+
+        string read = tool.Content("read", source_id: sourceId, line: 2, context_lines: 0);
+
+        Assert.Contains("2: beta line two", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_UniqueExactDisplayPath_StillResolves()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md", "docs/guides/setup.md");
+
+        string read = tool.Content("read", source_id: "docs/plans/alpha.md", line: 2, context_lines: 0);
+
+        Assert.Contains("2: beta line two", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_ExactDisplayPath_StillResolvesCaseInsensitively()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md");
+
+        string read = tool.Content("read", source_id: "DOCS/PLANS/ALPHA.MD", line: 2, context_lines: 0);
+
+        Assert.Contains("2: beta line two", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_AmbiguousExactDisplayPath_StillListsCandidates()
+    {
+        ContentTool tool = ToolWithImportedSources("shared/notes.md", "shared/notes.md");
+
+        string read = tool.Content("read", source_id: "shared/notes.md", line: 1);
+
+        Assert.Contains("matches multiple imported sources by display_path", read, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=ambiguous_source", read, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(read, "external_file:"));
+    }
+
+    [Fact]
+    public void Content_Read_UniquePathSuffix_Resolves()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md", "docs/guides/setup.md");
+
+        string read = tool.Content("read", source_id: "plans/alpha.md", line: 2, context_lines: 0);
+
+        Assert.Contains("2: beta line two", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_UniqueBasenameSuffix_Resolves()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md", "docs/guides/setup.md");
+
+        string read = tool.Content("read", source_id: "alpha.md", line: 2, context_lines: 0);
+
+        Assert.Contains("2: beta line two", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_PartialSegmentSuffix_DoesNotResolve()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md");
+
+        string read = tool.Content("read", source_id: "ans/alpha.md", line: 2);
+
+        Assert.Contains("Content source 'ans/alpha.md' was not found.", read, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=source_not_found", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_AmbiguousSuffix_ListsCandidatesCappedAtFive()
+    {
+        ContentTool tool = ToolWithImportedSources(
+            "a1/x.md", "a2/x.md", "a3/x.md", "a4/x.md", "a5/x.md", "a6/x.md");
+
+        string read = tool.Content("read", source_id: "x.md", line: 1);
+
+        Assert.Contains("matches multiple imported sources by display_path", read, StringComparison.Ordinal);
+        Assert.Equal(5, CountOccurrences(read, "external_file:"));
+    }
+
+    [Fact]
+    public void Content_Read_FullMiss_AppendsNearestDisplayPathSuggestions()
+    {
+        ContentTool tool = ToolWithImportedSources(
+            "docs/plans/alpha.md", "docs/plans/beta.md", "docs/guides/setup.md");
+
+        string read = tool.Content("read", source_id: "plans/missing.md", line: 1);
+
+        Assert.Contains("Content source 'plans/missing.md' was not found.", read, StringComparison.Ordinal);
+        Assert.Contains("docs/plans/alpha.md", read, StringComparison.Ordinal);
+        Assert.Contains("docs/plans/beta.md", read, StringComparison.Ordinal);
+        Assert.DoesNotContain("docs/guides/setup.md", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_FullMiss_CapsSuggestionsAtThreeInDeterministicOrder()
+    {
+        ContentTool tool = ToolWithImportedSources(
+            "docs/plans/e.md", "docs/plans/d.md", "docs/plans/c.md", "docs/plans/b.md", "docs/plans/a.md");
+
+        string read = tool.Content("read", source_id: "plans/missing.md", line: 1);
+
+        Assert.Equal(3, CountOccurrences(read, "docs/plans/"));
+        Assert.Contains("docs/plans/a.md, docs/plans/b.md, docs/plans/c.md", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_FullMissWithNothingSimilar_StaysAPlainNotFound()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md");
+
+        string read = tool.Content("read", source_id: "zzzzz", line: 1);
+
+        Assert.Contains("Content source 'zzzzz' was not found.", read, StringComparison.Ordinal);
+        Assert.DoesNotContain("Nearest imported paths", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Remove_StaysStrict_AndRefusesDisplayPathAndSuffixAliases()
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/alpha.md");
+
+        string byDisplayPath = tool.Content("remove", source_id: "docs/plans/alpha.md");
+        string bySuffix = tool.Content("remove", source_id: "alpha.md");
+
+        Assert.Contains("not found: docs/plans/alpha.md", byDisplayPath, StringComparison.Ordinal);
+        Assert.Contains("not found: alpha.md", bySuffix, StringComparison.Ordinal);
+
+        string stillReadable = tool.Content("read", source_id: "docs/plans/alpha.md", line: 2, context_lines: 0);
+        Assert.Contains("2: beta line two", stillReadable, StringComparison.Ordinal);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal);
+             i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+            count++;
+        return count;
+    }
+
     [Fact]
     public void Content_Search_RecordsOperationShapeAndEmptyReason_InTelemetry()
     {

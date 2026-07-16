@@ -267,7 +267,7 @@ public sealed class ContentTool
         string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(readContentDbPath, sourceId);
         readContentDbPath = ResolveReadContentDbPath(readContentDbPath, resolvedSourceId, workspaceId: null);
-        ExternalContentReadResult result = _store.ReadWindow(
+        ExternalContentReadResult result = ReadWindowWithNearestPaths(
             readContentDbPath,
             resolvedSourceId,
             line.Value,
@@ -298,6 +298,72 @@ public sealed class ContentTool
         // original value so the existing workspace-routing + not-found error path handles it.
         return sourceId;
     }
+
+    private const int MaxPathSuggestions = 3;
+
+    private ExternalContentReadResult ReadWindowWithNearestPaths(
+        string contentDbPath,
+        string sourceId,
+        int line,
+        int contextLines)
+    {
+        try
+        {
+            return _store.ReadWindow(contentDbPath, sourceId, line, contextLines);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            IReadOnlyList<string> nearest = NearestDisplayPaths(contentDbPath, sourceId);
+            if (nearest.Count == 0)
+                throw;
+            throw new KeyNotFoundException(
+                $"{ex.Message} Nearest imported paths: {string.Join(", ", nearest)}. " +
+                "Read one of those paths directly, or run `content list` for every imported source.",
+                ex);
+        }
+    }
+
+    private IReadOnlyList<string> NearestDisplayPaths(string contentDbPath, string requested)
+    {
+        var sources = new List<ExternalContentSource>();
+        sources.AddRange(_store.List(contentDbPath, TextContentKind.ExternalFile));
+        sources.AddRange(_store.List(contentDbPath, TextContentKind.Web));
+
+        return sources
+            .Select(source => (source.DisplayPath, Score: NearPathScore(requested, source.DisplayPath)))
+            .Where(static scored => scored.Score > 0)
+            .OrderByDescending(static scored => scored.Score)
+            .ThenBy(static scored => scored.DisplayPath, StringComparer.Ordinal)
+            .Take(MaxPathSuggestions)
+            .Select(static scored => scored.DisplayPath)
+            .ToArray();
+    }
+
+    private static int NearPathScore(string requested, string displayPath)
+    {
+        string[] requestedSegments = PathSegments(requested);
+        string[] candidateSegments = PathSegments(displayPath);
+
+        int sharedTrailing = 0;
+        while (sharedTrailing < requestedSegments.Length
+            && sharedTrailing < candidateSegments.Length
+            && string.Equals(
+                requestedSegments[^(sharedTrailing + 1)],
+                candidateSegments[^(sharedTrailing + 1)],
+                StringComparison.OrdinalIgnoreCase))
+        {
+            sharedTrailing++;
+        }
+
+        int sharedSegments = requestedSegments.Intersect(candidateSegments, StringComparer.OrdinalIgnoreCase).Count();
+        bool overlaps = displayPath.Contains(requested, StringComparison.OrdinalIgnoreCase)
+            || requested.Contains(displayPath, StringComparison.OrdinalIgnoreCase);
+
+        return (10 * sharedTrailing) + sharedSegments + (overlaps ? 1 : 0);
+    }
+
+    private static string[] PathSegments(string value) =>
+        value.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
 
     private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId, string? workspaceId)
     {
