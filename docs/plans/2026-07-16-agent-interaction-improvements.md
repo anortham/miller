@@ -494,8 +494,8 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Requires T5.1–T5.4 merged and all gates green; push/publish requires explicit user approval.
 
 **Acceptance criteria:**
-- [ ] Release published with verified assets; both plugins updated; hook observed firing on SessionStart AND SubagentStart in live sessions on both hosts (or a documented host limitation).
-- [ ] Opt-out verified. Findings doc records versions, evidence, and the T7.2 clock start date.
+- [x] Release published with verified assets; both plugins updated; hook observed firing on SessionStart AND SubagentStart in live sessions on both hosts (or a documented host limitation).
+- [x] Opt-out verified. Findings doc records versions, evidence, and the T7.2 clock start date.
 
 # Phase 6 — Instruction-tier harness expansion
 

@@ -118,6 +118,10 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-07-content-corpus-fts5-search-plan.md`](plans/2026-06-07-content-corpus-fts5-search-plan.md) - implemented content corpus plan; current contract is in `contracts/content-corpus-v1.md`.
 - [`reference/static-ssr-htmx-alpine-pattern.md`](reference/static-ssr-htmx-alpine-pattern.md) - Miller UI pattern for static SSR Razor, Minimal API fragments, htmx, and Alpine CSP (`Miller.Dashboard` reference).
 
+## Current release and delivery evidence
+
+- [`findings/2026-07-16-hook-delivery-verification.md`](findings/2026-07-16-hook-delivery-verification.md) - v1.10.0 release verification and live SessionStart/SubagentStart hook smoke on Claude Code, opt-out proof, the Codex inert-hooks limitation, and the T7.2 clock start.
+
 ## Current Blazor and bridge evidence
 
 - [`findings/2026-07-14-blazor-namespace-resolution.md`](findings/2026-07-14-blazor-namespace-resolution.md) - current supported and fail-closed Blazor component namespace behavior, with fast and live-test evidence.
