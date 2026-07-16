@@ -287,10 +287,10 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **What to build:** Outcome notices that survive being missed (toast mirrors the inline notice), a Cancel that just closes the confirm instead of reloading the page, and a theme label with no first-paint flash.
 
 **Acceptance criteria:**
-- [ ] Cancel button renders with `data-close-details` and no `href`; remove-confirm still posts correctly.
-- [ ] Notice paragraph carries the tone attribute; toast mirroring is wired in JS.
-- [ ] Theme button renders both labels; CSS shows exactly one per theme.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Cancel button renders with `data-close-details` and no `href`; remove-confirm still posts correctly.
+- [x] Notice paragraph carries the tone attribute; toast mirroring is wired in JS.
+- [x] Theme button renders both labels; CSS shows exactly one per theme.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 8: Trends time axis
 

@@ -26,8 +26,7 @@
                         hx-swap="none"
                         data-toast-success="Opening the workspace folder…">Open folder</button>
                 <span class="workspace-state @StateClass(Facts.Status)">@Facts.Status</span>
-                <WorkspaceRemoveConfirm WorkspaceId="@Facts.WorkspaceId"
-                                        CancelHref="@($"/workspace?workspace_id={Esc(Facts.WorkspaceId)}")" />
+                <WorkspaceRemoveConfirm WorkspaceId="@Facts.WorkspaceId" />
             </div>
         }
     </div>

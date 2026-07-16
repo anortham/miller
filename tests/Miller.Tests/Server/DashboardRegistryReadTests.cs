@@ -1456,8 +1456,8 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("action=\"/workspace/remove\"", html);
         Assert.Contains("name=\"workspace_id\" value=\"ws-a\"", html);
         Assert.Contains("Confirm remove", html);
-        // Cancel returns to this workspace's page, not the all-workspaces list.
-        Assert.Contains("href=\"/workspace?workspace_id=ws-a\"", html);
+        Assert.Contains("data-close-details", html);
+        Assert.DoesNotContain(">Cancel</a>", html);
         Assert.Contains("name=\"__RequestVerificationToken\"", html);
     }
 

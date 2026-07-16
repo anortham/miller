@@ -1049,6 +1049,120 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.DoesNotContain("empty index", populated);
     }
 
+    [Fact]
+    public async Task WorkspaceRemoveConfirm_CancelIsAButtonThatClosesTheDetailsInsteadOfNavigating()
+    {
+        string html = await RenderComponentAsync<WorkspaceRemoveConfirm>(new Dictionary<string, object?>
+        {
+            ["WorkspaceId"] = "ws-a",
+        });
+
+        Assert.Contains("data-close-details", html, StringComparison.Ordinal);
+        Assert.Contains(">Cancel</button>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(">Cancel</a>", html, StringComparison.Ordinal);
+        Assert.Contains("action=\"/workspace/remove\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-issue-id=\"remove-ws-a\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_RemoveCancelDropsTheWorkspaceHrefNavigation()
+    {
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = FactsWithStatus("ready", fileCount: 4),
+        });
+
+        Assert.Contains("data-close-details", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(">Cancel</a>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkspaceIndex_NoticeCarriesToneMarkersSoJsCanMirrorItAsAToast()
+    {
+        string removed = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+            ["Notice"] = "removed",
+            ["NoticeDetail"] = "/repo/a",
+        });
+
+        Assert.Contains("data-notice", removed, StringComparison.Ordinal);
+        Assert.Contains("data-notice-tone=\"ok\"", removed, StringComparison.Ordinal);
+
+        string failed = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+            ["Notice"] = "remove-error",
+            ["NoticeDetail"] = "locked",
+        });
+
+        Assert.Contains("data-notice-tone=\"danger\"", failed, StringComparison.Ordinal);
+
+        string none = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = IndexWithActivity(lastActivityTs: null),
+        });
+
+        Assert.DoesNotContain("data-notice", none, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Shells_ThemeButtonRendersBothLabelsSoCssPicksOneWithoutAFlash()
+    {
+        var index = new DashboardWorkspaceIndex(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);
+        string landing = await RenderComponentAsync<WorkspacesShell>(new Dictionary<string, object?>
+        {
+            ["Index"] = index,
+        });
+
+        var snapshot = new DashboardSnapshot(
+            Array.Empty<DashboardWorkspaceRow>(),
+            new DashboardTelemetrySummary("ws-a", [], 0, null, null, []),
+            "ws-a");
+        string workspace = await RenderComponentAsync<WorkspaceShell>(new Dictionary<string, object?>
+        {
+            ["Snapshot"] = snapshot,
+        });
+
+        string notFound = await RenderComponentAsync<NotFoundPage>(new Dictionary<string, object?>
+        {
+            ["Message"] = "workspace_id 'bogus' is not registered.",
+        });
+
+        foreach (string html in new[] { landing, workspace, notFound })
+        {
+            Assert.Contains("class=\"theme-label-dark\">Dark</span>", html, StringComparison.Ordinal);
+            Assert.Contains("class=\"theme-label-light\">Light</span>", html, StringComparison.Ordinal);
+            Assert.DoesNotContain("id=\"theme-toggle-label\"", html, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void DashboardCss_ShowsExactlyOneThemeLabelPerTheme()
+    {
+        string css = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src", "Miller.Dashboard", "wwwroot", "dashboard.css"));
+
+        Assert.Contains(".theme-label-light { display: none; }", css, StringComparison.Ordinal);
+        Assert.Contains("html[data-theme=\"dark\"] .theme-label-dark { display: none; }", css, StringComparison.Ordinal);
+        Assert.Contains("html[data-theme=\"dark\"] .theme-label-light { display: inline; }", css, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DashboardSiteScript_ClosesDetailsMirrorsNoticeToastAndLeavesThemeLabelToCss()
+    {
+        string js = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src", "Miller.Dashboard", "wwwroot", "js", "dashboard-site.js"));
+
+        Assert.Contains("[data-close-details]", js, StringComparison.Ordinal);
+        Assert.Contains("data-notice-tone", js, StringComparison.Ordinal);
+        Assert.Contains("showDashboardToast", js, StringComparison.Ordinal);
+        Assert.Contains("aria-pressed", js, StringComparison.Ordinal);
+        Assert.DoesNotContain("theme-toggle-label", js, StringComparison.Ordinal);
+    }
+
     private static DashboardWorkspaceFacts FactsWithStatus(string status, long fileCount) =>
         new(
             "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db", status, null,

@@ -93,11 +93,12 @@
         return Promise.resolve();
     }
 
+    // The visible label is CSS-driven off html[data-theme] (see dashboard.css) so it cannot flash a wrong
+    // value before this script runs. Only the pressed state, which CSS cannot express, is written here.
     function updateThemeButton(theme) {
-        var label = document.getElementById('theme-toggle-label');
-        if (label) {
-            label.textContent = theme === 'dark' ? 'Light' : 'Dark';
-        }
+        document.querySelectorAll('[data-toggle-theme]').forEach(function (button) {
+            button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+        });
     }
 
     window.toggleTheme = function () {
@@ -170,10 +171,31 @@
         window.showDashboardToast(message, 'danger');
     }
 
+    function mirrorNoticeAsToast() {
+        var notice = document.querySelector('[data-notice]');
+        if (!notice) {
+            return;
+        }
+        var text = (notice.textContent || '').trim();
+        if (text) {
+            window.showDashboardToast(text, notice.getAttribute('data-notice-tone') || 'ok');
+        }
+    }
+
     document.addEventListener('click', function (event) {
         var toggle = event.target.closest('[data-toggle-theme]');
         if (toggle) {
             window.toggleTheme();
+            return;
+        }
+
+        var closer = event.target.closest('[data-close-details]');
+        if (closer) {
+            var details = closer.closest('details');
+            if (details) {
+                event.preventDefault();
+                details.open = false;
+            }
             return;
         }
 
@@ -199,6 +221,9 @@
         updateRelativeTimes(document);
         window.rememberIssueDetailsState(document);
         applyVisibilityPolling();
+        // Runs before the first 30s poll, whose fragment carries no notice and morphs the inline
+        // paragraph away — the toast is what survives for a reader who looked away.
+        mirrorNoticeAsToast();
     });
 
     document.addEventListener('visibilitychange', applyVisibilityPolling);

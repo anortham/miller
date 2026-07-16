@@ -246,6 +246,13 @@ h3 {
   justify-content: flex-end;
 }
 
+/* The button names the theme it switches TO, chosen here rather than in script: theme-init.js stamps
+   data-theme before first paint, so the right label is already showing when the page appears. The
+   unstamped default (JS disabled) keeps the light-theme label, matching the served CSS colours. */
+.theme-label-light { display: none; }
+html[data-theme="dark"] .theme-label-dark { display: none; }
+html[data-theme="dark"] .theme-label-light { display: inline; }
+
 /* ---- Buttons & links — one squared, mono-labelled control ----------- */
 .theme-switcher-btn,
 .api-link,

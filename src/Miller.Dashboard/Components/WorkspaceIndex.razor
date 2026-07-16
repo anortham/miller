@@ -33,10 +33,14 @@
         <p class="notice error-notice"><strong>Registry unavailable</strong> @Index.Error</p>
     }
 
-    @* Remove/prune outcomes arrive as a post-redirect-get query param; the next 30s fragment poll clears them. *@
+    @* Remove/prune outcomes arrive as a post-redirect-get query param; the next 30s fragment poll clears them.
+       data-notice lets dashboard-site.js mirror the outcome into a toast on load — the durable signal, since
+       the poll's fragment render carries no Notice and morphs this paragraph away. *@
     @if (NoticeMessage is not null)
     {
-        <p class="@(NoticeIsError ? "notice error-notice" : "notice")">@NoticeMessage</p>
+        <p class="@(NoticeIsError ? "notice error-notice" : "notice")"
+           data-notice
+           data-notice-tone="@(NoticeIsError ? "danger" : "ok")">@NoticeMessage</p>
     }
 
     @if (Index.Entries.Count == 0)
