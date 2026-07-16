@@ -480,12 +480,13 @@ public sealed class InspectTool
         // limit is load-bearing — trace mode=refs defaults to 20, so a bare call would hand back FEWER refs
         // than the render that prompted it.
         bool refsTruncatedAtRefLimit = relationLimit == RefLimit && refs.Count > relationLimit;
+        string callName = EscapeCallString(sym.Name);
         if (refsTruncatedAtRefLimit)
             sb.Append('\n').Append(NextStepHint.Render(
-                $"trace target=\"{sym.Name}\" mode=refs limit={refs.Count}", "full reference list"));
+                $"trace target=\"{callName}\" mode=refs limit={refs.Count}", "full reference list"));
         else if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
             sb.Append('\n').Append(NextStepHint.Render(
-                $"impact target=\"{sym.Name}\"", $"{refs.Count} dependents"));
+                $"impact target=\"{callName}\"", $"{refs.Count} dependents"));
 
         return sb.ToString().TrimEnd('\n');
     }
@@ -595,6 +596,12 @@ public sealed class InspectTool
         }
         return Utf8(buffer);
     }
+
+    // Escape a symbol name for embedding inside a quoted tool-call argument, matching context's NextInspectLine
+    // precedent: backslash first, then quote, so a name containing either stays a single well-formed hint line.
+    private static string EscapeCallString(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private static void AppendOmittedLine(StringBuilder sb, int total, int visible, string label)
     {
