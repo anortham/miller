@@ -191,10 +191,10 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **Approach:** Host check compares `context.Request.Host.Host` against `127.0.0.1`, `localhost`, `[::1]`; wrong host → 403 plain text. Header check per endpoint (shared private helper), 400 with a short message pointing at the header name. Antiforgery-validated form posts (remove/prune) are already covered and stay unchanged.
 
 **Acceptance criteria:**
-- [ ] TestServer request with `Host: evil.example` → 403; normal host → 200.
-- [ ] The three POSTs → 400 without the header, succeed with it; remove/prune behavior unchanged.
-- [ ] Contract doc updated if it documents the JSON refresh POST.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] TestServer request with `Host: evil.example` → 403; normal host → 200.
+- [x] The three POSTs → 400 without the header, succeed with it; remove/prune behavior unchanged.
+- [x] Contract doc updated if it documents the JSON refresh POST.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 5: Workspace list UX (row click, remove de-emphasis, sort affordance, no-facts clarity, last-activity, `/` shortcut)
 

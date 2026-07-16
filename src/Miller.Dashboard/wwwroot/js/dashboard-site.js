@@ -204,10 +204,18 @@
     document.addEventListener('visibilitychange', applyVisibilityPolling);
 
     document.addEventListener('htmx:configRequest', function (event) {
-        var elt = pollTriggerElement(event.detail && event.detail.elt);
+        var detail = event.detail;
+        if (!detail || !detail.headers) {
+            return;
+        }
+        // Server-side CSRF gate on the antiforgery-free POSTs: a cross-origin form cannot set a custom
+        // header, and a cross-origin fetch that sets one preflights against a server that never answers.
+        // Sent on every htmx request, GETs included — harmless there, and one rule cannot drift per-route.
+        detail.headers['X-Miller-Dashboard'] = '1';
+        var elt = pollTriggerElement(detail.elt);
         var etag = elt ? fragmentETags[elt.id] : null;
         if (etag) {
-            event.detail.headers['If-None-Match'] = etag;
+            detail.headers['If-None-Match'] = etag;
         }
     });
 

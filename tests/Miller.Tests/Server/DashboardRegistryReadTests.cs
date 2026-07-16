@@ -1846,7 +1846,9 @@ public sealed class DashboardRegistryReadTests : IDisposable
 
         int route = endpoints.IndexOf("/workspaces/{workspace_id}/refresh", StringComparison.Ordinal);
         Assert.True(route >= 0, "JSON refresh route not found");
-        string block = endpoints[route..Math.Min(endpoints.Length, route + 400)];
+        // Window spans this route's handler only: the sole other TryRefreshWorkspace call precedes the
+        // route, so scanning forward cannot pass on a different route's use of it.
+        string block = endpoints[route..Math.Min(endpoints.Length, route + 700)];
         Assert.Contains("TryRefreshWorkspace", block, StringComparison.Ordinal);
     }
 

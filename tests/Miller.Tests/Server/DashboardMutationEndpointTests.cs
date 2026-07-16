@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -12,11 +13,13 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// HTTP-level tests for the dashboard's registry-lifecycle mutation endpoints (ADR-0002), driving the
-/// EXACT production pipeline (<see cref="DashboardHostPipeline"/>) on an in-memory TestServer. These
-/// prove what the component-render tests cannot: antiforgery validation actually rejects token-less and
-/// bad-token posts BEFORE any mutation, a valid token really mutates, and rejection is a 400 — never a
-/// 500 through the outer exception wrapper.
+/// HTTP-level tests for the dashboard's registry-lifecycle mutation endpoints (ADR-0002) and the
+/// loopback hardening around them, driving the EXACT production pipeline
+/// (<see cref="DashboardHostPipeline"/>) on an in-memory TestServer. These prove what the
+/// component-render tests cannot: antiforgery validation actually rejects token-less and bad-token
+/// posts BEFORE any mutation, a valid token really mutates, rejection is a 400 — never a 500 through
+/// the outer exception wrapper — a foreign <c>Host</c> is refused before any handler runs, and the
+/// antiforgery-free POSTs demand the <c>X-Miller-Dashboard</c> header a cross-origin form cannot send.
 /// </summary>
 public sealed class DashboardMutationEndpointTests : IDisposable
 {
@@ -143,6 +146,135 @@ public sealed class DashboardMutationEndpointTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.NotNull(FindRow("ws-gone"));
+    }
+
+    [Fact]
+    public async Task Request_WithForeignHost_Returns403BeforeAnyHandler()
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "http://evil.example/");
+        HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("text/plain", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Theory]
+    [InlineData("http://localhost/")]
+    [InlineData("http://127.0.0.1:4977/")]
+    [InlineData("http://[::1]:4977/")]
+    public async Task Request_WithLoopbackHost_IsServed(string url)
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task FragmentRefreshPost_WithoutDashboardHeader_Returns400()
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/fragments/refresh?workspace_id=ws-a", content: null, TestContext.Current.CancellationToken);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("X-Miller-Dashboard", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FragmentRefreshPost_WithDashboardHeader_RendersDetailStack()
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendWithDashboardHeaderAsync(
+            client, HttpMethod.Post, "/fragments/refresh?workspace_id=ws-a");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task OpenFolderPost_WithoutDashboardHeader_Returns400()
+    {
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/workspaces/ws-unregistered/open-folder", content: null, TestContext.Current.CancellationToken);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("X-Miller-Dashboard", body, StringComparison.Ordinal);
+    }
+
+    // An unregistered id: the header gate is proven passed by reaching the registry lookup's 404, without
+    // Process.Start opening a real file browser window on the machine running the suite.
+    [Fact]
+    public async Task OpenFolderPost_WithDashboardHeader_ReachesRegistryLookup()
+    {
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendWithDashboardHeaderAsync(
+            client, HttpMethod.Post, "/workspaces/ws-unregistered/open-folder");
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("Workspace not found in registry.", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task JsonRefreshPost_WithoutDashboardHeader_Returns400()
+    {
+        SeedWorkspace("ws-a", "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/workspaces/ws-a/refresh", content: null, TestContext.Current.CancellationToken);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("X-Miller-Dashboard", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task JsonRefreshPost_WithDashboardHeader_KeepsResponseShape()
+    {
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendWithDashboardHeaderAsync(
+            client, HttpMethod.Post, "/workspaces/does-not-exist/refresh");
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        using JsonDocument doc = JsonDocument.Parse(body);
+        Assert.Equal("does-not-exist", doc.RootElement.GetProperty("WorkspaceId").GetString());
+        Assert.Equal("failed", doc.RootElement.GetProperty("StatusText").GetString());
+    }
+
+    private static async Task<HttpResponseMessage> SendWithDashboardHeaderAsync(
+        HttpClient client, HttpMethod method, string url)
+    {
+        using var request = new HttpRequestMessage(method, url);
+        request.Headers.Add("X-Miller-Dashboard", "1");
+        return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
     private async Task<IHost> StartHostAsync()

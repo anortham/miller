@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Primitives;
 using Miller.Dashboard.Components;
 using Miller.Indexing;
 using Miller.Server.Tools;
@@ -13,6 +14,21 @@ namespace Miller.Dashboard.Endpoints;
 
 internal static class DashboardEndpoints
 {
+    private const string DashboardRequestHeader = "X-Miller-Dashboard";
+
+    /// <summary>
+    /// CSRF guard for the POSTs that carry no antiforgery token (they are htmx triggers, not forms, and
+    /// the loopback dashboard has no cookie session to bind a token to). A cross-origin <c>&lt;form&gt;</c>
+    /// cannot set a custom request header at all, and a cross-origin <c>fetch</c> that sets one turns the
+    /// request into a CORS preflight this server never answers — so the header's presence is proof the
+    /// caller is the dashboard's own page. Returns null when the request may proceed.
+    /// </summary>
+    private static IResult? RequireDashboardRequestHeader(HttpContext context) =>
+        context.Request.Headers.TryGetValue(DashboardRequestHeader, out StringValues values) &&
+        values.Contains("1")
+            ? null
+            : Results.BadRequest($"Missing required {DashboardRequestHeader}: 1 header.");
+
     public static void MapDashboardEndpoints(
         IEndpointRouteBuilder endpoints,
         DashboardPaths paths,
@@ -127,8 +143,13 @@ internal static class DashboardEndpoints
                 PreventStreamingRendering = true,
             });
 
-        endpoints.MapPost("/fragments/refresh", (string workspace_id) =>
+        endpoints.MapPost("/fragments/refresh", (string workspace_id, HttpContext context) =>
         {
+            if (RequireDashboardRequestHeader(context) is IResult rejected)
+            {
+                return rejected;
+            }
+
             var result = DashboardData.TryRefreshWorkspace(
                 paths.RegistryDbPath,
                 paths.ToolsRoot,
@@ -139,7 +160,7 @@ internal static class DashboardEndpoints
                 paths.TelemetryDbPath,
                 workspace_id,
                 launchDirectory);
-            return new RazorComponentResult<WorkspaceDetailStack>(new
+            return (IResult)new RazorComponentResult<WorkspaceDetailStack>(new
             {
                 Snapshot = snapshot,
                 Activity = DashboardData.ReadRecentActivity(
@@ -153,8 +174,13 @@ internal static class DashboardEndpoints
             };
         });
 
-        endpoints.MapPost("/workspaces/{workspace_id}/open-folder", (string workspace_id) =>
+        endpoints.MapPost("/workspaces/{workspace_id}/open-folder", (string workspace_id, HttpContext context) =>
         {
+            if (RequireDashboardRequestHeader(context) is IResult rejected)
+            {
+                return rejected;
+            }
+
             var workspaces = DashboardData.ReadWorkspaces(paths.RegistryDbPath);
             var workspace = workspaces.FirstOrDefault(w => string.Equals(w.WorkspaceId, workspace_id, StringComparison.Ordinal));
             if (workspace is null)
@@ -216,8 +242,13 @@ internal static class DashboardEndpoints
             DashboardData.RenderDiagnosticsJson(BuildRuntimeInfo(paths, launchDirectory)),
             "application/json; charset=utf-8"));
 
-        endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id) =>
+        endpoints.MapPost("/workspaces/{workspace_id}/refresh", (string workspace_id, HttpContext context) =>
         {
+            if (RequireDashboardRequestHeader(context) is IResult rejected)
+            {
+                return rejected;
+            }
+
             // Parity with the htmx /fragments/refresh route: any failure (unregistered id, missing extractor,
             // scan fault) renders as a Failed result body instead of a 500 with an empty body.
             var result = DashboardData.TryRefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspace_id);

@@ -82,6 +82,7 @@ internal static partial class DashboardHostPipeline
                     $"miller-dashboard error: {ex.GetType().Name}: {ex.Message}");
             }
         });
+        app.Use(RejectForeignHostAsync);
         app.Use(FragmentETagAsync);
         app.UseRouting();
         app.UseAntiforgery();
@@ -133,6 +134,35 @@ internal static partial class DashboardHostPipeline
             DashboardEndpoints.MapDashboardJsonEndpoints(endpoints, paths, launchDirectory);
         });
     }
+
+    /// <summary>
+    /// DNS-rebinding guard. The listener is loopback-only (<see cref="DashboardPaths.Url"/> is always
+    /// <c>http://127.0.0.1:{port}</c>), so a browser can only arrive here under a foreign <c>Host</c> if
+    /// an attacker's domain was rebound to 127.0.0.1 — at which point same-origin policy would hand that
+    /// page every dashboard read. Only the NAME is checked: any port reaching this process is by
+    /// definition the port we bound.
+    /// </summary>
+    private static async Task RejectForeignHostAsync(HttpContext context, RequestDelegate next)
+    {
+        if (!IsLoopbackHost(context.Request.Host.Host))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "text/plain; charset=utf-8";
+            await context.Response.WriteAsync(
+                "miller-dashboard: request Host is not a loopback name; reach the dashboard on 127.0.0.1.");
+            return;
+        }
+
+        await next(context);
+    }
+
+    // HostString.Host keeps IPv6 brackets ("[::1]:4977" -> "[::1]"); accept the bare form too so a Host
+    // assembled without them is not refused. An absent Host header yields "" and is refused.
+    private static bool IsLoopbackHost(string host) =>
+        LoopbackHosts.Contains(host);
+
+    private static readonly HashSet<string> LoopbackHosts =
+        new(["localhost", "127.0.0.1", "[::1]", "::1"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Conditional-GET support for the polled fragments: hash each rendered fragment into a strong

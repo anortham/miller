@@ -199,7 +199,11 @@ For authenticated browser surfaces:
 - Tests assert missing/invalid token fails without mutating.
 - Non-form htmx POST triggers include the token via `hx-include` on a containing form, or isolate the trigger in its own form.
 
-`Miller.Dashboard` today is **loopback-only** with no cookie session; `POST /fragments/refresh` does not use antiforgery. Do not copy that omission into authenticated Miller surfaces.
+`Miller.Dashboard` is **loopback-only** with no cookie session, so its htmx-triggered POSTs — `POST /fragments/refresh`, `POST /workspaces/{workspace_id}/open-folder`, and the JSON `POST /workspaces/{workspace_id}/refresh` — carry no antiforgery token. They are not unguarded: each **requires the `X-Miller-Dashboard: 1` request header** and answers `400` without it. A cross-origin `<form>` cannot set a custom header at all, and a cross-origin `fetch` that sets one becomes a CORS preflight the dashboard never answers — so the header proves the caller is the dashboard's own page. `dashboard-site.js` attaches it to every htmx request from one `htmx:configRequest` listener; any non-browser caller of the JSON refresh POST must send it too. The registry-lifecycle form posts (`/workspace/remove`, `/workspaces/prune`) are real forms and stay antiforgery-validated (ADR-0002).
+
+Header checks substitute for antiforgery only because there is no ambient credential to steal — the guard stops a cross-origin page from driving the local dashboard, nothing more. On an authenticated surface, validate antiforgery; do not copy this pattern.
+
+The same pipeline refuses any request whose `Host` is not a loopback name (`localhost`, `127.0.0.1`, `[::1]`) with `403`, before routing — a DNS-rebinding guard, since same-origin policy would otherwise hand an attacker's rebound domain every dashboard read. Port is not checked: any port reaching the process is the one it bound.
 
 Shared validation helper pattern:
 
