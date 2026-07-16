@@ -416,8 +416,8 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Canary cross-checks the instruction core; needs T4.1's final wording.
 
 **Acceptance criteria:**
-- [ ] Block ≤3,000 chars, gated by test; canary test cross-checks the nine routing lines against the embedded instruction core file.
-- [ ] `node --test tests/plugin/hooks-routing-block.test.cjs` passes.
+- [x] Block ≤3,000 chars, gated by test; canary test cross-checks the nine routing lines against the embedded instruction core file.
+- [x] `node --test tests/plugin/hooks-routing-block.test.cjs` passes.
 
 ### Task T5.2: Session hook script + shared hooks manifest (explicit event argument)
 
