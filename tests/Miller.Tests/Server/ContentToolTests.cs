@@ -305,6 +305,263 @@ public sealed class ContentToolTests : IDisposable
         return count;
     }
 
+    private ContentTool ToolWithNumberedSource(int lineCount, string displayPath)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string file = Path.Combine(_dir, "numbered.txt");
+        File.WriteAllText(file, string.Join('\n', Enumerable.Range(1, lineCount).Select(i => $"line {i}")));
+        tool.Content("import", path: file, display_path: displayPath);
+        return tool;
+    }
+
+    private int SourceLineCount(ContentTool tool, string displayPath)
+    {
+        using JsonDocument doc = JsonDocument.Parse(tool.Content("list", format: "json"));
+        return doc.RootElement.EnumerateArray()
+            .Single(source => source.GetProperty("display_path").GetString() == displayPath)
+            .GetProperty("line_count").GetInt32();
+    }
+
+    private static (int Start, int End) RenderedRange(string compact)
+    {
+        string header = compact.Split('\n').First(l => l.Contains(":", StringComparison.Ordinal) && l.Contains('-'));
+        string range = header[(header.LastIndexOf(':') + 1)..];
+        string[] parts = range.Split('-');
+        return (int.Parse(parts[0]), int.Parse(parts[1]));
+    }
+
+    [Fact]
+    public void Content_Read_NumberedFixture_HasExpectedLineCount()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        Assert.Equal(500, SourceLineCount(tool, "big/log.txt"));
+    }
+
+    [Fact]
+    public void Content_Read_OversizedWindowMidFile_ClampsToTwoHundredWithContinuationNote()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string read = tool.Content("read", source_id: "big/log.txt", line: 250, context_lines: 150);
+
+        Assert.StartsWith(
+            "window clamped to 200 lines (requested 301) — continue with line=450 context_lines=150",
+            read,
+            StringComparison.Ordinal);
+        Assert.Equal((100, 299), RenderedRange(read));
+        Assert.Contains("250: line 250", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_OversizedWindowClippedAtStartOfFile_ClampsFromLineOne()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string read = tool.Content("read", source_id: "big/log.txt", line: 50, context_lines: 300);
+
+        Assert.StartsWith("window clamped to 200 lines (requested 601)", read, StringComparison.Ordinal);
+        Assert.Equal((1, 200), RenderedRange(read));
+        Assert.Contains("50: line 50", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_OversizedWindowClippedAtEndOfFile_KeepsRequestedCenter()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string read = tool.Content("read", source_id: "big/log.txt", line: 495, context_lines: 300);
+
+        Assert.StartsWith("window clamped to 200 lines (requested 601)", read, StringComparison.Ordinal);
+        Assert.Contains("495: line 495", read, StringComparison.Ordinal);
+        (int start, int end) = RenderedRange(read);
+        Assert.Equal(200, end - start + 1);
+        Assert.InRange(495, start, end);
+    }
+
+    [Fact]
+    public void Content_Read_WindowClippedByEndOfFileWithinBudget_RendersNoClampNote()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string read = tool.Content("read", source_id: "big/log.txt", line: 495, context_lines: 150);
+
+        Assert.DoesNotContain("window clamped", read, StringComparison.Ordinal);
+        Assert.Equal((345, 500), RenderedRange(read));
+    }
+
+    [Fact]
+    public void Content_Read_OneLineSource_RendersThatLineWithoutClampNote()
+    {
+        ContentTool tool = ToolWithNumberedSource(1, "tiny/one.txt");
+
+        string read = tool.Content("read", source_id: "tiny/one.txt", line: 1, context_lines: 10);
+
+        Assert.DoesNotContain("window clamped", read, StringComparison.Ordinal);
+        Assert.Equal((1, 1), RenderedRange(read));
+        Assert.Contains("1: line 1", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_ContextLinesBeyondSourceLength_RendersWholeSourceWithoutClampNote()
+    {
+        ContentTool tool = ToolWithNumberedSource(5, "tiny/five.txt");
+
+        string read = tool.Content("read", source_id: "tiny/five.txt", line: 3, context_lines: 1000);
+
+        Assert.DoesNotContain("window clamped", read, StringComparison.Ordinal);
+        Assert.Equal((1, 5), RenderedRange(read));
+    }
+
+    [Fact]
+    public void Content_Read_ContextLinesLargerThanTheClamp_StillRendersRequestedCenter()
+    {
+        ContentTool tool = ToolWithNumberedSource(2000, "big/huge.txt");
+
+        string read = tool.Content("read", source_id: "big/huge.txt", line: 1000, context_lines: 500);
+
+        Assert.Contains("1000: line 1000", read, StringComparison.Ordinal);
+        (int start, int end) = RenderedRange(read);
+        Assert.Equal(200, end - start + 1);
+        Assert.InRange(1000, start, end);
+    }
+
+    private static int ContinuationLine(string compact)
+    {
+        string note = compact.Split('\n')[0];
+        int at = note.IndexOf("line=", StringComparison.Ordinal) + "line=".Length;
+        return int.Parse(note[at..note.IndexOf(' ', at)]);
+    }
+
+    [Theory]
+    [InlineData(150)]
+    [InlineData(500)]
+    public void Content_Read_ClampContinuationChain_ResumesExactlyAfterTheLastRenderedLine(int contextLines)
+    {
+        ContentTool tool = ToolWithNumberedSource(2000, "big/huge.txt");
+
+        string page = tool.Content("read", source_id: "big/huge.txt", line: 1000, context_lines: contextLines);
+        (int _, int firstEnd) = RenderedRange(page);
+
+        string nextPage = tool.Content(
+            "read",
+            source_id: "big/huge.txt",
+            line: ContinuationLine(page),
+            context_lines: contextLines);
+        (int nextStart, int _) = RenderedRange(nextPage);
+
+        Assert.Equal(firstEnd + 1, nextStart);
+    }
+
+    [Theory]
+    [InlineData(250)]
+    [InlineData(300)]
+    [InlineData(900)]
+    public void Content_Read_ClampContinuationChain_TerminatesAndCoversEveryLineWithoutGaps(int contextLines)
+    {
+        ContentTool tool = ToolWithNumberedSource(700, "big/log.txt");
+
+        var covered = new SortedSet<int>();
+        string page = tool.Content("read", source_id: "big/log.txt", line: 1, context_lines: contextLines);
+        for (int hop = 0; hop < 20; hop++)
+        {
+            (int start, int end) = RenderedRange(page);
+            covered.UnionWith(Enumerable.Range(start, end - start + 1));
+            if (!page.StartsWith("window clamped", StringComparison.Ordinal))
+                break;
+            page = tool.Content(
+                "read",
+                source_id: "big/log.txt",
+                line: ContinuationLine(page),
+                context_lines: contextLines);
+        }
+
+        Assert.Equal(Enumerable.Range(1, 700).ToArray(), covered.ToArray());
+        Assert.DoesNotContain("window clamped", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_ClampedWindow_RendersIdenticalLinesInCompactAndJson()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string compact = tool.Content("read", source_id: "big/log.txt", line: 250, context_lines: 150);
+        string json = tool.Content("read", source_id: "big/log.txt", line: 250, context_lines: 150, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        (int start, int end) = RenderedRange(compact);
+        Assert.Equal(start, root.GetProperty("line_start").GetInt32());
+        Assert.Equal(end, root.GetProperty("line_end").GetInt32());
+
+        int[] jsonLines = root.GetProperty("lines").EnumerateArray()
+            .Select(l => l.GetProperty("line").GetInt32()).ToArray();
+        Assert.Equal(Enumerable.Range(start, end - start + 1).ToArray(), jsonLines);
+    }
+
+    [Fact]
+    public void Content_Read_ClampNote_StaysOutOfJson()
+    {
+        ContentTool tool = ToolWithNumberedSource(500, "big/log.txt");
+
+        string json = tool.Content("read", source_id: "big/log.txt", line: 250, context_lines: 150, format: "json");
+
+        Assert.DoesNotContain("window clamped", json, StringComparison.Ordinal);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            new[] { "source_id", "display_path", "line_start", "line_end", "lines" },
+            doc.RootElement.EnumerateObject().Select(static p => p.Name).ToArray());
+    }
+
+    [Theory]
+    [InlineData("source", "workspace_source")]
+    [InlineData("workspace_source", "workspace_source")]
+    [InlineData("SOURCE", "workspace_source")]
+    [InlineData("docs", "workspace_docs")]
+    [InlineData("doc", "workspace_docs")]
+    [InlineData("workspace_docs", "workspace_docs")]
+    [InlineData("DOCS", "workspace_docs")]
+    [InlineData("config", "workspace_config")]
+    [InlineData("workspace_config", "workspace_config")]
+    [InlineData("external", "external_file")]
+    [InlineData("external_file", "external_file")]
+    [InlineData("file", "external_file")]
+    [InlineData("web", "web")]
+    [InlineData("WEB", "web")]
+    public void Content_SearchKindAliases_ResolveToCanonicalKinds(string alias, string canonical)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: alias, limit: 1);
+
+        Assert.Contains(canonical, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchKindAll_DefaultsToExternalFileForSearch()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "all", limit: 1);
+
+        Assert.Contains("external_file", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchUnknownKind_ErrorListsCanonicalValuesAndAliases()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "anything", content_kind: "markdown", limit: 1);
+
+        Assert.Contains(
+            "content_kind must be all, workspace_source (alias source), workspace_docs (aliases docs, doc), " +
+            "workspace_config (alias config), external_file (aliases external, file), or web.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=search_error", output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Content_Search_RecordsOperationShapeAndEmptyReason_InTelemetry()
     {

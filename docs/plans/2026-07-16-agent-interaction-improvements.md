@@ -243,9 +243,9 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Same files as T2.1; runs after T2.1 lands.
 
 **Acceptance criteria:**
-- [ ] Oversized windows return clamped content + note (no error); all five worked examples pass; compact/JSON render identical line sets.
-- [ ] Alias regression pins green; unknown kinds error with canonical values + aliases listed.
-- [ ] Focused ContentToolTests pass; handed to lead per commit mode.
+- [x] Oversized windows return clamped content + note (no error); all five worked examples pass; compact/JSON render identical line sets.
+- [x] Alias regression pins green; unknown kinds error with canonical values + aliases listed.
+- [x] Focused ContentToolTests pass; handed to lead per commit mode.
 
 # Phase 3 — Output token trims
 

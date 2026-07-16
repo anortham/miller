@@ -50,7 +50,7 @@ public sealed class ContentTool
         [Description("Stored workspace_id filter for operation=export. Optional.")] string? content_workspace_id = null,
         [Description("Workspace selector for search/read. Use all only for registered workspace search. Optional.")] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
-        [Description("Context lines before/after the read line. Default 10; total window capped at 200 lines (MaxReadWindowLines); larger is rejected.")] int? context_lines = null,
+        [Description("Context lines before/after the read line. Default 10. A window over 200 lines (MaxReadWindowLines) is clamped to 200, keeping the requested line; compact output then names the next line to continue from.")] int? context_lines = null,
         [Description("Max search results. Default 6.")] int limit = SearchTool.DefaultLimit,
         [Description("Max import bytes. Required to intentionally import files over the default cap.")] long? max_bytes = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
@@ -264,6 +264,7 @@ public sealed class ContentTool
         if (line is null)
             throw new InvalidOperationException("content read requires line.");
 
+        int effectiveContextLines = contextLines ?? ContentCorpusExternalStore.DefaultContextLines;
         string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(readContentDbPath, sourceId);
         readContentDbPath = ResolveReadContentDbPath(readContentDbPath, resolvedSourceId, workspaceId: null);
@@ -271,7 +272,7 @@ public sealed class ContentTool
             readContentDbPath,
             resolvedSourceId,
             line.Value,
-            contextLines ?? ContentCorpusExternalStore.DefaultContextLines);
+            effectiveContextLines);
         if (telemetry is not null)
         {
             telemetry.SetTarget(sourceId);
@@ -279,7 +280,7 @@ public sealed class ContentTool
             telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
         }
 
-        return json ? RenderReadJson(result) : RenderReadCompact(result);
+        return json ? RenderReadJson(result) : RenderReadCompact(result, effectiveContextLines);
     }
 
     private string ResolveReadSourceId(string contentDbPath, string sourceId)
@@ -562,7 +563,9 @@ public sealed class ContentTool
             "config" or "workspace_config" => TextContentKind.WorkspaceConfig,
             "external" or "external_file" or "file" => TextContentKind.ExternalFile,
             "web" => TextContentKind.Web,
-            _ => throw new InvalidOperationException("content_kind must be all, workspace_source, workspace_docs, workspace_config, external_file, or web."),
+            _ => throw new InvalidOperationException(
+                "content_kind must be all, workspace_source (alias source), workspace_docs (aliases docs, doc), " +
+                "workspace_config (alias config), external_file (aliases external, file), or web."),
         };
     }
 
@@ -629,9 +632,24 @@ public sealed class ContentTool
             + " workspace_id=" + first.Workspace.WorkspaceId;
     }
 
-    private static string RenderReadCompact(ExternalContentReadResult result)
+    private static string RenderReadCompact(ExternalContentReadResult result, int contextLines)
     {
         var sb = new StringBuilder();
+        if (result.Clamped && result.LineEnd < result.SourceLineCount)
+        {
+            int requestedLines = (2 * contextLines) + 1;
+            // The next window's start is itself clamped to centre − (MaxReadWindowLines − 1), so advancing the
+            // centre by more than that would step over unread lines instead of resuming at LineEnd + 1; a centre
+            // past the last line would be rejected outright, so the final hop lands on the last line and overlaps.
+            int advance = Math.Min(contextLines, ContentCorpusExternalStore.MaxReadWindowLines - 1);
+            int nextCenter = Math.Min(result.SourceLineCount, result.LineEnd + advance + 1);
+            sb.Append("window clamped to ").Append(ContentCorpusExternalStore.MaxReadWindowLines)
+              .Append(" lines (requested ").Append(requestedLines)
+              .Append(") — continue with line=").Append(nextCenter)
+              .Append(" context_lines=").Append(contextLines)
+              .Append('\n');
+        }
+
         sb.Append(result.DisplayPath).Append(':').Append(result.LineStart).Append('-').Append(result.LineEnd);
         foreach (ExternalContentLine line in result.Lines)
             sb.Append('\n').Append("    ").Append(line.LineNumber).Append(": ").Append(line.Text);
@@ -779,8 +797,6 @@ public sealed class ContentTool
                 return "source_not_found";
             if (message.Contains("No content corpus exists", StringComparison.OrdinalIgnoreCase))
                 return "content_corpus_missing";
-            if (message.Contains("maximum is", StringComparison.OrdinalIgnoreCase))
-                return "read_window_too_large";
             if (message.Contains("requested line", StringComparison.OrdinalIgnoreCase))
                 return "line_out_of_range";
             if (ex is ArgumentOutOfRangeException && message.Contains("context_lines", StringComparison.OrdinalIgnoreCase))

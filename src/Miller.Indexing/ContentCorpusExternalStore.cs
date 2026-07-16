@@ -232,11 +232,13 @@ public sealed class ContentCorpusExternalStore
 
         int start = Math.Max(1, line - contextLines);
         int end = Math.Min(source.LineCount, line + contextLines);
-        if (end - start + 1 > MaxReadWindowLines)
+        bool clamped = end - start + 1 > MaxReadWindowLines;
+        if (clamped)
         {
-            throw new InvalidOperationException(
-                $"Requested read window has {end - start + 1} lines; maximum is {MaxReadWindowLines}. " +
-                "Use a smaller context_lines value.");
+            // Trim the tail, but never past the requested centre: with context_lines >= MaxReadWindowLines a
+            // pure tail trim would drop the very line the caller asked for.
+            start = Math.Max(start, line - (MaxReadWindowLines - 1));
+            end = start + MaxReadWindowLines - 1;
         }
 
         using var command = connection.CreateCommand();
@@ -271,7 +273,9 @@ public sealed class ContentCorpusExternalStore
             source.DisplayPath,
             start,
             end,
-            linesByNumber.Select(static kv => new ExternalContentLine(kv.Key, kv.Value)).ToArray());
+            linesByNumber.Select(static kv => new ExternalContentLine(kv.Key, kv.Value)).ToArray(),
+            clamped,
+            source.LineCount);
     }
 
     /// <summary>Largest number of ambiguous alias candidates reported back to the caller.</summary>
@@ -705,12 +709,21 @@ public sealed record ExternalContentSource(
     int ChunkCount,
     string? Url = null);
 
+/// <summary>
+/// A rendered read window. <paramref name="Clamped"/> is true when the requested window exceeded
+/// <see cref="ContentCorpusExternalStore.MaxReadWindowLines"/> and was trimmed to fit, so callers can offer a
+/// continuation; a window merely clipped by the start/end of the source is not clamped.
+/// <paramref name="SourceLineCount"/> is the whole source's line count, which callers need to keep a
+/// continuation hint inside the source.
+/// </summary>
 public sealed record ExternalContentReadResult(
     string SourceId,
     string DisplayPath,
     int LineStart,
     int LineEnd,
-    IReadOnlyList<ExternalContentLine> Lines);
+    IReadOnlyList<ExternalContentLine> Lines,
+    bool Clamped = false,
+    int SourceLineCount = 0);
 
 public sealed record ExternalContentLine(int LineNumber, string Text);
 
