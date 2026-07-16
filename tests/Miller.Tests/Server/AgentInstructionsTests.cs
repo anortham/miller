@@ -97,7 +97,8 @@ public sealed class AgentInstructionsTests
         Assert.Contains("One Miller call beats shell greps and full-file reads", instructions);
         Assert.Contains("Structure before content", instructions);
         Assert.Contains("Impact before changing", instructions);
-        Assert.Contains("do NOT re-verify Miller results with grep/find", instructions);
+        Assert.Contains("Trust the index: results are current for the indexed revision", instructions);
+        Assert.Contains("beats re-checking by hand", instructions);
     }
 
     [Theory]

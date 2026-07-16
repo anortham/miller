@@ -7,9 +7,9 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 1. Search before reading: run `search` before grep/rg/cat or opening whole files.
 2. Structure before content: `inspect` a file's symbols or a symbol's signature before reading it whole.
 3. Impact before changing: run `impact` to see blast radius and which tests to run.
-4. Trace to follow a thread: `trace` answers "who references this?" and "how does A reach B?" — not manual file hopping.
+4. Trace to follow a thread: `trace` answers "who references this?" and "how does A reach B?" in one call.
 5. Edit with a preview: `edit` dry-runs a diff; set apply=true only after it looks right.
-6. Trust the index: do NOT re-verify Miller results with grep/find. If stale, run `workspace refresh` and retry.
+6. Trust the index: results are current for the indexed revision; if one looks stale, run `workspace refresh` and retry — beats re-checking by hand.
 
 ## When to reach for each tool
 
@@ -21,6 +21,6 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
 - patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 36 languages.
 - content — import then search/read logs, CI output, web markdown, and other large text without full-file reads.
-- workspace — index lifecycle: status, refresh, health, list (filter/limit), onboarding, dashboard.
+- workspace — index lifecycle: status, refresh, health, list, onboarding, dashboard.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.

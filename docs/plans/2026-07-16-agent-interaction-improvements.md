@@ -355,8 +355,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** None - safe parallel batch.
 
 **Acceptance criteria:**
-- [ ] No bare-NOT construct without a named alternative remains in the instruction core; char count ≤1,900 post-CRLF-normalization.
-- [ ] AgentInstructionsTests pass with updated pins; handed to lead per commit mode.
+- [x] No bare-NOT construct without a named alternative remains in the instruction core; char count ≤1,900 post-CRLF-normalization.
+- [x] AgentInstructionsTests pass with updated pins; handed to lead per commit mode.
 
 ### Task T4.2: Description sweep for adoption-hostile phrasing
 
