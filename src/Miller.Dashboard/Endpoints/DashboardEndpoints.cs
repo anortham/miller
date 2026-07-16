@@ -143,6 +143,9 @@ internal static class DashboardEndpoints
                 PreventStreamingRendering = true,
             });
 
+        // A converge can run for minutes: start a background job and answer with the in-progress stack, which
+        // polls /fragments/refresh-status until a terminal result renders. Blocking here would hold the request
+        // open past the browser's patience and lose the outcome entirely.
         endpoints.MapPost("/fragments/refresh", (string workspace_id, HttpContext context) =>
         {
             if (RequireDashboardRequestHeader(context) is IResult rejected)
@@ -150,29 +153,14 @@ internal static class DashboardEndpoints
                 return rejected;
             }
 
-            var result = DashboardData.TryRefreshWorkspace(
-                paths.RegistryDbPath,
-                paths.ToolsRoot,
-                workspace_id);
-            DashboardIndexFactsCache.Clear();
-            DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
-                paths.RegistryDbPath,
-                paths.TelemetryDbPath,
+            DashboardRefreshJobStatus job = DashboardRefreshJobs.Start(
                 workspace_id,
-                launchDirectory);
-            return (IResult)new RazorComponentResult<WorkspaceDetailStack>(new
-            {
-                Snapshot = snapshot,
-                Activity = DashboardData.ReadRecentActivity(
-                    paths.TelemetryDbPath,
-                    paths.RegistryDbPath,
-                    snapshot.SelectedWorkspaceId),
-                RefreshResult = result,
-            })
-            {
-                PreventStreamingRendering = true,
-            };
+                () => RefreshAndInvalidateFacts(paths, workspace_id));
+            return DetailStackResult(paths, launchDirectory, workspace_id, job);
         });
+
+        endpoints.MapGet("/fragments/refresh-status", (string workspace_id) =>
+            DetailStackResult(paths, launchDirectory, workspace_id, DashboardRefreshJobs.Peek(workspace_id)));
 
         endpoints.MapPost("/workspaces/{workspace_id}/open-folder", (string workspace_id, HttpContext context) =>
         {
@@ -207,6 +195,45 @@ internal static class DashboardEndpoints
                 return Results.BadRequest(ex.Message);
             }
         });
+    }
+
+    private static IResult DetailStackResult(
+        DashboardPaths paths,
+        string launchDirectory,
+        string workspaceId,
+        DashboardRefreshJobStatus? job)
+    {
+        DashboardSnapshot snapshot = DashboardData.ReadSnapshot(
+            paths.RegistryDbPath,
+            paths.TelemetryDbPath,
+            workspaceId,
+            launchDirectory);
+        return new RazorComponentResult<WorkspaceDetailStack>(new
+        {
+            Snapshot = snapshot,
+            Activity = DashboardData.ReadRecentActivity(
+                paths.TelemetryDbPath,
+                paths.RegistryDbPath,
+                snapshot.SelectedWorkspaceId),
+            RefreshJob = job,
+        })
+        {
+            PreventStreamingRendering = true,
+        };
+    }
+
+    // Runs on the job's background thread. The cached facts describe the index this refresh just rewrote, so
+    // they are dropped as the job ends — even for a failed scan, which may still have replaced the artifact.
+    private static WorkspaceRefreshResult RefreshAndInvalidateFacts(DashboardPaths paths, string workspaceId)
+    {
+        try
+        {
+            return DashboardData.TryRefreshWorkspace(paths.RegistryDbPath, paths.ToolsRoot, workspaceId);
+        }
+        finally
+        {
+            DashboardIndexFactsCache.Clear();
+        }
     }
 
     public static void MapDashboardJsonEndpoints(

@@ -1,5 +1,4 @@
 @namespace Miller.Dashboard.Components
-@using Miller.Server.Workspaces
 
 <section id="workspace-detail-panel" class="panel detail-panel" aria-label="Selected workspace index facts">
     <div class="panel-heading">
@@ -10,12 +9,13 @@
         @if (Facts is not null)
         {
             <div class="detail-actions">
-                <RefreshStatusPanel Result="RefreshResult" />
+                <RefreshStatusPanel Job="RefreshJob" WorkspaceId="@Facts.WorkspaceId" />
                 <button class="refresh-button"
                         type="button"
                         hx-post="/fragments/refresh?workspace_id=@Esc(Facts.WorkspaceId)"
                         hx-target="#workspace-detail-stack"
-                        hx-swap="outerHTML"
+                        hx-ext="morph"
+                        hx-swap="morph:outerHTML"
                         hx-disabled-elt="this">
                     <span class="refresh-button-label">Refresh index</span>
                     <span class="refresh-button-indicator" aria-hidden="true">Refreshing…</span>
@@ -222,7 +222,7 @@
 @code {
     [Parameter] public DashboardWorkspaceFacts? Facts { get; set; }
 
-    [Parameter] public WorkspaceRefreshResult? RefreshResult { get; set; }
+    [Parameter] public DashboardRefreshJobStatus? RefreshJob { get; set; }
 
     // One "now" per render so the last-scan <time> humanizes against the same instant the client repaints from.
     private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;

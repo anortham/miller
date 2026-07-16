@@ -345,9 +345,9 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **Approach:** In-memory `ConcurrentDictionary<string, Lazy<Task<WorkspaceRefreshResult>>>`; duplicate Start for a running workspace returns the running job (no double refresh). `DashboardIndexFactsCache.Clear()` moves to job completion. Status renders: Running → "Refreshing… started Ns ago" + poll attr; Completed → existing `RefreshStatusPanel` result rendering, no poll attr.
 
 **Acceptance criteria:**
-- [ ] POST `/fragments/refresh` returns in <1s with in-progress markup (fake slow refresh func in test).
-- [ ] Status route renders running state while incomplete and the terminal result exactly once after completion; second Start while running does not spawn a second refresh.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] POST `/fragments/refresh` returns in <1s with in-progress markup (fake slow refresh func in test).
+- [x] Status route renders running state while incomplete and the terminal result exactly once after completion; second Start while running does not spawn a second refresh.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 10: Responsive pass, hero-metrics grid, final visual sweep
 

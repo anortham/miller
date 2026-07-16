@@ -601,7 +601,7 @@ public sealed class DashboardActivityFeedTests : IDisposable
 
         string html = await RenderComponentAsync<RefreshStatusPanel>(new Dictionary<string, object?>
         {
-            ["Result"] = result,
+            ["Job"] = new DashboardRefreshJobStatus(DashboardRefreshJobState.Completed, TimeSpan.FromSeconds(4), result),
         });
 
         Assert.Contains("id=\"refresh-status\"", html);

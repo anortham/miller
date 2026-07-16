@@ -165,6 +165,13 @@ internal static partial class DashboardHostPipeline
         new(["localhost", "127.0.0.1", "[::1]", "::1"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// The refresh-job status route. Its <c>Refreshing…</c> body repeats verbatim between polls, so an ETag
+    /// match would answer <c>304</c> — a no-swap on the client — for as long as the job runs, and the panel
+    /// would still be polling a route whose terminal render it agreed not to look at. Never cache it.
+    /// </summary>
+    private static readonly PathString RefreshStatusPath = new("/fragments/refresh-status");
+
+    /// <summary>
     /// Conditional-GET support for the polled fragments: hash each rendered fragment into a strong
     /// <c>ETag</c> and answer a matching <c>If-None-Match</c> with <c>304</c>, so an unchanged poll
     /// transfers and re-renders nothing. Pairs with the client's morph swaps (dashboard-site.js):
@@ -173,7 +180,8 @@ internal static partial class DashboardHostPipeline
     private static async Task FragmentETagAsync(HttpContext context, RequestDelegate next)
     {
         if (!HttpMethods.IsGet(context.Request.Method) ||
-            !context.Request.Path.StartsWithSegments("/fragments"))
+            !context.Request.Path.StartsWithSegments("/fragments") ||
+            context.Request.Path.Equals(RefreshStatusPath, StringComparison.OrdinalIgnoreCase))
         {
             await next(context);
             return;

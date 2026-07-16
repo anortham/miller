@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Miller.Dashboard;
 using Miller.Indexing;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -208,6 +209,76 @@ public sealed class DashboardMutationEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task FragmentRefreshPost_AnswersWhileTheRefreshIsStillRunning()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await SendWithDashboardHeaderAsync(
+            client, HttpMethod.Post, $"/fragments/refresh?workspace_id={workspaceId}");
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(gate.Task.IsCompleted);
+        Assert.Contains($"hx-get=\"/fragments/refresh-status?workspace_id={workspaceId}\"", body, StringComparison.Ordinal);
+        Assert.Contains("hx-trigger=\"every 2s\"", body, StringComparison.Ordinal);
+        Assert.Contains("Refreshing", body, StringComparison.Ordinal);
+
+        gate.SetResult();
+    }
+
+    [Fact]
+    public async Task RefreshStatusFragment_RendersRunningThenTheTerminalResultExactlyOnce()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        var gate = new TaskCompletionSource();
+        DashboardRefreshJobs.Start(workspaceId, GatedRefresh(gate, workspaceId));
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+        string url = $"/fragments/refresh-status?workspace_id={workspaceId}";
+
+        string running = await GetBodyAsync(client, url);
+        Assert.Contains("hx-trigger=\"every 2s\"", running, StringComparison.Ordinal);
+        Assert.DoesNotContain("rev 43", running, StringComparison.Ordinal);
+
+        gate.SetResult();
+        string terminal = await PollUntilAsync(client, url, body => body.Contains("rev 43", StringComparison.Ordinal));
+        Assert.Contains("refreshed", terminal, StringComparison.Ordinal);
+        Assert.DoesNotContain("hx-trigger=\"every 2s\"", terminal, StringComparison.Ordinal);
+        Assert.DoesNotContain("/fragments/refresh-status", terminal, StringComparison.Ordinal);
+
+        string afterConsumed = await GetBodyAsync(client, url);
+        Assert.DoesNotContain("rev 43", afterConsumed, StringComparison.Ordinal);
+        Assert.DoesNotContain("hx-trigger=\"every 2s\"", afterConsumed, StringComparison.Ordinal);
+    }
+
+    // A Running body repeats verbatim between polls, so an ETag match would 304 the panel into a permanent
+    // "Refreshing…" — the status route must stay out of the fragment ETag cache. The activity fragment is the
+    // control: it proves the middleware is live for every other fragment.
+    [Fact]
+    public async Task RefreshStatusFragment_IsExcludedFromFragmentETagCaching()
+    {
+        string workspaceId = NewWorkspaceId();
+        SeedWorkspace(workspaceId, "alpha-abcd1234");
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage status = await SendWithIfNoneMatchAsync(
+            client, $"/fragments/refresh-status?workspace_id={workspaceId}");
+        HttpResponseMessage activity = await SendWithIfNoneMatchAsync(
+            client, $"/fragments/activity?workspace_id={workspaceId}");
+
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.Null(status.Headers.ETag);
+        Assert.Equal(HttpStatusCode.NotModified, activity.StatusCode);
+    }
+
+    [Fact]
     public async Task OpenFolderPost_WithoutDashboardHeader_Returns400()
     {
         using IHost host = await StartHostAsync();
@@ -276,6 +347,48 @@ public sealed class DashboardMutationEndpointTests : IDisposable
         request.Headers.Add("X-Miller-Dashboard", "1");
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
+
+    private static async Task<HttpResponseMessage> SendWithIfNoneMatchAsync(HttpClient client, string url)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("If-None-Match", "*");
+        return await client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<string> GetBodyAsync(HttpClient client, string url)
+    {
+        HttpResponseMessage response = await client.GetAsync(url, TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<string> PollUntilAsync(HttpClient client, string url, Func<string, bool> matches)
+    {
+        for (int attempt = 0; attempt < 3000; attempt++)
+        {
+            string body = await GetBodyAsync(client, url);
+            if (matches(body))
+                return body;
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException($"{url} never rendered the expected state within 30s.");
+    }
+
+    private static Func<WorkspaceRefreshResult> GatedRefresh(TaskCompletionSource gate, string workspaceId) =>
+        () =>
+        {
+            gate.Task.GetAwaiter().GetResult();
+            return new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.Refreshed,
+                workspaceId,
+                "/repo/a",
+                "/repo/a/.miller/symbols.db",
+                Revision: 43,
+                Scanned: true);
+        };
+
+    private static string NewWorkspaceId() => "ws-http-" + Guid.NewGuid().ToString("N");
 
     private async Task<IHost> StartHostAsync()
     {

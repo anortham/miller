@@ -1,8 +1,7 @@
 @namespace Miller.Dashboard.Components
-@using Miller.Server.Workspaces
 
 <div id="workspace-detail-stack" class="main-stack detail-stack">
-    <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" RefreshResult="RefreshResult" />
+    <WorkspaceDetailPanel Facts="Snapshot.SelectedWorkspaceFacts" RefreshJob="RefreshJob" />
     <WorkspaceHealthPanel Health="Snapshot.Health" />
     <PatternInventoryPanel Inventory="Snapshot.PatternInventory" />
     <WorkspaceOnboardingPanel Onboarding="Snapshot.Onboarding" />
@@ -20,5 +19,5 @@
     [Parameter, EditorRequired] public DashboardActivityFeed Activity { get; set; } =
         new(null, Array.Empty<DashboardActivityEntry>());
 
-    [Parameter] public WorkspaceRefreshResult? RefreshResult { get; set; }
+    [Parameter] public DashboardRefreshJobStatus? RefreshJob { get; set; }
 }

@@ -1,26 +1,56 @@
 @namespace Miller.Dashboard.Components
 @using Miller.Server.Workspaces
 
-@* Swap target for the workspace refresh button. Rendered empty on the page; the
-   POST /fragments/refresh response replaces it with the refresh outcome. *@
-<span id="refresh-status" class="refresh-status @CssClass">@Label</span>
+@* Swap target for the workspace refresh button. Rendered empty on the page; the POST /fragments/refresh
+   response replaces it with a running state that polls itself to the refresh outcome. The poll attributes
+   exist ONLY while the job runs — a terminal render drops them, which is what stops the polling. *@
+<span id="refresh-status" class="refresh-status @CssClass" @attributes="PollAttributes">@Label</span>
 
 @code {
-    [Parameter] public WorkspaceRefreshResult? Result { get; set; }
+    [Parameter] public DashboardRefreshJobStatus? Job { get; set; }
 
-    private string CssClass => Result switch
+    [Parameter] public string? WorkspaceId { get; set; }
+
+    private bool IsRunning => Job is { State: DashboardRefreshJobState.Running };
+
+    private WorkspaceRefreshResult? Result => Job?.Result;
+
+    private Dictionary<string, object>? PollAttributes => IsRunning
+        ? new Dictionary<string, object>
+        {
+            ["hx-get"] = $"/fragments/refresh-status?workspace_id={Esc(WorkspaceId)}",
+            ["data-poll-trigger"] = "every 2s",
+            ["hx-trigger"] = "every 2s",
+            ["hx-target"] = "#workspace-detail-stack",
+            ["hx-ext"] = "morph",
+            ["hx-swap"] = "morph:outerHTML",
+        }
+        : null;
+
+    private string CssClass
     {
-        null => string.Empty,
-        { Status: WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged } => "ok",
-        // The live server leader holds the lock and converges on its own — not a failure.
-        { Status: WorkspaceRefreshStatus.LockBusy } => "neutral",
-        _ => "bad",
-    };
+        get
+        {
+            // Reuses the muted "neutral" tone: a job in flight is not an outcome yet.
+            if (IsRunning)
+                return "neutral";
+            return Result switch
+            {
+                null => string.Empty,
+                { Status: WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged } => "ok",
+                // The live server leader holds the lock and converges on its own — not a failure.
+                { Status: WorkspaceRefreshStatus.LockBusy } => "neutral",
+                _ => "bad",
+            };
+        }
+    }
 
     private string Label
     {
         get
         {
+            if (IsRunning)
+                return $"Refreshing… started {ElapsedSeconds}s ago";
             if (Result is null)
                 return string.Empty;
             string label = Result.StatusText;
@@ -31,4 +61,7 @@
             return label;
         }
     }
+
+    private string ElapsedSeconds =>
+        Math.Max(0, (long)(Job?.Elapsed.TotalSeconds ?? 0)).ToString(CultureInfo.InvariantCulture);
 }
