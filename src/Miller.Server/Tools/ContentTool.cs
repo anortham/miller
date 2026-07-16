@@ -832,11 +832,10 @@ public sealed class ContentTool
     private static IReadOnlyList<ContentNextAction> SearchNoResultsNextActions(string query, string contentKind) =>
     [
         NextAction(
-            "content",
-            "retry against all indexed text kinds when the expected corpus is unclear",
-            ("operation", "search"),
+            "search",
+            "widen to every indexed text kind when the expected corpus is unclear",
             ("query", query),
-            ("content_kind", "all-text")),
+            ("mode", "all-text")),
         NextAction(
             "content",
             "audit registered workspace source text across workspaces only when that broad scope is intended",
@@ -861,12 +860,12 @@ public sealed class ContentTool
                 "find a valid source_id before reading",
                 ("operation", "search"),
                 ("query", query),
-                ("content_kind", "all-text")),
+                ("content_kind", "external_file")),
             NextAction(
                 "content",
                 "list imported sources and choose an exact source_id",
                 ("operation", "list"),
-                ("content_kind", "all-text")),
+                ("content_kind", "external_file")),
         ];
     }
 

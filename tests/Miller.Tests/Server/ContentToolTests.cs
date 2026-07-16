@@ -845,6 +845,67 @@ public sealed class ContentToolTests : IDisposable
             .ToArray();
     }
 
+    private const string ContentKindRejection = "content_kind must be";
+
+    private static string ReplayContentAction(ContentTool tool, JsonElement action)
+    {
+        JsonElement args = action.GetProperty("args");
+        string? Arg(string key) => args.TryGetProperty(key, out JsonElement value) ? value.GetString() : null;
+
+        return tool.Content(
+            Arg("operation"),
+            query: Arg("query"),
+            content_kind: Arg("content_kind"),
+            workspace_id: Arg("workspace_id"),
+            format: "json");
+    }
+
+    private static void AssertNextActionsAreAccepted(ContentTool tool, string output)
+    {
+        JsonElement[] actions = JsonDocument.Parse(output).RootElement
+            .GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.NotEmpty(actions);
+
+        foreach (JsonElement action in actions)
+        {
+            string tool_ = action.GetProperty("tool").GetString()!;
+            JsonElement args = action.GetProperty("args");
+
+            if (string.Equals(tool_, "content", StringComparison.Ordinal))
+            {
+                string replay = ReplayContentAction(tool, action);
+                Assert.DoesNotContain(ContentKindRejection, replay, StringComparison.Ordinal);
+                continue;
+            }
+
+            if (string.Equals(tool_, "search", StringComparison.Ordinal))
+            {
+                string mode = args.GetProperty("mode").GetString()!;
+                Assert.NotEqual(SearchToolMode.Auto, SearchTool.ParseMode(mode));
+            }
+        }
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_JsonNextActionsAreAcceptedByTheirOwnParsers()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "docs", format: "json", limit: 3);
+
+        AssertNextActionsAreAccepted(tool, output);
+    }
+
+    [Fact]
+    public void Content_ErrorRecovery_JsonNextActionsAreAcceptedByTheirOwnParsers()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content("read", source_id: "external_file:deadbeef", line: 1, format: "json");
+
+        AssertNextActionsAreAccepted(tool, output);
+    }
+
     [Fact]
     public void Content_SearchNoResults_JsonIncludesRecoveryGuidance()
     {
@@ -862,8 +923,8 @@ public sealed class ContentToolTests : IDisposable
         JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
         Assert.True(actions.Length >= 3);
         Assert.Contains(actions, action =>
-            action.GetProperty("tool").GetString() == "content"
-            && action.GetProperty("args").GetProperty("content_kind").GetString() == "all-text");
+            action.GetProperty("tool").GetString() == "search"
+            && action.GetProperty("args").GetProperty("mode").GetString() == "all-text");
         Assert.Contains(actions, action =>
             action.GetProperty("tool").GetString() == "search"
             && action.GetProperty("args").GetProperty("mode").GetString() == "source");
@@ -891,9 +952,9 @@ public sealed class ContentToolTests : IDisposable
         JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
         Assert.Equal(3, actions.Length);
         Assert.Equal(
-            new[] { "content", "content", "search" },
+            new[] { "search", "content", "search" },
             actions.Select(static action => action.GetProperty("tool").GetString()).ToArray());
-        Assert.Equal("all-text", actions[0].GetProperty("args").GetProperty("content_kind").GetString());
+        Assert.Equal("all-text", actions[0].GetProperty("args").GetProperty("mode").GetString());
         Assert.Equal("all", actions[1].GetProperty("args").GetProperty("workspace_id").GetString());
         Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
     }
