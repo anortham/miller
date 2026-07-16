@@ -113,7 +113,6 @@ public sealed class InspectTool
         }
     }
 
-    private const int SignatureMaxLength = 110;
     private const int RefLimit = 50;
     private const int OverviewRelationLimit = 3;
     private const int OverviewChildLimit = 5;
@@ -336,7 +335,7 @@ public sealed class InspectTool
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  :").Append(s.StartLine);
         if (SignatureAddsInfo(s))
-            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -386,7 +385,7 @@ public sealed class InspectTool
         sb.Append("# ").Append(sym.Name).Append("  (").Append(sym.Kind).Append(")\n");
         sb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
         if (SignatureAddsInfo(sym))
-            sb.Append(Truncate(sym.Signature!, SignatureMaxLength)).Append('\n');
+            sb.Append(Truncate(sym.Signature!, ToolRenderLimits.SignatureMaxLength)).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
             sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
@@ -778,7 +777,7 @@ public sealed class InspectTool
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine);
         if (SignatureAddsInfo(s))
-            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 

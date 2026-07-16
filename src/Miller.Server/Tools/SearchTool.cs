@@ -811,7 +811,6 @@ public sealed class SearchTool
     }
 
     private const int OutsideScopeHintLimit = 3;
-    private const int SignatureMaxLength = 110;
 
     /// <summary>Longest accepted query. A pasted blob beyond this is never a real symbol/text search; reject it
     /// BEFORE tokenization/CollapseName so it cannot heap-thrash the tokenizers.</summary>
@@ -1868,7 +1867,7 @@ public sealed class SearchTool
             if (IsLowSignalKind(s.Kind))
                 sb.Append("  low_signal");
             else if (!string.IsNullOrEmpty(s.Signature))
-                sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+                sb.Append("  ").Append(Truncate(s.Signature!, ToolRenderLimits.SignatureMaxLength));
         }
         return sb.ToString();
     }
@@ -2067,7 +2066,7 @@ public sealed class SearchTool
         if (IsLowSignalKind(s.Kind))
             sb.Append("  low_signal");
         else if (!string.IsNullOrEmpty(s.Signature))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(s.Signature!, ToolRenderLimits.SignatureMaxLength));
         if (hasDocSymbolIds?.Contains(s.SymbolId) == true)
             sb.Append("  has_doc");
     }
@@ -2213,7 +2212,7 @@ public sealed class SearchTool
         sb.Append('\n');
 
         if (!string.IsNullOrEmpty(symbol.Signature))
-            sb.Append("  ").Append(Truncate(symbol.Signature!, SignatureMaxLength)).Append('\n');
+            sb.Append("  ").Append(Truncate(symbol.Signature!, ToolRenderLimits.SignatureMaxLength)).Append('\n');
     }
 
     private static void AppendOtherMatchesGroupedByFile(
@@ -2286,7 +2285,7 @@ public sealed class SearchTool
         }
 
         if (!string.IsNullOrEmpty(symbol.Signature))
-            sb.Append('\n').Append(continuationIndent).Append(Truncate(symbol.Signature!, SignatureMaxLength));
+            sb.Append('\n').Append(continuationIndent).Append(Truncate(symbol.Signature!, ToolRenderLimits.SignatureMaxLength));
         sb.Append('\n');
     }
 

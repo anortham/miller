@@ -142,7 +142,6 @@ public sealed partial class ContextTool
         }
     }
 
-    private const int SignatureMaxLength = 110;
     private const int SearchSeedLimit = 10; // BM25 seed cap for bundle construction, not the rendered search page.
     // A generous internal reach cap so the budget — not an arbitrary count — bounds the bundle. The token pack
     // is the real limiter; this only guards against a pathological fan-out feeding the packer a huge candidate set.
@@ -602,7 +601,7 @@ public sealed partial class ContextTool
           .Append(s.FilePath).Append(':').Append(s.StartLine)
           .Append("  hop=").Append(c.Hop);
         if (!string.IsNullOrEmpty(s.Signature))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(s.Signature!, ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -616,7 +615,7 @@ public sealed partial class ContextTool
         if (c.Hop > 0) // hop=0 is the seed/definition itself — the label only earns its tokens for neighbors
             sb.Append(" hop=").Append(c.Hop);
         if (!string.IsNullOrEmpty(s.Signature))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(s.Signature!, ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -706,7 +705,7 @@ public sealed partial class ContextTool
         sb.Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
           .Append(s.FilePath).Append(':').Append(s.StartLine).Append("  seed");
         if (!string.IsNullOrEmpty(s.Signature))
-            sb.Append("  ").Append(Truncate(s.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(s.Signature!, ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -751,9 +750,9 @@ public sealed partial class ContextTool
         if (item.Hop is not null)
             sb.Append(" hop=").Append(item.Hop.Value);
         if (!string.IsNullOrEmpty(item.Signature))
-            sb.Append(' ').Append(Truncate(item.Signature!, SignatureMaxLength));
+            sb.Append(' ').Append(Truncate(item.Signature!, ToolRenderLimits.SignatureMaxLength));
         if (!string.IsNullOrEmpty(item.Snippet))
-            sb.Append(' ').Append(Truncate(item.Snippet!, SignatureMaxLength));
+            sb.Append(' ').Append(Truncate(item.Snippet!, ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 
@@ -768,9 +767,9 @@ public sealed partial class ContextTool
         if (item.Hop is not null)
             sb.Append(" hop=").Append(item.Hop.Value);
         if (!string.IsNullOrEmpty(item.Signature))
-            sb.Append("  ").Append(Truncate(item.Signature!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(item.Signature!, ToolRenderLimits.SignatureMaxLength));
         else if (!string.IsNullOrEmpty(item.Snippet))
-            sb.Append("  ").Append(Truncate(item.Snippet!, SignatureMaxLength));
+            sb.Append("  ").Append(Truncate(item.Snippet!, ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
     }
 

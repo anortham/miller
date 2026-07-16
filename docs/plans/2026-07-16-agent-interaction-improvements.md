@@ -318,7 +318,7 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Touches lane A + two otherwise-untouched files; runs after Batches 1–4 land (Batch 5a, before T4.2).
 
 **Acceptance criteria:**
-- [ ] Literal `110` appears once; all three tools reference the shared const; fast suite passes.
+- [x] Literal `110` appears once; all three tools reference the shared const; fast suite passes.
 
 ### Task T3.5: Refresh ADR-0001's stale measurement
 
