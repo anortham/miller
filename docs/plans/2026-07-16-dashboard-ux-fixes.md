@@ -96,11 +96,11 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 - Manual smoke: run the dashboard on port 4999, confirm in the browser network log (curl is fine: two successive GETs, second with `If-None-Match`) that unchanged fragments 304.
 
 **Acceptance criteria:**
-- [ ] `GET /fragments/workspaces` responds with an `ETag`; repeating the request with that `If-None-Match` (same cookies) yields `304` with an empty body; a data change yields a fresh 200 + different ETag.
-- [ ] Rendered `WorkspaceIndex`/`ActivityFeedPanel`/`TelemetryPanel` HTML contains `hx-ext="morph"` and `hx-swap="morph:outerHTML"` on the polled sections (rendered-HTML assertions).
-- [ ] Remove-confirm `<details>` carries `data-issue-details` + stable `data-issue-id` so its open state survives swaps.
-- [ ] `/lib/idiomorph/idiomorph-ext.min.js` is served by the pipeline (HTTP test) and loaded by `DashboardScripts`.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] `GET /fragments/workspaces` responds with an `ETag`; repeating the request with that `If-None-Match` (same cookies) yields `304` with an empty body; a data change yields a fresh 200 + different ETag.
+- [x] Rendered `WorkspaceIndex`/`ActivityFeedPanel`/`TelemetryPanel` HTML contains `hx-ext="morph"` and `hx-swap="morph:outerHTML"` on the polled sections (rendered-HTML assertions).
+- [x] Remove-confirm `<details>` carries `data-issue-details` + stable `data-issue-id` so its open state survives swaps.
+- [x] `/lib/idiomorph/idiomorph-ext.min.js` is served by the pipeline (HTTP test) and loaded by `DashboardScripts`.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 2: Copy & data presentation (pluralization, unresolved hashes, pattern list)
 

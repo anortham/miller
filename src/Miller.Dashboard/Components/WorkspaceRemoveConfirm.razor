@@ -4,7 +4,7 @@
 @* Shared remove control (all-workspaces rows + workspace detail page) so the confirm copy,
    antiforgery token, and endpoint cannot drift between views. CSS-only details/summary expand
    around an SSR confirm form — no JS. *@
-<details>
+<details data-issue-details data-issue-id="remove-@WorkspaceId">
     <summary class="subtle-link">Remove…</summary>
     <form class="detail-actions" method="post" action="/workspace/remove">
         <AntiforgeryToken />

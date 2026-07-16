@@ -5,7 +5,8 @@
          hx-get="/fragments/telemetry?workspace_id=@Esc(SelectedWorkspaceId)"
          data-poll-trigger="every 30s"
          hx-trigger="every 30s"
-         hx-swap="outerHTML">
+         hx-ext="morph"
+         hx-swap="morph:outerHTML">
     <div class="panel-heading">
         <div>
             <h2>Telemetry</h2>
@@ -15,7 +16,7 @@
                 type="button"
                 hx-get="/fragments/telemetry?workspace_id=@Esc(SelectedWorkspaceId)"
                 hx-target="#telemetry-panel"
-                hx-swap="outerHTML">Refresh</button>
+                hx-swap="morph:outerHTML">Refresh</button>
     </div>
 
     @if (!string.IsNullOrWhiteSpace(Telemetry.Error))

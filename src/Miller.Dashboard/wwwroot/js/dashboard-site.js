@@ -16,6 +16,17 @@
         staleOpen: false,
     };
 
+    // ETag per polled element id. Module scope, not the DOM: a morph swap replaces attributes on the
+    // live element, so an ETag parked on the node itself would be clobbered by the very swap it guards.
+    var fragmentETags = {};
+
+    function pollTriggerElement(elt) {
+        return elt && typeof elt.getAttribute === 'function' &&
+            elt.getAttribute('data-poll-trigger') && elt.id
+            ? elt
+            : null;
+    }
+
     function issueKey(details) {
         return details.getAttribute('data-issue-id') || details.id || '';
     }
@@ -192,7 +203,33 @@
 
     document.addEventListener('visibilitychange', applyVisibilityPolling);
 
+    document.addEventListener('htmx:configRequest', function (event) {
+        var elt = pollTriggerElement(event.detail && event.detail.elt);
+        var etag = elt ? fragmentETags[elt.id] : null;
+        if (etag) {
+            event.detail.headers['If-None-Match'] = etag;
+        }
+    });
+
+    document.addEventListener('htmx:afterOnLoad', function (event) {
+        var detail = event.detail;
+        var elt = pollTriggerElement(detail && detail.elt);
+        if (!elt || !detail.xhr) {
+            return;
+        }
+        var etag = detail.xhr.getResponseHeader('ETag');
+        if (etag) {
+            fragmentETags[elt.id] = etag;
+        }
+    });
+
     document.addEventListener('htmx:beforeSwap', function (event) {
+        // htmx 2's default responseHandling swaps any 3xx, so an unguarded 304 would swap the
+        // panel away with its empty body. Nothing changed — keep the live DOM exactly as it is.
+        if (event.detail && event.detail.xhr && event.detail.xhr.status === 304) {
+            event.detail.shouldSwap = false;
+            return;
+        }
         captureIssueDetailsState(event.target);
     });
 

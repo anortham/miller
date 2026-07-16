@@ -8,7 +8,8 @@
          hx-get="/fragments/workspaces"
          data-poll-trigger="every 30s"
          hx-trigger="every 30s"
-         hx-swap="outerHTML">
+         hx-ext="morph"
+         hx-swap="morph:outerHTML">
     <div class="panel-heading">
         <div>
             <h2>Workspaces</h2>

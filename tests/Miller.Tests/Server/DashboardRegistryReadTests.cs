@@ -1342,11 +1342,13 @@ public sealed class DashboardRegistryReadTests : IDisposable
             ["Index"] = SampleWorkspaceIndex(),
         });
 
-        // A6: the section refreshes itself from the orphaned fragment route, visibility-gated.
+        // A6: the section refreshes itself from the orphaned fragment route, visibility-gated,
+        // and patches in place via idiomorph rather than tearing the subtree down on every poll.
         Assert.Contains("hx-get=\"/fragments/workspaces\"", html);
         Assert.Contains("data-poll-trigger=\"every 30s\"", html);
         Assert.Contains("hx-trigger=\"every 30s\"", html);
-        Assert.Contains("hx-swap=\"outerHTML\"", html);
+        Assert.Contains("hx-ext=\"morph\"", html);
+        Assert.Contains("hx-swap=\"morph:outerHTML\"", html);
     }
 
     [Fact]

@@ -10,11 +10,10 @@ document.addEventListener('alpine:init', function () {
             sortColumn: null, // 'workspace' | 'files' | 'symbols' | 'rev'
             sortDir: 'asc',   // 'asc' | 'desc'
 
-            // The #workspace-index section is swapped wholesale by a 30s htmx poll, which
-            // destroys this component's DOM and reactive state. State that must survive a
-            // swap lives in a module-level store owned by dashboard-site.js; init() rehydrates
-            // from it and every mutation writes back, so the poll never clears the user's
-            // filter text, sort choice, or a manually-opened stale section.
+            // The #workspace-index section is patched by a 30s htmx morph poll. State that must
+            // survive a swap lives in a module-level store owned by dashboard-site.js; init()
+            // rehydrates from it and every mutation writes back, so the poll never clears the
+            // user's filter text, sort choice, or a manually-opened stale section.
             store: function () {
                 return window.__millerWorkspaceIndexState ||
                     (window.__millerWorkspaceIndexState = {
@@ -37,13 +36,20 @@ document.addEventListener('alpine:init', function () {
                 this.autoOpenedStale = !!s.autoOpenedStale;
                 this.sortColumn = s.sortColumn || null;
                 this.sortDir = s.sortDir || 'asc';
+                this.rehydrate();
 
-                // Restore an open stale section (manual or auto) that a prior swap dropped.
+                // A morph swap patches this section in place, so the component instance and this
+                // init() survive it — the server's freshly rendered rows arrive unsorted, unfiltered,
+                // and with the stale section closed. Reapply the user's view on every swap.
+                var self = this;
+                this.$el.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
+            },
+
+            rehydrate: function () {
                 var stale = this.$el.querySelector('.ws-stale-collapse');
-                if (stale && s.staleOpen) {
+                if (stale && this.store().staleOpen) {
                     stale.open = true;
                 }
-                // Track manual open/close so it survives the next swap.
                 if (stale && stale.getAttribute('data-stale-bound') !== '1') {
                     stale.setAttribute('data-stale-bound', '1');
                     var self = this;

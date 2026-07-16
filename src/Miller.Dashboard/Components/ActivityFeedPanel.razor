@@ -5,7 +5,8 @@
          hx-get="/fragments/activity?workspace_id=@Esc(Feed.WorkspaceId)"
          data-poll-trigger="every 5s"
          hx-trigger="every 5s"
-         hx-swap="outerHTML">
+         hx-ext="morph"
+         hx-swap="morph:outerHTML">
     <div class="panel-heading">
         <div>
             <h2>Live activity</h2>
