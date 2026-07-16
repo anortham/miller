@@ -40,7 +40,7 @@ function listSkillFiles(root) {
 
 const HOOKED_PLUGIN_MANIFESTS = ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json'];
 const SHARED_HOOKS_REFERENCE = './hooks/claude-codex-hooks.json';
-const ALLOWED_HOOK_EVENTS = ['SessionStart'];
+const ALLOWED_HOOK_EVENTS = ['SessionStart', 'SubagentStart'];
 
 function readHooksManifest(pluginManifestPath) {
   const plugin = readJson(pluginManifestPath);

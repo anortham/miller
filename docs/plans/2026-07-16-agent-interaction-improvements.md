@@ -476,8 +476,8 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Extends T5.2/T5.3 artifacts.
 
 **Acceptance criteria:**
-- [ ] SubagentStart emission uses the verified shape; SessionStart behavior unchanged; failure paths still exit 0.
-- [ ] `scripts/test-plugin.sh` passes.
+- [x] SubagentStart emission uses the verified shape; SessionStart behavior unchanged; failure paths still exit 0.
+- [x] `scripts/test-plugin.sh` passes.
 
 ### Task T5.5: Hook delivery gate — release, install, trust, smoke (**approval-gated**)
 

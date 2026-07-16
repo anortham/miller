@@ -15,6 +15,11 @@ const HOOKS_MANIFEST_PATH = path.join(repoRoot, 'hooks', 'claude-codex-hooks.jso
 const ROUTING_BLOCK_FRAGMENT = 'One Miller call beats shell greps and full-file reads';
 const HOOK_TIMEOUT_MS = 10000;
 
+const EMITTING_EVENTS = [
+  { argument: 'session-start', hookEventName: 'SessionStart', matcher: 'startup|resume|clear|compact' },
+  { argument: 'subagent-start', hookEventName: 'SubagentStart', matcher: undefined },
+];
+
 function runHook(args, env = {}) {
   const result = spawnSync(process.execPath, [HOOK_SCRIPT_PATH, ...args], {
     encoding: 'utf8',
@@ -27,57 +32,67 @@ function runHook(args, env = {}) {
   return result;
 }
 
-test('session-start emits the routing block and exits 0', () => {
-  const result = runHook(['session-start']);
+for (const { argument, hookEventName } of EMITTING_EVENTS) {
+  test(`${argument} emits the routing block and exits 0`, () => {
+    const result = runHook([argument]);
 
-  assert.equal(result.status, 0);
-  assert.ok(
-    result.stdout.includes(ROUTING_BLOCK_FRAGMENT),
-    `hook stdout should carry the routing block; got: ${result.stdout.slice(0, 200)}`,
-  );
-});
+    assert.equal(result.status, 0);
+    assert.ok(
+      result.stdout.includes(ROUTING_BLOCK_FRAGMENT),
+      `hook stdout should carry the routing block; got: ${result.stdout.slice(0, 200)}`,
+    );
+  });
 
-test('session-start output conforms to the SessionStart additionalContext shape', () => {
-  const result = runHook(['session-start']);
-  const payload = JSON.parse(result.stdout);
-  const block = fs.readFileSync(ROUTING_BLOCK_PATH, 'utf8').replaceAll('\r\n', '\n').trim();
+  test(`${argument} output conforms to the ${hookEventName} additionalContext shape`, () => {
+    const result = runHook([argument]);
+    const payload = JSON.parse(result.stdout);
+    const block = fs.readFileSync(ROUTING_BLOCK_PATH, 'utf8').replaceAll('\r\n', '\n').trim();
 
-  assert.equal(payload.hookSpecificOutput.hookEventName, 'SessionStart');
-  assert.equal(payload.hookSpecificOutput.additionalContext, block);
-});
+    assert.equal(payload.hookSpecificOutput.hookEventName, hookEventName);
+    assert.equal(payload.hookSpecificOutput.additionalContext, block);
+  });
 
-test('MILLER_SESSION_HOOKS=0 exits 0 without emitting context', () => {
-  const result = runHook(['session-start'], { MILLER_SESSION_HOOKS: '0' });
+  test(`${argument} honours MILLER_SESSION_HOOKS=0`, () => {
+    const result = runHook([argument], { MILLER_SESSION_HOOKS: '0' });
 
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, '');
-});
-
-test('MILLER_SESSION_HOOKS=false exits 0 without emitting context', () => {
-  const result = runHook(['session-start'], { MILLER_SESSION_HOOKS: 'false' });
-
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, '');
-});
-
-test('a missing routing block exits 0 without emitting context', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-hook-'));
-  const copiedScript = path.join(tempDir, 'miller-session-hook.cjs');
-  fs.copyFileSync(HOOK_SCRIPT_PATH, copiedScript);
-
-  try {
-    const result = spawnSync(process.execPath, [copiedScript, 'session-start'], {
-      encoding: 'utf8',
-      timeout: HOOK_TIMEOUT_MS,
-      cwd: os.tmpdir(),
-    });
-
-    assert.equal(result.signal, null);
     assert.equal(result.status, 0);
     assert.equal(result.stdout, '');
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  });
+
+  test(`${argument} honours MILLER_SESSION_HOOKS=false`, () => {
+    const result = runHook([argument], { MILLER_SESSION_HOOKS: 'false' });
+
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '');
+  });
+
+  test(`${argument} exits 0 without emitting context when the routing block is missing`, () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miller-hook-'));
+    const copiedScript = path.join(tempDir, 'miller-session-hook.cjs');
+    fs.copyFileSync(HOOK_SCRIPT_PATH, copiedScript);
+
+    try {
+      const result = spawnSync(process.execPath, [copiedScript, argument], {
+        encoding: 'utf8',
+        timeout: HOOK_TIMEOUT_MS,
+        cwd: os.tmpdir(),
+      });
+
+      assert.equal(result.signal, null);
+      assert.equal(result.status, 0);
+      assert.equal(result.stdout, '');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('each supported event emits a distinct hookEventName', () => {
+  const emitted = EMITTING_EVENTS.map(({ argument }) =>
+    JSON.parse(runHook([argument]).stdout).hookSpecificOutput.hookEventName);
+
+  assert.deepEqual(emitted, EMITTING_EVENTS.map((event) => event.hookEventName));
+  assert.equal(new Set(emitted).size, emitted.length);
 });
 
 test('an unknown event argument exits 0 without emitting context', () => {
@@ -94,31 +109,32 @@ test('a missing event argument exits 0 without emitting context', () => {
   assert.equal(result.stdout, '');
 });
 
-test('hooks manifest registers SessionStart against an existing script with an explicit event', () => {
+test('hooks manifest registers each supported event against an existing script with its own explicit event argument', () => {
   const manifest = JSON.parse(fs.readFileSync(HOOKS_MANIFEST_PATH, 'utf8'));
 
-  assert.deepEqual(Object.keys(manifest.hooks), ['SessionStart']);
+  assert.deepEqual(Object.keys(manifest.hooks), EMITTING_EVENTS.map((event) => event.hookEventName));
 
-  for (const entry of manifest.hooks.SessionStart) {
-    assert.equal(entry.matcher, 'startup|resume|clear|compact');
-    assert.ok(entry.hooks.length > 0);
+  for (const { argument, hookEventName, matcher } of EMITTING_EVENTS) {
+    for (const entry of manifest.hooks[hookEventName]) {
+      assert.equal(entry.matcher, matcher, `${hookEventName} matcher should be ${matcher ?? 'omitted (every agent type)'}`);
+      assert.ok(entry.hooks.length > 0);
 
-    for (const handler of entry.hooks) {
-      assert.equal(handler.type, 'command');
+      for (const handler of entry.hooks) {
+        assert.equal(handler.type, 'command');
 
-      const scriptMatch = handler.command.match(/\$\{CLAUDE_PLUGIN_ROOT\}\/([^"']+\.cjs)/);
-      assert.ok(scriptMatch, `command should invoke a plugin-root script: ${handler.command}`);
-      assert.ok(
-        fs.existsSync(path.join(repoRoot, scriptMatch[1])),
-        `command references a missing script: ${scriptMatch[1]}`,
-      );
+        const scriptMatch = handler.command.match(/\$\{CLAUDE_PLUGIN_ROOT\}\/([^"']+\.cjs)/);
+        assert.ok(scriptMatch, `command should invoke a plugin-root script: ${handler.command}`);
+        assert.ok(
+          fs.existsSync(path.join(repoRoot, scriptMatch[1])),
+          `command references a missing script: ${scriptMatch[1]}`,
+        );
 
-      const finalToken = handler.command.trim().split(/\s+/).pop();
-      assert.match(
-        finalToken,
-        /^[a-z][a-z-]*$/,
-        `command should end with an explicit event argument: ${handler.command}`,
-      );
+        assert.equal(
+          handler.command.trim().split(/\s+/).pop(),
+          argument,
+          `${hookEventName} command should pass the explicit ${argument} argument`,
+        );
+      }
     }
   }
 });

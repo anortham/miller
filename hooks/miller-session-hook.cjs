@@ -8,6 +8,7 @@ const ROUTING_BLOCK_FILE = 'miller-routing-block.md';
 
 const HOOK_EVENT_NAMES = new Map([
   ['session-start', 'SessionStart'],
+  ['subagent-start', 'SubagentStart'],
 ]);
 
 function sessionHooksDisabled() {

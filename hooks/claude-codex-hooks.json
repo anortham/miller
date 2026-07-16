@@ -12,6 +12,18 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/miller-session-hook.cjs\" subagent-start",
+            "statusMessage": "Loading Miller routing guidance",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
