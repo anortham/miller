@@ -37,7 +37,7 @@ document.addEventListener('alpine:init', function () {
                 s.autoOpenedStale = this.autoOpenedStale;
                 s.sortColumn = this.sortColumn;
                 s.sortDir = this.sortDir;
-                var stale = this.$el.querySelector('.ws-stale-collapse');
+                var stale = this.$root.querySelector('.ws-stale-collapse');
                 s.staleOpen = stale ? stale.open : false;
             },
             init: function () {
@@ -52,11 +52,11 @@ document.addEventListener('alpine:init', function () {
                 // init() survive it — the server's freshly rendered rows arrive unsorted, unfiltered,
                 // and with the stale section closed. Reapply the user's view on every swap.
                 var self = this;
-                this.$el.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
+                this.$root.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
             },
 
             rehydrate: function () {
-                var stale = this.$el.querySelector('.ws-stale-collapse');
+                var stale = this.$root.querySelector('.ws-stale-collapse');
                 if (stale && this.store().staleOpen) {
                     stale.open = true;
                 }
@@ -72,7 +72,7 @@ document.addEventListener('alpine:init', function () {
             },
 
             applyFilter: function () {
-                var root = this.$el;
+                var root = this.$root;
                 var q = (this.query || '').trim().toLowerCase();
                 var anyVisible = false;
                 root.querySelectorAll('.ws-index-row').forEach(function (row) {
@@ -121,7 +121,7 @@ document.addEventListener('alpine:init', function () {
                 var dir = this.sortDir === 'desc' ? -1 : 1;
                 // Sort each grid (live + stale) independently; the header row is not a .ws-index-row
                 // so re-appending the rows leaves the header in place.
-                this.$el.querySelectorAll('.ws-index').forEach(function (grid) {
+                this.$root.querySelectorAll('.ws-index').forEach(function (grid) {
                     var rows = Array.prototype.slice.call(grid.querySelectorAll('.ws-index-row'));
                     rows.sort(function (a, b) {
                         if (col === 'workspace') {
@@ -144,7 +144,7 @@ document.addEventListener('alpine:init', function () {
                 var self = this;
                 // aria-sort belongs on the columnheader, not the button inside it: a button is not a
                 // table header, so the state must land on the element carrying role="columnheader".
-                this.$el.querySelectorAll('[data-sort-col]').forEach(function (btn) {
+                this.$root.querySelectorAll('[data-sort-col]').forEach(function (btn) {
                     var col = btn.getAttribute('data-sort-col');
                     var header = btn.closest('[role="columnheader"]') || btn;
                     if (self.sortColumn === col) {
@@ -181,7 +181,7 @@ document.addEventListener('alpine:init', function () {
                 this.rehydrate();
 
                 var self = this;
-                this.$el.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
+                this.$root.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
             },
 
             rehydrate: function () {
@@ -208,7 +208,7 @@ document.addEventListener('alpine:init', function () {
                 var col = this.sortColumn;
                 var dir = this.sortDir === 'desc' ? -1 : 1;
                 // Re-appending rows inside <tbody> leaves <thead> in place.
-                this.$el.querySelectorAll('tbody').forEach(function (body) {
+                this.$root.querySelectorAll('tbody').forEach(function (body) {
                     var rows = Array.prototype.slice.call(body.querySelectorAll('.telemetry-row'));
                     rows.sort(function (a, b) {
                         if (col === 'tool') {
@@ -230,7 +230,7 @@ document.addEventListener('alpine:init', function () {
             reflectSortButtons: function () {
                 var self = this;
                 // A real <th> carries aria-sort directly — it has no explicit role="columnheader".
-                this.$el.querySelectorAll('[data-sort-col]').forEach(function (btn) {
+                this.$root.querySelectorAll('[data-sort-col]').forEach(function (btn) {
                     var header = btn.closest('th') || btn;
                     if (self.sortColumn === btn.getAttribute('data-sort-col')) {
                         header.setAttribute('aria-sort', self.sortDir === 'desc' ? 'descending' : 'ascending');

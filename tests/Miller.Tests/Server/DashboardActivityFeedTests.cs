@@ -890,6 +890,34 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public void AlpineComponents_QueryTheComponentRootNotTheDirectiveElement()
+    {
+        string js = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "wwwroot",
+            "js",
+            "alpine-components.js"));
+
+        Assert.DoesNotContain("this.$el", js, StringComparison.Ordinal);
+        Assert.Contains("this.$root", js, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceRows_LiftAboveSiblingsWhileTheirRemovePopoverIsOpen()
+    {
+        string css = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "wwwroot",
+            "dashboard.css"));
+
+        Assert.Contains(".ws-index-row:has(details[open])", css, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReleaseWorkflow_VerifiesVendoredDashboardScriptAssets()
     {
         string workflow = File.ReadAllText(Path.Combine(

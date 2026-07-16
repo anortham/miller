@@ -118,7 +118,7 @@
                     <span class="muted">
                         @if (staleMissing > 0)
                         {
-                            <text>@staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing root — prune below or run <code>miller workspace prune</code></text>
+                            <text>@staleMissing.ToString("N0", CultureInfo.InvariantCulture) missing root — expand to prune, or run <code>miller workspace prune</code></text>
                         }
                         @if (staleMissing > 0 && staleErrored > 0)
                         {

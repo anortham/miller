@@ -596,6 +596,12 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
 
 .ws-index-row:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
 
+/* The remove popover hangs BELOW its row, over the next row — whose stretched-link ::after
+   otherwise wins the hit-test (sibling rows are z-auto, and :hover's transform flattens the
+   form's own z-index into the row). Lift the whole row while its popover is open so every
+   click inside the popover lands on the popover. */
+.ws-index-row:has(details[open]) { z-index: 3; }
+
 /* Above the stretch: the path keeps its truncation tooltip and stays selectable, and the remove
    control stays clickable instead of navigating to the workspace. */
 .ws-index-row .workspace-path,
@@ -959,6 +965,16 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
 
 .panel-collapse-summary::-webkit-details-marker { display: none; }
 
+/* The default disclosure marker is suppressed, so without a caret the summary reads as static
+   text and nothing advertises that the section expands. */
+.panel-collapse-summary::before {
+  content: "\25B8";
+  color: var(--muted);
+  font-size: 11px;
+}
+
+details[open] > .panel-collapse-summary::before { content: "\25BE"; }
+
 .panel-collapse .telemetry {
   border: 0;
   box-shadow: none;
@@ -1080,6 +1096,25 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
+}
+
+/* Pattern inventory rows reuse .breakdown-row but live directly in the panel (no .breakdown
+   wrapper), so the list carries the panel's inner padding itself. */
+.pattern-family-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 14px 18px 18px;
+  list-style: none;
+}
+
+.pattern-family-list li { min-width: 0; }
+
+.pattern-family-list small { overflow-wrap: anywhere; }
+
+.pattern-inventory-panel > .empty-inline,
+.pattern-inventory-panel > .notice {
+  margin: 14px 18px 18px;
 }
 
 .breakdown-row span:first-child,
