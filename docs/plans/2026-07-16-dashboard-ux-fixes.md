@@ -316,8 +316,8 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **What to build:** Sparklines currently have no time anchor. Show the recorded window ("Jun 12, 10:00 UTC → Jul 16, 16:00 UTC") under each sparkline so "since first" means something.
 
 **Acceptance criteria:**
-- [ ] Series carry first/latest recorded timestamps when history has them; panel renders the window; series without timestamps render unchanged.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Series carry first/latest recorded timestamps when history has them; panel renders the window; series without timestamps render unchanged.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 9: Async refresh with progress
 

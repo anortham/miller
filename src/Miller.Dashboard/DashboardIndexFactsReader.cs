@@ -61,32 +61,39 @@ public static class DashboardIndexFactsReader
             return DashboardWorkspaceTrendsPanel.UnreadablePanel(workspace.WorkspaceId);
         }
 
-        // Group the flattened rows by metric (each already ordered by snapshot_id) so a per-metric value series can
-        // be assembled without re-sorting.
-        var valuesByMetric = new Dictionary<string, List<double>>(StringComparer.Ordinal);
+        // Group the flattened rows by metric (each already ordered by snapshot_id) so a per-metric series can be
+        // assembled without re-sorting. The store downsamples BEFORE returning, so these rows are exactly the points
+        // the sparkline plots — the window bounds below therefore match its first/last plotted point.
+        var pointsByMetric = new Dictionary<string, List<MetricHistoryTrendPoint>>(StringComparer.Ordinal);
         foreach (MetricHistoryTrendPoint point in points)
         {
-            if (!valuesByMetric.TryGetValue(point.Metric, out List<double>? series))
+            if (!pointsByMetric.TryGetValue(point.Metric, out List<MetricHistoryTrendPoint>? series))
             {
-                series = new List<double>();
-                valuesByMetric[point.Metric] = series;
+                series = new List<MetricHistoryTrendPoint>();
+                pointsByMetric[point.Metric] = series;
             }
 
-            series.Add(point.Value);
+            series.Add(point);
         }
 
         var seriesList = new List<DashboardTrendSeries>(TrendMetrics.Length);
         foreach ((string metric, string label) in TrendMetrics)
         {
-            if (!valuesByMetric.TryGetValue(metric, out List<double>? values) || values.Count == 0)
+            if (!pointsByMetric.TryGetValue(metric, out List<MetricHistoryTrendPoint>? metricPoints)
+                || metricPoints.Count == 0)
+            {
                 continue; // absent metric ⟹ no row.
+            }
 
+            double[] values = metricPoints.ConvertAll(static p => p.Value).ToArray();
             seriesList.Add(new DashboardTrendSeries(
                 metric,
                 label,
                 values,
                 First: values[0],
-                Latest: values[^1]));
+                Latest: values[^1],
+                FirstRecordedAtUtc: metricPoints[0].RecordedAtUtc,
+                LatestRecordedAtUtc: metricPoints[^1].RecordedAtUtc));
         }
 
         return new DashboardWorkspaceTrendsPanel(workspace.WorkspaceId, seriesList);

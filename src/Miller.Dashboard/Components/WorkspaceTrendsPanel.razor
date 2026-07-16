@@ -43,6 +43,12 @@
                                 <span title="Highest value across the recorded history">max @FormatValue(SeriesMax(series))</span>
                                 <span title="Most recent recorded value">latest @FormatValue(series.Latest)</span>
                             </small>
+                            @if (series.HasRecordedWindow)
+                            {
+                                <small class="sparkline-window" title="Recorded window this sparkline covers">
+                                    @WindowLabel(series)
+                                </small>
+                            }
                         </div>
                         <small class="trend-delta">@DeltaLabel(series)</small>
                     }
@@ -74,6 +80,10 @@
         string sign = delta > 0 ? "+" : string.Empty;
         return FormatCount(series.Points.Count, "point") + " · " + sign + FormatValue(delta) + " since first";
     }
+
+    // HasRecordedWindow guarantees both bounds are non-blank here.
+    private static string WindowLabel(DashboardTrendSeries series) =>
+        AbsoluteShort(series.FirstRecordedAtUtc) + " → " + AbsoluteShort(series.LatestRecordedAtUtc);
 
     // HasTrend guarantees Points.Count >= 2, so Min/Max are always defined here.
     private static double SeriesMin(DashboardTrendSeries series) => series.Points.Min();

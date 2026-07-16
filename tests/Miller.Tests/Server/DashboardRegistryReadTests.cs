@@ -2157,7 +2157,11 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     private static void RecordSnapshot(
-        string historyDbPath, long revision, params (string Metric, double Value)[] metrics)
+        string historyDbPath, long revision, params (string Metric, double Value)[] metrics) =>
+        RecordSnapshotAt(historyDbPath, revision, null, metrics);
+
+    private static void RecordSnapshotAt(
+        string historyDbPath, long revision, DateTime? recordedAtUtc, params (string Metric, double Value)[] metrics)
     {
         var snapshot = new MetricHistorySnapshot(
             WorkspaceId: "ws-a",
@@ -2167,7 +2171,7 @@ public sealed class DashboardRegistryReadTests : IDisposable
             MillerVersion: "0.9.9",
             Source: "converge",
             Metrics: metrics.Select(m => new MetricHistoryPoint(m.Metric, m.Value, null)).ToList());
-        MetricHistoryWriteResult result = MetricHistoryStore.RecordConverge(historyDbPath, snapshot);
+        MetricHistoryWriteResult result = MetricHistoryStore.RecordConverge(historyDbPath, snapshot, recordedAtUtc);
         Assert.Equal(MetricHistoryWriteResult.Recorded, result);
     }
 
@@ -2199,6 +2203,53 @@ public sealed class DashboardRegistryReadTests : IDisposable
         DashboardTrendSeries markers = panel.Series[2];
         Assert.False(markers.HasTrend); // single point => empty-state hint row, still present
         Assert.Single(markers.Points);
+    }
+
+    [Fact]
+    public void ReadTrends_CarriesRecordedWindowBoundsForEachSeries()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        RecordSnapshotAt(historyDbPath, 1, new DateTime(2026, 6, 12, 10, 0, 0, DateTimeKind.Utc), ("symbol_count", 100));
+        RecordSnapshotAt(historyDbPath, 2, new DateTime(2026, 7, 1, 12, 30, 0, DateTimeKind.Utc), ("symbol_count", 110));
+        RecordSnapshotAt(historyDbPath, 3, new DateTime(2026, 7, 16, 16, 0, 0, DateTimeKind.Utc), ("symbol_count", 120));
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        DashboardTrendSeries symbols = Assert.Single(panel.Series);
+        Assert.Equal("2026-06-12T10:00:00.0000000Z", symbols.FirstRecordedAtUtc);
+        Assert.Equal("2026-07-16T16:00:00.0000000Z", symbols.LatestRecordedAtUtc);
+    }
+
+    [Fact]
+    public void ReadTrends_BoundsFollowSnapshotOrderNotRecordedAtOrder()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        RecordSnapshotAt(historyDbPath, 1, new DateTime(2026, 7, 16, 16, 0, 0, DateTimeKind.Utc), ("symbol_count", 100));
+        RecordSnapshotAt(historyDbPath, 2, new DateTime(2026, 6, 12, 10, 0, 0, DateTimeKind.Utc), ("symbol_count", 120));
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        DashboardTrendSeries symbols = Assert.Single(panel.Series);
+        Assert.Equal("2026-07-16T16:00:00.0000000Z", symbols.FirstRecordedAtUtc);
+        Assert.Equal("2026-06-12T10:00:00.0000000Z", symbols.LatestRecordedAtUtc);
+    }
+
+    [Fact]
+    public void ReadTrends_BoundsMatchPlottedEndpointsWhenDownsampled()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        var origin = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
+        for (int i = 0; i < 51; i++)
+            RecordSnapshotAt(historyDbPath, i + 1, origin.AddHours(i), ("symbol_count", 100 + i));
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        DashboardTrendSeries symbols = Assert.Single(panel.Series);
+        Assert.Equal(50, symbols.Points.Count);
+        Assert.Equal(100d, symbols.First);
+        Assert.Equal(150d, symbols.Latest);
+        Assert.Equal("2026-05-01T00:00:00.0000000Z", symbols.FirstRecordedAtUtc);
+        Assert.Equal("2026-05-03T02:00:00.0000000Z", symbols.LatestRecordedAtUtc);
     }
 
     [Fact]

@@ -770,6 +770,73 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkspaceTrendsPanel_ShowsRecordedWindowUnderSparkline()
+    {
+        var trends = new DashboardWorkspaceTrendsPanel(
+            "ws-a",
+            [
+                new DashboardTrendSeries(
+                    "symbol_count",
+                    "symbols",
+                    [10d, 30d, 20d],
+                    First: 10d,
+                    Latest: 20d,
+                    FirstRecordedAtUtc: "2026-06-12T10:00:00.0000000Z",
+                    LatestRecordedAtUtc: "2026-07-16T16:00:00.0000000Z"),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceTrendsPanel>(new Dictionary<string, object?>
+        {
+            ["Trends"] = trends,
+        });
+
+        Assert.Contains("sparkline-window", html);
+        Assert.Contains("Jun 12, 10:00 UTC", html);
+        Assert.Contains("Jul 16, 16:00 UTC", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceTrendsPanel_WithoutRecordedBounds_OmitsWindowLine()
+    {
+        var trends = new DashboardWorkspaceTrendsPanel(
+            "ws-a",
+            [
+                new DashboardTrendSeries("symbol_count", "symbols", [10d, 30d, 20d], First: 10d, Latest: 20d),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceTrendsPanel>(new Dictionary<string, object?>
+        {
+            ["Trends"] = trends,
+        });
+
+        Assert.DoesNotContain("sparkline-window", html);
+        Assert.Contains("sparkline-scale", html);
+    }
+
+    [Fact]
+    public async Task WorkspaceTrendsPanel_WithOnlyOneRecordedBound_OmitsWindowLine()
+    {
+        var trends = new DashboardWorkspaceTrendsPanel(
+            "ws-a",
+            [
+                new DashboardTrendSeries(
+                    "symbol_count",
+                    "symbols",
+                    [10d, 30d, 20d],
+                    First: 10d,
+                    Latest: 20d,
+                    FirstRecordedAtUtc: "2026-06-12T10:00:00.0000000Z"),
+            ]);
+
+        string html = await RenderComponentAsync<WorkspaceTrendsPanel>(new Dictionary<string, object?>
+        {
+            ["Trends"] = trends,
+        });
+
+        Assert.DoesNotContain("sparkline-window", html);
+    }
+
+    [Fact]
     public void TryRefreshWorkspace_WrapsFailuresInsteadOfThrowing()
     {
         using (var registry = WorkspaceRegistry.Open(_registryDb))

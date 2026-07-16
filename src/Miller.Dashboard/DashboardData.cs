@@ -228,16 +228,29 @@ public sealed record DashboardLocalMetricsPanel(
 /// downsampled to at most <c>maxPoints</c> by the store) plus its first/latest for a compact delta label. A series
 /// is only present when its metric has at least one recorded point — an ABSENT metric never becomes a zero row.
 /// </summary>
+/// <param name="FirstRecordedAtUtc">
+/// Display-only <c>recorded_at_utc</c> of the FIRST plotted point, anchoring the "since first" delta to a date. Null
+/// when unknown; the panel then renders without a window line. Never used to order the series — point order is
+/// <c>snapshot_id</c> per the metrics-history contract.
+/// </param>
+/// <param name="LatestRecordedAtUtc">Display-only <c>recorded_at_utc</c> of the LAST plotted point. Null when unknown.</param>
 public sealed record DashboardTrendSeries(
     [property: JsonPropertyName("metric")] string Metric,
     [property: JsonPropertyName("label")] string Label,
     [property: JsonPropertyName("points")] IReadOnlyList<double> Points,
     [property: JsonPropertyName("first")] double First,
-    [property: JsonPropertyName("latest")] double Latest)
+    [property: JsonPropertyName("latest")] double Latest,
+    [property: JsonPropertyName("first_recorded_at_utc")] string? FirstRecordedAtUtc = null,
+    [property: JsonPropertyName("latest_recorded_at_utc")] string? LatestRecordedAtUtc = null)
 {
     /// <summary>A single point cannot draw a line; the panel shows the "run miller report" hint for these.</summary>
     [JsonIgnore]
     public bool HasTrend => Points.Count >= 2;
+
+    /// <summary>Both bounds known ⟹ the panel can render the recorded window; either missing ⟹ it renders as before.</summary>
+    [JsonIgnore]
+    public bool HasRecordedWindow =>
+        !string.IsNullOrWhiteSpace(FirstRecordedAtUtc) && !string.IsNullOrWhiteSpace(LatestRecordedAtUtc);
 }
 
 /// <summary>

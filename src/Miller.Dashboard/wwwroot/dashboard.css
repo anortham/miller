@@ -1607,6 +1607,14 @@ th[aria-sort="descending"] .telemetry-sort::after {
   font-size: 11px;
 }
 
+.sparkline-window {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-feature-settings: var(--tnum);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
 /* ---- Site footer ---------------------------------------------------- */
 .site-footer {
   display: flex;
