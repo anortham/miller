@@ -21,6 +21,7 @@
   ],
   "mcpServers": "./.mcp.json",
   "skills": "./skills/",
+  "hooks": "./hooks/claude-codex-hooks.json",
   "interface": {
     "displayName": "Miller",
     "shortDescription": "Local code intelligence for agent workflows",

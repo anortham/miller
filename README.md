@@ -57,6 +57,12 @@ Cursor: install Miller from the Cursor plugin marketplace, or add a user-global 
 entry with an absolute path to `miller serve`. Miller binds its workspace from MCP client roots on the first
 tool call, so one global install works per editor window without `${workspaceFolder}` placeholders.
 
+The Claude Code plugin also injects a ~2.4KB Miller routing block at session start through a `SessionStart` hook,
+so the tool-routing guidance stays in context even though clients truncate MCP server instructions. The Codex
+plugin ships the same hook: Codex runs it once you review and trust the plugin's hooks, and current Codex builds
+load hooks from `~/.codex/hooks.json` rather than from plugin roots
+([openai/codex#16430](https://github.com/openai/codex/issues/16430)). Set `MILLER_SESSION_HOOKS=0` to opt out.
+
 After extracting a release archive (see [Manual Binary Install](#manual-binary-install)), add to
 `~/.cursor/mcp.json`:
 

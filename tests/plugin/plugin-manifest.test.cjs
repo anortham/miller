@@ -38,6 +38,76 @@ function listSkillFiles(root) {
   return files;
 }
 
+const HOOKED_PLUGIN_MANIFESTS = ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json'];
+const SHARED_HOOKS_REFERENCE = './hooks/claude-codex-hooks.json';
+const ALLOWED_HOOK_EVENTS = ['SessionStart'];
+
+function readHooksManifest(pluginManifestPath) {
+  const plugin = readJson(pluginManifestPath);
+  assert.equal(
+    plugin.hooks,
+    SHARED_HOOKS_REFERENCE,
+    `${pluginManifestPath} should reference the shared hooks file`,
+  );
+
+  const hooksPath = path.join(repoRoot, plugin.hooks);
+  assert.ok(
+    fs.existsSync(hooksPath),
+    `${pluginManifestPath} references a missing hooks file: ${plugin.hooks}`,
+  );
+
+  return JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+}
+
+test('Claude and Codex plugin manifests wire the shared hooks file', () => {
+  for (const manifestPath of HOOKED_PLUGIN_MANIFESTS) {
+    const hooks = readHooksManifest(manifestPath);
+
+    assert.ok(hooks.hooks, `${manifestPath} hooks file should declare a hooks object`);
+  }
+});
+
+test('plugin hooks register only the allowed events', () => {
+  for (const manifestPath of HOOKED_PLUGIN_MANIFESTS) {
+    const hooks = readHooksManifest(manifestPath);
+
+    assert.deepEqual(
+      Object.keys(hooks.hooks),
+      ALLOWED_HOOK_EVENTS,
+      `${manifestPath} registers hook events outside the allowlist; adding an event is a deliberate policy change`,
+    );
+  }
+});
+
+test('plugin hook commands run existing scripts with an explicit event argument', () => {
+  for (const manifestPath of HOOKED_PLUGIN_MANIFESTS) {
+    const hooks = readHooksManifest(manifestPath);
+
+    for (const entries of Object.values(hooks.hooks)) {
+      for (const entry of entries) {
+        assert.ok(entry.hooks.length > 0, `${manifestPath} declares an empty hooks entry`);
+
+        for (const handler of entry.hooks) {
+          assert.equal(handler.type, 'command');
+
+          const scriptMatch = handler.command.match(/\$\{CLAUDE_PLUGIN_ROOT\}\/([^"']+\.cjs)/);
+          assert.ok(scriptMatch, `${manifestPath} hook command should run a plugin-root script: ${handler.command}`);
+          assert.ok(
+            fs.existsSync(path.join(repoRoot, scriptMatch[1])),
+            `${manifestPath} hook command references a missing script: ${scriptMatch[1]}`,
+          );
+
+          assert.match(
+            handler.command.trim().split(/\s+/).pop(),
+            /^[a-z][a-z-]*$/,
+            `${manifestPath} hook command should end with an explicit event argument: ${handler.command}`,
+          );
+        }
+      }
+    }
+  }
+});
+
 test('Claude, Cursor, and Codex plugin manifests point at the release launcher', () => {
   const config = readJson('miller-plugin.json');
   const claude = readJson('.claude-plugin/plugin.json');

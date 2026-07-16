@@ -458,8 +458,8 @@ Policy note: this softens the repo's no-hooks stance to "prompt-injection-only h
 **Dependency reason:** Consumes T5.2's hooks JSON.
 
 **Acceptance criteria:**
-- [ ] `scripts/test-plugin.sh` passes including the new manifest assertions; README documents the hook + opt-out env var.
-- [ ] Cursor manifest intentionally unchanged (Cursor hook support unverified — instruction-tier covers it via Phase 6; revisit only with evidence).
+- [x] `scripts/test-plugin.sh` passes including the new manifest assertions; README documents the hook + opt-out env var.
+- [x] Cursor manifest intentionally unchanged (Cursor hook support unverified — instruction-tier covers it via Phase 6; revisit only with evidence).
 
 ### Task T5.4: SubagentStart re-injection
 

@@ -27,5 +27,6 @@
       ]
     }
   },
-  "skills": "./skills/"
+  "skills": "./skills/",
+  "hooks": "./hooks/claude-codex-hooks.json"
 }
