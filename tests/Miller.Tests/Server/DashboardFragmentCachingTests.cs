@@ -203,6 +203,43 @@ public sealed class DashboardFragmentCachingTests : IDisposable
     }
 
     [Fact]
+    public async Task StaticAsset_RevalidatesInsteadOfHeuristicCaching()
+    {
+        Directory.CreateDirectory(_paths.WebRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(_paths.WebRoot, "dashboard.css"), ":root{}", TestContext.Current.CancellationToken);
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage first = await client.GetAsync("/dashboard.css", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.True(first.Headers.CacheControl?.NoCache);
+        Assert.NotNull(first.Content.Headers.LastModified);
+
+        using var conditional = new HttpRequestMessage(HttpMethod.Get, "/dashboard.css");
+        conditional.Headers.IfModifiedSince = first.Content.Headers.LastModified;
+        HttpResponseMessage second = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotModified, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task AssetReferences_CarryTheBuildVersionQuery()
+    {
+        string head = await RenderComponentAsync<DashboardHead>(new Dictionary<string, object?>());
+        string scripts = await RenderComponentAsync<DashboardScripts>(new Dictionary<string, object?>());
+
+        Assert.Contains("/dashboard.css?v=", head, StringComparison.Ordinal);
+        Assert.Contains("/lib/htmx/htmx.min.js?v=", head, StringComparison.Ordinal);
+        Assert.Contains("/js/theme-init.js?v=", head, StringComparison.Ordinal);
+        Assert.Contains("/lib/idiomorph/idiomorph-ext.min.js?v=", scripts, StringComparison.Ordinal);
+        Assert.Contains("/js/dashboard-site.js?v=", scripts, StringComparison.Ordinal);
+        Assert.Contains("/js/alpine-components.js?v=", scripts, StringComparison.Ordinal);
+        Assert.Contains("/lib/alpine/cspalpine.min.js?v=", scripts, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VendoredIdiomorphExtension_RegistersTheMorphHtmxExtension()
     {
         string vendored = Path.Combine(

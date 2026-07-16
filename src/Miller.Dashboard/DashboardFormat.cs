@@ -12,6 +12,17 @@ public static class DashboardFormat
     public static string Esc(string? value) => Uri.EscapeDataString(value ?? string.Empty);
 
     /// <summary>
+    /// Cache-busting asset URL. Assets are served without fingerprinted filenames, so a browser that
+    /// heuristically cached a stylesheet from an older binary would pair it with newer markup after an
+    /// upgrade; the per-build query makes every upgrade a different cache key.
+    /// </summary>
+    public static string Asset(string path) => path + "?v=" + AssetVersionToken;
+
+    private static readonly string AssetVersionToken =
+        string.Concat(Miller.Server.MillerVersion.Current.Select(c =>
+            char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' ? c : '-'));
+
+    /// <summary>
     /// Formats a count with its unit. Nouns whose plural is not "+s" (e.g. "common miss" → "common misses")
     /// pass <paramref name="plural"/> explicitly.
     /// </summary>

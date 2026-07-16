@@ -91,39 +91,39 @@ internal static partial class DashboardHostPipeline
             endpoints.MapMethods(
                 "/dashboard.css",
                 ["GET", "HEAD"],
-                () => StaticAsset(dashboardCssPath, "text/css; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, dashboardCssPath, "text/css; charset=utf-8"));
             endpoints.MapMethods(
                 "/lib/htmx/htmx.min.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(htmxPath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, htmxPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/lib/alpine/cspalpine.min.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(alpinePath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, alpinePath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/js/theme-init.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(themeInitPath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, themeInitPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/js/dashboard-site.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(siteJsPath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, siteJsPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/js/alpine-components.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(alpineComponentsPath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, alpineComponentsPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/lib/idiomorph/idiomorph-ext.min.js",
                 ["GET", "HEAD"],
-                () => StaticAsset(idiomorphPath, "text/javascript; charset=utf-8"));
+                (HttpContext context) => StaticAsset(context, idiomorphPath, "text/javascript; charset=utf-8"));
             endpoints.MapMethods(
                 "/fonts/archivo-latin.woff2",
                 ["GET", "HEAD"],
-                () => StaticAsset(archivoFontPath, "font/woff2"));
+                (HttpContext context) => StaticAsset(context, archivoFontPath, "font/woff2"));
             endpoints.MapMethods(
                 "/fonts/jetbrains-mono-latin.woff2",
                 ["GET", "HEAD"],
-                () => StaticAsset(jetbrainsMonoFontPath, "font/woff2"));
+                (HttpContext context) => StaticAsset(context, jetbrainsMonoFontPath, "font/woff2"));
             endpoints.MapMethods("/favicon.ico", ["GET", "HEAD"], () =>
                 Results.Text(FaviconSvg, "image/svg+xml; charset=utf-8"));
             endpoints.MapGet("/healthz", () => Results.Text(
@@ -279,6 +279,15 @@ internal static partial class DashboardHostPipeline
         return false;
     }
 
-    private static IResult StaticAsset(string path, string contentType) =>
-        File.Exists(path) ? Results.File(path, contentType) : Results.NotFound();
+    private static IResult StaticAsset(HttpContext context, string path, string contentType)
+    {
+        if (!File.Exists(path))
+            return Results.NotFound();
+
+        // Asset references carry a per-build ?v= query, but bare URLs (font files inside the CSS, old
+        // bookmarks) must revalidate on every load: without Cache-Control the browser heuristically
+        // caches them and pairs a stale copy from an older binary with newer markup after an upgrade.
+        context.Response.Headers.CacheControl = "no-cache";
+        return Results.File(path, contentType);
+    }
 }

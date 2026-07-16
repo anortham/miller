@@ -7,9 +7,9 @@
 <title>@Title</title>
 <link rel="preload" href="/fonts/archivo-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/dashboard.css">
-<script src="/lib/htmx/htmx.min.js"></script>
-<script src="/js/theme-init.js"></script>
+<link rel="stylesheet" href="@Asset("/dashboard.css")">
+<script src="@Asset("/lib/htmx/htmx.min.js")"></script>
+<script src="@Asset("/js/theme-init.js")"></script>
 
 @code {
     [Parameter] public string Title { get; set; } = "Miller Dashboard";
