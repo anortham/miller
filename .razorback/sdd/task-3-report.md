@@ -1,131 +1,130 @@
-# Task 3 report — Theme tokens via light-dark() + contrast
+# Task 3 — Styled 404, version footer, JSON links open in new tab
 
-**Status:** DONE
+**Status:** COMPLETE
+**Commit SHA:** none — parallel-lead-commit (no `git add` / `git commit` run)
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
+**Branch:** `worktree-dashboard-ux-fixes` @ `780b51d` (dirty — my owned files + Task 2's in-flight files)
 
-## What changed
-- `src/Miller.Dashboard/wwwroot/dashboard.css` — collapsed the three-way theme definition
-  (`:root` light block + `@media (prefers-color-scheme: dark)` block + `html[data-theme="dark"]`
-  block, ~90 lines, every theme value written twice) into a single `:root` block where each
-  themed token is defined ONCE as `light-dark(<light>, <dark>)`. The two old dark blocks are
-  replaced by two tiny rules that only flip `color-scheme`:
-  - `html[data-theme="dark"] { color-scheme: dark; }`
-  - `html[data-theme="light"] { color-scheme: light; }`
-  `:root` keeps `color-scheme: light dark`, so no-JS users still get OS-preference dark.
-- `src/Miller.Dashboard/wwwroot/js/theme-init.js` — **not modified.** It only stamps
-  `data-theme` on `<html>` (the exact contract `light-dark()` + the toggle rely on), and its
-  one comment ("applies data-theme before first paint") is still accurate — it never described
-  the old block layout. No behavior or comment change was required.
+> This file replaced a stale `task-3-report.md` from an earlier plan's numbering ("Theme tokens via
+> light-dark() + contrast", mtime 12:18, alongside equally stale task-4..task-7 reports). Wrote here per the
+> lead's explicit path instruction. Flagging in case those older reports need preserving elsewhere.
 
-No token was renamed; no non-token rule was touched. The `#theme-toggle` / `#theme-toggle-label`
-contract is untouched (those IDs live in razor/markup, not this file).
+## What I implemented
 
-## `light-dark()` note
-`light-dark()` takes two **color** values, so the two box-shadow tokens wrap only their color
-part, keeping the offset geometry outside the function:
-- `--lift: 3px 3px 0 0 light-dark(rgba(26,22,17,0.05), rgba(0,0,0,0.35));`
-- `--lift-hover: 5px 5px 0 0 light-dark(rgba(26,22,17,0.08), rgba(0,0,0,0.45));`
+1. **Styled 404 page** — new `NotFoundPage.razor`, a minimal full-document component (doctype/head/body,
+   `<DashboardHead Title="Miller — Not found" />`, `<DashboardScripts />`) mirroring the shells' structure.
+   Hero-style layout (`.dashboard-hero` / `.hero-copy` / `.eyebrow` / `.hero-subtitle`), the exact endpoint
+   message in a `.not-found` section, plus two routes back to `/` (a `.back-link` in the hero and a
+   `.subtle-link` under the message). One parameter: `Message` (string).
+2. **Endpoint 404 branch** — `DashboardEndpoints.cs` `/workspace` not-registered branch now returns
+   `RazorComponentResult<NotFoundPage>` with `StatusCode = StatusCodes.Status404NotFound` and
+   `PreventStreamingRendering = true`, replacing `Results.NotFound(text)`. Message text preserved
+   byte-for-byte. No other branch touched.
+3. **Version footer** — `<footer class="site-footer">` in both shells: `miller <MillerVersion.Current>`
+   plus a `/diagnostics.json` link.
+4. **New-tab JSON links** — all four `.api-link` anchors in each shell carry `target="_blank" rel="noopener"`.
+5. **CSS** — `.site-footer` / `.site-footer-version` / `.site-footer-link` / `.not-found` /
+   `.not-found-message` appended at the very END of `dashboard.css` (lines 1437-1487), append-only.
 
-## Token inventory (old light / old dark → new single definition)
-All 20 themed tokens now defined once each via `light-dark()`. Values are byte-identical to the
-old ones **except `--muted`** (the A7 fix):
+## Verification ledger
 
-| token | light | dark |
-|---|---|---|
-| --paper | #f1ece1 | #121110 |
-| --grid | rgba(26,23,18,0.05) | rgba(255,255,255,0.028) |
-| --surface | #fbf9f3 | #1a1916 |
-| --surface-inset | #f5f1e7 | #211f1b |
-| --ink | #1a1611 | #ece6d8 |
-| --ink-soft | #4b463d | #c0baaa |
-| **--muted** | **#8c8576 → #6f6959** | **#8f897a → #a49e8d** |
-| --rule | #ddd6c6 | #2c2925 |
-| --rule-strong | #c3bba7 | #423e38 |
-| --accent | #0c7d72 | #2fb3a3 |
-| --accent-ink | #075d54 | #46c7b6 |
-| --accent-soft | #dcebe6 | #16302d |
-| --ok / --ok-soft | #3f7d39 / #dde9d3 | #6aa85f / #1c2a18 |
-| --warn / --warn-soft | #9a6207 / #f0e4c8 | #c98f2e / #2e2410 |
-| --err / --err-soft | #b23a25 / #f1d9d1 | #d36a52 / #2e1813 |
-| --lift / --lift-hover | rgba(26,22,17,…) | rgba(0,0,0,…) |
-
-## Contrast ratios (WCAG relative-luminance formula, computed via python — not by eye)
-AA target for small text = **4.5:1**. `--muted` drives 10–12px labels/paths/timestamps/table
-headers, which sit on `--surface`, and also on `--surface-inset` (table `th`, `.ws-index-head`,
-`.panel-heading p`) — so I verified against BOTH surfaces plus `--paper`.
-
-### `--muted` — the fixed token
-| theme | value | vs --surface | vs --surface-inset | vs --paper |
+| Invariant | Scope | Command | Result | Timestamp |
 |---|---|---|---|---|
-| light BEFORE | #8c8576 | **3.48 ✗** | (fail) | (fail) |
-| light AFTER | **#6f6959** | **5.19 ✓** | 4.85 ✓ | 4.64 ✓ |
-| dark BEFORE | #8f897a | 5.05 ✓ | 4.72 ✓ | — |
-| dark AFTER | **#a49e8d** | **6.58 ✓** | 6.15 ✓ | 7.05 ✓ |
+| 404 renders styled HTML w/ message + link to `/`; footer + new-tab links on both shells; reflected id escaped | focused | `dotnet test … --filter "(Category!=Scale)&(FullyQualifiedName~DashboardNotFound)"` | **PASS** 5/5 (573ms) | 2026-07-16 |
+| No regression across fast suite | worker | `scripts/test.sh` | **PASS** 3538/3538 (20s run, 25s wall — under 30s ceiling) | 2026-07-16 |
+| 0 warnings / 0 errors (warnings-as-errors) | worker ceiling | `dotnet build Miller.slnx -c Release` | **PASS** 0W/0E | 2026-07-16 |
 
-Light muted was the A7 failure (3.48:1). New light value clears 4.5:1 on every background it
-actually renders on. Dark muted already passed (5.05) but I bumped it to #a49e8d so its worst
-case (on surface-inset) rose from 4.72 → 6.15, giving a comfortable margin and keeping the two
-themes visually balanced. New light muted (5.19) stays clearly lighter than `--ink-soft` (8.9),
-so the muted/soft hierarchy is preserved.
+TDD: the HTTP test was written first and **watched fail** — first on the shared build break, then on a real
+red (`Not found: "miller 1.10.0+780b51d027cd"`) — before the implementation turned it green.
 
-### Other ≤12px tokens checked (per brief) — all already pass, left unchanged
-| token | context | light ratio | dark ratio |
-|---|---|---|---|
-| --ink-soft | copy-source/breakdown 12–13px, on surface | 8.89 ✓ | 9.08 ✓ |
-| --ink-soft | on surface-inset | 8.30 ✓ | 8.50 ✓ |
-| --accent-ink | code / language-pill / activity-ws 11–12px, on accent-soft | 6.32 ✓ | 6.76 ✓ |
-| --accent-ink | back-link 11px, on surface | 7.38 ✓ | 8.46 ✓ |
+Note: an initial `scripts/test.sh` reported 52s wall (> 30s ceiling). Re-run warm was 23s/25s. The overage was
+cold Release-build overhead inside the timed region, **not** a leaked slow test — my 5 tests total ~570ms.
 
-Only `--muted` was below AA; no other small-text token needed a change.
+## Files changed
 
-## Verification results (each check + what it proves)
-- **(a) old dark blocks gone / one definition per token:** `grep -c 'prefers-color-scheme: dark'`
-  = 0; the only `html[data-theme` lines are the two `color-scheme`-flip rules (:71–72) + one
-  comment. Each of the 20 themed token names appears exactly once (`grep -c '  --token:'` = 1).
-  → *Proves duplication is eliminated; a theme change is now made in one place (A5 fixed).*
-- **(b) every `light-dark(` has both values:** every token-definition line matching
-  `^\s*--x:.*light-dark\(` contains a comma pair; 20 token definitions + 2 comment mentions.
-  → *Proves no half-written `light-dark()` that would drop a theme's value.*
-- **(c) no dangling references:** `grep -o 'var(--[a-z-]*'` (referenced) minus `--x:` (defined)
-  = empty. → *Proves every `var(--x)` in the file still resolves; no token was renamed away.*
-- **(d) build:** `dotnet build Miller.slnx -c Release` → **Build succeeded, 0 Warning(s), 0
-  Error(s)** (CSS is copied/embedded by the build). → *Proves the change ships.*
-- **worker-ceiling — `scripts/test.sh` (fast suite):** 3081/3082 passed. The one failure was
-  `RepositoryIndexLoaderBridgeTests.Load_RootMillerJsonDotnetWebProvider_PopulatesBridgeGraph`
-  — an `ObjectDisposedException` on a SQLite handle in that test's own constructor, entirely
-  unrelated to CSS. Re-ran that class in isolation: **17/17 passed.** So it is a pre-existing
-  parallel-isolation flake, not a regression from this task. → *Proves the CSS change broke
-  nothing elsewhere (CSS has no unit tests).*
+| File | Change |
+|---|---|
+| `src/Miller.Dashboard/Components/NotFoundPage.razor` | **created** (38 lines) |
+| `src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs` | 404 branch only (+8/−2) |
+| `src/Miller.Dashboard/Components/WorkspaceShell.razor` | api-links + footer (+12/−4) |
+| `src/Miller.Dashboard/Components/WorkspacesShell.razor` | api-links + footer (+12/−4) |
+| `src/Miller.Dashboard/wwwroot/dashboard.css` | +51 appended at EOF, no edits above |
+| `tests/Miller.Tests/Server/DashboardNotFoundTests.cs` | **created** (5 tests) |
+
+No file outside my ownership was touched. `DashboardFormat.cs`, onboarding/pattern panels, and
+`DashboardActivityFeedTests.cs` (Task 2) untouched; Task 1's middleware and fragment routes untouched.
+
+## Miller calls used
+
+| Call | What it confirmed |
+|---|---|
+| `inspect(target='MapDashboardEndpoints', depth='full')` | Exact 404 branch (`Results.NotFound` at :63), the `(IResult)` cast idiom on the sibling return, and the `PreventStreamingRendering = true` object-initializer pattern on all 7 `RazorComponentResult` usages. |
+| `search(query='MillerVersion', mode='symbol')` | Definition at `src/Miller.Server/MillerVersion.cs:13`, `public static class`. |
+| `inspect(target='MillerVersion', depth='overview')` | Accessor shape: `public static string Current { get; }` (:16) — a property, not a method. 27 dependents; already called from `DashboardEndpoints.BuildRuntimeInfo:309`. |
+| `inspect(target='src/Miller.Dashboard/Components/WorkspaceShell.razor')` | Symbol list + hero/footer placement; `Snapshot`/`Activity` params. |
+| `inspect(target='ReadSnapshot', depth='full')` | Selection is registry-driven via `SelectWorkspace`; facts-read degrades to `null` — proving a stub `symbols.db` in my seed still resolves `SelectedWorkspaceId` (corroborated by the existing `ReadSnapshot_UnreadableWorkspaceDbReturnsFactsErrorNotCrash`). This validated the 200-path test. |
+
+## API-shape evidence (no guessed shapes)
+
+- **`MillerVersion.Current`** — property, not method. Miller `inspect` depth=overview (above). Referenced
+  fully-qualified as `@Miller.Server.MillerVersion.Current` in the shells because `_Imports.razor` is **not**
+  in my ownership and already lacks a `Miller.Server` using; `DashboardEndpoints.cs:309` uses the same
+  fully-qualified form, so this matches existing practice.
+- **`RazorComponentResult.StatusCode`** — verified against the real .NET 10 ref assembly rather than memory:
+  `strings …/Microsoft.AspNetCore.App.Ref/10.0.10/ref/net10.0/Microsoft.AspNetCore.Components.Endpoints.dll`
+  → `get_StatusCode` / `set_StatusCode` / `IStatusCodeHttpResult` / `set_PreventStreamingRendering`. Settable
+  via object initializer, exactly as the plan assumed.
+- **TestServer helper** — `DashboardMutationEndpointTests:148` `StartHostAsync()`:
+  `HostBuilder().ConfigureWebHost(w => w.UseTestServer().ConfigureServices(DashboardHostPipeline.ConfigureServices).Configure(app => DashboardHostPipeline.Configure(app, _paths, _dir)))`.
+  Copied verbatim, plus its `DashboardPaths` ctor arity (5) and
+  `registry.UpsertSeen(id, displayId, root, indexDbPath, WorkspaceRegistryState.Current, DateTimeOffset)` seed shape.
+- **Blazor HTML encoding** — `HtmlEncoder.Default` escapes `+` → `&#x2B;` and `'` → `&#x27;`. Confirmed
+  empirically by dumping rendered HTML (`miller 1.10.0&#x2B;780b51d027cd`), not assumed.
+
+## Self-review findings (acted on)
+
+1. **Reached for a `SiteFooter` component, then removed it.** It would have been a new abstraction (approved
+   shape: "one new page component, no new abstractions") **and** a file outside my ownership. The spec scopes
+   the footer to the two shells only, and the shells already duplicate their hero/theme-switch blocks verbatim
+   — inlining matches the local idiom. Reverted before it reached the build.
+2. **New XSS surface — covered with a test.** The endpoint previously emitted `workspace_id` as `text/plain`
+   (inherently inert); it now reflects that user input into **HTML**. Razor auto-escapes, but that invariant
+   was load-bearing and untested, so I added
+   `WorkspaceGet_WithScriptInjectionId_EscapesIdIntoInertText`: `?workspace_id=<script>alert(1)</script>`
+   returns 404 with the payload escaped to `&lt;script&gt;…` and asserts the raw tag is absent. Passes.
+3. **Test asserted escaped entities; fixed the test, not the code.** My first version hard-coded
+   `&#x27;`/`&#x2B;`. Brittle and it obscured intent — the browser renders the correct glyphs. Switched to
+   `WebUtility.HtmlDecode(html)` and asserted the human-readable string.
+4. **Did not assert an ETag on `/workspace`** — Task 1's middleware covers `/fragments/*` only, per briefing.
+5. Zero comments in tests; no narration comments in code. The only doc comments are XML summaries on the
+   `Message` parameter and the test class.
 
 ## Judgment calls
-1. **Bumped dark `--muted` too** (5.05 → 6.58 on surface) though it already met AA — for margin,
-   theme balance, and because on `--surface-inset` the old value was only 4.72. Token-value
-   change only; in scope ("fix any that fail… change token VALUES/definitions only").
-2. **Verified against `--surface-inset` and `--paper`, not just `--surface`.** The brief targets
-   `--surface`, but muted small text renders on inset backgrounds (table headers, index head) —
-   both new values clear 4.5:1 on all three, so no surface has failing muted text.
-3. **Left `theme-init.js` untouched.** Its behavior is exactly what the new CSS needs and its
-   comment is accurate; editing it would be churn.
 
-## For the lead to eyeball in Task 7 (live, both themes)
-- Toggle overrides OS preference in BOTH directions (dark→light and light→dark) — this is the
-  main thing `color-scheme`-flip + `light-dark()` changes structurally.
-- No-JS / first-paint: OS-dark users with no stored theme should still see dark (via
-  `color-scheme: light dark`).
-- Muted text (table headers, workspace paths, timestamps, eyebrows) legible in both themes;
-  confirm the muted vs ink-soft hierarchy still reads as two distinct weights.
-- Box-shadow lifts (`.panel`, `.dashboard-hero`) render correctly in both themes (light-dark()
-  now supplies the shadow color).
+- `NotFoundPage.razor:31` — **no footer on the 404 page.** Chose spec-literal ("add a footer to both shells")
+  over symmetry, because adding it would have forced either a shared `SiteFooter` component (new abstraction,
+  unowned file) or a third copy of the markup. Flagging for the lead: if a footer on the 404 is wanted, the
+  clean move is a `SiteFooter` component in a follow-up that owns all three call sites.
+- `DashboardEndpoints.cs:63` — returned the concrete `RazorComponentResult<NotFoundPage>` **without** an
+  `(IResult)` cast. The sibling branch already carries the cast, so C# best-common-type resolves the lambda to
+  `IResult`. Verified by the clean Release build; adding a second cast would have been redundant.
+- `NotFoundPage.razor:12,28` — **two** links back to `/` (hero back-link + body link). The hero `.back-link`
+  mirrors `WorkspaceShell` so the chrome is consistent; the body link puts the escape hatch next to the
+  message. Acceptance only requires "a link to `/`".
+- `NotFoundPage.razor:17-23` — kept the theme-switch button so the 404 isn't the one page that ignores the
+  user's theme. Dropped the `.api-actions` nav and `.hero-metrics` (no workspace to describe).
+- `dashboard.css` — reused only existing custom properties (`--surface`, `--rule`, `--rule-strong`,
+  `--ink-soft`, `--muted`, `--accent-ink`, `--radius`, `--font-mono`, `--tnum`). All are `light-dark()`, so
+  both themes are covered with no new theme rules.
 
-## Miller / tool calls used
-- No `mcp__miller__search` calls needed: the `#theme-toggle` / `#theme-toggle-label` contract is
-  markup-side and out of my file ownership; I confirmed via the brief and `theme-init.js` that
-  only `data-theme` stamping matters, which is unchanged. CSS is not indexed as symbols, so I
-  used `Read` on `dashboard.css` and `theme-init.js` directly (per Miller directives).
+## Concerns
 
-## Worktree state
-- Path: `/Users/murphy/source/miller/.worktrees/dashboard-polish`
-- Branch: `feat/dashboard-polish`
-- Base commit: `6207978`
-- Dirty state (before lead stages): modified `src/Miller.Dashboard/wwwroot/dashboard.css`,
-  this report, and the pre-existing untracked `docs/plans/2026-07-08-dashboard-polish.md`.
-  Did NOT `git add`/`commit` (parallel-lead-commit mode). `theme-init.js` unchanged.
+- **None blocking.** Fast suite and Release build are green.
+- **Shared-tree timing (resolved):** Task 2's mid-TDD state broke the shared build twice (`DashboardFormatTests.cs`
+  `FormatCount` overload, then `WorkspaceOnboardingPanel.razor` RZ1010). Neither was mine; I waited for green
+  rather than touching their files. Worth noting for the lead: in a shared working tree, a worker's "watch it
+  fail" step can be masked by another worker's compile error.
+- **For the lead's final gate:** the fast-suite tripwire is wall-clock and includes build time — a cold
+  `scripts/test.sh` reports ~52s and trips the 30s ceiling. Warm re-run is 23-25s. Not a leaked slow test.
+- My 5 tests spin up in-memory TestServer hosts (~570ms total, no `julie-extract` subprocess), so they
+  correctly stay out of `Category=Scale` — same precedent as `DashboardMutationEndpointTests`.

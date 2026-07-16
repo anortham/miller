@@ -1434,3 +1434,54 @@ tr.has-errors td:nth-child(6) {
   font-feature-settings: var(--tnum);
   font-size: 11px;
 }
+
+/* ---- Site footer ---------------------------------------------------- */
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.site-footer-version {
+  text-transform: uppercase;
+  font-feature-settings: var(--tnum);
+}
+
+.site-footer-link {
+  color: var(--ink-soft);
+  text-decoration: none;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.site-footer-link:hover { color: var(--accent-ink); }
+
+/* ---- Unresolved-workspace 404 --------------------------------------- */
+.not-found {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 28px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.not-found-message {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}

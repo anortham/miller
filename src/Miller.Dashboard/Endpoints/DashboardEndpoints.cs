@@ -60,8 +60,14 @@ internal static class DashboardEndpoints
                 snapshot.Workspaces.Count > 0 &&
                 !string.Equals(snapshot.SelectedWorkspaceId, workspace_id, StringComparison.Ordinal))
             {
-                return Results.NotFound(
-                    $"workspace_id '{workspace_id}' is not registered — open / for the workspace list.");
+                return new RazorComponentResult<NotFoundPage>(new
+                {
+                    Message = $"workspace_id '{workspace_id}' is not registered — open / for the workspace list.",
+                })
+                {
+                    PreventStreamingRendering = true,
+                    StatusCode = StatusCodes.Status404NotFound,
+                };
             }
 
             return (IResult)new RazorComponentResult<WorkspaceShell>(new

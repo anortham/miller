@@ -20,10 +20,10 @@
                     </button>
                 </div>
                 <nav class="api-actions" aria-label="Dashboard JSON">
-                    <a class="api-link" href="/workspaces.json">workspaces.json</a>
-                    <a class="api-link" href="/activity.json">activity.json</a>
-                    <a class="api-link" href="/telemetry.json?workspace_id=all">telemetry.json</a>
-                    <a class="api-link" href="/diagnostics.json">diagnostics.json</a>
+                    <a class="api-link" href="/workspaces.json" target="_blank" rel="noopener">workspaces.json</a>
+                    <a class="api-link" href="/activity.json" target="_blank" rel="noopener">activity.json</a>
+                    <a class="api-link" href="/telemetry.json?workspace_id=all" target="_blank" rel="noopener">telemetry.json</a>
+                    <a class="api-link" href="/diagnostics.json" target="_blank" rel="noopener">diagnostics.json</a>
                 </nav>
                 <div class="hero-metrics" aria-label="Machine-wide totals">
                     <div>
@@ -58,6 +58,10 @@
                 <TelemetryPanel Telemetry="Telemetry" SelectedWorkspaceId="all" />
             </details>
         }
+        <footer class="site-footer">
+            <span class="site-footer-version">miller @Miller.Server.MillerVersion.Current</span>
+            <a class="site-footer-link" href="/diagnostics.json" target="_blank" rel="noopener">diagnostics.json</a>
+        </footer>
     </main>
     <DashboardScripts />
 </body>

@@ -1,0 +1,38 @@
+@namespace Miller.Dashboard.Components
+
+<!doctype html>
+<html lang="en">
+<head>
+    <DashboardHead Title="Miller — Not found" />
+</head>
+<body>
+    <main class="shell">
+        <header class="dashboard-hero">
+            <div class="hero-copy">
+                <a class="back-link" href="/">&larr; All workspaces</a>
+                <p class="eyebrow">Not found</p>
+                <h1>No such workspace</h1>
+                <p class="hero-subtitle">Miller could not resolve that workspace from the local registry.</p>
+            </div>
+            <div class="hero-side">
+                <div class="theme-switch-wrapper">
+                    <button id="theme-toggle" class="theme-switcher-btn" type="button" data-toggle-theme aria-label="Toggle Theme">
+                        <span id="theme-toggle-label">Dark</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <section class="not-found">
+            <p class="not-found-message">@Message</p>
+            <a class="subtle-link" href="/">&larr; All workspaces</a>
+        </section>
+    </main>
+    <DashboardScripts />
+</body>
+</html>
+
+@code {
+    /// <summary>The endpoint's plain-text reason, rendered as the page body so the cause stays discoverable.</summary>
+    [Parameter, EditorRequired] public string Message { get; set; } = string.Empty;
+}

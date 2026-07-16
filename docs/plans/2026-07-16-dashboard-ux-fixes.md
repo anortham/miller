@@ -161,9 +161,9 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **Approach:** `NotFoundPage` is a minimal full-document component (doctype/head/body like the shells) with the message and an `← All workspaces` link. The endpoint keeps the exact message text ("workspace_id '<id>' is not registered — open / for the workspace list.") inside the page body so existing behavior stays discoverable, and sets HTTP 404.
 
 **Acceptance criteria:**
-- [ ] `GET /workspace?workspace_id=bogus` returns 404 with `text/html`, contains the message and a link to `/`.
-- [ ] Both shells render the footer with `MillerVersion.Current` and api-links carry `target="_blank"`.
-- [ ] Worker-scope verification passes; verified diff handed to the lead per `parallel-lead-commit`.
+- [x] `GET /workspace?workspace_id=bogus` returns 404 with `text/html`, contains the message and a link to `/`.
+- [x] Both shells render the footer with `MillerVersion.Current` and api-links carry `target="_blank"`.
+- [x] Worker-scope verification passes; verified diff handed to the lead per `parallel-lead-commit`.
 
 ### Task 4: Hardening — Host allowlist + CSRF header on non-form POSTs
 
