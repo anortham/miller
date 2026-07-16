@@ -1185,11 +1185,14 @@ tr.has-errors td:nth-child(6) {
   background: var(--surface);
 }
 
+/* Fixed five-cell grid: time | tool | op | kind | duration. Every cell renders even when
+   empty, so a row never reflows its neighbours into the wrong column. The issue-details
+   expander sits on its own full-width row (.recent-error-detail spans 1 / -1). */
 .recent-errors li {
   display: grid;
-  grid-template-columns: 150px 150px 1fr auto;
-  gap: 12px;
-  align-items: center;
+  grid-template-columns: 108px 132px minmax(0, 1fr) minmax(0, 1.2fr) 76px;
+  gap: 6px 12px;
+  align-items: baseline;
   padding: 9px 0;
   border-top: 1px solid var(--rule);
 }
@@ -1202,6 +1205,21 @@ tr.has-errors td:nth-child(6) {
 }
 
 .recent-errors code { justify-self: start; }
+
+.recent-error-time,
+.recent-error-tool,
+.recent-error-op,
+.recent-error-kind {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.recent-error-duration {
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-feature-settings: var(--tnum);
+  white-space: nowrap;
+}
 
 /* ---- Workspace refresh action ---------------------------------------- */
 .detail-actions {
@@ -1428,6 +1446,8 @@ tr.has-errors td:nth-child(6) {
   .breakdown + .breakdown:last-child { border-bottom: 0; }
 
   .recent-errors li { grid-template-columns: 1fr; gap: 6px; align-items: start; }
+
+  .recent-error-duration { justify-self: start; }
 }
 
 /* ---- Workspace-list sortable headers ------------------------------- */
@@ -1480,6 +1500,54 @@ tr.has-errors td:nth-child(6) {
 }
 
 .ws-sort:hover::after { opacity: 0.7; }
+
+/* ---- Telemetry sortable headers ------------------------------------- */
+/* Same affordance as .ws-sort, but the telemetry table is a real <table>: aria-sort sits on
+   the <th> itself, which has an implicit columnheader role and so never matches the
+   [role="columnheader"] attribute selector those rules key off. */
+.telemetry-sort {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.telemetry-sort:hover { color: var(--ink); }
+
+.telemetry-sort:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* An idle two-way caret advertises sortability before the first click. */
+.telemetry-sort::after {
+  content: "\2195";
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.35;
+}
+
+th[aria-sort="ascending"] .telemetry-sort::after {
+  content: "\25B2";
+  opacity: 0.7;
+}
+
+th[aria-sort="descending"] .telemetry-sort::after {
+  content: "\25BC";
+  opacity: 0.7;
+}
+
+.telemetry-sort:hover::after { opacity: 0.7; }
 
 /* ---- Detail-page polish (Task 6): refresh indicator, chips, sparkline scale ---- */
 

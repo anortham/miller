@@ -448,6 +448,104 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public async Task TelemetryPanel_RendersSortableHeadersWithNumericSortKeys()
+    {
+        var telemetry = new DashboardTelemetrySummary("ws-a",
+        [
+            new DashboardToolStat("search", 1234, 20.5, 30, 44, 2, 9876,
+                "2026-06-12T10:01:00.000Z", "ok", "2026-06-12T10:00:30.000Z", "Boom"),
+        ], 1234, "2026-06-12T10:00:00.000Z", "2026-06-12T10:01:00.000Z", []);
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        Assert.Contains("x-data=\"telemetryTableSort\"", html);
+        Assert.Contains("data-sort-col=\"tool\"", html);
+        Assert.Contains("data-sort-col=\"calls\"", html);
+        Assert.Contains("data-sort-col=\"avg\"", html);
+        Assert.Contains("data-sort-col=\"p95\"", html);
+        Assert.Contains("data-sort-col=\"max\"", html);
+        Assert.Contains("data-sort-col=\"errors\"", html);
+        Assert.Contains("data-sort-col=\"tokens\"", html);
+        Assert.Contains("aria-sort=\"none\"", html);
+
+        Assert.Contains("data-sort-tool=\"search\"", html);
+        Assert.Contains("data-sort-calls=\"1234\"", html);
+        Assert.Contains("data-sort-avg=\"20.5\"", html);
+        Assert.Contains("data-sort-p95=\"30\"", html);
+        Assert.Contains("data-sort-max=\"44\"", html);
+        Assert.Contains("data-sort-errors=\"2\"", html);
+        Assert.Contains("data-sort-tokens=\"9876\"", html);
+        Assert.DoesNotContain("data-sort-calls=\"1,234\"", html);
+        Assert.DoesNotContain("data-sort-tokens=\"9,876\"", html);
+    }
+
+    [Fact]
+    public async Task TelemetryPanel_SortableHeadersKeepResponsiveOptionalColumns()
+    {
+        var telemetry = new DashboardTelemetrySummary("ws-a",
+        [
+            new DashboardToolStat("search", 2, 20.0, 30, 30, 0, 150,
+                "2026-06-12T10:01:00.000Z", "ok", null, null),
+        ], 2, "2026-06-12T10:00:00.000Z", "2026-06-12T10:01:00.000Z", []);
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        Assert.Equal(10, CountOccurrences(html, "telemetry-col-optional"));
+    }
+
+    [Fact]
+    public async Task TelemetryPanel_RendersRecentErrorsAsFixedGridCells()
+    {
+        var telemetry = new DashboardTelemetrySummary("ws-a",
+        [
+            new DashboardToolStat("search", 2, 20.0, 30, 30, 1, 150,
+                "2026-06-12T10:01:00.000Z", "ok", "2026-06-12T10:00:30.000Z", "Boom"),
+        ], 2, "2026-06-12T10:00:00.000Z", "2026-06-12T10:01:00.000Z",
+        [
+            new DashboardRecentError("2026-06-12T10:00:30.000Z", "search", "auto", "Boom", 20,
+                Id: "cid-1", ErrorMessage: "boom happened"),
+            new DashboardRecentError("2026-06-12T10:00:10.000Z", "inspect", null, null, 7),
+        ]);
+
+        string html = await RenderComponentAsync<TelemetryPanel>(new Dictionary<string, object?>
+        {
+            ["Telemetry"] = telemetry,
+            ["SelectedWorkspaceId"] = "ws-a",
+        });
+
+        Assert.Contains("recent-error-row", html);
+        Assert.Equal(2, CountOccurrences(html, "recent-error-time"));
+        Assert.Equal(2, CountOccurrences(html, "recent-error-tool"));
+        Assert.Equal(2, CountOccurrences(html, "recent-error-op"));
+        Assert.Equal(2, CountOccurrences(html, "recent-error-kind"));
+        Assert.Equal(2, CountOccurrences(html, "recent-error-duration"));
+
+        Assert.Contains("data-issue-details", html);
+        Assert.Contains("data-issue-id=\"cid-1\"", html);
+        Assert.Contains("recent-error-detail", html);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int i = haystack.IndexOf(needle, StringComparison.Ordinal); i >= 0;
+             i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [Fact]
     public async Task Shells_IncludeDashboardBehaviorScripts()
     {
         var index = new DashboardWorkspaceIndex(Array.Empty<DashboardWorkspaceIndexEntry>(), 0, 0, 0, 0);

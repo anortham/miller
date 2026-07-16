@@ -2,6 +2,7 @@
 
 <section id="telemetry-panel"
          class="panel telemetry"
+         x-data="telemetryTableSort"
          hx-get="/fragments/telemetry?workspace_id=@Esc(SelectedWorkspaceId)"
          data-poll-trigger="every 30s"
          hx-trigger="every 30s"
@@ -38,21 +39,35 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Tool</th>
-                        <th>Calls</th>
-                        <th class="telemetry-col-optional">Avg ms</th>
-                        <th class="telemetry-col-optional">p95 ms</th>
-                        <th class="telemetry-col-optional">Max ms</th>
-                        <th>Errors</th>
+                        <th aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="tool" x-on:click="onSort($event)">Tool</button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="calls" x-on:click="onSort($event)">Calls</button>
+                        </th>
+                        <th class="telemetry-col-optional" aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="avg" x-on:click="onSort($event)">Avg ms</button>
+                        </th>
+                        <th class="telemetry-col-optional" aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="p95" x-on:click="onSort($event)">p95 ms</button>
+                        </th>
+                        <th class="telemetry-col-optional" aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="max" x-on:click="onSort($event)">Max ms</button>
+                        </th>
+                        <th aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="errors" x-on:click="onSort($event)">Errors</button>
+                        </th>
                         <th>Last call</th>
                         <th class="telemetry-col-optional">Last error</th>
-                        <th class="telemetry-col-optional">Est tokens</th>
+                        <th class="telemetry-col-optional" aria-sort="none">
+                            <button type="button" class="telemetry-sort" data-sort-col="tokens" x-on:click="onSort($event)">Est tokens</button>
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (DashboardToolStat tool in Telemetry.Tools)
                     {
-                        <tr class="@(tool.ErrorCount > 0 ? "has-errors" : "")">
+                        <tr class="telemetry-row @(tool.ErrorCount > 0 ? "has-errors" : "")" @attributes="SortKeys(tool)">
                             <td><code>@tool.Tool</code></td>
                             <td>@tool.Calls.ToString("N0", CultureInfo.InvariantCulture)</td>
                             <td class="telemetry-col-optional">@tool.AvgMs.ToString("0.0", CultureInfo.InvariantCulture)</td>
@@ -95,15 +110,12 @@
                 <ol>
                     @foreach (DashboardRecentError error in Telemetry.RecentErrors)
                     {
-                        <li>
-                            <time class="rel-ts timestamp" datetime="@error.Ts" data-ts="@error.Ts">@RelativeTime(error.Ts, Now)</time>
-                            <code>@error.Tool</code>
-                            @if (!string.IsNullOrWhiteSpace(error.Op))
-                            {
-                                <span class="muted">@error.Op</span>
-                            }
-                            <span class="error-kind">@error.ErrorKind</span>
-                            <span class="muted">@error.DurationMs.ToString("N0", CultureInfo.InvariantCulture) ms</span>
+                        <li class="recent-error-row">
+                            <time class="rel-ts timestamp recent-error-time" datetime="@error.Ts" data-ts="@error.Ts">@RelativeTime(error.Ts, Now)</time>
+                            <code class="recent-error-tool">@error.Tool</code>
+                            <span class="muted recent-error-op">@Cell(error.Op)</span>
+                            <span class="error-kind recent-error-kind">@Cell(error.ErrorKind)</span>
+                            <span class="muted recent-error-duration">@error.DurationMs.ToString("N0", CultureInfo.InvariantCulture) ms</span>
                             @if (HasIssueDetails(error))
                             {
                                 string issueId = IssueId(error);
@@ -160,6 +172,23 @@
 
     private static string DisplayOutcome(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+
+    // Every recent-error cell renders even when empty; an omitted cell would shift the
+    // remaining ones into the wrong grid columns.
+    private static string Cell(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    // Raw numeric sort keys so the client sorts on values, not formatted "1,234" text.
+    private static Dictionary<string, object> SortKeys(DashboardToolStat tool) => new()
+    {
+        ["data-sort-tool"] = tool.Tool,
+        ["data-sort-calls"] = tool.Calls.ToString(CultureInfo.InvariantCulture),
+        ["data-sort-avg"] = tool.AvgMs.ToString("0.###", CultureInfo.InvariantCulture),
+        ["data-sort-p95"] = tool.P95Ms.ToString(CultureInfo.InvariantCulture),
+        ["data-sort-max"] = tool.MaxMs.ToString(CultureInfo.InvariantCulture),
+        ["data-sort-errors"] = tool.ErrorCount.ToString(CultureInfo.InvariantCulture),
+        ["data-sort-tokens"] = tool.SumEstTokens.ToString(CultureInfo.InvariantCulture),
+    };
 
     private static bool HasIssueDetails(DashboardRecentError error) =>
         !string.IsNullOrWhiteSpace(error.Id) ||

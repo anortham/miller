@@ -146,4 +146,89 @@ document.addEventListener('alpine:init', function () {
             },
         };
     });
+
+    Alpine.data('telemetryTableSort', function () {
+        return {
+            sortColumn: null, // 'tool' | 'calls' | 'avg' | 'p95' | 'max' | 'errors' | 'tokens'
+            sortDir: 'desc',  // 'asc' | 'desc'
+
+            // #telemetry-panel is patched by a 30s htmx morph poll, which re-renders the rows in
+            // server order. Sort state lives in a module-level store (never on DOM nodes — morph
+            // rewrites their attributes); init() rehydrates and every swap reapplies the choice.
+            store: function () {
+                return window.__millerTelemetrySortState ||
+                    (window.__millerTelemetrySortState = { sortColumn: null, sortDir: 'desc' });
+            },
+            persist: function () {
+                var s = this.store();
+                s.sortColumn = this.sortColumn;
+                s.sortDir = this.sortDir;
+            },
+            init: function () {
+                var s = this.store();
+                this.sortColumn = s.sortColumn || null;
+                this.sortDir = s.sortDir || 'desc';
+                this.rehydrate();
+
+                var self = this;
+                this.$el.addEventListener('htmx:afterSwap', function () { self.rehydrate(); });
+            },
+
+            rehydrate: function () {
+                this.applySort();
+                this.reflectSortButtons();
+            },
+
+            onSort: function (event) {
+                var col = event.currentTarget.getAttribute('data-sort-col');
+                if (!col) return;
+                if (this.sortColumn === col) {
+                    this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortColumn = col;
+                    // Numeric columns default to descending (biggest first); tool name to ascending.
+                    this.sortDir = col === 'tool' ? 'asc' : 'desc';
+                }
+                this.applySort();
+                this.reflectSortButtons();
+                this.persist();
+            },
+            applySort: function () {
+                if (!this.sortColumn) return;
+                var col = this.sortColumn;
+                var dir = this.sortDir === 'desc' ? -1 : 1;
+                // Re-appending rows inside <tbody> leaves <thead> in place.
+                this.$el.querySelectorAll('tbody').forEach(function (body) {
+                    var rows = Array.prototype.slice.call(body.querySelectorAll('.telemetry-row'));
+                    rows.sort(function (a, b) {
+                        if (col === 'tool') {
+                            var an = (a.getAttribute('data-sort-tool') || '').toLowerCase();
+                            var bn = (b.getAttribute('data-sort-tool') || '').toLowerCase();
+                            if (an < bn) return -dir;
+                            if (an > bn) return dir;
+                            return 0;
+                        }
+                        var av = parseFloat(a.getAttribute('data-sort-' + col));
+                        var bv = parseFloat(b.getAttribute('data-sort-' + col));
+                        if (isNaN(av)) av = -1;
+                        if (isNaN(bv)) bv = -1;
+                        return (av - bv) * dir;
+                    });
+                    rows.forEach(function (row) { body.appendChild(row); });
+                });
+            },
+            reflectSortButtons: function () {
+                var self = this;
+                // A real <th> carries aria-sort directly — it has no explicit role="columnheader".
+                this.$el.querySelectorAll('[data-sort-col]').forEach(function (btn) {
+                    var header = btn.closest('th') || btn;
+                    if (self.sortColumn === btn.getAttribute('data-sort-col')) {
+                        header.setAttribute('aria-sort', self.sortDir === 'desc' ? 'descending' : 'ascending');
+                    } else {
+                        header.setAttribute('aria-sort', 'none');
+                    }
+                });
+            },
+        };
+    });
 });

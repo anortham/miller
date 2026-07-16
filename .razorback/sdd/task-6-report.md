@@ -1,103 +1,61 @@
-# Task 6 report — Detail-page polish (feedback, sparklines, id chips)
+# Task 6 — Telemetry panel polish (sortable columns, recent-errors alignment)
 
-**Status:** DONE
-**Commit SHA:** <filled below>
-**Worktree:** `/Users/murphy/source/miller/.worktrees/dashboard-polish`
-**Branch:** `feat/dashboard-polish`
-**Base commit:** 1524f16 (Tasks 1–5 merged)
-**Dirty state at report time:** only my owned files + this report modified; pre-existing `M .razorback/sdd/task-5-report.md` left untouched (not mine).
+**Status:** COMPLETE
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
+**Branch:** `worktree-dashboard-ux-fixes`
+**Base:** 6d40280 (T5)
 
-## What I built
+## Ledger
 
-All four acceptance criteria, TDD (7 new render tests written first → red → implemented → green).
+| Step | Result |
+| --- | --- |
+| Miller-first orientation | Done — model shapes from `inspect`, not guessed |
+| Tests written first, watched red | Done — 2 of 3 new tests red on `x-data="telemetryTableSort"` / `recent-error-row` |
+| Implementation | Done — razor + Alpine component + CSS |
+| Focused verification | Green — 45/45 `~DashboardActivityFeed` |
+| Full fast suite | Green — 3562/3562, 24s |
+| Release build | Green — 0 warnings / 0 errors |
+| `node --check` | Green |
+| Plan checkboxes ticked | Done — Task 6 section only (lines 261-263) |
 
-1. **Refresh button in-progress label** (`WorkspaceDetailPanel.razor:14`). The button now wraps two spans:
-   `.refresh-button-label` ("Refresh index") and `.refresh-button-indicator` ("Refreshing…"). CSS shows the
-   indicator and hides the label only while the requesting element carries htmx's default `.htmx-request`
-   class — no separate `hx-indicator` target needed because the button itself is the requester. The pre-existing
-   `hx-disabled-elt="this"` is kept, so the button also disables during the request. This replaces the
-   "global opacity only" signal the audit (A9) called out with an explicit textual state.
+## Files changed
 
-2. **Open-folder as a real button + success toast** (`WorkspaceDetailPanel.razor:22`, `dashboard-site.js`).
-   Reclassed from `.subtle-link open-folder-link` to `.refresh-button open-folder-button` (real control chrome,
-   not a link). Added `data-toast-success="Opening the workspace folder…"`. A new delegated
-   `htmx:afterRequest` listener in `dashboard-site.js` reads `data-toast-success` off `event.detail.elt` and, on
-   `event.detail.successful`, calls the **existing** `window.showDashboardToast(message, 'ok')` — no second toast
-   mechanism. The action stays `hx-swap="none"` (no visible swap), so this is the only success signal. Generic
-   attribute-driven, so any future opt-in button reuses it.
+- `src/Miller.Dashboard/Components/TelemetryPanel.razor` — `x-data="telemetryTableSort"` on the section; sort buttons inside `<th>` for Tool/Calls/Avg/p95/Max/Errors/Est tokens with `aria-sort="none"` on the `<th>`; `.telemetry-row` + `@attributes="SortKeys(tool)"` on each `<tr>`; recent-errors cells get fixed grid classes and always render (`Cell()` em-dash placeholder).
+- `src/Miller.Dashboard/wwwroot/js/alpine-components.js` — new `telemetryTableSort` component (+96 lines), CSP-safe.
+- `src/Miller.Dashboard/wwwroot/dashboard.css` — recent-errors five-column grid; new "Telemetry sortable headers" section.
+- `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` — 3 new tests + `CountOccurrences` helper.
+- `docs/plans/2026-07-16-dashboard-ux-fixes.md` — Task 6 checkboxes.
 
-3. **Sparkline min/max/latest scale labels** (`WorkspaceTrendsPanel.razor:34`). The `<svg>` is wrapped in a
-   `.trend-plot` column; below it a `.sparkline-scale` row renders `min <SeriesMin>`, `max <SeriesMax>`,
-   `latest <Latest>`, derived directly from the in-hand `DashboardTrendSeries.Points` (min/max) and `.Latest`.
-   No charting library. Each label carries a `title` tooltip. `HasTrend` guarantees ≥2 points so `Points.Min()`
-   /`.Max()` are safe.
+## Miller calls (API-shape evidence)
 
-4. **Truncated copyable id chips + jargon titles.**
-   - Artifact id (`WorkspaceDetailPanel.razor`): visible `.id-chip` shows first 12 chars + `…`, full value in
-     `title`; a `hidden-copy` `#copy-artifact-id` span holds the full value and a `Copy` button targets it via
-     the existing `data-copy-target` delegated handler. `n/a` still renders when absent.
-   - Clone body hash (`WorkspaceLocalMetricsPanel.razor`): same chip pattern, per-row ids `copy-clone-hash-{i}`
-     (loop switched to indexed `for` to mint stable ids).
-   - Jargon `title` explanations added to the `<dt>` for **Revision**, **Artifact**, **Search sidecar**,
-     **Content sidecar** — one plain-English sentence each.
-   - Last-scan `<time>` now renders `RelativeTime(Facts.LastScanAt, Now)` (Task 2 contract) instead of raw ISO;
-     `data-ts`/`datetime` keep the raw ISO for the client repaint (same contract ActivityFeedPanel uses).
+| Call | Proves |
+| --- | --- |
+| `inspect(target='DashboardToolStat', depth='full')` | `DashboardData.cs:34` — `Tool string`, `Calls long`, `AvgMs double`, `P95Ms long`, `MaxMs long`, `ErrorCount long`, `SumEstTokens long`, `LastCallTs/LastOutcome/LastErrorTs/LastErrorKind string?`. Every `data-sort-*` key is rendered from these model values, never parsed from formatted text. |
+| `inspect(target='DashboardRecentError', depth='full')` | `DashboardData.cs:47` — `Ts string`, `Tool string`, `Op string?`, `ErrorKind string?`, `DurationMs long`, then optional `Id`/`WorkspaceId`/`WorkspaceDisplayId`/`ErrorMessage`/`ErrorDetail`. `Op` and `ErrorKind` being nullable is exactly why the grid needed always-rendered cells. |
+
+Worktree bytes read directly (changed since the Miller baseline by T1/T5): `TelemetryPanel.razor`, `alpine-components.js`, `WorkspaceIndex.razor`, `dashboard.css`.
 
 ## Judgment calls
 
-- **Ellipsis is U+2026 (`…`), asserted as `&#x2026;` in tests** (`DashboardActivityFeedTests.cs:514,578`). The
-  Blazor `HtmlRenderer` default `HtmlEncoder` encodes U+2026 to the numeric entity `&#x2026;`, which renders as a
-  correct ellipsis in-browser. Kept the typographic glyph in source; assertions match the encoded output.
-- **`ChipText` duplicated (3 lines) in both razor `@code` blocks** rather than added to `DashboardFormat`
-  (`WorkspaceDetailPanel.razor` + `WorkspaceLocalMetricsPanel.razor`). `DashboardFormat.cs` is outside my file
-  ownership; a tiny private static helper per component respects that boundary.
-- **Copy source is a hidden full-value span, not CSS-truncation.** Truncating server-side (testable "12 chars +
-  ellipsis" markup) means the visible text can't be the copy source, so I reuse the codebase's existing
-  `hidden-copy` + `data-copy-target` pattern (already used for workspace_id / root path) to copy the full value.
-- **Toast tone `ok` needed a style.** Base `.dashboard-toast` is danger-coloured; added `.dashboard-toast-ok`
-  (uses `--ok`/`--ok-soft` tokens) so a success confirmation isn't red.
-- **Global `.htmx-request { opacity:.5 }` still applies** to the refreshing button; the added text label is the
-  primary signal, dim is secondary. Acceptable and consistent with the rest of the dashboard.
+1. **New `.telemetry-sort` CSS class rather than reusing `.ws-sort`** (`dashboard.css:1484-1529`). Task 5's caret rules key off `[role="columnheader"][aria-sort=...]`. A real `<th>` has an *implicit* columnheader role, and CSS attribute selectors only match explicit attributes — so `.ws-sort`'s carets would never light up inside a `<th>`. Extending Task 5's selector lists would mean editing its section, which Task 6 does not own. Cost: ~12 duplicated lines of button reset. Noted for the Task 10 visual sweep as a possible merge into one shared `.col-sort`.
+2. **Sortable columns = the 7 named in the spec.** "Last call" and "Last error" got no sort button (not in scope, and both would need epoch keys like T5's `ActivityEpochSeconds`).
+3. **`Cell()` em-dash placeholder for null `Op`/`ErrorKind`** (`TelemetryPanel.razor:169-172`). The old markup dropped the op `<span>` entirely when null — with a fixed 5-column grid that shifts kind/duration one column left. This is the actual root cause of the "wraps unpredictably" symptom: 5-6 children in a 4-column `150px 150px 1fr auto` grid.
+4. **`data-sort-avg` formatted `0.###` invariant, not raw `double.ToString()`.** Blazor renders `@attributes` object values through `ToString()`, which is culture-sensitive; an invariant string keeps `parseFloat` correct under any test/host culture.
+5. **`data-sort-*` on `<tr>`, not `<td>`** — the plan allowed either; `<tr>` matches T5's row-level convention and is what the sort comparator reads.
 
-## Miller calls + confirmations
+## Self-review
 
-- `mcp__miller__inspect`/`mcp__miller__search` schemas loaded via ToolSearch; used Read on the three worktree
-  razor files as the source of truth (worktree is authoritative per brief). Drift note: the worktree razor files
-  match main's structure at the regions the brief cited (refresh :16 region, open-folder :22 region, sparkline
-  :34-39, clone `<code>` hash) — no unexpected divergence.
-- API-shape evidence (read from `src/Miller.Dashboard/DashboardData.cs`):
-  - `DashboardWorkspaceFacts` (:118) — `ArtifactId` is an optional trailing ctor param (nullable string,
-    default null); `LastScanAt` nullable string; sidecar statuses strings.
-  - `DashboardTrendSeries` (:229) — `Points: IReadOnlyList<double>`, `First`, `Latest`; `HasTrend => Points.Count >= 2`.
-  - `DashboardSparkline` (:270) — `ViewBox`, `Points(...)` already exist; I only added text labels, no geometry change.
-  - `DashboardMetricCloneGroup` (:212) — `BodyHash`, `Count`, `Symbols`.
-- Reused the established toast (`dashboard-site.js:140 window.showDashboardToast`), copy pattern
-  (`data-copy-target` delegated click at `dashboard-site.js:169`), and the `.rel-ts`/`data-ts`/`datetime` time
-  contract from `ActivityFeedPanel.razor:27`.
+- **Contract inputs preserved:** `hx-ext="morph"`, `hx-swap="morph:outerHTML"`, `data-poll-trigger="every 30s"`, `hx-trigger="every 30s"`, and the Refresh button's morph swap all untouched. Verified by the existing green `WorkspacesShell_MountsMachineWideTelemetryPanel` / `WorkspaceShell_RendersVisibleTelemetryAndHtmxTargets`.
+- **`telemetry-col-optional` survives:** guarded by a new test asserting exactly 10 occurrences (5 `<th>` + 5 `<td>`) — this one passed on first run by design, as a regression guard.
+- **Issue-expander machinery untouched:** `data-issue-details`, `data-issue-id`, `data-copy-target`, `.copy-box` unchanged; `.recent-error-detail { grid-column: 1 / -1; }` already existed and still gives the expander its own full-width row.
+- **Store pattern copied exactly:** module-level `window.__millerTelemetrySortState`, `init()` rehydrate, element-scoped `htmx:afterSwap` re-apply, `persist()` on mutation. No state parked on DOM nodes.
+- **CSP-safe:** `x-on:click="onSort($event)"` only — same subset as `workspaceIndexFilter`. `Shells_IncludeDashboardBehaviorScripts`' `DoesNotContain("onclick=")` still green.
+- **No new abstractions:** one Alpine component; no endpoint, model, or `DashboardData` change. Sort is client-side presentation only.
+- **Unowned tests:** no edits needed. `DashboardRegistryReadTests` sort assertions are all `ws-*`-scoped and stayed green.
 
-## What Task 7 must live-verify (browser)
+## Concerns
 
-- **Refresh indicator visual** — click Refresh index; confirm the label flips to "Refreshing…" and the button
-  disables/dims during the in-flight request, then restores after swap.
-- **Open-folder toast** — click Open folder; confirm a green (ok-tone) toast "Opening the workspace folder…"
-  appears bottom-right on 2xx, and no success toast on failure (the existing error toasts should fire instead).
-- **Clipboard** — click Copy on the artifact id and a clone body hash; confirm the **full** value is copied
-  (not the truncated chip text) and the button flashes "Copied"; confirm graceful degrade when
-  `navigator.clipboard` is unavailable (non-secure context) — chip `title` still shows the full value.
-- **Chip titles / jargon tooltips** — hover the truncated chips (full id) and the Revision/Artifact/sidecar
-  `<dt>` labels (plain-English sentence).
-- **Sparkline scale** — confirm min/max/latest read correctly against the drawn line for a real history.db.
-
-## Gate invariants + results
-
-- **worker-red-green** — `dotnet test … --filter "Category!=Scale&FullyQualifiedName~DashboardActivityFeedTests"`
-  → **Passed 28/28** (7 new + 21 existing). Proves the four acceptance-criteria markup contracts: refresh
-  indicator spans, open-folder button + toast hook, artifact/clone truncated chips with full-value title + copy
-  target, jargon `<dt>` titles, last-scan relative time, sparkline min/max/latest labels. Confirmed red first —
-  the two chip tests failed on the ellipsis assertion before implementation.
-- **worker-ceiling** — `scripts/test.sh` (fast suite) → **Passed 3116/3116**, wall time **18s** (ceiling 30s).
-  Proves no regression across the suite. Build is 0 warnings / 0 errors (Release, `TreatWarningsAsErrors`).
-- **CSP** — no `onclick=` / inline `<script>` in any changed file; copy + toast go through delegated listeners in
-  `dashboard-site.js`. Clipboard degrades (existing `copyTextFromTarget` fallback). Confirmed by the passing
-  `Shells_IncludeDashboardBehaviorScripts` (`DoesNotContain onclick=`).
-- **Read surface** — no new endpoints, no mutations, JSON contracts untouched. CSS additions are append-only.
+- **`.ws-sort` / `.telemetry-sort` duplication** — see judgment call 1. Deliberate, ownership-driven; the natural cleanup is Task 10.
+- **Two independent sort stores** (`__millerWorkspaceIndexState`, `__millerTelemetrySortState`) — correct today (different panels, different columns), but a third sortable table should prompt a shared factory rather than a third store.
+- **Sort is per-page-load, not persisted** across a browser reload (module store, not `localStorage`) — matches T5 behavior exactly; flagging only in case a later task wants durable preferences.
+- **No plan mismatch found.** The plan's "sort keys on `<td>` or `<tr>`" ambiguity is the only open choice and is resolved above.

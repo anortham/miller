@@ -258,9 +258,9 @@ Commit modes: Batch B (Tasks 2, 3) uses `parallel-lead-commit`. All serial tasks
 **What to build:** Click-to-sort on Calls / Avg / p95 / Max / Errors / Est tokens (numeric desc first), Tool (alpha), and a recent-errors list that lines up.
 
 **Acceptance criteria:**
-- [ ] Rendered telemetry table carries sort buttons with `aria-sort` on `<th>` and numeric `data-sort-*` keys.
-- [ ] Recent-errors entries render the fixed grid classes.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Rendered telemetry table carries sort buttons with `aria-sort` on `<th>` and numeric `data-sort-*` keys.
+- [x] Recent-errors entries render the fixed grid classes.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
 ### Task 7: Notice toasts, non-navigating Cancel, CSS-driven theme label
 
