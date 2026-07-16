@@ -825,17 +825,29 @@ public sealed class EditService
         if (evidence is null)
             return;
 
-        sb.Append("Match proof:\n");
-        sb.Append("- match_mode: ").Append(evidence.MatchMode).Append('\n');
-        sb.Append("- match_source: ").Append(evidence.MatchSource).Append('\n');
+        sb.Append("match: ").Append(evidence.MatchMode).Append(" ×").Append(evidence.MatchCount);
         if (evidence.LineStart is { } lineStart && evidence.LineEnd is { } lineEnd)
-            sb.Append("- line_range: ").Append(lineStart).Append('-').Append(lineEnd).Append('\n');
-        sb.Append("- match_count: ").Append(evidence.MatchCount).Append('\n');
-        sb.Append("- occurrence: ").Append(evidence.Occurrence).Append('\n');
-        sb.Append("- disk_verified: ").Append(evidence.DiskVerified ? "true" : "false").Append('\n');
-        sb.Append("- content_index_state: ").Append(evidence.ContentIndexState).Append('\n');
+            sb.Append(" @ L").Append(lineStart).Append('-').Append(lineEnd);
+        sb.Append(evidence.DiskVerified ? " (disk verified" : " (DISK UNVERIFIED");
+        sb.Append(", index ").Append(evidence.ContentIndexState).Append(")\n");
+
+        AppendEvidenceNotes(sb, evidence);
+    }
+
+    private static void AppendEvidenceNotes(StringBuilder sb, EditMatchEvidence evidence)
+    {
+        var notes = new List<string>(3);
+        if (evidence.MatchCount > 1)
+            notes.Add($"occurrence={evidence.Occurrence} of {evidence.MatchCount} matches");
+        if (!evidence.DiskVerified)
+            notes.Add("old_text did not verify against current disk text");
         if (!string.IsNullOrWhiteSpace(evidence.CandidateReason))
-            sb.Append("- content_index_note: ").Append(evidence.CandidateReason).Append('\n');
+            notes.Add(evidence.CandidateReason);
+
+        if (notes.Count == 0)
+            return;
+
+        sb.Append("match note: ").Append(string.Join("; ", notes)).Append('\n');
     }
 
     private static void WriteEvidenceJson(Utf8JsonWriter w, EditMatchEvidence? evidence)

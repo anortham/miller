@@ -404,11 +404,97 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("match_mode: exact", result.Output);
-        Assert.Contains("match_source: disk", result.Output);
-        Assert.Contains("line_range:", result.Output);
-        Assert.Contains("occurrence: first", result.Output);
-        Assert.Contains("disk_verified: true", result.Output);
+        Assert.Contains("match: exact ×2 @ L2-2 (disk verified, index not_used)", result.Output);
+    }
+
+    private static string[] EvidenceLines(string output) => output
+        .Split('\n')
+        .Where(static l => l.StartsWith("match: ", StringComparison.Ordinal)
+            || l.StartsWith("match note: ", StringComparison.Ordinal))
+        .ToArray();
+
+    [Fact]
+    public void Execute_ReplaceText_Preview_RendersEvidenceOnOneLine_NoLabelBlock()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);",
+            NewText = "return 42;",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("Preview — pass apply=true to commit.", result.Output);
+        Assert.Equal(["match: exact ×1 @ L3-3 (disk verified, index not_used)"], EvidenceLines(result.Output));
+        Assert.DoesNotContain("Match proof:", result.Output);
+        Assert.DoesNotContain("- match_mode:", result.Output);
+        Assert.DoesNotContain("- match_source:", result.Output);
+        Assert.DoesNotContain("- line_range:", result.Output);
+        Assert.DoesNotContain("- content_index_state:", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_Apply_RendersEvidenceOnOneLine()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);",
+            NewText = "return 42;",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.Contains("Applied — 1 file written.", result.Output);
+        Assert.Equal(["match: exact ×1 @ L3-3 (disk verified, index not_used)"], EvidenceLines(result.Output));
+        Assert.DoesNotContain("Match proof:", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_MultipleMatches_SurfacesOccurrenceDisambiguationOnNoteLine()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "Total",
+            NewText = "Sum",
+            Occurrence = "all",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.Equal(
+            [
+                "match: exact ×2 @ L2-3 (disk verified, index not_used)",
+                "match note: occurrence=all of 2 matches",
+            ],
+            EvidenceLines(result.Output));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_SingleMatch_OmitsOccurrenceNoteLine()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "private int _count;",
+            NewText = "private int _n;",
+        });
+
+        Assert.Single(EvidenceLines(result.Output));
+        Assert.DoesNotContain("match note:", result.Output);
     }
 
     [Fact]
@@ -425,7 +511,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("match_mode: normalized", result.Output);
+        Assert.Contains("match: normalized ×1 ", result.Output);
         Assert.Contains("return 42;", result.Output);
     }
 
@@ -445,8 +531,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("match_mode: fuzzy", result.Output);
-        Assert.Contains("disk_verified: true", result.Output);
+        Assert.Contains("match: fuzzy ×1 @ L1-1 (disk verified, index not_used)", result.Output);
     }
 
     [Fact]
@@ -465,8 +550,7 @@ public sealed class EditToolTests : IDisposable
 
         Assert.True(result.Applied);
         Assert.Contains("Applied — 1 file written.", result.Output);
-        Assert.Contains("match_mode: exact", result.Output);
-        Assert.Contains("disk_verified: true", result.Output);
+        Assert.Contains("match: exact ×2 @ L2-2 (disk verified, index not_used)", result.Output);
     }
 
     [Fact]
@@ -533,8 +617,7 @@ public sealed class EditToolTests : IDisposable
         Assert.False(result.Applied);
         Assert.Null(result.FailureReason);
         Assert.Contains("No change", result.Output);
-        Assert.Contains("match_mode: exact", result.Output);
-        Assert.Contains("disk_verified: true", result.Output);
+        Assert.Contains("match: exact ×2 @ L2-2 (disk verified, index not_used)", result.Output);
     }
 
     [Fact]
@@ -578,8 +661,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("match_source: indexed_content", result.Output);
-        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("match: exact ×1 @ L170-170 (disk verified, index current)", result.Output);
         Assert.Contains("-target-value beta-anchor", result.Output);
         Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
     }
@@ -605,7 +687,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("match: exact ×1 @ L170-170 (disk verified, index current)", result.Output);
         Assert.Contains("-target-value beta-anchor", result.Output);
         Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
     }
@@ -631,8 +713,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("line_range: 14-14", result.Output);
-        Assert.Contains("match_count: 1", result.Output);
+        Assert.Contains("match: exact ×1 @ L14-14 (disk verified, index current)", result.Output);
         Assert.Contains("-target-value beta-anchor", result.Output);
         Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
     }
@@ -658,7 +739,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("line_range: 170-170", result.Output);
+        Assert.Contains("match: exact ×1 @ L170-170 (disk verified, index current)", result.Output);
         Assert.Contains("-target-value beta-anchor", result.Output);
         Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
     }
@@ -684,8 +765,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("line_range: 14-14", result.Output);
-        Assert.Contains("match_count: 1", result.Output);
+        Assert.Contains("match: exact ×1 @ L14-14 (disk verified, index current)", result.Output);
         Assert.Contains("-target-value beta-anchor", result.Output);
         Assert.DoesNotContain("-target-value alpha-anchor", result.Output);
     }
@@ -707,8 +787,87 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        Assert.Contains("match_source: disk_after_index_unavailable", result.Output);
-        Assert.Contains("content_index_state: unavailable", result.Output);
+        Assert.Contains("match: exact ×1 @ L1-1 (disk verified, index unavailable)", result.Output);
+        Assert.Contains("match note: missing content.db at ", result.Output);
+        Assert.Equal(2, EvidenceLines(result.Output).Length);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonPreview_PinsEvidenceFieldNamesAndOrder()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);",
+            NewText = "return 42;",
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(
+            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state"],
+            root.EnumerateObject().Select(static p => p.Name).ToArray());
+        Assert.Equal("exact", root.GetProperty("match_mode").GetString());
+        Assert.Equal("disk", root.GetProperty("match_source").GetString());
+        Assert.Equal(3, root.GetProperty("line_start").GetInt32());
+        Assert.Equal(3, root.GetProperty("line_end").GetInt32());
+        Assert.Equal(1, root.GetProperty("match_count").GetInt32());
+        Assert.Equal("first", root.GetProperty("occurrence").GetString());
+        Assert.True(root.GetProperty("disk_verified").GetBoolean());
+        Assert.Equal("not_used", root.GetProperty("content_index_state").GetString());
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonApply_PinsEvidenceFieldNamesAndOrder()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);",
+            NewText = "return 42;",
+            Apply = true,
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(
+            ["applied", "files_written", "stale_allowed", "index_fresh", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state"],
+            root.EnumerateObject().Select(static p => p.Name).ToArray());
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_JsonUnavailableContentDb_PinsContentIndexNoteField()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "public class Api { public string Value => \"target-value\"; }\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "Value",
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(
+            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state", "content_index_note"],
+            root.EnumerateObject().Select(static p => p.Name).ToArray());
+        Assert.Equal("disk_after_index_unavailable", root.GetProperty("match_source").GetString());
+        Assert.Equal("unavailable", root.GetProperty("content_index_state").GetString());
+        Assert.StartsWith("missing content.db at ", root.GetProperty("content_index_note").GetString());
     }
 
     [Fact]

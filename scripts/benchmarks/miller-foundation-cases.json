@@ -4677,16 +4677,15 @@
       },
       "expected": {
         "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
-        "anchor": "Match proof:"
+        "anchor": "match: "
       },
       "scoring": {
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_mode: exact",
-          "match_source: indexed_content",
-          "disk_verified: true",
+          "match: exact ×",
+          "index current",
+          "disk verified",
           "+version = \"1.2.4\""
         ],
         "max_output_chars": 3500
@@ -4721,16 +4720,15 @@
       },
       "expected": {
         "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
-        "anchor": "match_mode: normalized"
+        "anchor": "match: normalized ×"
       },
       "scoring": {
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_mode: normalized",
-          "match_source: indexed_content",
-          "disk_verified: true",
+          "match: normalized ×",
+          "index current",
+          "disk verified",
           "+    normalized_label = \"indent updated\""
         ],
         "max_output_chars": 3500
@@ -4765,15 +4763,14 @@
       },
       "expected": {
         "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
-        "anchor": "match_mode: normalized"
+        "anchor": "match: normalized ×"
       },
       "scoring": {
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_mode: normalized",
-          "disk_verified: true",
+          "match: normalized ×",
+          "disk verified",
           "+trailing_value = \"updated\""
         ],
         "max_output_chars": 3500
@@ -4807,16 +4804,15 @@
       },
       "expected": {
         "path": "docs/findings/benchmarks/2026-06-28-token-saving-edit-redesign/edit-token-saving-fixture.md",
-        "anchor": "match_mode: fuzzy"
+        "anchor": "match: fuzzy ×"
       },
       "scoring": {
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_mode: fuzzy",
-          "match_source: disk",
-          "disk_verified: true",
+          "match: fuzzy ×",
+          "index not_used",
+          "disk verified",
           "+fuzzy_value = \"receive tokens\""
         ],
         "max_output_chars": 3500
@@ -4857,10 +4853,9 @@
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_source: indexed_content",
-          "match_count: 1",
-          "disk_verified: true",
+          "index current",
+          "×1",
+          "disk verified",
           "+duplicate_value = \"line-selected\""
         ],
         "max_output_chars": 3500
@@ -4901,10 +4896,9 @@
         "mode": "workflow_anchors",
         "readiness": "edit-ready",
         "required_anchors": [
-          "Match proof:",
-          "match_source: indexed_content",
-          "match_count: 1",
-          "disk_verified: true",
+          "index current",
+          "×1",
+          "disk verified",
           "+duplicate_value = \"anchor-selected\""
         ],
         "max_output_chars": 3500

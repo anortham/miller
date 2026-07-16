@@ -300,8 +300,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** None - safe parallel batch.
 
 **Acceptance criteria:**
-- [ ] Normal-path evidenced edits render ≤2 evidence lines across preview/applied; abnormal states still surface loudly; JSON pinned unchanged.
-- [ ] Focused EditToolTests pass; handed to lead per commit mode.
+- [x] Normal-path evidenced edits render ≤2 evidence lines across preview/applied; abnormal states still surface loudly; JSON pinned unchanged.
+- [x] Focused EditToolTests pass; handed to lead per commit mode.
 
 ### Task T3.4: Single home for SignatureMaxLength
 
