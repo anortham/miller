@@ -61,8 +61,8 @@ public sealed class TraceTool
         "provider-scoped cross-language chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, " +
         "backend-http) with a confidence band. mode=auto (callers/callees) is subsumed by inspect depth=full — " +
         "prefer inspect for that. refs is name-based and may be empty for some languages; on empty, fall back to " +
-        "search mode=source for text occurrences. Reduced-confidence links are flagged [verb-unknown]/[ambiguous] " +
-        "— never trust an unflagged link more than a flagged one. NOT for: a symbol's own definition/signature " +
+        "search mode=source for text occurrences. Reduced-confidence links are flagged [verb-unknown]/[ambiguous]; " +
+        "treat flagged and unflagged links alike as leads to confirm with inspect. NOT for: a symbol's own definition/signature " +
         "(inspect), or ranking which tests to run before a change (impact). Example: trace target=FreshnessService " +
         "mode=refs. format=json for structure; format=full adds per-link signals in bridge output. Empty results " +
         "include next actions.")]

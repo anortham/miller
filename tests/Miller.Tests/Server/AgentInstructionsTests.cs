@@ -213,6 +213,36 @@ public sealed class AgentInstructionsTests
         }
     }
 
+    // Redirect vocabulary rule: a description may say what a tool is NOT for only while naming where to go
+    // instead. The template's "NOT for: X (use Y)" clause does exactly that and is required above, so it is
+    // excluded here; what remains must not prohibit without redirecting. Measured effect (context-mode, 2026-07):
+    // bare-NOT negations regressed smaller models, so this is a gate rather than a style note.
+    private static readonly string[] ProhibitionMarkers =
+    {
+        "never ",
+        "do not ",
+        "do NOT ",
+        "don't ",
+        "cannot ",
+        "must not ",
+    };
+
+    [Theory]
+    [MemberData(nameof(ToolMethods))]
+    public void ToolDescriptions_RedirectInsteadOfProhibiting(MethodInfo method)
+    {
+        string methodName = $"{method.DeclaringType?.Name}.{method.Name}";
+        string description = method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty;
+        string outsideNotForClause = description.Replace(NotForClause(description), string.Empty, StringComparison.Ordinal);
+
+        foreach (string marker in ProhibitionMarkers)
+        {
+            Assert.False(
+                outsideNotForClause.Contains(marker, StringComparison.OrdinalIgnoreCase),
+                $"{methodName} description prohibits with \"{marker.Trim()}\" outside its 'NOT for:' clause; state the capability and name the tool to use instead.");
+        }
+    }
+
     [Fact]
     public void CombinedToolDescriptions_StayWithinTotalSchemaBudget()
     {

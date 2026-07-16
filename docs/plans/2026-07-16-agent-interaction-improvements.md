@@ -373,8 +373,8 @@ Re-baselined 2026-07-16: exact/unique display_path resolution and kind aliases a
 **Dependency reason:** Same files as T3.4 (SearchTool/InspectTool/ContextTool); runs after T3.4 lands (Batch 5b).
 
 **Acceptance criteria:**
-- [ ] Every description passes the `NOT for:`+`Example` template test and per-tool budgets; no bare-NOT-without-alternative remains.
-- [ ] Fast suite passes; handed to lead per commit mode.
+- [x] Every description passes the `NOT for:`+`Example` template test and per-tool budgets; no bare-NOT-without-alternative remains.
+- [x] Fast suite passes; handed to lead per commit mode.
 
 ### Task T4.3: Extend the nudge graph toward underused tools
 
