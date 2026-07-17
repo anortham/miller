@@ -58,6 +58,23 @@ public sealed class DashboardNotFoundTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkspaceGet_WithUnregisteredIdAndEmptyRegistry_ReturnsStyledHtml404()
+    {
+        using IHost host = await StartHostAsync();
+        HttpClient client = host.GetTestClient();
+
+        HttpResponseMessage response = await client.GetAsync(
+            "/workspace?workspace_id=bogus", TestContext.Current.CancellationToken);
+        string html = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains(
+            "workspace_id 'bogus' is not registered — open / for the workspace list.",
+            WebUtility.HtmlDecode(html),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task WorkspaceGet_WithScriptInjectionId_EscapesIdIntoInertText()
     {
         SeedWorkspace("ws-a", "alpha-abcd1234");

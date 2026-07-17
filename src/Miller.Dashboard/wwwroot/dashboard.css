@@ -666,6 +666,11 @@ html[data-theme="dark"] .theme-label-light { display: inline; }
   white-space: normal;
 }
 
+/* The confirm form floats below its row, so on the last (or only) row it crosses the panel's
+   bottom edge — the panel's rounded-corner clip must yield while a confirm is open, or the
+   controls are unreachable. */
+.ws-index-panel:has(.ws-row-actions details[open]) { overflow: visible; }
+
 @media (prefers-reduced-motion: reduce) {
   .ws-row-actions { transition: none; }
 }

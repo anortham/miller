@@ -1381,7 +1381,9 @@ public static class DashboardData
         if (SelectTelemetryWorkspace(workspaces, telemetryDbPath) is { } telemetryWorkspaceId)
             return telemetryWorkspaceId;
 
-        return workspaces.Count == 0 ? requestedWorkspaceId : workspaces[0].WorkspaceId;
+        // Never echo an unresolved request back as "selected": the /workspace endpoint detects a bad
+        // id by comparing it against the selection, and an echo would mask the miss on an empty registry.
+        return workspaces.Count == 0 ? null : workspaces[0].WorkspaceId;
     }
 
     private static string? SelectTelemetryWorkspace(

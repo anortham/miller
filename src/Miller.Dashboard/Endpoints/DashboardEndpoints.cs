@@ -71,9 +71,9 @@ internal static class DashboardEndpoints
                 paths.TelemetryDbPath,
                 workspace_id,
                 launchDirectory);
-            // A requested id that did not resolve must not silently render the fallback workspace.
+            // A requested id that did not resolve must not silently render the fallback workspace —
+            // or, on an empty registry, the empty workspace shell.
             if (!string.IsNullOrWhiteSpace(workspace_id) &&
-                snapshot.Workspaces.Count > 0 &&
                 !string.Equals(snapshot.SelectedWorkspaceId, workspace_id, StringComparison.Ordinal))
             {
                 return new RazorComponentResult<NotFoundPage>(new

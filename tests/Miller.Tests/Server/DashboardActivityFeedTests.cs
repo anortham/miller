@@ -918,6 +918,22 @@ public sealed class DashboardActivityFeedTests : IDisposable
     }
 
     [Fact]
+    public void WorkspacePanel_StopsClippingWhileARemovePopoverIsOpen()
+    {
+        string css = File.ReadAllText(Path.Combine(
+            Miller.Tests.ScaleTestSupport.RepoRoot(),
+            "src",
+            "Miller.Dashboard",
+            "wwwroot",
+            "dashboard.css"));
+
+        Assert.Contains(
+            ".ws-index-panel:has(.ws-row-actions details[open]) { overflow: visible; }",
+            css,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ReleaseWorkflow_VerifiesVendoredDashboardScriptAssets()
     {
         string workflow = File.ReadAllText(Path.Combine(
@@ -930,6 +946,8 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("dashboard/wwwroot/js/dashboard-site.js", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/wwwroot/js/alpine-components.js", workflow, StringComparison.Ordinal);
         Assert.Contains("dashboard/wwwroot/lib/alpine/cspalpine.min.js", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/wwwroot/lib/htmx/htmx.min.js", workflow, StringComparison.Ordinal);
+        Assert.Contains("dashboard/wwwroot/lib/idiomorph/idiomorph-ext.min.js", workflow, StringComparison.Ordinal);
     }
 
     [Fact]
