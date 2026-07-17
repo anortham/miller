@@ -236,6 +236,22 @@ public sealed class BlazorNamespaceCatalogTests
     }
 
     [Fact]
+    public void QualifiedNames_ExtendedLengthWorkspaceRootResolvesProjectNamespace()
+    {
+        if (!OperatingSystem.IsWindows())
+            Assert.Skip(@"Extended-length (\\?\) roots are a Windows path form.");
+
+        using var fixture = CreateFixture();
+        WriteFile(fixture, "Sample.csproj", "<Project><PropertyGroup><RootNamespace>Sample.Web</RootNamespace></PropertyGroup></Project>");
+        var component = Component("Features/Widget.razor", "Widget");
+        MaterializeComponent(fixture, component.Path);
+
+        var catalog = BlazorNamespaceCatalog.Build(@"\\?\" + fixture.WorkspaceRoot, [component], []);
+
+        Assert.Equal(["Sample.Web.Features.Widget"], catalog.QualifiedNames(component));
+    }
+
+    [Fact]
     public void QualifiedNames_PathOutsideWorkspaceFailsClosed()
     {
         using var fixture = CreateFixture();

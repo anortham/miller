@@ -450,7 +450,11 @@ internal sealed class BlazorNamespaceCatalog
                     XmlResolver = null,
                     MaxCharactersInDocument = MaximumProjectDocumentCharacters,
                 };
-                using XmlReader reader = XmlReader.Create(path, settings);
+                // XmlReader.Create(string) URI-parses the path and throws uncaught UriFormatException on
+                // extended-length (\\?\) roots, the form julie-extract records in artifact_metadata.root_path
+                // on Windows — open the file ourselves so no URI parsing happens.
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using XmlReader reader = XmlReader.Create(stream, settings);
                 document = XDocument.Load(reader, LoadOptions.None);
                 return document.Root is not null;
             }
