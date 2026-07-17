@@ -134,6 +134,11 @@ scripts/test.ps1 all
   Native AOT.
 - Do not publish, retag, delete, or overwrite a release without explicit user approval. README current-release
   metadata and release-evidence docs must come from live GitHub release facts, not guessed values.
+- **Every release ships release notes** — `docs/release-notes/v<version>.md` (existing format), the
+  `docs/README.md` map pointer, AND the GitHub release body set from that file
+  (`gh release edit v<version> --notes-file …`); the workflow only writes a placeholder body. See
+  [docs/release-process.md](docs/release-process.md). (Why: v1.10.0/v1.11.0 shipped placeholder-only and had to
+  be backfilled 2026-07-17.)
 - **A pushed release-prep commit is a live marketplace release (load-bearing).** The Claude Code/Cursor/Codex
   marketplaces serve the plugin manifests straight from `origin/main` HEAD, and the plugin launcher downloads
   `releases/download/v<manifest version>/…`. Pushing a `release: prepare X` commit therefore makes updates

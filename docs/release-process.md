@@ -41,6 +41,23 @@ scripts/release-promote.sh --version <version> --run-id <successful-package-run-
 
 Use `--dry-run` to verify artifacts without creating or updating a release.
 
+## Release Notes (required for every release)
+
+Every release — feature or patch — ships release notes in both places:
+
+1. Write `docs/release-notes/v<version>.md` following the existing format (audience, release shape,
+   pinned extractor, What Changed, Upgrade Notes, Verification), and update the `docs/README.md` map
+   ("latest release notes" pointer moves to the new file; the previous latest becomes historical).
+2. Set the same content as the GitHub release body:
+
+   ```bash
+   gh release edit v<version> --notes-file docs/release-notes/v<version>.md
+   ```
+
+The publish workflow creates the release with a placeholder body; a release is not done until the notes
+file exists and the release body carries it. (v1.10.0 and v1.11.0 shipped without notes and were
+backfilled on 2026-07-17 — do not repeat that.)
+
 ## Guardrails
 
 - Do not publish from a failed, cancelled, or in-progress package run.
