@@ -42,7 +42,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v1.9.0.md`](release-notes/v1.9.0.md) - latest release notes.
+- [`release-notes/v1.11.1.md`](release-notes/v1.11.1.md) - latest release notes.
+- [`release-notes/v1.9.0.md`](release-notes/v1.9.0.md) - historical `v1.9.0` release notes.
 - [`release-notes/v1.8.1.md`](release-notes/v1.8.1.md) - historical `v1.8.1` release notes.
 - [`release-notes/v1.8.0.md`](release-notes/v1.8.0.md) - historical `v1.8.0` release notes.
 - [`release-notes/v1.7.0.md`](release-notes/v1.7.0.md) - historical `v1.7.0` release notes.
