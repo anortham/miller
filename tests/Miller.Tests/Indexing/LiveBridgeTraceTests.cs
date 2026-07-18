@@ -980,18 +980,24 @@ public sealed class LiveBridgeTraceTests
         var graph = index.BridgeGraph;
         Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
 
-        var ktorHits = HitsInto(graph, "ktor/Server.kt");
-        Assert.Contains(ktorHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
-        var symfonyHits = HitsInto(graph, "symfony/ItemController.php");
-        Assert.Contains(symfonyHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
-        var phoenixHits = HitsInto(graph, "phoenix/router.ex");
-        Assert.Contains(phoenixHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
-        var axumHits = HitsInto(graph, "axum/main.rs");
-        Assert.Contains(axumHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+        var clientFiles = new[]
+        {
+            "client/OkHttpClient.kt", "client/RetrofitApi.kt", "client/WebClientCalls.kt", "client/RestTemplateCalls.kt",
+            "client/symfony_client.php", "client/curl_client.php",
+            "client/tesla_client.ex", "client/httpoison_client.ex", "client/httpc_client.ex", "client/finch_client.ex",
+            "client/hyper_client.rs", "client/ureq_client.rs",
+        };
+        foreach (var clientFile in clientFiles)
+        {
+            var hits = HitsFrom(graph, clientFile);
+            Assert.True(hits.Any(hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown),
+                $"expected a High verb-known bridge edge from {clientFile}");
+        }
 
-        _output.WriteLine("BACKEND-HTTP 2.16.0 GROUP — deferred kt/php/ex/rs clients bridge to same-language routes:");
+        _output.WriteLine("BACKEND-HTTP 2.16.0 GROUP — every deferred kt/php/ex/rs client bridges to a same-language route:");
         _output.WriteLine($"  client labels: {string.Join(", ", clientLabels.Order(StringComparer.Ordinal))}");
-        _output.WriteLine($"  hits: ktor={ktorHits.Count} symfony={symfonyHits.Count} phoenix={phoenixHits.Count} axum={axumHits.Count}");
+        foreach (var clientFile in clientFiles)
+            _output.WriteLine($"  {clientFile}: {HitsFrom(graph, clientFile).Count} hit(s)");
     }
 
     private static void WriteV2160BackendGroup(string repo)
@@ -1019,20 +1025,32 @@ public sealed class LiveBridgeTraceTests
                 }
             }
             """);
-        File.WriteAllText(Path.Combine(client, "KotlinClients.kt"), """
+        File.WriteAllText(Path.Combine(client, "OkHttpClient.kt"), """
             import okhttp3.Request
+
+            fun okhttpCall(body: okhttp3.RequestBody) {
+                Request.Builder().url("/kt/items").post(body).build()
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "RetrofitApi.kt"), """
             import retrofit2.http.GET
-            import org.springframework.web.reactive.function.client.WebClient
-            import org.springframework.web.client.RestTemplate
 
             interface LegacyApi {
                 @GET("/kt/legacy/users")
                 suspend fun users(): List<String>
             }
+            """);
+        File.WriteAllText(Path.Combine(client, "WebClientCalls.kt"), """
+            import org.springframework.web.reactive.function.client.WebClient
 
-            fun calls(web: WebClient, rest: RestTemplate, body: okhttp3.RequestBody) {
-                Request.Builder().url("/kt/items").post(body).build()
+            fun webClientCall(web: WebClient) {
                 web.get().uri("/kt/legacy/users").retrieve()
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "RestTemplateCalls.kt"), """
+            import org.springframework.web.client.RestTemplate
+
+            fun restTemplateCall(rest: RestTemplate) {
                 rest.getForObject("/kt/legacy/users", String::class.java)
             }
             """);
@@ -1053,13 +1071,19 @@ public sealed class LiveBridgeTraceTests
                 }
             }
             """);
-        File.WriteAllText(Path.Combine(client, "clients.php"), """
+        File.WriteAllText(Path.Combine(client, "symfony_client.php"), """
             <?php
             use Symfony\Contracts\HttpClient\HttpClientInterface;
 
-            function phpCalls(HttpClientInterface $symfony)
+            function symfonyCall(HttpClientInterface $symfony)
             {
                 $symfony->request('PATCH', '/php/items/1');
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "curl_client.php"), """
+            <?php
+            function curlCall()
+            {
                 $ch = curl_init();
                 curl_setopt($ch, CURLOPT_URL, '/php/health');
                 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
@@ -1075,14 +1099,32 @@ public sealed class LiveBridgeTraceTests
               delete "/ex/sessions/:id", SessionController, :delete
             end
             """);
-        File.WriteAllText(Path.Combine(client, "clients.ex"), """
-            defmodule Demo.Clients do
-              def calls(tesla_client) do
+        File.WriteAllText(Path.Combine(client, "tesla_client.ex"), """
+            defmodule Demo.TeslaClient do
+              def call(tesla_client) do
+                Tesla.post(tesla_client, "/ex/notes", "body")
+              end
+            end
+            """);
+        File.WriteAllText(Path.Combine(client, "httpoison_client.ex"), """
+            defmodule Demo.HttpoisonClient do
+              def call do
                 HTTPoison.get("/ex/users")
                 HTTPoison.request!(:delete, "/ex/sessions/1", "", [], [])
-                Tesla.post(tesla_client, "/ex/notes", "body")
+              end
+            end
+            """);
+        File.WriteAllText(Path.Combine(client, "httpc_client.ex"), """
+            defmodule Demo.HttpcClient do
+              def call do
                 :httpc.request(:post, {'/ex/notes', []}, [], [])
-                Finch.build(:get, "https://api.example.com/finch")
+              end
+            end
+            """);
+        File.WriteAllText(Path.Combine(client, "finch_client.ex"), """
+            defmodule Demo.FinchClient do
+              def call do
+                Finch.build(:get, "/ex/users")
               end
             end
             """);
@@ -1100,12 +1142,17 @@ public sealed class LiveBridgeTraceTests
 
             async fn remove() {}
             """);
-        File.WriteAllText(Path.Combine(client, "clients.rs"), """
+        File.WriteAllText(Path.Combine(client, "hyper_client.rs"), """
             use hyper::Request;
+
+            pub fn call() {
+                let _ = hyper::Request::builder().uri("/rs/health").body(());
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "ureq_client.rs"), """
             use ureq;
 
-            pub fn calls() {
-                let _ = hyper::Request::builder().uri("/rs/health").body(());
+            pub fn call() {
                 let _ = ureq::delete("/rs/users/1").call();
             }
             """);
@@ -1426,6 +1473,12 @@ public sealed class LiveBridgeTraceTests
         graph.Edges
             .Where(e => e.Edge.Kind == BridgeKind.Hits
                 && string.Equals(e.Edge.TargetRef.FilePath, filePath, StringComparison.Ordinal))
+            .ToList();
+
+    private static List<ScoredEdge> HitsFrom(BridgeGraph graph, string filePath) =>
+        graph.Edges
+            .Where(e => e.Edge.Kind == BridgeKind.Hits
+                && string.Equals(e.Edge.SourceRef.FilePath, filePath, StringComparison.Ordinal))
             .ToList();
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────
