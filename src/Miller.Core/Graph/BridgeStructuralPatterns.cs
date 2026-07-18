@@ -60,6 +60,12 @@ public static class BridgeStructuralPatterns
     public const string ActixScopeRoute = "actix.scope_route.v1";
     public const string ActixMount = "actix.mount.v1";
 
+    /// <summary>Symfony attribute routes emitted by julie-extractors 2.15.0.</summary>
+    public const string SymfonyRoute = "symfony.route.v1";
+
+    /// <summary>Ktor routing DSL routes emitted by julie-extractors 2.15.0.</summary>
+    public const string KtorRoute = "ktor.route.v1";
+
     /// <summary>
     /// The <c>SqliteBridgeReader.ReadStructuralFacts</c> SQL load whitelist: a pattern id absent here never
     /// reaches any bridge provider (silent no-op). Append new bridge fact families here first.
@@ -99,7 +105,6 @@ public static class BridgeStructuralPatterns
         RailsRoute,
         RailsResourceRoute,
         RailsMount,
-        // julie-extractors 2.8.0 wave 2.
         NestJsRoute,
         LaravelRoute,
         LaravelResourceRoute,
@@ -112,12 +117,15 @@ public static class BridgeStructuralPatterns
         ActixAttributeRoute,
         ActixScopeRoute,
         ActixMount,
+        SymfonyRoute,
+        KtorRoute,
     ];
 
     /// <summary>
-    /// The 16 backend route-template families the <c>backend-http</c> provider joins against
+    /// The 18 backend route-template families the <c>backend-http</c> provider joins against
     /// <c>normalized_route_template</c> (2.7.0: Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/
-    /// Rails; 2.8.0: NestJS/Laravel/Phoenix/axum + both actix provenances). Excludes the prefix/mount families
+    /// Rails; 2.8.0: NestJS/Laravel/Phoenix/axum + both actix provenances; 2.15.0: Symfony/Ktor). Excludes the
+    /// prefix/mount families
     /// (cross-file prefix-join inputs), the <see cref="RailsResourceRoute"/>/<see cref="LaravelResourceRoute"/>/
     /// <see cref="PhoenixResourceRoute"/> aggregate declarations (expanded to concrete routes on Miller's side),
     /// and <see cref="RailsMount"/> (evidence-only). Consumed by
@@ -135,14 +143,13 @@ public static class BridgeStructuralPatterns
         GinRoute,
         EchoRoute,
         RailsRoute,
-        // julie-extractors 2.8.0: plain route-template families (each carries normalized_route_template, so
-        // TryReadBackendRoute joins them with no family-specific read change). actix has two route provenances
-        // (attribute macros + scope call routing) mirroring the shipped ASP.NET attribute-vs-call split.
         NestJsRoute,
         LaravelRoute,
         PhoenixRoute,
         AxumRoute,
         ActixAttributeRoute,
         ActixScopeRoute,
+        SymfonyRoute,
+        KtorRoute,
     ];
 }

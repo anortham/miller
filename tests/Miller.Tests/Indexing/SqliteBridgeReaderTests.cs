@@ -311,6 +311,12 @@ public sealed class SqliteBridgeReaderTests : IDisposable
                   ('sf-nuxt-file', 'f-nuxt', 'web/zz/pages/calendar.vue', 'vue', 'nuxt.file_route.v1',
                    'file_route', 'file', 's-nuxt-page', 1, 0, 100, 0, 1031, 1200, 1.0,
                    '{"route_path":"/calendar","normalized_route_template":"/calendar"}'),
+                  ('sf-ktor', 'f-ktor', 'Backend/Application.kt', 'kotlin', 'ktor.route.v1',
+                   'route_call', 'call_expression', 's-ktor', 10, 0, 10, 30, 1201, 1230, 1.0,
+                   '{"effective_route_template":"/api/users/{id}","normalized_route_template":"/api/users/:id","verb":"GET"}'),
+                  ('sf-symfony', 'f-symfony', 'Backend/UserController.php', 'php', 'symfony.route.v1',
+                   'route_attribute', 'attribute', 's-symfony', 20, 0, 20, 30, 1231, 1260, 1.0,
+                   '{"effective_route_template":"/api/users/{id}","normalized_route_template":"/api/users/:id","verb":"GET"}'),
                   ('sf-ignored', 'f-css', 'web/site.css', 'css', 'css.selector_rule.v1',
                    'selector', 'rule_set', NULL, 60, 0, 60, 10, 900, 910, 1.0,
                    '{"selector":".calendar"}');
@@ -323,6 +329,8 @@ public sealed class SqliteBridgeReaderTests : IDisposable
             new[]
             {
                 "aspnet.minimal_api.route.v1",
+                "ktor.route.v1",
+                "symfony.route.v1",
                 "htmx.attribute.v1",
                 "vue.route_reference.v1",
                 "react.route_reference.v1",
@@ -337,6 +345,8 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "aspnet.minimal_api.route_group.v1");
         Assert.DoesNotContain(data.StructuralFacts, f => f.PatternId == "css.selector_rule.v1");
         Assert.Equal("/api/calendar", data.StructuralFacts.Single(f => f.FactId == "sf-aspnet-route").Metadata["effective_route_template"]);
+        Assert.Equal("/api/users/:id", data.StructuralFacts.Single(f => f.FactId == "sf-ktor").Metadata["normalized_route_template"]);
+        Assert.Equal("/api/users/:id", data.StructuralFacts.Single(f => f.FactId == "sf-symfony").Metadata["normalized_route_template"]);
     }
 
     [Fact]

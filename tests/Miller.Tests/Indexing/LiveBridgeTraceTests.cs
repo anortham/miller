@@ -937,6 +937,81 @@ public sealed class LiveBridgeTraceTests
         _output.WriteLine($"  client languages: {string.Join(", ", clientLangs.Order(StringComparer.Ordinal))}");
     }
 
+    [Fact]
+    public void BackendHttpV2150Group_SymfonyKtor_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteV2150BackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+
+        Assert.Contains("symfony.route.v1", StructuralPatternIds(work.Db, "symfony.%"));
+        Assert.Contains("ktor.route.v1", StructuralPatternIds(work.Db, "ktor.%"));
+
+        var graph = index.BridgeGraph;
+        var symfonyHits = HitsInto(graph, "symfony/UserController.php");
+        Assert.Contains(symfonyHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+        var symfonyVerblessHits = HitsInto(graph, "symfony/WebhookController.php");
+        Assert.Contains(symfonyVerblessHits, hit => hit.Band == ConfidenceBand.Medium && hit.IsVerbUnknown);
+        var ktorHits = HitsInto(graph, "ktor/Application.kt");
+        Assert.Contains(ktorHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+    }
+
+    private static void WriteV2150BackendGroup(string repo)
+    {
+        string symfony = Path.Combine(repo, "symfony");
+        string ktor = Path.Combine(repo, "ktor");
+        string client = Path.Combine(repo, "client");
+        foreach (var dir in new[] { symfony, ktor, client })
+            Directory.CreateDirectory(dir);
+
+        File.WriteAllText(Path.Combine(symfony, "UserController.php"), """
+            <?php
+            use Symfony\Component\Routing\Attribute\Route;
+
+            #[Route('/api')]
+            class UserController {
+                #[Route('/users/{id}', methods: ['GET'])]
+                public function show($id) {
+                    return $id;
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(symfony, "WebhookController.php"), """
+            <?php
+            use Symfony\Component\Routing\Attribute\Route;
+
+            class WebhookController {
+                #[Route('/webhook')]
+                public function handle() {
+                    return null;
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(ktor, "Application.kt"), """
+            import io.ktor.server.application.*
+            import io.ktor.server.routing.*
+
+            fun Application.module() {
+                routing {
+                    route("/api") {
+                        get("/orders/{id}") {
+                            call.respondText("ok")
+                        }
+                    }
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "api.ts"), """
+            export async function load() {
+              await fetch('/api/users/1');
+              await fetch('/webhook', { method: 'POST' });
+              await fetch('/api/orders/1');
+            }
+            """);
+    }
+
     private static void WriteV280BackendGroup(string repo)
     {
         string nest = Path.Combine(repo, "nest");
@@ -1122,7 +1197,7 @@ public sealed class LiveBridgeTraceTests
 
     // ── The parity gate: aggregate per-family + per-client-language emission across ALL group workspaces ──────
     [Fact]
-    public void BackendHttpParityGate_AllTwentyEightFamiliesAndTwelveClientLanguagesEmitLive()
+    public void BackendHttpParityGate_AllThirtyFamiliesAndTwelveClientLanguagesEmitLive()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
@@ -1138,6 +1213,7 @@ public sealed class LiveBridgeTraceTests
             ("ruby", WriteRubyBackendGroup),
             ("csharp", WriteCsharpBackendGroup),
             ("v2.8.0", WriteV280BackendGroup),
+            ("v2.15.0", WriteV2150BackendGroup),
         };
 
         var emittedPatternIds = new HashSet<string>(StringComparer.Ordinal);
@@ -1155,8 +1231,6 @@ public sealed class LiveBridgeTraceTests
                 + $"{StructuralPatternIds(work.Db, "%").Count(id => RequiredFamilies.Contains(id))} target families present");
         }
 
-        // The 28 route/mount families the backend-http lane spans (julie-extract 2.7.0's 16 + 2.8.0's 12; release
-        // notes §New Structural-Fact Families). Every one must emit at least once, or Miller's consumer is a subset.
         foreach (var family in RequiredFamilies)
             Assert.Contains(family, emittedPatternIds);
 
@@ -1166,27 +1240,24 @@ public sealed class LiveBridgeTraceTests
         foreach (var lang in RequiredClientLanguages)
             Assert.Contains(lang, emittedClientLanguages);
 
-        _output.WriteLine("BACKEND-HTTP PARITY GATE — all 28 families + all client languages emit live:");
-        _output.WriteLine($"  families ({RequiredFamilies.Length}/28): {string.Join(", ", RequiredFamilies.Order(StringComparer.Ordinal))}");
+        _output.WriteLine("BACKEND-HTTP PARITY GATE — all 30 families + all client languages emit live:");
+        _output.WriteLine($"  families ({RequiredFamilies.Length}/30): {string.Join(", ", RequiredFamilies.Order(StringComparer.Ordinal))}");
         _output.WriteLine($"  client languages: {string.Join(", ", emittedClientLanguages.Order(StringComparer.Ordinal))}");
     }
 
-    // The 28 backend route/mount fact families (julie-extract 2.7.0's 16 + 2.8.0's 12). Kept as one explicit list
-    // so a dropped or renamed family FAILS loudly rather than silently shrinking the parity claim.
     private static readonly string[] RequiredFamilies =
     {
-        // 2.7.0 wave 1 (16).
         "express.route.v1", "express.router_mount.v1", "fastify.route.v1",
         "fastapi.route.v1", "fastapi.include_router.v1", "flask.route.v1", "flask.blueprint_registration.v1",
         "django.url_pattern.v1", "django.url_include.v1", "spring.request_mapping.v1",
         "go.net_http.route.v1", "gin.route.v1", "echo.route.v1",
         "rails.route.v1", "rails.resource_route.v1", "rails.mount.v1",
-        // 2.8.0 wave 2 (12).
         "nestjs.route.v1",
         "laravel.route.v1", "laravel.resource_route.v1", "laravel.route_prefix.v1",
         "phoenix.route.v1", "phoenix.resource_route.v1", "phoenix.forward.v1",
         "axum.route.v1", "axum.nest.v1",
         "actix.attribute_route.v1", "actix.scope_route.v1", "actix.mount.v1",
+        "symfony.route.v1", "ktor.route.v1",
     };
 
     // The distinct client languages http.client_request.v1 must cover live (js/ts split into javascript +

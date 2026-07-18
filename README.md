@@ -356,8 +356,8 @@ are `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, `b
 route references to file routes/definitions, Blazor navigation references to Razor page routes, client requests to
 Next.js/Nuxt route handlers, and client requests
 (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/`HttpClient`/Ktor/Guzzle/Req/reqwest) to
-Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix route templates —
-not every framework route shape.
+Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/
+Symfony/Ktor route templates — not every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -739,7 +739,7 @@ Warnings are errors (`Directory.Build.props`).
   (Vue route references to route definitions), `react` (React route references to route definitions), `blazor`
   (navigation references to Razor page routes), and
   `backend-http` (client requests to Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/
-  NestJS/Laravel/Phoenix/axum/actix route templates).
+  NestJS/Laravel/Phoenix/axum/actix/Symfony/Ktor route templates).
   API handlers, server actions, middleware rewrites, redirects, and runtime route rules need extractor facts before bridge can claim them. The mode intentionally uses the full bridge graph
   for provider-scoped evidence. Normal `search`, `inspect`, graph-only `context`, `impact`, non-bridge `trace`,
   and workspace status/list stay on projection-specific read paths.

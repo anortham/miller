@@ -3969,15 +3969,11 @@ public sealed class BridgeGraphBuilderTests
         return metadata;
     }
 
-    // ===== Task 1: Backend HTTP boundary — whitelist + adapter reads (16 new families) =====
-
     [Fact]
-    public void BridgeStructuralPatterns_BridgeFactPatternIds_ContainsAll28BackendFamilies()
+    public void BridgeStructuralPatterns_BridgeFactPatternIds_ContainsAll30BackendFamilies()
     {
-        // The load whitelist (SqliteBridgeReader SQL gate): an id absent here never reaches a provider.
         var backendIds = new[]
         {
-            // 2.7.0 wave 1 (16).
             BridgeStructuralPatterns.ExpressRoute,
             BridgeStructuralPatterns.ExpressRouterMount,
             BridgeStructuralPatterns.FastifyRoute,
@@ -3994,7 +3990,6 @@ public sealed class BridgeGraphBuilderTests
             BridgeStructuralPatterns.RailsRoute,
             BridgeStructuralPatterns.RailsResourceRoute,
             BridgeStructuralPatterns.RailsMount,
-            // 2.8.0 wave 2 (12): six more stacks — routes, resource declarations, and prefix/mount families.
             BridgeStructuralPatterns.NestJsRoute,
             BridgeStructuralPatterns.LaravelRoute,
             BridgeStructuralPatterns.LaravelResourceRoute,
@@ -4007,20 +4002,21 @@ public sealed class BridgeGraphBuilderTests
             BridgeStructuralPatterns.ActixAttributeRoute,
             BridgeStructuralPatterns.ActixScopeRoute,
             BridgeStructuralPatterns.ActixMount,
+            BridgeStructuralPatterns.SymfonyRoute,
+            BridgeStructuralPatterns.KtorRoute,
         };
 
-        Assert.Equal(28, backendIds.Length); // self-check: every constant enumerated
+        Assert.Equal(30, backendIds.Length);
         foreach (var id in backendIds)
             Assert.Contains(id, BridgeStructuralPatterns.BridgeFactPatternIds);
     }
 
     [Fact]
-    public void BridgeStructuralPatterns_BackendRoutePatternIds_ContainsTheSixteenRouteFamiliesOnly()
+    public void BridgeStructuralPatterns_BackendRoutePatternIds_ContainsTheEighteenRouteFamiliesOnly()
     {
         var routeIds = BridgeStructuralPatterns.BackendRoutePatternIds;
 
-        Assert.Equal(16, routeIds.Count);
-        // The 16 route-template families the provider joins against normalized_route_template (2.7.0 + 2.8.0).
+        Assert.Equal(18, routeIds.Count);
         Assert.Contains(BridgeStructuralPatterns.ExpressRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.FastifyRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.FastApiRoute, routeIds);
@@ -4037,7 +4033,8 @@ public sealed class BridgeGraphBuilderTests
         Assert.Contains(BridgeStructuralPatterns.AxumRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.ActixAttributeRoute, routeIds);
         Assert.Contains(BridgeStructuralPatterns.ActixScopeRoute, routeIds);
-        // Mount/prefix families, resource-declaration families, and Rails evidence-only are NOT route-template inputs.
+        Assert.Contains(BridgeStructuralPatterns.SymfonyRoute, routeIds);
+        Assert.Contains(BridgeStructuralPatterns.KtorRoute, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.ExpressRouterMount, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.FastApiIncludeRouter, routeIds);
         Assert.DoesNotContain(BridgeStructuralPatterns.FlaskBlueprintRegistration, routeIds);
@@ -4735,23 +4732,16 @@ public sealed class BridgeGraphBuilderTests
         Assert.Null(hit.Edge.TargetRef.SymbolId);
     }
 
-    // ============================ backend-http provider — julie-extractors 2.8.0 wave 2 =========================
-    // Six more backend stacks join through the SAME machinery: plain route families (NestJS/Laravel/Phoenix/axum +
-    // both actix provenances) read via TryReadBackendRoute; laravel/phoenix resource declarations expand like Rails;
-    // axum.nest / actix.mount / phoenix.forward compose cross-file prefixes; laravel.route_prefix is target-less
-    // evidence. Kotlin+Spring routes and the four new client languages reuse existing ids (no test needed here — a
-    // spring.request_mapping.v1 route and an http.client_request.v1 call already have coverage above).
-
     [Theory]
     [InlineData("nestjs.route.v1", "typescript")]
     [InlineData("laravel.route.v1", "php")]
     [InlineData("phoenix.route.v1", "elixir")]
     [InlineData("axum.route.v1", "rust")]
     [InlineData("actix.attribute_route.v1", "rust")]
-    public void BackendHttp_v280_plain_route_family_hits_client_High(string patternId, string language)
+    [InlineData("symfony.route.v1", "php")]
+    [InlineData("ktor.route.v1", "kotlin")]
+    public void BackendHttp_plain_route_family_hits_client_High(string patternId, string language)
     {
-        // Invariant (language parity): each new plain route family carries normalized_route_template and joins a
-        // verb-equal client request at High, bound to the route fact's handler symbol — with no family-specific read.
         var handler = Method("sym-handler", "handle", "handle()", string.Empty, "server/app_routes");
         var clientFn = Type("sym-client-fn", "load", "function", file: "web/api.ts");
         var facts = new List<StructuralFactRecord>
@@ -4783,6 +4773,38 @@ public sealed class BridgeGraphBuilderTests
         Assert.Equal("sym-handler", hit.Edge.TargetRef.SymbolId);
         Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
         Assert.Equal(1, graph.CapabilityReport.EvidenceCounts["backend-http.routeFacts"]);
+    }
+
+    [Fact]
+    public void BackendHttp_symfony_route_without_methods_hits_client_Medium_verb_unknown()
+    {
+        var handler = Method("sym-handler", "handle", "handle()", string.Empty, "server/WebhookController.php");
+        var clientFn = Type("sym-client-fn", "load", "function", file: "web/api.ts");
+        var facts = new List<StructuralFactRecord>
+        {
+            Fact("sf-client", "http.client_request.v1", "typescript", "web/api.ts", "sym-client-fn", 100,
+                new Dictionary<string, string>
+                {
+                    ["client"] = "fetch",
+                    ["target_path"] = "/webhook",
+                    ["url_kind"] = "path",
+                    ["verb"] = "POST",
+                    ["verb_source"] = "attested",
+                }),
+            Fact("sf-route", "symfony.route.v1", "php", "server/WebhookController.php", "sym-handler", 200,
+                new Dictionary<string, string>
+                {
+                    ["normalized_route_template"] = "/webhook",
+                }),
+        };
+
+        var graph = BridgeGraphBuilder.Build(
+            [handler, clientFn], typeArguments: [], literals: [], annotations: [], dbSetProperties: [],
+            structuralFacts: facts);
+
+        var hit = Assert.Single(graph.Incident("sym-handler"), e => e.Edge.Kind == BridgeKind.Hits);
+        Assert.Equal(ConfidenceBand.Medium, hit.Band);
+        Assert.True(hit.IsVerbUnknown);
     }
 
     [Fact]

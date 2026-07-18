@@ -114,11 +114,11 @@
 **Approach:** Write failing whitelist/provider/live tests first against the restored 2.15.0 binary. Use the generic route adapter; Symfony/Ktor should need constants and whitelist membership only. Add high-confidence verb matches and at least one honest medium-confidence verbless case if the emitted fixture supports it.
 
 **Acceptance criteria:**
-- [ ] Unit lists contain all 30 backend families and exactly 18 plain route families.
-- [ ] SQLite reader admits Symfony/Ktor facts and backend-http produces expected edges.
-- [ ] Live 2.15.0 extraction emits both families and the 30-family parity gate passes.
-- [ ] Current trace contract/skill guidance names Symfony and Ktor.
-- [ ] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
+- [x] Unit lists contain all 30 backend families and exactly 18 plain route families.
+- [x] SQLite reader admits Symfony/Ktor facts and backend-http produces expected edges.
+- [x] Live 2.15.0 extraction emits both families and the 30-family parity gate passes.
+- [x] Current trace contract/skill guidance names Symfony and Ktor.
+- [x] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
 
 ### Task 3: Successful extractor warning visibility
 

@@ -171,10 +171,10 @@ internal static class StructuralRouteFactAdapter
     }
 
     /// <summary>
-    /// Read a backend HTTP route-template fact (the 16 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/>
+    /// Read a backend HTTP route-template fact (the 18 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/>
     /// families — 2.7.0 Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails; 2.8.0 NestJS/Laravel/
-    /// Phoenix/axum + both actix provenances). Sibling to <see cref="TryReadRouteHandler"/>, but the route-path
-    /// precedence differs: backend families carry NO bracket-form <c>route_path</c>, so the join key is
+    /// Phoenix/axum + both actix provenances; 2.15.0 Symfony/Ktor). Sibling to <see cref="TryReadRouteHandler"/>,
+    /// but the route-path precedence differs: backend families carry NO bracket-form <c>route_path</c>, so the join key is
     /// <c>effective_route_template</c> (same-file prefix folded) preferred over <c>normalized_route_template</c>.
     /// A blank route is rejected — this honestly excludes Django <c>route_syntax="regex"</c> facts (no
     /// <c>normalized_route_template</c>), never synthesizing a route from a regex. A Spring

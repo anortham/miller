@@ -5,11 +5,12 @@ using System.Text.Json;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0/2.8.0): joins
+/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0/2.8.0/2.15.0): joins
 /// <c>http.client_request.v1</c> client call sites (fetch/axios plus the 2.8.0 Kotlin/PHP/Elixir/Rust clients) to
-/// server route-template facts from the 16 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/> families
+/// server route-template facts from the 18 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/> families
 /// (2.7.0 Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails; 2.8.0 NestJS/Laravel/Phoenix/axum
-/// + both actix provenances), emitting <see cref="BridgeKind.Hits"/> edges. It sits beside the framework-specific
+/// + both actix provenances; 2.15.0 Symfony/Ktor), emitting <see cref="BridgeKind.Hits"/> edges. It sits beside the
+/// framework-specific
 /// verb-aware API arm (<see cref="ApiRouteBridgeProvider"/>) but is standalone rather than descriptor-driven: it
 /// collects a broad route-family set plus the cross-file mount/include inputs, giving the later enrichment passes
 /// (mount composition, resource expansion for rails/laravel/phoenix) a single place to grow.

@@ -149,12 +149,18 @@ Bridge is provider-scoped. Current packaged providers are:
   containing symbol targets a synthesized endpoint node.
 - `vue`: Vue route references to Vue route definitions.
 - `react`: React route references to React route definitions.
-- `backend-http`: fetch/axios/`requests`/`httpx`/`net/http`/`java.net.http`/`Net::HTTP` client requests
-  (`http.client_request.v1`, now spanning vue/js/jsx/tsx/ts/python/go/java/ruby beyond the JS/TS frontends)
-  joined to server route-template facts from ten backend families — Express, Fastify, FastAPI, Flask, Django,
-  Spring, Go net/http, gin, echo, and Rails (`express.route.v1`, `fastify.route.v1`, `fastapi.route.v1`,
-  `flask.route.v1`, `django.url_pattern.v1`, `spring.request_mapping.v1`, `go.net_http.route.v1`,
-  `gin.route.v1`, `echo.route.v1`, `rails.route.v1`) — emitted as `hits` edges with the `route` label. It is
+- `backend-http`: fetch/axios/`requests`/`httpx`/`net/http`/`java.net.http`/`Net::HTTP`/`HttpClient`/Ktor/
+  Guzzle/`Http`-facade/`Req`/reqwest client requests (`http.client_request.v1`). The live parity gate requires 12
+  artifact language values: `javascript`, `typescript`, `vue`, `python`, `go`, `java`, `ruby`, `csharp`, `kotlin`,
+  `php`, `elixir`, and `rust`; facts from `.jsx` and `.tsx` files preserve the additional `jsx` and `tsx`
+  provenance values. These requests join server route-template facts from 18 backend families — Express, Fastify,
+  FastAPI, Flask, Django, Spring, Go net/http, gin, echo, Rails, NestJS, Laravel, Phoenix, axum, both actix
+  provenances, Symfony, and Ktor. The exact route IDs are `express.route.v1`, `fastify.route.v1`,
+  `fastapi.route.v1`, `flask.route.v1`, `django.url_pattern.v1`,
+  `spring.request_mapping.v1`, `go.net_http.route.v1`, `gin.route.v1`, `echo.route.v1`, `rails.route.v1`,
+  `nestjs.route.v1`, `laravel.route.v1`, `phoenix.route.v1`, `axum.route.v1`, `actix.attribute_route.v1`,
+  `actix.scope_route.v1`, `symfony.route.v1`, and `ktor.route.v1`. Matches are emitted as `hits` edges with the
+  `route` label. It is
   standalone rather than descriptor-driven and hosts three Miller-owned enrichment passes (cross-file
   mount-prefix composition, Rails resource-route expansion, and Rails `controller_action` symbol binding),
   described below.
