@@ -1,6 +1,6 @@
 ---
 name: miller-bridge-trace
-description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, Vue/React references to route definitions, or backend-http client requests to Express/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix route facts.
+description: Use when tracing Miller bridge paths in supported providers: dotnet-web URL literals and fetch/axios client requests to ASP.NET signals, client requests to Next.js route handlers or Nuxt server routes, Next.js/Nuxt route references to file routes, Vue/React references to route definitions, or backend-http client requests to Express/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/Symfony/Ktor route facts.
 user-invocable: true
 arguments: "<client call, URL, route, endpoint, DTO, entity, or table>"
 allowed-tools: mcp__miller__trace, mcp__miller__search, mcp__miller__inspect, mcp__miller__context, mcp__miller__workspace, mcp__miller__patterns
@@ -17,7 +17,7 @@ to Next.js file routes), `nextjs-api` (fetch/axios client requests to Next.js Ap
 `backend-http` (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/Ktor/Guzzle/`Http`-facade/`Req`/reqwest
 client requests — spanning python/go/java/ruby/vue and, since julie-extract 2.8.0, kotlin/php/elixir/rust beyond
 js/ts — to Express/Fastify/FastAPI/Flask/Django/Spring (Java **and** Kotlin)/Go net/http/gin/echo/Rails/NestJS/
-Laravel/Phoenix/axum/actix route facts, with cross-file mount-prefix composition and rails/laravel/phoenix
+Laravel/Phoenix/axum/actix/Symfony/Ktor route facts, with cross-file mount-prefix composition and rails/laravel/phoenix
 resource-route expansion).
 
 ## Workflow
