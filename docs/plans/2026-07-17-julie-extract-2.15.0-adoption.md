@@ -80,10 +80,10 @@
 **Approach:** Update assertions first where applicable, then the pin and current guidance. Configuration/docs changes are the approved TDD exception.
 
 **Acceptance criteria:**
-- [ ] Pin JSON and contract constant agree on 2.15.0 and all four verified digests.
-- [ ] Current public/tool/agent guidance says 194 IDs across 36 languages.
-- [ ] Contract versions remain 4/4/3/3 and focused pin/CLI tests pass.
-- [ ] Worker-scope verification passes and the change is committed by the worker.
+- [x] Pin JSON and contract constant agree on 2.15.0 and all four verified digests.
+- [x] Current public/tool/agent guidance says 194 IDs across 36 languages.
+- [x] Contract versions remain 4/4/3/3 and focused pin/CLI tests pass.
+- [x] Worker-scope verification passes and the change is committed by the worker.
 
 ### Task 2: Symfony/Ktor backend bridges
 
