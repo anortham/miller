@@ -150,10 +150,10 @@
 **Approach:** First add failing pure-helper and refresh-result tests. Preserve the existing partial string contract, render successful warnings compactly with code/path evidence, and prove workspace refresh/open surfaces the warning through existing output.
 
 **Acceptance criteria:**
-- [ ] Healthy warning-free reports return null and partial report text remains stable.
-- [ ] Successful `slow_file_skipped` reports return operator-visible code/path text.
-- [ ] All scan paths call the generalized helper; refresh/workspace results surface the warning without failure.
-- [ ] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
+- [x] Healthy warning-free reports return null and partial report text remains stable.
+- [x] Successful `slow_file_skipped` reports return operator-visible code/path text.
+- [x] All scan paths call the generalized helper; refresh/workspace results surface the warning without failure.
+- [x] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
 
 ### Task 4: Kotlin test-role compatibility proof
 

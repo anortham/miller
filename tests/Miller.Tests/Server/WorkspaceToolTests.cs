@@ -324,6 +324,25 @@ public sealed class WorkspaceToolTests : IDisposable
             },
         };
 
+    private static ExtractReport SlowWarningReport(
+        string root,
+        string dbPath,
+        string workspaceId,
+        long revision) =>
+        Report(root, dbPath, workspaceId, revision) with
+        {
+            Status = "no_change",
+            Warnings =
+            [
+                new ReportDiagnostic(
+                    "slow_file_skipped",
+                    "file exceeded extraction timeout",
+                    Path.Combine(root, "Generated", "Slow.kt"),
+                    "Generated/Slow.kt",
+                    Recoverable: true),
+            ],
+        };
+
     private sealed class NoopLease : IDisposable
     {
         public void Dispose()
@@ -1052,6 +1071,30 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("primed", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Open_NoChangeSlowFileWarningSurfacesWarningInOutput()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            openScan: (root, db, _) =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(db)!);
+                File.WriteAllText(db, "created by fake scan");
+                return SlowWarningReport(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
+            },
+            acquireLock: _ => new NoopLease());
+        string target = NewTempDir("open-slow-warning");
+
+        string output = harness.Tool.Workspace(operation: "open", path: target);
+
+        Assert.Contains("slow_file_skipped", output, StringComparison.Ordinal);
+        Assert.Contains("Generated/Slow.kt", output, StringComparison.Ordinal);
+        Assert.Contains("primed", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- telemetry op sub-axis (decision-7) ----
 
     [Fact]
@@ -1402,6 +1445,27 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("PARTIAL artifact", output, StringComparison.Ordinal);
         Assert.Contains("Controllers/Broken.cs", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refresh_RegisteredWorkspaceId_NoChangeSlowFileWarningSurfacesWarningInOutput()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (root, db, _) => SlowWarningReport(root, db, OtherWs, revision: 9));
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        string output = harness.Tool.Workspace(operation: "refresh", workspace_id: OtherWs);
+
+        Assert.Contains("status: unchanged", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("slow_file_skipped", output, StringComparison.Ordinal);
+        Assert.Contains("Generated/Slow.kt", output, StringComparison.Ordinal);
     }
 
     [Fact]

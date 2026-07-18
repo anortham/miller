@@ -98,6 +98,33 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_NoChangeWithSlowFileWarning_RemainsUnchangedAndSurfacesWarningText()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("slow-warning");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        ExtractReport report = NoChangeReport(root, dbPath, "target-ws", revision: 4) with
+        {
+            Warnings = [SlowFileWarning(root)],
+        };
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => report,
+            acquireLock: _ => new NoopLease());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Unchanged, result.Status);
+        Assert.True(result.Scanned);
+        Assert.Equal(4, result.Revision);
+        Assert.Contains("slow_file_skipped", result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("Generated/Slow.kt", result.WarningText, StringComparison.Ordinal);
+        Assert.Equal(4, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_UnlockedTargetWithNoNewRevision_ReturnsUnchangedButStillReportsThatItScanned()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -828,6 +855,14 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                     Recoverable: true),
             },
         };
+
+    private static ReportDiagnostic SlowFileWarning(string root) =>
+        new(
+            "slow_file_skipped",
+            "file exceeded extraction timeout",
+            Path.Combine(root, "Generated", "Slow.kt"),
+            "Generated/Slow.kt",
+            Recoverable: true);
 
     private static JulieDbFixture JulieSourceDb(string marker)
     {

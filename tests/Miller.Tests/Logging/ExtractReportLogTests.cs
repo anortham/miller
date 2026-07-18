@@ -4,13 +4,7 @@ using Xunit;
 
 namespace Miller.Tests.Logging;
 
-/// <summary>
-/// Pins <see cref="PartialExtractLog.DescribePartial"/> — the pure helper the scan callers use to surface a
-/// PARTIAL julie-extract report (the artifact loaded, but a file failed to parse, so its symbols are absent).
-/// A healthy report yields null (no warning); a partial report yields a warning naming the failed-file count,
-/// the diagnostic codes, and the affected paths so the loss is never hidden behind a clean "scan complete".
-/// </summary>
-public sealed class PartialExtractLogTests
+public sealed class ExtractReportLogTests
 {
     private static ExtractReport Report(string status, long filesFailed, long? revision, params ReportDiagnostic[] errors) =>
         new(
@@ -32,10 +26,14 @@ public sealed class PartialExtractLogTests
         new("parse_error", "tree-sitter failed", Path: "/abs/" + rootRelativePath,
             RootRelativePath: rootRelativePath, Recoverable: true);
 
+    private static ReportDiagnostic SlowFileWarning(string rootRelativePath) =>
+        new("slow_file_skipped", "file exceeded extraction timeout", Path: "/abs/" + rootRelativePath,
+            RootRelativePath: rootRelativePath, Recoverable: true);
+
     [Fact]
     public void HealthyReport_ReturnsNull()
     {
-        Assert.Null(PartialExtractLog.DescribePartial(Report("ok", filesFailed: 0, revision: 7)));
+        Assert.Null(ExtractReportLog.DescribeWarning(Report("ok", filesFailed: 0, revision: 7)));
     }
 
     [Fact]
@@ -44,27 +42,37 @@ public sealed class PartialExtractLogTests
         var report = Report("partial", filesFailed: 2, revision: 9,
             ParseError("broken/a.rs"), ParseError("broken/b.rs"));
 
-        string? warning = PartialExtractLog.DescribePartial(report);
+        string? warning = ExtractReportLog.DescribeWarning(report);
 
-        Assert.NotNull(warning);
-        Assert.Contains("PARTIAL", warning!);
-        Assert.Contains("2 file(s)", warning);       // the dropped-file count
-        Assert.Contains("revision 9", warning);
-        Assert.Contains("parse_error", warning);     // the diagnostic code
-        Assert.Contains("broken/a.rs", warning);     // the affected paths (prefers root_relative_path)
-        Assert.Contains("broken/b.rs", warning);
+        Assert.Equal(
+            "julie-extract returned a PARTIAL artifact — 2 file(s) failed to parse and are absent from the index " +
+            "(revision 9). Codes: parse_error, parse_error. Affected: broken/a.rs, broken/b.rs.",
+            warning);
     }
 
     [Fact]
     public void PartialReport_NoStructuredErrors_StillWarns_WithPlaceholders()
     {
-        // A partial with files_failed but an empty errors[] still warns (the count alone is the signal); the
-        // codes/paths degrade to explicit placeholders rather than an empty, misleading line.
-        string? warning = PartialExtractLog.DescribePartial(Report("partial", filesFailed: 1, revision: 4));
+        string? warning = ExtractReportLog.DescribeWarning(Report("partial", filesFailed: 1, revision: 4));
 
         Assert.NotNull(warning);
         Assert.Contains("1 file(s)", warning!);
         Assert.Contains("(no structured errors)", warning);
         Assert.Contains("(paths unavailable)", warning);
+    }
+
+    [Fact]
+    public void NoChangeReport_WithSlowFileWarning_NamesCodeAndAffectedPath()
+    {
+        ExtractReport report = Report("no_change", filesFailed: 0, revision: 7) with
+        {
+            Warnings = [SlowFileWarning("generated/slow.kt")],
+        };
+
+        string? warning = ExtractReportLog.DescribeWarning(report);
+
+        Assert.NotNull(warning);
+        Assert.Contains("slow_file_skipped", warning, StringComparison.Ordinal);
+        Assert.Contains("generated/slow.kt", warning, StringComparison.Ordinal);
     }
 }

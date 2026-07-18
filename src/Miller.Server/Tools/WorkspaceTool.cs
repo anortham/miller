@@ -565,7 +565,7 @@ public sealed class WorkspaceTool
             _ => null,
         };
         if (note is null && scan.Report is { } report)
-            note = PartialExtractLog.DescribePartial(report);
+            note = ExtractReportLog.DescribeWarning(report);
 
         // Always poll+swap after the scan attempt so the held index reflects the newest persisted revision NOW
         // (a leader's own scan, or a non-leader picking up the leader's writes). Best-effort; never throws.
@@ -718,7 +718,7 @@ public sealed class WorkspaceTool
             Revision: revision,
             WorkspaceId: stableWorkspaceId,
             DisplayId: displayId,
-            WarningText: PartialExtractLog.DescribePartial(report));
+            WarningText: ExtractReportLog.DescribeWarning(report));
         return (WorkspaceRender.Open(result, json), 1, TelemetryOutcome.Ok);
     }
 

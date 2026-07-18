@@ -189,7 +189,7 @@ public sealed class CrossWorkspaceRefreshService
             // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
             // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
             long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
-            string? warning = PartialExtractLog.DescribePartial(report);
+            string? warning = ExtractReportLog.DescribeWarning(report);
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
             // This is the one safe writer for an external workspace's search.db — it holds the workspace

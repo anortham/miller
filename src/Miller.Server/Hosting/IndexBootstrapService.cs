@@ -393,11 +393,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 _logger.LogInformation(
                     "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
                     report.SymbolsExtracted, report.Revision);
-                // A partial scan (some files failed to parse) is a CONSISTENT artifact loaded with rows
-                // missing — surface it as a WARNING so the clean "Scan complete" above never hides silent
-                // symbol loss (julie-extract migration review finding).
-                if (PartialExtractLog.DescribePartial(report) is { } partial)
-                    _logger.LogWarning("Bootstrap scan: {Partial}", partial);
+                if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                    _logger.LogWarning("Bootstrap scan: {Warning}", warning);
             }
             else
             {
@@ -421,8 +418,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     _logger.LogInformation(
                         "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
                         rebuild.SymbolsExtracted, rebuild.Revision);
-                    if (PartialExtractLog.DescribePartial(rebuild) is { } partial)
-                        _logger.LogWarning("Auto-rebuild scan: {Partial}", partial);
+                    if (ExtractReportLog.DescribeWarning(rebuild) is { } warning)
+                        _logger.LogWarning("Auto-rebuild scan: {Warning}", warning);
                     return rebuild.Revision;
                 },
                 // The rebuild replaced the DB file; drop pooled read connections so the retry below opens a

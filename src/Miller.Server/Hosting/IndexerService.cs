@@ -552,8 +552,8 @@ public sealed class IndexerService : BackgroundService
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
                 report.Revision, report.FilesUpdated, report.FilesDeleted);
-            if (PartialExtractLog.DescribePartial(report) is { } partial)
-                _logger.LogWarning("Startup delta scan: {Partial}", partial);
+            if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                _logger.LogWarning("Startup delta scan: {Warning}", warning);
         }
         catch (Exception ex)
         {
@@ -587,8 +587,8 @@ public sealed class IndexerService : BackgroundService
             try
             {
                 ExtractReport report = ops.Update(path);
-                if (PartialExtractLog.DescribePartial(report) is { } partial)
-                    _logger.LogWarning("Inline write-through reindex of {Path}: {Partial}", path, partial);
+                if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                    _logger.LogWarning("Inline write-through reindex of {Path}: {Warning}", path, warning);
                 TryConvergeSidecar(_bootstrap.Workspace.CanonicalExtractDbPath, report, fullRebuild: false);
                 return true;
             }
@@ -665,9 +665,9 @@ public sealed class IndexerService : BackgroundService
             return ScanOutcome.Failed;
         }
 
-        if (PartialExtractLog.DescribePartial(report) is { } partial)
+        if (ExtractReportLog.DescribeWarning(report) is { } warning)
             _logger.LogWarning(
-                "{Source} {Kind} scan: {Partial}", source, force ? "full (force)" : "refresh (delta)", partial);
+                "{Source} {Kind} scan: {Warning}", source, force ? "full (force)" : "refresh (delta)", warning);
 
         // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
         // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
