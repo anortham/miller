@@ -9,7 +9,7 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Live v2.12 test-role proof over the exact Razor and Vue regression shapes published by julie-extractors.
+/// Live v2.15 test-role proof over the Razor, Vue, and Kotlin regression shapes published by julie-extractors.
 /// This is positive candidate evidence only; zero rows or false flags are never treated as completeness proof.
 /// </summary>
 [Trait("Category", "Scale")]
@@ -20,7 +20,7 @@ public sealed class LiveTestRoleEvidenceScaleTests
     public LiveTestRoleEvidenceScaleTests(ITestOutputHelper output) => _output = output;
 
     [Fact]
-    public void LiveExtract_RazorAndVueRoles_RoundTripThroughReaderExportAndImpact()
+    public void LiveExtract_RazorVueAndKotlinRoles_RoundTripThroughReaderExportAndImpact()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
         Assert.Equal(
@@ -38,6 +38,51 @@ public sealed class LiveTestRoleEvidenceScaleTests
                     public sealed class RazorTestRoles {
                         [Fact] public void RazorCase() {}
                         public void Fact() {}
+                    }
+                }
+                """);
+            File.WriteAllText(Path.Combine(repo, "tests", "KotlinRoles.kt"), """
+                import org.junit.jupiter.api.AfterAll
+                import org.junit.jupiter.api.AfterEach
+                import org.junit.jupiter.api.BeforeAll
+                import org.junit.jupiter.api.BeforeEach
+                import org.junit.jupiter.api.Nested
+                import org.junit.jupiter.api.Test
+
+                class CalculatorTest {
+                    @BeforeAll
+                    fun setUpAll() {
+                    }
+
+                    @BeforeEach
+                    fun setUp() {
+                    }
+
+                    @AfterEach
+                    fun tearDown() {
+                    }
+
+                    @AfterAll
+                    fun tearDownAll() {
+                    }
+
+                    @Test
+                    fun addsTwoNumbers() {
+                    }
+
+                    @Nested
+                    class WhenNegative {
+                        @Test
+                        fun rejectsNegativeInput() {
+                        }
+                    }
+
+                    fun helper() {
+                    }
+                }
+
+                class OrdinaryHelper {
+                    fun helper() {
                     }
                 }
                 """);
@@ -80,10 +125,15 @@ public sealed class LiveTestRoleEvidenceScaleTests
             IndexedSymbol namedControl = Assert.Single(symbols,
                 symbol => symbol.FilePath == "tests/Setup.vue" && symbol.Name == "testNamedButOrdinary");
             Assert.False(namedControl.TestEvidence.IsTest);
+            (IndexedSymbol kotlinCase, IndexedSymbol kotlinControl) = AssertKotlinRoles(symbols);
 
             Dictionary<string, (long Cases, long Containers, long Lifecycles)> counts = ReadRoleCounts(db);
+            Assert.Contains("kotlin", counts.Keys);
             Assert.Contains("razor", counts.Keys);
             Assert.Contains("vue", counts.Keys);
+            Assert.Equal(2, counts["kotlin"].Cases);
+            Assert.Equal(2, counts["kotlin"].Containers);
+            Assert.Equal(4, counts["kotlin"].Lifecycles);
             Assert.True(counts["razor"].Cases >= 1);
             Assert.True(counts["vue"].Cases >= 2);
             Assert.True(counts["vue"].Containers >= 2);
@@ -93,25 +143,25 @@ public sealed class LiveTestRoleEvidenceScaleTests
                     "language={0} test_cases={1} test_containers={2} test_lifecycles={3}",
                     language, roleCounts.Cases, roleCounts.Containers, roleCounts.Lifecycles);
             _output.WriteLine(
-                "controls: RazorRoles.razor::Fact is_test={0}; Setup.vue::testNamedButOrdinary is_test={1}",
-                razorControl.IsTest, namedControl.IsTest);
+                "controls: RazorRoles.razor::Fact is_test={0}; Setup.vue::testNamedButOrdinary is_test={1}; "
+                + "KotlinRoles.kt::OrdinaryHelper.helper is_test={2}",
+                razorControl.IsTest, namedControl.IsTest, kotlinControl.IsTest);
 
             Dictionary<string, JsonElement> exported = SymbolExportReader.ExportJsonLines(db)
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Select(static line => JsonDocument.Parse(line).RootElement.Clone())
                 .ToDictionary(static row => row.GetProperty("symbol_id").GetString()!, StringComparer.Ordinal);
-            AssertExportMatches(razorCase, exported[razorCase.SymbolId]);
-            foreach (IndexedSymbol role in symbols.Where(static symbol => symbol.TestEvidence.IsTest))
-                AssertExportMatches(role, exported[role.SymbolId]);
+            foreach (IndexedSymbol symbol in symbols)
+                AssertExportMatches(symbol, exported[symbol.SymbolId]);
 
-            var impactSymbols = new[] { razorControl with { DocId = 0 }, razorCase with { DocId = 1 } };
+            var impactSymbols = new[] { kotlinControl with { DocId = 0 }, kotlinCase with { DocId = 1 } };
             var impactIndex = MillerRepositoryIndex.Build(
                 impactSymbols,
-                [new GraphEdge(razorCase.SymbolId, razorControl.SymbolId, "calls")]);
+                [new GraphEdge(kotlinCase.SymbolId, kotlinControl.SymbolId, "calls")]);
             string impactJson = ImpactTool.Run(
                 impactIndex,
                 new SmartTargetResolver(impactIndex),
-                target: "Fact",
+                target: "helper",
                 changedPaths: null,
                 diff: null,
                 maxDepth: 1,
@@ -121,7 +171,7 @@ public sealed class LiveTestRoleEvidenceScaleTests
                 out _);
             using JsonDocument impact = JsonDocument.Parse(impactJson);
             JsonElement reached = Assert.Single(impact.RootElement.GetProperty("tests").EnumerateArray());
-            Assert.Equal(razorCase.SymbolId, reached.GetProperty("symbol_id").GetString());
+            Assert.Equal(kotlinCase.SymbolId, reached.GetProperty("symbol_id").GetString());
             Assert.Equal("current", reached.GetProperty("test_evidence").GetProperty("status").GetString());
             Assert.True(reached.GetProperty("test_evidence").GetProperty("test_case").GetBoolean());
             Assert.Equal("candidate_only",
@@ -132,6 +182,46 @@ public sealed class LiveTestRoleEvidenceScaleTests
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(work, recursive: true); } catch (IOException) { /* best effort */ }
         }
+    }
+
+    private static (IndexedSymbol Case, IndexedSymbol Control) AssertKotlinRoles(
+        IReadOnlyList<IndexedSymbol> symbols)
+    {
+        const string path = "tests/KotlinRoles.kt";
+        IndexedSymbol calculator = Assert.Single(symbols,
+            symbol => symbol.FilePath == path && symbol.Name == "CalculatorTest");
+        IndexedSymbol nested = Assert.Single(symbols,
+            symbol => symbol.FilePath == path && symbol.Name == "WhenNegative");
+        Assert.True(calculator.TestEvidence.IsContainer);
+        Assert.True(nested.TestEvidence.IsContainer);
+
+        IndexedSymbol testCase = Assert.Single(symbols,
+            symbol => symbol.FilePath == path && symbol.Name == "addsTwoNumbers");
+        IndexedSymbol nestedCase = Assert.Single(symbols,
+            symbol => symbol.FilePath == path && symbol.Name == "rejectsNegativeInput");
+        Assert.True(testCase.TestEvidence.IsCase);
+        Assert.True(nestedCase.TestEvidence.IsCase);
+
+        foreach (string name in new[] { "setUpAll", "setUp", "tearDown", "tearDownAll" })
+        {
+            IndexedSymbol lifecycle = Assert.Single(symbols,
+                symbol => symbol.FilePath == path && symbol.Name == name);
+            Assert.True(lifecycle.TestEvidence.IsTest);
+            Assert.True(lifecycle.TestEvidence.IsLifecycle);
+            Assert.False(lifecycle.TestEvidence.IsCase);
+        }
+
+        IndexedSymbol ordinaryClass = Assert.Single(symbols,
+            symbol => symbol.FilePath == path && symbol.Name == "OrdinaryHelper");
+        IndexedSymbol control = Assert.Single(symbols,
+            symbol => symbol.FilePath == path
+                && symbol.Name == "helper"
+                && symbol.ParentId == ordinaryClass.SymbolId);
+        Assert.False(ordinaryClass.TestEvidence.IsTest);
+        Assert.False(ordinaryClass.TestEvidence.IsContainer);
+        Assert.False(control.TestEvidence.IsTest);
+
+        return (testCase, control);
     }
 
     private static void AssertVueRoles(IReadOnlyList<IndexedSymbol> symbols, string path)

@@ -177,7 +177,7 @@
 **Approach:** Keep the test Scale-tagged and use `ScaleTestSupport.RequireJulieServer`. Test the real 2.15.0 binary and existing public readers rather than adding Kotlin-specific Miller code.
 
 **Acceptance criteria:**
-- [ ] Live Kotlin JUnit case/container/lifecycle roles are present and ordinary controls remain non-test.
-- [ ] Kotlin role counts and JSONL export match the SQLite reader.
-- [ ] No Kotlin-specific production branch is added.
-- [ ] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
+- [x] Live Kotlin JUnit case/container/lifecycle roles are present and ordinary controls remain non-test.
+- [x] Kotlin role counts and JSONL export match the SQLite reader.
+- [x] No Kotlin-specific production branch is added.
+- [x] Worker-scope verification passes and the change is handed to the lead per parallel-lead-commit.
