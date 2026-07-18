@@ -8,7 +8,7 @@ allowed-tools: mcp__miller__patterns, mcp__miller__search, mcp__miller__inspect,
 
 # Miller Patterns Audit
 
-The current extractor catalog contains 175 pattern IDs across 36 languages. Use `patterns` when the question is
+The current extractor catalog contains 194 pattern IDs across 36 languages. Use `patterns` when the question is
 about known structural facts emitted by `julie-extractors`, not arbitrary AST matching. Start by listing observed
 pattern IDs in the selected workspace, then search the relevant ID with path, language, and metadata filters.
 

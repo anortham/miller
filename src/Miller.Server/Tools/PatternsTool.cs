@@ -47,7 +47,7 @@ public sealed class PatternsTool
 
     [McpServerTool(Name = "patterns")]
     [Description(
-        "Query generic code-shape facts pre-extracted by julie-extractors (175 pattern ids, 36 languages: HTTP routes, " +
+        "Query generic code-shape facts pre-extracted by julie-extractors (194 pattern ids, 36 languages: HTTP routes, " +
         "HTML/htmx/Alpine, SQL DDL/DML, async/await, JSON/YAML/TOML/Markdown structure). Call with no args to list " +
         "observed pattern_id values; then operation=search with pattern_id (plus path/language/where filters) or " +
         "a free-text query that matches pattern ids. Use INSTEAD of raw-grepping routes, config keys, or document " +
