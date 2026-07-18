@@ -150,7 +150,10 @@ Bridge is provider-scoped. Current packaged providers are:
 - `vue`: Vue route references to Vue route definitions.
 - `react`: React route references to React route definitions.
 - `backend-http`: fetch/axios/`requests`/`httpx`/`net/http`/`java.net.http`/`Net::HTTP`/`HttpClient`/Ktor/
-  Guzzle/`Http`-facade/`Req`/reqwest client requests (`http.client_request.v1`). The live parity gate requires 12
+  Guzzle/`Http`-facade/`Req`/reqwest client requests (`http.client_request.v1`), plus the julie-extract 2.16.0
+  deferred client families — OkHttp/Retrofit/Spring WebClient/RestTemplate (Kotlin), Symfony HttpClient/cURL
+  (PHP), Tesla/HTTPoison/Finch/`:httpc` (Elixir), and hyper/ureq (Rust). The provider is generic over the fact's
+  `client` label, so new extractor-emitted clients join without Miller changes. The live parity gate requires 12
   artifact language values: `javascript`, `typescript`, `vue`, `python`, `go`, `java`, `ruby`, `csharp`, `kotlin`,
   `php`, `elixir`, and `rust`; facts from `.jsx` and `.tsx` files preserve the additional `jsx` and `tsx`
   provenance values. These requests join server route-template facts from 18 backend families — Express, Fastify,

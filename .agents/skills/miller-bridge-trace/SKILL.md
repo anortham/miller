@@ -16,9 +16,11 @@ to Next.js file routes), `nextjs-api` (fetch/axios client requests to Next.js Ap
 `vue` (route references to Vue route definitions), `react` (route references to React route definitions), and
 `backend-http` (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/Ktor/Guzzle/`Http`-facade/`Req`/reqwest
 client requests — spanning python/go/java/ruby/vue and, since julie-extract 2.8.0, kotlin/php/elixir/rust beyond
-js/ts — to Express/Fastify/FastAPI/Flask/Django/Spring (Java **and** Kotlin)/Go net/http/gin/echo/Rails/NestJS/
-Laravel/Phoenix/axum/actix/Symfony/Ktor route facts, with cross-file mount-prefix composition and rails/laravel/phoenix
-resource-route expansion).
+js/ts; julie-extract 2.16.0 adds the deferred client families OkHttp/Retrofit/Spring WebClient/RestTemplate
+(Kotlin), Symfony HttpClient/cURL (PHP), Tesla/HTTPoison/Finch/`:httpc` (Elixir), and hyper/ureq (Rust), all
+generic over the fact's `client` label — to Express/Fastify/FastAPI/Flask/Django/Spring (Java **and** Kotlin)/Go
+net/http/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/Symfony/Ktor route facts, with cross-file mount-prefix
+composition and rails/laravel/phoenix resource-route expansion).
 
 ## Workflow
 

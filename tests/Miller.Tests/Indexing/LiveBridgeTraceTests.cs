@@ -958,6 +958,159 @@ public sealed class LiveBridgeTraceTests
         Assert.Contains(ktorHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
     }
 
+    [Fact]
+    public void BackendHttpV2160Group_DeferredHttpClients_LiveBridges()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        using var work = new TempWorkspace();
+        WriteV2160BackendGroup(work.Repo);
+
+        var index = ExtractAndLoad(binary, work);
+
+        var clientLabels = StructuralClientLabels(work.Db);
+        foreach (var label in new[]
+        {
+            "okhttp", "retrofit", "spring_webclient", "spring_resttemplate",
+            "symfony_http_client", "curl",
+            "tesla", "httpoison", "httpc", "finch",
+            "hyper", "ureq",
+        })
+            Assert.Contains(label, clientLabels);
+
+        var graph = index.BridgeGraph;
+        Assert.Contains("backend-http", graph.CapabilityReport.ActiveProviders);
+
+        var ktorHits = HitsInto(graph, "ktor/Server.kt");
+        Assert.Contains(ktorHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+        var symfonyHits = HitsInto(graph, "symfony/ItemController.php");
+        Assert.Contains(symfonyHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+        var phoenixHits = HitsInto(graph, "phoenix/router.ex");
+        Assert.Contains(phoenixHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+        var axumHits = HitsInto(graph, "axum/main.rs");
+        Assert.Contains(axumHits, hit => hit.Band == ConfidenceBand.High && !hit.IsVerbUnknown);
+
+        _output.WriteLine("BACKEND-HTTP 2.16.0 GROUP — deferred kt/php/ex/rs clients bridge to same-language routes:");
+        _output.WriteLine($"  client labels: {string.Join(", ", clientLabels.Order(StringComparer.Ordinal))}");
+        _output.WriteLine($"  hits: ktor={ktorHits.Count} symfony={symfonyHits.Count} phoenix={phoenixHits.Count} axum={axumHits.Count}");
+    }
+
+    private static void WriteV2160BackendGroup(string repo)
+    {
+        string ktor = Path.Combine(repo, "ktor");
+        string symfony = Path.Combine(repo, "symfony");
+        string phoenix = Path.Combine(repo, "phoenix");
+        string axum = Path.Combine(repo, "axum");
+        string client = Path.Combine(repo, "client");
+        foreach (var dir in new[] { ktor, symfony, phoenix, axum, client })
+            Directory.CreateDirectory(dir);
+
+        File.WriteAllText(Path.Combine(ktor, "Server.kt"), """
+            import io.ktor.server.application.*
+            import io.ktor.server.routing.*
+
+            fun Application.module() {
+                routing {
+                    post("/kt/items") {
+                        call.respondText("ok")
+                    }
+                    get("/kt/legacy/users") {
+                        call.respondText("ok")
+                    }
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "KotlinClients.kt"), """
+            import okhttp3.Request
+            import retrofit2.http.GET
+            import org.springframework.web.reactive.function.client.WebClient
+            import org.springframework.web.client.RestTemplate
+
+            interface LegacyApi {
+                @GET("/kt/legacy/users")
+                suspend fun users(): List<String>
+            }
+
+            fun calls(web: WebClient, rest: RestTemplate, body: okhttp3.RequestBody) {
+                Request.Builder().url("/kt/items").post(body).build()
+                web.get().uri("/kt/legacy/users").retrieve()
+                rest.getForObject("/kt/legacy/users", String::class.java)
+            }
+            """);
+
+        File.WriteAllText(Path.Combine(symfony, "ItemController.php"), """
+            <?php
+            use Symfony\Component\Routing\Attribute\Route;
+
+            class ItemController {
+                #[Route('/php/items/{id}', methods: ['PATCH'])]
+                public function update($id) {
+                    return $id;
+                }
+
+                #[Route('/php/health', methods: ['DELETE'])]
+                public function purge() {
+                    return null;
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(client, "clients.php"), """
+            <?php
+            use Symfony\Contracts\HttpClient\HttpClientInterface;
+
+            function phpCalls(HttpClientInterface $symfony)
+            {
+                $symfony->request('PATCH', '/php/items/1');
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, '/php/health');
+                curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+            }
+            """);
+
+        File.WriteAllText(Path.Combine(phoenix, "router.ex"), """
+            defmodule DemoWeb.Router do
+              use Phoenix.Router
+
+              get "/ex/users", UserController, :index
+              post "/ex/notes", NoteController, :create
+              delete "/ex/sessions/:id", SessionController, :delete
+            end
+            """);
+        File.WriteAllText(Path.Combine(client, "clients.ex"), """
+            defmodule Demo.Clients do
+              def calls(tesla_client) do
+                HTTPoison.get("/ex/users")
+                HTTPoison.request!(:delete, "/ex/sessions/1", "", [], [])
+                Tesla.post(tesla_client, "/ex/notes", "body")
+                :httpc.request(:post, {'/ex/notes', []}, [], [])
+                Finch.build(:get, "https://api.example.com/finch")
+              end
+            end
+            """);
+
+        File.WriteAllText(Path.Combine(axum, "main.rs"), """
+            use axum::{routing::{delete, get}, Router};
+
+            fn app() -> Router {
+                Router::new()
+                    .route("/rs/health", get(health))
+                    .route("/rs/users/{id}", delete(remove))
+            }
+
+            async fn health() {}
+
+            async fn remove() {}
+            """);
+        File.WriteAllText(Path.Combine(client, "clients.rs"), """
+            use hyper::Request;
+            use ureq;
+
+            pub fn calls() {
+                let _ = hyper::Request::builder().uri("/rs/health").body(());
+                let _ = ureq::delete("/rs/users/1").call();
+            }
+            """);
+    }
+
     private static void WriteV2150BackendGroup(string repo)
     {
         string symfony = Path.Combine(repo, "symfony");
@@ -1214,6 +1367,7 @@ public sealed class LiveBridgeTraceTests
             ("csharp", WriteCsharpBackendGroup),
             ("v2.8.0", WriteV280BackendGroup),
             ("v2.15.0", WriteV2150BackendGroup),
+            ("v2.16.0", WriteV2160BackendGroup),
         };
 
         var emittedPatternIds = new HashSet<string>(StringComparer.Ordinal);
@@ -2585,6 +2739,28 @@ public sealed class LiveBridgeTraceTests
 
     // The distinct languages one pattern id emitted for — proves per-client-language coverage of
     // http.client_request.v1 (js/ts, vue, python, go, java, ruby, csharp) on a real extract.
+    private static IReadOnlyCollection<string> StructuralClientLabels(string dbPath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString());
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT json_extract(metadata_json, '$.client')
+            FROM structural_facts
+            WHERE pattern_id = 'http.client_request.v1'
+              AND json_extract(metadata_json, '$.client') IS NOT NULL
+            ORDER BY 1;
+            """;
+
+        using var reader = command.ExecuteReader();
+        var labels = new List<string>();
+        while (reader.Read())
+            labels.Add(reader.GetString(0));
+        return labels;
+    }
+
     private static IReadOnlyCollection<string> StructuralFactLanguages(string dbPath, string patternId)
     {
         using var connection = new SqliteConnection(

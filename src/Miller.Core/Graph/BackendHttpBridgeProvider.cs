@@ -5,8 +5,10 @@ using System.Text.Json;
 namespace Miller.Core.Graph;
 
 /// <summary>
-/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0/2.8.0/2.15.0): joins
-/// <c>http.client_request.v1</c> client call sites (fetch/axios plus the 2.8.0 Kotlin/PHP/Elixir/Rust clients) to
+/// Verb-aware backend HTTP boundary bridge provider (julie-extractors 2.7.0/2.8.0/2.15.0/2.16.0): joins
+/// <c>http.client_request.v1</c> client call sites (fetch/axios, the 2.8.0 Kotlin/PHP/Elixir/Rust clients, and the
+/// 2.16.0 deferred families — OkHttp/Retrofit/Spring clients, Symfony HttpClient/cURL, Tesla/HTTPoison/Finch/:httpc,
+/// hyper/ureq — generic over the fact's <c>client</c> label) to
 /// server route-template facts from the 18 <see cref="BridgeStructuralPatterns.BackendRoutePatternIds"/> families
 /// (2.7.0 Express/Fastify/FastAPI/Flask/Django/Spring/Go net-http/gin/echo/Rails; 2.8.0 NestJS/Laravel/Phoenix/axum
 /// + both actix provenances; 2.15.0 Symfony/Ktor), emitting <see cref="BridgeKind.Hits"/> edges. It sits beside the
