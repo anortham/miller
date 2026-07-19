@@ -10,6 +10,13 @@ value, bucket edge, window length, and derivation below is a decision, not a sug
 required addition is a **v2**: a new `canary-telemetry-v2.md`, a bumped `canary_contract_version`, and a
 re-frozen analysis plan. Rows written under different contract versions are never pooled.
 
+The one exception is **pre-ship amendment**: until P2b writes the first row under this contract, no data
+exists that a v2 could protect, so a defect found in review is fixed in place at
+`canary_contract_version` 1. Two such amendments have been made (the `miller_version` exact-set cohort
+rule; the gate-computability and qualified-attribution fixes of § Where each clause is computed,
+§ Frozen analysis parameters, `canary_result_qualified_hashes`, and `total_latency_bucket_counts`). Once
+the first canary row is written this exception is spent and the v2 rule is absolute.
+
 **Privacy posture (load-bearing).** Every field defined here is an enum, a counter, a version string, a
 bounded bucket label, or a SHA-256 hex digest produced by the *existing* `TelemetryScope.SetTarget`
 mechanism. No field carries query text, source text, symbol bodies, absolute paths, or workspace roots.
@@ -40,7 +47,7 @@ Existing columns the canary **reads and reuses** (it writes none of them special
 | `workspace_id` | Assignment-unit component. Already SHA-256 of the canonical root — not a path. |
 | `tool`, `op` | Surface identity (`search`/`auto`, `search`/`content`, …). |
 | `outcome` | `ok` / `empty` / `error`. First half of the success event. |
-| `duration_ms` | End-to-end call latency. The canary defines **no** separate total-latency field. |
+| `duration_ms` | End-to-end call latency, and the **only** input to the warm-latency gate clause. The canary defines **no** separate total-latency metadata key: locally it reads this column raw, and the export carries a bucketed histogram of it (`total_latency_bucket_counts`). |
 | `result_count` | Served result count for the arm actually rendered. |
 | `target_hash` | The call's own target hash. Unchanged semantics; see attribution below. |
 | `miller_version` | Task 2's TEXT column. Cohorts are version-relative; rows without it are excluded. The stamped value is the FULL build string `semver+gitsha` (e.g. `1.14.0+abc1234`); consumers group by exact string, or split on `+` for release-level grouping. Version strings are NOT lexicographically orderable (`'1.9.0' > '1.13.0'` as TEXT) — cohort gates use exact sets, never string `>=`. |
@@ -217,7 +224,8 @@ Cold and warm rows are reported separately in the gate (design §9.4); they are 
 
 ### `latency_bucket`
 
-One ladder, applied to both semantic timing fields. Edges are milliseconds, **left-inclusive,
+One ladder, applied to both per-row semantic timing fields and — in the aggregate export only — to
+`duration_ms` as `total_latency_bucket_counts`. Edges are milliseconds, **left-inclusive,
 right-exclusive**, over the integer millisecond value (floor of the measured duration).
 
 | Value | Range (ms) |
@@ -237,7 +245,8 @@ Rationale for these edges: `10/25/50/100` resolve the warm query-embed target ba
 10–150ms), `250/500/1000` resolve degraded-but-usable, and `3000` is the top of the documented cold-start
 range — anything above it is a distinct failure mode and does not need finer resolution. Buckets, not raw
 milliseconds, because a raw per-call latency on a semantic arm is a weak fingerprint of query length;
-the bucket is not. (`duration_ms` remains raw because it is an existing, already-accepted column.)
+the bucket is not. (`duration_ms` remains raw **on the local row** because it is an existing,
+already-accepted column; it is bucketed on the way out of the machine.)
 
 ### `shadow_status`
 
@@ -269,17 +278,43 @@ A canary row records the digests of the results it served, using the identical d
 `inspect`/`content read` row's `target_hash` can be matched against them:
 
 - `canary_result_name_hashes` — `sha256(lower-hex)` of each served result's **symbol name exactly as an
-  agent would pass it to `inspect target=`** (the bare name, not a qualified id).
+  agent would pass it to `inspect target=`** (the bare name; the qualified spelling is the third array
+  below).
 - `canary_result_path_hashes` — `sha256(lower-hex)` of each served result's **workspace-relative path**,
   the form `inspect target=<path>` and `content operation=read` take.
+- `canary_result_qualified_hashes` — `sha256(lower-hex)` of each served result's **qualified spelling**
+  `<ParentName>.<Name>`, written **only for results whose qualified spelling differs from the bare name**
+  (i.e. the symbol has a parent). Bare-name-only results contribute nothing to this array.
 
-Both are recorded because a follow-up may address a result either way; matching either set counts.
-Each array is capped at the **first 10 served results in served order**; `canary_result_hash_truncated`
-records whether the cap bit. Rationale for 10: the compact search surface renders far fewer than 10 rows,
-attribution beyond rank 10 is not a meaningful conversion signal, and the cap bounds row size.
+  The qualified spelling is derived, not read from a column: the artifact's `symbols` table has no
+  qualified/fully-qualified name field, so the value is composed from the two real columns
+  `symbols.parent_symbol_id` → the parent row's `symbols.name`, joined to the result's own `symbols.name`
+  with `.`. This is deliberately the *same* one-level `Parent.Member` shape that
+  [`SmartTargetResolver.ResolveQualifiedMember`](../../src/Miller.Server/Resolution/SmartTargetResolver.cs)
+  already accepts on `inspect target=` — it matches on the last dot segment and the immediate parent's
+  name, so a deeper spelling an agent might type (`Ns.Type.Member`) resolves through the same immediate
+  parent. Only the one-level form is hashed; matching a deeper spelling is out of scope for v1 and simply
+  counts as no conversion, the same conservative direction as a missed follow-up.
 
-Privacy: these are digests of identifiers that already flow through `target_hash` today, in a
-machine-local database, and they are **never** included in any aggregate export (§ Export). They are not
+All three are recorded because a follow-up may address a result any of these ways, and
+[`TelemetryScope.SetTarget`](../../src/Miller.Server/Telemetry/TelemetryScope.cs) hashes the *exact string
+the agent passed* — an agent that disambiguates with `inspect target=Parent.Member` produces a digest that
+neither the bare-name nor the path array can contain. Without the qualified array those follow-ups are
+silently lost, and the loss is not guaranteed symmetric across arms (the arms serve different result sets,
+so they invite different disambiguation). Matching **any** of the three sets counts.
+
+Each array is capped at the **first 10 served results in served order**; a single shared
+`canary_result_hash_truncated` flag records whether the cap bit — one flag for all three arrays, not one
+per array, because the cap is applied to the served-result list itself before any hashing, so the three
+arrays are always truncated at the same result boundary. (The qualified array may still be *shorter* than
+the other two, because results without a parent contribute no entry; that is absence, not truncation.)
+Rationale for 10: the compact search surface renders far fewer than 10 rows, attribution beyond rank 10 is
+not a meaningful conversion signal, and the cap bounds row size.
+
+Privacy: all three arrays are digests of identifiers that already flow through `target_hash` today — a
+qualified spelling is just another string an agent types into `inspect target=` and that `SetTarget`
+already hashes, so the qualified array is the same mechanism and the same exposure as the other two — held
+in a machine-local database, and **never** included in any aggregate export (§ Export). They are not
 a new exposure class — but they are also not anonymization, since a local dictionary attack over the
 local index is exactly what `WorkspaceTargetHashResolver` does on purpose. That is the same trade already
 accepted for `target_hash`, and it is why hashes stay local-only.
@@ -301,13 +336,35 @@ A canary row `C` is **attributed** a follow-up if there exists a `tool_telemetry
 1. `F.workspace_id = C.workspace_id`
 2. `F.tool = 'inspect'`, **or** `F.tool = 'content'` with `F.op = 'read'`
 3. `F.outcome = 'ok'`
-4. `F.target_hash` is non-null and present in `C.canary_result_name_hashes` ∪ `C.canary_result_path_hashes`
+4. `F.target_hash` is non-null and present in `C.canary_result_name_hashes` ∪
+   `C.canary_result_path_hashes` ∪ `C.canary_result_qualified_hashes` (membership in **any** of the three
+   arrays counts; a hash present in more than one array is still one match)
 5. `F.ts > C.ts` and `F.ts − C.ts ≤ 600 s`
 6. `C` is the **latest** canary row satisfying 1–5 for `F` (a follow-up is credited to the most recent
    preceding canary row that served that hash, never to several)
 
 At most **one** follow-up is attributed per canary row: the earliest `F` satisfying the above. Conversion
 is a binary per-row fact, not a count — repeat visits to one result are not extra evidence.
+
+**Conformance cases.** An implementation of the write path and the analysis must reproduce all of these
+for a canary row that served the method `Save` on class `LedgerWriter` in
+`src/Miller.Server/Telemetry/LedgerWriter.cs`:
+
+- *Bare target.* `inspect target=Save` within the window ⟹ attributed, via
+  `canary_result_name_hashes` containing `sha256("Save")`.
+- *Qualified target.* `inspect target=LedgerWriter.Save` within the window ⟹ attributed, via
+  `canary_result_qualified_hashes` containing `sha256("LedgerWriter.Save")`. This case fails to attribute
+  if the qualified array is omitted — it is the reason the array exists.
+- *Path target.* `inspect target=src/Miller.Server/Telemetry/LedgerWriter.cs` or
+  `content operation=read` on that path within the window ⟹ attributed, via
+  `canary_result_path_hashes`.
+- *Top-level result.* A served result with no parent (e.g. the class `LedgerWriter` itself) contributes a
+  name hash and a path hash and **no** qualified-array entry; `inspect target=LedgerWriter` still attributes
+  through the name array.
+- *Deeper spelling.* `inspect target=Miller.Server.Telemetry.LedgerWriter.Save` does **not** attribute in
+  v1 (only the one-level `Parent.Member` form is hashed) and counts as no conversion.
+- *Double counting.* A follow-up whose hash appears in two of the three arrays is one attribution, and the
+  canary row is still credited at most one follow-up overall.
 
 ## The Success Event
 
@@ -328,6 +385,73 @@ returned results nobody looked at is not a success.
 calls; compare the distribution of per-unit rates between `control` and `treatment` units; the gate
 passes on a positive treatment effect whose confidence interval excludes zero, with no >20% p95
 warm-latency regression on eligible queries (warm rows only, per `canary_embed_warmth`).
+
+### Where each clause is computed (load-bearing)
+
+The gate has two computation surfaces and they are not interchangeable:
+
+- **Local (authoritative).** The gate is computed by reading raw `tool_telemetry` rows on the machine
+  that wrote them. Local rows carry `duration_ms`, `outcome`, `result_count`, `miller_version`, the
+  `canary_*` metadata, and the served-result hashes needed for attribution. Every clause below is defined
+  over these rows, and a clause's stated value is the local value.
+- **Export (approximation).** `miller telemetry canary --json` (§ Aggregate Export) carries per-unit
+  counters only. It can *approximate* both clauses — success rates exactly, latency only at bucket
+  resolution — and a pooled multi-operator read is by construction an approximation of the local gates it
+  aggregates. Where the two disagree, the local computation is authoritative and the disagreement is
+  reported, not silently resolved.
+
+**Success-rate clause (local).** Restrict to eligible rows (`canary_eligibility=eligible`) with a
+`miller_version` in the cohort's exact version set. Group by assignment unit. A unit is included when it
+has at least the minimum eligible calls fixed below. The unit's success rate is
+`attributed successes ÷ eligible calls` per § The Success Event. The treatment effect is the difference of
+arm means over per-unit rates; the interval is the frozen estimator below. Per-call pooling is forbidden
+(§ Assignment).
+
+**Warm-latency clause (local).** This clause is about *end-to-end call latency*, the existing raw
+`tool_telemetry.duration_ms` column — the canary defines no separate total-latency metadata key and needs
+none locally. Exactly:
+
+- Treatment population: eligible `treatment` rows with `canary_embed_warmth = warm`.
+- Control population: **all** eligible `control` rows. Control rows never embed, so they always record
+  `canary_embed_warmth = none` and have no warm/cold split to condition on; the whole control arm *is*
+  the steady-state lexical baseline the warm treatment arm must not degrade.
+- Statistic: nearest-rank p95 over the ascending integer `duration_ms` values of each population —
+  the value at index `ceil(0.95 × n)` (1-based), with no interpolation.
+- Clause passes when `p95(treatment warm) ≤ 1.20 × p95(control)`. It is **indeterminate** (and the gate
+  therefore does not pass) below the minimum row counts fixed below.
+
+**Warm-latency clause (export approximation).** The export carries `total_latency_bucket_counts` per unit:
+the `latency_bucket` ladder applied to `duration_ms` over that unit's eligible calls. A unit's bucketed
+p95 is the bucket that contains its nearest-rank p95 — computed by walking the ladder in ascending order
+and taking the first bucket whose cumulative count reaches `ceil(0.95 × calls)`. At export granularity the
+regression check compares the *median across units* of each arm's bucketed p95 rung, and flags a possible
+regression when the treatment rung is strictly higher than the control rung. This is a coarse screen, not
+the gate: one ladder rung spans up to a 2.5× range, so it can neither confirm nor rule out a 20%
+regression on its own. A flag means "go compute the local clause", nothing more.
+
+**Identifier non-inferiority (local, shadow population).** Computed over shadow rows per
+§ Shadow Population, with the population, estimator, and margins fixed below.
+
+### Frozen analysis parameters
+
+These are part of the frozen contract. An analysis that changes one of them is not this gate.
+
+| Parameter | Frozen value | Source |
+|---|---|---|
+| Unit of analysis | assignment unit `(workspace_id, utc_date, query_class)` | § Assignment |
+| Minimum eligible calls for a unit to enter the analysis | **5** | Same floor as the export's `suppressed_unit_count` rule, so local and exported analyses include the same units |
+| Minimum included units per arm | **30** | Judgment call (design is silent). Below this the t-interval is too wide to be informative and the gate is reported as underpowered, never as a pass |
+| Treatment-effect estimator | difference in arm means of per-unit success rates | Design §9.1 ("per-unit", cluster-randomized) |
+| Confidence interval | **Welch two-sample 95% t-interval** over per-unit rates (unequal variances, Welch–Satterthwaite df), two-sided | Judgment call (design says "confidence interval excludes zero" without naming a method). Welch because arm variances differ whenever the arms differ in unit size mix |
+| Success-rate pass rule | interval **lower bound > 0** | Design §9.1, §11 |
+| p95 estimator | **nearest-rank**, index `ceil(0.95 × n)` (1-based), ascending, no interpolation | Judgment call. Nearest-rank because `duration_ms` is integer and interpolation invents values between observed samples |
+| Warm-latency regression threshold | `p95(treatment warm) ≤ 1.20 × p95(control)` | Design §9.1/§11 ("no >20% p95 warm-latency regression") |
+| Minimum rows for the latency clause | **100** eligible warm treatment rows **and** 100 eligible control rows | Judgment call. Below 100, a nearest-rank p95 is determined by fewer than 5 observations |
+| Identifier non-inferiority population | shadow rows with `canary_shadow_status = ok`, grouped into shadow units `(workspace_id, utc_date, identifier)`, same 5-call floor | Judgment call (population was previously unstated) |
+| Identifier non-inferiority margins | per-unit `top1_changed` rate: **95% t-interval upper bound ≤ 0.05**; per-unit mean `overlap_at_10`: 95% t-interval lower bound **≥ 8.0**; minimum **30** shadow units | Judgment call. These are the *field-telemetry* margins over shadow rows; the sealed-set retrieval bar remains the eval protocol's (§ Shadow Population) and the two are reported separately, never merged |
+
+Cohort rule: all of the above are computed within one exact `miller_version` set and one
+`canary_contract_version`. Rows outside the set are excluded before any statistic is computed.
 
 ## Field Reference
 
@@ -360,7 +484,8 @@ condition does not hold is **absent**, never a fabricated zero or empty string.
 | `canary_knn_latency_bucket` | enum string | see `latency_bucket` | Every eligible row (`none` when no KNN ran) | As above. |
 | `canary_result_name_hashes` | array of string | ≤10 lowercase SHA-256 hex digests | `arm` ∈ {`control`,`treatment`} and `result_count > 0` | Same digest mechanism and same local-only exposure as the existing `target_hash` column; excluded from every export. |
 | `canary_result_path_hashes` | array of string | ≤10 lowercase SHA-256 hex digests | as above | As above. |
-| `canary_result_hash_truncated` | bool | `true`/`false` | Whenever either hash array is written | Boolean. |
+| `canary_result_qualified_hashes` | array of string | ≤10 lowercase SHA-256 hex digests | as above, and only for served results whose `<ParentName>.<Name>` differs from the bare name (absent when no served result has a parent) | As above — a qualified spelling is an identifier that already flows through `target_hash`; same mechanism, same local-only exposure, excluded from every export. |
+| `canary_result_hash_truncated` | bool | `true`/`false` | Whenever any hash array is written; one shared flag for all three arrays | Boolean. |
 | `canary_shadow_status` | enum string | see `shadow_status` | `arm=shadow` | 4-value enum. |
 | `canary_shadow_overlap_at_10` | int | `0`–`10` | `arm=shadow`, `canary_shadow_status=ok` | Counter: results common to both arms' top 10. |
 | `canary_shadow_top1_changed` | bool | `true`/`false` | as above | Boolean: would the hybrid arm have changed rank 1. |
@@ -395,8 +520,13 @@ Non-inferiority for them is measured by a shadow population instead.
 
 Non-inferiority is evaluated offline over the shadow rows: the hybrid arm must not displace the lexical
 top-1 (`canary_shadow_top1_changed`) beyond a pre-registered margin, and top-10 overlap must stay above a
-pre-registered floor. Those two thresholds are set by the P0 eval-protocol task on the sealed set, not
-here — this contract fixes the *measurement*, and the eval protocol fixes the *bar*.
+pre-registered floor. Two distinct bars exist and are reported separately, never merged:
+
+- **Sealed-set retrieval bar** — set by the P0 eval-protocol task on the sealed acceptance set, not here.
+  This contract fixes the *measurement*; the eval protocol fixes that *bar*.
+- **Field-telemetry margins** over the shadow rows defined by this contract — frozen in
+  § Frozen analysis parameters, because a gate clause computed from fields defined here must be computable
+  from this document alone.
 
 ## Retention
 
@@ -422,7 +552,11 @@ canary data leaves a machine.
 **Export invariants (load-bearing):**
 
 - **Counters and enums only.** No hashes, no `workspace_id`, no `workspace_root`, no paths, no
-  `target_hash`, no per-call rows, no `duration_ms`.
+  `target_hash`, no per-call rows, **no raw `duration_ms` — bucketed total-latency counters only**
+  (`total_latency_bucket_counts`, the `latency_bucket` ladder applied to `duration_ms` over the unit's
+  eligible calls). A per-call millisecond value never leaves the machine; a bucket histogram over ≥5 calls
+  is a counter like every other field here, and it is what makes the latency clause approximable off-box
+  at all (§ Where each clause is computed).
 - Units are identified by `unit_id` = the first 12 hex characters of
   `SHA256(experiment_id|assignment_version|workspace_id|utc_date|query_class)` — the same digest the
   assignment already computes, truncated. It is a join key across exports from one operator, and it does
@@ -462,7 +596,8 @@ canary data leaves a machine.
       "backend_counts": { "metal": 41 },
       "embed_warmth_counts": { "warm": 39, "cold": 2 },
       "embed_latency_bucket_counts": { "lt_25": 12, "lt_50": 21, "lt_100": 6, "gte_3000": 2 },
-      "knn_latency_bucket_counts": { "lt_10": 33, "lt_25": 8 }
+      "knn_latency_bucket_counts": { "lt_10": 33, "lt_25": 8 },
+      "total_latency_bucket_counts": { "lt_100": 9, "lt_250": 27, "lt_500": 3, "gte_3000": 2 }
     }
   ],
   "shadow_units": [
@@ -479,6 +614,13 @@ canary data leaves a machine.
   ]
 }
 ```
+
+`total_latency_bucket_counts` is written for every exported unit in both arms (control rows have a
+`duration_ms` like any other row), and its counts sum to the unit's `calls`. The other bucket maps stay
+semantic-only: `embed_latency_bucket_counts` and `knn_latency_bucket_counts` are absent-or-`none`-heavy on
+control units by construction. All three are separate marginal distributions — the export cannot express a
+joint (warmth × total latency) distribution, which is exactly why the exported latency check is labeled an
+approximation and the local raw-row clause is authoritative.
 
 Count maps omit zero-valued keys. `units` is ordered by `(utc_date, query_class, unit_id)` so an unchanged
 window re-exports byte-identically; `shadow_units` follows the same ordering rule.
