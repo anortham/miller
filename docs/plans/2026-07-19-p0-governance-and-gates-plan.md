@@ -112,10 +112,10 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Follow the ledger's existing connection/setup pattern. Test invariants: (a) migration is idempotent across two opens; (b) a row written after migration carries the current version string; (c) an INSERT using the OLD column list (simulating an older writer, via raw SQL like `InsertRawForTest` at TelemetryLedger.cs:431) still succeeds post-migration.
 
 **Acceptance criteria:**
-- [ ] Column is named exactly `miller_version` (Task 5's frozen contract references it by name); added additively via `EnsureTextColumn`; migration idempotent AND concurrent-adder-safe; old-writer INSERT proven still valid by test
-- [ ] Every `TelemetryRecord` write path stamps the version (no null versions from current-binary writes, proven by test)
-- [ ] No query text/paths in the new field (it is a version string only)
-- [ ] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
+- [x] Column is named exactly `miller_version` (Task 5's frozen contract references it by name); added additively via `EnsureTextColumn`; migration idempotent AND concurrent-adder-safe; old-writer INSERT proven still valid by test
+- [x] Every `TelemetryRecord` write path stamps the version (no null versions from current-binary writes, proven by test)
+- [x] No query text/paths in the new field (it is a version string only)
+- [x] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
 
 ### Task 3: Edit failure-reason completeness
 

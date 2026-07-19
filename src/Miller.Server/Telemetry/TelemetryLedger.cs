@@ -11,7 +11,9 @@ namespace Miller.Server.Telemetry;
 /// <c>tool_telemetry</c> table, and reuses a prepared INSERT. <see cref="Record"/> is best-effort and NEVER
 /// throws — a telemetry write failure must never break a tool call; it is swallowed and counted in
 /// <see cref="DroppedWrites"/>. Registered as a DI singleton; the single connection is guarded by a lock
-/// because MCP tool calls can run concurrently.
+/// because MCP tool calls can run concurrently. Every row is stamped with <see cref="MillerVersion.Current"/>
+/// in the nullable <c>miller_version</c> column so cohorts can be attributed to a binary version; the column is
+/// added additively, and rows from older binaries (which name their columns explicitly) stay NULL.
 /// </summary>
 public sealed class TelemetryLedger : IDisposable
 {
@@ -27,7 +29,8 @@ public sealed class TelemetryLedger : IDisposable
             bytes_returned INTEGER NOT NULL DEFAULT 0 CHECK (bytes_returned >= 0),
             source_bytes  INTEGER NOT NULL DEFAULT 0 CHECK (source_bytes >= 0),
             est_tokens INTEGER, index_fresh INTEGER CHECK (index_fresh IS NULL OR index_fresh IN (0,1)),
-            target_hash TEXT, metadata_json TEXT NOT NULL DEFAULT '{}'
+            target_hash TEXT, metadata_json TEXT NOT NULL DEFAULT '{}',
+            miller_version TEXT
         ) STRICT;
         DROP INDEX IF EXISTS idx_tool_telemetry_ts;
         DROP INDEX IF EXISTS idx_tool_telemetry_tool;
@@ -77,10 +80,10 @@ public sealed class TelemetryLedger : IDisposable
             INSERT INTO tool_telemetry
                 (id, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
                  error_message, error_detail, bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh,
-                 target_hash, metadata_json)
+                 target_hash, metadata_json, miller_version)
             VALUES
                 ($id, $tool, $op, $ws, $wsroot, $dur, $outcome, $errkind, $rc,
-                 $errmsg, $errdetail, $bex, $bret, $src, $est, $fresh, $hash, $meta);
+                 $errmsg, $errdetail, $bex, $bret, $src, $est, $fresh, $hash, $meta, $version);
             """;
         // Declare parameters once; values are set per Record() call. Prepared and reused on the hot path.
         _insert.Parameters.Add("$id", SqliteType.Text);
@@ -101,6 +104,9 @@ public sealed class TelemetryLedger : IDisposable
         _insert.Parameters.Add("$fresh", SqliteType.Integer);
         _insert.Parameters.Add("$hash", SqliteType.Text);
         _insert.Parameters.Add("$meta", SqliteType.Text);
+        // The running build's version is a process constant, so it is bound once here rather than per write.
+        // Every row from this binary is stamped; rows written by older binaries stay NULL.
+        _insert.Parameters.Add("$version", SqliteType.Text).Value = MillerVersion.Current;
         _insert.Prepare();
     }
 
@@ -144,6 +150,7 @@ public sealed class TelemetryLedger : IDisposable
         }
         EnsureTextColumn(connection, "error_message");
         EnsureTextColumn(connection, "error_detail");
+        EnsureTextColumn(connection, "miller_version");
 
         return new TelemetryLedger(connection, Path.GetFullPath(dbPath), workspaceId, workspaceRoot);
     }
@@ -158,9 +165,26 @@ public sealed class TelemetryLedger : IDisposable
                 return;
         }
 
+        AddTextColumnToleratingConcurrentAdder(connection, columnName);
+    }
+
+    /// <summary>
+    /// The ALTER half of <see cref="EnsureTextColumn"/>. The pragma guard above it is only a fast path: the
+    /// telemetry DB is machine-global, so another Miller process can add the same column between that check and
+    /// this statement. A duplicate-column failure means the intended end state already holds, so it is tolerated.
+    /// </summary>
+    internal static void AddTextColumnToleratingConcurrentAdder(SqliteConnection connection, string columnName)
+    {
         using var alter = connection.CreateCommand();
         alter.CommandText = $"ALTER TABLE tool_telemetry ADD COLUMN {columnName} TEXT;";
-        alter.ExecuteNonQuery();
+        try
+        {
+            alter.ExecuteNonQuery();
+        }
+        catch (SqliteException ex) when (
+            ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        {
+        }
     }
 
     /// <summary>

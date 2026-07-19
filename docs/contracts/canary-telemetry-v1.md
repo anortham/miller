@@ -43,7 +43,7 @@ Existing columns the canary **reads and reuses** (it writes none of them special
 | `duration_ms` | End-to-end call latency. The canary defines **no** separate total-latency field. |
 | `result_count` | Served result count for the arm actually rendered. |
 | `target_hash` | The call's own target hash. Unchanged semantics; see attribution below. |
-| `miller_version` | Task 2's TEXT column. Cohorts are version-relative; rows without it are excluded. |
+| `miller_version` | Task 2's TEXT column. Cohorts are version-relative; rows without it are excluded. The stamped value is the FULL build string `semver+gitsha` (e.g. `1.14.0+abc1234`); consumers group by exact string, or split on `+` for release-level grouping. Version strings are NOT lexicographically orderable (`'1.9.0' > '1.13.0'` as TEXT) — cohort gates use exact sets, never string `>=`. |
 
 ## Activation
 
@@ -456,7 +456,7 @@ canary data leaves a machine.
       "corpus_generation": "cards-v1-chunks-v1",
       "fusion_profile": "rrf-mixed-v1",
       "policy_version": 1,
-      "miller_versions": ["1.14.0"],
+      "miller_versions": ["1.14.0+abc1234"],
       "fallback_reason_counts": { "none": 38, "embed_timeout": 3 },
       "rescue_kind_counts": { "none": 30, "semantic_symbol": 8, "semantic_docs": 3 },
       "backend_counts": { "metal": 41 },

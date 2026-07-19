@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Server;
 using Miller.Server.Telemetry;
 using Xunit;
 
@@ -117,6 +118,193 @@ public sealed class TelemetryLedgerTests : IDisposable
             r.IsDBNull(5) ? null : r.GetInt32(5),
             r.IsDBNull(6) ? null : r.GetString(6),
             r.IsDBNull(7) ? null : r.GetString(7));
+    }
+
+    private static int ColumnCount(SqliteConnection connection, string columnName)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('tool_telemetry') WHERE name = $name;";
+        cmd.Parameters.AddWithValue("$name", columnName);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private List<string?> ReadMillerVersions()
+    {
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT miller_version FROM tool_telemetry ORDER BY id;";
+        var versions = new List<string?>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            versions.Add(r.IsDBNull(0) ? null : r.GetString(0));
+        return versions;
+    }
+
+    [Fact]
+    public void Open_AddsMillerVersionColumn_ExactlyOnce_AcrossRepeatedOpens()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+        }
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+        }
+
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        Assert.Equal(1, ColumnCount(c, "miller_version"));
+    }
+
+    private void SeedTableWithoutMillerVersion()
+    {
+        using var seed = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false,
+            }.ToString());
+        seed.Open();
+        using var ddl = seed.CreateCommand();
+        ddl.CommandText = """
+            CREATE TABLE tool_telemetry (
+                id TEXT PRIMARY KEY, ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                tool TEXT NOT NULL, op TEXT, workspace_id TEXT, workspace_root TEXT,
+                duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+                outcome TEXT NOT NULL CHECK (outcome IN ('ok','empty','error')), error_kind TEXT,
+                result_count INTEGER,
+                bytes_examined INTEGER NOT NULL DEFAULT 0 CHECK (bytes_examined >= 0),
+                bytes_returned INTEGER NOT NULL DEFAULT 0 CHECK (bytes_returned >= 0),
+                source_bytes  INTEGER NOT NULL DEFAULT 0 CHECK (source_bytes >= 0),
+                est_tokens INTEGER, index_fresh INTEGER CHECK (index_fresh IS NULL OR index_fresh IN (0,1)),
+                target_hash TEXT, metadata_json TEXT NOT NULL DEFAULT '{}'
+            ) STRICT;
+            """;
+        ddl.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void Open_MigratesAPreExistingTableThatLacksMillerVersion()
+    {
+        SeedTableWithoutMillerVersion();
+
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            using var scope = ledger.Measure("search", op: "auto");
+            scope.Outcome = TelemetryOutcome.Ok;
+        }
+
+        Assert.Equal(MillerVersion.Current, Assert.Single(ReadMillerVersions()));
+    }
+
+    [Fact]
+    public void AddTextColumn_ToleratesAColumnAnotherProcessAlreadyAdded()
+    {
+        // Stands in for the TOCTOU window: the pragma guard saw no column, another Miller process added it,
+        // and this ALTER arrives second. The second call must be a no-op, not a throw.
+        SeedTableWithoutMillerVersion();
+
+        using var c = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+            }.ToString());
+        c.Open();
+
+        TelemetryLedger.AddTextColumnToleratingConcurrentAdder(c, "miller_version");
+        TelemetryLedger.AddTextColumnToleratingConcurrentAdder(c, "miller_version");
+
+        Assert.Equal(1, ColumnCount(c, "miller_version"));
+    }
+
+    [Fact]
+    public void Open_FromManyProcessesConcurrently_LeavesExactlyOneMillerVersionColumn()
+    {
+        SeedTableWithoutMillerVersion();
+
+        using var barrier = new Barrier(8);
+        var failures = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        Parallel.For(0, 8, _ =>
+        {
+            try
+            {
+                barrier.SignalAndWait();
+                using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
+        });
+
+        Assert.Empty(failures);
+        using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        c.Open();
+        Assert.Equal(1, ColumnCount(c, "miller_version"));
+    }
+
+    [Fact]
+    public void Record_StampsTheRunningMillerVersion()
+    {
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            var record = new TelemetryRecord(
+                Tool: "search", Op: "auto", WorkspaceId: "ws1", WorkspaceRoot: null,
+                DurationMs: 1, Outcome: "ok", ErrorKind: null,
+                ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+                EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+            ledger.Record(in record, id: "row-1");
+
+            using var scope = ledger.Measure("inspect", op: null);
+            scope.Outcome = TelemetryOutcome.Ok;
+        }
+
+        var versions = ReadMillerVersions();
+        Assert.Equal(2, versions.Count);
+        Assert.All(versions, v => Assert.Equal(MillerVersion.Current, v));
+    }
+
+    [Fact]
+    public void Record_StampsAVersionStringOnly_NotQueryTextOrPaths()
+    {
+        string secretRoot = Path.Combine(_dir, "secret-workspace");
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1", secretRoot))
+        {
+            using var scope = ledger.Measure("search", op: "auto");
+            scope.SetTarget("SELECT * FROM secrets");
+            scope.Outcome = TelemetryOutcome.Ok;
+        }
+
+        string version = Assert.Single(ReadMillerVersions())!;
+        Assert.Equal(MillerVersion.Current, version);
+        Assert.DoesNotContain("secret", version, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Path.DirectorySeparatorChar, version);
+    }
+
+    [Fact]
+    public void OlderWriterInsert_NamingTheLegacyColumnList_StillSucceeds_AfterMigration()
+    {
+        using var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1");
+
+        using var write = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+            }.ToString());
+        write.Open();
+        using var cmd = write.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO tool_telemetry
+                (id, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
+                 error_message, error_detail, bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh,
+                 target_hash, metadata_json)
+            VALUES
+                ('legacy-row', 'search', 'auto', 'ws1', NULL, 3, 'ok', NULL, NULL,
+                 NULL, NULL, 0, 0, 0, NULL, NULL, NULL, '{}');
+            """;
+        Assert.Equal(1, cmd.ExecuteNonQuery());
+
+        Assert.Null(Assert.Single(ReadMillerVersions()));
     }
 
     [Fact]
