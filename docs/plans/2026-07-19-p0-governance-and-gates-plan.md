@@ -83,11 +83,11 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Edit CLAUDE.md minimally — change the boundary sentences, do not restructure. The CLAUDE.md "replacement boundary" paragraph gains one sentence citing ADR-0003 and the design doc. README's Eros assignment gets the same treatment. Run `scripts/sync-agents.sh` last.
 
 **Acceptance criteria:**
-- [ ] ADR-0003 exists in existing ADR format with Context/Decision/Consequences/Applies To/Future Agents, Eros migration inventory, and named Julie-compat owner
-- [ ] CLAUDE.md and README.md no longer forbid local semantic retrieval in Miller; both cite ADR-0003; no other guidance weakened (MCP-stinginess, language parity, test split untouched) — checked mechanically: `AgentInstructionsTests` green (`dotnet test --filter "FullyQualifiedName~AgentInstructionsTests"`)
-- [ ] `docs/README.md` maps ADR-0003 + both plan docs under active/current
-- [ ] `cmp -s CLAUDE.md AGENTS.md` passes after `scripts/sync-agents.sh`
-- [ ] Verified diff handed to lead (parallel-lead-commit)
+- [x] ADR-0003 exists in existing ADR format with Context/Decision/Consequences/Applies To/Future Agents, Eros migration inventory, and named Julie-compat owner
+- [x] CLAUDE.md and README.md no longer forbid local semantic retrieval in Miller; both cite ADR-0003; no other guidance weakened (MCP-stinginess, language parity, test split untouched) — checked mechanically: `AgentInstructionsTests` green (`dotnet test --filter "FullyQualifiedName~AgentInstructionsTests"`)
+- [x] `docs/README.md` maps ADR-0003 + both plan docs under active/current
+- [x] `cmp -s CLAUDE.md AGENTS.md` passes after `scripts/sync-agents.sh`
+- [x] Verified diff handed to lead (parallel-lead-commit)
 
 ### Task 2: Telemetry version stamping
 
