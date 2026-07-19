@@ -48,7 +48,7 @@ Cluster-unit metrics (topk): recall@10 0.6979, nDCG@10 0.6423, worst-language nD
 - Fast suite 3618 passing / 0 failing (includes new exception-path edit test); scale suite 54/54; eval harness 31/31; Release build 0 warnings / 0 errors. Branch gate recorded at 2e26dba; subsequent commits are metadata-only (.razorback/.memories), so the evidence carries.
 
 ## Blockers hit
-- None. (Push and PR creation intentionally not performed: user approval boundary.)
+- None. (Push and PR held for user approval per approval boundaries; approved and executed 2026-07-19.)
 
 ## Files changed
 - 64 files, +8288/−939 over 18 commits (main..HEAD): docs/plans (design + plan), docs/adr/ADR-0003, docs/contracts/canary-telemetry-v1.md, docs/findings (spike, benchmark), spike/SqliteVec.AotSpike + CI job, eval/retrieval-eval + eval/model-bench, src/Miller.Server (EditTool, EditService, TelemetryLedger), tests, CLAUDE.md/AGENTS.md/README.md, .memories + .razorback evidence.
