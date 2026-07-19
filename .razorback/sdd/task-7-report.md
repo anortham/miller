@@ -1,120 +1,172 @@
-# Task 7 — Notice toasts, non-navigating Cancel, CSS-driven theme label
+# Task 7 report — Model benchmark harness + benchmark run → pin recommendation
 
 **Status:** COMPLETE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
-**Branch:** `worktree-dashboard-ux-fixes` (base `b53fd7d`)
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/semantic-integration`, branch
+`worktree-semantic-integration`
 
-> This file previously held a stale report from an older plan (lead live-verification notes); overwritten
-> per the task brief.
+> This file previously held a stale report from an older plan (dashboard UX fixes); overwritten per
+> the task brief, matching what tasks 1–6 did with their own report files.
 
-## Ledger
+## Pin recommendation
 
-| Step | Result |
-|---|---|
-| Orientation (grep `CancelHref`, read current worktree bytes) | 3 call sites found; all changed files read fresh |
-| Tests written first (6 new) | RED — 6 failed for the intended reasons |
-| Implementation (7 files) | GREEN — 56/56 focused |
-| Full fast suite (`scripts/test.sh`) | 3568/3568 pass, 25s (ceiling 30s) |
-| `dotnet build Miller.slnx -c Release` | 0 warnings / 0 errors |
-| `node --check dashboard-site.js` | OK |
+- **Default pin:** `Qwen3-Embedding-0.6B`, f16 GGUF weights, **1024 dims, int8 vector storage**
+  (pooling `last`, `<|endoftext|>` append, instruction-prefixed queries, MRL slice-then-renormalize).
+- **Fallback pin:** `bge-small-en-v1.5`, f32 GGUF weights, **384 dims, int8 vector storage**
+  (pooling `cls`). **Evidence-backed** — both fallback lanes completed end to end, satisfying the
+  decision rule's "fallback pin only from a completed fallback lane". No pin is recorded as OPEN.
+
+Every lane completed: 6 Qwen3 lanes (256/512/1024 × f32/int8), 2 fallback candidates × f32/int8, and
+2 BM25 baseline modes — each under both threshold policies, **24 scored arms**. **No incomplete
+lanes, so no resume commands are required.**
+
+## Implementation
+
+Created `eval/model-bench/`:
+
+| file | role |
+| --- | --- |
+| `bench-pins.json` | llama.cpp `b10068` + 3 candidate GGUFs: URLs, sha256, sizes, licenses (with provenance), pooling, dims, instruction prefixes. Records 4 rejected candidates and why. |
+| `build_corpus.py` | Corpus from both pinned workspaces' `symbols.db` + `content.db`, design §5.2 v1 card template. Emits `golden_set_leak_check`. |
+| `bench.py` | `sanity` (pooling gate), `embed` (llama-server HTTP), `rank` (MRL slice → quantize → cosine → threshold). |
+| `bm25_baseline.py` | Lexical baseline arm from Miller's real `search --json` CLI. |
+| `summarize.py` | Collects scorer reports into one comparison table. |
+| `run-bench.sh` | Orchestrates download→verify→corpus→BM25→sanity→embed→rank→score→summarize. |
+| `README.md` | Harness contract, corpus contract, trap documentation, threshold and truncation policy. |
+| `.gitignore` | `.cache/` + `runs/` — placed **inside** `eval/model-bench/`; repo-root `.gitignore` untouched. |
+
+Also created `docs/findings/2026-07-19-model-benchmark.md`; modified `eval/retrieval-eval/README.md`
+(integration note only, per ownership).
+
+Corpus: **34,481 units** (25,815 symbol cards + 8,666 docs/config chunks) across both pinned
+workspaces. `doc_id` = repo-relative file path, matching the dev set — verified the golden set
+carries zero `#Symbol` suffixes, so ranking is file-granular with best-unit-per-file collapse.
+
+## Verification
+
+| invariant | scope | command | result |
+| --- | --- | --- | --- |
+| Golden-set exclusion (hard gate) | corpus + every arm | manifest `golden_set_leak_check`; direct scan of corpus + all 24 results files | **PASS** — 0 corpus units and 0 ranked entries under `eval/`/`.razorback/`/`.claude/` across all arms |
+| Pooling sanity per candidate (hard gate) | 3 candidates | `bench.py sanity` | **PASS** ×3 — Qwen3 0.4487, bge 0.1677, arctic 0.1973 (threshold 0.10); dims match declared |
+| Pooling gate actually bites (negative control) | Qwen3 forced `cls` | `bench.py sanity`, wrong pooling | **PASS** — margin 0.0560 = FAIL, **exit code 3** |
+| Scorer runs green (hard gate) | 24 arms | `retrieval-eval score` | **PASS** — 24/24 scored, 0 failures, 0 `missing_results` |
+| Pin supported by completed lanes (hard gate) | all lanes | see metrics | **PASS** — 12 Qwen3 + 8 fallback + 4 BM25 arms all complete |
+| sha256 integrity re-verify | 4 artifacts | warm-cache re-verification | **PASS** ×4 |
+| sha256 mismatch aborts (negative control) | 1 artifact | appended bytes, re-hashed, restored | **PASS** — mismatch detected; artifact restored to pinned sha |
+| Miller build unaffected | repo | `dotnet build Miller.slnx -c Release` | **PASS** — 0 warnings, 0 errors |
+| Miller tests unaffected | repo | `scripts/test.sh` | **PASS** — 3617 passed, 0 failed, 1 skipped, 29s |
+| Script lint | 5 scripts | `py_compile` ×4, `bash -n` | **PASS** |
+
+Timestamp: 2026-07-19, macos-arm64 (Apple Silicon, Metal), llama.cpp `b10068`.
+
+### Hard-gate metrics (`topk` policy — the BM25-comparable one)
+
+| arm | recall@10 | nDCG@10 | worst-lang nDCG | prose recall | ident recall | ident nDCG | clusters |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `bm25-symbol` (baseline) | 0.4474 | 0.3820 | csharp 0.3183 | 0.2234 | 1.0000 | 1.0000 | 10/14 |
+| **`qwen3-1024d-int8`** (pin) | **0.6184** | **0.5454** | csharp **0.5227** | **0.4787** | 1.0000 | 0.9980 | **14/14** |
+| `qwen3-512d-int8` | 0.5987 | 0.5356 | csharp 0.4976 | 0.4255 | 1.0000 | 0.9759 | 14/14 |
+| `qwen3-256d-int8` | 0.5592 | 0.5161 | markdown 0.4077 | 0.4149 | 1.0000 | 0.9519 | 14/14 |
+| `bge-384d-int8` (fallback pin) | 0.5724 | 0.4879 | rust 0.4595 | 0.3617 | 1.0000 | 0.9977 | 13/14 |
+| `arctic-384d-int8` | 0.5658 | 0.4482 | csharp 0.4186 | 0.4043 | 1.0000 | 0.9516 | 12/14 |
+
+**Identifier non-inferiority:** every arm holds recall@10 = 1.0000, matching the baseline exactly.
+The pin gives up 0.0020 nDCG (ordering only). Identifier nDCG degrades monotonically as dims shrink
+(0.9980 → 0.9759 → 0.9519) — an independent argument against 256d. In production the bar is easier
+still: lexical output stays byte-identical and semantic fuses on top, so hybrid cannot fall below
+lexical here.
+
+**int8 is free:** within 0.0002 nDCG of f32 at every dims lane; identical to 4dp at 1024d.
+
+### Report-only metrics
+
+| candidate | model load | corpus embed (34,481 units) | units/sec | warm query embed |
+| --- | --- | --- | --- | --- |
+| Qwen3-0.6B f16 | 13.2s cold / 1.0s warm | 659.5s | 52.3 | 11.0 ms |
+| bge-small-en-v1.5 f32 | 10.6s | 153.9s | 224.0 | 3.9 ms |
+| arctic-embed-s f16 | 0.5s | 136.5s | 252.7 | 3.5 ms |
+
+Warm query embed (11.0 ms) sits well inside the design's 10–150 ms target. Initial build is the risk:
+52 units/sec extrapolates a 500k-unit workspace to ~2.7 hours against §5.2's "minutes not hours".
 
 ## Files changed
 
-- `src/Miller.Dashboard/Components/WorkspaceRemoveConfirm.razor` — Cancel is now
-  `<button type="button" class="subtle-link" data-close-details>Cancel</button>`; `CancelHref` parameter dropped.
-  Header comment corrected: it claimed "no JS", which the delegated Cancel handler makes false.
-- `src/Miller.Dashboard/Components/WorkspaceDetailPanel.razor` — dropped the `CancelHref` argument only.
-- `src/Miller.Dashboard/Components/WorkspaceIndex.razor` — notice paragraph gains `data-notice` +
-  `data-notice-tone="ok|danger"` (bound to the existing `NoticeIsError`).
-- `src/Miller.Dashboard/Components/{WorkspacesShell,WorkspaceShell,NotFoundPage}.razor` — theme button renders
-  both `theme-label-dark`/`theme-label-light` spans; `id="theme-toggle-label"` removed.
-- `src/Miller.Dashboard/wwwroot/js/dashboard-site.js` — delegated `data-close-details` handler;
-  `mirrorNoticeAsToast()` on DOMContentLoaded; `updateThemeButton` no longer writes the label, now only
-  reflects `aria-pressed` (true when dark) across all `[data-toggle-theme]` buttons.
-- `src/Miller.Dashboard/wwwroot/dashboard.css` — theme-switch label visibility per `html[data-theme]`.
-- `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` — 6 new tests.
-- `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` — **unowned**, minimal intent-preserving update (see below).
-- `docs/plans/2026-07-16-dashboard-ux-fixes.md` — Task 7 checkboxes ticked.
+Created: `eval/model-bench/{bench-pins.json,build_corpus.py,bench.py,bm25_baseline.py,summarize.py,run-bench.sh,README.md,.gitignore}`,
+`docs/findings/2026-07-19-model-benchmark.md`.
+Modified: `eval/retrieval-eval/README.md` (integration note only), `.razorback/sdd/task-7-report.md`.
 
-## Miller calls / API-shape evidence
+Nothing from `.cache/` is staged — `git check-ignore -v` confirms `eval/model-bench/.gitignore:2`
+ignores `.cache/`. The 6 other modified `.razorback/sdd/task-*-report.md` files were already dirty at
+session start, are not mine, and are excluded from the commit.
 
-Structure came from targeted greps over live worktree bytes. The files in scope were rewritten by
-T1/T3/T5/T6 after the Miller index baseline, so per the contract inputs the worktree bytes — not the index —
-are the trustworthy source for them; Miller's index would have described superseded code.
+## Miller calls used
 
-- `grep -rn "CancelHref" src/ tests/` → exactly 3 sites: the `<a href>` (`WorkspaceRemoveConfirm.razor:14`),
-  the `[Parameter]` declaration (`:22`), and the single `WorkspaceDetailPanel` argument (`:30`). No test
-  referenced it by that name.
-- `grep -rn "theme-toggle-label" src/Miller.Dashboard/Components …` → 3 shells + `dashboard-site.js:97`.
-  Test-tree matches were `bin/Release` build artifacts only, not source.
-- Shapes used, all read from source rather than guessed:
-  - `showDashboardToast(message, tone)` — `dashboard-site.js:151`; className is
-    `'dashboard-toast-' + (tone || 'danger')`. Existing callers pass exactly `'ok'` / `'danger'`.
-  - `NoticeIsError` — `WorkspaceIndex.razor:202`, a closed set of 4 error codes.
-  - `RenderComponentAsync<TComponent>(Dictionary<string, object?>)` — test helper at line 1084, with a
-    `FixedAntiforgeryStateProvider` so `<AntiforgeryToken/>` renders outside a real request.
-  - `theme-init.js` stamps `data-theme` (stored value, else `prefers-color-scheme`) pre-paint — the
-    contract the CSS switch keys off.
+`search --mode symbol|auto --json` against both registered workspaces (82 queries × 2 modes × 2
+policies) as the BM25 baseline arm — this doubles as the CLI API-shape evidence. `sqlite3` read-only
+against `.miller/symbols.db` and `.miller/content.db` for the corpus and the card-eligibility matrix.
 
-## Self-review
+## API-shape evidence
 
-- **Toast tone classes:** `.dashboard-toast-danger` has no CSS rule — verified this is by design: the base
-  `.dashboard-toast` is danger-coloured and `.dashboard-toast-ok` (line 1570) overrides it. `'ok'`/`'danger'`
-  therefore match the existing convention exactly; no CSS parity work needed.
-- **`.subtle-link` on a `<button>`** (contract flagged this): verified class-based, not anchor-scoped —
-  `.theme-switcher-btn, .api-link, .subtle-link, .refresh-button` share one rule that sets font-family,
-  size, border, background and padding explicitly. `<summary class="subtle-link">` in this same component
-  already proves non-anchor elements render correctly. No visual regression, no CSS change required.
-- **Cancel click vs T5's stretched row link:** `.ws-row-actions` is `position: relative; z-index: 1`
-  (dashboard.css:581) while the `.workspace-name::after` overlay has no z-index — the actions cell sits above
-  it, so Cancel cannot leak into row navigation. `.ws-row-actions:has(details[open])` keeps the form visible.
-- **Details state stays consistent:** setting `details.open = false` fires `toggle`, which the existing
-  `rememberIssueDetailsState` listener already handles → the key leaves `openIssueDetails`, so a later morph
-  swap will not re-open the cancelled confirm.
-- **No-JS degradation:** Cancel falls back to re-clicking the summary (native `<details>`); the theme label
-  defaults to "Dark", matching the light-theme colours the CSS serves unstamped.
-- **Load-bearing code left untouched:** `htmx:beforeSwap` 304 guard, `htmx:configRequest` headers, `/` keydown,
-  `rememberIssueDetailsState`, morph attrs, table roles. Handlers were appended, never reordered.
+- **`miller search --json`** returns a bare JSON array of `{name, kind, file, line, signature, score,
+  symbol_id}`. `file` is the repo-relative path, so the mapping into the golden set's `doc_id` space
+  is identity after exclusion filtering. Verified by direct invocation.
+- **`symbols.db`** — verified schema for `symbols` (incl. `parent_symbol_id`, `doc_comment`,
+  `is_test`) and `files`. **`content.db`** — `content_chunks` with `content_kind` values
+  `workspace_docs|workspace_config|workspace_source|external_file`.
+- **llama.cpp `b10068`** (`https://github.com/ggml-org/llama.cpp/releases/download/b10068/llama-b10068-bin-macos-arm64.tar.gz`,
+  sha256 `13aa2d40…`): archive listed — contains `llama-server`, **not** `llama-embedding`.
+- **`Qwen/Qwen3-Embedding-0.6B-GGUF`** (Apache-2.0, official Qwen org): only `f16` and `Q8_0`
+  published — **no f32 GGUF exists**. f16 sha256 `421a27e5…`.
+- **`CompendiumLabs/bge-small-en-v1.5-gguf`** (MIT declared, MIT base): f32 sha256 `bf40c42a…`.
+- **`ChristianAzinn/snowflake-arctic-embed-s-gguf`** (Apache-2.0 declared, Apache-2.0 base): f16
+  sha256 `6e3d14df…`. Snowflake publishes **no official GGUF for the -s size** — the org ships
+  safetensors + ONNX, and its only gguf-tagged repo is arctic-embed-**m-v1.5**, a different model.
+- **`llama-server` flags/endpoints** verified from `tools/server/README.md`:
+  `--pooling {none,mean,cls,last,rank}`, `--embedding`, `--embd-normalize`, and three endpoints
+  (`/v1/embeddings`, `/embeddings`, `/embedding`).
 
 ## Judgment calls
 
-1. **`aria-pressed` written per-button via `[data-toggle-theme]`, not by id.** The three shells each render
-   `id="theme-toggle"`, so a `getElementById` write is fine today but silently breaks if a page ever renders
-   two toggles. The delegated selector already in use is the safer, equally trivial signal. JS-only (SSR cannot
-   know the theme), so a no-JS page correctly exposes a plain button.
-2. **Class naming reads as "the label whose text is X", not "shown when X".** Matches the task spec literally
-   (`<span class="theme-label-dark">Dark</span>`) and preserves current semantics: the button names the theme
-   you switch TO, so `theme-label-dark` ("Dark") shows while the light theme is active.
-3. **CSS base rule hides `.theme-label-light` rather than keying both labels off `html[data-theme]`.** With no
-   attribute stamped (JS disabled), attribute-only rules would hide *both* labels and render an empty button.
-   The base rule keeps the previous SSR default ("Dark") in that case.
-4. **Left the "Registry unavailable" paragraph without `data-notice`.** It is a persistent degradation state,
-   not a transient post-redirect-get outcome; mirroring it into a self-dismissing toast would be wrong.
-5. **`querySelector` (single) for the notice mirror** — the notice is a single post-redirect-get paragraph;
-   a loop would imply a multiplicity that cannot occur.
-6. **`NotFoundPage` theme button included** under the lead-granted ownership extension; covered by the new
-   dual-label test via direct component render (the existing `DashboardNotFoundTests` drives it over HTTP and
-   still passes unchanged).
-
-## Plan mismatch
-
-None material. The plan's Task 7 file list named two shells; the third (`NotFoundPage.razor`, added by T3)
-carries the same theme button and was covered by the lead-granted extension in the brief. No new abstractions
-were introduced — all three behaviors landed on existing seams (delegated click handler, DOMContentLoaded hook,
-CSS attribute selector).
-
-## Unowned-test breakage (flagged)
-
-`tests/Miller.Tests/Server/DashboardRegistryReadTests.cs::WorkspaceDetailPanel_RendersRemoveConfirmForm`
-asserted `href="/workspace?workspace_id=ws-a"` — precisely the Cancel navigation Task 7 removes. Applied the
-minimal intent-preserving update: kept every other assertion (`action`, `workspace_id`, `Confirm remove`,
-antiforgery token) and swapped the href assertion for `data-close-details` + `DoesNotContain(">Cancel</a>")`.
-The test's stated intent ("the detail page carries the same expandable confirm form") is unchanged; its stale
-comment about Cancel's destination was removed with the line it described.
+1. **`llama-server` HTTP instead of `llama-embedding`.** The prebuilt archive has no
+   `llama-embedding` — it lives under `examples/` and upstream `release.yml` sets
+   `-DLLAMA_BUILD_EXAMPLES=OFF`. Building from source would have weakened the pin. Approved by lead.
+2. **Two threshold policies per lane.** A thresholded semantic arm emits ~1.5 docs/query, capping
+   recall@10 by construction, while the BM25 baseline is unthresholded top-10 (what Miller's CLI
+   actually shows a user). Scoring those against each other would understate every model and risk a
+   wrong pin. `topk` carries recall/nDCG; `thr` carries negatives/precision. Approved by lead; every
+   table in the findings doc labels its policy.
+3. **Card eligibility derived, not hardcoded.** Design §5.2 requires kind/data-driven eligibility. A
+   language earns cards only where a real extract shows ≥1 code kind; the full matrix is published in
+   the corpus manifest. Outcome excludes exactly json/markdown/yaml/toml — the design's predicted
+   list, reached as evidence rather than assumption. Cut the corpus 75,799 → 34,481 units.
+4. **Per-model input truncation.** Both fallbacks are 512-token and `llama-server` rejects
+   over-length input with HTTP 400 rather than truncating (hit as a real failure mid-run). Capped at
+   `context_length × 1.6` chars; 22.0% of units (7,603) truncated for the fallbacks, 0% for Qwen3.
+   Recorded in `.perf.json` and reported as a genuine capability handicap on the fallback numbers.
+5. **Recommending 1024d against the design's favored 256d.** §2.4 named "256d int8" as favored. 256d
+   measured −9.6% relative recall and −22% relative worst-language nDCG, which the language-parity
+   rule treats as a regression. Recommending 1024d int8, with 512d int8 as the storage-pressure
+   compromise, and flagging the design amendment explicitly.
+6. **Ran a threshold sweep beyond the brief.** Negatives failed 6/6 on every arm at the default, so a
+   bare "negatives fail" would have been useless to P1. The sweep localizes the tradeoff and shows
+   floor 0.45 is strictly free.
 
 ## Concerns
 
-- None blocking.
-- Note for Task 10's visual sweep: both theme spans now exist in the DOM, and the hidden one contributes no
-  flex gap only because it is `display: none`. If a future rule sets a `gap` on `.theme-switcher-btn`, keep
-  the hidden label at `display: none` rather than `visibility: hidden`.
+1. **No arm rejects a single negative query** at the default policy (FP 1.0000, 6/6, all 24 arms).
+   The shipped 0.35 floor is dominated. Sweep on the pin lane: 0.45 is free (FP → 0.667 at identical
+   recall/nDCG); 0.55 gives FP 0.333 at recall 0.5658, still well above BM25's 0.4474; full
+   abstention needs 0.65, where recall (0.3947) falls **below** the lexical baseline. **P1 blocker
+   for any "semantic can decline to answer" claim.** Does not affect the model/dims/quant pin — the
+   sweep moves all lanes together.
+2. **Qwen3 loses docs-like and markdown** to BM25 *and* to both fallbacks (docs_like 0.750/0.533 vs
+   BM25 1.000/0.687; markdown 0.750/0.533 vs bge 1.000/0.741). Suspected corpus-shape cause — docs
+   enter as ~1,200-char windows of ~7KB files while BM25 scores whole files — not the encoder. But
+   `n=4` docs_like and `n=4` markdown is far too small to conclude; needs a larger docs slice in P1.
+3. **Initial-build throughput.** 52 units/sec puts a 500k-unit workspace near 2.7 hours against
+   §5.2's "minutes not hours". Re-measure against the real sidecar's batching before repeating that
+   claim; the harness's per-batch HTTP round-trips make these numbers a floor.
+4. **Neither fallback has a first-party GGUF.** Both pinned artifacts are community conversions whose
+   declared licenses match their base models. P1 owns whether that is acceptable for a shipped escape
+   hatch, or whether the sidecar should convert from first-party weights itself.
+5. **Dev-set tuning only.** These numbers come from the visible dev set, which is what it is for. The
+   sealed acceptance set was not touched and must not be during P1 tuning.

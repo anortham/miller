@@ -1,0 +1,12 @@
+{
+  "version": "0.1.9",
+  "binary": "sqlite-vec",
+  "note": "Pinned sqlite-vec loadable-extension assets for the P0 Native-AOT hard-gate spike (scripts/spike-sqlite-vec.sh). Keyed by .NET RID. sha256 values were computed from the downloaded assets and cross-checked against the release's checksums.txt. The Windows asset is a .tar.gz, not a .zip.",
+  "urlTemplate": "https://github.com/asg017/sqlite-vec/releases/download/v{VER}/{asset}",
+  "assets": {
+    "osx-arm64": { "name": "sqlite-vec-{VER}-loadable-macos-aarch64.tar.gz",  "member": "vec0.dylib", "sha256": "8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29" },
+    "osx-x64":   { "name": "sqlite-vec-{VER}-loadable-macos-x86_64.tar.gz",   "member": "vec0.dylib", "sha256": "53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713" },
+    "linux-x64": { "name": "sqlite-vec-{VER}-loadable-linux-x86_64.tar.gz",   "member": "vec0.so",    "sha256": "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7" },
+    "win-x64":   { "name": "sqlite-vec-{VER}-loadable-windows-x86_64.tar.gz", "member": "vec0.dll",   "sha256": "51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983" }
+  }
+}

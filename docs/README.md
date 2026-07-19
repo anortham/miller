@@ -10,7 +10,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`agent-guidance.md`](agent-guidance.md) - long-form agent reference: full workflow catalog, subagent-dispatch primer, and per-tool parameter detail relocated from the embedded ≤1,900-char ServerInstructions core.
 - [`agent-setup-snippet.md`](agent-setup-snippet.md) - copy-paste CLAUDE.md/AGENTS.md/Cursor-rule routing snippet that keeps agents preferring Miller over shell grep when harnesses defer MCP tool schemas.
 - [`adr/ADR-0001-guidance-delivery-channels.md`](adr/ADR-0001-guidance-delivery-channels.md) - accepted decision record for the three guidance channels (ServerInstructions discovery core, tool-description usage contracts, NextStepHint nudges) and their budgets.
+- [`adr/ADR-0003-semantic-retrieval-ownership.md`](adr/ADR-0003-semantic-retrieval-ownership.md) - accepted decision record moving optional local semantic retrieval to Miller and reserving fleet-level semantics for Eros.
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
+- [`contracts/canary-telemetry-v1.md`](contracts/canary-telemetry-v1.md) - Canary telemetry contract v1 — randomized holdout experiment fields for the semantic rollout.
 - [`contracts/workspace-status-v1.md`](contracts/workspace-status-v1.md) - active workspace status JSON contract.
 - [`contracts/workspace-health-v1.md`](contracts/workspace-health-v1.md) - active workspace health JSON contract.
 - [`contracts/workspace-onboarding-v1.md`](contracts/workspace-onboarding-v1.md) - active telemetry-derived workspace onboarding JSON contract.
@@ -27,6 +29,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/metrics-json-v1.md`](contracts/metrics-json-v1.md) - active metrics JSON contract for churn, clone groups, and complexity ranking.
 - [`contracts/metrics-history-v1.md`](contracts/metrics-history-v1.md) - active metric-history JSON contract for `miller metrics history` trend reads over the append-only `history.db` sidecar.
 - [`contracts/rules-v1.md`](contracts/rules-v1.md) - active `miller rules` output contract for the instruction tier, plus the per-harness rules-file formats with the official doc URL each was verified against.
+- [`plans/2026-07-19-miller-semantic-integration-design.md`](plans/2026-07-19-miller-semantic-integration-design.md) - authoritative program design for Miller's optional local semantic layer (sidecar binary, vector artifact, hybrid retrieval, phases P0-P6).
+- [`plans/2026-07-19-p0-governance-and-gates-plan.md`](plans/2026-07-19-p0-governance-and-gates-plan.md) - approved phase-0 plan for the semantic program: boundary docs, telemetry stamping, gates, eval harness, and model benchmark.
+- [`findings/2026-07-19-sqlite-vec-aot-spike.md`](findings/2026-07-19-sqlite-vec-aot-spike.md) - P0 hard-gate evidence: sqlite-vec v0.1.9 under Native AOT per release RID (osx-arm64 PASS; other RIDs via the isolated CI matrix job).
 - [`plans/2026-07-07-metric-history-design.md`](plans/2026-07-07-metric-history-design.md) - design record for the P4 metric-history/trends slice (`history.db` sidecar, hybrid converge/heavy-arm snapshots, dashboard sparklines).
 - [`plans/2026-07-07-metric-history-implementation-plan.md`](plans/2026-07-07-metric-history-implementation-plan.md) - implementation plan for the P4 metric-history/trends slice.
 - [`plans/2026-06-26-miller-five-gap-implementation-plan.md`](plans/2026-06-26-miller-five-gap-implementation-plan.md) - historical implementation plan for metrics, empty-state recovery, leader handoff, dashboard panels, and clone/complexity discovery; the metrics MCP-tool portions were superseded by the CLI-only metrics contract.

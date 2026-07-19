@@ -132,6 +132,39 @@ jobs:
             exit 1
           }
 
+  # P0 HARD GATE for the semantic integration program: sqlite-vec must load and function under a
+  # Native-AOT-published binary on every RID Miller releases for. This job is deliberately its own
+  # `needs:` island — it gates no other job and is gated on none — so a gate failure is a loud,
+  # isolated signal rather than a blocker on the product build. It builds spike/SqliteVec.AotSpike,
+  # which is NOT part of Miller.slnx. Making it a REQUIRED BRANCH CHECK is a user-owned
+  # branch-protection change; see docs/findings/2026-07-19-sqlite-vec-aot-spike.md.
+  sqlite-vec-aot-spike:
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-arm64
+            runs-on: macos-15
+          - rid: osx-x64
+            runs-on: macos-15-intel
+          - rid: linux-x64
+            runs-on: ubuntu-latest
+          - rid: win-x64
+            runs-on: windows-2025
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - uses: actions/setup-dotnet@v5.3.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: sqlite-vec Native-AOT spike (${{ matrix.rid }})
+        shell: bash
+        run: bash scripts/spike-sqlite-vec.sh --rid ${{ matrix.rid }}
+
   windows-scale-smoke:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-2025

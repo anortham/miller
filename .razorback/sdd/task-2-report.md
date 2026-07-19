@@ -1,154 +1,173 @@
-# Task 2 — Copy & data presentation (pluralization, unresolved hashes, pattern list)
+# Task 2 — Telemetry version stamping — Report
 
 **Status:** COMPLETE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
-**Branch:** `worktree-dashboard-ux-fixes` @ base commit `780b51d` (working tree dirty — Task 3 in flight in parallel)
-**Commit SHA:** none — parallel-lead-commit (no `git add` / `git commit` run)
+**Commit SHA:** none - parallel-lead-commit
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/semantic-integration`, branch `worktree-semantic-integration`, base commit `87f9b1d` (lead has since committed sibling tasks; HEAD now `700cc50`)
 
-> Note: this path previously held a stale report from the earlier `2026-07-08-dashboard-polish` plan
-> (worktree `.worktrees/dashboard-polish`, base `6207978`). Overwritten per the task brief, which names this
-> path for the current plan's Task 2.
+> Note: this path previously held a stale report from the `dashboard-ux-fixes` plan (worktree
+> `.claude/worktrees/dashboard-ux-fixes`, base `780b51d`). Overwritten per the task brief, which names this path
+> for the current semantic-integration plan's Task 2.
 
-## What I implemented
+## Implementation summary
 
-### 1. Pluralization (`DashboardFormat.cs:14-19`)
-Added an optional third parameter: `FormatCount(long value, string singular, string? plural = null)`.
-Two-arg behaviour is byte-identical (`plural ?? singular + "s"`), so all 22 existing call sites keep their
-current output. `WorkspaceOnboardingPanel.razor:36` now passes `"common miss", "common misses"` — fixing
-"10 common misss".
+Added a nullable `miller_version` TEXT column to the STRICT `tool_telemetry` table and stamped every write from
+the running binary with `MillerVersion.Current`.
 
-### 2. Unresolved hot targets collapse (`WorkspaceOnboardingPanel.razor:68-93, 148-149`)
-`Onboarding.HotTargets` is partitioned by a new `IsNamed` predicate (`!string.IsNullOrWhiteSpace(Name)`).
-Named targets render exactly as before. Unresolved targets collapse into ONE trailing row:
-`N unresolved targets` + summed calls, detail `hashes not present in the current index`. When every target
-is unresolved, the summary row is the only row (the `No hot targets.` empty state still only fires on a
-genuinely empty list).
+1. **DDL** (`TelemetryLedger.cs:32-33`) — `miller_version TEXT` appended to `CreateTableDdl`, so freshly created
+   DBs get the column at `CREATE TABLE` time. Nullable and TEXT, both required by STRICT + the shared-DB rule.
+2. **Additive migration** (`TelemetryLedger.cs:153`) — one added line, `EnsureTextColumn(connection, "miller_version")`,
+   alongside the existing `error_message` / `error_detail` calls. No parallel helper written, per the brief.
+3. **Concurrent-adder tolerance** (`TelemetryLedger.cs:168-187`) — the ALTER half of `EnsureTextColumn` was
+   extracted into `internal static AddTextColumnToleratingConcurrentAdder` and its `ExecuteNonQuery` wrapped in a
+   `catch (SqliteException) when (message contains "duplicate column name")`. The pragma check is now explicitly a
+   fast path; the catch closes the TOCTOU window between it and the ALTER.
+4. **Stamping** (`TelemetryLedger.cs:83, 86, 107-109`) — `miller_version` added to the prepared INSERT's column
+   list and `$version` to its VALUES. Because the running build's version is a process constant, the parameter is
+   bound **once at prepare time** rather than re-assigned on every `Record()` call — the ledger's INSERT is on the
+   hot path and the existing comment there already flags that intent.
 
-### 2b. Hot-target metric counts only named targets (fix round — `WorkspaceOnboardingPanel.razor:32, 148-150`)
-Lead-accepted fix round for my own concern #1. The metric band's "resolved from hashes" figure was
-`Onboarding.HotTargets.Count` — every target, resolved or not. Now `FormatCount(NamedHotTargetCount, "hot target")`,
-where `NamedHotTargetCount => Onboarding is null ? 0 : Onboarding.HotTargets.Count(IsNamed)` reuses the same
-`IsNamed` predicate the list partition uses, so the metric and the list can never disagree. Label unchanged.
-All-unresolved renders "0 hot targets" — the honest number; the count still surfaces in the summary row.
+Old writers keep working unchanged: their INSERTs name columns explicitly and `miller_version` is nullable, so
+their rows simply land with NULL in the new column.
 
-### 3. Pattern inventory sub-line (`PatternInventoryPanel.razor:37, 47-69`)
-Replaced the three-clause `;`-separated sub-line with `FamilyDetails(family)`, joined by ` · `:
-- `languages: …` — always
-- `N patterns` — only when `PatternCount > 1` (via `FormatCount`, so the "1 pattern" noise is gone)
-- `captures: …` — only when `HasInformativeCaptures`: non-empty AND not a single capture equal to the
-  family's trailing segment (`json.property` + `["property"]` → omitted; `dotnet.route` + `["route","verb"]` → shown).
+## Judgment calls
 
-## Verification ledger
+- **`src/Miller.Server/Telemetry/TelemetryRecord.cs` — NOT modified (chose ledger-layer stamping over a record
+  field).** The brief listed a new field on `TelemetryRecord` plus edits to every construction site. I stamped in
+  the ledger instead. Reasons: (a) the version is a single process-global constant, so threading it through a
+  17-parameter record and every construction site is churn that carries no information; (b) it makes the
+  acceptance criterion *"no null versions from current-binary writes"* true **by construction** — a record field
+  could be left unset at any current or future construction site, silently producing NULL cohort rows; (c) it
+  binds once at prepare time instead of per-write on the hot path. `inspect target=TelemetryRecord depth=full`
+  showed the only production construction sites are `TelemetryLedger.cs:200` and `TelemetryScope.cs:280` — both
+  funnel through `TelemetryLedger.Record`, so ledger-layer stamping covers 100% of writers. No Task 3-owned file
+  (`EditTool.cs` / `EditService.cs`) constructs a `TelemetryRecord`, so the ownership-conflict fallback the brief
+  anticipated did not arise; this choice was made on merit, not to dodge a conflict. Net effect: the produced
+  contract (`miller_version` column, populated on every current-binary row) is exactly what the brief specified.
+- **`TelemetryLedger.cs:168` — extracted `AddTextColumnToleratingConcurrentAdder` rather than inlining the
+  try/catch.** My first concurrency test was **vacuous** and I caught it during self-review: because the new DDL
+  creates `miller_version` at `CREATE TABLE` time, a fresh DB never reaches the ALTER, so 8 racing `Open()` calls
+  passed even with the try/catch deleted. Seeding a legacy (pre-column) table made the ALTER reachable but the
+  race still would not reproduce deterministically — the barrier sits before `connection.Open()` + pragmas + DDL,
+  which staggers the threads well before the check→ALTER window. Rather than ship a probabilistic test, I made the
+  invariant directly testable, which the brief explicitly permits ("or unit-test the try/catch path directly").
+  Verified non-vacuous by mutation (below). The parallel-`Open()` test is retained as a lower-value
+  no-crash/exactly-one-column smoke test.
 
-| Invariant | Scope | Command | Result | Timestamp |
-|---|---|---|---|---|
-| Red before green (compile red) | focused | `dotnet test … --filter "(Category!=Scale)&(FullyQualifiedName~DashboardActivityFeedTests\|FullyQualifiedName~DashboardFormat)"` | FAIL — CS1501 no 3-arg `FormatCount` (×2) | 2026-07-16 |
-| Red before green (behavioural) | focused | same | FAIL — 4 failed / 70 passed: no "2 common misses", no "3 unresolved targets", no "2 unresolved targets", "captures:" still present | 2026-07-16 |
-| Green after implementation | focused | same | **PASS — 74/74**, 188 ms | 2026-07-16 |
-| Fast suite | worker scope | `scripts/test.sh` | 2 failed / 3535 passed — both failures in `DashboardNotFoundTests` (Task 3's untracked, mid-flight file) | 2026-07-16 |
-| Fast suite excl. Task 3 in-flight | worker scope | `dotnet test … --filter "(Category!=Scale)&(FullyQualifiedName!~DashboardNotFoundTests)"` | **PASS — 3533/3533**, 21 s | 2026-07-16 |
-| Zero-warning Release build | worker ceiling | `dotnet build Miller.slnx -c Release` | **PASS — 0 Warning(s), 0 Error(s)** | 2026-07-16 |
-| Duplicate-assignment re-verify | focused | same focused filter | **PASS — 74/74**, 269 ms (work intact at `780b51d`, unaffected by Task 3's shared-tree edits) | 2026-07-16 |
-| Fix round — red first | focused | same focused filter | FAIL — 2 failed / 72 passed: no `<strong>1 hot target</strong>`, no `<strong>0 hot targets</strong>` | 2026-07-16 |
-| Fix round — green | focused | same focused filter | **PASS — 74/74**, 243 ms | 2026-07-16 |
-| Fix round — zero-warning build | worker ceiling | `dotnet build src/Miller.Dashboard/Miller.Dashboard.csproj -c Release` | **PASS — 0 Warning(s), 0 Error(s)** | 2026-07-16 |
+## Verification
 
-The only fast-suite failures (`DashboardNotFoundTests.WorkspacesShell_RendersVersionFooterAndNewTabJsonLinks`,
-`…WorkspaceShell_RendersVersionFooterAndNewTabJsonLinks`) are in an **untracked file created by Task 3**
-(`git status` confirms `?? tests/Miller.Tests/Server/DashboardNotFoundTests.cs`), asserting a version footer
-Task 3 has not finished wiring. Excluding that class, my scope is fully green. Not my files, not my regression.
+| | |
+|---|---|
+| **Invariant** | Additive version stamping without breaking older concurrent writers |
+| **Assigned scope** | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~Telemetry"` |
+| **Result** | **PASS** — 120 passed / 0 failed / 0 skipped (4s) |
+| **Escalation ceiling** | `scripts/test.sh` (full fast suite) — required because this task touches ledger schema |
+| **Result** | **PASS on correctness** — 3617 passed / 0 failed / 1 skipped. The script's wall-clock tripwire fired (93s vs 30s ceiling); see below — not attributable to this task |
+| **Timestamp** | 2026-07-19 |
 
-## Files changed (all within my ownership)
+### Fast-suite wall-clock tripwire (investigated, not mine)
 
-- `src/Miller.Dashboard/DashboardFormat.cs` (+8/−4)
-- `src/Miller.Dashboard/Components/WorkspaceOnboardingPanel.razor` (+19/−2)
-- `src/Miller.Dashboard/Components/PatternInventoryPanel.razor` (+29/−7)
-- `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` (+119) — 5 new render tests
-- `tests/Miller.Tests/Server/DashboardFormatTests.cs` (+27) — 3 new `FormatCount` tests (file already existed;
-  it had zero `FormatCount` coverage, so I extended it rather than creating a new file per the task note)
+`scripts/test.sh` exited non-zero on its budget tripwire — `fast suite took 93s (> 30s ceiling)` — while reporting
+0 failures. I did not hand-wave this, since the tripwire exists precisely to catch a slow test leaking into the
+default suite. Evidence it is not this task's doing:
+
+- The entire `TelemetryLedgerTests` class — all 23 tests, including all 7 new ones — runs in **285 ms** in Release.
+  My contribution to the 93s is ~0.3%.
+- The one skipped test is `BlazorNamespaceCatalogTests.QualifiedNames_ExtendedLengthWorkspaceRootResolvesProjectNamespace`,
+  unrelated to telemetry.
+- The run included a cold Release build of five projects, and five sibling P0 agents were compiling and running
+  tests concurrently on the same machine, so wall-clock is heavily contended.
+
+The lead should re-run `scripts/test.sh` on a quiet machine after the parallel batch lands to get a trustworthy
+timing number. Flagging rather than dismissing: if it still exceeds 30s when nothing else is running, a genuinely
+slow test leaked in from some task in this batch and needs the `Category=Scale` trait.
+
+### Mutation checks (each confirms a test is load-bearing, not decorative)
+
+- **TDD baseline (red first):** the 6 new tests failed pre-implementation with
+  `SQLite Error 1: 'no such column: miller_version'` and a column-count assertion `Expected: 1 / Actual: 0`.
+- **Removing the `try/catch`** → `AddTextColumn_ToleratesAColumnAnotherProcessAlreadyAdded` FAILS with
+  `duplicate column name: miller_version`. Restored → passes. (This check is what exposed the earlier vacuous
+  version of the concurrency test, which passed 3/3 runs with the catch deleted.)
+
+### Transient build break observed mid-run (not mine)
+
+Two `dotnet test` invocations failed to compile with `CS0103: FailureReasonMetadataKey does not exist` and
+`CS0122: EditService.FailureUnknown is inaccessible` in `src/Miller.Server/Tools/EditTool.cs`. That is Task 3's
+in-flight edit to a shared assembly, not a defect in this task's changes; it cleared on retry and all verification
+above ran green. I touched no file outside my ownership.
+
+## Files changed
+
+| File | Change |
+|---|---|
+| `src/Miller.Server/Telemetry/TelemetryLedger.cs` | DDL column, `EnsureTextColumn` call, duplicate-column tolerance + helper extraction, INSERT column/param, class doc |
+| `tests/Miller.Tests/Server/TelemetryLedgerTests.cs` | 7 new tests + `SeedTableWithoutMillerVersion` / `ColumnCount` / `ReadMillerVersions` helpers |
+
+`src/Miller.Server/Telemetry/TelemetryRecord.cs` — intentionally unchanged (see judgment calls).
+
+### New tests
+
+| Test | Invariant |
+|---|---|
+| `Open_AddsMillerVersionColumn_ExactlyOnce_AcrossRepeatedOpens` | (a) migration idempotent across two opens |
+| `Open_MigratesAPreExistingTableThatLacksMillerVersion` | additive migration onto a legacy table, then a stamped row |
+| `AddTextColumn_ToleratesAColumnAnotherProcessAlreadyAdded` | (d) concurrent-adder tolerance (deterministic) |
+| `Open_FromManyProcessesConcurrently_LeavesExactlyOneMillerVersionColumn` | 8 racing opens: no throw, exactly one column |
+| `Record_StampsTheRunningMillerVersion` | (b) both `Record()` and `Measure()` scope rows carry `MillerVersion.Current` |
+| `Record_StampsAVersionStringOnly_NotQueryTextOrPaths` | privacy: no query text, no path separator in the field |
+| `OlderWriterInsert_NamingTheLegacyColumnList_StillSucceeds_AfterMigration` | (c) old-writer INSERT still valid, lands NULL |
 
 ## Miller calls used
 
 | Call | What it confirmed |
 |---|---|
-| `inspect(target='FormatCount', depth='full')` | Definition at `DashboardFormat.cs:14`; body `value.ToString("N0", …) + " " + (value == 1 ? singular : singular + "s")`; 22 dependents |
-| `trace(target='FormatCount', mode='refs', limit=50)` | All 22 call sites enumerated (ContextSavings ×3, WorkspaceDetail ×7, WorkspaceHealth ×2, WorkspaceLocalMetrics ×3, WorkspaceOnboarding ×5, WorkspaceTrends ×2). **Every one passes exactly 2 args** — no caller already passes a plural, so the optional param is safe |
-| `inspect(target='DashboardOnboardingTarget', depth='full')` | Positional record: `(string Confidence, string? Name, string? Kind, string? Path, int? Line, long Calls)` |
-| `inspect(target='DashboardPatternFamily', depth='full')` | Positional record: `(string Family, int PatternCount, long FactCount, IReadOnlyList<string> Languages, IReadOnlyList<string> Captures)` |
-| `inspect(target='DashboardWorkspaceOnboardingPanel', depth='full')` | `(string? WorkspaceId, string State, long TotalCalls, IReadOnlyList<string> StartHere, IReadOnlyList<DashboardOnboardingTarget> HotTargets, IReadOnlyList<DashboardOnboardingMiss> CommonMisses, IReadOnlyList<string> Notes, string? Error = null)` — used to construct test fixtures |
-| `inspect(target='DashboardPatternInventoryPanel', depth='full')` | `(string? WorkspaceId, string State, IReadOnlyList<DashboardPatternFamily> Families, string? Error = null)` |
-| `inspect(target='DashboardOnboardingMiss', depth='full')` | `(string Tool, string? Op, string Reason, long Calls)` |
-
-Supporting greps (non-shape): `grep -rn "unresolved_hash" src/ tests/` confirmed `"unresolved_hash"` is the
-`Confidence` value produced by `WorkspaceTargetHashResolver.cs:60` / `DashboardData.cs:1201` for name-less
-targets — i.e. `Name == null` and `Confidence == "unresolved_hash"` travel together, so partitioning on `Name`
-(per the approved plan) matches the data.
+| `inspect target=src/Miller.Server/Telemetry/TelemetryLedger.cs` | Symbol map: `EnsureTextColumn:151`, `Record:200`, `InsertRawForTest:425`, `CreateTableDdl:18` — matched the brief's line refs exactly |
+| `inspect target=TelemetryRecord depth=full` | Full 17-field positional shape + all references/callers; showed only 2 production construction sites, both funnelling through `TelemetryLedger.Record` |
+| `search query=MillerVersion mode=symbol` | Located `src/Miller.Server/MillerVersion.cs:13` |
+| `inspect target=MillerVersion depth=full` | **API shape**: `public static class MillerVersion` with `public static string Current { get; }` — a string property, not a method; never empty (falls back to assembly version then `"0.0.0"`) |
+| `inspect target=TelemetryScope` | Confirmed the `Measure` scope persists via `TelemetryLedger.Record` on dispose, so ledger-layer stamping covers the scope write path too |
 
 ## API-shape evidence
 
-No guessed shapes. Every record constructed in tests came from an `inspect … depth='full'` body listed above.
-`ImplicitUsings=enable` in `Directory.Build.props` supplies `System.Linq` to the generated Razor class
-(`Components/_Imports.razor` does not import it explicitly) — confirmed by the clean Release build.
+- **Version symbol:** `Miller.Server.MillerVersion.Current` — `public static string`, eagerly initialized from
+  `AssemblyInformationalVersionAttribute` (e.g. `1.13.0+87f9b1d`). Namespace `Miller.Server` is a parent of
+  `Miller.Server.Telemetry`, so no `using` was needed in the ledger; the test file needed `using Miller.Server;`.
+- **`TelemetryRecord`:** `public readonly record struct` with 17 positional parameters, passed by `in` to
+  `TelemetryLedger.Record`. Left unchanged.
+- **STRICT compatibility:** `TEXT` is one of the types STRICT accepts; nullable by omitting `NOT NULL`.
+- **`internal` visibility works from tests:** the test project already consumes `InsertRawForTest` (internal), so
+  `InternalsVisibleTo` is configured and the new internal helper is reachable without new plumbing.
 
-## Judgment calls
+## Acceptance criteria
 
-- `PatternInventoryPanel.razor:47` — chose a `FamilyDetails(family)` helper in the component's `@code` block over
-  inline Razor ternaries, because the conditional ` · ` joining is unreadable inline and it mirrors the existing
-  `TargetDetails` helper in `WorkspaceOnboardingPanel.razor:151`. This is NOT a new helper "outside DashboardFormat"
-  in the architectural sense — it is component-private presentation logic in the shape the sibling panel already uses.
-- `PatternInventoryPanel.razor:60` — redundancy check applies only when `Captures.Count == 1`. A multi-capture set is
-  always informative even if one member repeats the tail (`["property","value"]` on `json.property` still tells you
-  about `value`). Chose this over filtering individual redundant members, which would render a misleadingly partial
-  capture list.
-- `PatternInventoryPanel.razor:66` — `OrdinalIgnoreCase` over `Ordinal` for the tail comparison; extractor family ids
-  and captures are lowercase today, so the choice is invisible now but avoids a redundant row if casing ever drifts.
-- `PatternInventoryPanel.razor:66` — a family with no `.` (e.g. `route` + `["route"]`) treats the whole family as the
-  tail, so it is correctly judged redundant. Falls out of `LastIndexOf('.') + 1 == 0`.
-- `WorkspaceOnboardingPanel.razor:71-72` — partition on `Name` (the plan's stated rule) rather than on
-  `Confidence == "unresolved_hash"`. The two are equivalent in the data (evidence above), but `Name` is what the row
-  actually needs to render, so it cannot go stale if the extractor adds another unresolved confidence band.
-- `WorkspaceOnboardingPanel.razor:71` — used `var` rather than the explicit `List<DashboardOnboardingTarget>` type: a
-  line starting with `List<` inside a Razor code block trips the markup/tag parser (`RZ1010` class of error).
-- `WorkspaceOnboardingPanel.razor:151` — left `TargetName`'s `Confidence` fallback in place though the named
-  partition makes it unreachable. It carries the null-safety the compiler needs for `string? Name`; removing it would
-  require a `!` suppression, which is worse.
-- Tests: extended the pre-existing `DashboardFormatTests.cs` instead of creating it. The brief said "create ONLY if
-  none exist" — the file existed (from the earlier dashboard-polish plan) but had zero `FormatCount` coverage (only
-  `RelativeTime`/`AbsoluteShort`/`FormatBytes`), which is why the `grep -rn "FormatCount" tests/` found nothing.
-
-## Self-review findings
-
-- Two-arg regression coverage is explicit: `FormatCount_WithoutPlural_AppendsS` pins `"file"`/`"symbol"` across
-  0/1/2/1234, and `FormatCount_NullPlural_MatchesTwoArgumentBehaviour` pins the overloads to each other.
-- `WorkspaceOnboardingPanel_AllHotTargetsUnresolved_RendersSummaryRowOnly` includes a whitespace-only `Name` (`"   "`)
-  to prove the partition uses `IsNullOrWhiteSpace`, not `IsNullOrEmpty`.
-- `Assert.DoesNotContain("unresolved_hash", html)` proves the raw confidence token no longer leaks to the UI
-  (previously `TargetName` fell back to it, rendering `<span>unresolved_hash</span>` per row).
-- `Assert.Equal(1, html.Split("unresolved target").Length - 1)` proves the "at most one row" criterion, not merely the
-  row's presence.
-- Summed-calls arithmetic is asserted with distinct numbers (named target 9 calls vs unresolved sum 4+3+1=8) so a
-  wrong-partition bug cannot pass by coincidence.
-- `PatternInventoryPanel_ShowsPatternCountAndCapturesWhenInformative` was green before the change — kept deliberately
-  as a regression guard proving the informative case still renders after the rewrite.
-- Zero comments in the new tests; no narration comments in the changed production code (the two doc comments added
-  state non-obvious *why*: the plural contract and the capture-redundancy rule).
+- [x] Column named exactly `miller_version`; added additively via `EnsureTextColumn`; migration idempotent AND
+      concurrent-adder-safe; old-writer INSERT proven still valid by test
+- [x] Every `TelemetryRecord` write path stamps the version — enforced at the ledger chokepoint, so no construction
+      site can omit it; proven by `Record_StampsTheRunningMillerVersion` (covers both `Record()` and `Measure()`)
+- [x] No query text/paths in the new field — proven by `Record_StampsAVersionStringOnly_NotQueryTextOrPaths`
+- [x] Worker-scope verification passes; diff handed to lead uncommitted (parallel-lead-commit)
 
 ## Concerns
 
-1. ~~**Out-of-scope inaccuracy left in place** — the "resolved from hashes" metric counted unresolved targets too.~~
-   **RESOLVED in the fix round** (see §2b): the lead accepted it as in-scope, and the metric now counts only named
-   targets via `NamedHotTargetCount`, sharing the `IsNamed` predicate with the list partition.
-2. ~~**Shared test file with Task 3**~~ — **did not materialize.** Lead confirmed Task 3 never touched
-   `DashboardActivityFeedTests.cs`; my 5 render tests are the only additions. No conflict expected at commit.
-3. **Fast suite is red in the shared working tree** purely from Task 3's in-flight `DashboardNotFoundTests`. Per the
-   lead's instruction I skipped the full fast suite this round and ran the focused filter only; the lead runs the
-   batch-level suite after Task 3 lands. My last full run (pre-fix-round) was 3533/3533 with that class excluded.
-
-## Fix round summary (post lead review)
-
-Lead review approved the implementation (byte-compatible `FormatCount`, spec-matching collapse and sub-line logic)
-and requested one fix: the hot-target metric. Delivered TDD — extended two existing render tests with metric
-assertions (`<strong>1 hot target</strong>` when 1 of 4 targets is named; `<strong>0 hot targets</strong>` when all
-are unresolved), watched both fail (2 failed / 72 passed), then added `NamedHotTargetCount` and went green
-(74/74). `Assert.DoesNotContain("4 hot targets", html)` pins the regression. No new files; no `git add`/`commit`
-(parallel-lead-commit unchanged).
+1. **⚠️ Cross-task mismatch with Task 5's contract — needs a lead decision.** I cross-checked the now-present
+   `docs/contracts/canary-telemetry-v1.md`. The column *name* matches exactly (`miller_version`, lines 29/46/369),
+   and line 46 already states rows without it are excluded, which resolves the NULL-cohort question. **But** the
+   worked example at line 459 shows `"miller_versions": ["1.14.0"]` — a bare semver. The value I actually stamp is
+   `MillerVersion.Current`, the *informational* version **including the git short SHA**: `1.14.0+abc1234`. My brief
+   mandated exactly that ("stamped with the semantic version + short SHA string"), so I did not unilaterally strip
+   the suffix — but a Task 5 consumer grouping or matching on the literal `"1.14.0"` will match zero rows. One of
+   two things must change: either Task 5's consumer splits on `+` before grouping, or the stamp drops the SHA.
+   Recommend the former — the SHA is what distinguishes a freshly built dogfood binary from a released one, which
+   is precisely the attribution the column exists for. Cheap to fix on either side; expensive if it ships silently.
+2. **Cohort facts (informational).** The column is nullable TEXT holding semver + `+<short-sha>`. Note that
+   `WHERE miller_version >= …` silently drops NULLs — usually the desired cohort semantics, and the contract
+   already says so.
+3. **Version strings are not lexicographically orderable across a 2-digit rollover.** `'1.9.0' > '1.13.0'` is TRUE
+   under TEXT comparison. Any `>=` cohort gate in the canary contract should compare against an exact set or a
+   parsed version, not raw string ordering. Flagged for Task 5 rather than solved here — no version-parsing surface
+   was in scope for this task.
+4. **`InsertRawForTest` leaves `miller_version` NULL.** Correct as-is (it deliberately uses a minimal legacy column
+   list and now doubles as old-writer shape coverage), but a future test asserting "all rows stamped" against a DB
+   seeded by that helper would see a NULL and should not read it as a bug.
+5. **No dashboard/CLI surfacing of the new column.** Out of scope here; the column is written but not yet read
+   anywhere. Cohort consumption arrives with Task 5 / §9 gates.

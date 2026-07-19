@@ -1,0 +1,105 @@
+{
+  "pins_version": "1",
+  "purpose": "Benchmark tooling ONLY for Miller semantic integration P0 (design §2.4, §4.1). These pins do NOT define the future julie-semantic-sidecar runtime; the sidecar vendors llama.cpp itself and owns its own pin file (scripts/semantic-pins.json, P1).",
+  "verified_on": "2026-07-19",
+  "platform": "macos-arm64 (Apple Silicon, Metal)",
+  "runtime": {
+    "name": "llama.cpp",
+    "source": "ggml-org/llama.cpp GitHub releases (official)",
+    "release_tag": "b10068",
+    "released_at": "2026-07-18T13:36:42Z",
+    "asset": "llama-b10068-bin-macos-arm64.tar.gz",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10068/llama-b10068-bin-macos-arm64.tar.gz",
+    "sha256": "13aa2d40c76ad1dcb8ebeec5f0d2814bf3b2f84a66935c7d4dc6f7cca8e38d68",
+    "size_bytes": 10603591,
+    "build_flags_upstream": "-DGGML_METAL_USE_BF16=ON -DGGML_METAL_EMBED_LIBRARY=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON",
+    "binary_used": "llama-server",
+    "note": "llama.cpp publishes no semver 'stable' releases; every master push produces a build-numbered release. The prebuilt archive does NOT contain llama-embedding: that target lives under examples/ and upstream release.yml builds with -DLLAMA_BUILD_EXAMPLES=OFF. The harness therefore drives the llama-server HTTP embedding endpoint rather than a CLI batch tool. Verified by listing the extracted archive.",
+    "endpoint": "POST /v1/embeddings (OpenAI-compatible; requires pooling != none; server L2-normalizes with --embd-normalize 2)",
+    "endpoint_doc_url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md"
+  },
+  "candidates": [
+    {
+      "id": "qwen3-0.6b-f16",
+      "tier": "default",
+      "model": "Qwen3-Embedding-0.6B",
+      "hf_repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
+      "hf_repo_owner": "Qwen (official model org)",
+      "license": "apache-2.0",
+      "license_verified_from": "https://huggingface.co/api/models/Qwen/Qwen3-Embedding-0.6B-GGUF",
+      "file": "Qwen3-Embedding-0.6B-f16.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-f16.gguf",
+      "sha256": "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
+      "size_bytes": 1197629632,
+      "native_dims": 1024,
+      "pooling": "last",
+      "mrl": true,
+      "mrl_lanes": [256, 512, 1024],
+      "instruction_aware": true,
+      "query_instruction": "Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ",
+      "document_instruction": "",
+      "context_length": 32768,
+      "weight_quant_note": "The official Qwen GGUF repo publishes only f16 and Q8_0 — there is NO f32 GGUF. f16 is therefore the highest-precision weight lane available and is what this benchmark runs. Vector-storage precision (f32 vs int8) is varied independently in the lanes, which is what design §2.4 means by 'quantization'."
+    },
+    {
+      "id": "bge-small-en-v1.5-f32",
+      "tier": "fallback",
+      "model": "bge-small-en-v1.5",
+      "hf_repo": "CompendiumLabs/bge-small-en-v1.5-gguf",
+      "hf_repo_owner": "CompendiumLabs (community conversion of BAAI/bge-small-en-v1.5)",
+      "license": "mit",
+      "license_verified_from": "GGUF repo card frontmatter declares license: mit, matching the MIT base model BAAI/bge-small-en-v1.5",
+      "file": "bge-small-en-v1.5-f32.gguf",
+      "url": "https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-f32.gguf",
+      "sha256": "bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65",
+      "size_bytes": 133609568,
+      "native_dims": 384,
+      "pooling": "cls",
+      "mrl": false,
+      "mrl_lanes": [384],
+      "instruction_aware": true,
+      "query_instruction": "Represent this sentence for searching relevant passages: ",
+      "document_instruction": "",
+      "context_length": 512
+    },
+    {
+      "id": "arctic-embed-s-f16",
+      "tier": "fallback",
+      "model": "snowflake-arctic-embed-s",
+      "hf_repo": "ChristianAzinn/snowflake-arctic-embed-s-gguf",
+      "hf_repo_owner": "ChristianAzinn (community conversion; Snowflake publishes NO official GGUF for the -s size — verified: the Snowflake org ships safetensors + ONNX only, and the gguf-tagged Snowflake repo is arctic-embed-m-v1.5, a different model)",
+      "license": "apache-2.0",
+      "license_verified_from": "GGUF repo declares apache-2.0, matching the Apache-2.0 base model Snowflake/snowflake-arctic-embed-s",
+      "file": "snowflake-arctic-embed-s-f16.GGUF",
+      "url": "https://huggingface.co/ChristianAzinn/snowflake-arctic-embed-s-gguf/resolve/main/snowflake-arctic-embed-s-f16.GGUF",
+      "sha256": "6e3d14df024e30dc825ab830c1e8c8e37ab671f4ff1b10813d9a88d182d73d93",
+      "size_bytes": 67308160,
+      "native_dims": 384,
+      "pooling": "cls",
+      "mrl": false,
+      "mrl_lanes": [384],
+      "instruction_aware": true,
+      "query_instruction": "Represent this sentence for searching relevant passages: ",
+      "document_instruction": "",
+      "context_length": 512
+    }
+  ],
+  "rejected_candidates": [
+    {
+      "model": "EmbeddingGemma",
+      "reason": "license-gated on HuggingFace; cannot be a silent fallback (design §2.4)"
+    },
+    {
+      "model": "jina-code",
+      "reason": "CC-BY-NC — non-commercial, rejected by the Apache/MIT fallback-tier rule"
+    },
+    {
+      "model": "CodeRankEmbed",
+      "reason": "community GGUF with unclear license"
+    },
+    {
+      "model": "yixuan-chia/snowflake-arctic-embed-s-GGUF",
+      "reason": "GGUF repo declares no license at all; the ChristianAzinn conversion was pinned instead"
+    }
+  ]
+}

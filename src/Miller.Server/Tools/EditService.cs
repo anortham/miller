@@ -43,7 +43,8 @@ public sealed class EditService
     private const string FailureInvalidRequest = "invalid_request";
     private const string FailureTargetNotFound = "target_not_found";
     private const string FailureApplyFailed = "apply_failed";
-    private const string FailureUnknown = "unknown";
+    /// <summary>The bucket for a known failure path that produced no more specific classification.</summary>
+    internal const string FailureUnknown = "unknown";
 
     private readonly MillerRepositoryIndex _index;
     private readonly SmartTargetResolver _resolver;

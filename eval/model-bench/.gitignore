@@ -1,0 +1,3 @@
+# Bench downloads, embeddings, and run outputs. Nothing here is committed.
+.cache/
+runs/
