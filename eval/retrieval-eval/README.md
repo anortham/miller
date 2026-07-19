@@ -120,3 +120,21 @@ Rules an arm must honor:
 - `sets/dev/` — the visible dev set (82 queries across miller + julie) and its manifest. Frozen for tuning.
 - `sets/SEALED-SET-PROTOCOL.md` — how the user-owned acceptance set is held and used. No sealed data lives in
   this repo.
+
+## Consumers
+
+[`eval/model-bench/`](../model-bench/README.md) is the first arm producer: it embeds a symbol-card and
+docs-chunk corpus with each candidate model, ranks the dev set, and scores every model/dims/quantization
+lane plus a BM25 baseline through this harness. Its output is the P0 pin recommendation in
+[`docs/findings/2026-07-19-model-benchmark.md`](../../docs/findings/2026-07-19-model-benchmark.md).
+
+Two contract notes that any future arm producer should inherit from it:
+
+- **Exclude the golden set from your corpus.** `sets/**` lives inside the miller workspace and contains both
+  query text and answer paths. An arm that indexes `eval/`, `.razorback/`, or `.claude/` retrieves its own
+  answer key and scores meaninglessly high. This bites lexical arms too — the live miller index covers
+  `.claude/worktrees/**`.
+- **Honor the post-threshold rule literally.** `ranked` must contain only docs the arm would actually show.
+  An arm that emits its raw top-k scores a false positive on every negative query, which is correct
+  behavior for the metric but makes negatives incomparable across arms unless the threshold policy is
+  stated. model-bench records its floor/ratio policy per arm for exactly this reason.
