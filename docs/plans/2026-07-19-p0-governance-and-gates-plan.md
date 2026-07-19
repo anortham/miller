@@ -224,11 +224,11 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Keep the harness dependency-free (System.Text.Json only). Seed dev queries from the design's documented failure modes (paraphrase queries that lexical search currently misses — mine candidates by running Miller `search mode=source` for prose phrasings of known subsystems and recording misses).
 
 **Acceptance criteria:**
-- [ ] Harness scores a synthetic fixture correctly (unit tests for recall@k, nDCG@k, cluster scoring, macro/worst-language rollups)
-- [ ] Dev set meets the composition minimums above; all relevant-doc references verified to exist; a manifest in `eval/retrieval-eval/sets/dev/` pins the miller + julie repo paths AND the exact commit SHAs the set was constructed against (later re-tuning must not silently drift the ground truth)
-- [ ] Results/queries JSONL schemas documented in README (Task 7's integration contract)
-- [ ] Sealed-set protocol documented; no sealed data in repo
-- [ ] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
+- [x] Harness scores a synthetic fixture correctly (unit tests for recall@k, nDCG@k, cluster scoring, macro/worst-language rollups)
+- [x] Dev set meets the composition minimums above; all relevant-doc references verified to exist; a manifest in `eval/retrieval-eval/sets/dev/` pins the miller + julie repo paths AND the exact commit SHAs the set was constructed against (later re-tuning must not silently drift the ground truth)
+- [x] Results/queries JSONL schemas documented in README (Task 7's integration contract)
+- [x] Sealed-set protocol documented; no sealed data in repo
+- [x] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
 
 ### Task 7: Model benchmark harness + benchmark run → pin recommendation
 
