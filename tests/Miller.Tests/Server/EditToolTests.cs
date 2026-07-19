@@ -1716,6 +1716,36 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Edit_UnhandledException_RetainsRequestDerivedDiagnosisMetadata()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx, writeThrough: new ThrowingWriteThrough());
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit(
+            "replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }",
+            match_mode: "exact", apply: true, scope: "orders/OrderService.cs", line: 3);
+
+        Assert.Equal(TelemetryOutcome.Error, telemetry.Outcome);
+        Assert.Equal("replace_symbol_body", telemetry.Op);
+        Assert.NotNull(telemetry.TargetHash);
+        Assert.NotEmpty(telemetry.TargetHash);
+
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        JsonElement root = metadata.RootElement;
+        Assert.Equal("exact", root.GetProperty("match_mode").GetString());
+        Assert.True(root.GetProperty("apply").GetBoolean());
+        Assert.False(root.GetProperty("allow_stale").GetBoolean());
+        Assert.True(root.GetProperty("has_scope").GetBoolean());
+        Assert.True(root.GetProperty("has_line").GetBoolean());
+        Assert.False(root.GetProperty("has_query").GetBoolean());
+        Assert.False(root.GetProperty("has_anchor").GetBoolean());
+        Assert.Equal("compact", root.GetProperty("format").GetString());
+    }
+
+    [Fact]
     public void Execute_MissingNewText_ForBodyReplace_ReturnsCleanError()
     {
         using var fx = JulieDbFixture.CreateForEdit();

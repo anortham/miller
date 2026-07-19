@@ -100,24 +100,10 @@ public sealed class EditTool
                 Format = format,
             };
 
-            var service = new EditService(
-                _holder.Current, _resolver, _workspace.ExtractDbPath, _workspace.WorkspaceRoot,
-                _applier, _writeThrough);
-
-            EditService.EditResult result = service.Execute(request);
-
             if (telemetry is not null)
             {
                 telemetry.Op = string.IsNullOrWhiteSpace(operation) ? "unknown" : operation.Trim().ToLowerInvariant();
                 telemetry.SetTarget(target);
-                telemetry.ResultCount = result.ResultCount;
-                telemetry.IndexFresh = result.IndexFresh;
-                telemetry.Outcome = result.Outcome switch
-                {
-                    "ok" => TelemetryOutcome.Ok,
-                    "empty" => TelemetryOutcome.Empty,
-                    _ => TelemetryOutcome.Error,
-                };
                 telemetry.SetMetadata("format", string.Equals(format, "json", StringComparison.OrdinalIgnoreCase) ? "json" : "compact");
                 telemetry.SetMetadata("apply", apply);
                 telemetry.SetMetadata("allow_stale", allow_stale);
@@ -126,6 +112,24 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_query", !string.IsNullOrEmpty(query));
                 telemetry.SetMetadata("has_anchor", !string.IsNullOrEmpty(anchor));
                 telemetry.SetMetadata("has_line", line is not null);
+            }
+
+            var service = new EditService(
+                _holder.Current, _resolver, _workspace.ExtractDbPath, _workspace.WorkspaceRoot,
+                _applier, _writeThrough);
+
+            EditService.EditResult result = service.Execute(request);
+
+            if (telemetry is not null)
+            {
+                telemetry.ResultCount = result.ResultCount;
+                telemetry.IndexFresh = result.IndexFresh;
+                telemetry.Outcome = result.Outcome switch
+                {
+                    "ok" => TelemetryOutcome.Ok,
+                    "empty" => TelemetryOutcome.Empty,
+                    _ => TelemetryOutcome.Error,
+                };
                 if (result.FailureReason is not null)
                     telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
                 else if (telemetry.Outcome == TelemetryOutcome.Error)
