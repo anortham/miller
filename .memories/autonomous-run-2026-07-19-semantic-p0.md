@@ -3,7 +3,7 @@
 **Status:** Complete
 **Plan:** docs/plans/2026-07-19-p0-governance-and-gates-plan.md
 **Branch:** worktree-semantic-integration
-**PR:** not created (push awaiting user approval per approval boundaries)
+**PR:** https://github.com/anortham/miller/pull/6
 **Duration:** single session, ~6h wall (design + doubt pass + plan + 7-task execution + codex pre-merge review + fix round)
 **Phases:** 1/7 program phases complete (P0 of P0–P6)
 **Tasks:** 7/7 plan tasks complete + 5/5 review findings fixed
@@ -54,7 +54,7 @@ Cluster-unit metrics (topk): recall@10 0.6979, nDCG@10 0.6423, worst-language nD
 - 64 files, +8288/−939 over 18 commits (main..HEAD): docs/plans (design + plan), docs/adr/ADR-0003, docs/contracts/canary-telemetry-v1.md, docs/findings (spike, benchmark), spike/SqliteVec.AotSpike + CI job, eval/retrieval-eval + eval/model-bench, src/Miller.Server (EditTool, EditService, TelemetryLedger), tests, CLAUDE.md/AGENTS.md/README.md, .memories + .razorback evidence.
 
 ## Next steps
-- **Approve push + PR creation** (or tell me to keep the branch local). Branch: worktree-semantic-integration → main.
+- Review PR: https://github.com/anortham/miller/pull/6
 - Sanity-check the five frozen canary statistical values and the pre-ship amendment exception (flagged above).
 - P1 kickoff (sidecar + vectors.db) consumes: 512d int8 pin, sqlite-vec AOT evidence (3 non-mac RIDs still pending CI on push), and five inherited concerns: negative-query FP 1.0 at default threshold (tuning band 0.45–0.55 mapped), Qwen3 markdown weakness (n=4, drove the dims flip), 52 units/sec observed embed throughput vs the design's "minutes" initial-build claim, community-GGUF provenance for fallback models, identifier nDCG ordering cost to confirm on the hybrid arm.
 - User-owned follow-ups noted during execution: sealed acceptance set (third repo/language beyond csharp/rust), promotion of the spike CI job to a required check, 30-day telemetry retention vs 30-day canary window (export before age-out), sibling tools (search/inspect/trace) may have the same post-execute telemetry stamping pattern as EditTool — out of P0 scope, worth an audit.
