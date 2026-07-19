@@ -1,150 +1,185 @@
-# Task 4 — Hardening: Host allowlist + CSRF header on non-form POSTs
+# Task 4 report — sqlite-vec Native-AOT spike (P0 program HARD GATE)
 
 **Status:** COMPLETE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
-**Branch:** `worktree-dashboard-ux-fixes` (from `014cab2`)
+**Commit SHA:** none - parallel-lead-commit
+**Gate verdict:** **PASS on osx-arm64 (10/10 stages).** osx-x64 / linux-x64 / win-x64: pending CI evidence.
 
-## What was implemented
+> **Note on this file:** it previously held an unrelated report ("Task 4 — Hardening: Host allowlist +
+> CSRF header", from the `dashboard-ux-fixes` plan, committed at `c09b7f3`). `.razorback/sdd/` is reused
+> across plans. The old content is tracked and recoverable in git history; overwriting was intentional.
 
-### 1. Host allowlist (DNS-rebinding guard)
-`DashboardHostPipeline.RejectForeignHostAsync` — one `app.Use` inserted between the exception wrapper and
-`app.Use(FragmentETagAsync)`, exactly the approved order (exception wrapper → HOST CHECK → fragment-ETag →
-routing). Compares `context.Request.Host.Host` against a case-insensitive set and answers `403` plain text
-otherwise. Port is deliberately not checked: any port reaching the process is the one it bound.
+## Implementation
 
-### 2. CSRF header on the antiforgery-free POSTs
-One shared private helper `DashboardEndpoints.RequireDashboardRequestHeader(HttpContext)` returning
-`IResult?` (null = proceed), wired into all three POSTs as an early-return guard:
-- `POST /fragments/refresh`
-- `POST /workspaces/{workspace_id}/open-folder`
-- `POST /workspaces/{workspace_id}/refresh` (JSON)
+Four created files + one isolated CI job.
 
-Missing/wrong header → `400` naming the header. Antiforgery-validated form posts (`/workspace/remove`,
-`/workspaces/prune`) untouched — they are real forms and keep ADR-0002 validation.
+### `spike/SqliteVec.AotSpike/` (NOT in `Miller.slnx`)
 
-### 3. Client
-Extended the EXISTING `htmx:configRequest` listener in `dashboard-site.js` (added by Task 1 for
-`If-None-Match`). The header is set unconditionally on every htmx request; the ETag logic is preserved
-byte-for-byte in order, and the `htmx:beforeSwap` 304 guard was not touched.
+Console app, `<PublishAot>true</PublishAot>`, `AssemblyName=sqlite-vec-aot-spike`, referencing the
+same package versions the product already uses (`Microsoft.Data.Sqlite` 10.0.9,
+`SQLitePCLRaw.bundle_e_sqlite3` 3.0.3). Placement/style mirrors `spike/Codesearch.Spike`.
 
-### 4. Docs
-`docs/reference/static-ssr-htmx-alpine-pattern.md` — the Antiforgery section previously asserted
-"`POST /fragments/refresh` does not use antiforgery" with no mention of any other guard. That statement is
-what my change invalidates, so it was rewritten to document the header requirement on all three POSTs, why a
-custom header is a valid CSRF gate here, that non-browser callers of the JSON refresh POST must send it, and
-the Host/403 rule. Kept the "do not copy onto authenticated surfaces" warning, sharpened to say why it is only
-sufficient here (no ambient credential to steal).
+`Program.cs` runs 10 staged checks through a small `StageRunner` that prints `PASS`/`FAIL` + timing +
+a one-line detail per stage, stops at the first failure, names the failing stage in the verdict line,
+and exits 0 only when every stage passed:
 
-## Verification ledger
+1. `aot-no-jit-fallback` — asserts `RuntimeFeature.IsDynamicCodeSupported == false` **inside the
+   process**, so the gate cannot silently pass on a JIT host.
+2. `extension-file-present` — rejects a non-absolute path (the design specifies absolute-path load).
+3. `open-connection`
+4. `load-extension-absolute-path` — `EnableExtensions(true)` → `LoadExtension(abs)` → `EnableExtensions(false)`
+5. `vec_version`
+6. `create-vec0-table` — `vec0(embedding float[8] distance_metric=cosine)` under `journal_mode=WAL`
+7. `insert-integer-rowids` — 5 rows on explicit integer rowids, float32 LE BLOB parameters
+8. `knn-match-k3` — `WHERE embedding MATCH ? AND k = ? ORDER BY distance`; asserts hit count, that the
+   self-vector ranks first, and that cosine self-distance ≈ 0
+9. `delete-then-insert-one-transaction` — DELETE + re-INSERT of the same rowid in one transaction,
+   then verifies KNN reflects the *new* vector
+10. `wal-two-connection-reader-writer` — a second `Mode=ReadOnly` connection loads vec0 itself,
+    is confirmed **not** to see the row before commit, then observes the writer's commit
 
-| Check | Command | Result |
-|---|---|---|
-| TDD red | focused filter, before implementation | 4 failed / 11 passed — the exact 4 guards being added |
-| TDD green | `dotnet test --filter "(Category!=Scale)&(FullyQualifiedName~DashboardMutationEndpoint)"` | **15/15 passed** |
-| Full fast suite (1st) | `scripts/test.sh` | 1 failed — `JsonRefreshEndpoint_UsesNonThrowingRefreshPath` (see judgment calls) |
-| Full fast suite (final) | `scripts/test.sh` | **3548 passed, 0 failed**, 24s (ceiling 30s) |
-| Release build | `dotnet build Miller.slnx -c Release` | **0 Warning(s), 0 Error(s)** |
-| JS syntax | `node --check dashboard-site.js` | OK |
-| Real-Kestrel E2E | live dashboard on :4988, curl | all guards confirmed (below) |
+### `scripts/spike-sqlite-vec.sh`
 
-### Real-dashboard end-to-end (beyond TestServer — Kestrel, real binary)
-```
-GET / (Host: 127.0.0.1)             -> 200     GET / (Host: evil.example)          -> 403
-GET / (Host: localhost)             -> 200     GET /dashboard.css (evil Host)      -> 403
-GET / (Host: [::1])                 -> 200
-POST /fragments/refresh   no hdr    -> 400     with hdr -> 200
-POST /workspaces/x/open-folder no hdr -> 400   with hdr -> 404 (reached registry lookup)
-POST /workspaces/x/refresh no hdr   -> 400     with hdr -> 200
-403 body: miller-dashboard: request Host is not a loopback name; reach the dashboard on 127.0.0.1.
-400 body: "Missing required X-Miller-Dashboard: 1 header."
-JSON refresh shape (with header) — UNCHANGED, all fields intact:
-{"Status":5,"WorkspaceId":"x","WorkspaceRoot":"","IndexDbPath":"","Revision":null,"Scanned":false,
- "WarningText":null,"Error":"...","ScanDuration":null,"TotalDuration":null,"ArtifactId":null,"StatusText":"failed"}
-served /js/dashboard-site.js contains X-Miller-Dashboard: yes
-```
+Detect RID (`uname`, `--rid` override) → resolve pin → download (cached) → **verify sha256, abort loud
+on mismatch** → `tar -xzf` the member → `dotnet publish -c Release -r <rid> --self-contained` →
+**run the published AOT binary** (explicitly not `dotnet run`) → echo `SPIKE VERDICT [<rid>]: PASS/FAIL`.
+Failures emit `::error::` so CI annotates them. Pin parsing prefers `jq` (present on all GitHub runner
+images) and falls back to `python3` (a Windows Git Bash `python3` can be the non-functional Store shim).
+
+Downloads/publish output cache under `${SPIKE_CACHE_DIR:-$TMPDIR/miller-sqlite-vec-spike/<ver>/<rid>}` —
+**outside the repo**, so no binary lands in the working tree.
+
+### `scripts/spike-pins.json`
+
+`version` + `urlTemplate` + per-RID `{name, member, sha256}` with `{VER}`/`{asset}` placeholders,
+modelled on `scripts/julie-pins.json`. Proposed as the `semantic-pins.json` template; it swaps
+`archiveInnerPathTemplate` for a per-RID `member` because the inner filename differs by platform.
+
+### `.github/workflows/ci.yml` — one new job
+
+`sqlite-vec-aot-spike`, `fail-fast: false`, matrix `osx-arm64`/macos-15, `osx-x64`/macos-15-intel,
+`linux-x64`/ubuntu-latest, `win-x64`/windows-2025, running `bash scripts/spike-sqlite-vec.sh --rid <rid>`.
+**No `needs:`, and no job needs it** — verified by parsing the YAML. No existing job was modified.
+
+### `docs/findings/2026-07-19-sqlite-vec-aot-spike.md`
+
+Verdict per RID, pinned-asset table, report-only metrics, seven P2b notes, CI-job description, the
+required-branch-check note, reproduction instructions, and an explicit "what this spike does NOT
+cover" section.
+
+## Verification
+
+**Invariant:** sqlite-vec loads and functions under Native AOT on osx-arm64; the product build is
+untouched.
+
+**Scope:** the spike script end-to-end on osx-arm64 (published AOT binary passes all stages) +
+`dotnet build Miller.slnx -c Release` at 0 warnings.
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `scripts/spike-sqlite-vec.sh` (warm cache) | **PASS**, 10/10 stages, exit 0 |
+| 2 | `SPIKE_CACHE_DIR=$(mktemp -d) scripts/spike-sqlite-vec.sh` (cold cache, full download+publish) | **PASS**, 10/10, exit 0 — reproducible |
+| 3 | `bash scripts/spike-sqlite-vec.sh --rid osx-arm64` (exact CI invocation form) | **PASS**, 10/10 |
+| 4 | sha256 negative test — corrupted archive planted in `SPIKE_CACHE_DIR` | **exit 1**, expected/actual pair printed, publish never attempted |
+| 5 | `dotnet build Miller.slnx -c Release` | **Build succeeded. 0 Warning(s), 0 Error(s)** |
+| 6 | `scripts/test.sh` (fast suite) | **Passed! Failed: 0, Passed: 3617, Skipped: 1** |
+| 7 | `ruby -ryaml` parse of `ci.yml` | 5 jobs; `sqlite-vec-aot-spike` `needs: nil`; matrix = the 4 RIDs |
+| 8 | `git status --untracked-files=all -- spike/ scripts/spike-*` | only the 4 source files; **zero binaries in the tree** |
+
+Timestamp: 2026-07-19, local host macOS 15 / arm64, .NET 10.0.10, SQLite 3.50.4.
+Worktree: `/Users/murphy/source/miller/.claude/worktrees/semantic-integration`, branch
+`worktree-semantic-integration`, base commit `87f9b1d`.
+
+**One caveat on #6:** the fast suite passed with 0 failures but its 30s wall-clock tripwire fired at
+90s. This is machine contention — five sibling agents were building and testing concurrently on this
+host — not a regression from this task: the spike is outside `Miller.slnx`, no product code was
+touched, and no test references `ci.yml` content (`WatchPathFilterTests` uses the path only as a
+string literal). Flagging it so the lead can confirm against a quiet machine.
+
+## Hard-gate verdicts
+
+| RID | Verdict | Evidence |
+| --- | --- | --- |
+| osx-arm64 | **PASS** | Local run, 10/10 stages, this session |
+| osx-x64 | pending CI | Job added; branch unpushed |
+| linux-x64 | pending CI | Job added; branch unpushed |
+| win-x64 | pending CI | Job added; branch unpushed |
+
+**The gate did not fail.** The central unknown — whether `bundle_e_sqlite3` under Native AOT still
+exposes `sqlite3_load_extension` — is answered yes, with **zero AOT/trim warnings and zero extra
+csproj flags**.
+
+## Report-only metrics (osx-arm64)
+
+| Metric | Value |
+| --- | --- |
+| AOT binary | 2,763,560 bytes (Mach-O arm64) |
+| `libe_sqlite3.dylib` sibling | 1,661,200 bytes |
+| `vec0.dylib` | 161,896 bytes |
+| Publish dir total | ~15 MB (mostly the `.dSYM`, not shipped) |
+| First `LoadExtension` | ~140 ms cold; all later stages ≤ 31 ms |
 
 ## Files changed
-- `src/Miller.Dashboard/DashboardHostPipeline.cs` — `RejectForeignHostAsync` + `IsLoopbackHost` + `LoopbackHosts`; one `app.Use` line.
-- `src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs` — `DashboardRequestHeader` const, `RequireDashboardRequestHeader` helper, guard in 3 handlers, `(IResult)` cast on the fragment-refresh return, `Microsoft.Extensions.Primitives` using.
-- `src/Miller.Dashboard/wwwroot/js/dashboard-site.js` — header on every htmx request inside the existing `configRequest` listener.
-- `docs/reference/static-ssr-htmx-alpine-pattern.md` — Antiforgery section rewritten.
-- `tests/Miller.Tests/Server/DashboardMutationEndpointTests.cs` — 8 new tests (one is a Theory ×3 cases).
-- `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` — **not owned**; scan-window widen, see judgment calls.
-- `docs/plans/2026-07-16-dashboard-ux-fixes.md` — Task 4 checkboxes.
+
+Created: `spike/SqliteVec.AotSpike/SqliteVec.AotSpike.csproj`,
+`spike/SqliteVec.AotSpike/Program.cs`, `scripts/spike-sqlite-vec.sh` (executable),
+`scripts/spike-pins.json`, `docs/findings/2026-07-19-sqlite-vec-aot-spike.md`.
+Modified: `.github/workflows/ci.yml` (one added job + its comment block; no existing job touched),
+`.razorback/sdd/task-4-report.md` (this report; see the note at the top).
+
+No file outside the ownership list was edited.
 
 ## Miller calls used
+
 | Call | Confirmed |
-|---|---|
-| `inspect(target='DashboardPaths', depth='full')` | `DashboardPaths.Url` is always `http://127.0.0.1:{parsedPort}` (default 4977) — the Host check is defense-in-depth, not the binding. Also gave the full reference/caller list: the 3 dashboard test files that would break on a bad allowlist. |
-| `inspect(target='TryRefreshWorkspace', depth='full')` | Signature `(string registryDbPath, string toolsRoot, string workspaceId) -> WorkspaceRefreshResult`; non-throwing (wraps failures as `Failed`) — so the with-header success tests get 200, not 500, on an unregistered id. Referenced at `DashboardEndpoints.cs:132,223` = the two refresh routes. |
+| --- | --- |
+| `inspect target=spike/Codesearch.Spike` | Returned "No indexed symbols" — the spike tree is not indexed, so csproj conventions were read directly. |
+| `search query="PublishAot" mode=source` | Found `MillerExtractContractTests` asserting the release workflow publishes with `-p:PublishAot=true -p:JsonSerializerIsReflectionEnabledByDefault=false`. |
+| `search query="SQLitePCLRaw" mode=all-text` | Surfaced `THIRD-PARTY-NOTICES.md` (Microsoft.Data.Sqlite 10.0.9 / SQLitePCLRaw.bundle_e_sqlite3 3.0.3), the v0.5.5 release note pinning that override, and `docs/m1-indexing-design.md`'s "no `Batteries_V2.Init()` — bundled provider auto-inits" finding, which the spike re-confirmed under AOT. |
 
-Miller's index is the main-checkout baseline, so per the brief I read the current worktree bytes of all three
-Task-1/3-modified files (`DashboardHostPipeline.cs`, `DashboardEndpoints.cs`, `dashboard-site.js`) before editing.
-Doc/route location used grep (text search over docs, not a symbol question).
+## API-shape evidence (external — verified live, not from memory)
 
-## API-shape evidence (no guessed shapes)
-- `DashboardPaths.Url` = `$"http://127.0.0.1:{parsedPort}"` — Miller `inspect(DashboardPaths)` body.
-- `WorkspaceRefreshResult` JSON keys `WorkspaceId` / `StatusText` (value `"failed"`) — read from the existing
-  `TryRefreshWorkspace_UnregisteredIdReturnsFailedJsonNotThrow` test, then re-confirmed against the live
-  endpoint response above. My test asserts these exact keys to pin the shape.
-- `RazorComponentResult<T>` implements `IResult` — proven by the pre-existing `(IResult)` cast in the
-  `GET /workspace` handler (Task 3), which I mirrored rather than invented.
-- htmx `event.detail.headers` mutation contract — the existing Task-1 `If-None-Match` listener already relies
-  on it; I extended that same code path.
+`GET api.github.com/repos/asg017/sqlite-vec/releases/tags/v0.1.9` (published 2026-03-31) listed 27
+assets. Three naming facts contradicted reasonable assumptions and are recorded in the findings doc:
+
+- The **Windows asset is `.tar.gz`, not `.zip`** (unlike `julie-pins.json`'s Windows zip).
+- Asset filenames carry **no `v` prefix** (`sqlite-vec-0.1.9-…`) while the URL path does (`/v0.1.9/`).
+- Both `loadable-*` and `static-*` variants ship; the `LoadExtension` design needs `loadable-*`.
+
+All four sha256s were computed from the downloads and **matched the release's own `checksums.txt`**
+byte-for-byte. Inner members confirmed by `tar -tzf`: `vec0.dylib` / `vec0.dylib` / `vec0.so` / `vec0.dll`.
+
+`macos-15-intel` as the current x86_64 macOS runner label was verified against GitHub's changelog
+(macos-13 retired 2025-12-04; macos-15-intel is the last Intel image, supported to ~Aug 2027).
 
 ## Judgment calls
-1. **Widened a scan window in a non-owned test file.** `DashboardRegistryReadTests.JsonRefreshEndpoint_UsesNonThrowingRefreshPath`
-   (`:1836`) is a *source-text* guard: it reads `DashboardEndpoints.cs` and asserts `TryRefreshWorkspace` appears
-   within **400 chars** of the route literal. My header guard clause pushed the call to **477 chars** → red. The
-   guard's stated intent (route must ride the non-throwing path, not throwing `RefreshWorkspace`) is still fully
-   satisfied by the code; the 400 was a brittle positional proxy, not the assertion's meaning. I widened it to 700
-   and added a comment recording why the window is safe. **Verified it cannot false-positive:** the only other
-   `TryRefreshWorkspace` in the file is at `:153`, which *precedes* the route at `:249`, so scanning forward
-   cannot reach a different route's call. Discriminating power is unchanged — it still fails if the route switches
-   to the throwing path. This was the minimal intent-preserving fix; the alternative (contorting the handler to fit
-   an arbitrary char count) would have been worse code. **Flagging for lead review as an ownership deviation.**
-2. **Allowlist includes `::1` as well as `[::1]`.** `HostString.Host` keeps IPv6 brackets, so `[::1]` is the form
-   that actually arrives (test-confirmed via `http://[::1]:4977/`). Added the bare `::1` too — costs nothing and
-   avoids a refusal if a `HostString` is ever assembled without brackets. Plan listed only `[::1]`.
-3. **open-folder "success" test asserts 404, not 200.** With a *registered* id the handler calls
-   `Process.Start(UseShellExecute)` and would open a real Finder window on the machine running the suite. Using an
-   unregistered id proves the header gate was passed (reaches the registry lookup's 404, distinct from the gate's
-   400) with no side effect. Both sides asserted on body text, so 400-vs-400 ambiguity is impossible.
-4. **`Results.BadRequest(string)`** (JSON-encoded string body) rather than plain text — matches the file's existing
-   style (`open-folder` already does `Results.BadRequest(ex.Message)` / `Results.NotFound(string)`). Dashboard is
-   non-AOT, so reflection JSON is fine.
-5. **Doc target.** No file under `docs/contracts/` documents the JSON refresh POST (`cli-eros-v1.md` documents the
-   `dashboard --json` *CLI verb*, which only returns the URL — not the HTTP surface, so no Eros contract breaks).
-   The only doc under `docs/` documenting these POSTs is `docs/reference/static-ssr-htmx-alpine-pattern.md`, which
-   additionally made a now-false claim about the endpoints being unguarded. That is the file I updated.
 
-## Self-review findings
-- Middleware order verified against the brief: exception wrapper → **host check** → fragment-ETag → routing →
-  antiforgery. The 403 is emitted *before* the ETag middleware buffers anything, so no interaction.
-- Static assets and `/healthz` are also Host-guarded (403 confirmed on `/dashboard.css`) — correct: DNS-rebinding
-  reads are exactly what the check exists to stop, and no legitimate loopback caller is affected.
-- Empty/absent Host header → `""` → not in allowlist → 403. Safe default, intentional.
-- Grepped for every caller of the guarded POSTs: only the two `hx-post` attributes in `WorkspaceDetailPanel.razor`.
-  **No raw `fetch`/`XMLHttpRequest` anywhere in the dashboard**, so the single `configRequest` listener covers 100%
-  of browser callers — no route can be missed.
-- Task 1's `beforeSwap` 304 guard and the ETag listener ordering are untouched (verified by reading the final file);
-  ETag/304 tests in `DashboardFragmentCachingTests` stay green in the full suite.
-- htmx config `{"selfRequestsOnly":true,"allowEval":false}` untouched.
-- Tests carry zero narration comments; the two comments present state non-obvious constraints (why 404 not 200 for
-  open-folder; why the scan window is safe), per the repo comment rule.
+1. **Added an extra first stage** (`aot-no-jit-fallback`), not in the brief's stage list. A gate that
+   can't prove it ran on an AOT artifact isn't a gate; this makes a misconfigured publish fail loudly
+   instead of passing green.
+2. **Cache outside the repo** rather than a new gitignore entry — satisfies "no binaries in the tree"
+   without editing `.gitignore` (not an owned file).
+3. **`jq` first, `python3` fallback** for pin parsing, chosen for the Windows leg specifically.
+4. **`--self-contained true` on publish** — required for `-r <rid>` AOT and matches how the release
+   workflow publishes `miller`.
+5. **Did not add the findings doc to `docs/README.md`'s map.** That file is outside my ownership list
+   and is being modified by a sibling task. **Lead action needed:** add the pointer.
+6. **Job condition mirrors both existing patterns** (`push`/`pull_request` *and*
+   `schedule`/`workflow_dispatch`) so the gate runs on PRs and on the nightly, matching its hard-gate role.
+7. **Overwrote the stale unrelated `task-4-report.md`** after confirming it was tracked and recoverable.
 
-## Concerns / notes for the lead
-1. **Ownership deviation** — `DashboardRegistryReadTests.cs` (judgment call 1). One-number window widen + comment,
-   forced by an in-scope change breaking a positional text-proxy guard. Worth a look.
-2. **`POST /workspaces/{id}/refresh` is a behavior change for any non-browser caller** — scripts hitting it now need
-   `-H 'X-Miller-Dashboard: 1'` or they get 400. The response *shape* is unchanged (verified live). Documented in
-   the reference doc. Not referenced by `docs/contracts/cli-eros-v1.md`, so no Eros contract break — but if any
-   external tooling posts to it, this is the breaking bit.
-3. **Task 9 interaction (forward-looking)** — Task 9 edits `/fragments/refresh` and adds
-   `GET /fragments/refresh-status`. The plan already notes the status GET needs no header; that stays true since
-   the gate is POST-only and applied per-endpoint. Task 9's worker should keep the `RequireDashboardRequestHeader`
-   guard as the first statement in the refresh handler. Also note the 700-char scan window (judgment call 1) if
-   that handler grows further.
-4. **No browser-level test of the htmx header attachment** — the repo has no JS test infra. Mitigated by:
-   `node --check`, confirming the served JS contains the assignment, confirming the only callers are htmx-driven,
-   and driving every server-side gate against real Kestrel.
+## Concerns
+
+1. **The gate is advisory until branch protection changes.** The design calls this a hard gate, but a
+   non-required check can be merged past. Adding the four matrix legs to `main`'s required checks is
+   user-owned; flagged in the findings doc and here.
+2. **Three of four RIDs are unproven.** The osx-arm64 leg is the easiest platform. Windows is the real
+   risk (ILC + MSVC link, `.dll` extension load, Git Bash). Treat the gate as OPEN until CI runs green
+   on all four legs after push.
+3. **`macos-15-intel` sunsets ~Aug 2027**, taking the osx-x64 leg of this gate — and Miller's osx-x64
+   release target — with it. Not actionable now; worth a roadmap note.
+4. **Scope honesty:** this spike proves *function*, not durability or performance. §5.4's crash tests,
+   vec0 corruption/checkpoint tests, metadata-column filtering, the prefiltered manual-distance path,
+   and `int8[...]` are all still owed. Enumerated in the findings doc so a green gate is not mistaken
+   for broader coverage.
+5. **Fast-suite wall-clock tripwire fired at 90s** under parallel-agent contention (0 test failures).
+   Recommend the lead re-run on a quiet machine before merge.

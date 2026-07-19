@@ -253,10 +253,10 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Downloads total ~1–2GB (models + llama.cpp) — proceed; they are cached under `eval/model-bench/.cache/` (gitignored). If a candidate's GGUF or license claim fails verification at download time, record it in the findings and drop the candidate rather than substituting an unpinned source. If the local hardware cannot complete all lanes in reasonable time, complete Qwen3 lanes + one fallback fully and record which lanes remain, with the exact command to run them. **Pin decision rule (evidence-gated):** the default pin may name Qwen3 only from completed Qwen3 lanes, and a fallback pin may only be named from a completed fallback lane — the fallback tier is the license-safe escape hatch, so it must be evidence-backed in P0, never inferred. If no fallback lane completes, the findings doc says so explicitly and the fallback pin is recorded as OPEN, not defaulted.
 
 **Acceptance criteria:**
-- [ ] All artifacts sha256-pinned; cache gitignored; re-run reproducible from clean cache
-- [ ] Per-candidate pooling sanity check passes before scoring (guards the silent-garbage failure mode)
-- [ ] Benchmark run completed locally; findings doc contains per-candidate/lane metrics vs BM25 baseline, identifier non-inferiority table, and an explicit pin recommendation (model + dims + quantization)
-- [ ] Worker-scope verification passes (harness unit checks + successful end-to-end run); worker commits (serial-worker-commit)
+- [x] All artifacts sha256-pinned; cache gitignored; re-run reproducible from clean cache
+- [x] Per-candidate pooling sanity check passes before scoring (guards the silent-garbage failure mode)
+- [x] Benchmark run completed locally; findings doc contains per-candidate/lane metrics vs BM25 baseline, identifier non-inferiority table, and an explicit pin recommendation (model + dims + quantization)
+- [x] Worker-scope verification passes (harness unit checks + successful end-to-end run); worker commits (serial-worker-commit)
 
 ---
 

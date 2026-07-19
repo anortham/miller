@@ -1,86 +1,129 @@
-# Task 5 — Workspace list UX
+# Task 5 Report — Canary telemetry contract (frozen)
 
-Status: COMPLETE
-Worktree: `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
-Branch: `worktree-dashboard-ux-fixes` (from `c09b7f3`)
+**Status:** COMPLETE
+**Commit SHA:** none - parallel-lead-commit
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/semantic-integration`, branch `worktree-semantic-integration`
+**Files changed:** created `docs/contracts/canary-telemetry-v1.md` (only file touched; no edits to `docs/README.md`)
 
-## Ledger
+> Note: this file previously held an unrelated stale report ("Task 5 — Workspace list UX", from the
+> `dashboard-ux-fixes` worktree). It was overwritten, as this task owns this report path.
 
-| Step | Outcome |
-|---|---|
-| Miller orientation (ReadIndex, entry record, telemetry schema, call sites) | done |
-| Tests written first, watched red | done (CS1729/CS1501/CS1061 — no `LastActivityTs`, no 2-arg `ReadIndex`) |
-| `DashboardData`: `LastActivityTs` + grouped telemetry read + degrade | done |
-| `DashboardEndpoints`: 3 call sites threaded with telemetry path | done |
-| `WorkspaceIndex.razor`: table roles, Last used, right-rail remove, no-facts, stretched link | done |
-| `alpine-components.js`: aria-sort → columnheader; `activity` column | done |
-| `dashboard-site.js`: `/` focuses the filter | done |
-| `dashboard.css`: grid, stretched link, right rail, idle carets | done |
-| Focused tests | 100/100 pass |
-| Fast suite (`scripts/test.sh`) | 3559/3559 pass, 22s |
-| `dotnet build Miller.slnx -c Release` | 0 warnings / 0 errors |
+## Implementation
 
-## Files changed
+Wrote the complete frozen contract following `metrics-history-v1.md` / `references-candidates-v1.md`
+house style (status line + posture paragraph, sectioned spec, Stability Rules, Boundary).
 
-- `src/Miller.Dashboard/DashboardData.cs` — `DashboardWorkspaceIndexEntry.LastActivityTs` (nullable, defaulted, `last_activity_ts` in JSON); `ReadIndex(registryDbPath, telemetryDbPath = null)`; private `ReadLastActivityByWorkspace`; `RenderIndexJson` gains the optional path.
-- `src/Miller.Dashboard/Endpoints/DashboardEndpoints.cs` — `/`, `/fragments/workspaces`, `/index.json` pass `paths.TelemetryDbPath`.
-- `src/Miller.Dashboard/Components/WorkspaceIndex.razor` — table/row/columnheader/cell roles; Last used column; remove control relocated to a right-rail cell; no-facts + empty-index notes; inline `text-decoration` style dropped; `Now` field.
-- `src/Miller.Dashboard/wwwroot/js/alpine-components.js` — `reflectSortButtons` writes aria-sort to `btn.closest('[role="columnheader"]')`; `activity` documented in the sort-column set.
-- `src/Miller.Dashboard/wwwroot/js/dashboard-site.js` — `/` keydown focuses+selects `#workspace-filter`.
-- `src/Miller.Dashboard/wwwroot/dashboard.css` — 9-column grid, stretched link, right-rail remove, idle two-way caret, fact notes, responsive.
-- `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` — 4 new `ReadIndex` last-activity tests; roles guard rewritten; cell-count invariant; aria-sort placement.
-- `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` — 5 new rendered-list tests.
+Sections: Storage Location · Activation · Assignment (unit + exact derivation + ineligible calls) ·
+Enums (all exhaustive) · Result Identifiers And Attribution · The Success Event · Field Reference
+(28 keys, each with type/values/write-condition/privacy note) · Shadow Population · Retention ·
+Aggregate Export · Stability Rules · Boundary.
 
-## Miller calls (orientation evidence)
+Key structural decisions:
 
-| Call | Proved |
-|---|---|
-| `inspect(target='ReadIndex', depth='full')` | signature `ReadIndex(string registryDbPath)` at `DashboardData.cs:459`, full body, callees |
-| `trace(target='ReadIndex', mode='refs')` | **6** references — `DashboardData.cs:507` (`RenderIndexJson`), `DashboardEndpoints.cs:44,130`, `DashboardFragmentCachingTests.cs:237`, `DashboardRegistryReadTests.cs:1530,1733`. The brief named 2 call sites; trace found a third production one (`RenderIndexJson`). |
-| `inspect(target='DashboardWorkspaceIndexEntry', depth='full')` | positional record `(Workspace, Facts, RootExists)` + `HasFacts`/`IsStale` computed; 20 dependents |
-| `search(query='tool_calls', mode='source')` | **no such table** — disproved the brief's "telemetry calls table" wording |
-| `grep` of `DashboardData.cs` telemetry readers → `TelemetryLedger.cs:19` DDL | real table is `tool_telemetry` |
+- **No new `tool_telemetry` columns.** All canary fields land in `metadata_json` under a `canary_`
+  prefix via `TelemetryScope.SetMetadata`. Rationale stated in the doc: `tool_telemetry` is `STRICT`,
+  its only column addition this program is Task 2's `miller_version`, and `metadata_json` already hosts
+  per-call experiment-shaped facts (`auto_rescue_kind`, `empty_reason`). Existing columns are reused
+  read-only (`ts`, `workspace_id`, `outcome`, `result_count`, `duration_ms`, `target_hash`,
+  `miller_version`) and each reuse is tabulated.
+- **Success is derived, never stored.** No `canary_success` field exists, and the doc forbids adding one
+  — the conversion clause depends on rows that don't exist when the canary row is written.
+- **Cluster-randomized analysis is part of the contract**, not an analysis preference: the gate is
+  computed over per-unit success rates, never pooled per-call rates.
 
-## API-shape evidence (no guessed shapes)
+## Frozen decisions I made (design left these open)
 
-- **Telemetry schema** — `src/Miller.Server/Telemetry/TelemetryLedger.cs:19-21`:
-  `CREATE TABLE IF NOT EXISTS tool_telemetry (id TEXT PRIMARY KEY, ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), tool TEXT NOT NULL, op TEXT, workspace_id TEXT, ...)`.
-  Table `tool_telemetry`, columns `ts` (TEXT) and `workspace_id` (TEXT). Confirmed in use by `DashboardData.cs:583,650,786,1340` and `ReadTotals` (`MIN(ts), MAX(ts) FROM tool_telemetry`).
-- **`ts` is fixed-width ISO-8601 UTC** (`%Y-%m-%dT%H:%M:%fZ`) ⇒ lexicographic `MAX(ts)` is chronological. Noted in the reader's doc comment.
-- **Degrade discipline** — copied from `ReadTelemetrySummary` (`DashboardData.cs:591`):
-  `catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException)`, plus the existing `OpenReadOnly` + `TableExists` guards.
-- **`rel-ts` pattern** — `ActivityFeedPanel.razor:33` / `TelemetryPanel.razor:70`:
-  `<time class="rel-ts timestamp" datetime="@ts" data-ts="@ts">@RelativeTime(ts, Now)</time>` with `private readonly DateTimeOffset Now = DateTimeOffset.UtcNow;`. Mirrored exactly.
-- **Epoch key** — `2026-06-12T10:00:00.000Z` → `1781258400`, verified independently before use.
+| Decision | Value | Rationale |
+|---|---|---|
+| Assignment unit | `(workspace_id, utc_date, query_class)` | Per-call randomization makes an agent's own session internally inconsistent and corrupts the follow-up attribution the success event depends on; per-workspace-forever yields too few units for a CI. Coarsest unit that still accumulates units fast and keeps a session coherent. |
+| Assignment derivation | `SHA256(experiment_id\|assignment_version\|workspace_id\|utc_date\|query_class)`, first 4 bytes big-endian as uint32, `% 100` → bucket; `<50` control | Same SHA-256 primitive already used by `SetTarget`; no component can contain `\|`; offline-reproducible by an analyst from persisted fields. `assignment_version` is the rerandomization escape hatch. |
+| Split | 50/50 | Max power per unit; treatment is already fail-open-gated so an even split adds no user risk. |
+| Attribution window | **600 s (10 min)** | Covers a slow agent turn (human read / intervening build) while staying far below the interval at which an unrelated later visit to the same symbol gets miscredited. Fixed because a tunable window is a researcher-degrees-of-freedom hole in a causal gate. |
+| Attribution matching | same workspace, `tool='inspect'` or `tool='content' AND op='read'`, `outcome='ok'`, `target_hash` ∈ served-hash set, `0 < Δts ≤ 600 s`, credited to the *latest* preceding canary row; at most one follow-up per canary row (binary, not a count) | Prevents double-crediting across overlapping canary rows and prevents repeat visits inflating a single row. |
+| Served-hash cap | first 10 served results, with `canary_result_hash_truncated` | Compact search renders far fewer than 10 rows; attribution past rank 10 isn't a meaningful conversion signal; bounds row size. |
+| Latency bucket edges | `lt_10 / lt_25 / lt_50 / lt_100 / lt_250 / lt_500 / lt_1000 / lt_3000 / gte_3000 / none`, ms, left-inclusive right-exclusive over floored integer ms | 10–100 resolves the warm-embed target band (design §4.2: 10–150 ms); 250–1000 resolves degraded-but-usable; 3000 is the top of the documented cold-start range and above it is a distinct failure mode. |
+| Shadow sampling rate | 10% of identifier assignment units (`bucket < 10` under `semantic_identifier_noninferiority_v1`) | Identifier is the highest-volume class; 10% gives ample comparisons while bounding wasted embedding work on the class the feature isn't trying to improve. |
+| Activation flag | `MILLER_SEMANTIC_CANARY=off\|on`, default `off`; inert when `MILLER_SEMANTIC=off` | Mirrors the §3 `off`-means-zero-side-effects guarantee; absence of `canary_arm` is the definitive not-in-experiment signal. |
+| Export unit id | first 12 hex of the assignment digest | Join key across one operator's exports; does not identify a repo to a recipient. |
+| Export k-anonymity floor | units with <5 eligible calls omitted, counted in `suppressed_unit_count` | A single-call unit could otherwise be reasoned back to one action. |
+| Retention | no exception — rides the existing `retentionDays: 30` prune | Stated with its two consequences (30-day max attribution history ⟹ exports must precede aging-out; straddling prunes are arm-independent so unbiased). |
+| Export surface | `miller telemetry canary --json` CLI verb, no new MCP tool | MCP-stinginess rule. |
+| Non-inferiority thresholds | deliberately **not** set here | Explicitly delegated to the P0 eval-protocol task on the sealed set: this contract fixes the measurement, the eval protocol fixes the bar. Flagged in-doc so it does not read as an omission. |
+
+## Verification self-check (worker scope, doc-only)
+
+- `grep -nEi "TBD|TODO|FIXME|XXX|<placeholder>|\?\?\?"` → **no matches**.
+- All enums fully enumerated with value tables: `experiment_id` (2), `arm` (4), `query_class` (6),
+  `eligibility` (9), `fallback_reason` (13), `rescue_kind` (7), `backend` (5), `embed_warmth` (3),
+  `latency_bucket` (10), `shadow_status` (4).
+- Every one of the 28 fields in the Field Reference has type, values, write condition, and a privacy
+  note. Absent-vs-zero stated as a guarantee.
+- Every referenced file path verified to exist on disk (`TelemetryLedger.cs`, `TelemetryScope.cs`,
+  `WorkspaceTargetHashResolver.cs`, `SearchTool.cs`, `IndexBootstrapService.cs`, the design doc,
+  `references-candidates-v1.md`). Relative links from `docs/contracts/` resolve.
+- P2b-implementer read-through: assignment is computable from persisted inputs with the exact hash
+  recipe; every field's write condition is unambiguous; the attribution query is expressible directly
+  as SQL over `tool_telemetry` from the stated predicates; the export envelope has a concrete example
+  with ordering and zero-omission rules.
+- Privacy: no field carries query text, source text, or paths. The only digest fields reuse the
+  existing `SetTarget` mechanism, are local-only, and are explicitly excluded from every export.
+
+## Miller calls used + confirmations
+
+- `search query="target_hash" mode=source` → located `TelemetryScope`, `WorkspaceTargetHashResolver`,
+  `TargetHashFrequency`, `RecoveredTargetHash`, `TelemetryOnboardingReader`.
+- `inspect target=src/Miller.Server/Telemetry/TelemetryScope.cs` → member list; confirmed
+  `SetTarget`, `SetMetadata` (3 overloads), `SetEmptyReason`, `SetErrorCategory`, `TargetHash` property.
+- `inspect target=src/Miller.Server/Telemetry/TelemetryLedger.cs` → confirmed `CreateTableDdl`,
+  `Prune(int retentionDays = 30)`, `Measure`, `Record`.
+- `search query="auto_rescue_kind" mode=source` → confirmed the existing rescue metadata vocabulary in
+  `SearchTool.cs:318` (`auto_rescue_attempted`, `auto_rescue_kind`, `auto_rescue_result_count`) that
+  `canary_rescue_kind` extends.
+- `search query="CREATE TABLE tool_telemetry" mode=source` → no hits (phrase query); fell back to
+  reading the DDL constant directly at `TelemetryLedger.cs:18`.
+
+## API-shape evidence
+
+- **Target-hash mechanism (real name/shape):** `TelemetryScope.SetTarget(string? raw)`
+  (`src/Miller.Server/Telemetry/TelemetryScope.cs:193`) —
+  `Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))`, stored to the `TargetHash`
+  property and persisted to the `tool_telemetry.target_hash` TEXT column via `TelemetryRecord`. Doc
+  comment states the raw string is NEVER persisted. Reversal path:
+  `WorkspaceTargetHashResolver.Resolve(dbPath, TargetHashFrequency[])` →
+  `RecoveredTargetHash(Confidence: "symbol_name_hash", …)` (`src/Miller.Indexing/`), consumed by
+  `WorkspaceOnboardingAssembler`. The contract names all of these.
+- **`tool_telemetry` schema:** read verbatim from `TelemetryLedger.CreateTableDdl` (line 18) — `STRICT`
+  table; columns `id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind,
+  error_message, error_detail, result_count, bytes_examined, bytes_returned, source_bytes, est_tokens,
+  index_fresh, target_hash, metadata_json`, with additive columns applied via `EnsureTextColumn`.
+- **Task 2's column confirmed live in this worktree:** `miller_version TEXT` at `TelemetryLedger.cs:33`,
+  in the insert column list at line 83, and `EnsureTextColumn(connection, "miller_version")` at line 153.
+  The contract references it by exactly that name.
+- **Retention value confirmed:** `IndexBootstrapService.cs:471` opens the ledger with `retentionDays: 30`.
 
 ## Judgment calls
 
-1. **Rewrote `WorkspaceIndex_DropsAriaTableAndRowRoles` → three well-formedness tests. FLAGGED.**
-   The existing guard asserted `DoesNotContain("role=\"table\"")` / `role="row"` — a direct contradiction of Task 5's acceptance criteria. `git log -S` traced it to `4c28d90`, where rows were `<a class="ws-index-row">`: an anchor hosting `role="row"` with cell children *is* malformed ARIA, which is what the guard's own comment says ("must not carry **malformed** table/row ARIA roles"). Rows are `<div>`s now, so complete table roles are well-formed and the guard's intent is preserved, not weakened. I own the file; the replacement is stronger than a deletion:
-   - `WorkspaceIndex_TableRolesAreWellFormed` — roles present **and** `DoesNotContain("<a class=\"ws-index-row\"")` keeps the original anchor-row prohibition alive.
-   - `WorkspaceIndex_EveryRowHasSameCellCountAsHeaderColumns` — 8 columnheaders × 2 rows == 16 cells; catches the incomplete-roles failure the original guard was really defending against.
-   - `WorkspaceIndex_AriaSortLivesOnColumnHeadersNotButtons`.
-2. **Third `ReadIndex` call site.** The brief named two (`DashboardEndpoints.cs:44,130`); trace found `RenderIndexJson` → `/index.json`. Threaded it too — the plan explicitly allows the additive `index.json` field, and leaving it would make the JSON feed disagree with the page.
-3. **Optional `telemetryDbPath` parameter** rather than required: keeps `RenderIndexJson` and the 3 unowned test call sites (`DashboardFragmentCachingTests.cs:237`, `DashboardRegistryReadTests.cs:1530,1733`) compiling untouched. Null path ⇒ null timestamps, same as a missing DB.
-4. **`workspace-path` raised above the stretched link** (`z-index: 1`). The plan offered this as a choice ("if it should stay selectable"). Raised it: the path's `title` tooltip exists precisely because the path is ellipsis-truncated, and the overlay would swallow both the tooltip and text selection. Cost: the second line is not a click target; the name line, all six data cells, and the row padding still are.
-5. **Last used placed second-to-last, before an actions column** (9 columns total). Fixed-width columns trimmed (`7.5→7rem`, `6→5.5rem`, `7→6.5rem`, `5.5→4.5rem` rev, langs `1.7→1.4fr`, main `2.4→2.2fr`) to absorb the two new columns. Task 10 owns the final responsive sweep.
-6. **`never`, not `—`, for no activity** — `—` already means "no facts" in the neighbouring cells; a distinct word keeps the two absences distinguishable. Carries `title="no agent tool calls recorded for this workspace"`.
-7. **Test asserts the split title string.** Blazor renders attribute values through `HtmlEncoder.Default`, which emits the em dash as `&#x2014;`. Asserting the literal spec string would fail on an encoding detail, so the test asserts `title="index facts unavailable` and `open the workspace to inspect"`. Rendered output is correct — browsers decode the entity.
+- Chose `metadata_json` over new columns (reasoning above). If P2b later finds a query-performance
+  need, that is a v2 conversation, not an implementer's call — the doc says so.
+- Gave `canary_rescue_kind` its own key rather than overloading the existing `auto_rescue_kind`, so the
+  frozen enum can't drift when the non-canary rescue vocabulary changes. The doc states the relationship.
+- Listed `ineligible_experiment_inactive` in the eligibility enum while noting it is never persisted
+  (the canary writes nothing when inactive) — kept for completeness of the analysis-side vocabulary.
+- Did **not** set the non-inferiority margin/floor: those are sealed-set decisions owned by the P0 eval
+  task. Delegated explicitly in-doc rather than inventing a number that would look authoritative.
 
-## Self-review
+## Concerns
 
-- **Caught and fixed a real CSS bug during self-review**: I first wrote `.ws-row-actions details[open] { position: absolute }`, which would have yanked the `Remove…` summary out of flow and collapsed the cell the instant the row expanded. Now only `details[open] > form` floats (`top: calc(100% + 6px); right: 0`), anchored to `details { position: relative }`; the summary stays in flow.
-- **Verified the real rendered HTML**, not just string assertions: rendered `WorkspaceIndex` to a temp probe, eyeballed the markup (correct roles, `aria-sort` on wrappers not buttons, `data-sort-activity="1781258400"`, `<time …>34d ago</time>`, remove control in its right-rail cell with `data-issue-details`/`data-issue-id="remove-ws-a"` intact, no inline `text-decoration` style), then deleted the probe. `git status` confirms only owned files changed.
-- **Inherited contracts intact**: `hx-ext="morph"` + `morph:outerHTML` + `every 30s` still on the section (4 matches); `htmx:configRequest` / `If-None-Match` / `X-Miller-Dashboard` / `htmx:beforeSwap` 304 guard / `shouldSwap = false` all still present (5 matches). New `/` listener is an additive `document.addEventListener('keydown')` that touches none of them.
-- **Morph-safe**: sort state still lives only in `window.__millerWorkspaceIndexState`; `reflectSortButtons` runs from the same `rehydrate()` on `htmx:afterSwap`, now writing to the columnheader. No state parked on DOM nodes.
-- **CSP-Alpine safe**: only `x-on:click="onSort($event)"` and property access; no expressions added.
-- `node --check` passes on both JS files.
-- Tests carry no narration comments; the two comments present state non-obvious constraints (HtmlEncoder behavior, aria-sort rationale).
+- **30-day retention is tight for the P5 30-day measurement window** — zero slack. Flagged in-doc under
+  Retention; P5 planning should schedule aggregate export on a rolling cadence, not once at the end.
+- **`miller telemetry canary --json` is a new CLI verb** the contract commits P2b/P5 to building. CLI +
+  export only (no MCP tool), so it stays within the stinginess rule, but the lead should confirm it is
+  in scope for a later phase's plan.
+- Served-result-hash arrays make canary rows larger than typical telemetry rows (≤20 digests). Bounded
+  and capped, but worth a size sanity check on real fleet data during P4 shadow rollout.
 
-## Concerns / notes for the lead
+## `docs/README.md` map line (for the lead → Task 1)
 
-1. **The rewritten roles guard is the one thing worth a second look** — see judgment call 1. Task 5's plan and the pre-existing test were in direct conflict; I resolved it toward the plan because the guard's stated intent (no *malformed* ARIA) is satisfied, and its real teeth (`<a>` rows) are preserved in the replacement.
-2. **`:has()` is used for the first time in `dashboard.css`** (`.ws-row-actions:has(details[open])`, keeping an open confirm visible when the pointer drifts). Baseline across modern browsers since Dec 2023 and the dashboard is local-first, so it is safe; `:focus-within` independently covers the click-to-open case, so an unsupporting browser degrades to "confirm hides on pointer-out", never to a broken control.
-3. **Stale grid has `role="table"` with no header row** — the stale section never rendered a header, so its cells are positional. Valid ARIA (a table need not have column headers) and better than the previous unlabeled div soup; flagging in case Task 10 wants a header there.
-4. **Filter matches remove-form text** (typing `remove` matches every row) — pre-existing, since `applyFilter` reads `row.textContent` and the confirm form was already inside the row. Not touched; Task 6/10 could scope the filter to the name/path.
-5. **`ReadIndex` opens the telemetry DB once per call**, one grouped query, no per-workspace fan-out — no new N+1 on the 30s fragment poll.
+```
+- [Canary Telemetry Contract v1](contracts/canary-telemetry-v1.md) — frozen randomized-holdout canary contract: assignment unit and derivation, arm/query-class/fallback/backend enums, target-hash attribution window, success event, per-field privacy notes, shadow non-inferiority population, retention and aggregate-export shapes.
+```
