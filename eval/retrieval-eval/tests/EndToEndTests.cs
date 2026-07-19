@@ -53,8 +53,14 @@ public class EndToEndTests : IDisposable
         Assert.Equal((0.5 + rustNdcg) / 2.0, report.LanguageMacroAverage.NdcgAtK, 1e-12);
         Assert.Equal("csharp", report.WorstLanguage!.Language);
 
+        Assert.Equal(UnitPolicies.Cluster, report.UnitPolicy);
+        Assert.Equal(2, report.EvaluationUnitCount);
         Assert.Equal(0.5, report.Overall.RecallAtK, 1e-12);
-        Assert.Equal((rustNdcg + 0.0 + 1.0) / 3.0, report.Overall.NdcgAtK, 1e-12);
+        Assert.Equal((0.5 + rustNdcg) / 2.0, report.Overall.NdcgAtK, 1e-12);
+
+        Assert.Equal((rustNdcg + 0.0 + 1.0) / 3.0, report.OverallPerQuery.NdcgAtK, 1e-12);
+        Assert.Equal(3, report.OverallPerQuery.UnitCount);
+        Assert.Equal((1.0 + rustNdcg) / 2.0, report.OverallClusterMax.NdcgAtK, 1e-12);
 
         var cluster = Assert.Single(report.PerIntentCluster);
         Assert.True(cluster.ClusterHit);

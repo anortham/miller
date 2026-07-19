@@ -28,6 +28,11 @@ Useful overrides: `CANDIDATES="qwen3-0.6b-f16"`, `BATCH=16`, `K=10`, `FLOOR`, `R
 Stages: download+verify → build corpus → BM25 baseline → **pooling sanity gate** → embed → rank each
 lane → score → `summarize.py` comparison table.
 
+**`RANK_ONLY=1 eval/model-bench/run-bench.sh`** re-derives every arm from the cached vectors: no
+download, no corpus rebuild, no BM25 re-run, no `llama-server`. Use it when the ranking population,
+threshold policy, or scorer changes but the embeddings did not — those stages are deterministic given
+the cached `.npy` files, so re-embedding would spend an hour reproducing identical vectors.
+
 ## Pieces
 
 | file | role |
@@ -63,6 +68,28 @@ context.
 `doc_id` is the repo-relative file path, matching the golden set's vocabulary. The dev set carries
 **zero** `#Symbol` suffixes, so ranking is file-granular: many units map onto one `doc_id` and a
 file's score is its best-scoring unit.
+
+### Ranking population: test units are excluded (production parity)
+
+`rank` scores a query against its own repo's corpus units **excluding every `is_test` unit** (6,104 of
+34,481 here, leaving 28,377). This is not a quality filter — it is what the shipped surface does.
+
+Design §5.2 gives test symbols cards but excludes them "from default search recall via the metadata
+filter", and Miller's lexical baseline already behaves that way: `SearchTool.ResolveExcludeTests`
+auto-hides test code for natural-language queries. Before this filter the semantic arms ranked 178
+test-path entries against BM25's 58, so the two arms were competing over **different doc populations** —
+the same class of error as indexing the golden set, just quieter.
+
+Two facts worth stating rather than assuming:
+
+- **It cannot manufacture a win.** No graded doc in the dev set resolves to a test-only path (verified
+  against the corpus), so no relevant document is removed from any query's candidate pool. The one golden
+  doc carrying any test units, `crates/julie-core/src/string_similarity.rs`, keeps its non-test units.
+- **A residual asymmetry remains, and it is production-faithful.** BM25 still returns 11 test-path
+  entries, all on `identifier`/`path` queries, because Miller's auto-hide applies to natural-language
+  phrasings only. Since no golden doc is test-only, this changes neither arm's recall.
+
+`--include-tests` restores the unfiltered population for ablation. Default arms never use it.
 
 ### Card eligibility is data-driven, not a language blocklist
 

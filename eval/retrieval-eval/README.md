@@ -81,12 +81,40 @@ Rules an arm must honor:
 - **recall@k** — fraction of a query's relevant docs appearing in the first `k` ranked entries.
 - **nDCG@k** — graded, with exponential gain `2^grade - 1` and `log2(position + 2)` discount, normalized by
   the ideal ordering (grades sorted descending) truncated at the same `k`.
-- **Cluster scoring** — a paraphrase cluster is one sample, not N. `cluster_hit` is true when **any** member
-  paraphrase retrieved at least one relevant doc inside `k`. `member_hit_rate` is reported alongside so a
-  cluster that only survives on its most literal phrasing is visible rather than hidden behind a hit.
-- **Language macro-average** — the mean of per-language means, so a language with three queries counts as much
-  as one with forty. `worst_language` reports the lowest-scoring language (nDCG first, then recall). Both are
-  required by the language-parity rule: a headline average that hides one broken language is a regression.
+
+### The evaluation unit (read this before comparing arms)
+
+Design §8 requires paraphrase intent clusters to be **scored as clusters, not independent samples**. The
+harness therefore builds an **evaluation unit** list and averages the primary metrics over units:
+
+- each non-empty `intent_cluster` is **one unit**, whose recall/nDCG is the **mean over its member
+  paraphrases** — the expected quality over a random phrasing of that intent;
+- each positive query with no `intent_cluster` is **one unit**.
+
+`unit_policy` in the report names this (`cluster`), and every block carries both `unit_count` and the
+`query_count` those units cover. This is a decision-relevant choice, not bookkeeping: a mined cluster with
+five paraphrases would otherwise outvote five distinct intents, and on the dev set the per-query and
+cluster-unit rankings of the benchmark lanes genuinely disagree.
+
+**Primary (cluster units):** `overall`, `per_language`, `language_macro_average`, `worst_language`.
+
+**Secondary:**
+
+- `overall_per_query` — every positive query weighted equally. Useful as a reference, not for pins.
+- `overall_cluster_max` — cluster units taking their **best** member's score: "is this intent reachable by
+  *some* phrasing?" Read with `intent_cluster_summary`, which is the hit-coverage version of the same view.
+- `per_language_per_query` — the per-query reference view of `per_language`.
+
+`per_query_class` stays **per-query** by construction: query classes cut across clusters, so there is no
+cluster unit to average over. Report labels must say so.
+
+- **Cluster hit coverage** — `cluster_hit` is true when **any** member paraphrase retrieved at least one
+  relevant doc inside `k`. `member_hit_rate` is reported alongside so a cluster that only survives on its
+  most literal phrasing is visible rather than hidden behind a hit.
+- **Language macro-average** — the mean of per-language (cluster-unit) means, so a language with three
+  queries counts as much as one with forty. `worst_language` reports the lowest-scoring language (nDCG
+  first, then recall). Both are required by the language-parity rule: a headline average that hides one
+  broken language is a regression. A cluster is attributed to its members' dominant language.
 - **Negatives** — a negative query passes when the arm returns **no doc inside `k`**. Because results files
   are post-threshold, "returned something" *is* "made a confident claim", so the harness needs no scores. The
   report gives `false_positive_rate` and `pass_rate`.
@@ -95,9 +123,11 @@ Rules an arm must honor:
 
 ## Report shape
 
-`score` writes a JSON object with `k`, query counts, `overall`, `per_language`, `language_macro_average`,
-`worst_language`, `per_query_class`, `per_intent_cluster`, `intent_cluster_summary`, `negatives`,
-`missing_results`, `unknown_results`, `inputs`, and (when `--corpus` is given) `corpus_validation`.
+`score` writes a JSON object with `k`, `unit_policy`, query counts, `evaluation_unit_count`, `overall`,
+`overall_per_query`, `overall_cluster_max`, `per_language`, `per_language_per_query`,
+`language_macro_average`, `worst_language`, `per_query_class`, `per_intent_cluster`,
+`intent_cluster_summary`, `negatives`, `missing_results`, `unknown_results`, `inputs`, and (when
+`--corpus` is given) `corpus_validation`.
 
 ## Set-construction protocol
 

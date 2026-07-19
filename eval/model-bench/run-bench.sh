@@ -31,6 +31,19 @@ mkdir -p "$DIST" "$RUNS"/{sanity,vecs,results,reports}
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
+# RANK_ONLY=1 re-derives every arm from cached vectors: no download, no corpus
+# rebuild, no BM25 re-run, no llama-server. Use it when the ranking population,
+# threshold policy, or scorer changes but the embeddings did not — those stages
+# are deterministic given the cached .npy files, so re-embedding would burn an
+# hour to reproduce identical vectors.
+RANK_ONLY="${RANK_ONLY:-0}"
+
+if [[ "$RANK_ONLY" == "1" ]]; then
+  say "RANK_ONLY=1 — reusing cached vectors in $RUNS/vecs (no embed, no BM25 re-run)"
+  [[ -d "$RUNS/vecs" ]] || { echo "no cached vectors at $RUNS/vecs" >&2; exit 1; }
+  [[ -f "$CORPUS" ]] || { echo "no cached corpus at $CORPUS" >&2; exit 1; }
+fi
+
 # --- 1. download + verify ---------------------------------------------------
 
 fetch() { # url sha256 filename
@@ -50,6 +63,8 @@ fetch() { # url sha256 filename
   fi
   echo "  ok $name ($got)"
 }
+
+if [[ "$RANK_ONLY" != "1" ]]; then
 
 say "1/6 download + verify pinned artifacts"
 eval "$(python3 - "$PINS" <<'PY'
@@ -95,6 +110,8 @@ else
   echo "  SKIP: miller binary not built at $MILLER_BIN (dotnet build Miller.slnx -c Release)" >&2
 fi
 
+fi  # RANK_ONLY
+
 # --- 4/5. per-candidate sanity gate, embed, rank ----------------------------
 
 lanes_for() { # candidate_id -> "dims:quant" lines
@@ -114,20 +131,26 @@ for cid in $CANDIDATES; do
   model_file="$(python3 -c "import json;print(next(c['file'] for c in json.load(open('$PINS'))['candidates'] if c['id']=='$cid'))")"
   model="$DIST/$model_file"
 
-  say "4/6 pooling sanity gate: $cid"
-  if ! python3 "$HERE/bench.py" sanity --pins "$PINS" --candidate "$cid" \
-        --binary "$LLAMA_BIN" --model "$model" --out "$RUNS/sanity/$cid.json"; then
-    echo "  SANITY FAILED for $cid — candidate dropped, not scored." >&2
-    continue
-  fi
+  if [[ "$RANK_ONLY" != "1" ]]; then
+    say "4/6 pooling sanity gate: $cid"
+    if ! python3 "$HERE/bench.py" sanity --pins "$PINS" --candidate "$cid" \
+          --binary "$LLAMA_BIN" --model "$model" --out "$RUNS/sanity/$cid.json"; then
+      echo "  SANITY FAILED for $cid — candidate dropped, not scored." >&2
+      continue
+    fi
 
-  say "5/6 embed corpus + queries: $cid"
-  if [[ ! -f "$RUNS/vecs/$cid.corpus.npy" ]]; then
-    python3 "$HERE/bench.py" embed --pins "$PINS" --candidate "$cid" \
-      --binary "$LLAMA_BIN" --model "$model" \
-      --corpus "$CORPUS" --queries "$QUERIES" --outdir "$RUNS/vecs" --batch "${BATCH:-16}"
+    say "5/6 embed corpus + queries: $cid"
+    if [[ ! -f "$RUNS/vecs/$cid.corpus.npy" ]]; then
+      python3 "$HERE/bench.py" embed --pins "$PINS" --candidate "$cid" \
+        --binary "$LLAMA_BIN" --model "$model" \
+        --corpus "$CORPUS" --queries "$QUERIES" --outdir "$RUNS/vecs" --batch "${BATCH:-16}"
+    else
+      echo "  cached: $RUNS/vecs/$cid.corpus.npy"
+    fi
   else
-    echo "  cached: $RUNS/vecs/$cid.corpus.npy"
+    [[ -f "$RUNS/vecs/$cid.corpus.npy" ]] || {
+      echo "  RANK_ONLY: no cached vectors for $cid" >&2; continue; }
+    say "5/6 cached vectors: $cid (sanity gate already passed on the embedding run)"
   fi
 
   # Two threshold policies per lane, because they answer different questions:

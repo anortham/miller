@@ -118,6 +118,124 @@ public class ScorerTests
     }
 
     [Fact]
+    public void An_extra_paraphrase_scoring_like_its_cluster_does_not_shift_the_primary_metric()
+    {
+        var baseQueries = new[]
+        {
+            Positive("p1", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p2", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("s1", "csharp", "identifier", ["b"]),
+        };
+        var baseResults = new[] { Ranked("p1", "a"), Ranked("p2", "a"), Ranked("s1", "nope") };
+
+        var widened = baseQueries.Append(
+            Positive("p3", "csharp", "prose", ["a"], cluster: "promote")).ToArray();
+        var widenedResults = baseResults.Append(Ranked("p3", "a")).ToArray();
+
+        var before = Scorer.Score(baseQueries, baseResults, k: 10);
+        var after = Scorer.Score(widened, widenedResults, k: 10);
+
+        Assert.Equal(2, before.EvaluationUnitCount);
+        Assert.Equal(2, after.EvaluationUnitCount);
+        Assert.Equal(0.5, before.Overall.RecallAtK, 1e-9);
+        Assert.Equal(before.Overall.RecallAtK, after.Overall.RecallAtK, 1e-9);
+        Assert.Equal(before.Overall.NdcgAtK, after.Overall.NdcgAtK, 1e-9);
+        Assert.Equal(before.PerLanguage["csharp"].RecallAtK, after.PerLanguage["csharp"].RecallAtK, 1e-9);
+
+        Assert.Equal(2.0 / 3.0, before.OverallPerQuery.RecallAtK, 1e-9);
+        Assert.Equal(0.75, after.OverallPerQuery.RecallAtK, 1e-9);
+    }
+
+    [Fact]
+    public void Duplicating_a_cluster_member_verbatim_leaves_the_primary_metric_unchanged()
+    {
+        var queries = new[]
+        {
+            Positive("p1", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p2", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("z1", "rust", "prose", ["b"], cluster: "safety", repo: "julie"),
+            Positive("z2", "rust", "prose", ["b"], cluster: "safety", repo: "julie"),
+        };
+        var results = new[] { Ranked("p1", "a"), Ranked("p2", "a"), Ranked("z1"), Ranked("z2") };
+
+        var duplicated = queries.Append(
+            Positive("p1-copy", "csharp", "prose", ["a"], cluster: "promote")).ToArray();
+        var duplicatedResults = results.Append(Ranked("p1-copy", "a")).ToArray();
+
+        var before = Scorer.Score(queries, results, k: 10);
+        var after = Scorer.Score(duplicated, duplicatedResults, k: 10);
+
+        Assert.Equal(0.5, before.Overall.RecallAtK, 1e-9);
+        Assert.Equal(before.Overall.RecallAtK, after.Overall.RecallAtK, 1e-9);
+        Assert.Equal(before.Overall.NdcgAtK, after.Overall.NdcgAtK, 1e-9);
+        Assert.Equal("rust", after.WorstLanguage!.Language);
+        Assert.Equal(before.WorstLanguage!.RecallAtK, after.WorstLanguage.RecallAtK, 1e-9);
+
+        Assert.Equal(0.5, before.OverallPerQuery.RecallAtK, 1e-9);
+        Assert.Equal(0.6, after.OverallPerQuery.RecallAtK, 1e-9);
+    }
+
+    [Fact]
+    public void A_cluster_weighs_the_same_as_one_standalone_query()
+    {
+        var queries = new[]
+        {
+            Positive("p1", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p2", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p3", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("s1", "csharp", "identifier", ["b"]),
+        };
+        var results = new[] { Ranked("p1"), Ranked("p2"), Ranked("p3"), Ranked("s1", "b") };
+
+        var report = Scorer.Score(queries, results, k: 10);
+
+        Assert.Equal(2, report.EvaluationUnitCount);
+        Assert.Equal(0.5, report.Overall.RecallAtK, 1e-9);
+        Assert.Equal(4, report.Overall.QueryCount);
+        Assert.Equal(0.25, report.OverallPerQuery.RecallAtK, 1e-9);
+    }
+
+    [Fact]
+    public void Cluster_max_overall_credits_a_cluster_for_its_best_phrasing()
+    {
+        var queries = new[]
+        {
+            Positive("p1", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p2", "csharp", "prose", ["a"], cluster: "promote"),
+        };
+        var results = new[] { Ranked("p1", "a"), Ranked("p2", "nope") };
+
+        var report = Scorer.Score(queries, results, k: 10);
+
+        Assert.Equal(0.5, report.Overall.RecallAtK, 1e-9);
+        Assert.Equal(1.0, report.OverallClusterMax.RecallAtK, 1e-9);
+        Assert.Equal(1, report.OverallClusterMax.UnitCount);
+    }
+
+    [Fact]
+    public void Per_language_and_worst_language_use_cluster_units()
+    {
+        var queries = new[]
+        {
+            Positive("p1", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p2", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("p3", "csharp", "prose", ["a"], cluster: "promote"),
+            Positive("r1", "rust", "prose", ["b"], repo: "julie"),
+        };
+        var results = new[] { Ranked("p1", "a"), Ranked("p2"), Ranked("p3"), Ranked("r1") };
+
+        var report = Scorer.Score(queries, results, k: 10);
+
+        Assert.Equal(1, report.PerLanguage["csharp"].UnitCount);
+        Assert.Equal(3, report.PerLanguage["csharp"].QueryCount);
+        Assert.Equal(1.0 / 3.0, report.PerLanguage["csharp"].RecallAtK, 1e-9);
+        Assert.Equal(1.0 / 3.0, report.PerLanguagePerQuery["csharp"].RecallAtK, 1e-9);
+        Assert.Equal("rust", report.WorstLanguage!.Language);
+        Assert.Equal(0.0, report.WorstLanguage.RecallAtK, 1e-9);
+        Assert.Equal(UnitPolicies.Cluster, report.UnitPolicy);
+    }
+
+    [Fact]
     public void Negative_query_fails_when_the_arm_returns_any_confident_hit()
     {
         var queries = new[] { Negative("n1"), Negative("n2"), Negative("n3") };

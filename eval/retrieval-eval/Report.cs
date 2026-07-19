@@ -2,11 +2,27 @@ using System.Text.Json.Serialization;
 
 namespace RetrievalEval;
 
+/// <summary>
+/// One aggregated metric block. <see cref="UnitCount"/> is the number of evaluation units averaged;
+/// <see cref="QueryCount"/> is the number of underlying queries those units cover. Under the per-query unit
+/// policy the two are equal; under the cluster unit policy a paraphrase cluster contributes one unit and N queries.
+/// </summary>
 public sealed record MetricBlock
 {
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("unit_count")] public int UnitCount { get; init; }
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
+}
+
+/// <summary>Evaluation-unit policies a report's primary metrics can average over.</summary>
+public static class UnitPolicies
+{
+    /// <summary>Design §8: an intent cluster is one unit, scored as the mean over its member paraphrases.</summary>
+    public const string Cluster = "cluster";
+
+    /// <summary>Every positive query is its own unit.</summary>
+    public const string PerQuery = "per_query";
 }
 
 public sealed record MacroAverage
@@ -21,6 +37,7 @@ public sealed record WorstLanguage
     [JsonPropertyName("language")] public string Language { get; init; } = "";
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("unit_count")] public int UnitCount { get; init; }
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
 }
 
@@ -62,13 +79,29 @@ public sealed record NegativeBlock
 public sealed record EvalReport
 {
     [JsonPropertyName("k")] public int K { get; init; }
+    /// <summary>Names the evaluation unit the primary metrics average over. See design §8.</summary>
+    [JsonPropertyName("unit_policy")] public string UnitPolicy { get; init; } = UnitPolicies.Cluster;
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
     [JsonPropertyName("positive_query_count")] public int PositiveQueryCount { get; init; }
     [JsonPropertyName("negative_query_count")] public int NegativeQueryCount { get; init; }
+    [JsonPropertyName("evaluation_unit_count")] public int EvaluationUnitCount { get; init; }
+    /// <summary>PRIMARY. Cluster-unit mean: each intent cluster is one unit scored as the mean over its members.</summary>
     [JsonPropertyName("overall")] public MetricBlock Overall { get; init; } = new();
+    /// <summary>Secondary. Every positive query weighted equally, ignoring cluster membership.</summary>
+    [JsonPropertyName("overall_per_query")] public MetricBlock OverallPerQuery { get; init; } = new();
+    /// <summary>Secondary. Cluster-unit mean where a cluster takes its best member's score (best-phrasing view).</summary>
+    [JsonPropertyName("overall_cluster_max")] public MetricBlock OverallClusterMax { get; init; } = new();
+    /// <summary>PRIMARY. Cluster-unit.</summary>
     [JsonPropertyName("per_language")] public IReadOnlyDictionary<string, MetricBlock> PerLanguage { get; init; } = new Dictionary<string, MetricBlock>();
+    /// <summary>Secondary. Per-query reference view of the same languages.</summary>
+    [JsonPropertyName("per_language_per_query")] public IReadOnlyDictionary<string, MetricBlock> PerLanguagePerQuery { get; init; } = new Dictionary<string, MetricBlock>();
     [JsonPropertyName("language_macro_average")] public MacroAverage LanguageMacroAverage { get; init; } = new();
+    /// <summary>PRIMARY. Cluster-unit.</summary>
     [JsonPropertyName("worst_language")] public WorstLanguage? WorstLanguage { get; init; }
+    /// <summary>
+    /// Per-query by design: query classes cut across intent clusters (a cluster's paraphrases can carry different
+    /// classes), so there is no cluster unit to average over. Read these as per-query metrics.
+    /// </summary>
     [JsonPropertyName("per_query_class")] public IReadOnlyDictionary<string, MetricBlock> PerQueryClass { get; init; } = new Dictionary<string, MetricBlock>();
     [JsonPropertyName("per_intent_cluster")] public IReadOnlyList<ClusterRollup> PerIntentCluster { get; init; } = [];
     [JsonPropertyName("intent_cluster_summary")] public ClusterSummary IntentClusterSummary { get; init; } = new();

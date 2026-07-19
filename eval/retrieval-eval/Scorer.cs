@@ -2,6 +2,19 @@ namespace RetrievalEval;
 
 sealed record ScoredQuery(EvalQuery Query, double Recall, double Ndcg, bool Hit);
 
+/// <summary>
+/// One evaluation unit under the cluster unit policy: an intent cluster scored as the mean over its member
+/// paraphrases, or a single standalone query. <see cref="MaxRecall"/>/<see cref="MaxNdcg"/> carry the
+/// best-member view used by the secondary cluster-max metrics.
+/// </summary>
+sealed record EvalUnit(
+    string Language,
+    double Recall,
+    double Ndcg,
+    double MaxRecall,
+    double MaxNdcg,
+    int QueryCount);
+
 /// <summary>Rolls per-query metrics up into the report shape the semantic program's gates read.</summary>
 public static class Scorer
 {
@@ -51,7 +64,13 @@ public static class Scorer
             positives.Add(new ScoredQuery(query, recall, ndcg, recall > 0.0));
         }
 
-        var perLanguage = positives
+        var units = BuildUnits(positives);
+
+        var perLanguage = units
+            .GroupBy(u => u.Language, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, AggregateUnits, StringComparer.Ordinal);
+
+        var perLanguagePerQuery = positives
             .GroupBy(s => s.Query.Language, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, Aggregate, StringComparer.Ordinal);
 
@@ -85,6 +104,7 @@ public static class Scorer
                 Language = kv.Key,
                 RecallAtK = kv.Value.RecallAtK,
                 NdcgAtK = kv.Value.NdcgAtK,
+                UnitCount = kv.Value.UnitCount,
                 QueryCount = kv.Value.QueryCount,
             })
             .FirstOrDefault();
@@ -92,11 +112,16 @@ public static class Scorer
         return new EvalReport
         {
             K = k,
+            UnitPolicy = UnitPolicies.Cluster,
             QueryCount = queries.Count,
             PositiveQueryCount = positives.Count,
             NegativeQueryCount = negativeCount,
-            Overall = Aggregate(positives),
+            EvaluationUnitCount = units.Count,
+            Overall = AggregateUnits(units),
+            OverallPerQuery = Aggregate(positives),
+            OverallClusterMax = AggregateUnitsMax(units),
             PerLanguage = perLanguage,
+            PerLanguagePerQuery = perLanguagePerQuery,
             LanguageMacroAverage = new MacroAverage
             {
                 RecallAtK = Mean(perLanguage.Values.Select(v => v.RecallAtK)),
@@ -126,6 +151,46 @@ public static class Scorer
         };
     }
 
+    /// <summary>
+    /// Design §8: paraphrase intent clusters are scored as clusters, not independent samples. A cluster becomes one
+    /// unit whose score is the mean over its members — the expected quality over a random phrasing of that intent —
+    /// so adding a paraphrase sharpens a cluster's estimate without buying it extra weight in the headline metric.
+    /// A query with no cluster is its own unit.
+    /// </summary>
+    static IReadOnlyList<EvalUnit> BuildUnits(IReadOnlyList<ScoredQuery> positives)
+    {
+        var units = new List<EvalUnit>();
+
+        foreach (var solo in positives.Where(s => string.IsNullOrWhiteSpace(s.Query.IntentCluster)))
+            units.Add(new EvalUnit(solo.Query.Language, solo.Recall, solo.Ndcg, solo.Recall, solo.Ndcg, 1));
+
+        var clustered = positives
+            .Where(s => !string.IsNullOrWhiteSpace(s.Query.IntentCluster))
+            .GroupBy(s => s.Query.IntentCluster!, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.Ordinal);
+
+        foreach (var cluster in clustered)
+        {
+            units.Add(new EvalUnit(
+                DominantLanguage(cluster),
+                cluster.Average(s => s.Recall),
+                cluster.Average(s => s.Ndcg),
+                cluster.Max(s => s.Recall),
+                cluster.Max(s => s.Ndcg),
+                cluster.Count()));
+        }
+
+        return units;
+    }
+
+    /// <summary>A cluster's language for parity reporting: the most common member language, ties broken by name.</summary>
+    static string DominantLanguage(IEnumerable<ScoredQuery> members) =>
+        members
+            .GroupBy(s => s.Query.Language, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .First().Key;
+
     static Dictionary<string, int> ToGradeMap(EvalQuery query)
     {
         var map = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -140,7 +205,32 @@ public static class Scorer
         {
             RecallAtK = Mean(items.Select(s => s.Recall)),
             NdcgAtK = Mean(items.Select(s => s.Ndcg)),
+            UnitCount = items.Count,
             QueryCount = items.Count,
+        };
+    }
+
+    static MetricBlock AggregateUnits(IEnumerable<EvalUnit> units)
+    {
+        var items = units as IReadOnlyCollection<EvalUnit> ?? units.ToList();
+        return new MetricBlock
+        {
+            RecallAtK = Mean(items.Select(u => u.Recall)),
+            NdcgAtK = Mean(items.Select(u => u.Ndcg)),
+            UnitCount = items.Count,
+            QueryCount = items.Sum(u => u.QueryCount),
+        };
+    }
+
+    static MetricBlock AggregateUnitsMax(IEnumerable<EvalUnit> units)
+    {
+        var items = units as IReadOnlyCollection<EvalUnit> ?? units.ToList();
+        return new MetricBlock
+        {
+            RecallAtK = Mean(items.Select(u => u.MaxRecall)),
+            NdcgAtK = Mean(items.Select(u => u.MaxNdcg)),
+            UnitCount = items.Count,
+            QueryCount = items.Sum(u => u.QueryCount),
         };
     }
 
