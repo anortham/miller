@@ -167,12 +167,12 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Mirror `spike/Codesearch.Spike` conventions for placement. Windows/Linux legs run in CI (report as pending evidence until push); the local leg (osx-arm64) must pass before handoff. Findings doc records: verdict per RID, binary sizes, load mechanism notes, and any SQLitePCLRaw/AOT trimming flags needed — these notes feed P2b directly. If the spike FAILS on any RID, that is a program-level gate failure: report it prominently; do not work around it silently.
 
 **Acceptance criteria:**
-- [ ] Spike passes locally on osx-arm64 under `dotnet publish -c Release` with AOT (no JIT fallback)
-- [ ] CI job added for all 4 RIDs (evidence pending until push — stated in findings doc)
-- [ ] All downloads sha256-pinned in `scripts/spike-pins.json`; script fails loud on mismatch
-- [ ] Findings doc records verdicts + AOT flags/trimming notes for P2b
-- [ ] Product build unaffected: `dotnet build Miller.slnx -c Release` still 0 warnings
-- [ ] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
+- [x] Spike passes locally on osx-arm64 under `dotnet publish -c Release` with AOT (no JIT fallback)
+- [x] CI job added for all 4 RIDs (evidence pending until push — stated in findings doc)
+- [x] All downloads sha256-pinned in `scripts/spike-pins.json`; script fails loud on mismatch
+- [x] Findings doc records verdicts + AOT flags/trimming notes for P2b
+- [x] Product build unaffected: `dotnet build Miller.slnx -c Release` still 0 warnings
+- [x] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
 
 ### Task 5: Canary telemetry contract (frozen)
 
