@@ -23,6 +23,16 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class EditTool
 {
+    /// <summary>
+    /// Telemetry key carrying the privacy-safe failure bucket for a non-successful edit. Every non-successful
+    /// call stamps it: a stable <see cref="EditService"/> bucket for a classified failure, or
+    /// <see cref="UnhandledFailureReasonPrefix"/> + the exception type name when one escapes the pipeline.
+    /// </summary>
+    private const string FailureReasonMetadataKey = "edit_failure_reason";
+
+    /// <summary>Prefix for the exception backstop bucket; the suffix is the exception TYPE NAME, never its message.</summary>
+    private const string UnhandledFailureReasonPrefix = "unhandled_";
+
     private readonly IndexHolder _holder;
     private readonly SmartTargetResolver _resolver;
     private readonly WorkspaceContext _workspace;
@@ -117,7 +127,9 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_anchor", !string.IsNullOrEmpty(anchor));
                 telemetry.SetMetadata("has_line", line is not null);
                 if (result.FailureReason is not null)
-                    telemetry.SetMetadata("edit_failure_reason", result.FailureReason);
+                    telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
+                else if (telemetry.Outcome == TelemetryOutcome.Error)
+                    telemetry.SetMetadata(FailureReasonMetadataKey, EditService.FailureUnknown);
                 if (telemetry.Outcome == TelemetryOutcome.Empty)
                     telemetry.SetEmptyReason("edit_noop");
             }
@@ -129,6 +141,9 @@ public sealed class EditTool
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
                 telemetry.SetError(ex);
+                // Type name only: the bucket is a queryable enum, and an exception message can carry a path or
+                // user text. The message/detail stay in the scope's dedicated error fields, not in metadata.
+                telemetry.SetMetadata(FailureReasonMetadataKey, UnhandledFailureReasonPrefix + ex.GetType().Name);
             }
             return $"edit failed: {ex.Message}";
         }

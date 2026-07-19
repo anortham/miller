@@ -140,9 +140,9 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Tests enumerate each failure class (usage error, no_match, ambiguous, stale_target, io failure, unhandled exception via a rigged provider) and assert a non-null, path-free bucket lands in `scope.MetadataJson`.
 
 **Acceptance criteria:**
-- [ ] Test-enforced invariant: error-outcome edit telemetry always carries `edit_failure_reason`; buckets are stable enums, no paths/content (existing :1461 privacy assertions extended)
-- [ ] All EditService failure returns audited; no remaining null-reason paths for known error kinds
-- [ ] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
+- [x] Test-enforced invariant: error-outcome edit telemetry always carries `edit_failure_reason`; buckets are stable enums, no paths/content (existing :1461 privacy assertions extended)
+- [x] All EditService failure returns audited; no remaining null-reason paths for known error kinds
+- [x] Worker-scope verification passes; diff handed to lead (parallel-lead-commit)
 
 ### Task 4: sqlite-vec Native-AOT spike (program HARD GATE probe)
 

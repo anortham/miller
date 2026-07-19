@@ -58,6 +58,14 @@ public sealed class EditToolTests : IDisposable
         public void Converge(IReadOnlyList<string> changedFiles) => Converged.AddRange(changedFiles);
     }
 
+    /// <summary>A write-through that fails the post-apply converge, exercising the tool's unhandled-exception path.</summary>
+    private sealed class ThrowingWriteThrough : IEditWriteThrough
+    {
+        internal const string Message = "converge exploded for orders/OrderService.cs";
+
+        public void Converge(IReadOnlyList<string> changedFiles) => throw new InvalidOperationException(Message);
+    }
+
     /// <summary>A write-through whose gate-time recovery behavior is scripted per test.</summary>
     private sealed class RecoveringWriteThrough(Func<string, StaleRecoveryAttempt> recover) : IEditWriteThrough
     {
@@ -132,7 +140,8 @@ public sealed class EditToolTests : IDisposable
         return new EditService(index, resolver, fx.DbPath, _root, applier, wt, recoveryOptions: recovery);
     }
 
-    private EditTool BuildTool(JulieDbFixture fx)
+    private EditTool BuildTool(
+        JulieDbFixture fx, EditApplier? applier = null, IEditWriteThrough? writeThrough = null)
     {
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var holder = new IndexHolder(index, builtRevision: 0);
@@ -145,8 +154,8 @@ public sealed class EditToolTests : IDisposable
             holder,
             resolver,
             workspace,
-            new EditApplier(() => new NoopLease()),
-            new RecordingWriteThrough());
+            applier ?? new EditApplier(() => new NoopLease()),
+            writeThrough ?? new RecordingWriteThrough());
     }
 
     private static EditRequest Req(string op, string target) => new(op, target);
@@ -1482,6 +1491,228 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("Preview", output, StringComparison.Ordinal);
         using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
         Assert.False(metadata.RootElement.TryGetProperty("edit_failure_reason", out _));
+    }
+
+    // ---- failure-reason completeness (design §7.1) ----
+    //
+    // The invariant: every edit telemetry row that did not succeed carries a non-null, privacy-safe
+    // `edit_failure_reason` bucket. The documented bucket vocabulary is exactly two shapes:
+    //   * a stable EditService bucket (below), where `unknown` means a known code path reached Error()
+    //     without a more specific bucket;
+    //   * `unhandled_<ExceptionTypeName>`, the EditTool backstop for an exception escaping the pipeline —
+    //     the exception TYPE NAME only, never its message.
+    // Buckets are stable enums: no file paths, no user text, no exception messages.
+    private static readonly string[] DocumentedFailureBuckets =
+    [
+        "no_match", "ambiguous_match", "stale_target", "invalid_request",
+        "target_not_found", "apply_failed", "unknown",
+    ];
+
+    private static string StampedFailureBucket(TelemetryScope telemetry, params string[] forbiddenText)
+    {
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.True(
+            metadata.RootElement.TryGetProperty("edit_failure_reason", out JsonElement reason),
+            "edit_failure_reason missing from " + telemetry.MetadataJson);
+
+        string bucket = Assert.IsType<string>(reason.GetString());
+        if (bucket.StartsWith("unhandled_", StringComparison.Ordinal))
+        {
+            string typeName = bucket["unhandled_".Length..];
+            Assert.NotEmpty(typeName);
+            Assert.All(typeName, c => Assert.True(char.IsAsciiLetterOrDigit(c) || c == '_', bucket));
+        }
+        else
+        {
+            Assert.Contains(bucket, DocumentedFailureBuckets);
+        }
+
+        foreach (string forbidden in forbiddenText)
+            Assert.DoesNotContain(forbidden, telemetry.MetadataJson, StringComparison.Ordinal);
+        return bucket;
+    }
+
+    private TelemetryLedger OpenLedger() => TelemetryLedger.Open(Path.Combine(_root, "telemetry.db"), "ws-edit", _root);
+
+    [Fact]
+    public void Edit_UnknownOperation_StampsInvalidRequestBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("frobnicate", "orders/OrderService.cs", old_text: "SecretOld", new_text: "SecretNew");
+
+        Assert.Equal("invalid_request", StampedFailureBucket(
+            telemetry, "orders/OrderService.cs", "SecretOld", "SecretNew"));
+    }
+
+    [Fact]
+    public void Edit_UnknownOccurrence_StampsInvalidRequestBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit(
+            "replace_text", "orders/OrderService.cs",
+            old_text: "SecretOld", new_text: "SecretNew", occurrence: "seventh");
+
+        Assert.Equal("invalid_request", StampedFailureBucket(
+            telemetry, "orders/OrderService.cs", "SecretOld", "SecretNew"));
+    }
+
+    [Fact]
+    public void Edit_TargetNotFound_StampsTargetNotFoundBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("replace_symbol_body", "NoSuchSecretSymbol", new_text: "{ return 0; }", apply: true);
+
+        Assert.Equal("target_not_found", StampedFailureBucket(telemetry, "NoSuchSecretSymbol"));
+    }
+
+    [Fact]
+    public void Edit_AmbiguousTarget_StampsAmbiguousMatchBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("replace_symbol_body", "Total", new_text: "{ return 0; }", apply: true);
+
+        Assert.Equal("ambiguous_match", StampedFailureBucket(
+            telemetry, "Total", "orders/OrderService.cs", "billing/Invoice.cs"));
+    }
+
+    [Fact]
+    public void Edit_StaleTarget_StampsStaleTargetBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"), JulieDbFixture.OrderServiceContent + "// drifted\n");
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }", apply: true);
+
+        Assert.Equal("stale_target", StampedFailureBucket(telemetry, "orders/OrderService.cs", "drifted"));
+    }
+
+    [Fact]
+    public void Edit_ReplaceSymbolBody_OnNullBodySymbol_StampsFailureBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("replace_symbol_body", "_count", new_text: "= 5;", apply: true);
+
+        Assert.Equal("invalid_request", StampedFailureBucket(telemetry, "_count", "orders/OrderService.cs"));
+    }
+
+    [Fact]
+    public void Edit_ApplyFailure_StampsApplyFailedBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx, applier: new EditApplier(() => null));
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }", apply: true);
+
+        Assert.Equal("apply_failed", StampedFailureBucket(telemetry, "orders/OrderService.cs"));
+    }
+
+    [Fact]
+    public void Edit_RenameSymbol_InvalidNewName_StampsInvalidRequestBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("rename_symbol", "OrderService.Total", new_text: "9not.valid", apply: true);
+
+        Assert.Equal("invalid_request", StampedFailureBucket(telemetry, "OrderService.Total", "9not.valid"));
+    }
+
+    [Fact]
+    public void Edit_RenameSymbol_MissingNewName_StampsInvalidRequestBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("rename_symbol", "OrderService.Total", apply: true);
+
+        Assert.Equal("invalid_request", StampedFailureBucket(telemetry, "OrderService.Total"));
+    }
+
+    [Fact]
+    public void Edit_RenameSymbol_AmbiguousTarget_StampsAmbiguousMatchBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit("rename_symbol", "Total", new_text: "GrandTotal", apply: true);
+
+        Assert.Equal("ambiguous_match", StampedFailureBucket(telemetry, "Total", "orders/OrderService.cs"));
+    }
+
+    [Fact]
+    public void Edit_ReplaceText_NoMatch_StampsNoMatchBucket()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit(
+            "replace_text", "orders/OrderService.cs",
+            old_text: "NoSuchSecretSelector", new_text: "SecretReplacement", apply: true);
+
+        Assert.Equal("no_match", StampedFailureBucket(
+            telemetry, "orders/OrderService.cs", "NoSuchSecretSelector", "SecretReplacement"));
+    }
+
+    [Fact]
+    public void Edit_UnhandledException_StampsExceptionTypeNameBucketWithoutMessage()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx, writeThrough: new ThrowingWriteThrough());
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }", apply: true);
+
+        Assert.StartsWith("edit failed:", output, StringComparison.Ordinal);
+        Assert.Equal(TelemetryOutcome.Error, telemetry.Outcome);
+        Assert.Equal("unhandled_InvalidOperationException", StampedFailureBucket(
+            telemetry, ThrowingWriteThrough.Message, "orders/OrderService.cs"));
     }
 
     [Fact]
