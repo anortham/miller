@@ -197,10 +197,10 @@ Commit mode: Batch A runs `parallel-lead-commit` (workers hand verified diffs to
 **Approach:** Follow `docs/contracts/` house style (e.g. `references-candidates-v1.md`, `metrics-history-v1.md`). Every field gets: name, type, enum values, when written, privacy note.
 
 **Acceptance criteria:**
-- [ ] Contract is implementable without further design decisions (a P2b worker could build it from this doc alone)
-- [ ] No field can carry query text or paths; each field's privacy note says why
-- [ ] Assignment determinism + attribution window + success event are exactly defined
-- [ ] Worker-scope verification (doc self-check: no TBDs, all enums enumerated); diff handed to lead (parallel-lead-commit)
+- [x] Contract is implementable without further design decisions (a P2b worker could build it from this doc alone)
+- [x] No field can carry query text or paths; each field's privacy note says why
+- [x] Assignment determinism + attribution window + success event are exactly defined
+- [x] Worker-scope verification (doc self-check: no TBDs, all enums enumerated); diff handed to lead (parallel-lead-commit)
 
 ### Task 6: Retrieval eval harness + dev golden set
 
