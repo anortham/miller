@@ -44,9 +44,11 @@ stamping — see §9.4). This reliability work rides the program as an independe
    have no Vulkan; MLC is LLM-serving oriented with weak embedding support). CoreML is explicitly
    rejected on Apple Silicon (slower than CPU for this class of model).
 4. **Model policy:** default **Qwen3-Embedding-0.6B GGUF** (Apache 2.0, 1024d MRL). Storage dims
-   and quantization are **benchmark outputs, not constants** (256d int8 + higher-precision rescore
-   is the favored lane; 256/512/1024 × quantization lanes gated on recall@10 / nDCG@10 per
-   language). Fallback tier must be Apache/MIT-licensed (bge-small, arctic-embed candidates);
+   and quantization are **benchmark outputs, not constants** — the P0 benchmark decided them:
+   **512d int8** is the pinned lane (the pre-benchmark favored lane, 256d int8 + rescore, lost
+   22% relative worst-language nDCG and is rejected; see
+   [`docs/findings/2026-07-19-model-benchmark.md`](../findings/2026-07-19-model-benchmark.md),
+   scored on cluster units per §8 over the non-test population). Fallback tier must be Apache/MIT-licensed (bge-small, arctic-embed candidates);
    EmbeddingGemma is license-gated on HF and cannot be a silent fallback; jina-code (CC-BY-NC) and
    CodeRankEmbed (community GGUF, unclear license) are rejected. Model weights are **not** in
    release archives: explicit prefetch (`miller semantic prepare`-style CLI verb) or consented
