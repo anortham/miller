@@ -130,37 +130,50 @@ so batch size and position cannot perturb a vector. Only one golden vector is co
 generator asserts the invariance and records `batch_group_positions_checked: 250`.
 
 `long-truncation-001/002` exceed bge-small's 512-token budget and are flagged `input_truncated: true` in the
-bge goldens and `false` in the qwen3 goldens (32K context) — a real capability difference the fixtures record
-rather than hide.
+bge goldens and `false` in the qwen3 goldens (32K budget). How they are cut is frozen by the contract, not
+by this harness — see below.
 
-### Truncated rows are excluded from the cross-implementation cosine gate
+### Truncation is token-exact, not a character approximation
 
-Every row the generator truncated also carries `truncation_sensitive: true` (today: `long-truncation-001`
-and `long-truncation-002` in the bge goldens only). Those rows are held to every check in the tolerance
-policy **except** the `>= 0.999` cosine comparison against the committed golden, which `--verify` reports as
-an informational note rather than a failure.
-
-The reason is that the goldens cannot currently encode a truncation point that a conformant sidecar is
-obliged to reproduce. `generate.py` truncates with the benchmark harness's character budget
-(`context_length × 1.6`, cut on a word boundary), while
+The goldens encode the truncation point a conformant sidecar computes, because `generate.py` runs the
+frozen algorithm from
 [`semantic-sidecar-protocol-v1.md`](../../docs/contracts/semantic-sidecar-protocol-v1.md)
-§ Truncation semantics specifies a **token** budget, `max_text_tokens`. Three things block encoding the
-contract's version:
+§ Truncation semantics using the **pinned tokenizer itself**, through the server's `POST /tokenize` and
+`POST /detokenize`. The benchmark harness's character budget (`context_length × 1.6`) is deliberately
+**not** used here; it was an approximation for benchmarking, and cuts in a different place.
 
-1. **v1 freezes no value for `max_text_tokens`.** It is declared per implementation through `health`, so two
-   compliant sidecars may legitimately truncate the same text at different points.
-2. **The section names a token budget but freezes a character-based algorithm**, citing `bench.py`'s `_fit`
-   (`context_length × 1.6` chars) as the mirror. The two cut at different places.
-3. **The prefixing order contradicts the reference it cites.** The contract's application order is prefix →
-   append EOS → fit to budget, which can cut off the EOS marker the same contract calls unconditional for
-   Qwen3; `bench.py` fits *before* appending EOS.
+Per input, applied to every text (a no-op below budget):
 
-The pinned `llama-server` build `b10068` does expose `POST /tokenize` and `POST /detokenize` (verified
-live against the cached binary), so a token-exact golden is technically implementable the moment the
-contract settles those three points. Until it does, marking the affected rows is the honest fixture: a
-conformant P2a sidecar implementing the frozen token semantics will not reproduce these two vectors, and
-failing it for that would be a false conformance failure. All 37 other rows in each model remain under the
-full strict gate.
+1. Sanitize, then prefix the role's instruction string.
+2. Reserve `eos_reserve` tokens for the model's EOS marker — `1` for Qwen3's `<|endoftext|>`, `0` for
+   bge-small, which declares no EOS append.
+3. Tokenize the prefixed string and, if it exceeds the budget, truncate the token **tail** to fit.
+4. **Round-trip stability rule:** detokenize, retokenize, and while the retokenization differs from the
+   truncated sequence, drop one more trailing token and repeat. The stable detokenization is the final text
+   body. This is what lets a string-in/string-out sidecar and a token-level one embed identical tokens.
+5. Append the EOS marker.
+
+The instruction prefix (truncation is tail-only) and the EOS marker (reserved in step 2) therefore always
+survive — load-bearing for Qwen3's `pooling=last`, where the final token carries the representation.
+
+`max_text_tokens` is the model's frozen budget: `32768` for qwen3-0.6b-f16, `512` for bge-small-en-v1.5-f32.
+Both are recorded per row under `generator.max_text_tokens`.
+
+**The budget covers the model's whole input, including its special tokens.** bge-small's tokenizer wraps
+every embedding input in `[CLS]` … `[SEP]`, so the generator measures that overhead once per model
+(`generator.special_token_overhead`, `2` for bge and `1` for qwen3) and subtracts it alongside
+`eos_reserve`. Without this the prefixed text could tokenize to exactly 512 tokens and the server would
+reject the request at 514. The effect is visible in the goldens: `long-truncation-001/002` stabilize at
+**510 content tokens = 512 with specials**, exactly the frozen budget.
+
+Only bge-small truncates anything in this corpus. Qwen3's 32768-token budget leaves the longest text
+(~8 KB) far inside it, so `input_truncated` is `false` for all 39 qwen3 rows — a real capability difference,
+not a fixture artifact. Note that the generator runs qwen3's *server* at `ctx = 8192` while the contract
+budget is the model's declared `32768`; no corpus text comes near either, so the two never interact here.
+
+Because truncation is now contract-frozen rather than harness-local, truncated rows are held to the **full**
+strict gate with no exemption, and `--verify` additionally compares `prepared_chars` — so a wrong cut point
+fails loudly instead of being absorbed by the cosine bar.
 
 ## Golden row shape
 
@@ -176,9 +189,8 @@ full strict gate.
   "instruction_applied": true,      // a non-empty instruction template was prefixed
   "eos_appended": true,             // qwen3 only: "<|endoftext|>" appended after prefixing
   "sanitized_to_empty_marker": false,
-  "input_truncated": false,         // text exceeded the model's char budget and was cut on a word
-  "truncation_sensitive": false,    // true => excluded from the cross-implementation cosine gate
-  "prepared_chars": 132,            // length of the final string handed to the tokenizer
+  "input_truncated": false,         // exceeded max_text_tokens and was tail-truncated per the contract
+  "prepared_chars": 132,            // length of the final string handed to the tokenizer; gate-compared
   "norm_native_raw": 1.0,           // L2 norm of the server's untransformed output, gate-checked
   "norm_native": 1.0,
   "norm_lane": 1.0,                 // after slice -> renormalize, before quantization
@@ -194,7 +206,9 @@ full strict gate.
     "model_sha256": "421a27e5…",
     "server_flags": { "embd_normalize": 2, "ctx": 8192, "device": "none", "n_gpu_layers": 0, "…": "…" },
     "request_batch_size": 16,
-    "float_decimals": 6
+    "float_decimals": 6,
+    "max_text_tokens": 32768,       // the model's frozen truncation budget
+    "special_token_overhead": 1     // tokens the tokenizer adds around every input
   }
 }
 ```
@@ -218,9 +232,7 @@ Reversing steps 1 and 2 produces a different vector. Implementations must use th
 > A sidecar implementation **passes conformance** if and only if, for every text in `corpus.jsonl`, embedded
 > under its own runtime and backend with the role's instruction template applied, every check in the
 > tolerance policy table above holds against the committed golden for that model — for all 39 texts and both
-> pinned models, except that rows marked `truncation_sensitive: true` are exempt from the cosine-vs-golden
-> check only (all other checks, including the three raw checks, still apply to them). One text failing one
-> applicable check fails conformance.
+> pinned models — all 39 texts, no exemptions. One text failing one check fails conformance.
 
 An implementation is free to run on any backend and any hardware; it is not free to produce a vector that
 points somewhere else. Failing only on a specific backend is a backend bug, not a licence to relax the bar.
@@ -232,10 +244,21 @@ is temperature-free, and the CPU backend is asserted rather than assumed. The co
 produced by one run and independently reproduced by two consecutive later `--verify` runs on the same cache.
 
 The gate is bidirectional, confirmed by injection rather than by argument. A deliberately corrupted golden
-fails it; so does a scratch copy of `generate.py` that replaces one server vector with all-`NaN`
-(`raw server output has 1024 non-finite component(s)`, exit 1) and one that scales a server vector by 3
-(`raw server output L2 norm 3.000000 outside 1.0 +/- 0.001; the runtime did not honour --embd-normalize 2`,
-exit 1). Both failures name the offending model and `text_id`, and neither vector can reach a golden file.
+fails it, and so does each of these scratch copies of `generate.py` (exit 1, offending model and `text_id`
+named, no bad vector reaching a golden file):
+
+| Injected defect | Failure |
+|---|---|
+| one server vector replaced with all-`NaN` | `raw server output has 1024 non-finite component(s)` |
+| one server vector scaled by 3 | `raw server output L2 norm 3.000000 outside 1.0 +/- 0.001; the runtime did not honour --embd-normalize 2` |
+| token budget cut 40 tokens early | `native cosine 0.998894 < 0.999`, `lane cosine 0.998595 < 0.999`, `prepared_chars 2325 != committed 2512` |
+
+The third is what proves the goldens encode the contract's truncation point rather than merely tolerating
+one: shifting the cut by 40 tokens out of 510 fails both the cosine bar and the `prepared_chars` comparison.
+
+The committed truncation was also independently reproduced outside the generator — driving `/tokenize` and
+`/detokenize` directly against a standalone server puts both `long-truncation` rows at exactly 510 content
+tokens (512 with specials) and reproduces the committed `prepared_chars` of 2484 and 2512.
 
 Generation and verification each take well under a minute for both models on an Apple M2 Ultra. Wall time is
 report-only; it is not a gate.

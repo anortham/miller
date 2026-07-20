@@ -14,12 +14,12 @@ finite, L2 norm already within tolerance of 1.0 -- before any renormalization
 or quantization touches it, so a runtime that ignored `--embd-normalize 2` or
 emitted NaN fails the run instead of being silently repaired.
 
-Everything about how a model is invoked -- pooling, instruction prefixes, EOS
-append, text budget, L2 normalization -- is reused from
-`eval/model-bench/bench.py`, which is the proven reference for these flags.
-Its text budget is character-based; the protocol contract freezes a token
-budget, so rows whose input was truncated carry `truncation_sensitive` and are
-excluded from the cross-implementation cosine gate (see README).
+How a model is invoked -- pooling, instruction prefixes, EOS append, L2
+normalization -- is reused from `eval/model-bench/bench.py`, the proven
+reference for these flags. Truncation is NOT: the bench's character budget is
+retired here in favour of the contract's frozen token-based tail truncation,
+applied through the server's own `/tokenize` and `/detokenize` so the goldens
+encode the same cut point a conformant sidecar computes.
 No network access: the pinned llama.cpp build and both GGUFs must already be in
 `eval/model-bench/.cache/`.
 """
@@ -31,6 +31,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from importlib import util as importlib_util
 from pathlib import Path
 
@@ -174,10 +175,62 @@ def read_corpus() -> list[dict]:
     return [loads_strict(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def prepare(bench, row: dict, cand: dict) -> tuple[str, bool]:
+def post_json(port: int, route: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/{route}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as response:
+        return json.loads(response.read())
+
+
+def tokenize(port: int, text: str, add_special: bool = False) -> list[int]:
+    return post_json(port, "tokenize", {"content": text, "add_special": add_special})["tokens"]
+
+
+def detokenize(port: int, tokens: list[int]) -> str:
+    return post_json(port, "detokenize", {"tokens": tokens})["content"]
+
+
+def special_token_overhead(port: int) -> int:
+    """Tokens the model adds around every embedding input (bge's [CLS]/[SEP])."""
+    probe = "conformance budget probe"
+    return len(tokenize(port, probe, add_special=True)) - len(tokenize(port, probe, add_special=False))
+
+
+def eos_marker(bench, cand: dict) -> str:
+    return bench.QWEN_EOS if cand["id"].startswith("qwen3") else ""
+
+
+def fit_to_budget(port: int, prefixed: str, budget: int, eos_reserve: int, overhead: int,
+                  label: str) -> tuple[str, bool]:
+    """The contract's frozen token-based tail truncation, including its stability rule.
+
+    A truncated token tail can detokenize to a string that retokenizes
+    differently; dropping trailing tokens until the round trip is stable is what
+    lets a string-in/string-out sidecar reach the same embedded tokens.
+    """
+    limit = budget - eos_reserve - overhead
+    tokens = tokenize(port, prefixed)
+    if len(tokens) <= limit:
+        return prefixed, False
+    sequence = tokens[:limit]
+    while sequence:
+        body = detokenize(port, sequence)
+        if tokenize(port, body) == sequence:
+            return body, True
+        sequence = sequence[:-1]
+    raise SystemExit(f"{label}: token round-trip never stabilized within the {limit}-token budget")
+
+
+def prepare(bench, row: dict, cand: dict, port: int, overhead: int, label: str) -> tuple[str, bool, bool]:
     sanitized, changed = sanitize(row["text"])
-    prep = bench.prep_query if row["role"] == "query" else bench.prep_doc
-    return prep(sanitized, cand), changed
+    instruction = cand.get("query_instruction" if row["role"] == "query" else "document_instruction", "")
+    eos = eos_marker(bench, cand)
+    eos_reserve = len(tokenize(port, eos)) if eos else 0
+    body, truncated = fit_to_budget(port, instruction + sanitized, cand["context_length"],
+                                    eos_reserve, overhead, label)
+    return body + eos, changed, truncated
 
 
 def l2(vec: np.ndarray) -> np.ndarray:
@@ -226,19 +279,18 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
     corpus = read_corpus()
     ctx = min(cand["context_length"], 8192)
 
-    prepared, truncated_flags = [], []
-    for row in corpus:
-        text, changed = prepare(bench, row, cand)
-        prepared.append(text)
-        budget = bench.text_budget(cand)
-        raw_prefixed = (cand.get("query_instruction", "") if row["role"] == "query"
-                        else cand.get("document_instruction", "")) + sanitize(row["text"])[0]
-        truncated_flags.append(bool(budget and len(raw_prefixed) > budget))
-        row["_sanitized"] = changed
-
     started = time.monotonic()
     with bench.LlamaServer(server, weights, cand["pooling"], ctx, port,
                            logdir / f"llama-{lane['key']}.log") as srv:
+        overhead = special_token_overhead(port)
+        prepared, truncated_flags = [], []
+        for row in corpus:
+            text, changed, truncated = prepare(bench, row, cand, port, overhead,
+                                               f"{lane['key']}/{row['text_id']}")
+            prepared.append(text)
+            truncated_flags.append(truncated)
+            row["_sanitized"] = changed
+
         vectors = srv.embed(prepared, batch=16)
         batch_checks = run_batch_group_check(corpus, prepared, srv, cand["native_dims"], lane["key"])
     elapsed = time.monotonic() - started
@@ -255,6 +307,8 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
         },
         "request_batch_size": 16,
         "float_decimals": FLOAT_DECIMALS,
+        "max_text_tokens": cand["context_length"],
+        "special_token_overhead": overhead,
     }
 
     rows = []
@@ -275,7 +329,6 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
             "eos_appended": prep_text.endswith(bench.QWEN_EOS),
             "sanitized_to_empty_marker": prep_text.find(EMPTY_SUBSTITUTE) >= 0 and row.get("sanitization_expected", False),
             "input_truncated": truncated,
-            "truncation_sensitive": truncated,
             "prepared_chars": len(prep_text),
             "norm_native_raw": round(raw_norm, FLOAT_DECIMALS),
             "norm_native": round(float(np.linalg.norm(native)), FLOAT_DECIMALS),
@@ -384,18 +437,13 @@ def check_row(fresh: dict, golden: dict) -> list[str]:
     native_cos = cosine(fresh["vector_native"], golden["vector_native"])
     lane_golden = np.asarray(golden["vector_lane_int8"], dtype=np.float64) * golden["lane_int8_scale"]
     lane_cos = cosine(lane_fresh, lane_golden)
-    if golden.get("truncation_sensitive"):
-        if min(native_cos, lane_cos) < COSINE_FLOOR:
-            print(f"  note: {tid} excluded from the cross-implementation cosine gate "
-                  f"(truncation-sensitive); native {native_cos:.6f}, lane {lane_cos:.6f}")
-    else:
-        if native_cos < COSINE_FLOOR:
-            failures.append(f"{tid}: native cosine {native_cos:.6f} < {COSINE_FLOOR}")
-        if lane_cos < COSINE_FLOOR:
-            failures.append(f"{tid}: lane cosine {lane_cos:.6f} < {COSINE_FLOOR}")
+    if native_cos < COSINE_FLOOR:
+        failures.append(f"{tid}: native cosine {native_cos:.6f} < {COSINE_FLOOR}")
+    if lane_cos < COSINE_FLOOR:
+        failures.append(f"{tid}: lane cosine {lane_cos:.6f} < {COSINE_FLOOR}")
 
     for field in ("role", "class", "storage_schema", "instruction_applied", "eos_appended",
-                  "input_truncated", "truncation_sensitive"):
+                  "input_truncated", "prepared_chars"):
         if fresh[field] != golden[field]:
             failures.append(f"{tid}: {field} {fresh[field]!r} != committed {golden[field]!r}")
     return failures
