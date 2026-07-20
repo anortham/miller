@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller semantic integration program (P0–P6)
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-20T13:35:45.225Z
+updated: 2026-07-20T20:02:13.025Z
 tags:
   - semantic-search
   - program
@@ -20,14 +20,15 @@ tags:
 - `julie-semantic-sidecar` (new repo): Rust shim + vendored llama.cpp (Metal/Vulkan/CPU, CUDA opt-in), speaks `julie.embedding.sidecar` v1 verbatim. Model: Qwen3-Embedding-0.6B (Apache 2.0); pinned lane 512d int8 per P0 benchmark. Sidecar `prepare` owns model download.
 - Miller: resident child process (never a daemon); `vectors.db` with dual cursors + shadow generations + five-field generation identity; default corpus = symbol cards + docs/config chunks (all-source opt-in, eval-gated); lexical path byte-identical; RRF hybrid behind SemanticQueryPolicy; `MILLER_SEMANTIC off|shadow|on` with `off` a permanent no-side-effects guarantee.
 - No new MCP tools. No ServerInstructions growth. Canary telemetry contract frozen in P0; randomized holdout is the causal gate.
-- **Miller stays LOCAL until the plan completes (user directive 2026-07-20):** no miller pushes — main or branch — without asking; the user does not want anyone pulling partially-working source. Exception: `worktree-semantic-p2` stays on origin because sidecar CI pins miller fixtures at `8edfa14` on that branch. Sidecar repo pushes unaffected.
+- **Miller stays LOCAL until the plan completes (user directive 2026-07-20):** no miller pushes — main or branch — without asking. Exception: `worktree-semantic-p2` stays on origin (sidecar CI pins miller fixtures at `8edfa14`). Sidecar repo pushes unaffected.
+- **ModelRevision pin = HF repo revision ("main"), never the gguf file name** — corrected f68dad8 after the live RC handshake caught it; encoder fingerprints changed pre-ship.
 
 ## Phase state
-- P0 (governance/gates): DONE — merged; model pin 512d int8; codex pre-merge review folded in.
-- P1 (freeze/conformance): DONE — merged as miller PR #7; contracts frozen, goldens token-exact.
-- P2a (sidecar v1 implementation): DONE 2026-07-20 — sidecar PR #1 merged (ab65a82). Includes the 19 GiB output-buffer OOM root-cause fix, codex round-2 review (5/5 findings fixed), CI cost re-scope (PRs = 1x Linux leg only; push-to-main = Linux+Windows; 10x macOS legs + long-input embeds = workflow_dispatch only — reference machine is macOS and proves those locally).
-- NEXT: P2 Miller-side parallel lanes (fake sidecar; typed candidate seam; edit lane; MinHash clones) → P3 integration (RC publication needs explicit user approval) → P4 shadow → P5 canary→default-on → P6 eval-gated extensions.
-- Open P4/P5 question (design doc §model policy): download footprint — Qwen3 f16 is ~1.1 GiB; evaluate Q8_0 pin (~640 MB, needs re-benchmark + new goldens) or bge-small default tier on P4 shadow evidence.
+- P0 (governance/gates): DONE. P1 (freeze/conformance): DONE (miller PR #7). P2a (sidecar v1): DONE (sidecar PR #1).
+- P2 (Miller-side lanes): DONE 2026-07-20 — merged to local main 40ca89a after codex review (3/3 real findings fixed).
+- P3 (query-time hybrid + Track 1 pins/packaging): DONE 2026-07-20 — merged to local main a8c499c. Hybrid RRF at the executor seam, rescue rung, mode contracts, CLI --arm + determinism. Sidecar v0.1.0-rc.1 PUBLISHED (prerelease); pins/restore/build-guard/real-sidecar Scale tests; RC promotion gate PASSES live. Codex review: 5/5 verified findings fixed. Local main ~46 commits ahead of origin, held.
+- NEXT: **P4 shadow** — run shadow in real workspaces and act on shadow evidence; P4 backlog: GC scheduler + live-reader registry (TagsWithLiveReaders unwired), converge_pause_state producer (top diagnosability item), disk preflight, `downloading` status producer, model-footprint decision (Q8_0 ~640MB re-benchmark vs f16 ~1.1GiB vs bge-small tier), fast-suite wall-ceiling pressure (at the 30s cliff). Then P5 canary→default-on (wire CanaryTelemetry arms + randomized holdout), P6 eval-gated extensions (all-source corpus etc.).
+- Pending user decisions: RC→v0.1.0 promotion (gate passed, ready); miller push timing (plan-complete definition).
 
 ## Status
-Sidecar main is green (merge matrix run pending at last check). Miller worktree `.claude/worktrees/semantic-integration` on `worktree-semantic-p2` is the active lane, clean. Miller main is 3 checkpoint commits ahead of origin — held local per the no-push directive.
+No active worktrees; miller main a8c499c clean (another session's untracked machine-service files present). Sidecar main green at 2a02f35 with v0.1.0-rc.1 released.
