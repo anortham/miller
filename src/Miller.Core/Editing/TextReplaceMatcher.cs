@@ -144,7 +144,40 @@ public static class TextReplaceMatcher
     }
 
     private static TextReplaceMatchPlan Failure(TextMatchMode attemptedMode, TextMatchMode requestedMode, EditErrorKind kind, string message) =>
-        new(EditPlan.Failure(new EditError(kind, message)), requestedMode, MatchedMode: null, Matches: [], MatchCount: 0);
+        new(
+            EditPlan.Failure(new EditError(kind, message + " " + RecoveryAction(attemptedMode, requestedMode, kind))),
+            requestedMode,
+            MatchedMode: null,
+            Matches: [],
+            MatchCount: 0);
+
+    // A no-match is the edit tool's dominant failure and the agent cannot see the file, so the message has to
+    // name the next call rather than only report the miss (design §7.2).
+    private static string RecoveryAction(TextMatchMode attemptedMode, TextMatchMode requestedMode, EditErrorKind kind)
+    {
+        if (kind == EditErrorKind.MissingArgument)
+            return "Pass the literal text to replace in old_text.";
+
+        if (attemptedMode == TextMatchMode.Fuzzy && requestedMode == TextMatchMode.Fuzzy)
+        {
+            return $"Shorten old_text to one distinctive line (max {MaxFuzzySnippetChars} chars), or retry with " +
+                   "match_mode=exact and the literal text copied from the file.";
+        }
+
+        return requestedMode switch
+        {
+            TextMatchMode.Exact =>
+                "Retry with match_mode=normalized (ignores indentation and trailing whitespace) or " +
+                "match_mode=fuzzy (tolerates small differences), or confirm the current text with inspect.",
+            TextMatchMode.Normalized =>
+                "Retry with match_mode=fuzzy (tolerates small differences), or confirm the current text with " +
+                "inspect and copy old_text from the file.",
+            _ =>
+                "The exact→normalized→fuzzy ladder found nothing. Confirm the current text with inspect (or " +
+                "search mode=source), then retry with old_text copied from the file, or narrow the edit with " +
+                "query/anchor/line.",
+        };
+    }
 
     private static bool WindowEquals(IReadOnlyList<LineInfo> contentLines, int offset, IReadOnlyList<string> targetLines)
     {
@@ -268,11 +301,11 @@ public static class TextReplaceMatcher
     private static LineInfo CreateLine(string content, int contentStart, int contentEnd, int lineNumber)
     {
         var leading = 0;
-        while (contentStart + leading < contentEnd && IsIndentWhitespace(content[contentStart + leading]))
+        while (contentStart + leading < contentEnd && IsNormalizedWhitespace(content[contentStart + leading]))
             leading++;
 
         var trailing = 0;
-        while (contentEnd - trailing > contentStart + leading && IsTrailingWhitespace(content[contentEnd - trailing - 1]))
+        while (contentEnd - trailing > contentStart + leading && IsNormalizedWhitespace(content[contentEnd - trailing - 1]))
             trailing++;
 
         var normalized = NormalizeLine(content[contentStart..contentEnd]);
@@ -282,19 +315,41 @@ public static class TextReplaceMatcher
     private static string NormalizeLine(string line)
     {
         var start = 0;
-        while (start < line.Length && IsIndentWhitespace(line[start]))
+        while (start < line.Length && IsNormalizedWhitespace(line[start]))
             start++;
 
         var end = line.Length;
-        while (end > start && IsTrailingWhitespace(line[end - 1]))
+        while (end > start && IsNormalizedWhitespace(line[end - 1]))
             end--;
 
-        return line[start..end];
+        var trimmed = line[start..end];
+        if (!ContainsUnicodeSpaceSubstitute(trimmed))
+            return trimmed;
+
+        var folded = new StringBuilder(trimmed.Length);
+        foreach (var ch in trimmed)
+            folded.Append(IsUnicodeSpaceSubstitute(ch) ? ' ' : ch);
+        return folded.ToString();
     }
 
-    private static bool IsIndentWhitespace(char ch) => ch is ' ' or '\t';
+    private static bool IsNormalizedWhitespace(char ch) => ch is ' ' or '\t' || IsUnicodeSpaceSubstitute(ch);
 
-    private static bool IsTrailingWhitespace(char ch) => ch is ' ' or '\t';
+    // Editors, docs, and terminal copy-paste routinely substitute these for an ASCII space; an agent that
+    // pastes one into old_text would otherwise get a bare no-match it cannot see (design §7.3).
+    private static bool IsUnicodeSpaceSubstitute(char ch) =>
+        ch is '\f' or '\u00A0' or '\u202F' or '\u205F' or '\u3000' ||
+        ch is >= '\u2000' and <= '\u200A';
+
+    private static bool ContainsUnicodeSpaceSubstitute(string text)
+    {
+        foreach (var ch in text)
+        {
+            if (IsUnicodeSpaceSubstitute(ch))
+                return true;
+        }
+
+        return false;
+    }
 
     private static int MaxFuzzyDistance(int length)
     {

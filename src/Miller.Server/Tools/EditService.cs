@@ -190,7 +190,10 @@ public sealed class EditService
             case TargetResolution.File: // a file target for a symbol op is a usage error
                 return NotFound(request.Target, json);
             default:
-                return Error("unrecognized target resolution.", json);
+                return Error(
+                    $"could not resolve '{request.Target}' to a single symbol. Locate it with inspect or search, " +
+                    "then retry with scope=<file> to disambiguate.", json,
+                    failureReason: FailureTargetNotFound);
         }
     }
 

@@ -1745,6 +1745,321 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal("compact", root.GetProperty("format").GetString());
     }
 
+    // ---- design §7.1: EVERY replace_text failure path stamps a bucket ----
+    //
+    // The enumeration below is the audit made executable. Each row drives one distinct exit from the
+    // replace_text pipeline; the assertion is that the telemetry row carries a documented, non-empty
+    // `edit_failure_reason` and leaks no path/user text. A new failure exit that forgets to stamp fails
+    // here the moment a row is added for it.
+    public static TheoryData<string, string> ReplaceTextFailurePaths() => new()
+    {
+        { "unknown_operation", "invalid_request" },
+        { "unknown_occurrence", "invalid_request" },
+        { "unknown_match_mode", "invalid_request" },
+        { "file_target_not_found", "target_not_found" },
+        { "file_missing_on_disk", "target_not_found" },
+        { "missing_new_text", "invalid_request" },
+        { "empty_old_text", "invalid_request" },
+        { "no_match_on_disk", "no_match" },
+        { "fuzzy_snippet_too_long", "no_match" },
+        { "indexed_selector_no_candidate", "no_match" },
+        { "stale_disk_text", "stale_target" },
+        { "apply_failed", "apply_failed" },
+        { "unhandled_exception", "unhandled_InvalidOperationException" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ReplaceTextFailurePaths))]
+    public void Edit_EveryReplaceTextFailurePath_StampsFailureReason(string path, string expectedBucket)
+    {
+        const string Secret = "NoSuchSecretSelector";
+        const string Replacement = "SecretReplacement";
+        const string File_ = "orders/OrderService.cs";
+
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        EditTool tool = path switch
+        {
+            "apply_failed" => BuildTool(fx, applier: new EditApplier(() => null)),
+            "unhandled_exception" => BuildTool(fx, writeThrough: new ThrowingWriteThrough()),
+            _ => BuildTool(fx),
+        };
+
+        if (path == "file_missing_on_disk")
+            File.Delete(AbsPath(File_));
+        if (path == "stale_disk_text")
+        {
+            BuildContentDb(fx, revision: 1);
+            File.WriteAllText(
+                AbsPath(File_),
+                JulieDbFixture.OrderServiceContent.Replace("Total", "Amount", StringComparison.Ordinal));
+        }
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+
+        switch (path)
+        {
+            case "unknown_operation":
+                tool.Edit("frobnicate", File_, old_text: Secret, new_text: Replacement);
+                break;
+            case "unknown_occurrence":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, occurrence: "seventh");
+                break;
+            case "unknown_match_mode":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, match_mode: "telepathic");
+                break;
+            case "file_target_not_found":
+                tool.Edit("replace_text", "orders/NoSuchSecretFile.cs", old_text: "a", new_text: "b", apply: true);
+                break;
+            case "file_missing_on_disk":
+            case "no_match_on_disk":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, apply: true);
+                break;
+            case "missing_new_text":
+                tool.Edit("replace_text", File_, old_text: "return _items", apply: true);
+                break;
+            case "empty_old_text":
+                tool.Edit("replace_text", File_, old_text: "", new_text: Replacement, apply: true);
+                break;
+            case "fuzzy_snippet_too_long":
+                tool.Edit(
+                    "replace_text", File_, old_text: new string('z', 200), new_text: Replacement,
+                    match_mode: "fuzzy", apply: true);
+                break;
+            case "indexed_selector_no_candidate":
+                tool.Edit(
+                    "replace_text", File_, old_text: Secret, new_text: Replacement,
+                    query: Secret, apply: true);
+                break;
+            case "stale_disk_text":
+                tool.Edit("replace_text", File_, old_text: "Total", new_text: "Sum", apply: true);
+                break;
+            case "apply_failed":
+            case "unhandled_exception":
+                tool.Edit(
+                    "replace_text", File_, old_text: "return _items.Sum(i => i.Total);",
+                    new_text: "return 0;", apply: true);
+                break;
+            default:
+                Assert.Fail("unenumerated failure path: " + path);
+                break;
+        }
+
+        Assert.Equal(expectedBucket, StampedFailureBucket(telemetry, File_, Secret, Replacement));
+    }
+
+    // The two exits above reach the indexed-candidate reader only when content.db is ABSENT (the disk-fallback
+    // arm). These two cover the arm where content.db is CURRENT and the candidate set itself decides the
+    // failure — the only replace_text buckets the theory cannot reach with the shared edit fixture.
+    [Fact]
+    public void Edit_IndexedCandidateFailsDiskVerification_StampsStaleTargetBucket()
+    {
+        const string Rel = "src/Api.cs";
+        string source = NumberedLines(220, (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(Rel, source);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = source });
+        BuildContentDb(fx);
+        File.WriteAllText(
+            AbsPath(Rel), source.Replace("target-value", "changed-value", StringComparison.Ordinal));
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text", Rel, old_text: "target-value", new_text: "updated-value",
+            query: "beta-anchor", apply: true);
+
+        Assert.Equal("stale_target", StampedFailureBucket(telemetry, Rel, "target-value", "beta-anchor"));
+        Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_AmbiguousIndexedCandidates_StampsAmbiguousMatchBucket()
+    {
+        const string Rel = "src/Api.cs";
+        string source = NumberedLines(220, (2, "target-value shared-anchor"), (170, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(Rel, source);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = source });
+        BuildContentDb(fx);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text", Rel, old_text: "target-value", new_text: "updated-value",
+            query: "shared-anchor", apply: true);
+
+        Assert.Equal("ambiguous_match", StampedFailureBucket(telemetry, Rel, "target-value", "shared-anchor"));
+        Assert.Contains("narrower line or anchor selector", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_FailureTelemetryRow_CarriesMillerVersion()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+        string dbPath = Path.Combine(_root, "telemetry.db");
+
+        using (var ledger = TelemetryLedger.Open(dbPath, "ws-edit", _root))
+        {
+            using (var telemetry = ledger.Measure("edit", op: null))
+            {
+                tool.Edit(
+                    "replace_text", "orders/OrderService.cs",
+                    old_text: "NoSuchSecretSelector", new_text: "SecretReplacement", apply: true);
+            }
+        }
+
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT miller_version FROM tool_telemetry WHERE tool = 'edit'";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(MillerVersion.Current, reader.GetString(0));
+    }
+
+    // ---- design §7.2: failure messages name the concrete next action ----
+
+    [Theory]
+    [InlineData("exact", "match_mode=normalized")]
+    [InlineData("normalized", "match_mode=fuzzy")]
+    [InlineData("auto", "inspect")]
+    public void Edit_ReplaceTextNoMatch_MessageNamesRecoveryAction(string matchMode, string expectedAction)
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "NoSuchSelectorHere",
+            NewText = "Replacement",
+            MatchMode = matchMode,
+            Apply = true,
+        });
+
+        Assert.Equal("no_match", result.FailureReason);
+        Assert.Contains(expectedAction, result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_FuzzySnippetTooLong_MessageNamesRecoveryAction()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = new string('z', 200),
+            NewText = "Replacement",
+            MatchMode = "fuzzy",
+            Apply = true,
+        });
+
+        Assert.Contains("too long", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("match_mode=exact", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_AmbiguousTarget_MessageNamesScopeDisambiguation()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_symbol_body", "Total") with { NewText = "{ return 0; }" });
+
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Contains("scope=", result.Output, StringComparison.Ordinal);
+    }
+
+    // ---- design §7.3: normalized matching treats Unicode spaces and form feed as whitespace ----
+
+    public static TheoryData<string, string> UnicodeWhitespaceVariants() => new()
+    {
+        { "nbsp", " " },
+        { "en_quad", " " },
+        { "hair_space", " " },
+        { "narrow_nbsp", " " },
+        { "medium_mathematical_space", " " },
+        { "ideographic_space", "　" },
+        { "form_feed", "\f" },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnicodeWhitespaceVariants))]
+    public void Edit_Normalized_MatchesUnicodeWhitespaceIndentation(string name, string whitespace)
+    {
+        Assert.NotEmpty(name);
+        const string Rel = "ws/Sample.cs";
+        string content = "class Sample {\n" + whitespace + whitespace + "return 42;\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "    return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal(
+            "class Sample {\n" + whitespace + whitespace + "return 7;\n}\n",
+            File.ReadAllText(AbsPath(Rel)));
+    }
+
+    [Theory]
+    [MemberData(nameof(UnicodeWhitespaceVariants))]
+    public void Edit_Normalized_MatchesInteriorUnicodeWhitespace(string name, string whitespace)
+    {
+        Assert.NotEmpty(name);
+        const string Rel = "ws/Interior.cs";
+        string content = "class Interior {\n  return" + whitespace + "42;\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal("class Interior {\n  return 7;\n}\n", File.ReadAllText(AbsPath(Rel)));
+    }
+
+    [Fact]
+    public void Edit_Normalized_MatchesUnicodeWhitespaceTrailer()
+    {
+        const string Rel = "ws/Trailer.cs";
+        const string Content = "class Trailer {\n  return 42; 　\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, Content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = Content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal("class Trailer {\n  return 7; 　\n}\n", File.ReadAllText(AbsPath(Rel)));
+    }
+
     [Fact]
     public void Execute_MissingNewText_ForBodyReplace_ReturnsCleanError()
     {

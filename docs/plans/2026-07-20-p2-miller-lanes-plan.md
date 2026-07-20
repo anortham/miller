@@ -116,11 +116,11 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** Close design §7 items 1–3: complete failure-reason coverage, version-stamped telemetry, recovery-action error messages, Unicode-aware normalized whitespace. Description/guidance edits must respect the ADR-0001 budgets (edit description ≤900 chars; run AgentInstructionsTests).
 
 **Acceptance criteria:**
-- [ ] A test enumerates every replace_text failure path and asserts a non-empty `edit_failure_reason` on each
-- [ ] Edit telemetry records carry Miller version
-- [ ] NBSP/Unicode-space/form-feed variants match under `normalized` (tests per §7.3 list)
-- [ ] Failure messages name the concrete next action; AgentInstructionsTests green
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] A test enumerates every replace_text failure path and asserts a non-empty `edit_failure_reason` on each
+- [x] Edit telemetry records carry Miller version
+- [x] NBSP/Unicode-space/form-feed variants match under `normalized` (tests per §7.3 list)
+- [x] Failure messages name the concrete next action; AgentInstructionsTests green
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task E1: MinHash/LSH near-duplicate analyzer
 
