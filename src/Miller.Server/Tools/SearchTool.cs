@@ -57,7 +57,21 @@ internal sealed record SymbolCandidateSet(
     IReadOnlyList<SymbolCandidate> OutsideScope,
     IReadOnlyList<IndexedSymbol> EmptySuggestions,
     bool FileMode,
-    ToolSearchFilters Filters);
+    ToolSearchFilters Filters,
+    SymbolVisibilityPolicy? Visibility = null);
+
+/// <summary>
+/// The visibility predicate candidate generation applied, carried forward so another retrieval arm can admit
+/// only symbols the lexical arm would also have shown. Without it a semantic hit could surface a test symbol
+/// or an out-of-filter file that the same query answered lexically would have hidden.
+/// </summary>
+internal sealed record SymbolVisibilityPolicy(bool HideTests, bool HideLowSignalKinds, ToolSearchFilters Filters)
+{
+    public bool Allows(IndexedSymbol symbol) =>
+        !(HideTests && IsTestPath.IsTest(symbol)) &&
+        !(HideLowSignalKinds && SearchTool.IsLowSignalKind(symbol.Kind)) &&
+        Filters.Allows(symbol.FilePath, symbol.Language);
+}
 
 /// <summary>
 /// The <c>search</c> tool (M2 §4): find indexed code and return ranked results. Maps to
@@ -96,6 +110,7 @@ public sealed class SearchTool
     private readonly IWorkspaceSearchProvider _workspaceProvider;
     private readonly IWorkspaceRegionSearchProvider _regionProvider;
     private readonly IWorkspaceTextContentSearchProvider _textContentProvider;
+    private readonly ISymbolFusionArm? _fusionArm;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -143,7 +158,8 @@ public sealed class SearchTool
         IWorkspaceSearchProvider workspaceProvider,
         IWorkspaceContentSearchProvider contentProvider,
         IWorkspaceRegionSearchProvider regionProvider,
-        IWorkspaceTextContentSearchProvider textContentProvider)
+        IWorkspaceTextContentSearchProvider textContentProvider,
+        ISymbolFusionArm? fusionArm = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
@@ -152,6 +168,7 @@ public sealed class SearchTool
         _workspaceProvider = workspaceProvider;
         _regionProvider = regionProvider;
         _textContentProvider = textContentProvider;
+        _fusionArm = fusionArm;
     }
 
     [McpServerTool(Name = "search")]
@@ -309,7 +326,8 @@ public sealed class SearchTool
                         compactBanner,
                         HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
                         FilePattern: file_pattern,
-                        Language: language));
+                        Language: language,
+                        FusionArm: _fusionArm));
                 output = result.Output;
                 count = result.Count;
                 if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))
@@ -969,7 +987,8 @@ public sealed class SearchTool
             [.. outsideScope.Select(static symbol => ToCandidate(symbol, score: 0))],
             emptySuggestions,
             fileMode,
-            filters);
+            filters,
+            new SymbolVisibilityPolicy(hideTests, hideLowSignalKinds, filters));
 
         void AddIfVisible(IndexedSymbol sym, double score)
         {
@@ -990,7 +1009,7 @@ public sealed class SearchTool
         }
     }
 
-    private static SymbolCandidate ToCandidate(IndexedSymbol symbol, double score) =>
+    internal static SymbolCandidate ToCandidate(IndexedSymbol symbol, double score) =>
         new(
             symbol.DocId,
             symbol.SymbolId,
@@ -1009,7 +1028,8 @@ public sealed class SearchTool
     internal static string RenderSymbolCandidates(
         SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
         out int renderedCount, string? compactBanner = null,
-        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null)
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         if (limit < 1) limit = 1;
@@ -1045,7 +1065,7 @@ public sealed class SearchTool
         }
 
         if (json)
-            return RenderJson(kept, page, hasDocSymbolIds);
+            return RenderJson(kept, page, hasDocSymbolIds, fusion);
         if (candidates.FileMode)
             return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
 
@@ -1448,7 +1468,7 @@ public sealed class SearchTool
         mode == SearchToolMode.Text ||
         (mode == SearchToolMode.Auto && IsNaturalLanguagePhrase(query));
 
-    private static bool IsLowSignalKind(string kind) =>
+    internal static bool IsLowSignalKind(string kind) =>
         string.Equals(kind, "import", StringComparison.Ordinal) ||
         string.Equals(kind, "module", StringComparison.Ordinal);
 
@@ -2363,10 +2383,16 @@ public sealed class SearchTool
             sb.Length--;
     }
 
+    /// <summary>
+    /// Rows are the lexical shape plus, on a fused run only, the additive provenance a caller needs to explain
+    /// an ordering it did not expect. <c>score</c> keeps meaning the lexical score in every mode, and a
+    /// lexical-only run writes no fusion keys at all, so its bytes are unchanged.
+    /// </summary>
     private static string RenderJson(
         IReadOnlyList<SymbolCandidate> kept,
         int page,
-        IReadOnlySet<string>? hasDocSymbolIds)
+        IReadOnlySet<string>? hasDocSymbolIds,
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -2384,6 +2410,14 @@ public sealed class SearchTool
                 else writer.WriteString("signature", s.Signature);
                 writer.WriteNumber("score", s.Score);
                 writer.WriteString("symbol_id", s.SymbolId);
+                if (fusion is not null && fusion.TryGetValue(s.SymbolId, out FusedCandidate? fused))
+                {
+                    writer.WriteNumber("rrf_score", fused.RrfScore);
+                    if (fused.LexicalRank is { } lexicalRank)
+                        writer.WriteNumber("lexical_rank", lexicalRank);
+                    if (fused.SemanticRank is { } semanticRank)
+                        writer.WriteNumber("semantic_rank", semanticRank);
+                }
                 if (hasDocSymbolIds is not null)
                     writer.WriteBoolean("has_doc", hasDocSymbolIds.Contains(s.SymbolId));
                 writer.WriteEndObject();
