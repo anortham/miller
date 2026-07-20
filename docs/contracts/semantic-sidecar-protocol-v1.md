@@ -586,6 +586,11 @@ Obligations:
 {"ready": false, "degraded_reason": "model_not_prepared"}
 ```
 
+(Amended in review: the reference's `protocol.py:63` runs `_validate_health_metadata` on **every**
+health result, which would reject this minimal not-ready payload and make row B3 unsatisfiable. A
+v1 implementation must apply full health-metadata validation only when `ready` is `true`; a
+not-ready health owes nothing beyond `ready` and `degraded_reason`.)
+
 `degraded_reason` is the exact string `model_not_prepared`. Because `ready` is false, a consumer
 refuses to construct (`sidecar_provider.rs:465-467`) and Miller surfaces the not-prepared state rather
 than hanging. Note that `dims` is not required when `ready` is false
