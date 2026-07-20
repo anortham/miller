@@ -13,6 +13,9 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`adr/ADR-0003-semantic-retrieval-ownership.md`](adr/ADR-0003-semantic-retrieval-ownership.md) - accepted decision record moving optional local semantic retrieval to Miller and reserving fleet-level semantics for Eros.
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
 - [`contracts/canary-telemetry-v1.md`](contracts/canary-telemetry-v1.md) - Canary telemetry contract v1 — randomized holdout experiment fields for the semantic rollout.
+- [`contracts/semantic-sidecar-protocol-v1.md`](contracts/semantic-sidecar-protocol-v1.md) - frozen `julie.embedding.sidecar` v1 wire protocol, model knob table, `prepare` subcommand, backend selection, and conformance bars for `julie-semantic-sidecar`.
+- [`contracts/vectors-v1.md`](contracts/vectors-v1.md) - frozen `<workspace>/.miller/vectors.db` artifact contract: five-field generation identity, invalidation matrix, dual cursors, vec0 storage schema, shadow/rollback lifecycle, status vocabulary.
+- [`../eval/sidecar-conformance/`](../eval/sidecar-conformance/) - committed sidecar conformance fixtures: 39-text corpus plus CPU-generated golden vectors for both pinned models, regenerated and gated by `generate.py --verify`.
 - [`contracts/workspace-status-v1.md`](contracts/workspace-status-v1.md) - active workspace status JSON contract.
 - [`contracts/workspace-health-v1.md`](contracts/workspace-health-v1.md) - active workspace health JSON contract.
 - [`contracts/workspace-onboarding-v1.md`](contracts/workspace-onboarding-v1.md) - active telemetry-derived workspace onboarding JSON contract.

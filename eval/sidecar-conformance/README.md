@@ -13,6 +13,17 @@ without needing the other side to exist.
 
 Committed payload is ~790 KiB of JSONL. No model weights or binaries live here.
 
+The contracts this fixture set is bound to:
+[`docs/contracts/semantic-sidecar-protocol-v1.md`](../../docs/contracts/semantic-sidecar-protocol-v1.md)
+§ Conformance (group C cites this directory and restates the tolerance policy below) and
+[`docs/contracts/vectors-v1.md`](../../docs/contracts/vectors-v1.md) § Conformance (item 4, same bars for
+stored lane vectors).
+
+> **Golden file/`model` short names.** `golden-bge-small-f32.jsonl` and its rows' `model: "bge-small-f32"`
+> use the P1 plan's short name. The pins key — and the identity both contracts freeze — is
+> `bge-small-en-v1.5-f32` in [`../model-bench/bench-pins.json`](../model-bench/bench-pins.json). The short
+> name is a fixture-local label only; nothing derives model identity from it.
+
 ## Regeneration
 
 ```bash
