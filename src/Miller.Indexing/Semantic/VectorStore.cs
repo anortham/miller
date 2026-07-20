@@ -69,14 +69,39 @@ public sealed class VectorStore : IDisposable
 
     public string VecVersion { get; }
 
+    /// <summary>The packaged loadable-extension file name for the host platform.</summary>
+    public static string PackagedExtensionFileName =>
+        OperatingSystem.IsWindows() ? "vec0.dll"
+        : OperatingSystem.IsMacOS() ? "vec0.dylib"
+        : "vec0.so";
+
     /// <summary>
-    /// Resolves the loadable extension: <see cref="ExtensionPathEnvVar"/> when set, otherwise none — this
-    /// build packages no extension, so callers get a stated reason rather than a silent lexical downgrade.
+    /// Resolves the loadable extension from the running app's base directory: <see cref="ExtensionPathEnvVar"/>
+    /// when set, otherwise the packaged <c>.tools/vec0.*</c> a release archive carries, otherwise none — an
+    /// unrestored build gets a stated reason rather than a silent lexical downgrade.
     /// </summary>
-    public static string? ResolveExtensionPath() =>
-        Environment.GetEnvironmentVariable(ExtensionPathEnvVar) is { Length: > 0 } configured
-            ? configured
-            : null;
+    public static string? ResolveExtensionPath() => ResolveExtensionPath(AppContext.BaseDirectory);
+
+    /// <summary>
+    /// Resolves the loadable extension relative to <paramref name="baseDirectory"/>, the packaged layout's
+    /// root (<c>&lt;baseDirectory&gt;/.tools/vec0.&lt;ext&gt;</c>). The environment override keeps absolute
+    /// precedence over whatever is packaged.
+    /// </summary>
+    public static string? ResolveExtensionPath(string baseDirectory)
+    {
+        if (Environment.GetEnvironmentVariable(ExtensionPathEnvVar) is { Length: > 0 } configured)
+        {
+            return configured;
+        }
+
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+        {
+            return null;
+        }
+
+        string packaged = Path.Combine(baseDirectory, ".tools", PackagedExtensionFileName);
+        return File.Exists(packaged) ? packaged : null;
+    }
 
     /// <summary>Creates a fresh artifact at <paramref name="path"/> stamped with <paramref name="identity"/>.</summary>
     public static VectorStore Create(
