@@ -216,11 +216,27 @@ public sealed class VectorSidecar
             return null;
         }
 
-        VectorStore? store = _opener.OpenStore(PathFor(workspaceRoot), out string failureReason);
+        // Classification resolves WHICH generation serves — it may be a retained one — so the open must follow
+        // it rather than assuming the active artifact.
+        string servingPath = facts.Path!;
+        VectorStore? store = _opener.OpenStore(servingPath, out string failureReason);
         if (store is null)
         {
             unavailableReason =
-                $"Vector artifact at '{facts.Path}' classified ready but could not be opened: {failureReason}.";
+                $"Vector artifact at '{servingPath}' classified ready but could not be opened: {failureReason}.";
+            return null;
+        }
+
+        // A promote can replace the file between the classify read and this open. Serving vectors from an
+        // encoder classification never approved would answer from the wrong embedding space, silently.
+        if (facts.Identity is { } classified &&
+            !string.Equals(store.Identity.EncoderFingerprint, classified.EncoderFingerprint, StringComparison.Ordinal))
+        {
+            string opened = store.Identity.EncoderFingerprint;
+            store.Dispose();
+            unavailableReason =
+                $"Vector artifact at '{servingPath}' changed between classification and open: it was classified " +
+                $"with encoder {classified.EncoderFingerprint} but opened with {opened}. Degrading to lexical.";
             return null;
         }
 

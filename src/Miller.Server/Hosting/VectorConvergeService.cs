@@ -201,6 +201,8 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly Func<Exception, string, Action, bool> _recoverCorrupt;
     private readonly Func<DateTimeOffset> _clock;
 
+    private SemanticEmbeddingSession? _session;
+
     public VectorConvergeService(
         IndexBootstrapService bootstrap,
         VectorSidecar sidecar,
@@ -246,34 +248,41 @@ public sealed class VectorConvergeService : BackgroundService
         if (!_sidecar.Enabled)
             return;
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await _signal.WaitAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+                try
+                {
+                    await _signal.WaitAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
 
-            try
-            {
-                await DrainAsync(stoppingToken).ConfigureAwait(false);
+                try
+                {
+                    await DrainOnceAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex) when (IsConvergeException(ex))
+                {
+                    _logger.LogWarning(ex,
+                        "Vector convergence drain failed; the cursors are unchanged and the next wake retries.");
+                }
             }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex) when (IsConvergeException(ex))
-            {
-                _logger.LogWarning(ex,
-                    "Vector convergence drain failed; the cursors are unchanged and the next wake retries.");
-            }
+        }
+        finally
+        {
+            await DisposeSessionAsync().ConfigureAwait(false);
         }
     }
 
-    private async Task DrainAsync(CancellationToken cancellationToken)
+    internal async Task DrainOnceAsync(CancellationToken cancellationToken)
     {
         WorkspaceContext? workspace = TryGetWorkspace();
         if (workspace is null)
@@ -283,12 +292,23 @@ public sealed class VectorConvergeService : BackgroundService
         if (port is null)
             return;
 
-        SemanticEmbeddingSession? session = _openSession(workspace);
-        if (session is null)
+        // ONE session for the life of the service: the resident child process, its restart count, and an open
+        // circuit are exactly the state a per-wake session would silently reset. A circuit-open session is kept
+        // and keeps stating its reason rather than being replaced by a fresh one that has forgotten why.
+        _session ??= _openSession(workspace);
+        if (_session is null)
             return;
 
-        await using (session.ConfigureAwait(false))
-            await DrainAsync(port, session, _openShadow(workspace), cancellationToken).ConfigureAwait(false);
+        await DrainAsync(port, _session, _openShadow(workspace), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DisposeSessionAsync()
+    {
+        if (_session is not { } session)
+            return;
+
+        _session = null;
+        await session.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -309,10 +329,12 @@ public sealed class VectorConvergeService : BackgroundService
             string artifact = VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
             if (!_recoverCorrupt(ex, artifact, () => _openPort(workspace)?.Dispose()))
                 throw;
-
-            // Recovery already rebuilt the artifact; this wake is done and the next one converges into it.
-            return null;
         }
+
+        // The only production stamp comes from index convergence, so on a quiet workspace there is no next wake:
+        // this drain must continue into the rebuilt artifact or it sits empty until an unrelated source change.
+        // A second corruption-shaped failure propagates rather than recovering in a loop.
+        return _openPort(workspace);
     }
 
     /// <summary>Drains both cursors once. Each cursor is independent: one failing never blocks the other.</summary>

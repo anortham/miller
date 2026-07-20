@@ -70,6 +70,7 @@ public sealed class VectorConvergeSignalTests
 /// disk. Scale because it loads the native extension — it SKIPS, never fails, when the extension is absent.
 /// </summary>
 [Trait("Category", "Scale")]
+[Collection(SqliteVecEnvironment.Name)]
 public sealed class VectorConvergePortScaleTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "miller-vec-converge-" + Guid.NewGuid());
@@ -443,40 +444,264 @@ public sealed class VectorConvergeServiceTests
         string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
         try
         {
-            string millerDir = Path.Combine(root, ".miller");
-            Directory.CreateDirectory(millerDir);
-            string symbols = Path.Combine(millerDir, "symbols.db");
-            File.WriteAllText(symbols, "source of truth");
-            string vectors = VectorSidecar.PathFor(root);
-            File.WriteAllText(vectors, "corrupt");
-
+            string symbols = SeedCorruptVectorArtifact(root);
             int opens = 0;
-            var service = new VectorConvergeService(
-                IsolatedBootstrap(),
-                new VectorSidecar(SemanticMode.On),
-                new VectorConvergeSignal(enabled: true),
-                NullLogger.Instance,
-                _ => opens++ == 0
-                    ? throw new InvalidOperationException("vector artifact has malformed meta")
-                    : null,
-                _ => null,
-                () => DateTimeOffset.UnixEpoch);
+            VectorConvergeService service = ServiceOverPorts(_ => opens++ == 0
+                ? throw new InvalidOperationException("vector artifact has malformed meta")
+                : null);
 
-            WorkspaceContext workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, root) with
-            {
-                CanonicalRoot = root,
-                CanonicalExtractDbPath = symbols,
-            };
-
-            Assert.Null(service.OpenPortWithRecovery(workspace));
-            Assert.False(File.Exists(vectors));
-            Assert.Equal(2, opens);
+            Assert.Null(service.OpenPortWithRecovery(WorkspaceAt(root, symbols)));
+            Assert.False(File.Exists(VectorSidecar.PathFor(root)));
             Assert.Equal("source of truth", File.ReadAllText(symbols));
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void OpenPort_AfterRecovery_ReturnsTheRebuiltGenerationSoThisDrainContinuesIntoIt()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
+        try
+        {
+            string symbols = SeedCorruptVectorArtifact(root);
+            var rebuilt = new FakePort();
+            int opens = 0;
+            VectorConvergeService service = ServiceOverPorts(_ => opens++ == 0
+                ? throw new InvalidOperationException("vector artifact has malformed meta")
+                : rebuilt);
+
+            Assert.Same(rebuilt, service.OpenPortWithRecovery(WorkspaceAt(root, symbols)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OpenPort_RebuiltGenerationAlsoCorrupt_PropagatesRatherThanRecoveringAgain()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
+        try
+        {
+            string symbols = SeedCorruptVectorArtifact(root);
+            VectorConvergeService service = ServiceOverPorts(
+                _ => throw new InvalidOperationException("vector artifact has malformed meta"));
+
+            Assert.Throws<InvalidOperationException>(
+                () => service.OpenPortWithRecovery(WorkspaceAt(root, symbols)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Drain_CorruptArtifactOnOneWake_ConvergesIntoTheRebuiltGenerationWithNoLaterStamp()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
+        try
+        {
+            string symbols = SeedCorruptVectorArtifact(root);
+            var rebuilt = new FakePort();
+            rebuilt.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+            int opens = 0;
+
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceOverWorkspace(
+                root,
+                symbols,
+                _ => opens++ == 0
+                    ? throw new InvalidOperationException("vector artifact has malformed meta")
+                    : rebuilt,
+                _ => session);
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            CommitRecord commit = rebuilt.Commits.Single(c => c.Kind is VectorUnitKind.Symbol);
+            Assert.Equal(["a"], commit.Vectors.Select(v => v.Unit.UnitId));
+            Assert.Equal(5, rebuilt.Commits.Single(c => c.Kind is VectorUnitKind.Symbol).AdvanceTo);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Drain_AcrossTwoWakes_ReusesOneResidentEmbeddingSession()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-session-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+            int created = 0;
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceOverWorkspace(
+                root, symbols, _ => port, _ => { created++; return session; });
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+            port.SymbolStored = [State("a", "src/A.cs", "card a")];
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, created);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Drain_AcrossTwoWakes_KeepsSidecarFailureStateSoRepeatedFailuresTripTheCircuit()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-circuit-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+            await using var session = new SemanticEmbeddingSession(
+                FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.CrashMidBatch), FastOptions);
+            VectorConvergeService service = ServiceOverWorkspace(root, symbols, _ => port, _ => session);
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+            int restartsAfterFirstWake = session.RestartCount;
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(restartsAfterFirstWake > 0);
+            Assert.True(session.RestartCount > restartsAfterFirstWake);
+            Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+            Assert.False(string.IsNullOrEmpty(port.Meta(VectorConvergeService.SymbolErrorKey)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Stop_DisposesTheResidentSessionExactlyOnceAndStartsNoOther()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-stop-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+            int created = 0;
+            SemanticEmbeddingSession? session = null;
+            var signal = new VectorConvergeSignal(enabled: true);
+            VectorConvergeService service = ServiceOverWorkspace(
+                root,
+                symbols,
+                _ => port,
+                _ =>
+                {
+                    created++;
+                    session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+                    return session;
+                },
+                signal);
+
+            await service.StartAsync(CancellationToken.None);
+            signal.StampTarget(5, fullRebuild: false);
+            await WaitUntil(() => port.Commits.Count > 0);
+
+            // The drain is done but the service is not: the resident child outlives the wake that started it.
+            Assert.NotEqual(SemanticSessionState.Stopped, session!.State);
+
+            await service.StopAsync(CancellationToken.None);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(1, created);
+            Assert.Equal(SemanticSessionState.Stopped, session!.State);
+            Assert.Equal("session disposed", session.UnavailableReason);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static SemanticSessionOptions FastOptions => new()
+    {
+        RequestTimeout = TimeSpan.FromSeconds(10),
+        InitTimeout = TimeSpan.FromSeconds(10),
+        ShutdownTimeout = TimeSpan.FromMilliseconds(200),
+        RestartBackoff = TimeSpan.Zero,
+        RestartBackoffCap = TimeSpan.Zero,
+        Delay = static (_, _) => Task.CompletedTask,
+    };
+
+    private static async Task WaitUntil(Func<bool> condition)
+    {
+        for (int attempt = 0; attempt < 200 && !condition(); attempt++)
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+
+        Assert.True(condition());
+    }
+
+    private static string SeedCorruptVectorArtifact(string root)
+    {
+        string symbols = SeedSymbolsDb(root);
+        File.WriteAllText(VectorSidecar.PathFor(root), "corrupt");
+        return symbols;
+    }
+
+    private static string SeedSymbolsDb(string root)
+    {
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string symbols = Path.Combine(millerDir, "symbols.db");
+        File.WriteAllText(symbols, "source of truth");
+        return symbols;
+    }
+
+    private static WorkspaceContext WorkspaceAt(string root, string symbolsDbPath) =>
+        WorkspaceContext.Create(root, AppContext.BaseDirectory, root) with
+        {
+            CanonicalRoot = root,
+            CanonicalExtractDbPath = symbolsDbPath,
+        };
+
+    private static VectorConvergeService ServiceOverPorts(Func<WorkspaceContext, IVectorConvergePort?> openPort) =>
+        new(
+            IsolatedBootstrap(),
+            new VectorSidecar(SemanticMode.On),
+            new VectorConvergeSignal(enabled: true),
+            NullLogger.Instance,
+            openPort,
+            _ => null,
+            () => DateTimeOffset.UnixEpoch);
+
+    private static VectorConvergeService ServiceOverWorkspace(
+        string root,
+        string symbolsDbPath,
+        Func<WorkspaceContext, IVectorConvergePort?> openPort,
+        Func<WorkspaceContext, SemanticEmbeddingSession?> openSession,
+        VectorConvergeSignal? signal = null)
+    {
+        IndexBootstrapService bootstrap = IsolatedBootstrap();
+        bootstrap.SeedForTest(WorkspaceAt(root, symbolsDbPath), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+
+        return new VectorConvergeService(
+            bootstrap,
+            new VectorSidecar(SemanticMode.On),
+            signal ?? new VectorConvergeSignal(enabled: true),
+            NullLogger.Instance,
+            openPort,
+            openSession,
+            () => DateTimeOffset.UnixEpoch);
     }
 
     [Fact]
