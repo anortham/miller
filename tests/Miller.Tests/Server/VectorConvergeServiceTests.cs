@@ -898,6 +898,94 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_ShadowBuildRefusedForDisk_StampsDiskBlockedWithFreeAndRequiredAndHoldsTheCursorWithNoDebris()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        live.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes =
+            await DrainWithDiskAsync(live, rebuilder, Blocking(free: 399, required: 400));
+
+        Assert.False(rebuilder.Promoted);
+        Assert.False(live.Disposed);
+        Assert.Equal(0, rebuilder.OpenShadowCalls);
+        Assert.DoesNotContain(shadow.Commits, c => c.Kind is VectorUnitKind.Symbol);
+
+        Assert.Equal("disk-blocked", live.Meta("converge_pause_state"));
+        string reason = live.Meta("converge_pause_reason")!;
+        Assert.Contains("399", reason, StringComparison.Ordinal);
+        Assert.Contains("400", reason, StringComparison.Ordinal);
+
+        Assert.Equal("0", live.Meta(VectorConvergeService.SymbolCompletedKey));
+        Assert.False(string.IsNullOrEmpty(live.Meta(VectorConvergeService.SymbolErrorKey)));
+    }
+
+    [Fact]
+    public async Task Drain_DiskRecoversAndBuildPromotes_LeavesNoDiskBlockedPauseOnTheServedArtifact()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        live.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        live.Metadata["converge_pause_state"] = "disk-blocked";
+        live.Metadata["converge_pause_reason"] = "not enough free disk (399 bytes free, 400 bytes required)";
+
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var promoted = new FakePort();
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService().DrainAsync(
+            live, session, rebuilder, () => promoted, VectorConvergeService.AlwaysAvailable,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(rebuilder.Promoted);
+        Assert.True(string.IsNullOrEmpty(promoted.Meta("converge_pause_state")));
+    }
+
+    [Fact]
+    public async Task Drain_FirstIncrementalWakeAfterDiskRecovers_ClearsAStaleDiskBlockedPause()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        port.Metadata["converge_pause_state"] = "disk-blocked";
+        port.Metadata["converge_pause_reason"] = "not enough free disk (399 bytes free, 400 bytes required)";
+
+        await DrainAsync(port);
+
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_state")));
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_reason")));
+    }
+
+    [Fact]
+    public async Task Drain_DiskBlockedAndCircuitOpen_CircuitOpenWinsThePauseState()
+    {
+        var live = new FakePort();
+        live.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var rebuilder = new FakeShadowRebuilder(new FakePort());
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.CrashMidBatch), FastOptions);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(live, session, TestContext.Current.CancellationToken);
+        await service.DrainAsync(live, session, TestContext.Current.CancellationToken);
+        Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        await service.DrainAsync(
+            live, session, rebuilder, null, Blocking(free: 399, required: 400),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+        Assert.Equal("circuit-open", live.Meta("converge_pause_state"));
+    }
+
+    [Fact]
     public async Task Drain_SidecarUnavailable_HoldsTheCursorAndRecordsTheReason()
     {
         var port = new FakePort();
@@ -953,6 +1041,19 @@ public sealed class VectorConvergeServiceTests
         await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
         return await NewService().DrainAsync(port, session, rebuilder, TestContext.Current.CancellationToken);
     }
+
+    private static async Task<IReadOnlyList<VectorCursorOutcome>> DrainWithDiskAsync(
+        FakePort port,
+        IVectorShadowRebuilder? rebuilder,
+        DiskGate diskGate)
+    {
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        return await NewService().DrainAsync(
+            port, session, rebuilder, null, diskGate, TestContext.Current.CancellationToken);
+    }
+
+    private static DiskGate Blocking(long free, long required) =>
+        _ => new DiskPreflightVerdict(false, free, required);
 
     private sealed class FakeShadowRebuilder(FakePort? shadow) : IVectorShadowRebuilder
     {

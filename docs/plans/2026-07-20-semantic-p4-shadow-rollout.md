@@ -113,10 +113,10 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Pure logic in `Miller.Core`-style (no I/O in the verdict; probe injected — default probe uses `DriveInfo`). Wire the check at `BuildShadowAsync` entry and at each bounded-batch slice boundary. Preflight failure is a hold (RecordError + pause stamp), never an exception.
 
 **Acceptance criteria:**
-- [ ] Preflight verdict is pure and unit-tested (blocked/ok boundaries, probe injected).
-- [ ] A blocked shadow build stamps `disk-blocked` with free+required bytes in the reason and leaves no `.rebuild`/shadow debris.
-- [ ] Recovery (probe reports space) clears the pause on the next wake and the build proceeds.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Preflight verdict is pure and unit-tested (blocked/ok boundaries, probe injected).
+- [x] A blocked shadow build stamps `disk-blocked` with free+required bytes in the reason and leaves no `.rebuild`/shadow debris.
+- [x] Recovery (probe reports space) clears the pause on the next wake and the build proceeds.
+- [x] Worker-scope verification passes and the change is committed (parallel-lead-commit — lead commit; circuit-open > disk-blocked precedence via single ResolvePause point).
 
 ### Task 3: `miller semantic prepare` CLI verb (consented model download)
 

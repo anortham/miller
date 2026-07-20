@@ -160,6 +160,14 @@ internal sealed record VectorConvergeSnapshot(
 internal sealed record VectorCommit(VectorWorkUnit Unit, sbyte[] Embedding);
 
 /// <summary>
+/// The per-wake disk gate a shadow rebuild consults with the number of units it is about to embed, so a build
+/// that could not fit is refused before it writes a corrupt half-artifact. Injected so the fast suite decides
+/// space without touching a real disk; the production gate closes over the workspace's <c>.miller</c> free
+/// space and the live artifact's observed bytes-per-unit.
+/// </summary>
+internal delegate DiskPreflightVerdict DiskGate(int workUnits);
+
+/// <summary>
 /// The leader-side drain loop for <c>vectors.db</c>: on wake it recomputes each cursor's changed paths from its
 /// own <c>completed_revision</c>, rebuilds card and chunk texts, hash-gates them, embeds outside any gate, then
 /// re-validates and commits the batch atomically with the cursor advance.
@@ -188,6 +196,11 @@ public sealed class VectorConvergeService : BackgroundService
     internal const string ConvergePauseStateKey = "converge_pause_state";
     internal const string ConvergePauseReasonKey = "converge_pause_reason";
     internal const string CircuitOpenPauseValue = "circuit-open";
+    internal const string DiskBlockedPauseValue = "disk-blocked";
+
+    /// <summary>A disk gate that always reports space: the default for drains that do not project onto a real
+    /// artifact (the fast-suite entry points), and the neutral element of pause resolution.</summary>
+    internal static readonly DiskGate AlwaysAvailable = static _ => new DiskPreflightVerdict(true, -1, 0);
 
     /// <summary>Bounded so one embed call can never outgrow the sidecar's per-request budget.</summary>
     internal const int EmbedBatchSize = 64;
@@ -202,6 +215,7 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly Func<WorkspaceContext, SemanticEmbeddingSession?> _openSession;
     private readonly Func<WorkspaceContext, IVectorShadowRebuilder?> _openShadow;
     private readonly Func<Exception, string, Action, bool> _recoverCorrupt;
+    private readonly Func<WorkspaceContext, IVectorConvergePort, DiskGate> _diskGateFactory;
     private readonly Func<DateTimeOffset> _clock;
 
     private SemanticEmbeddingSession? _session;
@@ -224,7 +238,8 @@ public sealed class VectorConvergeService : BackgroundService
         Func<WorkspaceContext, SemanticEmbeddingSession?> openSession,
         Func<DateTimeOffset>? clock,
         Func<WorkspaceContext, IVectorShadowRebuilder?>? openShadow = null,
-        Func<Exception, string, Action, bool>? recoverCorrupt = null)
+        Func<Exception, string, Action, bool>? recoverCorrupt = null,
+        Func<WorkspaceContext, IVectorConvergePort, DiskGate>? diskGateFactory = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -242,6 +257,7 @@ public sealed class VectorConvergeService : BackgroundService
         _openShadow = openShadow ?? SqliteVectorShadowRebuilder.TryOpen;
         _recoverCorrupt = recoverCorrupt ?? ((failure, path, rebuild) =>
             SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(failure, path, rebuild, logger));
+        _diskGateFactory = diskGateFactory ?? ProductionDiskGate;
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
     }
 
@@ -307,8 +323,40 @@ public sealed class VectorConvergeService : BackgroundService
                 _session,
                 _openShadow(workspace),
                 () => OpenPortWithRecovery(workspace),
+                _diskGateFactory(workspace, port),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The production disk gate: free space under the workspace's <c>.miller</c> directory versus the projected
+    /// shadow footprint, which is the work-list size times the bytes-per-unit observed on the live artifact. The
+    /// probe reads real free space; the verdict is pure. A workspace with no live artifact yet falls back to a
+    /// conservative per-unit estimate inside <see cref="DiskPreflight.EstimateRequiredBytes"/>.
+    /// </summary>
+    private static DiskGate ProductionDiskGate(WorkspaceContext workspace, IVectorConvergePort port)
+    {
+        string vectorsPath = VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+        string millerDir = Path.GetDirectoryName(vectorsPath) ?? vectorsPath;
+        long artifactBytes = FileSizeOrZero(vectorsPath);
+        int storedUnits = port.TotalStored(VectorUnitKind.Symbol);
+        var preflight = new DiskPreflight();
+
+        return workUnits => preflight.Check(
+            millerDir, DiskPreflight.EstimateRequiredBytes(workUnits, artifactBytes, storedUnits));
+    }
+
+    private static long FileSizeOrZero(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return 0;
+        }
     }
 
     private async Task DisposeSessionAsync()
@@ -358,25 +406,38 @@ public sealed class VectorConvergeService : BackgroundService
         SemanticEmbeddingSession session,
         IVectorShadowRebuilder? rebuilder,
         CancellationToken cancellationToken) =>
-        await DrainAsync(port, session, rebuilder, null, cancellationToken).ConfigureAwait(false);
+        await DrainAsync(port, session, rebuilder, null, AlwaysAvailable, cancellationToken).ConfigureAwait(false);
 
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
         IVectorShadowRebuilder? rebuilder,
         Func<IVectorConvergePort?>? reopenAfterPromote,
+        CancellationToken cancellationToken) =>
+        await DrainAsync(port, session, rebuilder, reopenAfterPromote, AlwaysAvailable, cancellationToken)
+            .ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        IVectorConvergePort port,
+        SemanticEmbeddingSession session,
+        IVectorShadowRebuilder? rebuilder,
+        Func<IVectorConvergePort?>? reopenAfterPromote,
+        DiskGate diskGate,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(port);
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(diskGate);
 
-        var state = new DrainState(rebuilder);
+        var state = new DrainState(rebuilder, diskGate);
         VectorCursorOutcome symbols = await DrainCursorAsync(
             port, session, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
 
         // A promote disposed the live port and replaced the file underneath it. The only production stamp comes
         // from index convergence, so on a quiet workspace there is no next wake: the chunk cursor must converge
-        // into the reopened artifact NOW or docs sit unembedded until an unrelated source change.
+        // into the reopened artifact NOW or docs sit unembedded until an unrelated source change. The promoted
+        // artifact is a fresh generation with no pause stamp, so resolving the pause on it is what clears a stale
+        // disk-blocked or circuit-open pause the superseded artifact carried.
         if (state.Promoted)
         {
             if (reopenAfterPromote?.Invoke() is not { } reopened)
@@ -386,6 +447,7 @@ public sealed class VectorConvergeService : BackgroundService
             {
                 VectorCursorOutcome promotedChunks = await DrainChunkToCompletionAsync(
                     reopened, session, state, cancellationToken).ConfigureAwait(false);
+                ResolvePause(reopened, session, state);
                 return [symbols, promotedChunks];
             }
         }
@@ -393,7 +455,7 @@ public sealed class VectorConvergeService : BackgroundService
         VectorCursorOutcome chunks = await DrainChunkToCompletionAsync(
             port, session, state, cancellationToken).ConfigureAwait(false);
 
-        ApplyCircuitPause(port, session);
+        ResolvePause(port, session, state);
         return [symbols, chunks];
     }
 
@@ -569,6 +631,12 @@ public sealed class VectorConvergeService : BackgroundService
         }
 
         state.ShadowAttempted = true;
+
+        // Preflight BEFORE opening the shadow so a disk-blocked refusal never even creates a .rebuild file: the
+        // cursor holds with a disk-blocked pause instead of failing mid-build with a corrupt half-artifact.
+        if (RefuseForDisk(state, live, LiveRebuildUnitCount(live), errorKey, errorAtKey) is { } blocked)
+            return Escalated(kind, plan, completed, blocked);
+
         IVectorConvergePort? shadow = null;
 
         try
@@ -580,8 +648,8 @@ public sealed class VectorConvergeService : BackgroundService
                     "a shadow generation could not be created; the cursor holds"));
             }
 
-            (int embedded, int flagged, string? failure) = await BuildShadowAsync(shadow, session, cancellationToken)
-                .ConfigureAwait(false);
+            (int embedded, int flagged, string? failure) =
+                await BuildShadowAsync(shadow, session, state, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
                 return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey, failure));
 
@@ -629,6 +697,7 @@ public sealed class VectorConvergeService : BackgroundService
     private async Task<(int Embedded, int Flagged, string? Failure)> BuildShadowAsync(
         IVectorConvergePort shadow,
         SemanticEmbeddingSession session,
+        DrainState state,
         CancellationToken cancellationToken)
     {
         (string completedKey, string targetKey, _, _) = Keys(VectorUnitKind.Symbol);
@@ -650,6 +719,11 @@ public sealed class VectorConvergeService : BackgroundService
         int flaggedTotal = 0;
         for (int offset = 0; offset < work.Count; offset += VectorConvergePlanner.MaxUnitsPerTransaction)
         {
+            // Re-check at each slice boundary as the shadow grows: space that held at entry can be exhausted by
+            // the slices already written, and a mid-build stop must refuse rather than write on into a corruption.
+            if (BlockedForDisk(state, work.Count - offset) is { } failed)
+                return (0, 0, failed);
+
             IReadOnlyList<VectorWorkUnit> slice =
                 [.. work.Skip(offset).Take(VectorConvergePlanner.MaxUnitsPerTransaction)];
             (List<VectorCommit> embedded, int flagged, string? failure) =
@@ -712,15 +786,61 @@ public sealed class VectorConvergeService : BackgroundService
         VectorUnitKind kind, VectorConvergePlan plan, long completed, string? error) =>
         new(kind, plan.Decision, plan.Trigger, 0, 0, completed, error);
 
-    /// <summary>Per-wake state shared by the two cursors: the shadow arm is attempted at most once, and a
-    /// promote ends the drain.</summary>
-    private sealed class DrainState(IVectorShadowRebuilder? rebuilder)
+    /// <summary>The whole-corpus symbol count a shadow rebuild will embed, used to project its disk footprint
+    /// before the shadow is opened. Every eligible unit is stored fresh, so the live unit count is the estimate;
+    /// the hash gate only ever shrinks it.</summary>
+    private static int LiveRebuildUnitCount(IVectorConvergePort live) =>
+        live.Units(VectorUnitKind.Symbol, null).Count;
+
+    /// <summary>Records a disk-blocked hold on the live artifact and marks the drain's pause state, returning the
+    /// stored reason. Used at shadow-rebuild entry, before any shadow file exists.</summary>
+    private string? RefuseForDisk(
+        DrainState state, IVectorConvergePort live, int workUnits, string errorKey, string errorAtKey)
+    {
+        DiskPreflightVerdict verdict = state.DiskGate(workUnits);
+        if (verdict.Ok)
+            return null;
+
+        state.MarkDiskBlocked(verdict);
+        return RecordError(live, errorKey, errorAtKey, DiskBlockedReason(verdict));
+    }
+
+    /// <summary>The mid-build variant: a slice boundary refusal marks the pause and returns the build-failure
+    /// reason, so the shadow arm records it on the live artifact and holds.</summary>
+    private static string? BlockedForDisk(DrainState state, int remainingUnits)
+    {
+        DiskPreflightVerdict verdict = state.DiskGate(remainingUnits);
+        if (verdict.Ok)
+            return null;
+
+        state.MarkDiskBlocked(verdict);
+        return DiskBlockedReason(verdict);
+    }
+
+    private static string DiskBlockedReason(DiskPreflightVerdict verdict) =>
+        $"not enough free disk under .miller to build a shadow vector generation ({verdict.Reason}); the cursor holds";
+
+    /// <summary>Per-wake state shared by the two cursors: the shadow arm is attempted at most once, a promote
+    /// ends the drain, and a disk refusal is remembered so the pause is resolved once at the end.</summary>
+    private sealed class DrainState(IVectorShadowRebuilder? rebuilder, DiskGate diskGate)
     {
         public IVectorShadowRebuilder? Rebuilder { get; } = rebuilder;
+
+        public DiskGate DiskGate { get; } = diskGate;
 
         public bool ShadowAttempted { get; set; }
 
         public bool Promoted { get; set; }
+
+        public bool DiskBlocked { get; private set; }
+
+        public string? DiskBlockedReason { get; private set; }
+
+        public void MarkDiskBlocked(DiskPreflightVerdict verdict)
+        {
+            DiskBlocked = true;
+            DiskBlockedReason = verdict.Reason;
+        }
     }
 
     /// <summary>The writer's half of the shared lane quantization; the reader's query path quantizes with the
@@ -762,33 +882,28 @@ public sealed class VectorConvergeService : BackgroundService
     }
 
     /// <summary>
-    /// Records or clears the convergence pause on the artifact so a reader instance — not just the leader that
-    /// tripped it — reports <c>circuit-open</c> instead of a stale <c>ready</c>. The transition is detected
-    /// against the artifact's own meta rather than an in-process flag: an open circuit is permanent for a
-    /// <see cref="SemanticEmbeddingSession"/>'s life, so recovery is inherently a later process observing the
-    /// stale stamp and clearing it on its first successful wake. Writing only on the open⟶stamp and
-    /// recovered⟶clear edges keeps the hot drain loop off <c>vectors_meta</c>. A cleared pause is an empty value,
-    /// which the consumer's <c>VectorSidecar.PauseState</c> treats as absent.
+    /// The single pause-resolution point for the two producers that stamp <c>converge_pause_state</c>. It records
+    /// or clears the convergence pause on the artifact so a reader instance — not just the leader that tripped it
+    /// — reports the pause instead of a stale <c>ready</c>. Precedence is explicit: an open circuit outranks a
+    /// disk block (it is the more fundamental stop), so a wake that is both stamps <c>circuit-open</c>. The
+    /// transition is detected against the artifact's own meta rather than an in-process flag, and only the
+    /// stamp⟶ and ⟶clear edges write, keeping the hot drain loop off <c>vectors_meta</c>. A cleared pause is an
+    /// empty value, which the consumer's <c>VectorSidecar.PauseState</c> treats as absent.
     /// </summary>
-    private static void ApplyCircuitPause(IVectorConvergePort port, SemanticEmbeddingSession session)
+    private static void ResolvePause(IVectorConvergePort port, SemanticEmbeddingSession session, DrainState state)
     {
-        bool circuitOpen = session.State is SemanticSessionState.CircuitOpen;
-        bool stamped = string.Equals(
-            port.Meta(ConvergePauseStateKey), CircuitOpenPauseValue, StringComparison.Ordinal);
+        (string desiredState, string desiredReason) = session.State is SemanticSessionState.CircuitOpen
+            ? (CircuitOpenPauseValue, Scrub(session.UnavailableReason))
+            : state.DiskBlocked
+                ? (DiskBlockedPauseValue, Scrub(state.DiskBlockedReason))
+                : (string.Empty, string.Empty);
 
-        if (circuitOpen == stamped)
+        string current = port.Meta(ConvergePauseStateKey) ?? string.Empty;
+        if (string.Equals(current, desiredState, StringComparison.Ordinal))
             return;
 
-        if (circuitOpen)
-        {
-            port.SetMeta(ConvergePauseStateKey, CircuitOpenPauseValue);
-            port.SetMeta(ConvergePauseReasonKey, Scrub(session.UnavailableReason));
-        }
-        else
-        {
-            port.SetMeta(ConvergePauseStateKey, string.Empty);
-            port.SetMeta(ConvergePauseReasonKey, string.Empty);
-        }
+        port.SetMeta(ConvergePauseStateKey, desiredState);
+        port.SetMeta(ConvergePauseReasonKey, desiredReason);
     }
 
     /// <summary>Persisted last-errors are bounded and carry no path: anything absolute is replaced by its file
