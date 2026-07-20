@@ -143,11 +143,11 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Follow the existing CLI verb pattern in `CliDispatch` (branch at the verb table, ~`CliDispatch.cs:92-148`; no host build, no index load — like `version`). Fake the sidecar in tests with a stub executable script/`FakeSemanticSidecar`-style process (existing support under `tests/Miller.Tests/Support/`); tag `Scale` if it must spawn a real process — prefer a pure argument/marker/exit-code core (`SemanticPrepareCli.Run(...)` with an injected process runner) so the fast suite covers logic without spawning.
 
 **Acceptance criteria:**
-- [ ] `miller semantic prepare` shells to the pinned sidecar's `prepare`, streams progress, and returns the sidecar's exit status; `--model` passes through.
-- [ ] Marker file exists exactly while the child runs (created before spawn, removed on success, failure, and cancellation).
-- [ ] Missing sidecar binary fails loud with the restore-script message (same wording pattern as `CliDispatch.cs:529`).
-- [ ] Disk preflight refusal produces an actionable message and nonzero exit without spawning the child.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] `miller semantic prepare` shells to the pinned sidecar's `prepare`, streams progress, and returns the sidecar's exit status; `--model` passes through.
+- [x] Marker file exists exactly while the child runs (created before spawn, removed on success, failure, and cancellation).
+- [x] Missing sidecar binary fails loud with the restore-script message (same wording pattern as `CliDispatch.cs:529`).
+- [x] Disk preflight refusal produces an actionable message and nonzero exit without spawning the child.
+- [x] Worker-scope verification passes and the change is committed (parallel-lead-commit — lead commit; local preflight seam pending Task 4's DiskPreflight swap).
 
 ### Task 4: `downloading` status state (consumer + producer)
 
