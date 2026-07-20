@@ -47,6 +47,19 @@ public enum SearchToolMode
 }
 
 /// <summary>
+/// The output of symbol candidate generation: the ordered candidates plus the miss-path facts rendering needs
+/// when there are none. <see cref="OutsideScope"/> holds the bounded sample of hits a file/language filter
+/// excluded and <see cref="EmptySuggestions"/> the near-match symbols for an empty result — both are computed
+/// during generation so rendering never touches the index.
+/// </summary>
+internal sealed record SymbolCandidateSet(
+    IReadOnlyList<SymbolCandidate> Candidates,
+    IReadOnlyList<SymbolCandidate> OutsideScope,
+    IReadOnlyList<IndexedSymbol> EmptySuggestions,
+    bool FileMode,
+    ToolSearchFilters Filters);
+
+/// <summary>
 /// The <c>search</c> tool (M2 §4): find indexed code and return ranked results. Maps to
 /// <see cref="MillerRepositoryIndex.Search"/> (lexical, SearchMode.Or) — the ordering is already
 /// score-DESC / DocId-ASC with the exact-name boost, so the renderer NEVER re-sorts. The
@@ -880,11 +893,31 @@ public sealed class SearchTool
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry) the tool method delegates to. Returns the rendered
     /// string and sets <paramref name="renderedCount"/> to the number of rows actually shown (the page).
+    /// Composes the two stages: <see cref="CollectSymbolCandidates"/> then <see cref="RenderSymbolCandidates"/>.
     /// </summary>
     public static string Run(
         ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
         bool? excludeTests, bool json, out int renderedCount, string? compactBanner = null,
         Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
+        string? filePattern = null,
+        string? language = null)
+    {
+        SymbolCandidateSet candidates =
+            CollectSymbolCandidates(index, query, mode, limit, excludeTests, filePattern, language);
+
+        return RenderSymbolCandidates(
+            candidates, query, mode, limit, json, out renderedCount, compactBanner, hasDocLookup);
+    }
+
+    /// <summary>
+    /// Stage one of the symbol route: rank, filter, and project index rows into typed candidates. Everything
+    /// that needs the index happens here — including the empty-result near-match suggestions — so stage two
+    /// renders from data alone. This is the seam a retrieval arm interposes on: it may reorder or extend
+    /// <see cref="SymbolCandidateSet.Candidates"/> and rendering follows without knowing the difference.
+    /// </summary>
+    internal static SymbolCandidateSet CollectSymbolCandidates(
+        ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
+        bool? excludeTests,
         string? filePattern = null,
         string? language = null)
     {
@@ -926,52 +959,17 @@ public sealed class SearchTool
             return (hits.Count, kept.Count);
         });
 
-        int total = kept.Count;
-        int page = Math.Min(limit, total);
-        renderedCount = page;
+        IReadOnlyList<IndexedSymbol> emptySuggestions =
+            kept.Count == 0 && !fileMode && outsideScope.Count == 0
+                ? SymbolSuggestionEngine.Suggest(index, query, EmptySuggestionLimit)
+                : [];
 
-        if (total == 0)
-        {
-            if (fileMode)
-            {
-                if (json)
-                    return "[]";
-                return outsideScope.Count > 0
-                    ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
-                    : ReadToolWorkspaceRouting.PrefixCompact(FileEmptyHint(query), compactBanner);
-            }
-            IReadOnlyList<IndexedSymbol> suggestions =
-                outsideScope.Count == 0
-                    ? SymbolSuggestionEngine.Suggest(index, query, EmptySuggestionLimit)
-                    : [];
-            if (json)
-                return suggestions.Count > 0 ? RenderEmptyJson(suggestions) : "[]";
-            return outsideScope.Count > 0
-                ? RenderFilteredMissCompact(filters, compactBanner, outsideScope)
-                : RenderEmptySymbolMissCompact(compactBanner, query, suggestions);
-        }
-
-        IReadOnlySet<string>? hasDocSymbolIds = null;
-        if (hasDocLookup is not null && page > 0)
-        {
-            string[] pageIds = kept.Take(page).Select(static s => s.SymbolId).ToArray();
-            hasDocSymbolIds = hasDocLookup(pageIds);
-        }
-
-        if (json)
-            return RenderJson(kept, scores, page, hasDocSymbolIds);
-        if (fileMode)
-            return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
-
-        string compact = RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
-        // Delivery-time nudge: a named symbol top hit is a natural inspect target, so route the agent there.
-        // Rendered last, exactly once. Suppressed for JSON (returned above, byte-identical), file-path hits
-        // (returned above), and empty results (returned earlier). Text/content/source/markers modes never reach
-        // this symbol path — and text mode, which does, is gated out here so only symbol/auto intent nudges.
-        if (mode is SearchToolMode.Auto or SearchToolMode.Symbol)
-            compact += "\n" + NextStepHint.Render(
-                $"inspect target=\"{EscapeCallString(kept[0].Name)}\" depth=overview");
-        return compact;
+        return new SymbolCandidateSet(
+            [.. kept.Select((symbol, i) => ToCandidate(symbol, scores[i]))],
+            [.. outsideScope.Select(static symbol => ToCandidate(symbol, score: 0))],
+            emptySuggestions,
+            fileMode,
+            filters);
 
         void AddIfVisible(IndexedSymbol sym, double score)
         {
@@ -990,6 +988,76 @@ public sealed class SearchTool
             kept.Add(sym);
             scores.Add(score);
         }
+    }
+
+    private static SymbolCandidate ToCandidate(IndexedSymbol symbol, double score) =>
+        new(
+            symbol.DocId,
+            symbol.SymbolId,
+            symbol.Name,
+            symbol.Signature,
+            symbol.Kind,
+            symbol.FilePath,
+            symbol.StartLine,
+            score);
+
+    /// <summary>
+    /// Stage two of the symbol route: render collected candidates. Reads no index and performs no lookup —
+    /// every rendered byte comes from <paramref name="candidates"/> plus the caller's presentation options —
+    /// so an arm that reshapes the candidate list fully determines the output.
+    /// </summary>
+    internal static string RenderSymbolCandidates(
+        SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
+        out int renderedCount, string? compactBanner = null,
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        if (limit < 1) limit = 1;
+
+        IReadOnlyList<SymbolCandidate> kept = candidates.Candidates;
+        int total = kept.Count;
+        int page = Math.Min(limit, total);
+        renderedCount = page;
+
+        if (total == 0)
+        {
+            if (candidates.FileMode)
+            {
+                if (json)
+                    return "[]";
+                return candidates.OutsideScope.Count > 0
+                    ? RenderFilteredMissCompact(candidates.Filters, compactBanner, candidates.OutsideScope)
+                    : ReadToolWorkspaceRouting.PrefixCompact(FileEmptyHint(query), compactBanner);
+            }
+            IReadOnlyList<IndexedSymbol> suggestions = candidates.EmptySuggestions;
+            if (json)
+                return suggestions.Count > 0 ? RenderEmptyJson(suggestions) : "[]";
+            return candidates.OutsideScope.Count > 0
+                ? RenderFilteredMissCompact(candidates.Filters, compactBanner, candidates.OutsideScope)
+                : RenderEmptySymbolMissCompact(compactBanner, query, suggestions);
+        }
+
+        IReadOnlySet<string>? hasDocSymbolIds = null;
+        if (hasDocLookup is not null && page > 0)
+        {
+            string[] pageIds = kept.Take(page).Select(static s => s.SymbolId).ToArray();
+            hasDocSymbolIds = hasDocLookup(pageIds);
+        }
+
+        if (json)
+            return RenderJson(kept, page, hasDocSymbolIds);
+        if (candidates.FileMode)
+            return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
+
+        string compact = RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+        // Delivery-time nudge: a named symbol top hit is a natural inspect target, so route the agent there.
+        // Rendered last, exactly once. Suppressed for JSON (returned above, byte-identical), file-path hits
+        // (returned above), and empty results (returned earlier). Text/content/source/markers modes never reach
+        // this symbol path — and text mode, which does, is gated out here so only symbol/auto intent nudges.
+        if (mode is SearchToolMode.Auto or SearchToolMode.Symbol)
+            compact += "\n" + NextStepHint.Render(
+                $"inspect target=\"{EscapeCallString(kept[0].Name)}\" depth=overview");
+        return compact;
     }
 
     /// <summary>
@@ -1856,10 +1924,10 @@ public sealed class SearchTool
     private static string RenderFilteredMissCompact(
         ToolSearchFilters filters,
         string? compactBanner,
-        IReadOnlyList<IndexedSymbol> outsideScope)
+        IReadOnlyList<SymbolCandidate> outsideScope)
     {
         var sb = FilteredMissHeader(filters, compactBanner, outsideScope.Select(static symbol => symbol.FilePath));
-        foreach (IndexedSymbol s in outsideScope)
+        foreach (SymbolCandidate s in outsideScope)
         {
             sb.Append('\n')
               .Append(s.Name).Append("  ").Append(s.Kind).Append("  ")
@@ -1938,7 +2006,7 @@ public sealed class SearchTool
     }
 
     private static string RenderCompact(
-        IReadOnlyList<IndexedSymbol> kept,
+        IReadOnlyList<SymbolCandidate> kept,
         int page,
         int total,
         string query,
@@ -1949,15 +2017,15 @@ public sealed class SearchTool
         if (definitionIndex >= 0)
             return RenderDefinitionCompact(kept, page, total, definitionIndex, query, compactBanner, hasDocSymbolIds);
 
-        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
+        var groups = new List<(string FilePath, List<SymbolCandidate> Symbols)>();
         for (int i = 0; i < page; i++)
         {
-            IndexedSymbol symbol = kept[i];
+            SymbolCandidate symbol = kept[i];
             int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
             if (groupIndex >= 0)
                 groups[groupIndex].Symbols.Add(symbol);
             else
-                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+                groups.Add((symbol.FilePath, new List<SymbolCandidate> { symbol }));
         }
 
         var sb = new StringBuilder();
@@ -1984,7 +2052,7 @@ public sealed class SearchTool
                 if (g > 0)
                     sb.Append('\n');
                 sb.Append(groups[g].FilePath).Append(':');
-                foreach (IndexedSymbol s in groups[g].Symbols)
+                foreach (SymbolCandidate s in groups[g].Symbols)
                 {
                     sb.Append('\n').Append("  :").Append(s.StartLine)
                       .Append(' ').Append(s.Name).Append(' ').Append(s.Kind);
@@ -2061,7 +2129,7 @@ public sealed class SearchTool
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
 
-    private static void AppendSymbolAnnotations(StringBuilder sb, IndexedSymbol s, IReadOnlySet<string>? hasDocSymbolIds)
+    private static void AppendSymbolAnnotations(StringBuilder sb, SymbolCandidate s, IReadOnlySet<string>? hasDocSymbolIds)
     {
         if (IsLowSignalKind(s.Kind))
             sb.Append("  low_signal");
@@ -2072,21 +2140,21 @@ public sealed class SearchTool
     }
 
     private static string RenderFileCompact(
-        IReadOnlyList<IndexedSymbol> kept,
+        IReadOnlyList<SymbolCandidate> kept,
         int page,
         int total,
         string? compactBanner,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
-        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
+        var groups = new List<(string FilePath, List<SymbolCandidate> Symbols)>();
         for (int i = 0; i < page; i++)
         {
-            IndexedSymbol symbol = kept[i];
+            SymbolCandidate symbol = kept[i];
             int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
             if (groupIndex >= 0)
                 groups[groupIndex].Symbols.Add(symbol);
             else
-                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+                groups.Add((symbol.FilePath, new List<SymbolCandidate> { symbol }));
         }
 
         var sb = new StringBuilder();
@@ -2117,10 +2185,10 @@ public sealed class SearchTool
 
     private static void AppendFileModeSymbols(
         StringBuilder sb,
-        IReadOnlyList<IndexedSymbol> symbols,
+        IReadOnlyList<SymbolCandidate> symbols,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
-        foreach (IndexedSymbol symbol in symbols)
+        foreach (SymbolCandidate symbol in symbols)
         {
             sb.Append("  :").Append(symbol.StartLine)
               .Append(' ').Append(symbol.Name)
@@ -2132,7 +2200,7 @@ public sealed class SearchTool
     }
 
     private static string RenderDefinitionCompact(
-        IReadOnlyList<IndexedSymbol> kept,
+        IReadOnlyList<SymbolCandidate> kept,
         int page,
         int total,
         int definitionIndex,
@@ -2144,11 +2212,11 @@ public sealed class SearchTool
         if (!string.IsNullOrWhiteSpace(compactBanner))
             sb.Append(compactBanner).Append('\n');
 
-        IndexedSymbol definition = kept[definitionIndex];
+        SymbolCandidate definition = kept[definitionIndex];
         sb.Append("Definition found: ").Append(query.Trim()).Append('\n');
         AppendPromotedDefinition(sb, definition, hasDocSymbolIds);
 
-        var otherRows = new List<IndexedSymbol>(Math.Max(0, page - 1));
+        var otherRows = new List<SymbolCandidate>(Math.Max(0, page - 1));
         for (int i = 0; i < page; i++)
         {
             if (i != definitionIndex)
@@ -2168,7 +2236,7 @@ public sealed class SearchTool
         return sb.ToString();
     }
 
-    private static int FindPromotableDefinitionIndex(IReadOnlyList<IndexedSymbol> kept, int page, string query)
+    private static int FindPromotableDefinitionIndex(IReadOnlyList<SymbolCandidate> kept, int page, string query)
     {
         string queryLower = query.Trim().ToLowerInvariant();
         if (queryLower.Length == 0)
@@ -2176,7 +2244,7 @@ public sealed class SearchTool
 
         for (int i = 0; i < page; i++)
         {
-            IndexedSymbol symbol = kept[i];
+            SymbolCandidate symbol = kept[i];
             if (!IsLowSignalKind(symbol.Kind) && IsDefinitionNameMatch(symbol.Name, queryLower))
                 return i;
         }
@@ -2202,7 +2270,7 @@ public sealed class SearchTool
 
     private static void AppendPromotedDefinition(
         StringBuilder sb,
-        IndexedSymbol symbol,
+        SymbolCandidate symbol,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
         sb.Append("  ").Append(symbol.FilePath).Append(':').Append(symbol.StartLine)
@@ -2217,17 +2285,17 @@ public sealed class SearchTool
 
     private static void AppendOtherMatchesGroupedByFile(
         StringBuilder sb,
-        IReadOnlyList<IndexedSymbol> symbols,
+        IReadOnlyList<SymbolCandidate> symbols,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
-        var groups = new List<(string FilePath, List<IndexedSymbol> Symbols)>();
-        foreach (IndexedSymbol symbol in symbols)
+        var groups = new List<(string FilePath, List<SymbolCandidate> Symbols)>();
+        foreach (SymbolCandidate symbol in symbols)
         {
             int groupIndex = groups.FindIndex(group => group.FilePath == symbol.FilePath);
             if (groupIndex >= 0)
                 groups[groupIndex].Symbols.Add(symbol);
             else
-                groups.Add((symbol.FilePath, new List<IndexedSymbol> { symbol }));
+                groups.Add((symbol.FilePath, new List<SymbolCandidate> { symbol }));
         }
 
         for (int i = 0; i < groups.Count; i++)
@@ -2240,7 +2308,7 @@ public sealed class SearchTool
             else
             {
                 sb.Append(group.FilePath).Append(':').Append('\n');
-                foreach (IndexedSymbol symbol in group.Symbols)
+                foreach (SymbolCandidate symbol in group.Symbols)
                     AppendGroupedOtherMatch(sb, symbol, hasDocSymbolIds);
             }
 
@@ -2251,7 +2319,7 @@ public sealed class SearchTool
 
     private static void AppendSingleOtherMatch(
         StringBuilder sb,
-        IndexedSymbol symbol,
+        SymbolCandidate symbol,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
         sb.Append(symbol.FilePath).Append(':').Append(symbol.StartLine)
@@ -2261,7 +2329,7 @@ public sealed class SearchTool
 
     private static void AppendGroupedOtherMatch(
         StringBuilder sb,
-        IndexedSymbol symbol,
+        SymbolCandidate symbol,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
         sb.Append("  :").Append(symbol.StartLine)
@@ -2271,7 +2339,7 @@ public sealed class SearchTool
 
     private static void AppendCompactMatchDetails(
         StringBuilder sb,
-        IndexedSymbol symbol,
+        SymbolCandidate symbol,
         string continuationIndent,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
@@ -2296,8 +2364,7 @@ public sealed class SearchTool
     }
 
     private static string RenderJson(
-        IReadOnlyList<IndexedSymbol> kept,
-        IReadOnlyList<double> scores,
+        IReadOnlyList<SymbolCandidate> kept,
         int page,
         IReadOnlySet<string>? hasDocSymbolIds)
     {
@@ -2315,7 +2382,7 @@ public sealed class SearchTool
                 writer.WriteNumber("line", s.StartLine);
                 if (s.Signature is null) writer.WriteNull("signature");
                 else writer.WriteString("signature", s.Signature);
-                writer.WriteNumber("score", scores[i]);
+                writer.WriteNumber("score", s.Score);
                 writer.WriteString("symbol_id", s.SymbolId);
                 if (hasDocSymbolIds is not null)
                     writer.WriteBoolean("has_doc", hasDocSymbolIds.Contains(s.SymbolId));

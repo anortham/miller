@@ -90,10 +90,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **Approach:** Write the golden tests FIRST against current behavior, commit-worthy on their own. Then refactor behind them. `SymbolCandidate` lives in Miller.Core (zero I/O). Keep `SearchRouteExecutionResult` shape unchanged for callers (CliDispatch.cs:320, SearchTool.cs:144).
 
 **Acceptance criteria:**
-- [ ] Golden parity tests cover compact + json for ≥12 query shapes and pass byte-identical pre/post refactor
-- [ ] RunSymbols internally flows typed candidates; rendering reads only the typed list
-- [ ] All existing SearchRouteExecutorTests pass unchanged
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Golden parity tests cover compact + json for ≥12 query shapes and pass byte-identical pre/post refactor
+- [x] RunSymbols internally flows typed candidates; rendering reads only the typed list
+- [x] All existing SearchRouteExecutorTests pass unchanged
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task D1: Edit failure instrumentation, guidance, Unicode whitespace
 
