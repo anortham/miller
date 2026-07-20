@@ -299,7 +299,13 @@ public sealed class VectorConvergeService : BackgroundService
         if (_session is null)
             return;
 
-        await DrainAsync(port, _session, _openShadow(workspace), cancellationToken).ConfigureAwait(false);
+        await DrainAsync(
+                port,
+                _session,
+                _openShadow(workspace),
+                () => OpenPortWithRecovery(workspace),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task DisposeSessionAsync()
@@ -348,6 +354,14 @@ public sealed class VectorConvergeService : BackgroundService
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
         IVectorShadowRebuilder? rebuilder,
+        CancellationToken cancellationToken) =>
+        await DrainAsync(port, session, rebuilder, null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        IVectorConvergePort port,
+        SemanticEmbeddingSession session,
+        IVectorShadowRebuilder? rebuilder,
+        Func<IVectorConvergePort?>? reopenAfterPromote,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(port);
@@ -357,15 +371,56 @@ public sealed class VectorConvergeService : BackgroundService
         VectorCursorOutcome symbols = await DrainCursorAsync(
             port, session, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
 
-        // A promote disposed the live port and replaced the file underneath it; the chunk cursor converges on the
-        // promoted artifact at the next wake, through its own gate.
+        // A promote disposed the live port and replaced the file underneath it. The only production stamp comes
+        // from index convergence, so on a quiet workspace there is no next wake: the chunk cursor must converge
+        // into the reopened artifact NOW or docs sit unembedded until an unrelated source change.
         if (state.Promoted)
-            return [symbols];
+        {
+            if (reopenAfterPromote?.Invoke() is not { } reopened)
+                return [symbols];
+
+            using (reopened)
+            {
+                VectorCursorOutcome promotedChunks = await DrainChunkToCompletionAsync(
+                    reopened, session, state, cancellationToken).ConfigureAwait(false);
+                return [symbols, promotedChunks];
+            }
+        }
+
+        VectorCursorOutcome chunks = await DrainChunkToCompletionAsync(
+            port, session, state, cancellationToken).ConfigureAwait(false);
+
+        return [symbols, chunks];
+    }
+
+    /// <summary>
+    /// Drains the chunk cursor, replanning after each bounded over-cap batch so an arbitrarily large span
+    /// converges within one wake. The iteration guard only backstops a port whose stored view fails to reflect
+    /// its own commits; each pass otherwise strictly shrinks the remaining span.
+    /// </summary>
+    private async Task<VectorCursorOutcome> DrainChunkToCompletionAsync(
+        IVectorConvergePort port,
+        SemanticEmbeddingSession session,
+        DrainState state,
+        CancellationToken cancellationToken)
+    {
+        const int maxBoundedBatches = 10_000;
 
         VectorCursorOutcome chunks = await DrainCursorAsync(
             port, session, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
 
-        return [symbols, chunks];
+        for (int batch = 0;
+            batch < maxBoundedBatches
+                && chunks.Embedded > 0
+                && string.Equals(chunks.LastError, VectorConvergePlanner.BoundedBatchHoldReason, StringComparison.Ordinal);
+            batch++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            chunks = await DrainCursorAsync(
+                port, session, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
+        }
+
+        return chunks;
     }
 
     private async Task<VectorCursorOutcome> DrainCursorAsync(
@@ -433,12 +488,15 @@ public sealed class VectorConvergeService : BackgroundService
             {
                 if (plan.AdvanceTo > completed)
                     port.Commit(kind, [], [], completedKey, plan.AdvanceTo, plan.AdvanceTo);
-                ClearError(port, errorKey, errorAtKey);
+                if (plan.HoldReason is null)
+                    ClearError(port, errorKey, errorAtKey);
+                else
+                    RecordError(port, errorKey, errorAtKey, plan.HoldReason);
                 return new VectorCursorOutcome(
                     kind, plan.Decision, plan.Trigger, 0, 0, Math.Max(plan.AdvanceTo, completed), plan.HoldReason);
             }
 
-            (List<VectorCommit> embedded, string? embedFailure) =
+            (List<VectorCommit> embedded, _, string? embedFailure) =
                 await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
             if (embedFailure is not null)
                 return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, embedFailure));
@@ -518,7 +576,7 @@ public sealed class VectorConvergeService : BackgroundService
                     "a shadow generation could not be created; the cursor holds"));
             }
 
-            (int embedded, string? failure) = await BuildShadowAsync(shadow, session, cancellationToken)
+            (int embedded, int flagged, string? failure) = await BuildShadowAsync(shadow, session, cancellationToken)
                 .ConfigureAwait(false);
             if (failure is not null)
                 return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey, failure));
@@ -534,7 +592,9 @@ public sealed class VectorConvergeService : BackgroundService
 
             state.Rebuilder.Promote(superseded, built);
             _logger.LogInformation(
-                "Promoted a shadow vector generation with {Embedded} embedded symbol cards.", embedded);
+                "Promoted a shadow vector generation with {Embedded} embedded symbol cards ({Flagged} flagged).",
+                embedded,
+                flagged);
 
             return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, embedded, 0, completed, null);
         }
@@ -554,50 +614,68 @@ public sealed class VectorConvergeService : BackgroundService
     }
 
     /// <summary>
-    /// Fills a fresh shadow generation with the whole symbol corpus. The chunk cursor is deliberately left at
-    /// zero: it may only advance past what <c>content.db</c> proves under all four preconditions, so it converges
-    /// on the promoted artifact through its own gate rather than being stamped here.
+    /// Fills a fresh shadow generation with the whole symbol corpus, committing in bounded slices so the
+    /// corpus size never hits the one-transaction cap — the incremental planner is deliberately NOT reused
+    /// here, because its escalation triggers would return an empty work list for exactly the spans a rebuild
+    /// exists to cover. Flagged units are tolerated (their absent hashes retry incrementally after the
+    /// promote); a build that embeds nothing at all refuses to promote. The chunk cursor is deliberately left
+    /// at zero: it may only advance past what <c>content.db</c> proves under all four preconditions, so it
+    /// converges on the promoted artifact through its own gate rather than being stamped here.
     /// </summary>
-    private async Task<(int Embedded, string? Failure)> BuildShadowAsync(
+    private async Task<(int Embedded, int Flagged, string? Failure)> BuildShadowAsync(
         IVectorConvergePort shadow,
         SemanticEmbeddingSession session,
         CancellationToken cancellationToken)
     {
         (string completedKey, string targetKey, _, _) = Keys(VectorUnitKind.Symbol);
         VectorConvergeSnapshot snapshot = shadow.Snapshot(0);
-        shadow.SetMeta(targetKey, Number(snapshot.TargetRevision));
+        long target = snapshot.TargetRevision;
+        shadow.SetMeta(targetKey, Number(target));
 
-        VectorConvergePlan plan = VectorConvergePlanner.Plan(new VectorConvergeRequest
+        IReadOnlyList<VectorWorkUnit> work = VectorConvergePlanner.RebuildWorkList(
+            shadow.Units(VectorUnitKind.Symbol, null),
+            shadow.Stored(VectorUnitKind.Symbol, null));
+
+        if (work.Count == 0)
         {
-            Kind = VectorUnitKind.Symbol,
-            CompletedRevision = 0,
-            TargetRevision = snapshot.TargetRevision,
-            Candidates = shadow.Units(VectorUnitKind.Symbol, null),
-            Stored = [],
-            TotalStoredUnits = 0,
-            DeltaHistoryComplete = true,
-        });
+            shadow.Commit(VectorUnitKind.Symbol, [], [], completedKey, target, target);
+            return (0, 0, null);
+        }
 
-        (List<VectorCommit> embedded, string? failure) =
-            await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
-        if (failure is not null)
-            return (0, failure);
+        int embeddedTotal = 0;
+        int flaggedTotal = 0;
+        for (int offset = 0; offset < work.Count; offset += VectorConvergePlanner.MaxUnitsPerTransaction)
+        {
+            IReadOnlyList<VectorWorkUnit> slice =
+                [.. work.Skip(offset).Take(VectorConvergePlanner.MaxUnitsPerTransaction)];
+            (List<VectorCommit> embedded, int flagged, string? failure) =
+                await EmbedAsync(session, slice, cancellationToken).ConfigureAwait(false);
+            if (failure is not null)
+                return (0, 0, failure);
 
-        if (embedded.Count != plan.ReEmbed.Count)
-            return (0, "some units could not be embedded into the shadow generation");
+            if (embedded.Count + flagged != slice.Count)
+                return (0, 0, "some units could not be embedded into the shadow generation");
 
-        shadow.Commit(
-            VectorUnitKind.Symbol, embedded, [], completedKey, snapshot.TargetRevision, snapshot.TargetRevision);
-        return (embedded.Count, null);
+            bool final = offset + slice.Count >= work.Count;
+            shadow.Commit(VectorUnitKind.Symbol, embedded, [], completedKey, final ? target : 0, target);
+            embeddedTotal += embedded.Count;
+            flaggedTotal += flagged;
+        }
+
+        if (embeddedTotal == 0)
+            return (0, flaggedTotal, "every unit was flagged by the sidecar; refusing to promote an empty shadow generation");
+
+        return (embeddedTotal, flaggedTotal, null);
     }
 
     /// <summary>Inference, OUTSIDE any gate, in bounded batches.</summary>
-    private static async Task<(List<VectorCommit> Embedded, string? Failure)> EmbedAsync(
+    private static async Task<(List<VectorCommit> Embedded, int Flagged, string? Failure)> EmbedAsync(
         SemanticEmbeddingSession session,
         IReadOnlyList<VectorWorkUnit> units,
         CancellationToken cancellationToken)
     {
         List<VectorCommit> embedded = [];
+        int flaggedCount = 0;
         for (int offset = 0; offset < units.Count; offset += EmbedBatchSize)
         {
             IReadOnlyList<VectorWorkUnit> batch = [.. units.Skip(offset).Take(EmbedBatchSize)];
@@ -606,7 +684,7 @@ public sealed class VectorConvergeService : BackgroundService
                 .ConfigureAwait(false);
 
             if (!outcome.Succeeded)
-                return ([], outcome.FailureReason);
+                return ([], 0, outcome.FailureReason);
 
             var flagged = outcome.FlaggedIndices.ToHashSet();
             for (int i = 0; i < batch.Count && i < outcome.Vectors.Count; i++)
@@ -614,12 +692,16 @@ public sealed class VectorConvergeService : BackgroundService
                 // A poison unit is isolated rather than committed as a zero vector: leaving it unwritten keeps
                 // its embed_text_hash absent, so the next drain retries exactly that unit.
                 if (flagged.Contains(i))
+                {
+                    flaggedCount++;
                     continue;
+                }
+
                 embedded.Add(new VectorCommit(batch[i], QuantizeToInt8(outcome.Vectors[i])));
             }
         }
 
-        return (embedded, null);
+        return (embedded, flaggedCount, null);
     }
 
     private static VectorCursorOutcome Escalated(

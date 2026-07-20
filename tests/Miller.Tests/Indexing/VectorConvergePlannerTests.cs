@@ -172,6 +172,67 @@ public sealed class VectorConvergePlannerTests
     }
 
     [Fact]
+    public void Plan_ChunkSpanBeyondOneTransaction_TruncatesToABoundedBatchInsteadOfEscalating()
+    {
+        int over = VectorConvergePlanner.MaxUnitsPerTransaction + 1;
+        VectorCorpusUnit[] candidates = [.. Enumerable.Range(0, over).Select(i => Unit($"c{i}", "docs/a.md", $"t{i}"))];
+
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(
+            Request(candidates, [], totalStored: 0) with { Kind = VectorUnitKind.Chunk });
+
+        Assert.Equal(VectorConvergeDecision.Incremental, plan.Decision);
+        Assert.Equal(VectorConvergePlanner.MaxUnitsPerTransaction, plan.ReEmbed.Count);
+        Assert.Equal(0, plan.AdvanceTo);
+        Assert.Equal(VectorConvergePlanner.BoundedBatchHoldReason, plan.HoldReason);
+    }
+
+    [Fact]
+    public void Plan_ChunkEscalationTrigger_HoldsInsteadOfShadowRebuilding()
+    {
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(
+            Request([Unit("c1", "docs/a.md", "t")], []) with
+            {
+                Kind = VectorUnitKind.Chunk,
+                DeltaHistoryComplete = false,
+            });
+
+        Assert.Equal(VectorConvergeDecision.Incremental, plan.Decision);
+        Assert.Equal(VectorEscalationTrigger.DeltaHistoryMissing, plan.Trigger);
+        Assert.Empty(plan.ReEmbed);
+        Assert.Equal(0, plan.AdvanceTo);
+        Assert.Contains("shadow rebuild", plan.HoldReason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Plan_ChunkChangedRatio_NeverEscalates()
+    {
+        VectorCorpusUnit[] candidates = [.. Enumerable.Range(0, 9).Select(i => Unit($"c{i}", "docs/a.md", $"v2 {i}"))];
+        VectorUnitState[] stored = [.. Enumerable.Range(0, 9).Select(i => Stored($"c{i}", "docs/a.md", $"v1 {i}"))];
+
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(
+            Request(candidates, stored, totalStored: 10) with { Kind = VectorUnitKind.Chunk });
+
+        Assert.Equal(VectorConvergeDecision.Incremental, plan.Decision);
+        Assert.Equal(9, plan.ReEmbed.Count);
+    }
+
+    [Fact]
+    public void RebuildWorkList_HashGatesAgainstStoredWithNoSizeCap()
+    {
+        int over = VectorConvergePlanner.MaxUnitsPerTransaction + 5;
+        VectorCorpusUnit[] candidates = [.. Enumerable.Range(0, over).Select(i => Unit($"u{i}", "src/A.cs", $"c{i}"))];
+
+        IReadOnlyList<VectorWorkUnit> all = VectorConvergePlanner.RebuildWorkList(candidates, []);
+        IReadOnlyList<VectorWorkUnit> gated = VectorConvergePlanner.RebuildWorkList(
+            candidates, [Stored("u0", "src/A.cs", "c0"), Stored("u1", "src/A.cs", "stale")]);
+
+        Assert.Equal(over, all.Count);
+        Assert.Equal(over - 1, gated.Count);
+        Assert.DoesNotContain(gated, u => u.UnitId == "u0");
+        Assert.Contains(gated, u => u.UnitId == "u1");
+    }
+
+    [Fact]
     public void Plan_WithDeferredPaths_StillEmbedsButHoldsTheCursor()
     {
         VectorConvergePlan plan = VectorConvergePlanner.Plan(

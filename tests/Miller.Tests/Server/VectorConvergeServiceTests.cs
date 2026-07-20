@@ -430,8 +430,9 @@ public sealed class VectorConvergeServiceTests
         Assert.False(string.IsNullOrEmpty(live.Meta(VectorConvergeService.SymbolErrorKey)));
 
         VectorCursorOutcome chunks = outcomes.Single(o => o.Kind is VectorUnitKind.Chunk);
-        Assert.Equal(VectorConvergeDecision.ShadowRebuild, chunks.Decision);
-        Assert.Contains("already attempted", chunks.LastError!, StringComparison.Ordinal);
+        Assert.Equal(VectorConvergeDecision.Incremental, chunks.Decision);
+        Assert.Contains("shadow rebuild", chunks.LastError!, StringComparison.Ordinal);
+        Assert.DoesNotContain(live.Commits, c => c.Kind is VectorUnitKind.Chunk);
     }
 
     [Fact]
@@ -452,6 +453,115 @@ public sealed class VectorConvergeServiceTests
         Assert.False(live.Disposed);
         Assert.True(shadow.Disposed);
         Assert.False(string.IsNullOrEmpty(live.Meta(VectorConvergeService.SymbolErrorKey)));
+    }
+
+    [Fact]
+    public async Task Drain_InitialBuildBeyondOneTransaction_ShadowRebuildEmbedsTheWholeCorpusInBoundedCommits()
+    {
+        var live = new FakePort();
+        live.SymbolUnits = ManyCards(VectorConvergePlanner.MaxUnitsPerTransaction + 1);
+        var shadow = new FakePort();
+        shadow.SymbolUnits = live.SymbolUnits;
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(live, rebuilder);
+
+        VectorCursorOutcome only = Assert.Single(outcomes);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, only.Decision);
+        Assert.Equal(VectorEscalationTrigger.BatchTooLarge, only.Trigger);
+        Assert.Equal(live.SymbolUnits.Count, only.Embedded);
+        Assert.True(rebuilder.Promoted);
+
+        List<CommitRecord> commits = [.. shadow.Commits.Where(c => c.Kind is VectorUnitKind.Symbol)];
+        Assert.Equal(live.SymbolUnits.Count, commits.Sum(c => c.Vectors.Count));
+        Assert.True(commits.Count >= 2);
+        Assert.All(commits, c => Assert.True(c.Vectors.Count <= VectorConvergePlanner.MaxUnitsPerTransaction));
+        Assert.Equal(
+            shadow.Meta(VectorConvergeService.SymbolTargetKey),
+            shadow.Meta(VectorConvergeService.SymbolCompletedKey));
+    }
+
+    [Fact]
+    public async Task Drain_ShadowRebuild_ToleratesFlaggedUnitsAndPromotesTheRest()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits =
+            [Card("a", "src/A.cs", "card a"), Card("b", "src/B.cs", "card b"), Card("c", "src/C.cs", "card c")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.PoisonItem, poisonIndices: [1]));
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService()
+            .DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        Assert.True(rebuilder.Promoted);
+        Assert.Equal(2, Assert.Single(outcomes).Embedded);
+        Assert.Equal(
+            ["a", "c"],
+            shadow.Commits
+                .Where(c => c.Kind is VectorUnitKind.Symbol)
+                .SelectMany(c => c.Vectors)
+                .Select(v => v.Unit.UnitId));
+    }
+
+    [Fact]
+    public async Task Drain_ShadowRebuild_RefusesToPromoteWhenEveryUnitFlags()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a"), Card("b", "src/B.cs", "card b")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.PoisonItem, poisonIndices: [0, 1]));
+        await NewService().DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        Assert.False(rebuilder.Promoted);
+        Assert.False(live.Disposed);
+        Assert.Contains("refusing", live.Meta(VectorConvergeService.SymbolErrorKey)!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Drain_ChunkSpanBeyondOneTransaction_ConvergesInBoundedBatchesWithinOneWake()
+    {
+        var port = new FakePort();
+        port.ChunkUnits = ManyChunks(VectorConvergePlanner.MaxUnitsPerTransaction + 1);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(port);
+
+        VectorCursorOutcome chunks = outcomes.Single(o => o.Kind is VectorUnitKind.Chunk);
+        Assert.Equal(VectorConvergeDecision.Incremental, chunks.Decision);
+        Assert.Null(chunks.LastError);
+
+        List<CommitRecord> commits = [.. port.Commits.Where(c => c.Kind is VectorUnitKind.Chunk)];
+        Assert.Equal(port.ChunkUnits.Count, commits.Sum(c => c.Vectors.Count));
+        Assert.All(commits, c => Assert.True(c.Vectors.Count <= VectorConvergePlanner.MaxUnitsPerTransaction));
+        Assert.Equal("5", port.Meta(VectorConvergeService.ChunkCompletedKey));
+    }
+
+    [Fact]
+    public async Task Drain_AfterAPromote_ContinuesIntoTheChunkCursorOnTheReopenedArtifactSameWake()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var promoted = new FakePort();
+        promoted.ChunkUnits = [Card("c1", "docs/a.md", "chunk one")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService().DrainAsync(
+            live, session, rebuilder, () => promoted, TestContext.Current.CancellationToken);
+
+        Assert.True(rebuilder.Promoted);
+        VectorCursorOutcome chunks = outcomes.Single(o => o.Kind is VectorUnitKind.Chunk);
+        Assert.Equal(1, chunks.Embedded);
+        Assert.Equal("5", promoted.Meta(VectorConvergeService.ChunkCompletedKey));
+        Assert.True(promoted.Disposed);
     }
 
     [Fact]
@@ -797,6 +907,12 @@ public sealed class VectorConvergeServiceTests
     private static VectorCorpusUnit Card(string id, string path, string text) =>
         new(id, path, text, "method", IsTest: false);
 
+    private static IReadOnlyList<VectorCorpusUnit> ManyCards(int count) =>
+        [.. Enumerable.Range(0, count).Select(i => Card($"u{i}", $"src/F{i % 50}.cs", $"card {i}"))];
+
+    private static IReadOnlyList<VectorCorpusUnit> ManyChunks(int count) =>
+        [.. Enumerable.Range(0, count).Select(i => Card($"c{i}", "docs/a.md", $"chunk {i}"))];
+
     private static VectorUnitState State(string id, string path, string text) =>
         new(id, path, SymbolCardBuilder.EmbedTextHash(text));
 
@@ -866,11 +982,29 @@ public sealed class VectorConvergeServiceTests
         public IReadOnlyList<VectorCorpusUnit> Units(VectorUnitKind kind, IReadOnlyCollection<string>? paths) =>
             kind is VectorUnitKind.Symbol ? SymbolUnits : ChunkUnits;
 
-        public IReadOnlyList<VectorUnitState> Stored(VectorUnitKind kind, IReadOnlyCollection<string>? paths) =>
-            kind is VectorUnitKind.Symbol ? SymbolStored : ChunkStored;
+        // The real port's Stored reflects every prior commit; the overlay keeps this fake contract-faithful so
+        // multi-batch drains see their own progress through the hash gate.
+        private readonly Dictionary<string, VectorUnitState> _committedSymbols = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, VectorUnitState> _committedChunks = new(StringComparer.Ordinal);
 
-        public int TotalStored(VectorUnitKind kind) =>
-            kind is VectorUnitKind.Symbol ? SymbolStored.Count : ChunkStored.Count;
+        public IReadOnlyList<VectorUnitState> Stored(VectorUnitKind kind, IReadOnlyCollection<string>? paths) =>
+            [.. Merged(kind).Values];
+
+        public int TotalStored(VectorUnitKind kind) => Merged(kind).Count;
+
+        private Dictionary<string, VectorUnitState> Merged(VectorUnitKind kind)
+        {
+            IReadOnlyList<VectorUnitState> seeded = kind is VectorUnitKind.Symbol ? SymbolStored : ChunkStored;
+            Dictionary<string, VectorUnitState> committed =
+                kind is VectorUnitKind.Symbol ? _committedSymbols : _committedChunks;
+
+            var merged = new Dictionary<string, VectorUnitState>(StringComparer.Ordinal);
+            foreach (VectorUnitState state in seeded)
+                merged[state.UnitId] = state;
+            foreach ((string id, VectorUnitState state) in committed)
+                merged[id] = state;
+            return merged;
+        }
 
         public ChunkCursorFacts ChunkFacts(long targetRevision) => ChunkFactsValue;
 
@@ -888,6 +1022,15 @@ public sealed class VectorConvergeServiceTests
                 throw fault;
 
             Commits.Add(new CommitRecord(kind, vectors, delete, completedRevisionKey, advanceTo));
+
+            Dictionary<string, VectorUnitState> committed =
+                kind is VectorUnitKind.Symbol ? _committedSymbols : _committedChunks;
+            foreach (VectorCommit vector in vectors)
+                committed[vector.Unit.UnitId] =
+                    new VectorUnitState(vector.Unit.UnitId, vector.Unit.Path, vector.Unit.EmbedTextHash);
+            foreach (string id in delete)
+                committed.Remove(id);
+
             if (advanceTo > 0)
                 Metadata[completedRevisionKey] = advanceTo.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
