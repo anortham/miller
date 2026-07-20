@@ -14,6 +14,11 @@ namespace Miller.Tests;
 /// spawns the real subprocess and MUST therefore carry <c>[Trait("Category","Scale")]</c> so the
 /// default fast suite excludes it. Before this helper existed the locator was copy-pasted into seven
 /// files, so there was no reliable signal a guard could trust.
+///
+/// <see cref="RequireSemanticSidecar"/> is the same arrangement for the second live binary Miller
+/// spawns, the pinned <c>julie-semantic-sidecar</c>. It is a separate signal rather than a widened
+/// julie one because the two binaries are restored by different scripts and a skip message that names
+/// the wrong script sends the reader to a command that will not help.
 /// </summary>
 public static class ScaleTestSupport
 {
@@ -78,6 +83,32 @@ public static class ScaleTestSupport
         string? binary = LocateJulieServer();
         Assert.SkipWhen(binary is null,
             "julie-extract not found in .tools/. Run scripts/restore-julie-extract.sh to enable the Scale test.");
+        return binary!;
+    }
+
+    /// <summary>
+    /// The pinned julie-semantic-sidecar binary under <c>.tools/</c>, or <c>null</c> if restore has not been
+    /// run. Referencing this method marks a test as sidecar-spawning (see the class remarks).
+    /// </summary>
+    public static string? LocateSemanticSidecar()
+    {
+        string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
+        string candidate = Path.Combine(RepoRoot(), ".tools", name);
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Locate the pinned julie-semantic-sidecar, or SKIP the calling test (never fail) when restore has not
+    /// run. The message names the sidecar's own restore script and the one-time <c>prepare</c> verb: the
+    /// binary downloads its ~1.2 GB GGUF into a shared cache on first use, so a cold machine's first
+    /// <c>serve</c> pays a download rather than a model load.
+    /// </summary>
+    public static string RequireSemanticSidecar()
+    {
+        string? binary = LocateSemanticSidecar();
+        Assert.SkipWhen(binary is null,
+            "julie-semantic-sidecar not found in .tools/. Run scripts/restore-semantic-sidecar.sh, then " +
+            "`.tools/julie-semantic-sidecar prepare` once to populate the model cache, to enable the Scale test.");
         return binary!;
     }
 
