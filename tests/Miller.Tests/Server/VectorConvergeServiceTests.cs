@@ -350,6 +350,136 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_ShadowRebuildDecision_BuildsTheShadowGenerationPromotesItAndStopsTheDrain()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a"), Card("b", "src/B.cs", "card b")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(live, rebuilder);
+
+        VectorCursorOutcome only = Assert.Single(outcomes);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, only.Decision);
+        Assert.Equal(2, only.Embedded);
+
+        CommitRecord built = Assert.Single(shadow.Commits);
+        Assert.Equal(VectorUnitKind.Symbol, built.Kind);
+        Assert.Equal(["a", "b"], built.Vectors.Select(v => v.Unit.UnitId));
+        Assert.Equal(5, built.AdvanceTo);
+
+        // The promoted generation is queryable: its symbol cursor reached the target it was given.
+        Assert.Equal(
+            "ready",
+            VectorGenerationManager.EvaluateBuildState(new VectorBuildProgress(
+                long.Parse(shadow.Meta(VectorConvergeService.SymbolCompletedKey)!),
+                long.Parse(shadow.Meta(VectorConvergeService.SymbolTargetKey)!),
+                "building")).BuildState);
+
+        Assert.True(rebuilder.Promoted);
+        Assert.True(shadow.Disposed);
+        Assert.True(live.Disposed);
+    }
+
+    [Fact]
+    public async Task Drain_ShadowRebuildLeavesTheChunkCursorToTheGatedPathOnThePromotedArtifact()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        shadow.ChunkUnits = [Card("c1", "docs/a.md", "chunk one")];
+
+        await DrainAsync(live, new FakeShadowRebuilder(shadow));
+
+        Assert.DoesNotContain(shadow.Commits, commit => commit.Kind is VectorUnitKind.Chunk);
+        Assert.Equal("0", shadow.Meta(VectorConvergeService.ChunkCompletedKey));
+    }
+
+    [Fact]
+    public async Task Drain_ShadowRebuildFails_HoldsTheCursorRecordsTheErrorAndNeverRetriesOnTheSameWake()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var rebuilder = new FakeShadowRebuilder(null) { OpenFault = new IOException("no disk space for a shadow") };
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(live, rebuilder);
+
+        Assert.Equal(1, rebuilder.OpenShadowCalls);
+        Assert.False(rebuilder.Promoted);
+        Assert.False(live.Disposed);
+        Assert.Equal("0", live.Meta(VectorConvergeService.SymbolCompletedKey));
+        Assert.False(string.IsNullOrEmpty(live.Meta(VectorConvergeService.SymbolErrorKey)));
+
+        VectorCursorOutcome chunks = outcomes.Single(o => o.Kind is VectorUnitKind.Chunk);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, chunks.Decision);
+        Assert.Contains("already attempted", chunks.LastError!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Drain_ShadowBuildCannotEmbed_LeavesTheLiveGenerationUnpromoted()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.ModelNotPrepared));
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await NewService().DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        Assert.False(rebuilder.Promoted);
+        Assert.False(live.Disposed);
+        Assert.True(shadow.Disposed);
+        Assert.False(string.IsNullOrEmpty(live.Meta(VectorConvergeService.SymbolErrorKey)));
+    }
+
+    [Fact]
+    public void OpenPort_CorruptArtifact_RecoversTheGenerationAndLeavesSymbolsDbUntouched()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
+        try
+        {
+            string millerDir = Path.Combine(root, ".miller");
+            Directory.CreateDirectory(millerDir);
+            string symbols = Path.Combine(millerDir, "symbols.db");
+            File.WriteAllText(symbols, "source of truth");
+            string vectors = VectorSidecar.PathFor(root);
+            File.WriteAllText(vectors, "corrupt");
+
+            int opens = 0;
+            var service = new VectorConvergeService(
+                IsolatedBootstrap(),
+                new VectorSidecar(SemanticMode.On),
+                new VectorConvergeSignal(enabled: true),
+                NullLogger.Instance,
+                _ => opens++ == 0
+                    ? throw new InvalidOperationException("vector artifact has malformed meta")
+                    : null,
+                _ => null,
+                () => DateTimeOffset.UnixEpoch);
+
+            WorkspaceContext workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, root) with
+            {
+                CanonicalRoot = root,
+                CanonicalExtractDbPath = symbols,
+            };
+
+            Assert.Null(service.OpenPortWithRecovery(workspace));
+            Assert.False(File.Exists(vectors));
+            Assert.Equal(2, opens);
+            Assert.Equal("source of truth", File.ReadAllText(symbols));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Drain_SidecarUnavailable_HoldsTheCursorAndRecordsTheReason()
     {
         var port = new FakePort();
@@ -398,10 +528,29 @@ public sealed class VectorConvergeServiceTests
     private static IndexBootstrapService IsolatedBootstrap() =>
         VectorConvergePortScaleTests.IsolatedBootstrap();
 
-    private static async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(FakePort port)
+    private static async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        FakePort port,
+        IVectorShadowRebuilder? rebuilder = null)
     {
         await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
-        return await NewService().DrainAsync(port, session, TestContext.Current.CancellationToken);
+        return await NewService().DrainAsync(port, session, rebuilder, TestContext.Current.CancellationToken);
+    }
+
+    private sealed class FakeShadowRebuilder(FakePort? shadow) : IVectorShadowRebuilder
+    {
+        public int OpenShadowCalls { get; private set; }
+
+        public bool Promoted { get; private set; }
+
+        public Exception? OpenFault { get; init; }
+
+        public IVectorConvergePort? OpenShadow()
+        {
+            OpenShadowCalls++;
+            return OpenFault is null ? shadow : throw OpenFault;
+        }
+
+        public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built) => Promoted = true;
     }
 
     private static VectorCorpusUnit Card(string id, string path, string text) =>
@@ -502,8 +651,8 @@ public sealed class VectorConvergeServiceTests
                 Metadata[completedRevisionKey] = advanceTo.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        public void Dispose()
-        {
-        }
+        public bool Disposed { get; private set; }
+
+        public void Dispose() => Disposed = true;
     }
 }

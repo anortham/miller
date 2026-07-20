@@ -130,6 +130,22 @@ internal interface IVectorConvergePort : IDisposable
 }
 
 /// <summary>
+/// The shadow-generation arm of a drain, behind one seam: open a fresh shadow artifact, then promote it over the
+/// live one. Splitting it out is what lets escalation execution be tested without sqlite-vec or real files, and
+/// keeps the drain loop unaware of file mechanics — those live in <see cref="VectorGenerationManager"/>.
+/// </summary>
+internal interface IVectorShadowRebuilder
+{
+    /// <summary>Reclaims any stale shadow trio and opens a fresh shadow generation. Null ⟹ one cannot be built
+    /// now (no pinned extension, no artifact id yet) and the cursor holds.</summary>
+    IVectorConvergePort? OpenShadow();
+
+    /// <summary>Promotes the built shadow over the live artifact, retaining the superseded generation when the
+    /// generation tag changed. The caller has already disposed both ports.</summary>
+    void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built);
+}
+
+/// <summary>
 /// The changed-path inputs of one span, read under the gate. <see cref="FullPass"/> is the initial build: the
 /// cursor is at zero, so the span is the whole corpus rather than a delta.
 /// </summary>
@@ -181,6 +197,8 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly ILogger _logger;
     private readonly Func<WorkspaceContext, IVectorConvergePort?> _openPort;
     private readonly Func<WorkspaceContext, SemanticEmbeddingSession?> _openSession;
+    private readonly Func<WorkspaceContext, IVectorShadowRebuilder?> _openShadow;
+    private readonly Func<Exception, string, Action, bool> _recoverCorrupt;
     private readonly Func<DateTimeOffset> _clock;
 
     public VectorConvergeService(
@@ -199,7 +217,9 @@ public sealed class VectorConvergeService : BackgroundService
         ILogger logger,
         Func<WorkspaceContext, IVectorConvergePort?> openPort,
         Func<WorkspaceContext, SemanticEmbeddingSession?> openSession,
-        Func<DateTimeOffset>? clock)
+        Func<DateTimeOffset>? clock,
+        Func<WorkspaceContext, IVectorShadowRebuilder?>? openShadow = null,
+        Func<Exception, string, Action, bool>? recoverCorrupt = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -214,6 +234,9 @@ public sealed class VectorConvergeService : BackgroundService
         _logger = logger;
         _openPort = openPort;
         _openSession = openSession;
+        _openShadow = openShadow ?? SqliteVectorShadowRebuilder.TryOpen;
+        _recoverCorrupt = recoverCorrupt ?? ((failure, path, rebuild) =>
+            SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(failure, path, rebuild, logger));
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
     }
 
@@ -256,7 +279,7 @@ public sealed class VectorConvergeService : BackgroundService
         if (workspace is null)
             return;
 
-        using IVectorConvergePort? port = _openPort(workspace);
+        using IVectorConvergePort? port = OpenPortWithRecovery(workspace);
         if (port is null)
             return;
 
@@ -265,22 +288,60 @@ public sealed class VectorConvergeService : BackgroundService
             return;
 
         await using (session.ConfigureAwait(false))
-            await DrainAsync(port, session, cancellationToken).ConfigureAwait(false);
+            await DrainAsync(port, session, _openShadow(workspace), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens the active generation, recovering it in place when the failure is corruption-shaped: the artifact is
+    /// deleted and rebuilt from the corpus, siblings and <c>symbols.db</c> untouched (vectors-v1 §Corruption
+    /// recovery). A non-corruption open failure propagates to the drain's own retry.
+    /// </summary>
+    internal IVectorConvergePort? OpenPortWithRecovery(WorkspaceContext workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        try
+        {
+            return _openPort(workspace);
+        }
+        catch (Exception ex) when (IsConvergeException(ex))
+        {
+            string artifact = VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+            if (!_recoverCorrupt(ex, artifact, () => _openPort(workspace)?.Dispose()))
+                throw;
+
+            // Recovery already rebuilt the artifact; this wake is done and the next one converges into it.
+            return null;
+        }
     }
 
     /// <summary>Drains both cursors once. Each cursor is independent: one failing never blocks the other.</summary>
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
+        CancellationToken cancellationToken) =>
+        await DrainAsync(port, session, null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        IVectorConvergePort port,
+        SemanticEmbeddingSession session,
+        IVectorShadowRebuilder? rebuilder,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(port);
         ArgumentNullException.ThrowIfNull(session);
 
+        var state = new DrainState(rebuilder);
         VectorCursorOutcome symbols = await DrainCursorAsync(
-            port, session, VectorUnitKind.Symbol, cancellationToken).ConfigureAwait(false);
+            port, session, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
+
+        // A promote disposed the live port and replaced the file underneath it; the chunk cursor converges on the
+        // promoted artifact at the next wake, through its own gate.
+        if (state.Promoted)
+            return [symbols];
+
         VectorCursorOutcome chunks = await DrainCursorAsync(
-            port, session, VectorUnitKind.Chunk, cancellationToken).ConfigureAwait(false);
+            port, session, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
 
         return [symbols, chunks];
     }
@@ -289,6 +350,7 @@ public sealed class VectorConvergeService : BackgroundService
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
         VectorUnitKind kind,
+        DrainState state,
         CancellationToken cancellationToken)
     {
         (string completedKey, string targetKey, string errorKey, string errorAtKey) = Keys(kind);
@@ -340,9 +402,9 @@ public sealed class VectorConvergeService : BackgroundService
             VectorConvergePlan plan = VectorConvergePlanner.Plan(request);
             if (plan.Decision is VectorConvergeDecision.ShadowRebuild)
             {
-                _logger.LogInformation(
-                    "Vector {Cursor} convergence escalates to a shadow rebuild ({Trigger}).", kind, plan.Trigger);
-                return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, 0, 0, completed, null);
+                return await RunShadowRebuildAsync(
+                        port, session, kind, plan, completed, state, errorKey, errorAtKey, cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             if (plan.ReEmbed.Count == 0 && plan.Delete.Count == 0)
@@ -354,28 +416,10 @@ public sealed class VectorConvergeService : BackgroundService
                     kind, plan.Decision, plan.Trigger, 0, 0, Math.Max(plan.AdvanceTo, completed), plan.HoldReason);
             }
 
-            // Inference happens OUTSIDE any gate, in bounded batches.
-            List<VectorCommit> embedded = [];
-            for (int offset = 0; offset < plan.ReEmbed.Count; offset += EmbedBatchSize)
-            {
-                IReadOnlyList<VectorWorkUnit> batch = [.. plan.ReEmbed.Skip(offset).Take(EmbedBatchSize)];
-                SemanticEmbedOutcome outcome = await session
-                    .EmbedBatchAsync([.. batch.Select(static u => u.Text)], cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (!outcome.Succeeded)
-                    return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, outcome.FailureReason));
-
-                var flagged = outcome.FlaggedIndices.ToHashSet();
-                for (int i = 0; i < batch.Count && i < outcome.Vectors.Count; i++)
-                {
-                    // A poison unit is isolated rather than committed as a zero vector: leaving it unwritten
-                    // keeps its embed_text_hash absent, so the next drain retries exactly that unit.
-                    if (flagged.Contains(i))
-                        continue;
-                    embedded.Add(new VectorCommit(batch[i], QuantizeToInt8(outcome.Vectors[i])));
-                }
-            }
+            (List<VectorCommit> embedded, string? embedFailure) =
+                await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
+            if (embedFailure is not null)
+                return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, embedFailure));
 
             // Model swap mid-flight: a response produced for a superseded generation is never committed.
             if (!port.StillValid(port.StoredIdentity, snapshot.ArtifactId))
@@ -410,6 +454,165 @@ public sealed class VectorConvergeService : BackgroundService
             _logger.LogWarning(ex, "Vector {Cursor} convergence failed; the cursor stays at {Revision}.", kind, completed);
             return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, ex.Message));
         }
+    }
+
+    /// <summary>
+    /// Executes the escalation the planner surfaced: build a whole new generation beside the live one, then
+    /// promote it. Bounded to one attempt per wake — a failed shadow build records the cursor's last error and
+    /// holds, so escalation can never spin a hot loop. The cursor keeps holding until a promote succeeds.
+    /// </summary>
+    private async Task<VectorCursorOutcome> RunShadowRebuildAsync(
+        IVectorConvergePort live,
+        SemanticEmbeddingSession session,
+        VectorUnitKind kind,
+        VectorConvergePlan plan,
+        long completed,
+        DrainState state,
+        string errorKey,
+        string errorAtKey,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Vector {Cursor} convergence escalates to a shadow rebuild ({Trigger}).", kind, plan.Trigger);
+
+        if (state.Rebuilder is null)
+            return Escalated(kind, plan, completed, null);
+
+        if (state.ShadowAttempted)
+        {
+            return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey,
+                "a shadow rebuild was already attempted on this wake; the cursor holds until the next wake"));
+        }
+
+        state.ShadowAttempted = true;
+        IVectorConvergePort? shadow = null;
+
+        try
+        {
+            shadow = state.Rebuilder.OpenShadow();
+            if (shadow is null)
+            {
+                return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey,
+                    "a shadow generation could not be created; the cursor holds"));
+            }
+
+            (int embedded, string? failure) = await BuildShadowAsync(shadow, session, cancellationToken)
+                .ConfigureAwait(false);
+            if (failure is not null)
+                return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey, failure));
+
+            SemanticGenerationIdentity superseded = live.StoredIdentity;
+            SemanticGenerationIdentity built = shadow.StoredIdentity;
+
+            // Both files must be closed before the rename: a promote over an open handle fails on Windows.
+            shadow.Dispose();
+            shadow = null;
+            live.Dispose();
+            state.Promoted = true;
+
+            state.Rebuilder.Promote(superseded, built);
+            _logger.LogInformation(
+                "Promoted a shadow vector generation with {Embedded} embedded symbol cards.", embedded);
+
+            return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, embedded, 0, completed, null);
+        }
+        catch (Exception ex) when (IsConvergeException(ex))
+        {
+            _logger.LogWarning(ex, "Shadow vector rebuild failed; the cursor stays at {Revision}.", completed);
+
+            // After the live port is disposed there is nothing left to record onto; the retained generation makes
+            // that state recoverable and the next wake rebuilds.
+            return Escalated(kind, plan, completed,
+                state.Promoted ? null : RecordError(live, errorKey, errorAtKey, ex.Message));
+        }
+        finally
+        {
+            shadow?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Fills a fresh shadow generation with the whole symbol corpus. The chunk cursor is deliberately left at
+    /// zero: it may only advance past what <c>content.db</c> proves under all four preconditions, so it converges
+    /// on the promoted artifact through its own gate rather than being stamped here.
+    /// </summary>
+    private async Task<(int Embedded, string? Failure)> BuildShadowAsync(
+        IVectorConvergePort shadow,
+        SemanticEmbeddingSession session,
+        CancellationToken cancellationToken)
+    {
+        (string completedKey, string targetKey, _, _) = Keys(VectorUnitKind.Symbol);
+        VectorConvergeSnapshot snapshot = shadow.Snapshot(0);
+        shadow.SetMeta(targetKey, Number(snapshot.TargetRevision));
+
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(new VectorConvergeRequest
+        {
+            Kind = VectorUnitKind.Symbol,
+            CompletedRevision = 0,
+            TargetRevision = snapshot.TargetRevision,
+            Candidates = shadow.Units(VectorUnitKind.Symbol, null),
+            Stored = [],
+            TotalStoredUnits = 0,
+            DeltaHistoryComplete = true,
+        });
+
+        (List<VectorCommit> embedded, string? failure) =
+            await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
+        if (failure is not null)
+            return (0, failure);
+
+        if (embedded.Count != plan.ReEmbed.Count)
+            return (0, "some units could not be embedded into the shadow generation");
+
+        shadow.Commit(
+            VectorUnitKind.Symbol, embedded, [], completedKey, snapshot.TargetRevision, snapshot.TargetRevision);
+        return (embedded.Count, null);
+    }
+
+    /// <summary>Inference, OUTSIDE any gate, in bounded batches.</summary>
+    private static async Task<(List<VectorCommit> Embedded, string? Failure)> EmbedAsync(
+        SemanticEmbeddingSession session,
+        IReadOnlyList<VectorWorkUnit> units,
+        CancellationToken cancellationToken)
+    {
+        List<VectorCommit> embedded = [];
+        for (int offset = 0; offset < units.Count; offset += EmbedBatchSize)
+        {
+            IReadOnlyList<VectorWorkUnit> batch = [.. units.Skip(offset).Take(EmbedBatchSize)];
+            SemanticEmbedOutcome outcome = await session
+                .EmbedBatchAsync([.. batch.Select(static u => u.Text)], cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!outcome.Succeeded)
+                return ([], outcome.FailureReason);
+
+            var flagged = outcome.FlaggedIndices.ToHashSet();
+            for (int i = 0; i < batch.Count && i < outcome.Vectors.Count; i++)
+            {
+                // A poison unit is isolated rather than committed as a zero vector: leaving it unwritten keeps
+                // its embed_text_hash absent, so the next drain retries exactly that unit.
+                if (flagged.Contains(i))
+                    continue;
+                embedded.Add(new VectorCommit(batch[i], QuantizeToInt8(outcome.Vectors[i])));
+            }
+        }
+
+        return (embedded, null);
+    }
+
+    private static VectorCursorOutcome Escalated(
+        VectorUnitKind kind, VectorConvergePlan plan, long completed, string? error) =>
+        new(kind, plan.Decision, plan.Trigger, 0, 0, completed, error);
+
+    /// <summary>Per-wake state shared by the two cursors: the shadow arm is attempted at most once, and a
+    /// promote ends the drain.</summary>
+    private sealed class DrainState(IVectorShadowRebuilder? rebuilder)
+    {
+        public IVectorShadowRebuilder? Rebuilder { get; } = rebuilder;
+
+        public bool ShadowAttempted { get; set; }
+
+        public bool Promoted { get; set; }
     }
 
     /// <summary>L2-normalized floats to the pinned int8 lane. Slice and renormalize already happened inside the
@@ -506,6 +709,36 @@ public sealed class VectorConvergeService : BackgroundService
 /// ONE short transaction spanning the vec0 deletes, the vec0 inserts, the mapping updates and the cursor
 /// advance — an invariant no composition of per-unit writes can provide.
 /// </summary>
+/// <summary>
+/// The production shadow arm: a fresh generation at <c>vectors.db.rebuild</c>, promoted over the live artifact
+/// by <see cref="VectorGenerationManager"/> — which retains the superseded generation under its own tag when the
+/// promote is incompatible, so a matching reader keeps serving through the soak window.
+/// </summary>
+internal sealed class SqliteVectorShadowRebuilder(WorkspaceContext workspace, VectorGenerationManager manager)
+    : IVectorShadowRebuilder
+{
+    public static IVectorShadowRebuilder? TryOpen(WorkspaceContext workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        return VectorStore.ResolveExtensionPath() is null
+            ? null
+            : new SqliteVectorShadowRebuilder(
+                workspace, new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot));
+    }
+
+    public IVectorConvergePort? OpenShadow()
+    {
+        manager.PrepareShadow();
+        return SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath);
+    }
+
+    public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built) =>
+        manager.Promote(
+            MillerSemanticContract.GenerationTag(built),
+            MillerSemanticContract.GenerationTag(live));
+}
+
 internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 {
     private static readonly string[] DocsLikeContentKinds =
@@ -532,14 +765,20 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     public static IVectorConvergePort? TryOpen(WorkspaceContext workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+        return TryOpenAt(workspace, VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot));
+    }
+
+    /// <summary>Opens (creating on first run) a generation at an explicit path — the active artifact, or the
+    /// shadow a rebuild is being built into.</summary>
+    public static IVectorConvergePort? TryOpenAt(WorkspaceContext workspace, string vectorsPath)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(vectorsPath);
 
         if (VectorStore.ResolveExtensionPath() is not { } extension)
             return null;
         if (workspace.CanonicalExtractDbPath is not { } symbolsDbPath || !File.Exists(symbolsDbPath))
             return null;
-
-        string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
-        string vectorsPath = VectorSidecar.PathFor(root);
 
         if (!File.Exists(vectorsPath))
         {
