@@ -119,8 +119,12 @@ public sealed class VectorStore : IDisposable
 
         try
         {
-            Execute(connection, SchemaDdl(lane));
-            WriteMeta(connection, InitialMeta(identity, artifactId));
+            Guard($"create the schema at '{path}'", () =>
+            {
+                Execute(connection, SchemaDdl(lane));
+                WriteMeta(connection, InitialMeta(identity, artifactId));
+            });
+
             return new VectorStore(connection, identity, lane, vecVersion);
         }
         catch
@@ -171,25 +175,28 @@ public sealed class VectorStore : IDisposable
         return ReadMeta(connection);
     }
 
-    public string? Meta(string key)
+    public string? Meta(string key) => Guard("read vectors_meta", () =>
     {
         using SqliteCommand command = _connection.CreateCommand();
         command.CommandText = "SELECT value FROM vectors_meta WHERE key = $key";
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
-    }
+    });
 
     public void SetMeta(string key, string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(value);
 
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText = "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
-                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        command.Parameters.AddWithValue("$key", key);
-        command.Parameters.AddWithValue("$value", value);
-        command.ExecuteNonQuery();
+        Guard("write vectors_meta", () =>
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
+                                  "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+            command.Parameters.AddWithValue("$key", key);
+            command.Parameters.AddWithValue("$value", value);
+            command.ExecuteNonQuery();
+        });
     }
 
     /// <summary>
@@ -222,34 +229,39 @@ public sealed class VectorStore : IDisposable
         string map = MapTable(kind);
         string idColumn = IdColumn(kind);
 
-        using SqliteTransaction transaction = _connection.BeginTransaction();
+        string vectorLiteral = VectorLiteral();
 
-        Execute(_connection, transaction, $"DELETE FROM {vectors} WHERE rowid = $rowid", ("$rowid", rowId));
-        Execute(_connection, transaction, $"DELETE FROM {map} WHERE rowid_ref = $rowid", ("$rowid", rowId));
+        Guard($"upsert into {vectors}", () =>
+        {
+            using SqliteTransaction transaction = _connection.BeginTransaction();
 
-        Execute(
-            _connection,
-            transaction,
-            $"INSERT INTO {vectors}(rowid, embedding, path, kind, is_test) " +
-            $"VALUES($rowid, {VectorLiteral()}, $path, $kind, $is_test)",
-            ("$rowid", rowId),
-            ("$embedding", blob),
-            ("$path", path),
-            ("$kind", symbolKind),
-            ("$is_test", isTest ? 1L : 0L));
+            Execute(_connection, transaction, $"DELETE FROM {vectors} WHERE rowid = $rowid", ("$rowid", rowId));
+            Execute(_connection, transaction, $"DELETE FROM {map} WHERE rowid_ref = $rowid", ("$rowid", rowId));
 
-        Execute(
-            _connection,
-            transaction,
-            $"INSERT INTO {map}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
-            "VALUES($rowid, $unit_id, $path, $hash, $revision)",
-            ("$rowid", rowId),
-            ("$unit_id", unitId),
-            ("$path", path),
-            ("$hash", embedTextHash),
-            ("$revision", revision));
+            Execute(
+                _connection,
+                transaction,
+                $"INSERT INTO {vectors}(rowid, embedding, path, kind, is_test) " +
+                $"VALUES($rowid, {vectorLiteral}, $path, $kind, $is_test)",
+                ("$rowid", rowId),
+                ("$embedding", blob),
+                ("$path", path),
+                ("$kind", symbolKind),
+                ("$is_test", isTest ? 1L : 0L));
 
-        transaction.Commit();
+            Execute(
+                _connection,
+                transaction,
+                $"INSERT INTO {map}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
+                "VALUES($rowid, $unit_id, $path, $hash, $revision)",
+                ("$rowid", rowId),
+                ("$unit_id", unitId),
+                ("$path", path),
+                ("$hash", embedTextHash),
+                ("$revision", revision));
+
+            transaction.Commit();
+        });
     }
 
     /// <summary>Every <c>vectors_meta</c> key/value, re-read from the artifact.</summary>
@@ -269,28 +281,31 @@ public sealed class VectorStore : IDisposable
         string table = MapTable(kind);
         string idColumn = IdColumn(kind);
 
-        var entries = new List<VectorMapEntry>();
-        foreach (IReadOnlyList<string>? batch in Batched(paths))
+        return Guard($"read {table}", () =>
         {
-            using SqliteCommand command = _connection.CreateCommand();
-            command.CommandText = batch is null
-                ? $"SELECT {idColumn}, path, embed_text_hash FROM {table}"
-                : $"SELECT {idColumn}, path, embed_text_hash FROM {table} WHERE path IN ({Placeholders(batch, command)})";
+            var entries = new List<VectorMapEntry>();
+            foreach (IReadOnlyList<string>? batch in Batched(paths))
+            {
+                using SqliteCommand command = _connection.CreateCommand();
+                command.CommandText = batch is null
+                    ? $"SELECT {idColumn}, path, embed_text_hash FROM {table}"
+                    : $"SELECT {idColumn}, path, embed_text_hash FROM {table} WHERE path IN ({Placeholders(batch, command)})";
 
-            using SqliteDataReader reader = command.ExecuteReader();
-            while (reader.Read())
-                entries.Add(new VectorMapEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
-        }
+                using SqliteDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                    entries.Add(new VectorMapEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
 
-        return entries;
+            return (IReadOnlyList<VectorMapEntry>)entries;
+        });
     }
 
-    public int MappedCount(VectorUnitKind kind)
+    public int MappedCount(VectorUnitKind kind) => Guard($"count {MapTable(kind)}", () =>
     {
         using SqliteCommand command = _connection.CreateCommand();
         command.CommandText = $"SELECT COUNT(*) FROM {MapTable(kind)}";
         return Convert.ToInt32(command.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
-    }
+    });
 
     /// <summary>
     /// The one short transaction of vectors-v1 §Cursors: vec0 deletes, vec0 inserts, mapping-table updates and
@@ -321,56 +336,61 @@ public sealed class VectorStore : IDisposable
         string mapTable = MapTable(kind);
         string idColumn = IdColumn(kind);
 
-        using SqliteTransaction transaction = _connection.BeginTransaction();
+        string vectorLiteral = VectorLiteral();
 
-        long nextRowId = NextRowId(transaction, mapTable);
-        foreach (string unitId in deletes.Concat(vectors.Select(static entry => entry.UnitId)))
+        Guard($"commit batch into {vectorTable}", () =>
         {
-            if (ResolveRowId(transaction, mapTable, idColumn, unitId) is not { } rowId)
-                continue;
+            using SqliteTransaction transaction = _connection.BeginTransaction();
 
-            Execute(_connection, transaction, $"DELETE FROM {vectorTable} WHERE rowid = $rowid", ("$rowid", rowId));
-            Execute(_connection, transaction, $"DELETE FROM {mapTable} WHERE rowid_ref = $rowid", ("$rowid", rowId));
-        }
+            long nextRowId = NextRowId(transaction, mapTable);
+            foreach (string unitId in deletes.Concat(vectors.Select(static entry => entry.UnitId)))
+            {
+                if (ResolveRowId(transaction, mapTable, idColumn, unitId) is not { } rowId)
+                    continue;
 
-        foreach (VectorBatchEntry entry in vectors)
-        {
-            long rowId = nextRowId++;
-            Execute(
-                _connection,
-                transaction,
-                $"INSERT INTO {vectorTable}(rowid, embedding, path, kind, is_test) " +
-                $"VALUES($rowid, {VectorLiteral()}, $path, $kind, $is_test)",
-                ("$rowid", rowId),
-                ("$embedding", QuantizedBlob(entry.Embedding)),
-                ("$path", entry.Path),
-                ("$kind", entry.SymbolKind),
-                ("$is_test", entry.IsTest ? 1L : 0L));
+                Execute(_connection, transaction, $"DELETE FROM {vectorTable} WHERE rowid = $rowid", ("$rowid", rowId));
+                Execute(_connection, transaction, $"DELETE FROM {mapTable} WHERE rowid_ref = $rowid", ("$rowid", rowId));
+            }
 
-            Execute(
-                _connection,
-                transaction,
-                $"INSERT INTO {mapTable}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
-                "VALUES($rowid, $unit_id, $path, $hash, $revision)",
-                ("$rowid", rowId),
-                ("$unit_id", entry.UnitId),
-                ("$path", entry.Path),
-                ("$hash", entry.EmbedTextHash),
-                ("$revision", revision));
-        }
+            foreach (VectorBatchEntry entry in vectors)
+            {
+                long rowId = nextRowId++;
+                Execute(
+                    _connection,
+                    transaction,
+                    $"INSERT INTO {vectorTable}(rowid, embedding, path, kind, is_test) " +
+                    $"VALUES($rowid, {vectorLiteral}, $path, $kind, $is_test)",
+                    ("$rowid", rowId),
+                    ("$embedding", QuantizedBlob(entry.Embedding)),
+                    ("$path", entry.Path),
+                    ("$kind", entry.SymbolKind),
+                    ("$is_test", entry.IsTest ? 1L : 0L));
 
-        foreach ((string key, string value) in metaUpdates)
-        {
-            Execute(
-                _connection,
-                transaction,
-                "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                ("$key", key),
-                ("$value", value));
-        }
+                Execute(
+                    _connection,
+                    transaction,
+                    $"INSERT INTO {mapTable}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
+                    "VALUES($rowid, $unit_id, $path, $hash, $revision)",
+                    ("$rowid", rowId),
+                    ("$unit_id", entry.UnitId),
+                    ("$path", entry.Path),
+                    ("$hash", entry.EmbedTextHash),
+                    ("$revision", revision));
+            }
 
-        transaction.Commit();
+            foreach ((string key, string value) in metaUpdates)
+            {
+                Execute(
+                    _connection,
+                    transaction,
+                    "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    ("$key", key),
+                    ("$value", value));
+            }
+
+            transaction.Commit();
+        });
     }
 
     /// <summary>
@@ -387,33 +407,39 @@ public sealed class VectorStore : IDisposable
                 $"query has {query.Length} dims but lane '{Lane.Lane}' declares {Lane.Dims}.");
         }
 
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText =
+        string sql =
             $"SELECT v.rowid, v.distance, m.{IdColumn(kind)}, m.path " +
             $"FROM {VectorTable(kind)} v JOIN {MapTable(kind)} m ON m.rowid_ref = v.rowid " +
             $"WHERE v.embedding MATCH {VectorLiteral("$query")} AND k = $k";
-        command.Parameters.AddWithValue("$query", QuantizedBlob(query));
-        command.Parameters.AddWithValue("$k", k);
+        byte[] blob = QuantizedBlob(query);
 
-        var matches = new List<VectorMatch>();
-        using (SqliteDataReader reader = command.ExecuteReader())
+        return Guard($"KNN over {VectorTable(kind)}", () =>
         {
-            while (reader.Read())
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("$query", blob);
+            command.Parameters.AddWithValue("$k", k);
+
+            var matches = new List<VectorMatch>();
+            using (SqliteDataReader reader = command.ExecuteReader())
             {
-                matches.Add(new VectorMatch(
-                    reader.GetInt64(0),
-                    reader.GetDouble(1),
-                    reader.GetString(2),
-                    reader.GetString(3)));
+                while (reader.Read())
+                {
+                    matches.Add(new VectorMatch(
+                        reader.GetInt64(0),
+                        reader.GetDouble(1),
+                        reader.GetString(2),
+                        reader.GetString(3)));
+                }
             }
-        }
 
-        matches.Sort(static (left, right) =>
-        {
-            int byDistance = left.Distance.CompareTo(right.Distance);
-            return byDistance != 0 ? byDistance : left.RowId.CompareTo(right.RowId);
+            matches.Sort(static (left, right) =>
+            {
+                int byDistance = left.Distance.CompareTo(right.Distance);
+                return byDistance != 0 ? byDistance : left.RowId.CompareTo(right.RowId);
+            });
+            return (IReadOnlyList<VectorMatch>)matches;
         });
-        return matches;
     }
 
     /// <summary>
@@ -425,32 +451,63 @@ public sealed class VectorStore : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(glob);
 
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText = $"SELECT rowid_ref FROM {MapTable(kind)} WHERE path GLOB $glob ORDER BY rowid_ref";
-        command.Parameters.AddWithValue("$glob", glob);
+        return Guard($"glob-resolve {MapTable(kind)}", () =>
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = $"SELECT rowid_ref FROM {MapTable(kind)} WHERE path GLOB $glob ORDER BY rowid_ref";
+            command.Parameters.AddWithValue("$glob", glob);
 
-        var rowIds = new List<long>();
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-            rowIds.Add(reader.GetInt64(0));
-        return rowIds;
+            var rowIds = new List<long>();
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                rowIds.Add(reader.GetInt64(0));
+            return (IReadOnlyList<long>)rowIds;
+        });
     }
 
     public IReadOnlyList<string> TableColumns(string table)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
 
-        using SqliteCommand command = _connection.CreateCommand();
-        command.CommandText = $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid";
+        return Guard($"read the columns of {table}", () =>
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = $"SELECT name FROM pragma_table_info('{table}') ORDER BY cid";
 
-        var columns = new List<string>();
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-            columns.Add(reader.GetString(0));
-        return columns;
+            var columns = new List<string>();
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                columns.Add(reader.GetString(0));
+            return (IReadOnlyList<string>)columns;
+        });
     }
 
     public void Dispose() => _connection.Dispose();
+
+    /// <summary>
+    /// The storage boundary: every SQLite fault a public member can hit — a dropped or corrupt table, an
+    /// unreadable file, a locked database — leaves here as <see cref="VectorStoreException"/>. Callers such as
+    /// the fail-open retrieval arm catch that one type; a raw <see cref="SqliteException"/> escaping instead
+    /// would propagate past them and break a lexical result the semantic arm is only supposed to augment.
+    /// </summary>
+    private static T Guard<T>(string operation, Func<T> work)
+    {
+        try
+        {
+            return work();
+        }
+        catch (SqliteException ex)
+        {
+            throw new VectorStoreException($"the vector artifact could not {operation}: {ex.Message}", ex);
+        }
+    }
+
+    private static void Guard(string operation, Action work) =>
+        Guard(operation, () =>
+        {
+            work();
+            return true;
+        });
 
     internal static string SchemaDdl(SemanticStorageLane lane)
     {
@@ -582,6 +639,11 @@ public sealed class VectorStore : IDisposable
                 Execute(connection, "PRAGMA journal_mode=WAL;");
 
             return connection;
+        }
+        catch (SqliteException ex)
+        {
+            connection.Dispose();
+            throw new VectorStoreException($"the vector artifact at '{path}' could not be opened: {ex.Message}", ex);
         }
         catch
         {

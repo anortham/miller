@@ -433,6 +433,57 @@ public sealed class SemanticSearchArmScaleTests : IDisposable
         Assert.Contains("vector artifact", result.UnavailableReason!, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task AnArtifactWhoseVectorTableIsGone_DegradesWithAReasonInsteadOfThrowingSqlite()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        SemanticEncoderPin pin = MillerSemanticContract.DefaultEncoder;
+        string path = VectorSidecar.PathFor(_root);
+
+        using (VectorStore store = VectorStore.Create(path, MillerSemanticContract.PinnedIdentity(pin), "artifact-1", extension))
+        {
+            store.CommitBatch(
+                VectorUnitKind.Symbol,
+                [Entry("near", "src/Near.cs", FakeSemanticSidecar.ExpectedVector("query", "workspace refresh", pin.Dims))],
+                [],
+                new Dictionary<string, string> { ["build_state"] = "ready" },
+                1);
+        }
+
+        DropSymbolVectors(path, extension);
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        var arm = new SemanticSearchArm(_root, new VectorSidecar(SemanticMode.On), () => session);
+
+        SemanticQueryResult result = await arm.QuerySymbolsAsync("workspace refresh", 2, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Hits);
+        Assert.False(result.Served);
+        Assert.Contains("symbol_vectors", result.UnavailableReason!, StringComparison.Ordinal);
+    }
+
+    private static void DropSymbolVectors(string path, string extensionPath)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString());
+
+        connection.Open();
+        connection.EnableExtensions(true);
+        connection.LoadExtension(extensionPath);
+        connection.EnableExtensions(false);
+
+        using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "DROP TABLE symbol_vectors";
+        command.ExecuteNonQuery();
+    }
+
     private static VectorBatchEntry Entry(string unitId, string path, float[] vector) =>
         new(unitId, path, "class", false, SemanticVectorQuantizer.ToInt8(vector), unitId + "-hash");
 

@@ -554,6 +554,51 @@ public sealed class VectorStoreTests : IDisposable
         Assert.ThrowsAny<Exception>(() => VectorStore.Open(DbPath, extension, readOnly: true));
     }
 
+    [Fact]
+    public void Search_AgainstAMissingVectorTable_FailsAsAVectorStoreException()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        using VectorStore store = CreateStore();
+        DropTable("symbol_vectors", extension);
+
+        VectorStoreException failure = Assert.Throws<VectorStoreException>(
+            () => store.Search(VectorUnitKind.Symbol, Vector(1), 4));
+
+        Assert.IsType<SqliteException>(failure.InnerException);
+    }
+
+    [Fact]
+    public void MappedUnits_AgainstAMissingMappingTable_FailsAsAVectorStoreException()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        using VectorStore store = CreateStore();
+        DropTable("symbol_vector_map", extension);
+
+        VectorStoreException failure = Assert.Throws<VectorStoreException>(
+            () => store.MappedUnits(VectorUnitKind.Symbol, null));
+
+        Assert.IsType<SqliteException>(failure.InnerException);
+    }
+
+    private void DropTable(string table, string extensionPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+
+        connection.Open();
+        connection.EnableExtensions(true);
+        connection.LoadExtension(extensionPath);
+        connection.EnableExtensions(false);
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"DROP TABLE {table}";
+        command.ExecuteNonQuery();
+    }
+
     private VectorStore CreateStore() => VectorStore.Create(
         DbPath,
         MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder),
