@@ -427,7 +427,8 @@ public sealed class SearchTool
                         HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
                         FilePattern: file_pattern,
                         Language: language,
-                        FusionArm: _fusionArm));
+                        FusionArm: _fusionArm,
+                        WorkspaceRoot: context.WorkspaceRoot));
                 output = result.Output;
                 count = result.Count;
                 if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))

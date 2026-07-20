@@ -14,7 +14,8 @@ internal sealed record SearchRouteExecutionRequest(
     string? Language = null,
     Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? HasDocLookup = null,
     Func<string, IReadOnlyList<IndexedSymbol>>? SuggestionLookup = null,
-    ISymbolFusionArm? FusionArm = null);
+    ISymbolFusionArm? FusionArm = null,
+    string WorkspaceRoot = "");
 
 /// <summary>
 /// Everything an additional retrieval arm may see about the lexical stage: the query, the ranking it already
@@ -24,11 +25,16 @@ internal sealed record SearchRouteExecutionRequest(
 /// The lexical arm's own visibility rules. An arm that admits a symbol this rejects would surface a test
 /// symbol or an out-of-filter file the same query answered lexically would have hidden.
 /// </param>
+/// <param name="WorkspaceRoot">
+/// The root of the workspace the lexical stage actually resolved to. Read tools route by <c>workspace_id</c>,
+/// so an arm keyed to the ambient workspace instead would join one workspace's index against another's vectors.
+/// </param>
 public sealed record SymbolFusionRequest(
     string Query,
     IReadOnlyList<SymbolCandidate> Candidates,
     int Limit,
-    Func<IndexedSymbol, bool> Allows);
+    Func<IndexedSymbol, bool> Allows,
+    string WorkspaceRoot = "");
 
 /// <summary>
 /// An additional retrieval arm offered the lexical candidate list. Returning <c>null</c> means "this query is
@@ -207,7 +213,8 @@ internal static class SearchRouteExecutor
             request.Query,
             candidates.Candidates,
             request.Limit,
-            candidates.Visibility is { } visibility ? visibility.Allows : static _ => true);
+            candidates.Visibility is { } visibility ? visibility.Allows : static _ => true,
+            request.WorkspaceRoot);
 
     private static void EnsureKind(SearchRoute route, SearchRouteKind expected)
     {
@@ -229,13 +236,16 @@ internal static class SearchRouteExecutor
 /// <para>The allow predicate re-applies the lexical arm's own visibility rules, so the semantic arm cannot
 /// surface a test symbol or an out-of-filter file the same query would have hidden — and because the arm
 /// answers a rejecting filter by fetching deeper, filtering here costs recall rather than buying it.</para>
+/// <para>The arm is opened for the request's own workspace root rather than the ambient one, because a
+/// <c>workspace_id</c>-routed search must consult the vectors belonging to the index it ranked.</para>
 /// </remarks>
-internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<SemanticSearchArm> openArm) : ISymbolFusionArm
+internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, SemanticSearchArm> openArm)
+    : ISymbolFusionArm
 {
     private const int MinimumRecall = 10;
 
     public SemanticSymbolFusionArm(SemanticMode mode, SemanticSearchArm arm)
-        : this(mode, () => arm)
+        : this(mode, _ => arm)
     {
     }
 
@@ -252,7 +262,7 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<SemanticSe
             return null;
 
         int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
-        SemanticQueryResult result = openArm()
+        SemanticQueryResult result = openArm(request.WorkspaceRoot)
             .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
             .GetAwaiter()
             .GetResult();

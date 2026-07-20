@@ -498,7 +498,7 @@ public static class CliDispatch
             using var policySession = new CliSemanticSession(ctx.ToolsRoot);
             var policyArm = new SemanticSymbolFusionArm(
                 sidecar.Mode,
-                () => new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, policySession.Open));
+                _ => new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, policySession.Open));
             outw.WriteLine(
                 SearchRouteExecutor.RunSymbols(index, route, request with { FusionArm = policyArm }).Output);
             return 0;

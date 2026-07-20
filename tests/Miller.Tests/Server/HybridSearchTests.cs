@@ -270,6 +270,31 @@ public sealed class HybridSearchTests
         Assert.Equal(Render(index, Request(ConceptualQuery, json: true)), output);
     }
 
+    [Fact]
+    public async Task FusionArm_OpensTheArmForTheRequestWorkspaceRootNotTheAmbientOne()
+    {
+        const string targetRoot = "/ws-b";
+        RecordingSymbolLookupIndex index = TwoSymbolIndex();
+        var port = new RecordingPort { Matches = [Match(1, 0.05, "gadget-symbol", "src/Gadget.cs")] };
+        await using SemanticEmbeddingSession session = NewSession();
+        var opened = new List<string>();
+        var fusion = new SemanticSymbolFusionArm(
+            SemanticMode.On,
+            root =>
+            {
+                opened.Add(root);
+                return new SemanticSearchArm(root, enabled: true, port.Factory, () => session);
+            });
+
+        SearchRouteExecutor.RunSymbols(
+            index,
+            SymbolRoute,
+            Request(ConceptualQuery, json: false, fusion, workspaceRoot: targetRoot));
+
+        Assert.Equal([targetRoot], opened);
+        Assert.DoesNotContain(Root, opened);
+    }
+
     private static IReadOnlyList<string> SortedResultLines(string output) =>
     [
         .. output.Split('\n')
@@ -287,8 +312,8 @@ public sealed class HybridSearchTests
             out _);
 
     private static SearchRouteExecutionRequest Request(
-        string query, bool json, ISymbolFusionArm? fusionArm = null) =>
-        new(query, Limit: 10, Json: json, ExcludeTests: false, FusionArm: fusionArm);
+        string query, bool json, ISymbolFusionArm? fusionArm = null, string workspaceRoot = Root) =>
+        new(query, Limit: 10, Json: json, ExcludeTests: false, FusionArm: fusionArm, WorkspaceRoot: workspaceRoot);
 
     private static SemanticSymbolFusionArm OnArm(RecordingPort port, SemanticEmbeddingSession session) =>
         new(SemanticMode.On, new SemanticSearchArm(Root, enabled: true, port.Factory, () => session));

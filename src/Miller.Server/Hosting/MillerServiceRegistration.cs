@@ -78,11 +78,16 @@ public static class MillerServiceRegistration
         services.AddTransient<ISymbolFusionArm>(sp =>
         {
             var sidecar = sp.GetRequiredService<VectorSidecar>();
-            return new SemanticSymbolFusionArm(sidecar.Mode, () =>
+            // The root comes from the request, not from WorkspaceContext: a workspace_id-routed search ranks
+            // another workspace's index, and pairing it with the ambient workspace's vectors fuses the wrong
+            // artifact. Only a request that carried no root falls back to the ambient one.
+            return new SemanticSymbolFusionArm(sidecar.Mode, root =>
             {
-                var workspace = sp.GetRequiredService<WorkspaceContext>();
                 var session = sp.GetRequiredService<Lazy<SemanticEmbeddingSession?>>();
-                return new SemanticSearchArm(workspace.WorkspaceRoot, sidecar, () => session.Value);
+                string workspaceRoot = string.IsNullOrEmpty(root)
+                    ? sp.GetRequiredService<WorkspaceContext>().WorkspaceRoot
+                    : root;
+                return new SemanticSearchArm(workspaceRoot, sidecar, () => session.Value);
             });
         });
 
