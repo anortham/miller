@@ -84,9 +84,9 @@ Commit mode: Batch A is `parallel-lead-commit`; F3–F5 are `serial-worker-commi
 **What to build:** The routing brain: cheap, pure classification of query shape into lexical-only vs hybrid (+ class). It must never require an index or artifact.
 
 **Acceptance criteria:**
-- [ ] Table-driven tests: identifiers (`FooBar`, `foo_bar`, `foo.Bar`), paths (`src/x/y.cs`), short tokens ⟹ LexicalOnly; prose ("how does indexing converge") ⟹ Hybrid/conceptual; ambiguous two-word queries flip on lexical evidence
-- [ ] Deterministic and pure (no index, no I/O, no clock); PolicyVersion constant present
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Table-driven tests: identifiers (`FooBar`, `foo_bar`, `foo.Bar`), paths (`src/x/y.cs`), short tokens ⟹ LexicalOnly; prose ("how does indexing converge") ⟹ Hybrid/conceptual; ambiguous two-word queries flip on lexical evidence
+- [x] Deterministic and pure (no index, no I/O, no clock); PolicyVersion constant present
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task F2: Semantic retrieval arm
 
