@@ -63,3 +63,4 @@ Task E2: complete (parallel-lead-commit, Lead inline review clean + lead contrac
 Task B3: complete (serial-worker-commit, worker commit f906a86, Lead inline review clean)
 Task B4: complete (serial-worker-commit, worker commit 9c9690c, Lead inline review clean; plan mismatch accepted: SqliteVectorConvergePort owns atomic-commit SQL until B5 folds CommitBatch into VectorStore)
 Task B5: complete (serial-worker-commit, worker commit 8ecabc1, Lead inline review clean; fold-in sanction honored, net -165 lines in VectorConvergeService). Follow-up dispatched to impl-b5: wire promote execution + corruption-recovery trigger in drain loop (sanctioned VectorConvergeService.cs extension) before B6.
+Task B5 follow-up: complete (serial-worker-commit, worker commit 1e8ceef, Lead inline review clean; shadow rebuild executed from drain, corruption recovery wired)
