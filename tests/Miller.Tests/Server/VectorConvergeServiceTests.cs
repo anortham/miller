@@ -108,7 +108,23 @@ public sealed class VectorConvergePortScaleTests : IDisposable
     {
         Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, null);
 
-        Assert.Null(SqliteVectorConvergePort.TryOpen(SeedWorkspace()));
+        // The csproj now copies a restored vec0 into this test assembly's own .tools/, so "no extension
+        // resolvable" must be manufactured by moving the packaged file aside for the duration. Safe because
+        // this class serializes on the SqliteVecEnvironment collection with every other vec0-touching class.
+        string packaged = Path.Combine(AppContext.BaseDirectory, ".tools", VectorStore.PackagedExtensionFileName);
+        string? parked = File.Exists(packaged) ? packaged + ".parked" : null;
+        if (parked is not null)
+            File.Move(packaged, parked);
+
+        try
+        {
+            Assert.Null(SqliteVectorConvergePort.TryOpen(SeedWorkspace()));
+        }
+        finally
+        {
+            if (parked is not null)
+                File.Move(parked, packaged);
+        }
     }
 
     private static VectorConvergeService NewService() =>

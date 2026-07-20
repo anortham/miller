@@ -110,10 +110,10 @@
 **What to build:** The launch signal + 3 Scale tests, in the `SqliteVecEnvironment` collection if they touch `MILLER_SQLITE_VEC_PATH`.
 
 **Acceptance criteria:**
-- [ ] With `.tools/` restored: `scripts/test.sh scale` green including the new tests; without: they SKIP with an actionable message
-- [ ] `ScaleTraitConventionTests` fails a deliberately untagged file referencing `RequireSemanticSidecar` (prove by temporary mutation in the report, not a committed test)
-- [ ] Handshake fingerprint equals `MillerSemanticContract.DefaultEncoder` fingerprint — this is the RC promotion gate evidence
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] With `.tools/` restored: `scripts/test.sh scale` green including the new tests (one foreign failure — `TryOpen_WithoutThePinnedExtension`, premise broken by G2's transitive vec0 copy into test output; lead-fixed by parking the packaged file inside the test); without: 3/3 SKIP with an actionable message (both directions proven, state restored)
+- [x] `ScaleTraitConventionTests` fails a deliberately untagged file referencing `RequireSemanticSidecar` (proven by temporary `TempGuardProbe.cs` mutation, removed before commit)
+- [x] Handshake fingerprint equals `MillerSemanticContract.DefaultEncoder` fingerprint — RC PROMOTION GATE PASSES against the live 0.1.0-rc.1 binary (after lead pin fix f68dad8); planted symbol round-trips through real vec0 to rank 1 on lexically-disjoint prose
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`ee0e3f3`; fast suite unchanged at 4155, Release clean)
 
 ## Task G4: release workflow packaging
 
