@@ -2,7 +2,9 @@ using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Git;
@@ -11,6 +13,7 @@ using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server.Cli;
@@ -1733,6 +1736,70 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_UnknownArm_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(new[] { "search", "UserService", "--arm", "vector" }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--arm must be", errText);
+    }
+
+    [Fact]
+    public void Search_ArmLexical_RendersExactlyTheDefaultOutput()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "UserService", "--arm", "lexical" }, Context(fx.DbPath));
+        var (defaultCode, defaultOut, _) = Run(new[] { "search", "UserService" }, Context(fx.DbPath));
+
+        Assert.Equal(defaultCode, code);
+        Assert.Equal(defaultOut, outText);
+        Assert.Empty(errText);
+    }
+
+    [Theory]
+    [InlineData("semantic")]
+    [InlineData("hybrid")]
+    public void Search_ForcedSemanticArm_WithoutAServingArtifact_FailsLoudlyRatherThanFallingBackToLexical(
+        string arm)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "UserService", "--arm", arm }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("--arm " + arm, errText);
+    }
+
+    [Theory]
+    [InlineData("semantic")]
+    [InlineData("hybrid")]
+    public void Search_ForcedSemanticArm_OnANonSymbolRoute_IsUsageErrorExitTwo(string arm)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(
+            new[] { "search", "UserService", "--mode", "content", "--arm", arm }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("symbol search route", errText);
+    }
+
+    [Fact]
+    public void Search_Usage_DocumentsTheArmFlag()
+    {
+        var (code, _, errText) = Run(new[] { "search" }, Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--arm lexical|semantic|hybrid", errText);
+    }
+
+    [Fact]
     public void Search_Regions_UsesFreshDiskRegionIndex()
     {
         const string path = "src/Target.cs";
@@ -3383,5 +3450,253 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("references_candidates: enabled", compactOut);
         Assert.Contains("references candidates --json", compactOut);
         Assert.Contains("references-candidates-v1.md", compactOut);
+    }
+
+    [Fact]
+    public async Task ForcedHybridArm_WhenTheArmCannotServe_ExitsThreeWithTheReasonAndNoResults()
+    {
+        var port = new StubVectorPort { UnavailableReason = "the vector artifact was replaced mid-query" };
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        var outw = new StringWriter();
+        var err = new StringWriter();
+
+        int code = CliDispatch.RunForcedArm(
+            CliSearchArm.Hybrid,
+            TwoSymbolIndex(),
+            SymbolRoute,
+            ArmRequest("widget"),
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session),
+            outw,
+            err);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outw.ToString());
+        Assert.Contains("--arm hybrid", err.ToString());
+        Assert.Contains("the vector artifact was replaced mid-query", err.ToString());
+    }
+
+    [Fact]
+    public async Task ForcedHybridArm_WhenTheArmServesNoNeighbours_RendersLexicalAndExitsZero()
+    {
+        var port = new StubVectorPort();
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        StubSymbolLookupIndex index = TwoSymbolIndex();
+        var outw = new StringWriter();
+        var err = new StringWriter();
+
+        int code = CliDispatch.RunForcedArm(
+            CliSearchArm.Hybrid,
+            index,
+            SymbolRoute,
+            ArmRequest("widget"),
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session),
+            outw,
+            err);
+
+        Assert.Equal(0, code);
+        Assert.Empty(err.ToString());
+        Assert.Equal(
+            SearchRouteExecutor.RunSymbols(index, SymbolRoute, ArmRequest("widget")).Output + Environment.NewLine,
+            outw.ToString());
+    }
+
+    [Fact]
+    public async Task ForcedSemanticArm_ExcludesTestSymbolsAndRefillsThroughTheRejection()
+    {
+        var port = new StubVectorPort
+        {
+            Matches =
+            [
+                new VectorMatch(1, 0.10, "test-symbol", "tests/WidgetTests.cs"),
+                new VectorMatch(2, 0.20, "widget-symbol", "src/Widget.cs"),
+            ],
+        };
+
+        string output = await RunForcedSemanticArm(port, ArmRequest("widget", excludeTests: true));
+
+        Assert.Contains("Widget", output);
+        Assert.DoesNotContain("WidgetTests", output);
+    }
+
+    [Fact]
+    public async Task ForcedSemanticArm_HonoursTheFilePatternFilter()
+    {
+        var port = new StubVectorPort
+        {
+            Matches =
+            [
+                new VectorMatch(1, 0.10, "gadget-symbol", "src/other/Gadget.cs"),
+                new VectorMatch(2, 0.20, "widget-symbol", "src/Widget.cs"),
+            ],
+        };
+
+        string output = await RunForcedSemanticArm(port, ArmRequest("widget", filePattern: "src/Widget.cs"));
+
+        Assert.Contains("Widget", output);
+        Assert.DoesNotContain("Gadget", output);
+    }
+
+    [Fact]
+    public async Task ForcedSemanticArm_HonoursTheLanguageFilter()
+    {
+        var port = new StubVectorPort
+        {
+            Matches =
+            [
+                new VectorMatch(1, 0.10, "python-symbol", "src/tool.py"),
+                new VectorMatch(2, 0.20, "widget-symbol", "src/Widget.cs"),
+            ],
+        };
+
+        string output = await RunForcedSemanticArm(port, ArmRequest("widget", language: "csharp"));
+
+        Assert.Contains("Widget", output);
+        Assert.DoesNotContain("tool.py", output);
+    }
+
+    private const string ArmRoot = "/ws";
+
+    private static SearchRoute SymbolRoute => SearchRoutePlanner.Plan("symbol", regions: null);
+
+    private static async Task<string> RunForcedSemanticArm(
+        StubVectorPort port,
+        SearchRouteExecutionRequest request)
+    {
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        var outw = new StringWriter();
+        var err = new StringWriter();
+
+        int code = CliDispatch.RunForcedArm(
+            CliSearchArm.Semantic,
+            TwoSymbolIndex(),
+            SymbolRoute,
+            request,
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session),
+            outw,
+            err);
+
+        Assert.Equal(0, code);
+        Assert.Empty(err.ToString());
+        return outw.ToString();
+    }
+
+    private static SearchRouteExecutionRequest ArmRequest(
+        string query,
+        bool excludeTests = false,
+        string? filePattern = null,
+        string? language = null) =>
+        new(
+            query,
+            Limit: 10,
+            Json: false,
+            ExcludeTests: excludeTests,
+            FilePattern: filePattern,
+            Language: language,
+            WorkspaceRoot: ArmRoot);
+
+    private static SemanticEmbeddingSession NewSemanticSession() =>
+        new(
+            FakeSemanticSidecar.InProcessLauncher(),
+            new SemanticSessionOptions
+            {
+                RequestTimeout = TimeSpan.FromSeconds(10),
+                InitTimeout = TimeSpan.FromSeconds(10),
+                ShutdownTimeout = TimeSpan.FromSeconds(1),
+                RestartBackoff = TimeSpan.Zero,
+                RestartBackoffCap = TimeSpan.Zero,
+                Delay = static (_, _) => Task.CompletedTask,
+            });
+
+    private static StubSymbolLookupIndex TwoSymbolIndex() =>
+        new(
+            ArmSymbol(0, "widget-symbol", "Widget", "src/Widget.cs"),
+            ArmSymbol(1, "gadget-symbol", "Gadget", "src/other/Gadget.cs"),
+            ArmSymbol(2, "test-symbol", "WidgetTests", "tests/WidgetTests.cs", isTest: true),
+            ArmSymbol(3, "python-symbol", "widget_tool", "src/tool.py", language: "python"));
+
+    private static IndexedSymbol ArmSymbol(
+        int docId,
+        string symbolId,
+        string name,
+        string path,
+        bool isTest = false,
+        string language = "csharp") =>
+        new(
+            docId,
+            symbolId,
+            name,
+            "void " + name + "()",
+            "method",
+            language,
+            path,
+            3,
+            6,
+            ParentId: null,
+            IsTest: isTest);
+
+    private sealed class StubVectorPort
+    {
+        public string? UnavailableReason { get; init; }
+
+        public IReadOnlyList<VectorMatch> Matches { get; init; } = [];
+
+        public IVectorSearchPort? Factory(string workspaceRoot, out string? unavailableReason)
+        {
+            if (UnavailableReason is not null)
+            {
+                unavailableReason = UnavailableReason;
+                return null;
+            }
+
+            unavailableReason = null;
+            return new Port(this);
+        }
+
+        private sealed class Port(StubVectorPort owner) : IVectorSearchPort
+        {
+            public SemanticStorageLane Lane { get; } =
+                MillerSemanticContract.ParseStorageSchema(MillerSemanticContract.DefaultEncoder.StorageSchema);
+
+            public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k) =>
+                [.. owner.Matches.Take(k)];
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private sealed class StubSymbolLookupIndex(params IndexedSymbol[] symbols) : ISymbolLookupIndex
+    {
+        public int DocumentCount => symbols.Length;
+
+        public IReadOnlySet<string> KnownExtensions { get; } =
+            new HashSet<string>(StringComparer.Ordinal) { ".cs", ".py" };
+
+        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
+            [.. symbols.Take(limit).Select(symbol => new SearchHit(symbol.ToSearchableDocument(), 2.0))];
+
+        public IndexedSymbol Resolve(int docId) => symbols.Single(symbol => symbol.DocId == docId);
+
+        public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
+            [.. symbols.Where(symbol => string.Equals(symbol.Name, name, StringComparison.Ordinal))];
+
+        public IndexedSymbol? FindBySymbolId(string symbolId) =>
+            symbols.FirstOrDefault(symbol => string.Equals(symbol.SymbolId, symbolId, StringComparison.Ordinal));
+
+        public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => [];
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) =>
+            [.. symbols.Where(symbol => string.Equals(symbol.FilePath, filePath, StringComparison.Ordinal))];
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+            [.. symbols.Where(symbol => symbol.FilePath.Contains(query, StringComparison.Ordinal)).Take(limit)];
+
+        public bool IsIndexedFilePath(string path) =>
+            symbols.Any(symbol => string.Equals(symbol.FilePath, path, StringComparison.Ordinal));
+
+        public string? ResolveIndexedFilePath(string target) =>
+            symbols.FirstOrDefault(symbol => string.Equals(symbol.FilePath, target, StringComparison.Ordinal))
+                ?.FilePath;
     }
 }

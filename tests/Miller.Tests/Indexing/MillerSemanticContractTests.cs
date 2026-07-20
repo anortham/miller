@@ -25,7 +25,7 @@ public sealed class MillerSemanticContractTests
 
         Assert.Equal("qwen3-0.6b-f16", pin.ModelId);
         Assert.Equal("421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340", pin.ModelSha256);
-        Assert.Equal("Qwen3-Embedding-0.6B-f16.gguf", pin.ModelRevision);
+        Assert.Equal("main", pin.ModelRevision);
         Assert.Equal(512, pin.Dims);
         Assert.Equal("last", pin.Pooling);
         Assert.Equal("<|endoftext|>", pin.EosAppend);
@@ -42,7 +42,7 @@ public sealed class MillerSemanticContractTests
 
         Assert.Equal("bge-small-en-v1.5-f32", pin.ModelId);
         Assert.Equal("bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65", pin.ModelSha256);
-        Assert.Equal("bge-small-en-v1.5-f32.gguf", pin.ModelRevision);
+        Assert.Equal("main", pin.ModelRevision);
         Assert.Equal(384, pin.Dims);
         Assert.Equal("cls", pin.Pooling);
         Assert.Equal("", pin.EosAppend);
@@ -59,7 +59,7 @@ public sealed class MillerSemanticContractTests
                 "encoder-v1",
                 "model_id=qwen3-0.6b-f16",
                 "model_sha256=421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
-                "model_revision=Qwen3-Embedding-0.6B-f16.gguf",
+                "model_revision=main",
                 "dims=512",
                 "pooling=last",
                 "eos_append=<|endoftext|>",

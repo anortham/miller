@@ -1,0 +1,32 @@
+{
+  "note": "Pins for Miller's OPTIONAL local semantic retrieval (ADR-0003). Two sections: `sidecar` is the julie-semantic-sidecar embedding binary keyed by rust target triple; `sqliteVec` is the sqlite-vec loadable extension keyed by .NET RID (values copied verbatim from scripts/spike-pins.json). Sidecar asset names carry NO leading `v` before the version and the binary sits at the ARCHIVE ROOT — both differ from julie-pins.json. The Windows sidecar asset is a .zip; the Windows sqlite-vec asset is a .tar.gz. A missing restore is not an error: semantic fails open with a reason.",
+  "sidecar": {
+    "version": "0.1.0-rc.1",
+    "binary": "julie-semantic-sidecar",
+    "archiveInnerPathTemplate": "julie-semantic-sidecar{exe}",
+    "urlTemplate": "https://github.com/anortham/julie-semantic-sidecar/releases/download/v{VER}/{asset}",
+    "assets": {
+      "aarch64-apple-darwin":     { "name": "julie-semantic-sidecar-{VER}-aarch64-apple-darwin.tar.gz",     "sha256": "2957b0c857cf0aa6ff6c5288ae3b2035b99f3540efc51978eb21cc755a59f508" },
+      "x86_64-apple-darwin":      { "name": "julie-semantic-sidecar-{VER}-x86_64-apple-darwin.tar.gz",      "sha256": "0ddcc5e01b2410a58fde9b42155e1d1433d0ed7849bedc695e4fbff64a07c7a0" },
+      "x86_64-unknown-linux-gnu": { "name": "julie-semantic-sidecar-{VER}-x86_64-unknown-linux-gnu.tar.gz", "sha256": "414eaa6039ed98280e3fcbdb7a0fa295ce425c59f14564402e1393d3b16a6af9" },
+      "x86_64-pc-windows-msvc":   { "name": "julie-semantic-sidecar-{VER}-x86_64-pc-windows-msvc.zip",      "sha256": "b3690b7a7567910a488cc0e5e391ff65868e31e1f84ea1c93f0487e4d1217f4e" }
+    },
+    "ridByTriple": {
+      "aarch64-apple-darwin": "osx-arm64",
+      "x86_64-apple-darwin": "osx-x64",
+      "x86_64-unknown-linux-gnu": "linux-x64",
+      "x86_64-pc-windows-msvc": "win-x64"
+    }
+  },
+  "sqliteVec": {
+    "version": "0.1.9",
+    "binary": "sqlite-vec",
+    "urlTemplate": "https://github.com/asg017/sqlite-vec/releases/download/v{VER}/{asset}",
+    "assets": {
+      "osx-arm64": { "name": "sqlite-vec-{VER}-loadable-macos-aarch64.tar.gz",  "member": "vec0.dylib", "sha256": "8282126333399ddfe98bbbcc7a1936e7252625aac49df056a98be602e46bfd29" },
+      "osx-x64":   { "name": "sqlite-vec-{VER}-loadable-macos-x86_64.tar.gz",   "member": "vec0.dylib", "sha256": "53ad76e400786515e2edcaed2f01271dda846316390b761fadbd2dcf56aa4713" },
+      "linux-x64": { "name": "sqlite-vec-{VER}-loadable-linux-x86_64.tar.gz",   "member": "vec0.so",    "sha256": "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7" },
+      "win-x64":   { "name": "sqlite-vec-{VER}-loadable-windows-x86_64.tar.gz", "member": "vec0.dll",   "sha256": "51581189d52066b4dfc6631f6d7a3eab7dedc2260656ab09ca97ab3fb8165983" }
+    }
+  }
+}

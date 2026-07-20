@@ -10,12 +10,17 @@ namespace Miller.Tests.Conventions;
 /// <c>VSTestTestCaseFilter=Category!=Scale</c>) excludes <c>Category=Scale</c>; this guard makes sure
 /// nothing that SHOULD be tagged Scale escapes the tag.
 ///
-/// The launch signal is <see cref="ScaleTestSupport.RequireJulieServer"/> /
-/// <see cref="ScaleTestSupport.LocateJulieServer"/> — the one place a test obtains the real
-/// <c>.tools/julie-extract</c> binary to spawn it. The guard scans the test sources and asserts:
-/// every file that references that signal also carries the Scale trait. It is intentionally
-/// ONE-directional (spawns julie ⟹ Scale), not the converse: a test can be Scale for other reasons
-/// (e.g. <c>RebuildLatencyTests</c> builds a 50k-symbol fixture, no julie), and that is fine.
+/// The launch signals are the two places a test obtains a real pinned binary to spawn it:
+/// <see cref="ScaleTestSupport.RequireJulieServer"/> / <see cref="ScaleTestSupport.LocateJulieServer"/> for
+/// <c>.tools/julie-extract</c>, and <see cref="ScaleTestSupport.RequireSemanticSidecar"/> /
+/// <see cref="ScaleTestSupport.LocateSemanticSidecar"/> for <c>.tools/julie-semantic-sidecar</c>. The guard
+/// scans the test sources and asserts: every file that references either signal also carries the Scale trait.
+/// It is intentionally ONE-directional (spawns a pinned binary ⟹ Scale), not the converse: a test can be Scale
+/// for other reasons (e.g. <c>RebuildLatencyTests</c> builds a 50k-symbol fixture, no julie), and that is fine.
+///
+/// Each signal family gets its OWN non-vacuity assertion. One combined counter would let a rename of the
+/// semantic signal pass silently as long as some julie test still existed — precisely the coverage hole the
+/// counter was added to close.
 ///
 /// This is a SOURCE scan, not reflection, because "this test spawns a subprocess" is a property of the
 /// method body that reflection cannot see. It runs in the fast suite in a few ms over ~40 small files.
@@ -25,9 +30,12 @@ namespace Miller.Tests.Conventions;
 /// </summary>
 public sealed class ScaleTraitConventionTests
 {
-    // The substrings that mark a test as julie-spawning. Referencing either means the test launches the
+    // The substrings that mark a test as julie-extract-spawning. Referencing any means the test launches the
     // real binary and therefore must be excluded from the default suite.
-    private static readonly string[] LaunchSignals = ["RequireJulieServer", "LocateJulieServer", "RunJulie"];
+    private static readonly string[] JulieLaunchSignals = ["RequireJulieServer", "LocateJulieServer", "RunJulie"];
+
+    // The same, for the pinned julie-semantic-sidecar binary.
+    private static readonly string[] SemanticLaunchSignals = ["RequireSemanticSidecar", "LocateSemanticSidecar"];
 
     // Files that legitimately contain the launch-signal substrings WITHOUT spawning julie, and so must be
     // excluded from the scan: the helper that DEFINES them, and this guard that NAMES them as literals.
@@ -38,7 +46,7 @@ public sealed class ScaleTraitConventionTests
     };
 
     [Fact]
-    public void EveryJulieSpawningTest_IsTaggedScale_SoTheDefaultSuiteExcludesIt()
+    public void EveryPinnedBinarySpawningTest_IsTaggedScale_SoTheDefaultSuiteExcludesIt()
     {
         string testRoot = Path.Combine(ScaleTestSupport.RepoRoot(), "tests", "Miller.Tests");
         Assert.True(Directory.Exists(testRoot), $"Could not locate the test source root at '{testRoot}'.");
@@ -53,7 +61,8 @@ public sealed class ScaleTraitConventionTests
             $"'{testRoot}'. The convention guard must not pass vacuously.");
 
         var violations = new List<string>();
-        int spawningFilesSeen = 0;
+        int julieFilesSeen = 0;
+        int semanticFilesSeen = 0;
 
         foreach (var path in sources)
         {
@@ -62,27 +71,37 @@ public sealed class ScaleTraitConventionTests
 
             // Strip comments FIRST so a signal/trait mentioned only in prose never counts as real code.
             string code = StripComments(File.ReadAllText(path));
-            if (!LaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal)))
+            bool spawnsJulie = JulieLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            bool spawnsSemantic = SemanticLaunchSignals.Any(s => code.Contains(s, StringComparison.Ordinal));
+            if (!spawnsJulie && !spawnsSemantic)
                 continue;
 
-            spawningFilesSeen++;
+            if (spawnsJulie)
+                julieFilesSeen++;
+            if (spawnsSemantic)
+                semanticFilesSeen++;
+
             if (!HasScaleTrait(code))
                 violations.Add(Path.GetRelativePath(testRoot, path));
         }
 
-        // Sanity: the live tests exist, so the scan must actually see the signal somewhere. If it sees
-        // none, the signal was renamed without updating this guard — a silent coverage hole.
-        Assert.True(spawningFilesSeen >= 1,
-            "The convention guard found NO test referencing the julie launch signal " +
-            $"({string.Join("/", LaunchSignals)}). Either the live tests were removed or the signal was " +
-            "renamed without updating this guard. Refusing to pass with zero coverage.");
+        // Sanity: the live tests exist, so the scan must actually see each signal family somewhere. If it sees
+        // none, that signal was renamed without updating this guard — a silent coverage hole.
+        AssertSignalFamilyIsCovered(julieFilesSeen, "julie-extract", JulieLaunchSignals);
+        AssertSignalFamilyIsCovered(semanticFilesSeen, "julie-semantic-sidecar", SemanticLaunchSignals);
 
         Assert.True(violations.Count == 0,
-            "These tests spawn the real julie-extract but are MISSING [Trait(\"Category\",\"Scale\")], so a " +
+            "These tests spawn a real pinned binary but are MISSING [Trait(\"Category\",\"Scale\")], so a " +
             "bare `dotnet test` would run them in the default fast suite (the julie 30-min trap). Tag each " +
             "with [Trait(\"Category\",\"Scale\")] at the class level:\n  " +
             string.Join("\n  ", violations));
     }
+
+    private static void AssertSignalFamilyIsCovered(int filesSeen, string binary, string[] signals) =>
+        Assert.True(filesSeen >= 1,
+            $"The convention guard found NO test referencing the {binary} launch signal " +
+            $"({string.Join("/", signals)}). Either the live tests were removed or the signal was renamed " +
+            "without updating this guard. Refusing to pass with zero coverage.");
 
     private static bool IsUnderBinOrObj(string path)
     {

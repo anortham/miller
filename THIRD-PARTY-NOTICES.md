@@ -50,8 +50,33 @@ inside Miller's release archives.
 ### julie-extract
 
 Miller delegates all source extraction to the pinned **`julie-extract`** binary
-(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.5.1**
+(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.16.0**
 (see [`scripts/julie-pins.json`](scripts/julie-pins.json)). It is the same author's own project (Alan
 Northam) and is shipped inside Miller's release archives under `.tools/julie-extract`. Refer to the
 julie-extractors repository for its license terms and for the licenses of the tree-sitter grammars it
 embeds.
+
+### julie-semantic-sidecar
+
+Miller's optional local semantic retrieval (ADR-0003) generates embeddings through the pinned
+**`julie-semantic-sidecar`** binary (<https://github.com/anortham/julie-semantic-sidecar>), currently
+pinned at version **0.1.0-rc.1** (see [`scripts/semantic-pins.json`](scripts/semantic-pins.json)). It is
+shipped inside Miller's release archives under `.tools/julie-semantic-sidecar`. The sidecar is the same
+author's own project (Alan Northam) and is licensed **MIT** (Copyright (c) 2026 Alan Northam).
+
+The sidecar binary is statically linked, so redistributing it also redistributes its native embedding
+engine. It embeds via the `llama-cpp-2` / `llama-cpp-sys-2` Rust crates (pinned at `=0.1.151`, both
+licensed **MIT OR Apache-2.0**), which vendor and compile **llama.cpp** and its **ggml** tensor library
+(<https://github.com/ggml-org/llama.cpp>) directly into the binary. llama.cpp and ggml are licensed
+**MIT** (Copyright (c) 2023-2026 The ggml authors). Miller does not build these itself; refer to the
+julie-semantic-sidecar repository for its full dependency manifest.
+
+### sqlite-vec
+
+The semantic vector store `<workspace>/.miller/vectors.db` is served by the **sqlite-vec** loadable SQLite
+extension (<https://github.com/asg017/sqlite-vec>), currently pinned at version **0.1.9** (see
+[`scripts/semantic-pins.json`](scripts/semantic-pins.json)). The prebuilt loadable library ships inside
+Miller's release archives as `.tools/vec0.dylib`, `.tools/vec0.so`, or `.tools/vec0.dll` depending on
+platform. sqlite-vec is dual-licensed **Apache-2.0 OR MIT** at the user's option (Copyright (c) 2024 Alex
+Garcia); the upstream repository carries both `LICENSE-APACHE` and `LICENSE-MIT` at the pinned `v0.1.9`
+tag.

@@ -41,6 +41,35 @@ scripts/release-promote.sh --version <version> --run-id <successful-package-run-
 
 Use `--dry-run` to verify artifacts without creating or updating a release.
 
+## Pinned Binaries (julie-extract and the semantic pair)
+
+Every platform archive carries two pinned toolsets under `.tools/`:
+
+| Pin file | Restored artifacts | Restore script |
+| --- | --- | --- |
+| `scripts/julie-pins.json` | `julie-extract[.exe]` | `scripts/restore-julie-extract.sh` / `.ps1` |
+| `scripts/semantic-pins.json` | `julie-semantic-sidecar[.exe]`, `vec0.dylib`/`vec0.so`/`vec0.dll` | `scripts/restore-semantic-sidecar.sh` / `.ps1` |
+
+The release workflow restores both by pin — it never hardcodes URLs or checksums — and each runner's host
+platform equals its matrix target, so the scripts' host detection resolves the right asset. Both packaged
+binaries are smoke-run with `--version` before packaging, and the sqlite-vec member name is read from
+`scripts/semantic-pins.json` per RID rather than assumed.
+
+Semantic restore failure fails the release job even though semantic retrieval is optional at runtime
+(ADR-0003): a local build with no restore is fine, but a published archive silently missing the sidecar is
+not.
+
+To bump the semantic pin:
+
+1. Update `version` and every `sha256` under `sidecar` (four triples) in `scripts/semantic-pins.json`;
+   update the `sqliteVec` block the same way if the extension version moves.
+2. Re-run `scripts/restore-semantic-sidecar.sh` (or `.ps1` on Windows) locally. The
+   `VerifyPinnedSemanticSidecarVersion` build guard in `src/Miller.Server/Miller.Server.csproj` fails the
+   build if `.tools/` still holds the pre-bump sidecar.
+3. Run `scripts/test.sh scale` — the real-sidecar Scale tests assert the handshake's `encoder_fingerprint`
+   matches `MillerSemanticContract.DefaultEncoder`. A fingerprint change is a `vectors.db` generation
+   change and must be called out in the release notes.
+
 ## Release Notes (required for every release)
 
 Every release — feature or patch — ships release notes in both places:
@@ -58,9 +87,22 @@ The publish workflow creates the release with a placeholder body; a release is n
 file exists and the release body carries it. (v1.10.0 and v1.11.0 shipped without notes and were
 backfilled on 2026-07-17 — do not repeat that.)
 
+### Required notes for the first release that ships the semantic pair
+
+- **`encoder_fingerprint` changed.** `ModelRevision` was corrected to the Hugging Face repo revision
+  `main` rather than the gguf file name (commit `f68dad8`). Any pre-existing local `vectors.db` therefore
+  reclassifies as `incompatible` and rebuilds automatically on first use — no user action, but say so.
+- **Semantic stays optional and off-switchable.** `MILLER_SEMANTIC=off` remains a permanent zero-work
+  guarantee and lexical-only output stays byte-identical (ADR-0003). A workspace that never enables
+  semantic pays nothing for the two extra packaged binaries.
+
 ## Guardrails
 
 - Do not publish from a failed, cancelled, or in-progress package run.
+- The semantic packaging change touches `.github/workflows/release.yml`, so the CLAUDE.md tag-push 403
+  rule applies: do not cut a tag-push release from a commit whose workflow diff against default-branch
+  HEAD is unmerged, and do not push further workflow-touching commits to main while a tag-push release run
+  is still building. Recover a 403'd publish job with `scripts/release-promote.sh` per that rule.
 - Do not overwrite an existing stable release unless explicitly intended; pass `allow_overwrite=true` or
   `--allow-overwrite` only for that case.
 - Keep `Directory.Build.props`, `miller-plugin.json`, `.claude-plugin/plugin.json`,

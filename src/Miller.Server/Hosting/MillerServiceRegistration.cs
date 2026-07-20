@@ -2,7 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Git;
+using Miller.Server.Tools;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -63,6 +65,31 @@ public static class MillerServiceRegistration
         services.AddSingleton(_ => VectorConvergeSignal.Shared);
         services.AddSingleton<VectorConvergeService>();
         services.AddHostedService(sp => sp.GetRequiredService<VectorConvergeService>());
+
+        // The query-time half of ADR-0003: the semantic arm the search tool's symbol route may fuse with. The
+        // session is a singleton because a resident child process, its restart count and an open circuit are
+        // exactly the state a per-query session would silently reset; it is Lazy so no process is launched until
+        // a hybrid query actually asks. The arm itself is transient (resolved per tool call, well after
+        // StartAsync) so its WorkspaceContext read follows the same rebind rules as the other per-call services.
+        // Under MILLER_SEMANTIC=off nothing here resolves a workspace, a path, or a process.
+        services.AddSingleton(sp => new Lazy<SemanticEmbeddingSession?>(
+            () => SemanticSearchArm.ProcessSession(sp.GetRequiredService<WorkspaceContext>().ToolsRoot),
+            LazyThreadSafetyMode.ExecutionAndPublication));
+        services.AddTransient<ISymbolFusionArm>(sp =>
+        {
+            var sidecar = sp.GetRequiredService<VectorSidecar>();
+            // The root comes from the request, not from WorkspaceContext: a workspace_id-routed search ranks
+            // another workspace's index, and pairing it with the ambient workspace's vectors fuses the wrong
+            // artifact. Only a request that carried no root falls back to the ambient one.
+            return new SemanticSymbolFusionArm(sidecar.Mode, root =>
+            {
+                var session = sp.GetRequiredService<Lazy<SemanticEmbeddingSession?>>();
+                string workspaceRoot = string.IsNullOrEmpty(root)
+                    ? sp.GetRequiredService<WorkspaceContext>().WorkspaceRoot
+                    : root;
+                return new SemanticSearchArm(workspaceRoot, sidecar, () => session.Value);
+            });
+        });
 
         // The index_fresh probe (decision-8) the telemetry filter reads per call: built revision vs. the freshness
         // service's last-observed revision AND the indexer's queue-empty state. Resolved lazily (per call / by the
