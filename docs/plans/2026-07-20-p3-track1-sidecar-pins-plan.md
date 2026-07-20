@@ -129,6 +129,6 @@
 **What to build:** Workflow steps + doc. No run, no push.
 
 **Acceptance criteria:**
-- [ ] Workflow YAML parses (`actionlint` if available, else `python -c "import yaml,sys; yaml.safe_load(open(...))"`) and restore step uses `scripts/semantic-pins.json`
-- [ ] `docs/release-process.md` documents the semantic pin-bump + restore flow
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Workflow YAML parses (actionlint clean vs baseline) and restore step uses the pin-driven scripts — zero literal URLs/sha256 in the workflow; real `dotnet publish -r osx-arm64` proved the packaged `.tools/` carry
+- [x] `docs/release-process.md` documents the semantic pin-bump + restore flow, both release-note reminders (encoder_fingerprint change from f68dad8; MILLER_SEMANTIC=off zero-work), and the tag-push-403 pointer
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`f97ec01`; no workflow dispatched — first live validation is the next package-only run)

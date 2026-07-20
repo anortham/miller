@@ -78,3 +78,4 @@ Task F5: complete (commits d601eb2, serial-worker-commit, Lead inline review cle
 Lead fix: f68dad8 — ModelRevision pin corrected to 'main' (both encoders) after G3's live RC handshake caught the mismatch; fingerprint change accepted pre-ship.
 Task G3 (Track 1): complete (serial-worker-commit ee0e3f3, Lead inline review clean — RC promotion gate PASSES live; caught the ModelRevision pin defect that motivated lead fix f68dad8)
 Lead fix: VectorConvergePortScaleTests.TryOpen_WithoutThePinnedExtension premise repaired (parks the packaged vec0 during the test) after G2's csproj copy transitively landed .tools/ in test output — emergent G1+G2 interaction, surfaced by G3.
+Task G4 (Track 1): complete (serial-worker-commit f97ec01, Lead inline review clean — pin-driven workflow legs fail loud, publish carry proven on osx-arm64; workflow NOT dispatched, first live validation at next package-only run)
