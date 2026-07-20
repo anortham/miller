@@ -20,7 +20,7 @@ Exact values — copy verbatim, never re-derive:
 - **Fallback model pin:** `bge-small-en-v1.5` f32 GGUF, 384d, int8 storage. sha256 + source in the same pins file (`bge-small-f32` entry).
 - **Qwen3 knobs (verbatim from bench-pins.json):** pooling `last`; append `<|endoftext|>` to every input before tokenization; `query_instruction` = `"Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: "`; `document_instruction` = `""`; L2 normalization always; MRL order **slice → renormalize → quantize**.
 - **bge-small knobs (verbatim):** pooling `cls`; no EOS append; `query_instruction` = `"Represent this sentence for searching relevant passages: "`; `document_instruction` = `""`.
-- **Protocol literals (from the reference implementation):** schema `"julie.embedding.sidecar"`, `version: 1`, methods `health | embed_query | embed_batch | shutdown`, error codes `parse_error | invalid_params | embed_error | internal_error | unknown_method | serialize_error`, newline-delimited JSON envelopes with `schema/version/request_id/method/params`, invariants: dims echo, batch count match, exactly-one-of result/error, request-id echo.
+- **Protocol literals (from the reference implementation):** schema `"julie.embedding.sidecar"`, `version: 1`, methods `health | embed_query | embed_batch | shutdown`, error codes `invalid_request | invalid_json | unknown_method | internal_error` (CORRECTED during Task 1: the design's six-code list was wrong — the reference emits these four; see the contract's Deviations D1), newline-delimited JSON envelopes with `schema/version/request_id/method/params`, invariants: dims echo, batch count match, exactly-one-of result/error, request-id echo.
 - **Reference implementation paths (read, cite, do not modify):** `~/source/julie/python/embeddings_sidecar/sidecar/protocol.py`, `~/source/julie/python/embeddings_sidecar/sidecar/runtime.py`, Rust consumer `~/source/julie/src/bin/julie-embedding-host.rs`, consumer tests `~/source/julie/src/tests/core/embedding_sidecar_provider.rs`.
 - **storage_schema lane string:** `vec0-int8-512-cosine-v1` (pinned default), fallback lane `vec0-int8-384-cosine-v1`. Format: `vec0-<element>-<dims>-<metric>-v<schema rev>`.
 - **sqlite-vec pin:** the version + per-RID checksums in [`scripts/spike-pins.json`](../../scripts/spike-pins.json), proven by the P0 AOT spike on all four RIDs (CI on PR #6).
@@ -81,10 +81,10 @@ Exact values — copy verbatim, never re-derive:
 **Approach:** Follow `canary-telemetry-v1.md`'s voice: frozen means frozen, every value is a decision, v2 rule for post-ship changes (this contract is pre-ship, so state the same pre-ship amendment convention). Read the Julie consumer tests to capture invariants the prose misses (request-id echo behavior on errors, batch-count mismatch handling). If the reference implementation contradicts a design §4.1 claim, the reference wins for v1 wire behavior — record the discrepancy in a `## Deviations from design` note rather than silently siding with either.
 
 **Acceptance criteria:**
-- [ ] Every envelope/method/error statement carries a reference citation (file:line) or a "v1 additive" marker — no uncited wire claims
-- [ ] Both pinned models' prompt templates and knob rows match Global Constraints byte-for-byte
-- [ ] `prepare`, backend selection, failure isolation, stdout purity, and conformance tolerance sections present and internally consistent
-- [ ] Worker-scope verification passes (documented consistency pass listed in the report) and the change is handed to the lead per commit mode
+- [x] Every envelope/method/error statement carries a reference citation (file:line) or a "v1 additive" marker — no uncited wire claims
+- [x] Both pinned models' prompt templates and knob rows match Global Constraints byte-for-byte
+- [x] `prepare`, backend selection, failure isolation, stdout purity, and conformance tolerance sections present and internally consistent
+- [x] Worker-scope verification passes (documented consistency pass listed in the report) and the change is handed to the lead per commit mode
 
 ## Task 2: Vector artifact contract — `vectors-v1.md`
 
@@ -108,11 +108,11 @@ Exact values — copy verbatim, never re-derive:
 **Approach:** DDL shapes are contract-level (column names, types, constraints, vec0 declarations) — exact enough that two independent implementations produce compatible artifacts, without freezing incidental SQLite details. Cite `FullRebuildPromotion` for the promote pattern and `SidecarCorruptionRecovery` for recovery registration (verify both symbol names with Miller before citing). Same frozen-contract voice and pre-ship amendment convention as Task 1.
 
 **Acceptance criteria:**
-- [ ] Five-field generation identity with a complete invalidation matrix; `fusion_profile` explicitly never invalidates stored vectors
-- [ ] Dual-cursor rules include the chunk cursor's content.db precondition and atomic cursor-advance-with-batch rule
-- [ ] Storage schema section fully parameterized by `storage_schema` with both pinned lane strings recorded
-- [ ] Cited Miller symbols verified against the index (report the Miller calls)
-- [ ] Worker-scope verification passes (documented consistency pass listed in the report) and the change is handed to the lead per commit mode
+- [x] Five-field generation identity with a complete invalidation matrix; `fusion_profile` explicitly never invalidates stored vectors
+- [x] Dual-cursor rules include the chunk cursor's content.db precondition and atomic cursor-advance-with-batch rule
+- [x] Storage schema section fully parameterized by `storage_schema` with both pinned lane strings recorded
+- [x] Cited Miller symbols verified against the index (report the Miller calls)
+- [x] Worker-scope verification passes (documented consistency pass listed in the report) and the change is handed to the lead per commit mode
 
 ## Task 3: Conformance fixtures + golden vectors — `eval/sidecar-conformance/`
 
