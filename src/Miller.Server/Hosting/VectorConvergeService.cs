@@ -511,26 +511,18 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     private static readonly string[] DocsLikeContentKinds =
         [TextContentKind.WorkspaceDocs, TextContentKind.WorkspaceConfig];
 
-    private readonly SqliteConnection _vectors;
+    private readonly VectorStore _vectors;
     private readonly string _symbolsDbPath;
     private readonly string _contentDbPath;
-    private readonly SemanticStorageLane _lane;
 
-    private SqliteVectorConvergePort(
-        SqliteConnection vectors,
-        string symbolsDbPath,
-        string contentDbPath,
-        SemanticGenerationIdentity identity,
-        SemanticStorageLane lane)
+    private SqliteVectorConvergePort(VectorStore vectors, string symbolsDbPath, string contentDbPath)
     {
         _vectors = vectors;
         _symbolsDbPath = symbolsDbPath;
         _contentDbPath = contentDbPath;
-        _lane = lane;
-        StoredIdentity = identity;
     }
 
-    public SemanticGenerationIdentity StoredIdentity { get; }
+    public SemanticGenerationIdentity StoredIdentity => _vectors.Identity;
 
     /// <summary>
     /// Opens (creating on first run) the active generation. Returns null — never throws — when the pinned
@@ -562,34 +554,22 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
                 extension);
         }
 
-        SqliteConnection connection = OpenVectors(vectorsPath, extension);
+        VectorStore store = VectorStore.Open(vectorsPath, extension);
         try
         {
-            IReadOnlyDictionary<string, string> meta = ReadAllMeta(connection);
-            SemanticGenerationIdentity identity = IdentityFrom(meta);
             return new SqliteVectorConvergePort(
-                connection,
-                symbolsDbPath,
-                ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath),
-                identity,
-                MillerSemanticContract.ParseStorageSchema(identity.StorageSchema));
+                store, symbolsDbPath, ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath));
         }
         catch
         {
-            connection.Dispose();
+            store.Dispose();
             throw;
         }
     }
 
-    public string? Meta(string key)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.CommandText = "SELECT value FROM vectors_meta WHERE key = $key";
-        command.Parameters.AddWithValue("$key", key);
-        return command.ExecuteScalar() as string;
-    }
+    public string? Meta(string key) => _vectors.Meta(key);
 
-    public void SetMeta(string key, string value) => SetMeta(null, key, value);
+    public void SetMeta(string key, string value) => _vectors.SetMeta(key, value);
 
     public VectorConvergeSnapshot Snapshot(long completedRevision)
     {
@@ -614,33 +594,13 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     public IReadOnlyList<VectorCorpusUnit> Units(VectorUnitKind kind, IReadOnlyCollection<string>? paths) =>
         kind is VectorUnitKind.Symbol ? SymbolUnits(paths) : ChunkUnits(paths);
 
-    public IReadOnlyList<VectorUnitState> Stored(VectorUnitKind kind, IReadOnlyCollection<string>? paths)
-    {
-        string table = MapTable(kind);
-        string idColumn = IdColumn(kind);
+    public IReadOnlyList<VectorUnitState> Stored(VectorUnitKind kind, IReadOnlyCollection<string>? paths) =>
+    [
+        .. _vectors.MappedUnits(kind, paths)
+            .Select(static entry => new VectorUnitState(entry.UnitId, entry.Path, entry.EmbedTextHash)),
+    ];
 
-        var states = new List<VectorUnitState>();
-        foreach (IReadOnlyList<string>? batch in Batched(paths))
-        {
-            using SqliteCommand command = _vectors.CreateCommand();
-            command.CommandText = batch is null
-                ? $"SELECT {idColumn}, path, embed_text_hash FROM {table}"
-                : $"SELECT {idColumn}, path, embed_text_hash FROM {table} WHERE path IN ({Placeholders(batch, command)})";
-
-            using SqliteDataReader reader = command.ExecuteReader();
-            while (reader.Read())
-                states.Add(new VectorUnitState(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
-        }
-
-        return states;
-    }
-
-    public int TotalStored(VectorUnitKind kind)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*) FROM {MapTable(kind)}";
-        return Convert.ToInt32(command.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
-    }
+    public int TotalStored(VectorUnitKind kind) => _vectors.MappedCount(kind);
 
     public ChunkCursorFacts ChunkFacts(long targetRevision)
     {
@@ -703,8 +663,8 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
     public bool StillValid(SemanticGenerationIdentity identity, string artifactId)
     {
-        IReadOnlyDictionary<string, string> meta = ReadAllMeta(_vectors);
-        return IdentityFrom(meta) == identity
+        IReadOnlyDictionary<string, string> meta = _vectors.AllMeta();
+        return _vectors.ReadIdentity() == identity
             && string.Equals(meta.GetValueOrDefault("artifact_id"), artifactId, StringComparison.Ordinal);
     }
 
@@ -716,57 +676,51 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         long advanceTo,
         long revision)
     {
-        string vectorTable = VectorTable(kind);
-        string mapTable = MapTable(kind);
-        string idColumn = IdColumn(kind);
-
-        using SqliteTransaction transaction = _vectors.BeginTransaction();
-
-        long nextRowId = NextRowId(transaction, mapTable);
-        foreach (string unitId in delete.Concat(vectors.Select(static v => v.Unit.UnitId)))
-        {
-            if (ResolveRowId(transaction, mapTable, idColumn, unitId) is not { } rowId)
-                continue;
-
-            Execute(transaction, $"DELETE FROM {vectorTable} WHERE rowid = $rowid", ("$rowid", rowId));
-            Execute(transaction, $"DELETE FROM {mapTable} WHERE rowid_ref = $rowid", ("$rowid", rowId));
-        }
-
-        foreach (VectorCommit commit in vectors)
-        {
-            if (commit.Embedding.Length != _lane.Dims)
-            {
-                throw new VectorStoreException(
-                    $"embedding has {commit.Embedding.Length} dims but lane '{_lane.Lane}' declares {_lane.Dims}.");
-            }
-
-            long rowId = nextRowId++;
-            Execute(
-                transaction,
-                $"INSERT INTO {vectorTable}(rowid, embedding, path, kind, is_test) " +
-                $"VALUES($rowid, {VectorLiteral()}, $path, $kind, $is_test)",
-                ("$rowid", rowId),
-                ("$embedding", Blob(commit.Embedding)),
-                ("$path", commit.Unit.Path),
-                ("$kind", commit.Unit.SymbolKind),
-                ("$is_test", commit.Unit.IsTest ? 1L : 0L));
-
-            Execute(
-                transaction,
-                $"INSERT INTO {mapTable}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
-                "VALUES($rowid, $unit_id, $path, $hash, $revision)",
-                ("$rowid", rowId),
-                ("$unit_id", commit.Unit.UnitId),
-                ("$path", commit.Unit.Path),
-                ("$hash", commit.Unit.EmbedTextHash),
-                ("$revision", revision));
-        }
-
+        var metaUpdates = new Dictionary<string, string>(StringComparer.Ordinal);
         if (advanceTo > 0)
-            SetMeta(transaction, completedRevisionKey, advanceTo.ToString(CultureInfo.InvariantCulture));
+            metaUpdates[completedRevisionKey] = advanceTo.ToString(CultureInfo.InvariantCulture);
 
-        transaction.Commit();
+        foreach ((string key, string value) in BuildStateUpdates(kind, advanceTo))
+            metaUpdates[key] = value;
+
+        _vectors.CommitBatch(
+            kind,
+            [
+                .. vectors.Select(static commit => new VectorBatchEntry(
+                    commit.Unit.UnitId,
+                    commit.Unit.Path,
+                    commit.Unit.SymbolKind,
+                    commit.Unit.IsTest,
+                    commit.Embedding,
+                    commit.Unit.EmbedTextHash)),
+            ],
+            delete,
+            metaUpdates,
+            revision);
     }
+
+    // A converged generation becomes queryable here: build_state is the reader's gate, and the commit that
+    // catches the symbol cursor up with its target is the moment the artifact starts serving.
+    private IReadOnlyDictionary<string, string> BuildStateUpdates(VectorUnitKind kind, long advanceTo)
+    {
+        long completed = kind is VectorUnitKind.Symbol && advanceTo > 0
+            ? advanceTo
+            : Number(VectorConvergeService.SymbolCompletedKey);
+
+        VectorBuildStateUpdate update = VectorGenerationManager.EvaluateBuildState(new VectorBuildProgress(
+            completed,
+            Number(VectorConvergeService.SymbolTargetKey),
+            Meta("build_state")));
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["build_state"] = update.BuildState,
+            ["build_progress_percent"] = update.ProgressPercent.ToString(CultureInfo.InvariantCulture),
+        };
+    }
+
+    private long Number(string key) =>
+        long.TryParse(Meta(key), NumberStyles.None, CultureInfo.InvariantCulture, out long value) ? value : 0;
 
     public void Dispose() => _vectors.Dispose();
 
@@ -882,60 +836,6 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             || Convert.ToInt64(minimum, CultureInfo.InvariantCulture) <= completedRevision + 1;
     }
 
-    private void SetMeta(SqliteTransaction? transaction, string key, string value)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
-                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
-        command.Parameters.AddWithValue("$key", key);
-        command.Parameters.AddWithValue("$value", value);
-        command.ExecuteNonQuery();
-    }
-
-    private long NextRowId(SqliteTransaction transaction, string mapTable)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = $"SELECT COALESCE(MAX(rowid_ref), 0) + 1 FROM {mapTable}";
-        return Convert.ToInt64(command.ExecuteScalar() ?? (object)1L, CultureInfo.InvariantCulture);
-    }
-
-    private long? ResolveRowId(SqliteTransaction transaction, string mapTable, string idColumn, string unitId)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = $"SELECT rowid_ref FROM {mapTable} WHERE {idColumn} = $id";
-        command.Parameters.AddWithValue("$id", unitId);
-        object? value = command.ExecuteScalar();
-        return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
-    }
-
-    private void Execute(SqliteTransaction transaction, string sql, params (string Name, object Value)[] parameters)
-    {
-        using SqliteCommand command = _vectors.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = sql;
-        foreach ((string name, object value) in parameters)
-            command.Parameters.AddWithValue(name, value);
-        command.ExecuteNonQuery();
-    }
-
-    private string VectorLiteral() => _lane.Element switch
-    {
-        "int8" => "vec_int8($embedding)",
-        _ => throw new VectorStoreException(
-            $"the writer stores the pinned int8 lanes only; lane '{_lane.Lane}' declares '{_lane.Element}'."),
-    };
-
-    private static byte[] Blob(sbyte[] embedding)
-    {
-        var blob = new byte[embedding.Length];
-        for (int i = 0; i < embedding.Length; i++)
-            blob[i] = unchecked((byte)embedding[i]);
-        return blob;
-    }
-
     // A null batch means "no path filter"; otherwise SQLite's parameter ceiling is respected by chunking.
     private static IEnumerable<IReadOnlyList<string>?> Batched(IReadOnlyCollection<string>? paths)
     {
@@ -990,63 +890,6 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         }
     }
 
-    private static IReadOnlyDictionary<string, string> ReadAllMeta(SqliteConnection connection)
-    {
-        var meta = new Dictionary<string, string>(StringComparer.Ordinal);
-        using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT key, value FROM vectors_meta";
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-            meta[reader.GetString(0)] = reader.GetString(1);
-        return meta;
-    }
-
-    // vectors_meta ⇒ the five identity fields. VectorStore's own projection is Indexing-internal, so the writer
-    // re-reads the same documented keys rather than widening that assembly's visibility.
-    private static SemanticGenerationIdentity IdentityFrom(IReadOnlyDictionary<string, string> meta) =>
-        new(
-            meta.GetValueOrDefault("encoder_fingerprint", string.Empty),
-            meta.GetValueOrDefault("storage_schema", string.Empty),
-            meta.GetValueOrDefault("corpus_generation", string.Empty),
-            meta.GetValueOrDefault("writer_version", string.Empty),
-            meta.GetValueOrDefault("min_reader_version", string.Empty),
-            meta.GetValueOrDefault("fusion_profile", string.Empty));
-
-    /// <summary>sqlite-vec reports its version as <c>v0.1.9</c>; the pin records it without the tag.</summary>
-    private static string NormalizeVecVersion(string reported) =>
-        reported.StartsWith('v') ? reported[1..] : reported;
-
-    private static SqliteConnection OpenVectors(string path, string extensionPath)
-    {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = path,
-            Mode = SqliteOpenMode.ReadWrite,
-            Pooling = false,
-        }.ToString());
-
-        try
-        {
-            connection.Open();
-            connection.EnableExtensions(true);
-            connection.LoadExtension(extensionPath);
-            connection.EnableExtensions(false);
-
-            using SqliteCommand version = connection.CreateCommand();
-            version.CommandText = "SELECT vec_version()";
-            string reported = NormalizeVecVersion(version.ExecuteScalar()?.ToString() ?? string.Empty);
-            if (!string.Equals(reported, VectorStore.PinnedVecVersion, StringComparison.Ordinal))
-                throw new VectorStoreException($"sqlite-vec {reported} != pinned {VectorStore.PinnedVecVersion}.");
-
-            return connection;
-        }
-        catch
-        {
-            connection.Dispose();
-            throw;
-        }
-    }
-
     private static SqliteConnection OpenReadOnly(string path)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -1059,12 +902,4 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         return connection;
     }
 
-    private static string VectorTable(VectorUnitKind kind) =>
-        kind is VectorUnitKind.Symbol ? "symbol_vectors" : "chunk_vectors";
-
-    private static string MapTable(VectorUnitKind kind) =>
-        kind is VectorUnitKind.Symbol ? "symbol_vector_map" : "chunk_vector_map";
-
-    private static string IdColumn(VectorUnitKind kind) =>
-        kind is VectorUnitKind.Symbol ? "symbol_id" : "chunk_id";
 }

@@ -6,6 +6,19 @@ namespace Miller.Indexing.Semantic;
 /// <summary>One KNN hit: the vec0 rowid and its distance, plus the mapping row's unit id.</summary>
 public sealed record VectorMatch(long RowId, double Distance, string UnitId, string Path);
 
+/// <summary>One mapping row: the unit a vec0 rowid stands for, and the hash that gates its re-embedding.</summary>
+public sealed record VectorMapEntry(string UnitId, string Path, string EmbedTextHash);
+
+/// <summary>One unit staged for <see cref="VectorStore.CommitBatch"/>: its vec0 metadata, its vector, and the
+/// hash of the constructed text the vector came from.</summary>
+public sealed record VectorBatchEntry(
+    string UnitId,
+    string Path,
+    string SymbolKind,
+    bool IsTest,
+    sbyte[] Embedding,
+    string EmbedTextHash);
+
 /// <summary>The two corpora that get their own vec0 table and mapping table.</summary>
 public enum VectorUnitKind
 {
@@ -210,6 +223,127 @@ public sealed class VectorStore : IDisposable
             ("$path", path),
             ("$hash", embedTextHash),
             ("$revision", revision));
+
+        transaction.Commit();
+    }
+
+    /// <summary>Every <c>vectors_meta</c> key/value, re-read from the artifact.</summary>
+    public IReadOnlyDictionary<string, string> AllMeta() => ReadMeta(_connection);
+
+    /// <summary>
+    /// The five identity fields as the artifact currently records them. Unlike <see cref="Identity"/>, which is
+    /// the snapshot taken at open, this re-reads — the writer uses it to prove the generation it embedded for is
+    /// still the generation it is about to commit to.
+    /// </summary>
+    public SemanticGenerationIdentity ReadIdentity() => IdentityFrom(AllMeta());
+
+    /// <summary>The mapping rows for <paramref name="paths"/>, or the whole corpus when it is null — the
+    /// hash-gate input that makes a re-embed targeted and a replay idempotent.</summary>
+    public IReadOnlyList<VectorMapEntry> MappedUnits(VectorUnitKind kind, IReadOnlyCollection<string>? paths)
+    {
+        string table = MapTable(kind);
+        string idColumn = IdColumn(kind);
+
+        var entries = new List<VectorMapEntry>();
+        foreach (IReadOnlyList<string>? batch in Batched(paths))
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = batch is null
+                ? $"SELECT {idColumn}, path, embed_text_hash FROM {table}"
+                : $"SELECT {idColumn}, path, embed_text_hash FROM {table} WHERE path IN ({Placeholders(batch, command)})";
+
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+                entries.Add(new VectorMapEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        }
+
+        return entries;
+    }
+
+    public int MappedCount(VectorUnitKind kind)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {MapTable(kind)}";
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The one short transaction of vectors-v1 §Cursors: vec0 deletes, vec0 inserts, mapping-table updates and
+    /// the cursor advance commit together, so no observable state has a cursor ahead of its staged batch or a
+    /// vec0 row without the mapping row that explains it.
+    /// </summary>
+    public void CommitBatch(
+        VectorUnitKind kind,
+        IReadOnlyList<VectorBatchEntry> vectors,
+        IReadOnlyList<string> deletes,
+        IReadOnlyDictionary<string, string> metaUpdates,
+        long revision)
+    {
+        ArgumentNullException.ThrowIfNull(vectors);
+        ArgumentNullException.ThrowIfNull(deletes);
+        ArgumentNullException.ThrowIfNull(metaUpdates);
+
+        foreach (VectorBatchEntry entry in vectors)
+        {
+            if (entry.Embedding.Length != Lane.Dims)
+            {
+                throw new VectorStoreException(
+                    $"embedding has {entry.Embedding.Length} dims but lane '{Lane.Lane}' declares {Lane.Dims}.");
+            }
+        }
+
+        string vectorTable = VectorTable(kind);
+        string mapTable = MapTable(kind);
+        string idColumn = IdColumn(kind);
+
+        using SqliteTransaction transaction = _connection.BeginTransaction();
+
+        long nextRowId = NextRowId(transaction, mapTable);
+        foreach (string unitId in deletes.Concat(vectors.Select(static entry => entry.UnitId)))
+        {
+            if (ResolveRowId(transaction, mapTable, idColumn, unitId) is not { } rowId)
+                continue;
+
+            Execute(_connection, transaction, $"DELETE FROM {vectorTable} WHERE rowid = $rowid", ("$rowid", rowId));
+            Execute(_connection, transaction, $"DELETE FROM {mapTable} WHERE rowid_ref = $rowid", ("$rowid", rowId));
+        }
+
+        foreach (VectorBatchEntry entry in vectors)
+        {
+            long rowId = nextRowId++;
+            Execute(
+                _connection,
+                transaction,
+                $"INSERT INTO {vectorTable}(rowid, embedding, path, kind, is_test) " +
+                $"VALUES($rowid, {VectorLiteral()}, $path, $kind, $is_test)",
+                ("$rowid", rowId),
+                ("$embedding", QuantizedBlob(entry.Embedding)),
+                ("$path", entry.Path),
+                ("$kind", entry.SymbolKind),
+                ("$is_test", entry.IsTest ? 1L : 0L));
+
+            Execute(
+                _connection,
+                transaction,
+                $"INSERT INTO {mapTable}(rowid_ref, {idColumn}, path, embed_text_hash, revision) " +
+                "VALUES($rowid, $unit_id, $path, $hash, $revision)",
+                ("$rowid", rowId),
+                ("$unit_id", entry.UnitId),
+                ("$path", entry.Path),
+                ("$hash", entry.EmbedTextHash),
+                ("$revision", revision));
+        }
+
+        foreach ((string key, string value) in metaUpdates)
+        {
+            Execute(
+                _connection,
+                transaction,
+                "INSERT INTO vectors_meta(key, value) VALUES($key, $value) " +
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                ("$key", key),
+                ("$value", value));
+        }
 
         transaction.Commit();
     }
@@ -492,6 +626,52 @@ public sealed class VectorStore : IDisposable
         for (int i = 0; i < embedding.Length; i++)
             blob[i] = unchecked((byte)embedding[i]);
         return blob;
+    }
+
+    private long NextRowId(SqliteTransaction transaction, string mapTable)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COALESCE(MAX(rowid_ref), 0) + 1 FROM {mapTable}";
+        return Convert.ToInt64(command.ExecuteScalar() ?? (object)1L, CultureInfo.InvariantCulture);
+    }
+
+    private long? ResolveRowId(SqliteTransaction transaction, string mapTable, string idColumn, string unitId)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT rowid_ref FROM {mapTable} WHERE {idColumn} = $id";
+        command.Parameters.AddWithValue("$id", unitId);
+        object? value = command.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    // A null batch means "no path filter"; otherwise SQLite's parameter ceiling is respected by chunking.
+    private static IEnumerable<IReadOnlyList<string>?> Batched(IReadOnlyCollection<string>? paths)
+    {
+        if (paths is null)
+        {
+            yield return null;
+            yield break;
+        }
+
+        const int batchSize = 400;
+        string[] ordered = [.. paths];
+        for (int offset = 0; offset < ordered.Length; offset += batchSize)
+            yield return ordered[offset..Math.Min(offset + batchSize, ordered.Length)];
+    }
+
+    private static string Placeholders(IReadOnlyList<string> values, SqliteCommand command)
+    {
+        var names = new List<string>(values.Count);
+        for (int i = 0; i < values.Count; i++)
+        {
+            string name = $"$p{i.ToString(CultureInfo.InvariantCulture)}";
+            command.Parameters.AddWithValue(name, values[i]);
+            names.Add(name);
+        }
+
+        return names.Count == 0 ? "NULL" : string.Join(", ", names);
     }
 
     private static string VectorTable(VectorUnitKind kind) =>

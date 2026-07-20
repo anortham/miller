@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 
 namespace Miller.Server.Hosting;
 
@@ -45,6 +46,32 @@ internal static class SidecarCorruptionRecovery
                 artifactPath);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Corruption recovery for one vector generation (vectors-v1 §Corruption recovery). Generations are separate
+    /// files, so recovery is literally per file: the corrupt one is deleted and nothing else is touched — not the
+    /// sibling generations that keep a compatible reader serving, and never <c>symbols.db</c>, whose vectors are
+    /// only ever recomputed embeddings. A retained generation is historical, not a convergence target, so it is
+    /// deleted without a rebuild.
+    /// </summary>
+    public static bool TryRecoverCorruptVectorGeneration(
+        Exception failure,
+        string artifactPath,
+        Action rebuild,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(rebuild);
+
+        VectorArtifactRole role = VectorGenerationManager.ClassifyArtifact(artifactPath);
+        if (role is VectorArtifactRole.Unknown)
+            return false;
+
+        return TryRebuildCorruptSidecar(
+            failure,
+            artifactPath,
+            role is VectorArtifactRole.Retained ? static () => { } : rebuild,
+            logger);
     }
 
     // Corruption-shaped: a SqliteException whose result code is SQLITE_CORRUPT (11) or SQLITE_NOTADB (26) -
