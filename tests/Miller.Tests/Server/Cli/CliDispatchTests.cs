@@ -1733,6 +1733,70 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_UnknownArm_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(new[] { "search", "UserService", "--arm", "vector" }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--arm must be", errText);
+    }
+
+    [Fact]
+    public void Search_ArmLexical_RendersExactlyTheDefaultOutput()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "UserService", "--arm", "lexical" }, Context(fx.DbPath));
+        var (defaultCode, defaultOut, _) = Run(new[] { "search", "UserService" }, Context(fx.DbPath));
+
+        Assert.Equal(defaultCode, code);
+        Assert.Equal(defaultOut, outText);
+        Assert.Empty(errText);
+    }
+
+    [Theory]
+    [InlineData("semantic")]
+    [InlineData("hybrid")]
+    public void Search_ForcedSemanticArm_WithoutAServingArtifact_FailsLoudlyRatherThanFallingBackToLexical(
+        string arm)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, outText, errText) = Run(
+            new[] { "search", "UserService", "--arm", arm }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("--arm " + arm, errText);
+    }
+
+    [Theory]
+    [InlineData("semantic")]
+    [InlineData("hybrid")]
+    public void Search_ForcedSemanticArm_OnANonSymbolRoute_IsUsageErrorExitTwo(string arm)
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(
+            new[] { "search", "UserService", "--mode", "content", "--arm", arm }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("symbol search route", errText);
+    }
+
+    [Fact]
+    public void Search_Usage_DocumentsTheArmFlag()
+    {
+        var (code, _, errText) = Run(new[] { "search" }, Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Contains("--arm lexical|semantic|hybrid", errText);
+    }
+
+    [Fact]
     public void Search_Regions_UsesFreshDiskRegionIndex()
     {
         const string path = "src/Target.cs";

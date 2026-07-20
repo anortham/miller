@@ -5,7 +5,9 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.DeadCode;
+using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Git;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -321,9 +323,14 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]");
+            return Usage(err, SearchUsage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
+        if (!TryParseSearchArm(o.Value("arm"), out CliSearchArm requestedArm))
+        {
+            err.WriteLine("--arm must be lexical, semantic, or hybrid.");
+            return Usage(err, SearchUsage);
+        }
 
         bool json = o.Has("json");
         int limit = o.Int("limit", SearchTool.DefaultLimit);
@@ -338,6 +345,15 @@ public static class CliDispatch
             err.WriteLine(ex.Message);
             return 2;
         }
+        if (requestedArm is CliSearchArm.Semantic or CliSearchArm.Hybrid &&
+            route.Kind != SearchRouteKind.Symbols)
+        {
+            err.WriteLine(
+                $"--arm {WireName(requestedArm)} applies to the symbol search route only; " +
+                $"mode {requestedMode} resolves to a different route.");
+            return 2;
+        }
+
         // exclude_tests tri-state: explicit CLI flags force a choice; otherwise the tool auto-hides for NL.
         bool? excludeTests = o.Has("exclude-tests") ? true : o.Has("include-tests") ? false : null;
         var executionRequest = new SearchRouteExecutionRequest(
@@ -435,9 +451,143 @@ public static class CliDispatch
 
         if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
-        outw.WriteLine(SearchRouteExecutor.RunSymbols(index, route, executionRequest).Output);
+
+        return RunSymbolRoute(index, route, executionRequest, requestedArm, ctx, outw, err);
+    }
+
+    private const string SearchUsage =
+        "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] " +
+        "[--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] " +
+        "[--file-pattern GLOB] [--language LANG] [--arm lexical|semantic|hybrid] [--limit N] [--json] " +
+        "[--include-tests|--exclude-tests]";
+
+    /// <summary>
+    /// Runs the symbol route under the requested arm. The absent flag composes exactly what the MCP host
+    /// composes — the policy-routed production arm, which under <c>MILLER_SEMANTIC=off</c> is never built at
+    /// all — so a CLI run and a tool call answer one query the same way.
+    /// </summary>
+    /// <remarks>
+    /// <c>--arm</c> is an evaluation lever, so a forced semantic/hybrid run that cannot reach a serving artifact
+    /// exits non-zero with the reason rather than quietly returning the lexical answer; a silent fallback would
+    /// make an evaluation report a retrieval quality it never measured.
+    /// </remarks>
+    private static int RunSymbolRoute(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        CliSearchArm requestedArm,
+        WorkspaceContext ctx,
+        TextWriter outw,
+        TextWriter err)
+    {
+        if (requestedArm is CliSearchArm.Lexical)
+        {
+            outw.WriteLine(SearchRouteExecutor.RunSymbols(index, route, request).Output);
+            return 0;
+        }
+
+        var sidecar = VectorSidecar.FromEnvironment();
+        if (requestedArm is CliSearchArm.Policy)
+        {
+            if (sidecar.Mode is not SemanticMode.On)
+            {
+                outw.WriteLine(SearchRouteExecutor.RunSymbols(index, route, request).Output);
+                return 0;
+            }
+
+            using var policySession = new CliSemanticSession(ctx.ToolsRoot);
+            var policyArm = new SemanticSymbolFusionArm(
+                sidecar.Mode,
+                () => new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, policySession.Open));
+            outw.WriteLine(
+                SearchRouteExecutor.RunSymbols(index, route, request with { FusionArm = policyArm }).Output);
+            return 0;
+        }
+
+        string wire = WireName(requestedArm);
+        if (sidecar.Mode is not SemanticMode.On)
+        {
+            err.WriteLine(
+                $"--arm {wire} requires {VectorSidecar.EnvVar}=on; semantic retrieval is currently " +
+                $"{sidecar.Mode.ToString().ToLowerInvariant()}.");
+            return 3;
+        }
+
+        using (VectorStore? probe = sidecar.TryOpen(ctx.WorkspaceRoot, out string? unavailableReason))
+        {
+            if (probe is null)
+            {
+                err.WriteLine($"--arm {wire} needs a serving vector artifact: {unavailableReason}");
+                return 3;
+            }
+        }
+
+        using var session = new CliSemanticSession(ctx.ToolsRoot);
+        if (session.Open() is null)
+        {
+            err.WriteLine(
+                $"--arm {wire} needs the pinned julie-semantic-sidecar binary under '{ctx.ToolsRoot}'; " +
+                "run the restore script and retry.");
+            return 3;
+        }
+
+        var arm = new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, session.Open);
+        if (requestedArm is CliSearchArm.Hybrid)
+        {
+            outw.WriteLine(
+                SearchRouteExecutor
+                    .RunSymbols(index, route, request with { FusionArm = new ForcedHybridFusionArm(() => arm) })
+                    .Output);
+            return 0;
+        }
+
+        SemanticQueryResult result = arm
+            .QuerySymbolsAsync(request.Query, request.Limit, allow: null)
+            .GetAwaiter()
+            .GetResult();
+        if (!result.Served)
+        {
+            err.WriteLine($"--arm semantic could not query the vector artifact: {result.UnavailableReason}");
+            return 3;
+        }
+
+        outw.WriteLine(CliSemanticRender.Symbols(index, result.Hits, request.Query, request.Limit, request.Json));
         return 0;
     }
+
+    /// <summary>Parses the <c>--arm</c> value; an absent flag is <see cref="CliSearchArm.Policy"/>.</summary>
+    internal static bool TryParseSearchArm(string? raw, out CliSearchArm arm)
+    {
+        if (raw is null)
+        {
+            arm = CliSearchArm.Policy;
+            return true;
+        }
+
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "lexical":
+                arm = CliSearchArm.Lexical;
+                return true;
+            case "semantic":
+                arm = CliSearchArm.Semantic;
+                return true;
+            case "hybrid":
+                arm = CliSearchArm.Hybrid;
+                return true;
+            default:
+                arm = CliSearchArm.Policy;
+                return false;
+        }
+    }
+
+    private static string WireName(CliSearchArm arm) => arm switch
+    {
+        CliSearchArm.Lexical => "lexical",
+        CliSearchArm.Semantic => "semantic",
+        CliSearchArm.Hybrid => "hybrid",
+        _ => "policy",
+    };
 
     private static int Content(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -2454,7 +2604,9 @@ public static class CliDispatch
                              stdout and the target path to stderr, so `miller rules --harness cursor > FILE` works.
                              [--harness cursor|windsurf|cline|kiro|copilot|agents]
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--include-tests|--exclude-tests]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--arm lexical|semantic|hybrid] [--limit N] [--json] [--include-tests|--exclude-tests]
+                             --arm forces one retrieval arm for evaluation (CLI-only, symbol route only); absent = normal policy routing.
+                             semantic|hybrid need MILLER_SEMANTIC=on and a serving vector artifact — they fail loudly rather than answering lexically.
           todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
                              [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
           content <op>       Import/search/read/list/remove/export external and web text in content.db.
@@ -2531,4 +2683,178 @@ public static class CliDispatch
           --workspace-id aliases --id; --workspace (a directory, resolved against the cwd) aliases --path —
           the same selector flags every read verb accepts.
         """;
+}
+
+/// <summary>Which retrieval arm the CLI <c>search</c> verb was told to run. CLI-only — the MCP tool has no
+/// equivalent parameter (ADR-0003 / MCP-stinginess).</summary>
+internal enum CliSearchArm
+{
+    /// <summary>No <c>--arm</c> flag: the query is routed by <see cref="SemanticQueryPolicy"/>, exactly as the
+    /// MCP host routes it.</summary>
+    Policy,
+
+    /// <summary>Force today's lexical-only path, whatever the mode and artifact would allow.</summary>
+    Lexical,
+
+    /// <summary>Render the semantic arm's own hits with rank and cosine, for evaluation.</summary>
+    Semantic,
+
+    /// <summary>Force fusion even for a query the policy would route lexical-only.</summary>
+    Hybrid,
+}
+
+/// <summary>
+/// The one-shot CLI's embedding session: opened at most once per invocation and shut down before the verb
+/// returns. The server owns a process-wide singleton instead, because a resident child process, its restart
+/// count and an open circuit are state a per-query session would silently reset — a CLI process has no queries
+/// after this one, so the same reasoning ends at disposal.
+/// </summary>
+internal sealed class CliSemanticSession(string toolsRoot) : IDisposable
+{
+    private SemanticEmbeddingSession? _session;
+    private bool _opened;
+
+    public SemanticEmbeddingSession? Open()
+    {
+        if (_opened)
+            return _session;
+
+        _opened = true;
+        _session = SemanticSearchArm.ProcessSession(toolsRoot);
+        return _session;
+    }
+
+    public void Dispose() => _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+}
+
+/// <summary>
+/// The <c>--arm hybrid</c> fusion arm: <see cref="SemanticSymbolFusionArm"/> without the mode and route gates.
+/// Forcing fusion is the whole point of the flag — an evaluator comparing arms on a symbol-lookup query needs
+/// the fused ranking the policy would have declined to produce — so this deliberately does NOT reuse the
+/// production arm, whose abstentions are what keep policy-routed output byte-identical to lexical.
+/// </summary>
+internal sealed class ForcedHybridFusionArm(Func<SemanticSearchArm> openArm) : ISymbolFusionArm
+{
+    private const int MinimumRecall = 10;
+
+    public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(request);
+
+        int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
+        SemanticQueryResult result = openArm()
+            .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
+            .GetAwaiter()
+            .GetResult();
+
+        if (!result.Served || result.Hits.Count == 0)
+            return null;
+
+        var semantic = new List<SemanticRankedCandidate>(result.Hits.Count);
+        foreach (SemanticHit hit in result.Hits)
+        {
+            if (hit.SymbolId is { } symbolId && index.FindBySymbolId(symbolId) is { } symbol)
+                semantic.Add(new SemanticRankedCandidate(SearchTool.ToCandidate(symbol, score: 0), hit.Rank));
+        }
+
+        // The class still comes from the policy even though the hybrid decision does not: the frozen fusion-v1
+        // weights are keyed on query shape, so a forced run must be scored under the same profile a routed one
+        // would have used or the comparison measures the weights rather than the arms.
+        SemanticFusionClass fusionClass = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None).HybridClass;
+        return semantic.Count == 0
+            ? null
+            : RrfFusion.Fuse(request.Candidates, semantic, RrfFusion.WeightsFor(fusionClass));
+    }
+
+    private static bool Admits(ISymbolLookupIndex index, SymbolFusionRequest request, VectorMatch match) =>
+        index.FindBySymbolId(match.UnitId) is { } symbol && request.Allows(symbol);
+}
+
+/// <summary>
+/// Renders the semantic arm's own ranking for <c>--arm semantic</c>. Evaluation compares runs against each
+/// other, so every field is derived from the hit itself and cosine is formatted invariantly — a culture-sensitive
+/// decimal separator alone would make two identical runs differ.
+/// </summary>
+internal static class CliSemanticRender
+{
+    public static string Symbols(
+        ISymbolLookupIndex index,
+        IReadOnlyList<SemanticHit> hits,
+        string query,
+        int limit,
+        bool json)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(hits);
+
+        var rows = new List<(SemanticHit Hit, IndexedSymbol Symbol)>(hits.Count);
+        foreach (SemanticHit hit in hits)
+        {
+            if (rows.Count == limit)
+                break;
+            if (hit.SymbolId is { } symbolId && index.FindBySymbolId(symbolId) is { } symbol)
+                rows.Add((hit, symbol));
+        }
+
+        return json ? Json(rows) : Compact(rows, query);
+    }
+
+    private static string Json(IReadOnlyList<(SemanticHit Hit, IndexedSymbol Symbol)> rows)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartArray();
+            foreach ((SemanticHit hit, IndexedSymbol symbol) in rows)
+            {
+                w.WriteStartObject();
+                w.WriteNumber("rank", hit.Rank);
+                w.WriteNumber("cosine", Math.Round(hit.Cosine, CosineDigits, MidpointRounding.ToEven));
+                w.WriteString("symbol_id", symbol.SymbolId);
+                w.WriteString("name", symbol.Name);
+                w.WriteString("kind", symbol.Kind);
+                w.WriteString("language", symbol.Language);
+                w.WriteString("path", symbol.FilePath);
+                w.WriteNumber("start_line", symbol.StartLine);
+                w.WriteEndObject();
+            }
+
+            w.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string Compact(IReadOnlyList<(SemanticHit Hit, IndexedSymbol Symbol)> rows, string query)
+    {
+        var sb = new StringBuilder();
+        sb.Append("semantic symbols for \"").Append(query).Append("\" (").Append(rows.Count).Append(")");
+        if (rows.Count == 0)
+            return sb.Append("\nno semantic neighbours in the serving vector artifact.").ToString();
+
+        foreach ((SemanticHit hit, IndexedSymbol symbol) in rows)
+        {
+            sb.Append("\n  ")
+                .Append(hit.Rank.ToString(CultureInfo.InvariantCulture))
+                .Append("  cos ")
+                .Append(Cosine(hit.Cosine))
+                .Append("  ")
+                .Append(symbol.Name)
+                .Append("  ")
+                .Append(symbol.Kind)
+                .Append("  ")
+                .Append(symbol.FilePath)
+                .Append(':')
+                .Append(symbol.StartLine.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return sb.ToString();
+    }
+
+    private const int CosineDigits = 4;
+
+    private static string Cosine(double cosine) =>
+        cosine.ToString("F" + CosineDigits.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
 }
