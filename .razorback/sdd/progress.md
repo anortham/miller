@@ -56,3 +56,5 @@ Task D1: complete (parallel-lead-commit, Lead inline review clean, lead commit f
 - B1 `disabled` status vocabulary: plan Global Constraints WIN over a literal vectors-v1 §Status reading — off mode assembles the fact but renders nothing (compact + JSON byte-identical). B6 must keep this; if vectors-v1 needs an errata note, B6 adds it additively.
 - Fast-suite tripwire (58-76s observations): adjudicated as parallel-build contention, not a leaked slow test — warm quiet runs are 22-28s, lane test additions total <2s. No Scale re-tagging now; re-measure on a quiet machine at branch gate (ledger entry f2dcb63).
 - C1 P3 blast radius: fusion at SearchRouteExecutor.CollectSymbolCandidates ONLY (search tool route) is the intended scope — other SearchTool.Run callers (context/impact/trace/CLI) stay lexical. Matches ADR-0003/design; P3 confirms at its own gate.
+Task D2: complete (parallel-lead-commit, Lead inline review clean, lead commit 42968e2)
+Task B2: complete (serial-worker-commit, worker commit 5f6511c, Lead inline review clean)

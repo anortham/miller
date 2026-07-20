@@ -199,10 +199,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** The identity/invalidation core (fast, pure tests) and the physical store (Scale tests against real sqlite-vec).
 
 **Acceptance criteria:**
-- [ ] Invalidation matrix covered by a table-driven pure test — every field × change ⟹ exactly the contract's mechanism
-- [ ] Scale test: create store, write/read vectors round-trip, `vec_version()` matches pin, schema matches contract shapes (column names asserted)
-- [ ] Mismatched `reader_compatibility` minimum ⟹ open refused with reason; mismatched `encoder_fingerprint` ⟹ not queryable, no re-embed triggered
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Invalidation matrix covered by a table-driven pure test — every field × change ⟹ exactly the contract's mechanism
+- [x] Scale test: create store, write/read vectors round-trip, `vec_version()` matches pin, schema matches contract shapes (column names asserted)
+- [x] Mismatched `reader_compatibility` minimum ⟹ open refused with reason; mismatched `encoder_fingerprint` ⟹ not queryable, no re-embed triggered
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit
 
 ### Task B3: Deterministic fake sidecar + SemanticEmbeddingSession
 
