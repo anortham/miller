@@ -135,11 +135,11 @@ Commit mode: Batch A is `parallel-lead-commit`; F3–F5 are `serial-worker-commi
 **What to build:** The fusion itself, wired only at the executor seam, provably inert in every non-hybrid state.
 
 **Acceptance criteria:**
-- [ ] Pure RRF tests: rank math, per-class weights, dedupe-before-fuse, stable tie-breaks (fused, lexical score, symbol id)
-- [ ] Hybrid end-to-end (fake sidecar + real or faked store): a conceptual query reorders/extends candidates; rows carry additive rrf fields in JSON; compact layout unchanged except order
-- [ ] Byte-identity: off, shadow, unready artifact, fingerprint mismatch, policy=LexicalOnly — all render byte-identical to pre-fusion output; SearchGoldenParityTests green unchanged
-- [ ] Semantic arm failure mid-query ⟹ lexical result unchanged (fail-open test)
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Pure RRF tests: rank math, per-class weights, dedupe-before-fuse, stable tie-breaks (fused, lexical score, symbol id)
+- [x] Hybrid end-to-end (fake sidecar + real or faked store): a conceptual query reorders/extends candidates; rows carry additive rrf fields in JSON; compact layout unchanged except order
+- [x] Byte-identity: off, shadow, unready artifact, fingerprint mismatch, policy=LexicalOnly — all render byte-identical to pre-fusion output (shadow/lexical-only additionally prove port never opened); SearchGoldenParityTests green unchanged
+- [x] Semantic arm failure mid-query ⟹ lexical result unchanged (fail-open test)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`a88f8ee`; 4102/0 fast, Release clean)
 
 ### Task F4: Semantic rescue + content/source modes
 

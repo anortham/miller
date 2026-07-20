@@ -71,3 +71,4 @@ Task F1: complete (parallel-lead-commit, Lead inline review clean, lead commit 5
 Follow-up (recorded, not P3 scope): lift QueryShapeFor + shape predicates from SearchTool.cs into a Core QueryShape helper after F3/F4 land; SemanticQueryPolicy.HasCodeSyntax is deliberately byte-identical to LooksLikeSourceCodeQuery until then (F1 judgment call 2).
 Task F2: complete (parallel-lead-commit, Lead inline review clean, lead commit 682190c)
 Task G1 (Track 1): complete (serial-worker-commit c4c3270, Lead inline review clean; fast-suite tripwire waived on isolation proof — compile failure owned by F3 in-flight TDD)
+Task F3: complete (commits a88f8ee, serial-worker-commit, Lead inline review clean — SemanticMode.On gate verified, blast radius confirmed via FusionArm-only reachability)
