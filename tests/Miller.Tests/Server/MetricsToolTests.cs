@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Core.Analysis;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
@@ -385,6 +386,174 @@ public sealed class MetricsToolTests
         Assert.Equal(2, group.GetProperty("symbol_limit").GetInt32());
         Assert.True(group.GetProperty("symbols_truncated").GetBoolean());
         Assert.Equal(2, group.GetProperty("symbols").GetArrayLength());
+    }
+
+    // ---- metrics clones: opt-in Type-2 (near-duplicate) arm ------------------------------------------------
+
+    private const string NearDuplicateOriginalBody = """
+        {
+            var totalCount = 0;
+            foreach (var order in orders)
+            {
+                if (order.Status == "open" && order.Amount > 10)
+                {
+                    totalCount = totalCount + order.Amount;
+                }
+                else
+                {
+                    logger.Warn("skipped order");
+                }
+            }
+            return totalCount;
+        }
+        """;
+
+    private const string NearDuplicateRenamedBody = """
+        {
+            var runningSum = 0;
+            foreach (var invoice in invoices)
+            {
+                if (invoice.State == "pending" && invoice.Value > 25)
+                {
+                    runningSum = runningSum + invoice.Value;
+                }
+                else
+                {
+                    tracer.Warn("ignored invoice");
+                }
+            }
+            return runningSum;
+        }
+        """;
+
+    private const string NearDuplicateAId = "aa11223344556677889900aabbccnd01";
+    private const string NearDuplicateBId = "aa11223344556677889900aabbccnd02";
+
+    private static JulieDbFixture CreateNearDuplicateFixture()
+    {
+        var content = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rows = new List<JulieDbFixture.SymbolRow>();
+
+        foreach ((string path, string name, string id, string body) in new[]
+        {
+            ("src/Orders.cs", "SumOrders", NearDuplicateAId, NearDuplicateOriginalBody),
+            ("src/Invoices.cs", "SumInvoices", NearDuplicateBId, NearDuplicateRenamedBody),
+        })
+        {
+            string header = $"class Holder\n{{\n    int {name}()\n";
+            string text = header + body + "\n}\n";
+            content[path] = text;
+            rows.Add(new JulieDbFixture.SymbolRow(id, name, "method", "csharp", path, $"int {name}()", 3, null)
+            {
+                EndLine = 3 + body.Split('\n').Length,
+                StartByte = 0,
+                EndByte = text.Length,
+                BodyStartByte = header.Length,
+                BodyEndByte = header.Length + body.Length,
+                BodyStartLine = 4,
+                BodyEndLine = 3 + body.Split('\n').Length,
+            });
+        }
+
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, rows, fileContent: content);
+    }
+
+    private static MetricsToolResult RunNearDuplicateClones(JulieDbFixture fx, bool json, bool nearDuplicates) =>
+        MetricsTool.Run(
+            fx.DbPath,
+            operation: "clones",
+            limit: 10,
+            json: json,
+            minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup,
+            minSeverity: "moderate",
+            includeTests: true,
+            workspaceRoot: fx.WorkspaceRoot,
+            nearDuplicates: nearDuplicates);
+
+    [Fact]
+    public void RunClonesJson_WithoutNearDuplicateFlag_IsByteIdenticalToTheExactOnlyOutput()
+    {
+        using var fx = CreateNearDuplicateFixture();
+
+        MetricsToolResult off = RunNearDuplicateClones(fx, json: true, nearDuplicates: false);
+
+        using var doc = JsonDocument.Parse(off.Output);
+        Assert.Empty(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal(0, off.ResultCount);
+    }
+
+    [Fact]
+    public void RunClonesCompact_WithoutNearDuplicateFlag_ReportsNoCloneGroups()
+    {
+        using var fx = CreateNearDuplicateFixture();
+
+        Assert.Equal("No clone groups.", RunNearDuplicateClones(fx, json: false, nearDuplicates: false).Output);
+    }
+
+    [Fact]
+    public void RunClonesJson_WithNearDuplicates_EmitsKindAndSimilarity()
+    {
+        using var fx = CreateNearDuplicateFixture();
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray().ToList());
+        Assert.Equal("near_duplicate", group.GetProperty("kind").GetString());
+        Assert.True(group.GetProperty("similarity").GetDouble() >= NearDuplicateAnalyzer.DefaultMinSimilarity);
+        Assert.Equal(2, group.GetProperty("count").GetInt32());
+        Assert.False(group.GetProperty("symbols_truncated").GetBoolean());
+        Assert.Equal(
+            ["src/Invoices.cs", "src/Orders.cs"],
+            group.GetProperty("symbols").EnumerateArray().Select(s => s.GetProperty("path").GetString()));
+        Assert.Equal(1, result.ResultCount);
+    }
+
+    [Fact]
+    public void RunClonesCompact_WithNearDuplicates_RendersTheNearDuplicateSection()
+    {
+        using var fx = CreateNearDuplicateFixture();
+
+        string output = RunNearDuplicateClones(fx, json: false, nearDuplicates: true).Output;
+
+        Assert.StartsWith("# near-duplicate groups", output);
+        Assert.Contains("similarity=", output, StringComparison.Ordinal);
+        Assert.Contains("src/Invoices.cs:3 SumInvoices method", output, StringComparison.Ordinal);
+        Assert.Contains("src/Orders.cs:3 SumOrders method", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("# clone groups", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunClones_ExactAndNearDuplicateGroups_AreRenderedSideBySide()
+    {
+        using var fx = CreateNearDuplicateFixture();
+        Exec(fx.DbPath, $"""
+            UPDATE symbols SET body_hash = 'shared-hash' WHERE symbol_id IN
+                ('{NearDuplicateAId}', '{NearDuplicateBId}');
+            """);
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        var groups = doc.RootElement.GetProperty("groups").EnumerateArray().ToList();
+        Assert.Equal(2, groups.Count);
+        Assert.Equal("shared-hash", groups[0].GetProperty("body_hash").GetString());
+        Assert.False(groups[0].TryGetProperty("kind", out _));
+        Assert.Equal("near_duplicate", groups[1].GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void RunClones_DriftedWorkspaceFile_YieldsNoNearDuplicateGroupsRatherThanStaleOnes()
+    {
+        using var fx = CreateNearDuplicateFixture();
+        File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "src/Orders.cs"), "class Drifted {}\n");
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        Assert.Empty(doc.RootElement.GetProperty("groups").EnumerateArray());
     }
 
     private static JulieDbFixture.SymbolRow Row(string id, string name, string path, int line) =>

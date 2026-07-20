@@ -1315,6 +1315,27 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Metrics_Clones_NearDuplicatesFlag_IsAcceptedAndStaysAdditive()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        StampBodyHash(fx.DbPath, JulieDbFixture.UserServiceId, "clone-hash");
+        StampBodyHash(fx.DbPath, JulieDbFixture.GetUserId, "clone-hash");
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "clones", "--json", "--near-duplicates" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement groups = doc.RootElement.GetProperty("groups");
+        Assert.Equal("clone-hash", groups[0].GetProperty("body_hash").GetString());
+        Assert.All(
+            groups.EnumerateArray().Where(g => g.TryGetProperty("kind", out _)),
+            g => Assert.Equal("near_duplicate", g.GetProperty("kind").GetString()));
+    }
+
+    [Fact]
     public void Metrics_Complexity_Json_EmitsRankedHotspots()
     {
         using var fx = JulieDbFixture.CreateForInspect();

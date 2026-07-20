@@ -144,10 +144,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** Token-shingle MinHash/LSH Type-2 near-duplicate detection surfaced through `metrics clones` as a new group kind. Pure logic in Miller.Core; MetricsTool wires data in.
 
 **Acceptance criteria:**
-- [ ] Analyzer is deterministic across runs and platforms (seeded, no Random/time), proven by a repeat-run test
-- [ ] Detects Type-2 clones (renamed identifiers/changed literals) in fixture bodies; exact duplicates stay in exact groups, not double-reported
-- [ ] `metrics clones` compact + JSON show near_duplicate groups with similarity; existing exact-group output unchanged when analyzer finds nothing
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Analyzer is deterministic across runs and platforms (seeded, no Random/time), proven by a repeat-run test
+- [x] Detects Type-2 clones (renamed identifiers/changed literals) in fixture bodies; exact duplicates stay in exact groups, not double-reported
+- [x] `metrics clones` compact + JSON show near_duplicate groups with similarity; existing exact-group output unchanged when analyzer finds nothing
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task B1: MILLER_SEMANTIC activation, VectorSidecar skeleton, off-guarantee
 

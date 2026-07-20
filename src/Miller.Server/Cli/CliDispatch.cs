@@ -627,7 +627,7 @@ public static class CliDispatch
 
     private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
+        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--near-duplicates] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
@@ -642,7 +642,7 @@ public static class CliDispatch
         if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots" or "risk"))
             return Usage(err, usage);
 
-        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits");
+        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits", "near-duplicates");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
         if (!RequireIndex(ctx, err))
@@ -670,7 +670,8 @@ public static class CliDispatch
                 workspaceRoot: ctx.WorkspaceRoot,
                 range: o.Value("range", "HEAD~20..HEAD"),
                 includeCommits: o.Has("include-commits"),
-                historyReader: new ProcessGitHistoryReader());
+                historyReader: new ProcessGitHistoryReader(),
+                nearDuplicates: o.Has("near-duplicates"));
             WriteOutput(outw, result.Output);
             if (recordable)
                 RecordHeavyArmSnapshot(

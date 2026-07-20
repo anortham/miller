@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using Miller.Core.Analysis;
 using Miller.Indexing;
 using Miller.Server.Git;
 
@@ -85,7 +87,8 @@ public static class MetricsTool
         string? workspaceRoot = null,
         string? range = null,
         bool includeCommits = false,
-        IGitHistoryReader? historyReader = null)
+        IGitHistoryReader? historyReader = null,
+        bool nearDuplicates = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -93,7 +96,8 @@ public static class MetricsTool
         string op = NormalizeOperation(operation);
         return op switch
         {
-            "clones" => RunClones(dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup),
+            "clones" => RunClones(
+                dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup, workspaceRoot, nearDuplicates),
             "complexity" => RunComplexity(dbPath, boundedLimit, json, minSeverity, includeTests),
             // NOTE: churn/risk carry SnapshotMetrics for the CLI heavy-arm history recorder; clones/complexity
             // leave it null (the leader converge arm already records clone_group_count from symbols.db).
@@ -117,19 +121,142 @@ public static class MetricsTool
         };
     }
 
+    /// <summary>
+    /// Symbols examined by the opt-in Type-2 arm, in <c>(path, start_line, symbol_id)</c> order. Bounded because
+    /// each candidate costs one disk-verified body read; a bigger sweep belongs in a background arm, not a CLI verb.
+    /// </summary>
+    private const int NearDuplicateCandidateCap = 2000;
+
+    /// <summary>Body-span byte floor for a Type-2 candidate — below it a body cannot clear the analyzer's token floor.</summary>
+    private const int NearDuplicateMinBodyBytes = 160;
+
     private static MetricsToolResult RunClones(
         string dbPath,
         int limit,
         bool json,
         int minCount,
-        int maxSymbolsPerGroup)
+        int maxSymbolsPerGroup,
+        string? workspaceRoot,
+        bool nearDuplicates)
     {
         int boundedSymbolLimit = Math.Clamp(maxSymbolsPerGroup, 1, CloneGroupReader.MaxSymbolsPerGroup);
         IReadOnlyList<CloneGroup> groups = CloneGroupReader.Read(dbPath, limit, minCount, boundedSymbolLimit);
+
+        // Off by default: the Type-2 arm re-reads symbol bodies from disk (hash-verified per file), so it must
+        // never ride along on a plain `metrics clones`. With it off the output below is byte-identical to v1.
+        IReadOnlyList<NearDuplicateCloneGroup> near =
+            nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
+                ? ReadNearDuplicateGroups(dbPath, workspaceRoot, limit, boundedSymbolLimit)
+                : [];
+
         return new MetricsToolResult(
-            json ? RenderClonesJson(groups, boundedSymbolLimit) : RenderClonesCompact(groups, boundedSymbolLimit),
-            groups.Count,
+            json
+                ? RenderClonesJson(groups, near, boundedSymbolLimit)
+                : RenderClonesCompact(groups, near, boundedSymbolLimit),
+            groups.Count + near.Count,
             SnapshotMetrics: null);
+    }
+
+    /// <summary>
+    /// The Type-2 arm: read a bounded, deterministically ordered candidate set of symbol bodies from disk and
+    /// hand them to the pure <see cref="NearDuplicateAnalyzer"/>. A body whose file drifted from the indexed
+    /// content is skipped by <see cref="ExtractReader.ReadBody"/> rather than sliced stale, so a stale workspace
+    /// yields fewer groups — never wrong ones.
+    /// </summary>
+    private static IReadOnlyList<NearDuplicateCloneGroup> ReadNearDuplicateGroups(
+        string dbPath,
+        string workspaceRoot,
+        int limit,
+        int symbolLimit)
+    {
+        IReadOnlyList<NearDuplicateCandidate> candidates = ReadNearDuplicateCandidates(dbPath);
+        if (candidates.Count < 2)
+            return [];
+
+        var inputs = new List<NearDuplicateInput>(candidates.Count);
+        var bySymbolId = new Dictionary<string, CloneSymbol>(StringComparer.Ordinal);
+        foreach (NearDuplicateCandidate candidate in candidates)
+        {
+            ExtractReader.BodyReadResult body = ExtractReader.ReadBody(
+                dbPath,
+                workspaceRoot,
+                candidate.Symbol.Path,
+                candidate.BodyStartByte,
+                candidate.BodyEndByte,
+                candidate.BodyStartLine,
+                candidate.BodyEndLine);
+            if (body.Text is not { Length: > 0 } text)
+                continue;
+
+            inputs.Add(new NearDuplicateInput(candidate.Symbol.SymbolId, text));
+            bySymbolId[candidate.Symbol.SymbolId] = candidate.Symbol;
+        }
+
+        IReadOnlyList<NearDuplicateGroup> analyzed =
+            NearDuplicateAnalyzer.FindGroups(inputs, new NearDuplicateOptions { MaxGroups = limit });
+
+        var results = new List<NearDuplicateCloneGroup>(analyzed.Count);
+        foreach (NearDuplicateGroup group in analyzed)
+        {
+            List<CloneSymbol> symbols = group.MemberIds
+                .Select(id => bySymbolId[id])
+                .OrderBy(symbol => symbol.Path, StringComparer.Ordinal)
+                .ThenBy(symbol => symbol.Line)
+                .ThenBy(symbol => symbol.SymbolId, StringComparer.Ordinal)
+                .ToList();
+            results.Add(new NearDuplicateCloneGroup(
+                Math.Round(group.Similarity, 4, MidpointRounding.ToEven),
+                symbols.Count,
+                symbols.Take(symbolLimit).ToList()));
+        }
+        return results;
+    }
+
+    // Runs only AFTER CloneGroupReader.Read has already opened the same artifact through the D5 schema gate, so an
+    // incompatible artifact fails there with the standard actionable message before this query is ever reached.
+    private static IReadOnlyList<NearDuplicateCandidate> ReadNearDuplicateCandidates(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Cache = SqliteCacheMode.Private,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT symbol_id, name, kind, language, path, start_line, is_test,
+                   body_start_byte, body_end_byte, body_start_line, body_end_line
+            FROM symbols
+            WHERE body_start_byte IS NOT NULL AND body_end_byte IS NOT NULL
+              AND (body_end_byte - body_start_byte) >= $min_bytes
+            ORDER BY path, start_line, symbol_id
+            LIMIT $cap;
+            """;
+        command.Parameters.AddWithValue("$min_bytes", NearDuplicateMinBodyBytes);
+        command.Parameters.AddWithValue("$cap", NearDuplicateCandidateCap);
+
+        var candidates = new List<NearDuplicateCandidate>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            candidates.Add(new NearDuplicateCandidate(
+                new CloneSymbol(
+                    SymbolId: reader.GetString(0),
+                    Name: reader.GetString(1),
+                    Kind: reader.GetString(2),
+                    Language: reader.GetString(3),
+                    Path: reader.GetString(4),
+                    Line: reader.IsDBNull(5) ? 0 : reader.GetInt32(5),
+                    IsTest: !reader.IsDBNull(6) && reader.GetInt64(6) != 0),
+                BodyStartByte: reader.GetInt32(7),
+                BodyEndByte: reader.GetInt32(8),
+                BodyStartLine: reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                BodyEndLine: reader.IsDBNull(10) ? null : reader.GetInt32(10)));
+        }
+        return candidates;
     }
 
     private static MetricsToolResult RunComplexity(
@@ -265,13 +392,17 @@ public static class MetricsTool
         return points;
     }
 
-    private static string RenderClonesCompact(IReadOnlyList<CloneGroup> groups, int symbolLimit)
+    private static string RenderClonesCompact(
+        IReadOnlyList<CloneGroup> groups,
+        IReadOnlyList<NearDuplicateCloneGroup> nearDuplicates,
+        int symbolLimit)
     {
-        if (groups.Count == 0)
+        if (groups.Count == 0 && nearDuplicates.Count == 0)
             return "No clone groups.";
 
         var sb = new StringBuilder();
-        sb.AppendLine("# clone groups");
+        if (groups.Count > 0)
+            sb.AppendLine("# clone groups");
         foreach (CloneGroup group in groups)
         {
             sb.Append(group.BodyHash).Append("  count=").Append(group.Count).AppendLine();
@@ -291,6 +422,34 @@ public static class MetricsTool
                   .Append(group.Count - group.Symbols.Count)
                   .Append(" more symbols hidden (use max_symbols_per_group / --max-symbols-per-group)")
                   .AppendLine();
+            }
+        }
+
+        if (nearDuplicates.Count > 0)
+        {
+            sb.AppendLine("# near-duplicate groups");
+            foreach (NearDuplicateCloneGroup group in nearDuplicates)
+            {
+                sb.Append("similarity=")
+                  .Append(group.Similarity.ToString("0.####", CultureInfo.InvariantCulture))
+                  .Append("  count=").Append(group.Count).AppendLine();
+                foreach (CloneSymbol symbol in group.Symbols)
+                {
+                    sb.Append("  ")
+                      .Append(symbol.Path).Append(':').Append(symbol.Line)
+                      .Append(' ').Append(symbol.Name)
+                      .Append(' ').Append(symbol.Kind);
+                    if (symbol.IsTest)
+                        sb.Append(" test");
+                    sb.AppendLine();
+                }
+                if (group.Symbols.Count < group.Count)
+                {
+                    sb.Append("  ... ")
+                      .Append(group.Count - group.Symbols.Count)
+                      .Append(" more symbols hidden (use max_symbols_per_group / --max-symbols-per-group)")
+                      .AppendLine();
+                }
             }
         }
         return sb.ToString().TrimEnd();
@@ -342,7 +501,10 @@ public static class MetricsTool
         return sb.ToString().TrimEnd();
     }
 
-    private static string RenderClonesJson(IReadOnlyList<CloneGroup> groups, int symbolLimit)
+    private static string RenderClonesJson(
+        IReadOnlyList<CloneGroup> groups,
+        IReadOnlyList<NearDuplicateCloneGroup> nearDuplicates,
+        int symbolLimit)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -355,6 +517,33 @@ public static class MetricsTool
             {
                 writer.WriteStartObject();
                 writer.WriteString("body_hash", group.BodyHash);
+                writer.WriteNumber("count", group.Count);
+                writer.WriteNumber("symbol_limit", symbolLimit);
+                writer.WriteBoolean("symbols_truncated", group.Symbols.Count < group.Count);
+                writer.WriteStartArray("symbols");
+                foreach (CloneSymbol symbol in group.Symbols)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("symbol_id", symbol.SymbolId);
+                    writer.WriteString("name", symbol.Name);
+                    writer.WriteString("kind", symbol.Kind);
+                    writer.WriteString("language", symbol.Language);
+                    writer.WriteString("path", symbol.Path);
+                    writer.WriteNumber("line", symbol.Line);
+                    writer.WriteBoolean("is_test", symbol.IsTest);
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+            // Additive per metrics-json-v1: near-duplicate groups are appended to the same array and are the ONLY
+            // entries carrying `kind`/`similarity` (an absent `kind` means the v1 exact `body_hash` group). Nothing
+            // is written when the Type-2 arm is off or finds nothing, so v1 output stays byte-identical.
+            foreach (NearDuplicateCloneGroup group in nearDuplicates)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("kind", "near_duplicate");
+                writer.WriteNumber("similarity", group.Similarity);
                 writer.WriteNumber("count", group.Count);
                 writer.WriteNumber("symbol_limit", symbolLimit);
                 writer.WriteBoolean("symbols_truncated", group.Symbols.Count < group.Count);
@@ -662,3 +851,18 @@ public static class MetricsTool
 /// </param>
 internal readonly record struct MetricsToolResult(
     string Output, int ResultCount, IReadOnlyList<MetricHistoryPoint>? SnapshotMetrics = null);
+
+/// <summary>
+/// A rendered Type-2 group: the analyzer's weakest-edge similarity plus the group's symbols in the same
+/// <c>(path, line, symbol_id)</c> order the exact clone groups use. <see cref="Count"/> is the full membership;
+/// <see cref="Symbols"/> is bounded by the caller's symbol limit.
+/// </summary>
+internal sealed record NearDuplicateCloneGroup(double Similarity, int Count, IReadOnlyList<CloneSymbol> Symbols);
+
+/// <summary>One symbol eligible for Type-2 analysis, with the body span the disk re-source needs.</summary>
+internal sealed record NearDuplicateCandidate(
+    CloneSymbol Symbol,
+    int BodyStartByte,
+    int BodyEndByte,
+    int? BodyStartLine,
+    int? BodyEndLine);
