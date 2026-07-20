@@ -305,10 +305,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** The observability half of lane b: everything a P4 shadow rollout needs to be diagnosable, and the canary schema ready so P5 flips a switch rather than migrating telemetry.
 
 **Acceptance criteria:**
-- [ ] Every status vocabulary state renderable and covered by a test; compact shows laggier cursor; JSON carries exact revisions/fingerprints
-- [ ] Canary-contract fields present per canary-telemetry-v1 with constant control arm; telemetry proven query-text-free by test
-- [ ] Existing status/health JSON consumers unaffected (additive only; contract tests green)
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Every status vocabulary state renderable and covered by a test; compact shows laggier cursor; JSON carries exact revisions/fingerprints
+- [x] Canary-contract fields present per canary-telemetry-v1 with constant control arm; telemetry proven query-text-free by test
+- [x] Existing status/health JSON consumers unaffected (additive only; contract tests green)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit
 
 ### Task D2: Fuzzy policy replay evaluation + stale-target convergence wait
 
