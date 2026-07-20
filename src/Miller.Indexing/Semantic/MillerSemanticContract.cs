@@ -94,7 +94,7 @@ public static class MillerSemanticContract
     public static SemanticEncoderPin DefaultEncoder { get; } = new(
         ModelId: "qwen3-0.6b-f16",
         ModelSha256: "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
-        ModelRevision: "Qwen3-Embedding-0.6B-f16.gguf",
+        ModelRevision: "main",
         Dims: 512,
         Pooling: "last",
         EosAppend: "<|endoftext|>",
@@ -105,7 +105,7 @@ public static class MillerSemanticContract
     public static SemanticEncoderPin FallbackEncoder { get; } = new(
         ModelId: "bge-small-en-v1.5-f32",
         ModelSha256: "bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65",
-        ModelRevision: "bge-small-en-v1.5-f32.gguf",
+        ModelRevision: "main",
         Dims: 384,
         Pooling: "cls",
         EosAppend: "",
