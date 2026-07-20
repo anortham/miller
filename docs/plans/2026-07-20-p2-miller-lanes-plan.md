@@ -279,10 +279,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** Generation lifecycle: shadow beside live, promote, retain, serve-from-retained, GC — plus corruption recovery wiring.
 
 **Acceptance criteria:**
-- [ ] Incompatible promote: old generation discoverable and queryable by an old-fingerprint reader across a process restart (Scale test)
-- [ ] GC never deletes the only ready generation, an in-soak generation, or one with a registered live reader (each rule its own test)
-- [ ] Corrupt vectors.db ⟹ deleted + rebuilt via recovery path; symbols.db untouched
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Incompatible promote: old generation discoverable and queryable by an old-fingerprint reader across a process restart (Scale test)
+- [x] GC never deletes the only ready generation, an in-soak generation, or one with a registered live reader (each rule its own test)
+- [x] Corrupt vectors.db ⟹ deleted + rebuilt via recovery path; symbols.db untouched
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit
 
 ### Task B6: Status/health facts, telemetry, canary-contract plumbing
 
