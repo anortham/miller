@@ -676,12 +676,15 @@ fail conformance check A5/A16/A17 and would differ from the running sidecar for 
 **D2 — Health metadata is only half additive (design overstates the gap).**
 Design §4.1 presents backend/device identity, `accelerated`, and `degraded_reason` as part of the "v1
 additive health metadata" block. They are not additive: `capabilities` and `load_policy` already exist
-(`runtime.py:196-215`, `runtime.py:320-331`) and are **strictly validated on both sides**
-(`protocol.py:67-123`, `sidecar_protocol.rs:167-209`), including the cross-field equality and
-degradation invariants. Treating them as optional new fields would produce a sidecar the existing
-consumer rejects. This contract documents them as reference behavior in
-[§ Methods](#methods) and reserves the additive label for the genuinely new keys in
-[§ Health metadata](#health-metadata-v1-additive).
+in the reference **producer**, which always emits them and strictly validates them on its own side
+(`runtime.py:196-215`, `runtime.py:320-331`, `protocol.py:67-123`). The Rust **consumer** treats both
+as optional (`#[serde(default)] Option<…>`, `sidecar_protocol.rs:74-77`) and enforces the cross-field
+equality and degradation invariants only when the fields are present (`sidecar_protocol.rs:167-209`),
+so a sidecar omitting them still interoperates with the existing consumer. This contract nevertheless
+**requires emitting them** — that is reference producer behavior and conformance enforces it (group A);
+the requirement's teeth are the conformance gate, not consumer rejection. The additive label is
+reserved for the genuinely new keys in [§ Health metadata](#health-metadata-v1-additive), which are
+documented in [§ Methods](#methods) as reference behavior.
 
 **D3 — Failure isolation flags on stderr, not on the wire (design overstates).**
 Design §4.1 specifies "zero-vector + flagged item". The reference substitutes the zero vector
