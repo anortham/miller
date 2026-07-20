@@ -96,6 +96,29 @@ jobs:
         shell: pwsh
         run: ./scripts/restore-julie-extract.ps1
 
+      # Semantic retrieval is optional at RUNTIME (ADR-0003) and a missing restore never fails a local
+      # build — but a release archive that silently lacks the sidecar is worse than a failed job, so the
+      # restore is explicit here and its failure fails the leg. Each runner's host platform equals its
+      # matrix target, so the scripts' host detection resolves the right pinned asset.
+      - name: Restore julie-semantic-sidecar (Unix)
+        if: runner.os != 'Windows'
+        run: bash scripts/restore-semantic-sidecar.sh
+
+      - name: Restore julie-semantic-sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/restore-semantic-sidecar.ps1
+
+      - name: Resolve pinned sqlite-vec member
+        shell: pwsh
+        run: |
+          $pins = Get-Content (Join-Path $env:GITHUB_WORKSPACE "scripts/semantic-pins.json") -Raw | ConvertFrom-Json
+          $asset = $pins.sqliteVec.assets.PSObject.Properties['${{ matrix.rid }}']
+          if ($null -eq $asset -or [string]::IsNullOrWhiteSpace($asset.Value.member)) {
+            throw "scripts/semantic-pins.json has no sqliteVec asset member for RID ${{ matrix.rid }}"
+          }
+          "SEMANTIC_VEC_MEMBER=$($asset.Value.member)" >> $env:GITHUB_ENV
+
       - name: Publish
         shell: pwsh
         run: |
@@ -133,6 +156,9 @@ jobs:
           test -x "${publish_dir}/miller"
           test -x "${publish_dir}/.tools/julie-extract"
           test ! -e "${publish_dir}/.tools/julie-extract.exe"
+          test -x "${publish_dir}/.tools/julie-semantic-sidecar"
+          test ! -e "${publish_dir}/.tools/julie-semantic-sidecar.exe"
+          test -f "${publish_dir}/.tools/${SEMANTIC_VEC_MEMBER}"
           test -x "${publish_dir}/dashboard/Miller.Dashboard"
           test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
           test -f "${publish_dir}/dashboard/wwwroot/fonts/archivo-latin.woff2"
@@ -144,7 +170,9 @@ jobs:
           test -f "${publish_dir}/dashboard/wwwroot/lib/htmx/htmx.min.js"
           test -f "${publish_dir}/dashboard/wwwroot/lib/idiomorph/idiomorph-ext.min.js"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
+          test ! -e "${publish_dir}/dashboard/.tools/julie-semantic-sidecar"
           "${publish_dir}/.tools/julie-extract" --version
+          "${publish_dir}/.tools/julie-semantic-sidecar" --version
           "${publish_dir}/miller" version
           reqs=$(printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
@@ -192,6 +220,18 @@ jobs:
           if (Test-Path $unixBinary) {
             throw "Windows package must not include Unix julie-extract"
           }
+          $windowsSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar.exe"
+          $unixSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar"
+          $vecLibrary = Join-Path $publishDir ".tools/$env:SEMANTIC_VEC_MEMBER"
+          if (-not (Test-Path $windowsSidecar)) {
+            throw "missing packaged Windows julie-semantic-sidecar.exe"
+          }
+          if (Test-Path $unixSidecar) {
+            throw "Windows package must not include Unix julie-semantic-sidecar"
+          }
+          if (-not (Test-Path $vecLibrary)) {
+            throw "missing packaged sqlite-vec extension $env:SEMANTIC_VEC_MEMBER"
+          }
           $dashboardBinary = Join-Path $publishDir "dashboard/Miller.Dashboard.exe"
           $dashboardCss = Join-Path $publishDir "dashboard/wwwroot/dashboard.css"
           $dashboardTools = Join-Path $publishDir "dashboard/.tools"
@@ -222,6 +262,7 @@ jobs:
             throw "dashboard package must not include a duplicate .tools directory"
           }
           & $windowsBinary --version
+          & $windowsSidecar --version
           & $millerBinary version
           $reqs = @(
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}',
@@ -264,7 +305,7 @@ jobs:
           cp "${GITHUB_WORKSPACE}/THIRD-PARTY-NOTICES.md" "${package_dir}/THIRD-PARTY-NOTICES.md"
           find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
           find "${package_dir}" -name '*.dSYM' -type d -prune -exec rm -rf {} +
-          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/dashboard/Miller.Dashboard"
+          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/.tools/julie-semantic-sidecar" "${package_dir}/dashboard/Miller.Dashboard"
           test -f "${package_dir}/LICENSE"
           test -f "${package_dir}/THIRD-PARTY-NOTICES.md"
           archive="${release_dir}/${package_name}.tar.gz"
