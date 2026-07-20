@@ -90,18 +90,22 @@ public static class TextReplaceMatcher
 
     private static TextReplaceMatchPlan PlanFuzzy(string content, string oldText, Occurrence occurrence, TextMatchMode requestedMode)
     {
-        if (oldText.Length > MaxFuzzySnippetChars)
-            return Failure(
-                TextMatchMode.Fuzzy,
-                requestedMode,
-                EditErrorKind.TextNotFound,
-                $"fuzzy old_text is too long ({oldText.Length} chars; max {MaxFuzzySnippetChars}).");
-
         var targetLines = NormalizedTargetLines(oldText);
         if (targetLines.Count == 0)
             return Failure(TextMatchMode.Fuzzy, requestedMode, EditErrorKind.TextNotFound, "fuzzy old_text did not contain a matchable line.");
 
         var targetText = string.Join('\n', targetLines);
+
+        // The cap exists to bound an O(n*m) distance scan, so it measures the text actually compared: matching
+        // strips indentation and line endings first, and counting them rejected snippets whose comparable
+        // content was well inside the budget (design §7.4 replay, 2026-07-20).
+        if (targetText.Length > MaxFuzzySnippetChars)
+            return Failure(
+                TextMatchMode.Fuzzy,
+                requestedMode,
+                EditErrorKind.TextNotFound,
+                $"fuzzy old_text is too long ({targetText.Length} comparable chars; max {MaxFuzzySnippetChars}).");
+
         var threshold = MaxFuzzyDistance(targetText.Length);
         var contentLines = SplitContentLines(content);
         var matches = new List<TextReplaceMatch>();

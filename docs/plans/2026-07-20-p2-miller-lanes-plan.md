@@ -332,9 +332,9 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** The judgment half of the edit lane: measure, then change policy only on evidence.
 
 **Acceptance criteria:**
-- [ ] Plan-time stale_target waits (bounded) and succeeds when index converges within budget; still fails cleanly after
-- [ ] Findings doc reports replay methodology + numbers; any policy change is gated on those numbers
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Plan-time stale_target waits (bounded) and succeeds when index converges within budget; still fails cleanly after
+- [x] Findings doc reports replay methodology + numbers; any policy change is gated on those numbers
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task E2: near_duplicate_group_count history metric + dashboard + report
 

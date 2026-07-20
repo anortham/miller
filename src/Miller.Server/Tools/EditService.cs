@@ -46,6 +46,9 @@ public sealed class EditService
     /// <summary>The bucket for a known failure path that produced no more specific classification.</summary>
     internal const string FailureUnknown = "unknown";
 
+    /// <summary>Wait-reason enum stamped when an edit spends budget waiting for a single-file converge.</summary>
+    internal const string StaleConvergeWaitReason = "edit_stale_converge";
+
     private readonly MillerRepositoryIndex _index;
     private readonly SmartTargetResolver _resolver;
     private readonly string _dbPath;
@@ -114,7 +117,14 @@ public sealed class EditService
     /// <param name="FailureReason">A privacy-safe stable failure bucket, or null when the edit did not fail.</param>
     public readonly record struct EditResult(
         string Output, bool Applied, bool StaleAllowed, bool? IndexFresh, string Outcome, int ResultCount,
-        string? FailureReason = null);
+        string? FailureReason = null)
+    {
+        /// <summary>
+        /// True iff the call spent budget waiting for a single-file index converge before producing this result
+        /// (design §7.5). Telemetry-only: the tool shell turns it into the <c>wait_reason</c> enum.
+        /// </summary>
+        public bool StaleWaitPerformed { get; init; }
+    }
 
     /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> is null.</exception>
@@ -210,6 +220,7 @@ public sealed class EditService
 
         EditMatchEvidence? evidence = null;
         EditPlan plan;
+        bool staleWaitPerformed = false;
         if (op == EditOperation.ReplaceText)
         {
             if (request.NewText is null)
@@ -217,9 +228,11 @@ public sealed class EditService
                     failureReason: FailureInvalidRequest);
 
             var replace = PlanReplaceText(relativePath, content, request, occurrence);
+            staleWaitPerformed = replace.StaleWaitPerformed;
             if (replace.ErrorMessage is not null)
                 return Error(replace.ErrorMessage, json,
-                    failureReason: replace.FailureReason ?? FailureUnknown);
+                    failureReason: replace.FailureReason ?? FailureUnknown) with
+                { StaleWaitPerformed = staleWaitPerformed };
 
             plan = replace.Plan!;
             evidence = replace.Evidence;
@@ -264,17 +277,20 @@ public sealed class EditService
         }
 
         var planned = new PlannedEdit(absPath, content, newContent, edits);
-        return FinishSingleFile(request, op, occurrence, relativePath, planned, json, allowRecovery, evidence);
+        return FinishSingleFile(
+            request, op, occurrence, relativePath, planned, json, allowRecovery, evidence, staleWaitPerformed);
     }
 
     private EditResult FinishSingleFile(
         EditRequest request, EditOperation op, Occurrence occurrence,
-        string relativePath, PlannedEdit planned, bool json, bool allowRecovery, EditMatchEvidence? evidence = null)
+        string relativePath, PlannedEdit planned, bool json, bool allowRecovery, EditMatchEvidence? evidence = null,
+        bool staleWaitPerformed = false)
     {
         string diff = UnifiedDiff.Render(planned.OldContent, planned.NewContent, relativePath);
 
         if (!IsApply(request))
-            return Preview(diff, json, renameSummary: null, siteCount: 0, evidence);
+            return Preview(diff, json, renameSummary: null, siteCount: 0, evidence) with
+            { StaleWaitPerformed = staleWaitPerformed };
 
         // --- apply path: freshness gate (with gate-time self-heal), then atomic write, then write-through ---
         var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
@@ -304,7 +320,7 @@ public sealed class EditService
 
         _writeThrough.Converge([planned.FilePath]);
         return Applied(diff, staleAllowed: !fresh && request.AllowStale, filesWritten: applyResult.FilesWritten,
-            indexFresh: fresh, json, evidence: evidence);
+            indexFresh: fresh, json, evidence: evidence) with { StaleWaitPerformed = staleWaitPerformed };
     }
 
     private ReplaceTextPlanResult PlanReplaceText(
@@ -329,7 +345,16 @@ public sealed class EditService
                 request.Line);
 
             if (candidateResult.State == IndexedEditCandidateState.Current)
-                return PlanReplaceTextFromIndexedCandidates(content, request, occurrence, matchMode, candidateResult);
+            {
+                ReplaceTextPlanResult planned = PlanReplaceTextFromIndexedCandidates(
+                    content, request, occurrence, matchMode, candidateResult);
+                if (planned.FailureReason != FailureStaleTarget)
+                    return planned;
+
+                ReplaceTextPlanResult? converged = WaitForCandidateConvergence(
+                    relativePath, content, request, occurrence, matchMode, out bool waited);
+                return (converged ?? planned) with { StaleWaitPerformed = waited };
+            }
 
             if (candidateResult.State == IndexedEditCandidateState.NoMatch)
             {
@@ -408,6 +433,63 @@ public sealed class EditService
                 occurrence,
                 candidateReason: null,
                 candidate));
+    }
+
+    /// <summary>
+    /// Plan-time mirror of the apply path's bounded stale wait (design §7.5). An indexed edit candidate whose
+    /// chunk pre-dates the current disk text fails verification and previously refused instantly, even though
+    /// the leader converges the file within about a debounce tick. Ask the write-through to converge this ONE
+    /// file, then re-discover and re-verify candidates until the plan succeeds or the shared
+    /// <see cref="RecoveryOptions"/> budget is spent. Returns the converged plan, or null to let the caller
+    /// return its original stale-target refusal unchanged. Polls the real success condition (a candidate that
+    /// verifies against disk) rather than the freshness gate, because content.db can lag symbols.db by a tick.
+    /// <paramref name="content"/> is the disk text already read by the caller and does not change during the
+    /// wait: the index is converging toward it, not the other way round.
+    /// </summary>
+    /// <param name="waited">True iff budget was actually spent waiting — the telemetry wait-reason signal.</param>
+    private ReplaceTextPlanResult? WaitForCandidateConvergence(
+        string relativePath,
+        string content,
+        EditRequest request,
+        Occurrence occurrence,
+        TextMatchMode matchMode,
+        out bool waited)
+    {
+        string absPath = ToAbsolute(relativePath);
+        StaleRecoveryAttempt attempt = _writeThrough.TryRecoverStaleFile(absPath);
+        waited = attempt != StaleRecoveryAttempt.None;
+        if (!waited)
+            return null;
+
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            IndexedEditCandidateResult converged;
+            try
+            {
+                converged = _indexedEditCandidateReader.FindCandidates(
+                    _dbPath, relativePath, ExpectedWorkspaceRevision(), request.OldText ?? string.Empty,
+                    request.Query, request.Anchor, request.Line);
+            }
+            catch (Exception ex) when (ex is SqliteException or FileNotFoundException or InvalidOperationException)
+            {
+                // A converge in flight can transiently break the revision read (the DB mid-swap or locked).
+                // Execute promises never to throw for an expected condition, so treat it as not-yet-converged.
+                converged = IndexedEditCandidateResult.Unavailable("transient read during converge");
+            }
+
+            if (converged.State == IndexedEditCandidateState.Current)
+            {
+                ReplaceTextPlanResult retry = PlanReplaceTextFromIndexedCandidates(
+                    content, request, occurrence, matchMode, converged);
+                if (retry.FailureReason != FailureStaleTarget)
+                    return retry;
+            }
+
+            if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= _recovery.Timeout)
+                return null;
+            Thread.Sleep(_recovery.PollInterval);
+        }
     }
 
     private static TextWindow FocusIndexedCandidateWindow(string content, IndexedEditCandidate candidate, EditRequest request)
@@ -1176,6 +1258,9 @@ public sealed class EditService
     private sealed record ReplaceTextPlanResult(
         EditPlan? Plan, EditMatchEvidence? Evidence, string? ErrorMessage, string? FailureReason)
     {
+        /// <summary>True iff planning spent budget waiting for a single-file converge, however it ended.</summary>
+        public bool StaleWaitPerformed { get; init; }
+
         public static ReplaceTextPlanResult Success(EditPlan plan, EditMatchEvidence evidence) =>
             new(plan, evidence, ErrorMessage: null, FailureReason: null);
 

@@ -132,6 +132,8 @@ public sealed class EditTool
                     "empty" => TelemetryOutcome.Empty,
                     _ => TelemetryOutcome.Error,
                 };
+                if (result.StaleWaitPerformed)
+                    telemetry.SetWaitReason(EditService.StaleConvergeWaitReason);
                 if (result.FailureReason is not null)
                     telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
                 else if (telemetry.Outcome == TelemetryOutcome.Error)

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Core.Editing;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -2091,4 +2092,304 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("\"applied\"", result.Output);
         Assert.Contains("\"diff\"", result.Output);
     }
+
+    // ---- fuzzy policy replay corpus (design §7.4) ----
+    //
+    // Telemetry cannot supply the replay corpus: the ledger is enum/counter-only, so no historical call retains
+    // its old_text. The corpus below is therefore synthesized, and is the evidence any fuzzy policy change is
+    // gated on. Two halves, both load-bearing:
+    //   * Recall cases  — the intended target is unambiguous and a fuzzy match is the CORRECT outcome.
+    //   * Precision cases — a fuzzy match would splice the WRONG span (silent corruption), so a miss is correct.
+    // A policy ships only on strict improvement: strictly more recall hits and NO new precision breaks.
+    // Numbers are reported in docs/findings/2026-07-20-edit-fuzzy-policy-replay.md.
+
+    private sealed record ReplayCase(string Id, string Content, string OldText, bool ShouldMatch, int? ExpectLine = null)
+    {
+        /// <summary>
+        /// A precision case the CURRENT distance ceiling already gets wrong, before and after this task's cap
+        /// change. Recorded rather than removed: it is the standing argument against loosening the ceiling.
+        /// </summary>
+        public bool KnownCeilingGap { get; init; }
+    }
+
+    private const string IndentedBlock =
+        "public sealed class OrderTotals\n" +
+        "{\n" +
+        "        public decimal ComputeGrandTotal(IReadOnlyList<LineItem> items)\n" +
+        "        {\n" +
+        "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrice * i.Quantity);\n" +
+        "        }\n" +
+        "}\n";
+
+    private const string SiblingBranches =
+        "switch (kind)\n" +
+        "{\n" +
+        "    case ReportKind.Daily: return BuildDailyReport(scope, window);\n" +
+        "    case ReportKind.Hourly: return BuildHourlyReport(scope, window);\n" +
+        "}\n";
+
+    private static readonly ReplayCase[] ReplayCorpus =
+    [
+        // -- recall: exact and normalized both fail, fuzzy is the right answer --
+        new("typo_in_identifier",
+            "var handler = new RequestHandler(logger, clock);\n",
+            "var handler = new RequestHandlar(logger, clock);\n", ShouldMatch: true, ExpectLine: 1),
+        new("missing_trailing_semicolon",
+            "await _queue.DrainAsync(cancellationToken);\n",
+            "await _queue.DrainAsync(cancellationToken)\n", ShouldMatch: true, ExpectLine: 1),
+        new("stale_numeric_literal",
+            "private const int RetryBudget = 5;\n",
+            "private const int RetryBudget = 3;\n", ShouldMatch: true, ExpectLine: 1),
+        new("case_drift_one_char",
+            "if (options.UseCache) return cached;\n",
+            "if (options.Usecache) return cached;\n", ShouldMatch: true, ExpectLine: 1),
+        // The next two are the cap cases: heavy indentation pushes RAW length past 160 while the text actually
+        // compared (indentation stripped) stays well inside it.
+        new("indented_single_line_over_raw_cap",
+            IndentedBlock,
+            "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrise * i.Quantity);\n" +
+            "                                                                                  \n",
+            ShouldMatch: true, ExpectLine: 5),
+        new("indented_multiline_over_raw_cap",
+            IndentedBlock,
+            "        public decimal ComputeGrandTotal(IReadOnlyList<LineItem> item)\n" +
+            "        {\n" +
+            "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrice * i.Quantity);\n",
+            ShouldMatch: true, ExpectLine: 3),
+
+        // -- precision: a fuzzy hit here splices the wrong span --
+        new("sibling_branch_near_both",
+            SiblingBranches,
+            "    case ReportKind.Weekly: return BuildWeeklyReport(scope, window);\n", ShouldMatch: false),
+        new("deleted_line_neighbour_survives",
+            "    case ReportKind.Daily: return BuildDailyReport(scope, window);\n",
+            "    case ReportKind.Daily: return BuildDailyReport(scope, budget);\n", ShouldMatch: false),
+        new("constant_table_wrong_key",
+            "case 1: return \"one\";\ncase 2: return \"two\";\ncase 3: return \"three\";\n",
+            "case 7: return \"one\";\n", ShouldMatch: false) { KnownCeilingGap = true },
+        new("unrelated_text_near_a_line",
+            "var total = ComputeTotal(order);\n",
+            "var total = ComputeTotal(basket);\n", ShouldMatch: false),
+    ];
+
+    private static (List<string> RecallMisses, List<string> PrecisionBreaks) RunReplay()
+    {
+        List<string> recallMisses = [], precisionBreaks = [];
+        foreach (ReplayCase c in ReplayCorpus)
+        {
+            var plan = TextReplaceMatcher.Plan(c.Content, c.OldText, Occurrence.First, TextMatchMode.Fuzzy);
+            bool rightSpan = plan.IsSuccess && (c.ExpectLine is null || plan.Matches[0].StartLine == c.ExpectLine);
+            if (c.ShouldMatch && !rightSpan)
+                recallMisses.Add(c.Id);
+            if (!c.ShouldMatch && plan.IsSuccess)
+                precisionBreaks.Add(c.Id);
+        }
+
+        return (recallMisses, precisionBreaks);
+    }
+
+    // The shipped policy measures the snippet cap against the text actually compared. Recall is complete, and
+    // the only precision break is the one the CURRENT distance ceiling already had — the cap change adds none.
+    [Fact]
+    public void FuzzyPolicyReplay_ShippedPolicy_HitsEveryRecallCase()
+    {
+        var (recallMisses, _) = RunReplay();
+
+        Assert.Empty(recallMisses);
+        Assert.Equal(6, ReplayCorpus.Count(static c => c.ShouldMatch));
+    }
+
+    [Fact]
+    public void FuzzyPolicyReplay_ShippedPolicy_AddsNoPrecisionBreakBeyondTheKnownCeilingGap()
+    {
+        var (_, precisionBreaks) = RunReplay();
+
+        Assert.Equal(
+            ReplayCorpus.Where(static c => c.KnownCeilingGap).Select(static c => c.Id).Order(),
+            precisionBreaks.Order());
+    }
+
+    // The cap change's entire delta: exactly the cases whose RAW length exceeds the cap while their COMPARABLE
+    // length (what the distance scan sees) fits. Anything else in the corpus behaves identically before/after,
+    // which is what makes "strictly more recall, no new precision break" checkable rather than asserted.
+    [Fact]
+    public void FuzzyPolicyReplay_CapChangeAffectsOnlyTheIndentedRecallCases()
+    {
+        string[] flipped = ReplayCorpus
+            .Where(static c => c.OldText.Length > TextReplaceMatcher.MaxFuzzySnippetChars)
+            .Select(static c => c.Id)
+            .ToArray();
+
+        Assert.Equal(["indented_single_line_over_raw_cap", "indented_multiline_over_raw_cap"], flipped);
+        Assert.All(flipped, id => Assert.True(ReplayCorpus.Single(c => c.Id == id).ShouldMatch));
+    }
+
+    // The cap change is the whole delta: a snippet whose comparable content fits the budget must be admitted
+    // even when raw indentation pushes it past it, and a snippet whose comparable content genuinely exceeds the
+    // budget must still be refused (the cap bounds an O(n*m) scan and cannot be dropped).
+    [Fact]
+    public void Plan_Fuzzy_CapMeasuresComparableTextNotRawIndentation()
+    {
+        string indented = new string(' ', 200) + "const retries = 5;\n";
+        Assert.True(indented.Length > TextReplaceMatcher.MaxFuzzySnippetChars);
+
+        var plan = TextReplaceMatcher.Plan(
+            "const retries = 5;\n", indented.Replace("5", "3", StringComparison.Ordinal),
+            Occurrence.First, TextMatchMode.Fuzzy);
+
+        Assert.True(plan.IsSuccess, plan.Error?.Message);
+        Assert.Equal(TextMatchMode.Fuzzy, plan.MatchedMode);
+    }
+
+    [Fact]
+    public void Plan_Fuzzy_StillRefusesSnippetsWhoseComparableTextExceedsTheCap()
+    {
+        string oversize = new string('z', TextReplaceMatcher.MaxFuzzySnippetChars + 1);
+
+        var plan = TextReplaceMatcher.Plan(oversize + "\n", oversize, Occurrence.First, TextMatchMode.Fuzzy);
+
+        Assert.False(plan.IsSuccess);
+        Assert.Contains("too long", plan.Error!.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- plan-time stale_target bounded convergence wait (design §7.5) ----
+    //
+    // The apply path already waits up to 2.5s for a requested single-file converge before refusing. The PLAN
+    // path did not: an indexed edit candidate whose chunk pre-dates the current disk text failed instantly with
+    // stale_target. Telemetry shows that exit is the dominant stale_target failure (6 of 7 historical rows are
+    // apply=0 with wait_reason=none), so the plan path now mirrors the apply path's bounded wait.
+
+    private const string StaleCandidateFile = "src/Api.cs";
+
+    // content.db is built while the anchor sits at line 12; disk then moves it to line 170. The candidate
+    // window still points at line 12, where old_text is gone — the stale_target exit under test. A converge
+    // (rebuilding content.db from current disk) moves the window to line 170 and the plan verifies.
+    private static string StaleCandidateIndexedSource => NumberedLines(220, (12, "target-value beta-anchor"));
+
+    private static string StaleCandidateCurrentDisk => NumberedLines(220, (170, "target-value beta-anchor"));
+
+    private JulieDbFixture LayStaleCandidateFixture()
+    {
+        string indexedSource = StaleCandidateIndexedSource;
+        var fx = CreateSingleFileFixture(StaleCandidateFile, indexedSource);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [StaleCandidateFile] = indexedSource });
+        BuildContentDb(fx);
+        File.WriteAllText(AbsPath(StaleCandidateFile), StaleCandidateCurrentDisk);
+        return fx;
+    }
+
+    // A real single-file converge re-extracts AND re-chunks: the content corpus refuses to index a file whose
+    // disk bytes do not match the indexed hash, so stamping the hash is what makes the rebuilt chunks active.
+    private void ConvergeStaleCandidateFile(JulieDbFixture fx)
+    {
+        ConvergeIndexedHash(fx, StaleCandidateFile);
+        BuildContentDb(fx);
+    }
+
+    private static EditRequest StaleCandidateRequest(bool apply) =>
+        Req("replace_text", StaleCandidateFile) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "beta-anchor",
+            Apply = apply,
+        };
+
+    private static EditService.RecoveryOptions FastRecovery(int timeoutMs) =>
+        new(Timeout: TimeSpan.FromMilliseconds(timeoutMs), PollInterval: TimeSpan.FromMilliseconds(5));
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_ConvergesWithinBudget_ThenPlans()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Requested;
+        });
+        var svc = Build(fx, wt, FastRecovery(2000));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: false));
+
+        Assert.Null(result.FailureReason);
+        Assert.Contains("@@", result.Output);
+        Assert.Contains("updated-value", result.Output, StringComparison.Ordinal);
+        Assert.Single(wt.RecoveryCalls);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_ConvergedInline_AppliesAtCurrentDiskSpan()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt, FastRecovery(2000));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+
+        Assert.True(result.Applied);
+        Assert.Equal(
+            StaleCandidateCurrentDisk.Replace("target-value", "updated-value", StringComparison.Ordinal),
+            File.ReadAllText(AbsPath(StaleCandidateFile)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_NeverConverges_FailsCleanlyAfterBudget()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ => StaleRecoveryAttempt.Requested);
+        var svc = Build(fx, wt, FastRecovery(60));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+
+        Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.Contains("workspace refresh", result.Output, StringComparison.Ordinal);
+        Assert.Single(wt.RecoveryCalls);
+        Assert.Equal(StaleCandidateCurrentDisk, File.ReadAllText(AbsPath(StaleCandidateFile)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_NoRecoveryAvailable_FailsWithoutWaiting()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecordingWriteThrough();
+        var svc = Build(fx, wt, FastRecovery(60_000));
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+        elapsed.Stop();
+
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), "no-recovery path must not consume the wait budget");
+    }
+
+    [Fact]
+    public void Edit_PlanTimeStaleCandidateWait_StampsWaitReasonWithoutRawEditText()
+    {
+        using var fx = LayStaleCandidateFixture();
+        // Converged (inline leader) so the wait is one re-check: the tool path uses the real 2.5s default
+        // budget, and a test must never spend it.
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Converged;
+        });
+        EditTool tool = BuildTool(fx, writeThrough: wt);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit(
+            "replace_text", StaleCandidateFile, old_text: "target-value", new_text: "updated-value",
+            query: "beta-anchor", apply: true);
+
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.Equal("edit_stale_converge", metadata.RootElement.GetProperty("wait_reason").GetString());
+        Assert.DoesNotContain("target-value", telemetry.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("beta-anchor", telemetry.MetadataJson, StringComparison.Ordinal);
+    }
+
 }
