@@ -531,29 +531,90 @@ public static class CliDispatch
             return 3;
         }
 
-        var arm = new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, session.Open);
+        return RunForcedArm(
+            requestedArm,
+            index,
+            route,
+            request,
+            new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, session.Open),
+            outw,
+            err);
+    }
+
+    /// <summary>
+    /// Runs <c>--arm semantic</c> or <c>--arm hybrid</c> against an already-opened arm.
+    /// </summary>
+    /// <remarks>
+    /// The pre-query probe proves an artifact existed, not that the query was served: a handshake failure, an
+    /// open circuit, a KNN fault, or an artifact promoted between the probe and the query all leave the arm
+    /// unserved. Forced arms exist to measure retrieval, so an unserved query exits 3 with the reason and prints
+    /// nothing — an arm that ran and found nothing is a real answer and renders the lexical bytes.
+    /// </remarks>
+    internal static int RunForcedArm(
+        CliSearchArm requestedArm,
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        SemanticSearchArm arm,
+        TextWriter outw,
+        TextWriter err)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(arm);
+        ArgumentNullException.ThrowIfNull(outw);
+        ArgumentNullException.ThrowIfNull(err);
+
+        string wire = WireName(requestedArm);
         if (requestedArm is CliSearchArm.Hybrid)
         {
-            outw.WriteLine(
-                SearchRouteExecutor
-                    .RunSymbols(index, route, request with { FusionArm = new ForcedHybridFusionArm(() => arm) })
-                    .Output);
+            var forced = new ForcedHybridFusionArm(() => arm);
+            string fusedOutput = SearchRouteExecutor
+                .RunSymbols(index, route, request with { FusionArm = forced })
+                .Output;
+
+            if (forced.UnservedReason is { } fusionReason)
+            {
+                err.WriteLine($"--arm {wire} could not query the vector artifact: {fusionReason}");
+                return 3;
+            }
+
+            if (!forced.Queried)
+            {
+                err.WriteLine(
+                    $"--arm {wire} never reached the semantic arm: this query resolved to a file-name lookup, " +
+                    "which the symbol vector corpus does not serve.");
+                return 3;
+            }
+
+            outw.WriteLine(fusedOutput);
             return 0;
         }
 
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(index, route, request);
         SemanticQueryResult result = arm
-            .QuerySymbolsAsync(request.Query, request.Limit, allow: null)
+            .QuerySymbolsAsync(request.Query, request.Limit, AdmitsUnder(index, candidates.Visibility))
             .GetAwaiter()
             .GetResult();
         if (!result.Served)
         {
-            err.WriteLine($"--arm semantic could not query the vector artifact: {result.UnavailableReason}");
+            err.WriteLine($"--arm {wire} could not query the vector artifact: {result.UnavailableReason}");
             return 3;
         }
 
         outw.WriteLine(CliSemanticRender.Symbols(index, result.Hits, request.Query, request.Limit, request.Json));
         return 0;
     }
+
+    /// <summary>
+    /// The lexical stage's own visibility rules as a vector-match predicate, so <c>--arm semantic</c> hides the
+    /// test symbols and out-of-filter files the same query answered lexically would have hidden — and, because
+    /// the arm answers a rejecting filter by fetching deeper, a rejected neighbour is refilled rather than
+    /// spending a slot.
+    /// </summary>
+    private static Func<VectorMatch, bool> AdmitsUnder(
+        ISymbolLookupIndex index,
+        SymbolVisibilityPolicy? visibility) =>
+        match => index.FindBySymbolId(match.UnitId) is { } symbol && (visibility?.Allows(symbol) ?? true);
 
     /// <summary>Parses the <c>--arm</c> value; an absent flag is <see cref="CliSearchArm.Policy"/>.</summary>
     internal static bool TryParseSearchArm(string? raw, out CliSearchArm arm)
@@ -2737,18 +2798,36 @@ internal sealed class ForcedHybridFusionArm(Func<SemanticSearchArm> openArm) : I
 {
     private const int MinimumRecall = 10;
 
+    /// <summary>Whether the executor offered this arm the query at all — a file-name candidate set never does.</summary>
+    public bool Queried { get; private set; }
+
+    /// <summary>
+    /// Why the semantic query was not served, or null when it ran. The interface answers an unserved query with
+    /// the same <c>null</c> a genuinely empty one returns, which is the fail-open the production arm wants and
+    /// the silent lexical fallback a forced evaluation run must never make; keeping the reason here lets the CLI
+    /// tell the two apart.
+    /// </summary>
+    public string? UnservedReason { get; private set; }
+
     public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(request);
 
+        Queried = true;
         int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
         SemanticQueryResult result = openArm()
             .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
             .GetAwaiter()
             .GetResult();
 
-        if (!result.Served || result.Hits.Count == 0)
+        if (!result.Served)
+        {
+            UnservedReason = result.UnavailableReason ?? "the semantic arm did not serve this query.";
+            return null;
+        }
+
+        if (result.Hits.Count == 0)
             return null;
 
         var semantic = new List<SemanticRankedCandidate>(result.Hits.Count);
