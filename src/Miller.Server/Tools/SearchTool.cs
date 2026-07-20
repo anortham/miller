@@ -5,12 +5,64 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
+
+/// <summary>
+/// The rescue/mode half of the local semantic arm (ADR-0003, design §6.3): symbol-card and docs-chunk KNN for
+/// one workspace root. Separate from <see cref="ISymbolFusionArm"/> because these callers do not fuse a lexical
+/// symbol ranking — they add a last-resort affordance, reorder chunk hits, or ask only whether the artifact
+/// could have been consulted at all.
+/// </summary>
+/// <remarks>
+/// The root is per call rather than per instance: read tools route by <c>workspace_id</c>, so the artifact a
+/// query must consult is the one belonging to the workspace that query resolved to.
+/// </remarks>
+internal interface ISemanticTextArm
+{
+    SemanticQueryResult QuerySymbols(string workspaceRoot, string query, int k, Func<VectorMatch, bool>? allow);
+
+    SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k);
+}
+
+/// <summary>
+/// The production <see cref="ISemanticTextArm"/>. Only <see cref="SemanticMode.On"/> retrieves: under
+/// <c>shadow</c> vectors are built and evaluated but never served, and under <c>off</c> nothing is asked at
+/// all — so neither mode may open an arm, launch a sidecar, or stat an artifact.
+/// </summary>
+internal sealed class SemanticTextArm(SemanticMode mode, Func<string, SemanticSearchArm> openArm)
+    : ISemanticTextArm
+{
+    private static readonly SemanticQueryResult NotServing =
+        SemanticQueryResult.Unavailable("Semantic retrieval is not serving results in this mode.");
+
+    /// <summary>
+    /// Composes the arm from the two registered services that carry the whole activation decision, or returns
+    /// null when either is absent — which is how a host without the semantic graph stays lexical-only.
+    /// </summary>
+    public static ISemanticTextArm? For(VectorSidecar? sidecar, Lazy<SemanticEmbeddingSession?>? session) =>
+        sidecar is null || session is null
+            ? null
+            : new SemanticTextArm(
+                sidecar.Mode,
+                root => new SemanticSearchArm(root, sidecar, () => session.Value));
+
+    public SemanticQueryResult QuerySymbols(
+        string workspaceRoot, string query, int k, Func<VectorMatch, bool>? allow) =>
+        mode is SemanticMode.On
+            ? openArm(workspaceRoot).QuerySymbolsAsync(query, k, allow).GetAwaiter().GetResult()
+            : NotServing;
+
+    public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k) =>
+        mode is SemanticMode.On
+            ? openArm(workspaceRoot).QueryChunksAsync(query, k).GetAwaiter().GetResult()
+            : NotServing;
+}
 
 /// <summary>The interpretation axis for <c>search</c> (miller-toolbox.md L74). NOT and/or.</summary>
 public enum SearchToolMode
@@ -111,6 +163,7 @@ public sealed class SearchTool
     private readonly IWorkspaceRegionSearchProvider _regionProvider;
     private readonly IWorkspaceTextContentSearchProvider _textContentProvider;
     private readonly ISymbolFusionArm? _fusionArm;
+    private readonly ISemanticTextArm? _semanticArm;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -159,7 +212,26 @@ public sealed class SearchTool
         IWorkspaceContentSearchProvider contentProvider,
         IWorkspaceRegionSearchProvider regionProvider,
         IWorkspaceTextContentSearchProvider textContentProvider,
-        ISymbolFusionArm? fusionArm = null)
+        ISymbolFusionArm? fusionArm = null,
+        VectorSidecar? semanticSidecar = null,
+        Lazy<SemanticEmbeddingSession?>? embeddingSession = null)
+        : this(
+            workspaceProvider,
+            contentProvider,
+            regionProvider,
+            textContentProvider,
+            fusionArm,
+            SemanticTextArm.For(semanticSidecar, embeddingSession))
+    {
+    }
+
+    internal SearchTool(
+        IWorkspaceSearchProvider workspaceProvider,
+        IWorkspaceContentSearchProvider contentProvider,
+        IWorkspaceRegionSearchProvider regionProvider,
+        IWorkspaceTextContentSearchProvider textContentProvider,
+        ISymbolFusionArm? fusionArm,
+        ISemanticTextArm? semanticArm)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
@@ -169,6 +241,7 @@ public sealed class SearchTool
         _regionProvider = regionProvider;
         _textContentProvider = textContentProvider;
         _fusionArm = fusionArm;
+        _semanticArm = semanticArm;
     }
 
     [McpServerTool(Name = "search")]
@@ -262,19 +335,41 @@ public sealed class SearchTool
                 WorkspaceTextContentSearchContext content =
                     _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
-                SearchRouteExecutionResult result = SearchRouteExecutor.RunContent(
-                    content.Index,
-                    route,
-                    new SearchRouteExecutionRequest(
+                Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank =
+                    SemanticContentRerank(query, content.WorkspaceRoot);
+                SearchRouteExecutionResult result;
+                if (rerank is null)
+                {
+                    result = SearchRouteExecutor.RunContent(
+                        content.Index,
+                        route,
+                        new SearchRouteExecutionRequest(
+                            query,
+                            limit,
+                            json,
+                            exclude_tests,
+                            contentBanner,
+                            FilePattern: file_pattern,
+                            Language: language,
+                            SuggestionLookup: identifier =>
+                                SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
+                }
+                else
+                {
+                    string hybridOutput = RunContentCorpus(
+                        content.Index,
                         query,
                         limit,
                         json,
-                        exclude_tests,
+                        out int hybridCount,
+                        out long hybridBytes,
                         contentBanner,
-                        FilePattern: file_pattern,
-                        Language: language,
-                        SuggestionLookup: identifier =>
-                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
+                        file_pattern,
+                        language,
+                        identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
+                        rerank);
+                    result = new SearchRouteExecutionResult(hybridOutput, hybridCount, hybridBytes);
+                }
                 output = result.Output;
                 count = result.Count;
                 if (scope is not null)
@@ -304,6 +399,11 @@ public sealed class SearchTool
                             SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
                 output = result.Output;
                 count = result.Count;
+                if (!json && route.Mode == SearchToolMode.Source &&
+                    SourceChunksNotIndexed(query, textContent.WorkspaceRoot))
+                {
+                    output += SourceChunksNotIndexedNote;
+                }
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
@@ -342,7 +442,8 @@ public sealed class SearchTool
                         ensureFresh,
                         file_pattern,
                         language,
-                        compactBanner);
+                        compactBanner,
+                        context);
                     if (scope is not null)
                     {
                         scope.SetMetadata("auto_rescue_attempted", true);
@@ -1168,7 +1269,8 @@ public sealed class SearchTool
         string? compactBanner = null,
         string? filePattern = null,
         string? language = null,
-        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null)
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -1201,6 +1303,11 @@ public sealed class SearchTool
             }
             return (fetched.Count, hits.Count);
         });
+
+        // Reordering happens after escalation and before paging, so the hybrid arm sees the same candidate set
+        // the lexical arm settled on and cannot change which hits exist — only which of them make the page.
+        if (rerank is not null && hits.Count > 1)
+            hits = [.. rerank(hits)];
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
@@ -1472,7 +1579,102 @@ public sealed class SearchTool
         string.Equals(kind, "import", StringComparison.Ordinal) ||
         string.Equals(kind, "module", StringComparison.Ordinal);
 
+    /// <summary>
+    /// The mode-contract honesty note (design §6.3): <c>mode=source</c> stays lexical-only under the default
+    /// corpus, which embeds docs and config but not source bodies. The note fires only when the arm WOULD have
+    /// been consulted — a semantically shaped query over a readable artifact — so it reports a corpus boundary
+    /// rather than restating that semantic retrieval is off.
+    /// </summary>
+    private const string SourceChunksNotIndexedNote =
+        "\nnote: source_chunks_not_indexed — the default vector corpus embeds docs/config, not source bodies, " +
+        "so mode=source ranks lexically only.";
+
+    private bool SourceChunksNotIndexed(string query, string workspaceRoot) =>
+        _semanticArm is { } arm &&
+        SemanticQueryPolicy.Route(query, LexicalEvidence.None).IsHybrid &&
+        arm.QueryChunks(workspaceRoot, query, 1).Served;
+
+    /// <summary>
+    /// The <c>mode=content</c> hybrid arm: a reordering of the chunk hits the lexical corpus already returned,
+    /// under the same gating as the symbol route. Returns null — meaning "run the untouched lexical path" — for
+    /// an absent arm or a query the policy routes lexical-only, so no gated state pays for a closure it will
+    /// never call.
+    /// </summary>
+    /// <remarks>
+    /// Membership is never changed, only order: a semantic-only chunk has no lexical hit to render (no score,
+    /// no line, no snippet), and fabricating one would make a neighbour look like a match.
+    /// </remarks>
+    private Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? SemanticContentRerank(
+        string query,
+        string workspaceRoot)
+    {
+        if (_semanticArm is not { } arm)
+            return null;
+
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        if (!route.IsHybrid)
+            return null;
+
+        FusionWeights weights = RrfFusion.WeightsFor(route.HybridClass);
+        return lexical =>
+        {
+            if (lexical.Count < 2)
+                return lexical;
+
+            SemanticQueryResult semantic = arm.QueryChunks(
+                workspaceRoot,
+                query,
+                Math.Clamp(lexical.Count, 1, SemanticSearchArm.MaxCandidates));
+            return semantic.Served && semantic.Hits.Count > 0
+                ? FuseContentHits(lexical, semantic.Hits, weights)
+                : lexical;
+        };
+    }
+
+    /// <summary>
+    /// Weighted reciprocal-rank fusion over chunk hits, matching the frozen <c>fusion-v1</c> constants the
+    /// symbol route uses. Hits join on file path because the chunk corpus and the content corpus chunk the same
+    /// files under different identifiers, and a path is the fact both sides agree on.
+    /// </summary>
+    private static IReadOnlyList<ContentSearchHit> FuseContentHits(
+        IReadOnlyList<ContentSearchHit> lexical,
+        IReadOnlyList<SemanticHit> semantic,
+        FusionWeights weights)
+    {
+        var semanticRanks = new Dictionary<string, int>(semantic.Count, StringComparer.Ordinal);
+        foreach (SemanticHit hit in semantic)
+            semanticRanks.TryAdd(hit.FilePath, hit.Rank);
+
+        return
+        [
+            .. lexical
+                .Select((hit, index) => (Hit: hit, Fused: FusedScore(index + 1, semanticRanks, hit.Path, weights)))
+                .OrderByDescending(row => row.Fused)
+                .ThenByDescending(row => row.Hit.Score)
+                .ThenBy(row => row.Hit.Path, StringComparer.Ordinal)
+                .ThenBy(row => row.Hit.Line)
+                .Select(row => row.Hit),
+        ];
+    }
+
+    private static double FusedScore(
+        int lexicalRank,
+        IReadOnlyDictionary<string, int> semanticRanks,
+        string path,
+        FusionWeights weights) =>
+        (weights.Lexical / (RrfFusion.RankConstant + lexicalRank)) +
+        (semanticRanks.TryGetValue(path, out int semanticRank)
+            ? weights.Semantic / (RrfFusion.RankConstant + semanticRank)
+            : 0d);
+
     private sealed record AutoTextRescueResult(string Output, int Count, long SourceBytes, string Kind);
+
+    /// <summary>The rescue block's hard row budget (design §6.3) — an affordance, not a result page.</summary>
+    private const int SemanticRescueRows = 2;
+
+    /// <summary>Recall depth per corpus. Deeper than the row budget so the visibility filter has something to
+    /// reject without collapsing the rung to nothing.</summary>
+    private const int SemanticRescueRecall = 8;
 
     private static bool ShouldRunAutoTextRescue(
         SearchRoute route,
@@ -1504,7 +1706,8 @@ public sealed class SearchTool
         bool ensureFresh,
         string? filePattern,
         string? language,
-        string? compactBanner)
+        string? compactBanner,
+        WorkspaceSymbolSearchContext symbolContext)
     {
         try
         {
@@ -1553,7 +1756,19 @@ public sealed class SearchTool
                 return lateDocsRescue;
             }
 
-            return sourceRescue;
+            // The final rung (design §6.3): every lexical corpus came back empty, so the only affordance left is
+            // "something semantically near your question exists". It is last precisely because a lexical hit is
+            // evidence the agent can verify by reading, and a neighbour is not.
+            return TryRunSemanticRescue(
+                       query,
+                       excludeTests,
+                       primaryOutput,
+                       primaryCount,
+                       filePattern,
+                       language,
+                       compactBanner,
+                       symbolContext)
+                   ?? sourceRescue;
         }
         catch (InvalidOperationException)
         {
@@ -1639,6 +1854,97 @@ public sealed class SearchTool
                 sourceBytes,
                 "docs_config");
     }
+
+    /// <summary>
+    /// The semantic rescue rung: at most two rows, each labelled with the corpus it came from, plus the single
+    /// closing affordance. Returns null whenever the arm is absent, the query is not semantically shaped, the
+    /// artifact could not be consulted, or nothing was found — every one of which leaves the lexical bytes
+    /// exactly as they were.
+    /// </summary>
+    private AutoTextRescueResult? TryRunSemanticRescue(
+        string query,
+        bool? excludeTests,
+        string primaryOutput,
+        int primaryCount,
+        string? filePattern,
+        string? language,
+        string? compactBanner,
+        WorkspaceSymbolSearchContext symbolContext)
+    {
+        if (_semanticArm is not { } arm)
+            return null;
+
+        // Rescue only runs when the lexical arms already came back weak or empty, so that IS the evidence the
+        // policy would otherwise read off a ranking — there is no stronger lexical signal left to consult.
+        if (!SemanticQueryPolicy.Route(query, LexicalEvidence.None).IsHybrid)
+            return null;
+
+        var visibility = new SymbolVisibilityPolicy(
+            ResolveExcludeTests(excludeTests, query, SearchToolMode.Auto),
+            ResolveHideLowSignalKinds(query, SearchToolMode.Auto),
+            ToolSearchFilters.Parse(filePattern, language));
+        ISymbolLookupIndex index = symbolContext.Index;
+        string root = symbolContext.WorkspaceRoot;
+
+        SemanticQueryResult symbols = arm.QuerySymbols(
+            root,
+            query,
+            SemanticRescueRecall,
+            match => index.FindBySymbolId(match.UnitId) is { } symbol && visibility.Allows(symbol));
+        SemanticQueryResult chunks = arm.QueryChunks(root, query, SemanticRescueRecall);
+
+        List<string> symbolRows =
+        [
+            .. symbols.Hits
+                .Select(hit => hit.SymbolId is { } id ? index.FindBySymbolId(id) : null)
+                .Where(symbol => symbol is not null)
+                .Select(symbol => $"  semantic symbol  {symbol!.Name}  {symbol.FilePath}:{symbol.StartLine}"),
+        ];
+        List<string> chunkRows =
+        [
+            .. chunks.Hits
+                .Where(hit => hit.DocId is not null)
+                .Select(hit => hit.FilePath)
+                .Distinct(StringComparer.Ordinal)
+                .Select(path => $"  semantic docs  {path}"),
+        ];
+
+        if (symbolRows.Count == 0 && chunkRows.Count == 0)
+            return null;
+
+        // One row from each corpus when both answered, otherwise two from whichever did — the ≤2 budget spent on
+        // breadth first, because a second neighbour from the same corpus adds far less than the other corpus does.
+        int symbolTake = chunkRows.Count == 0 ? SemanticRescueRows : Math.Min(symbolRows.Count, 1);
+        int chunkTake = SemanticRescueRows - symbolTake;
+        List<string> rows = [.. symbolRows.Take(symbolTake), .. chunkRows.Take(chunkTake)];
+
+        string kind = (symbolTake > 0 && symbolRows.Count > 0, chunkTake > 0 && chunkRows.Count > 0) switch
+        {
+            (true, true) => "semantic_mixed",
+            (true, false) => "semantic_symbol",
+            _ => "semantic_docs",
+        };
+
+        return new AutoTextRescueResult(
+            RenderAutoTextRescueCompact(
+                primaryOutput,
+                primaryCount,
+                string.Join('\n', rows),
+                compactBanner,
+                "Semantic matches also found:",
+                SemanticRescueAffordance(kind, rows)),
+            rows.Count,
+            SourceBytes: 0,
+            kind);
+    }
+
+    private static string SemanticRescueAffordance(string kind, IReadOnlyList<string> rows) =>
+        kind == "semantic_symbol"
+            ? $"Try: inspect target=\"{SymbolNameFromRescueRow(rows[0])}\""
+            : "Rerun with mode=content for more docs/config snippets.";
+
+    private static string SymbolNameFromRescueRow(string row) =>
+        row.Trim()["semantic symbol  ".Length..].Split("  ", StringSplitOptions.None)[0];
 
     private static string RenderAutoTextRescueCompact(
         string primaryOutput,
