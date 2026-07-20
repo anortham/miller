@@ -55,6 +55,15 @@ public static class MillerServiceRegistration
         services.AddHostedService(sp => sp.GetRequiredService<FreshnessService>());
         services.AddHostedService(sp => sp.GetRequiredService<IndexerService>());
 
+        // Optional local semantic retrieval (ADR-0003). The drain loop follows the SAME lazy-bootstrap-getter
+        // discipline as the M3 services above, and under MILLER_SEMANTIC=off its ExecuteAsync returns before
+        // waiting, opening, or stating anything — the vectors-v1 zero-work guarantee. The wake signal is the
+        // process-wide instance IndexerSidecarConverger stamps.
+        services.AddSingleton(_ => VectorSidecar.FromEnvironment());
+        services.AddSingleton(_ => VectorConvergeSignal.Shared);
+        services.AddSingleton<VectorConvergeService>();
+        services.AddHostedService(sp => sp.GetRequiredService<VectorConvergeService>());
+
         // The index_fresh probe (decision-8) the telemetry filter reads per call: built revision vs. the freshness
         // service's last-observed revision AND the indexer's queue-empty state. Resolved lazily (per call / by the
         // filter), well after StartAsync, so its GetRequiredService<IndexHolder>() is safe. Cheap — no SQLite on
