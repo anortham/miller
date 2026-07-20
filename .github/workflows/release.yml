@@ -308,6 +308,12 @@ jobs:
           chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/.tools/julie-semantic-sidecar" "${package_dir}/dashboard/Miller.Dashboard"
           test -f "${package_dir}/LICENSE"
           test -f "${package_dir}/THIRD-PARTY-NOTICES.md"
+          # The archive redistributes julie-semantic-sidecar (statically linked llama.cpp/ggml) and the
+          # sqlite-vec loadable extension, so shipping without their attribution is a license violation.
+          for component in julie-extract julie-semantic-sidecar sqlite-vec llama.cpp; do
+            grep -qi -- "${component}" "${package_dir}/THIRD-PARTY-NOTICES.md" \
+              || { echo "THIRD-PARTY-NOTICES.md is missing an attribution entry for ${component}"; exit 1; }
+          done
           archive="${release_dir}/${package_name}.tar.gz"
           tar -czf "${archive}" -C "${package_root}" "${package_name}"
           (cd "${release_dir}" && shasum -a 256 "${package_name}.tar.gz" > "${package_name}.tar.gz.sha256")
@@ -334,6 +340,14 @@ jobs:
           }
           if (-not (Test-Path (Join-Path $packageDir "THIRD-PARTY-NOTICES.md"))) {
             throw "missing packaged THIRD-PARTY-NOTICES.md"
+          }
+          # The archive redistributes julie-semantic-sidecar (statically linked llama.cpp/ggml) and the
+          # sqlite-vec loadable extension, so shipping without their attribution is a license violation.
+          $notices = Get-Content (Join-Path $packageDir "THIRD-PARTY-NOTICES.md") -Raw
+          foreach ($component in @("julie-extract", "julie-semantic-sidecar", "sqlite-vec", "llama.cpp")) {
+            if ($notices -notmatch [regex]::Escape($component)) {
+              throw "THIRD-PARTY-NOTICES.md is missing an attribution entry for $component"
+            }
           }
           $archive = Join-Path $releaseDir "$packageName.zip"
           Compress-Archive -Path $packageDir -DestinationPath $archive -Force
