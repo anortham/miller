@@ -102,8 +102,10 @@ stamping — see §9.4). This reliability work rides the program as an independe
 - Speaks the existing **`julie.embedding.sidecar` v1** protocol verbatim: newline-delimited JSON
   envelopes (`schema`, `version:1`, `request_id`, `method`, `params`), methods
   `health | embed_query | embed_batch | shutdown`, error envelope with
-  `parse_error | invalid_params | embed_error | internal_error | unknown_method |
-  serialize_error`. `embed_query` applies query instruction policy; `embed_batch` applies document
+  `invalid_request | invalid_json | unknown_method | internal_error` (corrected in P1: the
+  vocabulary originally listed here did not match the reference implementation — see
+  [`docs/contracts/semantic-sidecar-protocol-v1.md`](../contracts/semantic-sidecar-protocol-v1.md)
+  § Deviations from design, D1; the contract is authoritative). `embed_query` applies query instruction policy; `embed_batch` applies document
   policy — no new `kind` field. Existing validation invariants preserved (dims echo, batch count
   match, exactly-one-of result/error, request-id echo).
 - **v1 additive health metadata (backward compatible):** model sha256 + revision, sidecar build
