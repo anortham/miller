@@ -69,3 +69,4 @@ Task B6: complete (serial-worker-commit, worker commit f4f44cc, Lead inline revi
 P2 pre-merge review (codex): 4 findings — 3 real (all fixed in ce791aa, lead-reviewed), 1 dismissed (canary unwired = stated P2 posture, wiring is P3/P5). Post-fix branch gate PASS at ce791aa.
 Task F1: complete (parallel-lead-commit, Lead inline review clean, lead commit 5a25e5c)
 Follow-up (recorded, not P3 scope): lift QueryShapeFor + shape predicates from SearchTool.cs into a Core QueryShape helper after F3/F4 land; SemanticQueryPolicy.HasCodeSyntax is deliberately byte-identical to LooksLikeSourceCodeQuery until then (F1 judgment call 2).
+Task F2: complete (parallel-lead-commit, Lead inline review clean, lead commit 682190c)
