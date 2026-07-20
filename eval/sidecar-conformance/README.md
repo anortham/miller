@@ -69,11 +69,24 @@ Every emitted vector must satisfy all of:
 
 | Check | Bar | Applies to |
 |---|---|---|
+| Raw dimensionality | exactly the model's declared `native_dims` | **raw** server output, before any transform |
+| Raw finiteness | every component finite (no NaN, no ±Inf) | **raw** server output, before any transform |
+| Raw L2 norm | within `1e-3` of `1.0` | **raw** server output, before any transform |
 | Dimensionality | exactly equal to the requested lane | native and lane vectors |
 | L2 norm | within `1e-3` of `1.0` | emitted **float** vectors (`vector_native`, `norm_lane`) |
 | Cosine vs. golden | `>= 0.999` | native vector and reconstructed lane vector |
 | int8 quantization fidelity | cosine `>= 0.999` against its own pre-quantization float | `vector_lane_int8` |
 | int8 code range | `abs(code) <= 127` | `vector_lane_int8` |
+
+**The three raw checks run first, on untransformed output.** They are the reason the tolerance policy can
+be trusted at all. `generate.py` validates whatever the server returned *before* renormalizing it, so a
+runtime that ignored `--embd-normalize 2` fails on the raw norm instead of being silently repaired into a
+passing vector, and a NaN or ±Inf component fails the run naming the offending `text_id` instead of being
+rounded into a golden. Only after those checks does the generator re-normalize, and then purely for
+float-precision hygiene. The same three checks run inside `--verify`'s regeneration path and against every
+vector of the 250-wide batch-position probe. Goldens are written and parsed with non-standard JSON literals
+rejected (`allow_nan=False`), so `NaN`/`Infinity` can never enter or leave a committed file; `--verify` also
+re-checks the committed `norm_native_raw` and the finiteness of committed vectors.
 
 **The norm bar governs float vectors, not int8 storage codes.** `vector_lane_int8` is a storage encoding:
 reconstructing it as `code * lane_int8_scale` legitimately produces an L2 norm off by roughly `1.5e-3` at
@@ -120,6 +133,35 @@ generator asserts the invariance and records `batch_group_positions_checked: 250
 bge goldens and `false` in the qwen3 goldens (32K context) — a real capability difference the fixtures record
 rather than hide.
 
+### Truncated rows are excluded from the cross-implementation cosine gate
+
+Every row the generator truncated also carries `truncation_sensitive: true` (today: `long-truncation-001`
+and `long-truncation-002` in the bge goldens only). Those rows are held to every check in the tolerance
+policy **except** the `>= 0.999` cosine comparison against the committed golden, which `--verify` reports as
+an informational note rather than a failure.
+
+The reason is that the goldens cannot currently encode a truncation point that a conformant sidecar is
+obliged to reproduce. `generate.py` truncates with the benchmark harness's character budget
+(`context_length × 1.6`, cut on a word boundary), while
+[`semantic-sidecar-protocol-v1.md`](../../docs/contracts/semantic-sidecar-protocol-v1.md)
+§ Truncation semantics specifies a **token** budget, `max_text_tokens`. Three things block encoding the
+contract's version:
+
+1. **v1 freezes no value for `max_text_tokens`.** It is declared per implementation through `health`, so two
+   compliant sidecars may legitimately truncate the same text at different points.
+2. **The section names a token budget but freezes a character-based algorithm**, citing `bench.py`'s `_fit`
+   (`context_length × 1.6` chars) as the mirror. The two cut at different places.
+3. **The prefixing order contradicts the reference it cites.** The contract's application order is prefix →
+   append EOS → fit to budget, which can cut off the EOS marker the same contract calls unconditional for
+   Qwen3; `bench.py` fits *before* appending EOS.
+
+The pinned `llama-server` build `b10068` does expose `POST /tokenize` and `POST /detokenize` (verified
+live against the cached binary), so a token-exact golden is technically implementable the moment the
+contract settles those three points. Until it does, marking the affected rows is the honest fixture: a
+conformant P2a sidecar implementing the frozen token semantics will not reproduce these two vectors, and
+failing it for that would be a false conformance failure. All 37 other rows in each model remain under the
+full strict gate.
+
 ## Golden row shape
 
 ```jsonc
@@ -135,7 +177,9 @@ rather than hide.
   "eos_appended": true,             // qwen3 only: "<|endoftext|>" appended after prefixing
   "sanitized_to_empty_marker": false,
   "input_truncated": false,         // text exceeded the model's char budget and was cut on a word
+  "truncation_sensitive": false,    // true => excluded from the cross-implementation cosine gate
   "prepared_chars": 132,            // length of the final string handed to the tokenizer
+  "norm_native_raw": 1.0,           // L2 norm of the server's untransformed output, gate-checked
   "norm_native": 1.0,
   "norm_lane": 1.0,                 // after slice -> renormalize, before quantization
   "vector_native": [/* native_dims floats, 6dp */],
@@ -174,7 +218,9 @@ Reversing steps 1 and 2 produces a different vector. Implementations must use th
 > A sidecar implementation **passes conformance** if and only if, for every text in `corpus.jsonl`, embedded
 > under its own runtime and backend with the role's instruction template applied, every check in the
 > tolerance policy table above holds against the committed golden for that model — for all 39 texts and both
-> pinned models. One text failing one check fails conformance.
+> pinned models, except that rows marked `truncation_sensitive: true` are exempt from the cosine-vs-golden
+> check only (all other checks, including the three raw checks, still apply to them). One text failing one
+> applicable check fails conformance.
 
 An implementation is free to run on any backend and any hardware; it is not free to produce a vector that
 points somewhere else. Failing only on a specific backend is a backend bug, not a licence to relax the bar.
@@ -183,8 +229,13 @@ points somewhere else. Failing only on a specific backend is a backend bug, not 
 
 Generation is deterministic given the cache: the corpus order is fixed, server settings are fixed, embedding
 is temperature-free, and the CPU backend is asserted rather than assumed. The committed goldens were
-produced by one run and independently reproduced by a later `--verify` run on the same cache. The gate is
-bidirectional — a deliberately corrupted golden was confirmed to fail it.
+produced by one run and independently reproduced by two consecutive later `--verify` runs on the same cache.
+
+The gate is bidirectional, confirmed by injection rather than by argument. A deliberately corrupted golden
+fails it; so does a scratch copy of `generate.py` that replaces one server vector with all-`NaN`
+(`raw server output has 1024 non-finite component(s)`, exit 1) and one that scales a server vector by 3
+(`raw server output L2 norm 3.000000 outside 1.0 +/- 0.001; the runtime did not honour --embd-normalize 2`,
+exit 1). Both failures name the offending model and `text_id`, and neither vector can reach a golden file.
 
 Generation and verification each take well under a minute for both models on an Apple M2 Ultra. Wall time is
 report-only; it is not a gate.

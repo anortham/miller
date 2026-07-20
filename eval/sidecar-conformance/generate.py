@@ -9,9 +9,17 @@ Two modes:
   --verify   regenerate and assert the frozen tolerance policy against the
              committed goldens without writing them
 
+Every server output is validated raw -- declared native dims, all components
+finite, L2 norm already within tolerance of 1.0 -- before any renormalization
+or quantization touches it, so a runtime that ignored `--embd-normalize 2` or
+emitted NaN fails the run instead of being silently repaired.
+
 Everything about how a model is invoked -- pooling, instruction prefixes, EOS
 append, text budget, L2 normalization -- is reused from
 `eval/model-bench/bench.py`, which is the proven reference for these flags.
+Its text budget is character-based; the protocol contract freezes a token
+budget, so rows whose input was truncated carry `truncation_sensitive` and are
+excluded from the cross-implementation cosine gate (see README).
 No network access: the pinned llama.cpp build and both GGUFs must already be in
 `eval/model-bench/.cache/`.
 """
@@ -163,7 +171,7 @@ def sanitize(text: str) -> tuple[str, bool]:
 def read_corpus() -> list[dict]:
     if not CORPUS.is_file():
         raise SystemExit(f"missing {CORPUS}")
-    return [json.loads(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [loads_strict(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def prepare(bench, row: dict, cand: dict) -> tuple[str, bool]:
@@ -174,6 +182,26 @@ def prepare(bench, row: dict, cand: dict) -> tuple[str, bool]:
 
 def l2(vec: np.ndarray) -> np.ndarray:
     return vec / max(float(np.linalg.norm(vec)), 1e-12)
+
+
+def validate_raw(raw, expected_dims: int, label: str) -> tuple[np.ndarray, float]:
+    """Gate the server's untransformed output before anything reshapes it.
+
+    Normalizing first would hide a runtime that ignored `--embd-normalize 2`,
+    and a non-finite component would survive rounding into the goldens.
+    """
+    vec = np.asarray(raw, dtype=np.float64)
+    if vec.ndim != 1 or vec.shape[0] != expected_dims:
+        raise SystemExit(f"{label}: raw server output shape {vec.shape} != declared native dims ({expected_dims},)")
+    if not np.isfinite(vec).all():
+        bad = int(np.count_nonzero(~np.isfinite(vec)))
+        raise SystemExit(f"{label}: raw server output has {bad} non-finite component(s)")
+    norm = float(np.linalg.norm(vec))
+    if abs(norm - 1.0) > NORM_TOLERANCE:
+        raise SystemExit(
+            f"{label}: raw server output L2 norm {norm:.6f} outside 1.0 +/- {NORM_TOLERANCE}; "
+            "the runtime did not honour --embd-normalize 2")
+    return vec, norm
 
 
 def quantize_int8(vec: np.ndarray) -> tuple[np.ndarray, float]:
@@ -212,7 +240,7 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
     with bench.LlamaServer(server, weights, cand["pooling"], ctx, port,
                            logdir / f"llama-{lane['key']}.log") as srv:
         vectors = srv.embed(prepared, batch=16)
-        batch_checks = run_batch_group_check(corpus, prepared, srv)
+        batch_checks = run_batch_group_check(corpus, prepared, srv, cand["native_dims"], lane["key"])
     elapsed = time.monotonic() - started
 
     generator = {
@@ -230,8 +258,9 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
     }
 
     rows = []
-    for row, prep_text, native, truncated in zip(corpus, prepared, vectors, truncated_flags):
-        native = l2(np.asarray(native, dtype=np.float32))
+    for row, prep_text, raw, truncated in zip(corpus, prepared, vectors, truncated_flags):
+        checked, raw_norm = validate_raw(raw, cand["native_dims"], f"{lane['key']}/{row['text_id']}")
+        native = l2(checked.astype(np.float32))
         codes, scale, sliced = lane_vector(native, lane["lane_dims"])
         rows.append({
             "text_id": row["text_id"],
@@ -246,7 +275,9 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
             "eos_appended": prep_text.endswith(bench.QWEN_EOS),
             "sanitized_to_empty_marker": prep_text.find(EMPTY_SUBSTITUTE) >= 0 and row.get("sanitization_expected", False),
             "input_truncated": truncated,
+            "truncation_sensitive": truncated,
             "prepared_chars": len(prep_text),
+            "norm_native_raw": round(raw_norm, FLOAT_DECIMALS),
             "norm_native": round(float(np.linalg.norm(native)), FLOAT_DECIMALS),
             "norm_lane": round(float(np.linalg.norm(sliced)), FLOAT_DECIMALS),
             "vector_native": round_floats(native),
@@ -261,16 +292,18 @@ def embed_lane(bench, lane: dict, pins: dict, server: Path, port: int, logdir: P
     return rows
 
 
-def run_batch_group_check(corpus: list[dict], prepared: list[str], srv) -> dict:
+def run_batch_group_check(corpus: list[dict], prepared: list[str], srv,
+                          native_dims: int, lane_key: str) -> dict:
     """Embed batch-marker texts at every position of a full-size batch."""
     checks = {}
     for row, prep_text in zip(corpus, prepared):
         expand = row.get("batch_expand")
         if not expand:
             continue
-        stacked = srv.embed([prep_text] * expand, batch=expand)
-        first = l2(np.asarray(stacked[0], dtype=np.float32))
-        worst = min(float(first @ l2(np.asarray(v, dtype=np.float32))) for v in stacked)
+        stacked = [validate_raw(v, native_dims, f"{lane_key}/{row['text_id']}[batch {i}]")[0]
+                   for i, v in enumerate(srv.embed([prep_text] * expand, batch=expand))]
+        first = l2(stacked[0].astype(np.float32))
+        worst = min(float(first @ l2(v.astype(np.float32))) for v in stacked)
         if worst < COSINE_FLOOR:
             raise SystemExit(
                 f"batch position invariance failed for {row['text_id']}: worst cosine {worst:.6f}")
@@ -278,16 +311,24 @@ def run_batch_group_check(corpus: list[dict], prepared: list[str], srv) -> dict:
     return checks
 
 
+def reject_nonstandard(token: str):
+    raise SystemExit(f"golden contains the non-standard JSON literal {token!r}")
+
+
+def loads_strict(line: str) -> dict:
+    return json.loads(line, parse_constant=reject_nonstandard)
+
+
 def write_golden(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
-            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
 
 
 def read_golden(path: Path) -> dict:
     if not path.is_file():
         raise SystemExit(f"missing committed golden {path}; run generate.py without --verify first")
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [loads_strict(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return {r["text_id"]: r for r in rows}
 
 
@@ -310,6 +351,16 @@ def check_row(fresh: dict, golden: dict) -> list[str]:
         return failures
 
     native_fresh = np.asarray(fresh["vector_native"], dtype=np.float64)
+    if not np.isfinite(native_fresh).all():
+        failures.append(f"{tid}: emitted native vector has non-finite components")
+    if not np.isfinite(np.asarray(golden["vector_native"], dtype=np.float64)).all():
+        failures.append(f"{tid}: committed golden native vector has non-finite components")
+    if abs(golden["norm_native_raw"] - 1.0) > NORM_TOLERANCE:
+        failures.append(f"{tid}: committed golden raw L2 norm {golden['norm_native_raw']:.6f} "
+                        f"outside 1.0 +/- {NORM_TOLERANCE}")
+    if failures:
+        return failures
+
     native_norm = float(np.linalg.norm(native_fresh))
     if abs(native_norm - 1.0) > NORM_TOLERANCE:
         failures.append(f"{tid}: native L2 norm {native_norm:.6f} outside 1.0 +/- {NORM_TOLERANCE}")
@@ -331,15 +382,20 @@ def check_row(fresh: dict, golden: dict) -> list[str]:
         failures.append(f"{tid}: int8 quantization cosine {quant_cos:.6f} < {COSINE_FLOOR}")
 
     native_cos = cosine(fresh["vector_native"], golden["vector_native"])
-    if native_cos < COSINE_FLOOR:
-        failures.append(f"{tid}: native cosine {native_cos:.6f} < {COSINE_FLOOR}")
-
     lane_golden = np.asarray(golden["vector_lane_int8"], dtype=np.float64) * golden["lane_int8_scale"]
     lane_cos = cosine(lane_fresh, lane_golden)
-    if lane_cos < COSINE_FLOOR:
-        failures.append(f"{tid}: lane cosine {lane_cos:.6f} < {COSINE_FLOOR}")
+    if golden.get("truncation_sensitive"):
+        if min(native_cos, lane_cos) < COSINE_FLOOR:
+            print(f"  note: {tid} excluded from the cross-implementation cosine gate "
+                  f"(truncation-sensitive); native {native_cos:.6f}, lane {lane_cos:.6f}")
+    else:
+        if native_cos < COSINE_FLOOR:
+            failures.append(f"{tid}: native cosine {native_cos:.6f} < {COSINE_FLOOR}")
+        if lane_cos < COSINE_FLOOR:
+            failures.append(f"{tid}: lane cosine {lane_cos:.6f} < {COSINE_FLOOR}")
 
-    for field in ("role", "class", "storage_schema", "instruction_applied", "eos_appended", "input_truncated"):
+    for field in ("role", "class", "storage_schema", "instruction_applied", "eos_appended",
+                  "input_truncated", "truncation_sensitive"):
         if fresh[field] != golden[field]:
             failures.append(f"{tid}: {field} {fresh[field]!r} != committed {golden[field]!r}")
     return failures
@@ -388,7 +444,8 @@ def main() -> int:
                 print(f"  {line}", file=sys.stderr)
             return 1
         print(f"\nCONFORMANCE PASS: {checked} vectors across {len(LANES)} models "
-              f"(dims exact, |norm-1| <= {NORM_TOLERANCE}, cosine >= {COSINE_FLOOR}) in {elapsed:.1f}s")
+              f"(raw output finite and unit-norm, dims exact, |norm-1| <= {NORM_TOLERANCE}, "
+              f"cosine >= {COSINE_FLOOR}) in {elapsed:.1f}s")
     else:
         print(f"\ngenerated {sum(len(r) for r in generated.values())} vectors in {elapsed:.1f}s")
     return 0
