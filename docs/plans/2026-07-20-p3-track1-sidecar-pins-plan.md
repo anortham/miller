@@ -70,10 +70,10 @@
 **What to build:** The pin file and both restore scripts, structured like `restore-julie-extract.*` (download to temp, sha256 check, extract member, chmod, version smoke where runnable on this host).
 
 **Acceptance criteria:**
-- [ ] `scripts/restore-semantic-sidecar.sh` on this mac restores `.tools/julie-semantic-sidecar` (arm64) + `.tools/vec0.dylib`, sha256-verified, and `--version` prints `julie-semantic-sidecar 0.1.0-rc.1`
-- [ ] Tampered/wrong sha256 aborts without touching `.tools/`
-- [ ] `.ps1` mirrors the `.sh` flag-for-flag (structural review; not runnable on this host)
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] `scripts/restore-semantic-sidecar.sh` on this mac restores `.tools/julie-semantic-sidecar` (arm64) + `.tools/vec0.dylib`, sha256-verified, and `--version` prints `julie-semantic-sidecar 0.1.0-rc.1`
+- [x] Tampered/wrong sha256 aborts without touching `.tools/`
+- [x] `.ps1` mirrors the `.sh` flag-for-flag (structural review; not runnable on this host — pwsh absent)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`c4c3270`; fast-suite tripwire waived on isolation proof — F3's in-flight TDD code owns the compile failure, G1 touches zero .cs/.csproj/.slnx)
 
 ## Task G2: packaged extension resolution + csproj copy/guard
 

@@ -70,3 +70,4 @@ P2 pre-merge review (codex): 4 findings — 3 real (all fixed in ce791aa, lead-r
 Task F1: complete (parallel-lead-commit, Lead inline review clean, lead commit 5a25e5c)
 Follow-up (recorded, not P3 scope): lift QueryShapeFor + shape predicates from SearchTool.cs into a Core QueryShape helper after F3/F4 land; SemanticQueryPolicy.HasCodeSyntax is deliberately byte-identical to LooksLikeSourceCodeQuery until then (F1 judgment call 2).
 Task F2: complete (parallel-lead-commit, Lead inline review clean, lead commit 682190c)
+Task G1 (Track 1): complete (serial-worker-commit c4c3270, Lead inline review clean; fast-suite tripwire waived on isolation proof — compile failure owned by F3 in-flight TDD)
