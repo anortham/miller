@@ -224,10 +224,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** Miller's client half of the sidecar relationship, tested end-to-end against a fake it fully controls. Process-spawning tests are Scale-tagged.
 
 **Acceptance criteria:**
-- [ ] Session round-trips embed_batch with deterministic vectors; dims/norm validated per protocol tolerances
-- [ ] Stall ⟹ bounded timeout ⟹ fail-open error (no hang); crash ⟹ restart-with-backoff; repeated failure ⟹ circuit-open state surfaced as a reason
-- [ ] Garbage on stdout ⟹ session fails that request loudly, never misparses
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Session round-trips embed_batch with deterministic vectors; dims/norm validated per protocol tolerances
+- [x] Stall ⟹ bounded timeout ⟹ fail-open error (no hang); crash ⟹ restart-with-backoff; repeated failure ⟹ circuit-open state surfaced as a reason
+- [x] Garbage on stdout ⟹ session fails that request loudly, never misparses
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit
 
 ### Task B4: Corpus builder + dual-cursor convergence
 
