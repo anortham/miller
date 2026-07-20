@@ -46,3 +46,8 @@ Task 4: complete (serial-worker-commit, worker commit b464721, Lead inline revie
 
 ## P1 pre-merge codex review
 7 findings (3 high vectors-v1, 2 high fixtures, 1 med vectors-v1... full record .razorback/sdd/premerge-*-report.md + scratchpad p1-codex-review.json), ALL verified real by lead, ALL fixed: 505445b (D2 lead), fac8157 (vectors x4), 231360e+a739027 (fixtures x2 + frozen truncation 20fbb72). Zero dismissed. Zero false positives.
+## P2 execution (plan docs/plans/2026-07-20-p2-miller-lanes-plan.md)
+Task B1: complete (parallel-lead-commit, Lead inline review clean, lead commit da63f84)
+Task C1: complete (parallel-lead-commit, Lead inline review clean, lead commit 32e1491)
+Task E1: complete (parallel-lead-commit, Lead inline review clean + lead contract-doc addition, lead commit e7765a5)
+Task D1: complete (parallel-lead-commit, Lead inline review clean, lead commit f2dcb63)
