@@ -54,16 +54,16 @@ Non-git workspaces return a clear command error; Miller does not call the networ
 Command:
 
 ```bash
-miller metrics clones --json [--min-count N] [--limit N] [--max-symbols-per-group N]
+miller metrics clones --json [--min-count N] [--limit N] [--max-symbols-per-group N] [--near-duplicates]
 ```
 
 Fields:
 
 | Field | Type | Description |
 |---|---|---|
-| `groups` | array | Duplicate groups by identical non-empty `symbols.body_hash`. |
+| `groups` | array | Duplicate groups by identical non-empty `symbols.body_hash`, followed by Type-2 near-duplicate groups when `--near-duplicates` is supplied. |
 
-Each group:
+Each exact group:
 
 | Field | Type | Description |
 |---|---|---|
@@ -84,6 +84,31 @@ Each symbol:
 | `path` | string |
 | `line` | number |
 | `is_test` | boolean |
+
+With `--near-duplicates`, Type-2 near-duplicate groups (renamed identifiers / changed literals, MinHash/LSH
+over normalized token shingles, deterministic) are appended to the same `groups` array. They are the only
+entries carrying `kind`; an absent `kind` means the v1 exact `body_hash` group. Nothing is appended when the
+flag is off or no near-duplicates are found, so v1 output is byte-identical.
+
+Each near-duplicate group:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | string | Always `near_duplicate`. |
+| `similarity` | number | Weakest accepted pairwise Jaccard edge that linked the group (a floor, 4 dp). |
+| `count` | number | Number of symbols in the group. |
+| `symbol_limit` | number | Maximum symbols listed in `symbols` for this group. |
+| `symbols_truncated` | boolean | `true` when `count` is larger than the listed `symbols` sample. |
+| `symbols` | array | Bounded symbols, same shape and ordering as exact groups. |
+
+When the arm ran, the response also carries a top-level `near_duplicate_scan` object describing the
+bounded candidate scan (absent when the flag is off, so v1 output stays byte-identical):
+
+| Field | Type | Description |
+|---|---|---|
+| `candidate_cap` | number | The candidate-symbol bound the scan ran under. |
+| `candidates_truncated` | boolean | `true` when the cap was hit — `group_count` is then a floor and no history point is recorded (see `metrics-history-v1.md`). |
+| `group_count` | number | Exact near-duplicate group count from the scan, computed before any display limit. |
 
 The clone surface does not emit source body text and does not suggest cleanup.
 

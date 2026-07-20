@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Core.Analysis;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
@@ -385,6 +386,210 @@ public sealed class MetricsToolTests
         Assert.Equal(2, group.GetProperty("symbol_limit").GetInt32());
         Assert.True(group.GetProperty("symbols_truncated").GetBoolean());
         Assert.Equal(2, group.GetProperty("symbols").GetArrayLength());
+    }
+
+    // ---- metrics clones: opt-in Type-2 (near-duplicate) arm ------------------------------------------------
+
+    private const string NearDuplicateAId = NearDuplicateFixtures.PairAId;
+    private const string NearDuplicateBId = NearDuplicateFixtures.PairBId;
+
+    private static MetricsToolResult RunNearDuplicateClones(
+        JulieDbFixture fx,
+        bool json,
+        bool nearDuplicates,
+        int limit = 10,
+        int candidateCap = MetricsTool.NearDuplicateCandidateCap) =>
+        MetricsTool.Run(
+            fx.DbPath,
+            operation: "clones",
+            limit: limit,
+            json: json,
+            minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup,
+            minSeverity: "moderate",
+            includeTests: true,
+            workspaceRoot: fx.WorkspaceRoot,
+            nearDuplicates: nearDuplicates,
+            nearDuplicateCandidateCap: candidateCap);
+
+    [Fact]
+    public void RunClonesJson_WithoutNearDuplicateFlag_IsByteIdenticalToTheExactOnlyOutput()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        MetricsToolResult off = RunNearDuplicateClones(fx, json: true, nearDuplicates: false);
+
+        using var doc = JsonDocument.Parse(off.Output);
+        Assert.Empty(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal(0, off.ResultCount);
+    }
+
+    [Fact]
+    public void RunClonesCompact_WithoutNearDuplicateFlag_ReportsNoCloneGroups()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        Assert.Equal("No clone groups.", RunNearDuplicateClones(fx, json: false, nearDuplicates: false).Output);
+    }
+
+    [Fact]
+    public void RunClonesJson_WithNearDuplicates_EmitsKindAndSimilarity()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray().ToList());
+        Assert.Equal("near_duplicate", group.GetProperty("kind").GetString());
+        Assert.True(group.GetProperty("similarity").GetDouble() >= NearDuplicateAnalyzer.DefaultMinSimilarity);
+        Assert.Equal(2, group.GetProperty("count").GetInt32());
+        Assert.False(group.GetProperty("symbols_truncated").GetBoolean());
+        Assert.Equal(
+            ["src/Invoices.cs", "src/Orders.cs"],
+            group.GetProperty("symbols").EnumerateArray().Select(s => s.GetProperty("path").GetString()));
+        Assert.Equal(1, result.ResultCount);
+    }
+
+    [Fact]
+    public void RunClonesCompact_WithNearDuplicates_RendersTheNearDuplicateSection()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        string output = RunNearDuplicateClones(fx, json: false, nearDuplicates: true).Output;
+
+        Assert.StartsWith("# near-duplicate groups", output);
+        Assert.Contains("similarity=", output, StringComparison.Ordinal);
+        Assert.Contains("src/Invoices.cs:3 SumInvoices method", output, StringComparison.Ordinal);
+        Assert.Contains("src/Orders.cs:3 SumOrders method", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("# clone groups", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunClones_ExactAndNearDuplicateGroups_AreRenderedSideBySide()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+        Exec(fx.DbPath, $"""
+            UPDATE symbols SET body_hash = 'shared-hash' WHERE symbol_id IN
+                ('{NearDuplicateAId}', '{NearDuplicateBId}');
+            """);
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        var groups = doc.RootElement.GetProperty("groups").EnumerateArray().ToList();
+        Assert.Equal(2, groups.Count);
+        Assert.Equal("shared-hash", groups[0].GetProperty("body_hash").GetString());
+        Assert.False(groups[0].TryGetProperty("kind", out _));
+        Assert.Equal("near_duplicate", groups[1].GetProperty("kind").GetString());
+    }
+
+    [Fact]
+    public void RunClones_DriftedWorkspaceFile_YieldsNoNearDuplicateGroupsRatherThanStaleOnes()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+        File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "src/Orders.cs"), "class Drifted {}\n");
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(result.Output);
+        Assert.Empty(doc.RootElement.GetProperty("groups").EnumerateArray());
+    }
+
+    // ---- near_duplicate_group_count history metric (Task E2) -----------------------------------------------
+
+    [Fact]
+    public void RunClones_WithNearDuplicates_SurfacesNearDuplicateGroupCountSnapshotMetric()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+
+        MetricHistoryPoint point = Assert.Single(result.SnapshotMetrics!);
+        Assert.Equal("near_duplicate_group_count", point.Metric);
+        Assert.Equal(1.0, point.Value);
+        Assert.Contains("\"candidate_cap\":2000", point.DetailJson!);
+    }
+
+    [Fact]
+    public void RunClones_NearDuplicateGroupCountIsExact_NotBoundedByRenderLimit()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs(secondPair: true);
+
+        MetricsToolResult rendered = RunNearDuplicateClones(fx, json: true, nearDuplicates: true, limit: 1);
+
+        using var doc = JsonDocument.Parse(rendered.Output);
+        Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
+        MetricHistoryPoint point = Assert.Single(rendered.SnapshotMetrics!);
+        Assert.Equal(2.0, point.Value);
+    }
+
+    [Fact]
+    public void RunClones_ZeroNearDuplicateGroups_RecordsZeroRatherThanOmittingTheMetric()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[] { Row("aa11223344556677889900aabbccnd90", "Solo", "src/Solo.cs", 3) });
+
+        MetricsToolResult result = MetricsTool.Run(
+            fx.DbPath, operation: "clones", limit: 10, json: true, minCount: 2,
+            maxSymbolsPerGroup: MetricsTool.DefaultCloneSymbolsPerGroup, minSeverity: "moderate",
+            includeTests: true, workspaceRoot: fx.WorkspaceRoot, nearDuplicates: true);
+
+        MetricHistoryPoint point = Assert.Single(result.SnapshotMetrics!);
+        Assert.Equal("near_duplicate_group_count", point.Metric);
+        Assert.Equal(0.0, point.Value);
+    }
+
+    [Fact]
+    public void RunClones_CandidateScanTruncated_SuppressesTheMetricAndSaysSo()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs(secondPair: true);
+
+        MetricsToolResult compact = RunNearDuplicateClones(fx, json: false, nearDuplicates: true, candidateCap: 2);
+        MetricsToolResult json = RunNearDuplicateClones(fx, json: true, nearDuplicates: true, candidateCap: 2);
+
+        Assert.Null(compact.SnapshotMetrics);
+        Assert.Contains("near-duplicate scan truncated", compact.Output, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(json.Output);
+        JsonElement scan = doc.RootElement.GetProperty("near_duplicate_scan");
+        Assert.True(scan.GetProperty("candidates_truncated").GetBoolean());
+        Assert.Equal(2, scan.GetProperty("candidate_cap").GetInt32());
+    }
+
+    [Fact]
+    public void RunClones_UntruncatedScan_ReportsTheScanBoundsWithoutATruncationNote()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        MetricsToolResult json = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+        MetricsToolResult compact = RunNearDuplicateClones(fx, json: false, nearDuplicates: true);
+
+        using var doc = JsonDocument.Parse(json.Output);
+        JsonElement scan = doc.RootElement.GetProperty("near_duplicate_scan");
+        Assert.False(scan.GetProperty("candidates_truncated").GetBoolean());
+        Assert.Equal(1, scan.GetProperty("group_count").GetInt32());
+        Assert.DoesNotContain("truncated", compact.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordHeavyArmSnapshot_Clones_WritesNearDuplicateGroupCountUnderTheClonesSource()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs(revisions: true);
+        MetricsToolResult result = RunNearDuplicateClones(fx, json: true, nearDuplicates: true);
+        WorkspaceContext ctx = Context(fx);
+
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(ctx);
+        var warn = new StringWriter();
+        MetricHistoryWriteResult? outcome = CliDispatch.RecordHeavyArmSnapshot(
+            ctx, identity, "clones", result.SnapshotMetrics!, canonical: true, warn);
+
+        Assert.Equal(MetricHistoryWriteResult.Recorded, outcome);
+        Assert.Empty(warn.ToString());
+        var rows = ReadHistoryMetrics(fx);
+        Assert.Contains(
+            rows, r => r.Source == "clones" && r.Metric == "near_duplicate_group_count" && r.Value == 1.0);
     }
 
     private static JulieDbFixture.SymbolRow Row(string id, string name, string path, int line) =>

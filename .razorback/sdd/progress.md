@@ -46,3 +46,24 @@ Task 4: complete (serial-worker-commit, worker commit b464721, Lead inline revie
 
 ## P1 pre-merge codex review
 7 findings (3 high vectors-v1, 2 high fixtures, 1 med vectors-v1... full record .razorback/sdd/premerge-*-report.md + scratchpad p1-codex-review.json), ALL verified real by lead, ALL fixed: 505445b (D2 lead), fac8157 (vectors x4), 231360e+a739027 (fixtures x2 + frozen truncation 20fbb72). Zero dismissed. Zero false positives.
+## P2 execution (plan docs/plans/2026-07-20-p2-miller-lanes-plan.md)
+Task B1: complete (parallel-lead-commit, Lead inline review clean, lead commit da63f84)
+Task C1: complete (parallel-lead-commit, Lead inline review clean, lead commit 32e1491)
+Task E1: complete (parallel-lead-commit, Lead inline review clean + lead contract-doc addition, lead commit e7765a5)
+Task D1: complete (parallel-lead-commit, Lead inline review clean, lead commit f2dcb63)
+
+## Lead decisions (2026-07-20, post-Batch A)
+- B1 `disabled` status vocabulary: plan Global Constraints WIN over a literal vectors-v1 §Status reading — off mode assembles the fact but renders nothing (compact + JSON byte-identical). B6 must keep this; if vectors-v1 needs an errata note, B6 adds it additively.
+- Fast-suite tripwire (58-76s observations): adjudicated as parallel-build contention, not a leaked slow test — warm quiet runs are 22-28s, lane test additions total <2s. No Scale re-tagging now; re-measure on a quiet machine at branch gate (ledger entry f2dcb63).
+- C1 P3 blast radius: fusion at SearchRouteExecutor.CollectSymbolCandidates ONLY (search tool route) is the intended scope — other SearchTool.Run callers (context/impact/trace/CLI) stay lexical. Matches ADR-0003/design; P3 confirms at its own gate.
+Task D2: complete (parallel-lead-commit, Lead inline review clean, lead commit 42968e2)
+Task B2: complete (serial-worker-commit, worker commit 5f6511c, Lead inline review clean)
+- D2 lead rulings: (1) evidence-based narrowing of design §7.4 ACCEPTED — premises were false (fuzzy has successes; no replayable corpus exists by privacy design); only the cost-neutral cap change ships. (2) KnownCeilingGap precision defect ACCEPTED as documented + corpus-pinned; any ceiling change is a future evidence-backed task, out of P2 scope. (3) matched_mode telemetry enum recorded as the recommended post-P2 follow-up (unblocks the next fuzzy evaluation); not silently added to P2. (4) wait-in-EditService + poll-success-condition divergence ACCEPTED (content.db can lag symbols.db).
+Task E2: complete (parallel-lead-commit, Lead inline review clean + lead contract-doc additions, lead commit 6dff82b)
+Task B3: complete (serial-worker-commit, worker commit f906a86, Lead inline review clean)
+Task B4: complete (serial-worker-commit, worker commit 9c9690c, Lead inline review clean; plan mismatch accepted: SqliteVectorConvergePort owns atomic-commit SQL until B5 folds CommitBatch into VectorStore)
+Task B5: complete (serial-worker-commit, worker commit 8ecabc1, Lead inline review clean; fold-in sanction honored, net -165 lines in VectorConvergeService). Follow-up dispatched to impl-b5: wire promote execution + corruption-recovery trigger in drain loop (sanctioned VectorConvergeService.cs extension) before B6.
+Task B5 follow-up: complete (serial-worker-commit, worker commit 1e8ceef, Lead inline review clean; shadow rebuild executed from drain, corruption recovery wired)
+Task B6: complete (serial-worker-commit, worker commit f4f44cc, Lead inline review clean; VectorSidecar.cs deviation accepted — sole facts producer/off-guarantee seam; TagsWithLiveReaders decision recorded: P2 posture = soak-window-only GC protection, registration lands with the P4 GC scheduler)
+## P2 execution COMPLETE — all 11 tasks landed. P4 follow-ups recorded in task-B6-report.md concerns (top: converge_pause_state producer; disk preflight; downloading producer; GC scheduler + live-reader registry).
+P2 pre-merge review (codex): 4 findings — 3 real (all fixed in ce791aa, lead-reviewed), 1 dismissed (canary unwired = stated P2 posture, wiring is P3/P5). Post-fix branch gate PASS at ce791aa.

@@ -54,6 +54,12 @@ stamping — see §9.4). This reliability work rides the program as an independe
    release archives: explicit prefetch (`miller semantic prepare`-style CLI verb) or consented
    first-use download with pinned sha256 into a shared cache; atomic partial-download handling,
    concurrent-download lock, offline fail-loud with actionable message, disk-space preflight.
+   **Open question for P4/P5 (2026-07-20, user-raised): download footprint.** The pinned Qwen3
+   f16 GGUF is ~1.1 GiB (+127 MiB bge), which is a heavy ask for end users. Before default-on,
+   either (a) benchmark a Q8_0 weight pin (~640 MB, near-zero expected embedding-quality loss —
+   but new conformance goldens and a re-run of the eval gate, since the f16 pin is what P0
+   scored) or (b) consider bge-small (127 MiB) as the default tier with Qwen3 as the opt-in
+   quality tier. Decide on P4 shadow evidence of the Qwen3-vs-bge quality gap, not up front.
 5. **Hybrid retrieval, lexical parity preserved:** the lexical-only path remains byte-identical to
    today (the Bm25/backends parity invariant is untouched). Hybrid is a separate semantic arm fused
    by weighted RRF, active only when the vector artifact is ready and fingerprint-matched.

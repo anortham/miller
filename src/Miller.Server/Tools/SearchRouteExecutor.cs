@@ -17,7 +17,12 @@ internal sealed record SearchRouteExecutionResult(string Output, int Count, long
 
 internal static class SearchRouteExecutor
 {
-    public static SearchRouteExecutionResult RunSymbols(
+    /// <summary>
+    /// Candidate generation for the symbols route: the single seam between ranking and rendering. An
+    /// additional retrieval arm fuses into the returned candidate list here, and
+    /// <see cref="RunSymbols"/> renders whatever it is handed.
+    /// </summary>
+    public static SymbolCandidateSet CollectSymbolCandidates(
         ISymbolLookupIndex index,
         SearchRoute route,
         SearchRouteExecutionRequest request)
@@ -26,18 +31,32 @@ internal static class SearchRouteExecutor
         ArgumentNullException.ThrowIfNull(request);
         EnsureKind(route, SearchRouteKind.Symbols);
 
-        string output = SearchTool.Run(
+        return SearchTool.CollectSymbolCandidates(
             index,
             request.Query,
             route.Mode,
             request.Limit,
             request.ExcludeTests,
+            request.FilePattern,
+            request.Language);
+    }
+
+    public static SearchRouteExecutionResult RunSymbols(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request)
+    {
+        SymbolCandidateSet candidates = CollectSymbolCandidates(index, route, request);
+
+        string output = SearchTool.RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            route.Mode,
+            request.Limit,
             request.Json,
             out int count,
             request.CompactBanner,
-            request.HasDocLookup,
-            request.FilePattern,
-            request.Language);
+            request.HasDocLookup);
 
         return new SearchRouteExecutionResult(output, count);
     }

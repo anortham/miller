@@ -73,7 +73,9 @@ public sealed class EditTool
         [Description("The literal text to replace, for replace_text.")] string? old_text = null,
         [Description("The replacement text, or the new name for rename_symbol.")] string? new_text = null,
         [Description("Which match of old_text to replace: first | last | all. Default first.")] string occurrence = "first",
-        [Description("replace_text matching: auto | exact | normalized | fuzzy. Default auto.")] string match_mode = "auto",
+        [Description(
+            "replace_text matching. Default auto already ladders exact→normalized→fuzzy; pass " +
+            "exact|normalized|fuzzy only to pin one rung.")] string match_mode = "auto",
         [Description("Optional indexed-content selector to narrow replace_text without reading the full file.")] string? query = null,
         [Description("Optional nearby text selector to narrow replace_text candidates.")] string? anchor = null,
         [Description("Optional 1-based line hint to narrow replace_text candidates.")] int? line = null,
@@ -130,6 +132,8 @@ public sealed class EditTool
                     "empty" => TelemetryOutcome.Empty,
                     _ => TelemetryOutcome.Error,
                 };
+                if (result.StaleWaitPerformed)
+                    telemetry.SetWaitReason(EditService.StaleConvergeWaitReason);
                 if (result.FailureReason is not null)
                     telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
                 else if (telemetry.Outcome == TelemetryOutcome.Error)

@@ -2227,6 +2227,24 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void ReadTrends_PlotsNearDuplicateGroupCountAsACountOnlySeriesAfterTheDeadCodeRow()
+    {
+        DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);
+        RecordSnapshot(historyDbPath, 1, ("dead_code_candidate_count", 5), ("near_duplicate_group_count", 12));
+        RecordSnapshot(historyDbPath, 2, ("dead_code_candidate_count", 4), ("near_duplicate_group_count", 9));
+
+        DashboardWorkspaceTrendsPanel panel = DashboardIndexFactsReader.ReadTrends(workspace);
+
+        Assert.Equal(
+            new[] { "dead_code_candidate_count", "near_duplicate_group_count" },
+            panel.Series.Select(s => s.Metric).ToArray());
+        DashboardTrendSeries nearDuplicates = panel.Series[1];
+        Assert.Equal("Near-duplicate groups", nearDuplicates.Label);
+        Assert.Equal(new[] { 12d, 9d }, nearDuplicates.Points.ToArray());
+        Assert.True(nearDuplicates.HasTrend);
+    }
+
+    [Fact]
     public void ReadTrends_CarriesRecordedWindowBoundsForEachSeries()
     {
         DashboardWorkspaceRow workspace = WorkspaceRowWithMiller(out string historyDbPath);

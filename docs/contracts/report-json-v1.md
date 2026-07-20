@@ -72,6 +72,11 @@ hotspot: `severity`, `path`, `symbol_name`, `decision_count`, `loop_count`, `max
 Top-N body-hash clone groups, same ordering as `metrics clones`. Each group: `body_hash`, `count`,
 and a `sample` of up to 3 `{path, line, name}` symbols.
 
+With `--near-duplicates` (opt-in; absent ⟹ fields omitted, output byte-identical), the section
+additively gains `near_duplicate_groups` (number, exact group count computed before any display
+limit) and `near_duplicate_truncated` (boolean; `true` means the bounded candidate scan hit its cap,
+the count is a floor, and no history point is recorded per `metrics-history-v1.md`).
+
 ### `churn`
 
 Top-N churn rows for `range`, same semantics as `metrics churn` (`mapping_basis`, `symbol_name`,

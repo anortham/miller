@@ -45,7 +45,8 @@ When `--metric` is omitted, the default set is one rollup per signal family plus
 | `dead_code_candidate_count` | `candidates` | Dead-code candidates from `references candidates`. |
 
 Any metric name recorded by any write arm may be requested via `--metric`, including heavy-arm names not
-in the default set (`churn_files_changed`, `risk_top_score`, `risk_rows`, `dead_code_suppressed_total`).
+in the default set (`churn_files_changed`, `risk_top_score`, `risk_rows`, `dead_code_suppressed_total`,
+`near_duplicate_group_count`).
 Canonical names are single-sourced on `MetricSnapshotAggregates` (cheap arm) and `MetricHistoryHeavyArm`
 (heavy arm) so producer and this reader never drift.
 
@@ -109,7 +110,7 @@ A single JSON object.
 | `metrics[].points[].recorded_at_utc` | string | ISO-8601 UTC writer-clock timestamp (display metadata; not the sort axis). |
 | `metrics[].points[].artifact_id` | string | The artifact identity the snapshot was recorded against. |
 | `metrics[].points[].revision` | number | Workspace revision for that artifact. |
-| `metrics[].points[].source` | string | The recording arm: `converge`, `report`, `churn`, `risk`, or `candidates`. |
+| `metrics[].points[].source` | string | The recording arm: `converge`, `report`, `churn`, `risk`, `candidates`, or `clones`. |
 | `metrics[].points[].value` | number | The recorded metric value. |
 
 ### Example
@@ -151,8 +152,9 @@ An empty/missing history:
   `(artifact_id, revision)` — `symbol_count`, `file_count`, `language_count`, `complexity_p50/p90/max`,
   `clone_group_count`, and (when the region index is available) `marker_total`. First writer wins
   (`INSERT OR IGNORE`); non-blocking and skip-on-busy so it never stalls indexing.
-- **Heavy arms (`source='report'|'churn'|'risk'|'candidates'`).** The CLI commands `miller report`,
-  `miller metrics churn|risk`, and `miller references candidates` record a per-source upsert (a re-run at
+- **Heavy arms (`source='report'|'churn'|'risk'|'candidates'|'clones'`).** The CLI commands `miller report`,
+  `miller metrics churn|risk`, `miller references candidates`, and `miller metrics clones --near-duplicates`
+  record a per-source upsert (a re-run at
   the same revision replaces only its own snapshot). **Only canonical (default-params) runs record** — a
   run with a custom `--range`/`--limit`/test filter renders normally but does not record, because a trend
   that mixes parameters is incomparable. Recording is best-effort telemetry: a failed write warns on
@@ -168,6 +170,16 @@ name must be exactly comparable across its producers** ("exact or absent, never 
 - `churn_files_changed` is the **exact** distinct changed-path count for the range, computed before any
   row truncation, so `report` (section limit 10) and `metrics churn` (limit 50) record identical values
   for the same range. `risk_top_score` is the global maximum and is likewise limit-insensitive.
+- `near_duplicate_group_count` is recorded by the two commands that actually run the opt-in Type-2
+  (MinHash/LSH) arm: `miller metrics clones --near-duplicates` (`source='clones'`) and
+  `miller report --near-duplicates` (`source='report'`). It is the number of near-duplicate groups the scan
+  found, computed **before** any display limit and under **fixed** analyzer bounds (a 2000-symbol candidate
+  cap and the analyzer's default similarity threshold), so both producers record the identical value for the
+  same artifact and no CLI flag can move it. `detail_json` stamps those bounds.
+  **Truncation ⟹ absence.** The candidate scan is bounded; when it hits the cap, later files (by path order)
+  are never examined and the group count is a floor, so **no point is recorded** and both commands print
+  `near-duplicate scan truncated at 2000 candidate symbols — the group count is a floor and is not recorded.`
+  A complete scan that found nothing records `0` (the absent-vs-zero rule, both directions).
 
 The **absent-vs-zero rule** is load-bearing on both sides: a metric whose source was unavailable is an
 absent row, never `0`; a count that genuinely evaluated to `0` with its source present is recorded as `0`.

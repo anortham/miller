@@ -13,6 +13,10 @@ public static class DashboardIndexFactsReader
     // Keep in step with the candidates arm's metric name when the shared const lands.
     internal const string DeadCodeCandidateCountMetric = "dead_code_candidate_count";
 
+    // The heavy-arm metric recorded by `metrics clones --near-duplicates` / `report --near-duplicates`. Count-level
+    // only per ADR-0002: the dashboard plots how many Type-2 groups exist over time and never the groups themselves.
+    internal const string NearDuplicateGroupCountMetric = "near_duplicate_group_count";
+
     // The exact sparkline metric set (design "Dashboard" section), in display order. Each entry pairs the stored
     // metric name with the row label. Metrics with no recorded history become an ABSENT row, never a zero row.
     private static readonly (string Metric, string Label)[] TrendMetrics =
@@ -22,6 +26,7 @@ public static class DashboardIndexFactsReader
         (MetricSnapshotAggregates.CloneGroupCount, "Clone groups"),
         (MetricSnapshotAggregates.MarkerTotal, "Markers"),
         (DeadCodeCandidateCountMetric, "Dead-code candidates"),
+        (NearDuplicateGroupCountMetric, "Near-duplicate groups"),
     };
 
     private const int TrendMaxPoints = 50;

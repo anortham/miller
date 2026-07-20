@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Core.Editing;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -1745,6 +1746,321 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal("compact", root.GetProperty("format").GetString());
     }
 
+    // ---- design §7.1: EVERY replace_text failure path stamps a bucket ----
+    //
+    // The enumeration below is the audit made executable. Each row drives one distinct exit from the
+    // replace_text pipeline; the assertion is that the telemetry row carries a documented, non-empty
+    // `edit_failure_reason` and leaks no path/user text. A new failure exit that forgets to stamp fails
+    // here the moment a row is added for it.
+    public static TheoryData<string, string> ReplaceTextFailurePaths() => new()
+    {
+        { "unknown_operation", "invalid_request" },
+        { "unknown_occurrence", "invalid_request" },
+        { "unknown_match_mode", "invalid_request" },
+        { "file_target_not_found", "target_not_found" },
+        { "file_missing_on_disk", "target_not_found" },
+        { "missing_new_text", "invalid_request" },
+        { "empty_old_text", "invalid_request" },
+        { "no_match_on_disk", "no_match" },
+        { "fuzzy_snippet_too_long", "no_match" },
+        { "indexed_selector_no_candidate", "no_match" },
+        { "stale_disk_text", "stale_target" },
+        { "apply_failed", "apply_failed" },
+        { "unhandled_exception", "unhandled_InvalidOperationException" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ReplaceTextFailurePaths))]
+    public void Edit_EveryReplaceTextFailurePath_StampsFailureReason(string path, string expectedBucket)
+    {
+        const string Secret = "NoSuchSecretSelector";
+        const string Replacement = "SecretReplacement";
+        const string File_ = "orders/OrderService.cs";
+
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        EditTool tool = path switch
+        {
+            "apply_failed" => BuildTool(fx, applier: new EditApplier(() => null)),
+            "unhandled_exception" => BuildTool(fx, writeThrough: new ThrowingWriteThrough()),
+            _ => BuildTool(fx),
+        };
+
+        if (path == "file_missing_on_disk")
+            File.Delete(AbsPath(File_));
+        if (path == "stale_disk_text")
+        {
+            BuildContentDb(fx, revision: 1);
+            File.WriteAllText(
+                AbsPath(File_),
+                JulieDbFixture.OrderServiceContent.Replace("Total", "Amount", StringComparison.Ordinal));
+        }
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+
+        switch (path)
+        {
+            case "unknown_operation":
+                tool.Edit("frobnicate", File_, old_text: Secret, new_text: Replacement);
+                break;
+            case "unknown_occurrence":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, occurrence: "seventh");
+                break;
+            case "unknown_match_mode":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, match_mode: "telepathic");
+                break;
+            case "file_target_not_found":
+                tool.Edit("replace_text", "orders/NoSuchSecretFile.cs", old_text: "a", new_text: "b", apply: true);
+                break;
+            case "file_missing_on_disk":
+            case "no_match_on_disk":
+                tool.Edit("replace_text", File_, old_text: Secret, new_text: Replacement, apply: true);
+                break;
+            case "missing_new_text":
+                tool.Edit("replace_text", File_, old_text: "return _items", apply: true);
+                break;
+            case "empty_old_text":
+                tool.Edit("replace_text", File_, old_text: "", new_text: Replacement, apply: true);
+                break;
+            case "fuzzy_snippet_too_long":
+                tool.Edit(
+                    "replace_text", File_, old_text: new string('z', 200), new_text: Replacement,
+                    match_mode: "fuzzy", apply: true);
+                break;
+            case "indexed_selector_no_candidate":
+                tool.Edit(
+                    "replace_text", File_, old_text: Secret, new_text: Replacement,
+                    query: Secret, apply: true);
+                break;
+            case "stale_disk_text":
+                tool.Edit("replace_text", File_, old_text: "Total", new_text: "Sum", apply: true);
+                break;
+            case "apply_failed":
+            case "unhandled_exception":
+                tool.Edit(
+                    "replace_text", File_, old_text: "return _items.Sum(i => i.Total);",
+                    new_text: "return 0;", apply: true);
+                break;
+            default:
+                Assert.Fail("unenumerated failure path: " + path);
+                break;
+        }
+
+        Assert.Equal(expectedBucket, StampedFailureBucket(telemetry, File_, Secret, Replacement));
+    }
+
+    // The two exits above reach the indexed-candidate reader only when content.db is ABSENT (the disk-fallback
+    // arm). These two cover the arm where content.db is CURRENT and the candidate set itself decides the
+    // failure — the only replace_text buckets the theory cannot reach with the shared edit fixture.
+    [Fact]
+    public void Edit_IndexedCandidateFailsDiskVerification_StampsStaleTargetBucket()
+    {
+        const string Rel = "src/Api.cs";
+        string source = NumberedLines(220, (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(Rel, source);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = source });
+        BuildContentDb(fx);
+        File.WriteAllText(
+            AbsPath(Rel), source.Replace("target-value", "changed-value", StringComparison.Ordinal));
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text", Rel, old_text: "target-value", new_text: "updated-value",
+            query: "beta-anchor", apply: true);
+
+        Assert.Equal("stale_target", StampedFailureBucket(telemetry, Rel, "target-value", "beta-anchor"));
+        Assert.Contains("workspace refresh", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_AmbiguousIndexedCandidates_StampsAmbiguousMatchBucket()
+    {
+        const string Rel = "src/Api.cs";
+        string source = NumberedLines(220, (2, "target-value shared-anchor"), (170, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(Rel, source);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = source });
+        BuildContentDb(fx);
+        EditTool tool = BuildTool(fx);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        string output = tool.Edit(
+            "replace_text", Rel, old_text: "target-value", new_text: "updated-value",
+            query: "shared-anchor", apply: true);
+
+        Assert.Equal("ambiguous_match", StampedFailureBucket(telemetry, Rel, "target-value", "shared-anchor"));
+        Assert.Contains("narrower line or anchor selector", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_FailureTelemetryRow_CarriesMillerVersion()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+        string dbPath = Path.Combine(_root, "telemetry.db");
+
+        using (var ledger = TelemetryLedger.Open(dbPath, "ws-edit", _root))
+        {
+            using (var telemetry = ledger.Measure("edit", op: null))
+            {
+                tool.Edit(
+                    "replace_text", "orders/OrderService.cs",
+                    old_text: "NoSuchSecretSelector", new_text: "SecretReplacement", apply: true);
+            }
+        }
+
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT miller_version FROM tool_telemetry WHERE tool = 'edit'";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(MillerVersion.Current, reader.GetString(0));
+    }
+
+    // ---- design §7.2: failure messages name the concrete next action ----
+
+    [Theory]
+    [InlineData("exact", "match_mode=normalized")]
+    [InlineData("normalized", "match_mode=fuzzy")]
+    [InlineData("auto", "inspect")]
+    public void Edit_ReplaceTextNoMatch_MessageNamesRecoveryAction(string matchMode, string expectedAction)
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "NoSuchSelectorHere",
+            NewText = "Replacement",
+            MatchMode = matchMode,
+            Apply = true,
+        });
+
+        Assert.Equal("no_match", result.FailureReason);
+        Assert.Contains(expectedAction, result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_FuzzySnippetTooLong_MessageNamesRecoveryAction()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = new string('z', 200),
+            NewText = "Replacement",
+            MatchMode = "fuzzy",
+            Apply = true,
+        });
+
+        Assert.Contains("too long", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("match_mode=exact", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Edit_AmbiguousTarget_MessageNamesScopeDisambiguation()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_symbol_body", "Total") with { NewText = "{ return 0; }" });
+
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Contains("scope=", result.Output, StringComparison.Ordinal);
+    }
+
+    // ---- design §7.3: normalized matching treats Unicode spaces and form feed as whitespace ----
+
+    public static TheoryData<string, string> UnicodeWhitespaceVariants() => new()
+    {
+        { "nbsp", " " },
+        { "en_quad", " " },
+        { "hair_space", " " },
+        { "narrow_nbsp", " " },
+        { "medium_mathematical_space", " " },
+        { "ideographic_space", "　" },
+        { "form_feed", "\f" },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnicodeWhitespaceVariants))]
+    public void Edit_Normalized_MatchesUnicodeWhitespaceIndentation(string name, string whitespace)
+    {
+        Assert.NotEmpty(name);
+        const string Rel = "ws/Sample.cs";
+        string content = "class Sample {\n" + whitespace + whitespace + "return 42;\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "    return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal(
+            "class Sample {\n" + whitespace + whitespace + "return 7;\n}\n",
+            File.ReadAllText(AbsPath(Rel)));
+    }
+
+    [Theory]
+    [MemberData(nameof(UnicodeWhitespaceVariants))]
+    public void Edit_Normalized_MatchesInteriorUnicodeWhitespace(string name, string whitespace)
+    {
+        Assert.NotEmpty(name);
+        const string Rel = "ws/Interior.cs";
+        string content = "class Interior {\n  return" + whitespace + "42;\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal("class Interior {\n  return 7;\n}\n", File.ReadAllText(AbsPath(Rel)));
+    }
+
+    [Fact]
+    public void Edit_Normalized_MatchesUnicodeWhitespaceTrailer()
+    {
+        const string Rel = "ws/Trailer.cs";
+        const string Content = "class Trailer {\n  return 42; 　\n}\n";
+        using var fx = CreateSingleFileFixture(Rel, Content);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [Rel] = Content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", Rel) with
+        {
+            OldText = "return 42;",
+            NewText = "return 7;",
+            MatchMode = "normalized",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Equal("class Trailer {\n  return 7; 　\n}\n", File.ReadAllText(AbsPath(Rel)));
+    }
+
     [Fact]
     public void Execute_MissingNewText_ForBodyReplace_ReturnsCleanError()
     {
@@ -1776,4 +2092,304 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("\"applied\"", result.Output);
         Assert.Contains("\"diff\"", result.Output);
     }
+
+    // ---- fuzzy policy replay corpus (design §7.4) ----
+    //
+    // Telemetry cannot supply the replay corpus: the ledger is enum/counter-only, so no historical call retains
+    // its old_text. The corpus below is therefore synthesized, and is the evidence any fuzzy policy change is
+    // gated on. Two halves, both load-bearing:
+    //   * Recall cases  — the intended target is unambiguous and a fuzzy match is the CORRECT outcome.
+    //   * Precision cases — a fuzzy match would splice the WRONG span (silent corruption), so a miss is correct.
+    // A policy ships only on strict improvement: strictly more recall hits and NO new precision breaks.
+    // Numbers are reported in docs/findings/2026-07-20-edit-fuzzy-policy-replay.md.
+
+    private sealed record ReplayCase(string Id, string Content, string OldText, bool ShouldMatch, int? ExpectLine = null)
+    {
+        /// <summary>
+        /// A precision case the CURRENT distance ceiling already gets wrong, before and after this task's cap
+        /// change. Recorded rather than removed: it is the standing argument against loosening the ceiling.
+        /// </summary>
+        public bool KnownCeilingGap { get; init; }
+    }
+
+    private const string IndentedBlock =
+        "public sealed class OrderTotals\n" +
+        "{\n" +
+        "        public decimal ComputeGrandTotal(IReadOnlyList<LineItem> items)\n" +
+        "        {\n" +
+        "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrice * i.Quantity);\n" +
+        "        }\n" +
+        "}\n";
+
+    private const string SiblingBranches =
+        "switch (kind)\n" +
+        "{\n" +
+        "    case ReportKind.Daily: return BuildDailyReport(scope, window);\n" +
+        "    case ReportKind.Hourly: return BuildHourlyReport(scope, window);\n" +
+        "}\n";
+
+    private static readonly ReplayCase[] ReplayCorpus =
+    [
+        // -- recall: exact and normalized both fail, fuzzy is the right answer --
+        new("typo_in_identifier",
+            "var handler = new RequestHandler(logger, clock);\n",
+            "var handler = new RequestHandlar(logger, clock);\n", ShouldMatch: true, ExpectLine: 1),
+        new("missing_trailing_semicolon",
+            "await _queue.DrainAsync(cancellationToken);\n",
+            "await _queue.DrainAsync(cancellationToken)\n", ShouldMatch: true, ExpectLine: 1),
+        new("stale_numeric_literal",
+            "private const int RetryBudget = 5;\n",
+            "private const int RetryBudget = 3;\n", ShouldMatch: true, ExpectLine: 1),
+        new("case_drift_one_char",
+            "if (options.UseCache) return cached;\n",
+            "if (options.Usecache) return cached;\n", ShouldMatch: true, ExpectLine: 1),
+        // The next two are the cap cases: heavy indentation pushes RAW length past 160 while the text actually
+        // compared (indentation stripped) stays well inside it.
+        new("indented_single_line_over_raw_cap",
+            IndentedBlock,
+            "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrise * i.Quantity);\n" +
+            "                                                                                  \n",
+            ShouldMatch: true, ExpectLine: 5),
+        new("indented_multiline_over_raw_cap",
+            IndentedBlock,
+            "        public decimal ComputeGrandTotal(IReadOnlyList<LineItem> item)\n" +
+            "        {\n" +
+            "            return items.Where(i => i.IsActive).Sum(i => i.UnitPrice * i.Quantity);\n",
+            ShouldMatch: true, ExpectLine: 3),
+
+        // -- precision: a fuzzy hit here splices the wrong span --
+        new("sibling_branch_near_both",
+            SiblingBranches,
+            "    case ReportKind.Weekly: return BuildWeeklyReport(scope, window);\n", ShouldMatch: false),
+        new("deleted_line_neighbour_survives",
+            "    case ReportKind.Daily: return BuildDailyReport(scope, window);\n",
+            "    case ReportKind.Daily: return BuildDailyReport(scope, budget);\n", ShouldMatch: false),
+        new("constant_table_wrong_key",
+            "case 1: return \"one\";\ncase 2: return \"two\";\ncase 3: return \"three\";\n",
+            "case 7: return \"one\";\n", ShouldMatch: false) { KnownCeilingGap = true },
+        new("unrelated_text_near_a_line",
+            "var total = ComputeTotal(order);\n",
+            "var total = ComputeTotal(basket);\n", ShouldMatch: false),
+    ];
+
+    private static (List<string> RecallMisses, List<string> PrecisionBreaks) RunReplay()
+    {
+        List<string> recallMisses = [], precisionBreaks = [];
+        foreach (ReplayCase c in ReplayCorpus)
+        {
+            var plan = TextReplaceMatcher.Plan(c.Content, c.OldText, Occurrence.First, TextMatchMode.Fuzzy);
+            bool rightSpan = plan.IsSuccess && (c.ExpectLine is null || plan.Matches[0].StartLine == c.ExpectLine);
+            if (c.ShouldMatch && !rightSpan)
+                recallMisses.Add(c.Id);
+            if (!c.ShouldMatch && plan.IsSuccess)
+                precisionBreaks.Add(c.Id);
+        }
+
+        return (recallMisses, precisionBreaks);
+    }
+
+    // The shipped policy measures the snippet cap against the text actually compared. Recall is complete, and
+    // the only precision break is the one the CURRENT distance ceiling already had — the cap change adds none.
+    [Fact]
+    public void FuzzyPolicyReplay_ShippedPolicy_HitsEveryRecallCase()
+    {
+        var (recallMisses, _) = RunReplay();
+
+        Assert.Empty(recallMisses);
+        Assert.Equal(6, ReplayCorpus.Count(static c => c.ShouldMatch));
+    }
+
+    [Fact]
+    public void FuzzyPolicyReplay_ShippedPolicy_AddsNoPrecisionBreakBeyondTheKnownCeilingGap()
+    {
+        var (_, precisionBreaks) = RunReplay();
+
+        Assert.Equal(
+            ReplayCorpus.Where(static c => c.KnownCeilingGap).Select(static c => c.Id).Order(),
+            precisionBreaks.Order());
+    }
+
+    // The cap change's entire delta: exactly the cases whose RAW length exceeds the cap while their COMPARABLE
+    // length (what the distance scan sees) fits. Anything else in the corpus behaves identically before/after,
+    // which is what makes "strictly more recall, no new precision break" checkable rather than asserted.
+    [Fact]
+    public void FuzzyPolicyReplay_CapChangeAffectsOnlyTheIndentedRecallCases()
+    {
+        string[] flipped = ReplayCorpus
+            .Where(static c => c.OldText.Length > TextReplaceMatcher.MaxFuzzySnippetChars)
+            .Select(static c => c.Id)
+            .ToArray();
+
+        Assert.Equal(["indented_single_line_over_raw_cap", "indented_multiline_over_raw_cap"], flipped);
+        Assert.All(flipped, id => Assert.True(ReplayCorpus.Single(c => c.Id == id).ShouldMatch));
+    }
+
+    // The cap change is the whole delta: a snippet whose comparable content fits the budget must be admitted
+    // even when raw indentation pushes it past it, and a snippet whose comparable content genuinely exceeds the
+    // budget must still be refused (the cap bounds an O(n*m) scan and cannot be dropped).
+    [Fact]
+    public void Plan_Fuzzy_CapMeasuresComparableTextNotRawIndentation()
+    {
+        string indented = new string(' ', 200) + "const retries = 5;\n";
+        Assert.True(indented.Length > TextReplaceMatcher.MaxFuzzySnippetChars);
+
+        var plan = TextReplaceMatcher.Plan(
+            "const retries = 5;\n", indented.Replace("5", "3", StringComparison.Ordinal),
+            Occurrence.First, TextMatchMode.Fuzzy);
+
+        Assert.True(plan.IsSuccess, plan.Error?.Message);
+        Assert.Equal(TextMatchMode.Fuzzy, plan.MatchedMode);
+    }
+
+    [Fact]
+    public void Plan_Fuzzy_StillRefusesSnippetsWhoseComparableTextExceedsTheCap()
+    {
+        string oversize = new string('z', TextReplaceMatcher.MaxFuzzySnippetChars + 1);
+
+        var plan = TextReplaceMatcher.Plan(oversize + "\n", oversize, Occurrence.First, TextMatchMode.Fuzzy);
+
+        Assert.False(plan.IsSuccess);
+        Assert.Contains("too long", plan.Error!.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- plan-time stale_target bounded convergence wait (design §7.5) ----
+    //
+    // The apply path already waits up to 2.5s for a requested single-file converge before refusing. The PLAN
+    // path did not: an indexed edit candidate whose chunk pre-dates the current disk text failed instantly with
+    // stale_target. Telemetry shows that exit is the dominant stale_target failure (6 of 7 historical rows are
+    // apply=0 with wait_reason=none), so the plan path now mirrors the apply path's bounded wait.
+
+    private const string StaleCandidateFile = "src/Api.cs";
+
+    // content.db is built while the anchor sits at line 12; disk then moves it to line 170. The candidate
+    // window still points at line 12, where old_text is gone — the stale_target exit under test. A converge
+    // (rebuilding content.db from current disk) moves the window to line 170 and the plan verifies.
+    private static string StaleCandidateIndexedSource => NumberedLines(220, (12, "target-value beta-anchor"));
+
+    private static string StaleCandidateCurrentDisk => NumberedLines(220, (170, "target-value beta-anchor"));
+
+    private JulieDbFixture LayStaleCandidateFixture()
+    {
+        string indexedSource = StaleCandidateIndexedSource;
+        var fx = CreateSingleFileFixture(StaleCandidateFile, indexedSource);
+        LayFiles(new Dictionary<string, string>(StringComparer.Ordinal) { [StaleCandidateFile] = indexedSource });
+        BuildContentDb(fx);
+        File.WriteAllText(AbsPath(StaleCandidateFile), StaleCandidateCurrentDisk);
+        return fx;
+    }
+
+    // A real single-file converge re-extracts AND re-chunks: the content corpus refuses to index a file whose
+    // disk bytes do not match the indexed hash, so stamping the hash is what makes the rebuilt chunks active.
+    private void ConvergeStaleCandidateFile(JulieDbFixture fx)
+    {
+        ConvergeIndexedHash(fx, StaleCandidateFile);
+        BuildContentDb(fx);
+    }
+
+    private static EditRequest StaleCandidateRequest(bool apply) =>
+        Req("replace_text", StaleCandidateFile) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "beta-anchor",
+            Apply = apply,
+        };
+
+    private static EditService.RecoveryOptions FastRecovery(int timeoutMs) =>
+        new(Timeout: TimeSpan.FromMilliseconds(timeoutMs), PollInterval: TimeSpan.FromMilliseconds(5));
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_ConvergesWithinBudget_ThenPlans()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Requested;
+        });
+        var svc = Build(fx, wt, FastRecovery(2000));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: false));
+
+        Assert.Null(result.FailureReason);
+        Assert.Contains("@@", result.Output);
+        Assert.Contains("updated-value", result.Output, StringComparison.Ordinal);
+        Assert.Single(wt.RecoveryCalls);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_ConvergedInline_AppliesAtCurrentDiskSpan()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt, FastRecovery(2000));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+
+        Assert.True(result.Applied);
+        Assert.Equal(
+            StaleCandidateCurrentDisk.Replace("target-value", "updated-value", StringComparison.Ordinal),
+            File.ReadAllText(AbsPath(StaleCandidateFile)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_NeverConverges_FailsCleanlyAfterBudget()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecoveringWriteThrough(_ => StaleRecoveryAttempt.Requested);
+        var svc = Build(fx, wt, FastRecovery(60));
+
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+
+        Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.Contains("workspace refresh", result.Output, StringComparison.Ordinal);
+        Assert.Single(wt.RecoveryCalls);
+        Assert.Equal(StaleCandidateCurrentDisk, File.ReadAllText(AbsPath(StaleCandidateFile)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_PlanTimeStaleCandidate_NoRecoveryAvailable_FailsWithoutWaiting()
+    {
+        using var fx = LayStaleCandidateFixture();
+        var wt = new RecordingWriteThrough();
+        var svc = Build(fx, wt, FastRecovery(60_000));
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var result = svc.Execute(StaleCandidateRequest(apply: true));
+        elapsed.Stop();
+
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(5), "no-recovery path must not consume the wait budget");
+    }
+
+    [Fact]
+    public void Edit_PlanTimeStaleCandidateWait_StampsWaitReasonWithoutRawEditText()
+    {
+        using var fx = LayStaleCandidateFixture();
+        // Converged (inline leader) so the wait is one re-check: the tool path uses the real 2.5s default
+        // budget, and a test must never spend it.
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeStaleCandidateFile(fx);
+            return StaleRecoveryAttempt.Converged;
+        });
+        EditTool tool = BuildTool(fx, writeThrough: wt);
+
+        using var ledger = OpenLedger();
+        using var telemetry = ledger.Measure("edit", op: null);
+        tool.Edit(
+            "replace_text", StaleCandidateFile, old_text: "target-value", new_text: "updated-value",
+            query: "beta-anchor", apply: true);
+
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.Equal("edit_stale_converge", metadata.RootElement.GetProperty("wait_reason").GetString());
+        Assert.DoesNotContain("target-value", telemetry.MetadataJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("beta-anchor", telemetry.MetadataJson, StringComparison.Ordinal);
+    }
+
 }

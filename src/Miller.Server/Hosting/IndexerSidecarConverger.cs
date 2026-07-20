@@ -20,11 +20,13 @@ internal sealed class IndexerSidecarConverger
     private readonly Func<string, string> _searchDbPathFor;
     private readonly Func<Exception, string, Action, bool> _tryRecover;
     private readonly ILogger _logger;
+    private readonly VectorConvergeSignal _vectorSignal;
 
     public IndexerSidecarConverger(
         SymbolSearchSidecar searchSidecar,
         ContentCorpusSidecar contentSidecar,
-        ILogger logger)
+        ILogger logger,
+        VectorConvergeSignal? vectorSignal = null)
         : this(
             searchSidecar.Enabled,
             contentSidecar.EnsureBuilt,
@@ -36,7 +38,8 @@ internal sealed class IndexerSidecarConverger
             SymbolSearchSidecar.SearchDbPathFor,
             (ex, sidecarPath, rebuild) =>
                 SidecarCorruptionRecovery.TryRebuildCorruptSidecar(ex, sidecarPath, rebuild, logger),
-            logger)
+            logger,
+            vectorSignal)
     {
     }
 
@@ -48,7 +51,8 @@ internal sealed class IndexerSidecarConverger
         Func<string, string> contentDbPathFor,
         Func<string, string> searchDbPathFor,
         Func<Exception, string, Action, bool> tryRecover,
-        ILogger logger)
+        ILogger logger,
+        VectorConvergeSignal? vectorSignal = null)
     {
         ArgumentNullException.ThrowIfNull(ensureContentBuilt);
         ArgumentNullException.ThrowIfNull(ensureSearchBuilt);
@@ -66,6 +70,7 @@ internal sealed class IndexerSidecarConverger
         _searchDbPathFor = searchDbPathFor;
         _tryRecover = tryRecover;
         _logger = logger;
+        _vectorSignal = vectorSignal ?? VectorConvergeSignal.Shared;
     }
 
     public void Converge(
@@ -88,6 +93,10 @@ internal sealed class IndexerSidecarConverger
             ConvergeSearch(symbolsDbPath, workspaceRoot, revision, fullRebuild, searchDbPath);
 
         RecordConvergeHistory(symbolsDbPath, workspaceId, revision, searchDbPath);
+
+        // Vector convergence is asynchronous by design (vectors-v1 §Cursors): stamp the desired target and wake
+        // the drain loop, never embed here. Inert — a single bool check — when semantic retrieval is off.
+        _vectorSignal.StampTarget(revision, fullRebuild);
     }
 
     // Metric-history cheap arm: append one source='converge' snapshot AFTER the sidecar converge steps, independent

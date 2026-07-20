@@ -123,6 +123,89 @@ public sealed class SearchRouteExecutorTests
         Assert.Contains("\"has_doc\":true", result.Output);
     }
 
+    [Fact]
+    public void CollectSymbolCandidates_ProjectsIndexRowsToTypedCandidates()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(0, "widget-symbol", "Widget", "src/Widget.cs", isTest: false),
+            Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs", isTest: false));
+
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "Widget",
+                Limit: 5,
+                Json: false,
+                ExcludeTests: null));
+
+        Assert.Collection(
+            candidates.Candidates,
+            first =>
+            {
+                Assert.Equal("widget-symbol", first.SymbolId);
+                Assert.Equal("Widget", first.Name);
+                Assert.Equal("src/Widget.cs", first.FilePath);
+                Assert.Equal("method", first.Kind);
+                Assert.Equal(3, first.StartLine);
+                Assert.Equal("void Widget()", first.Signature);
+                Assert.Equal(2.0, first.Score);
+                Assert.Equal(0, first.DocId);
+            },
+            second => Assert.Equal("gadget-symbol", second.SymbolId));
+        Assert.Empty(candidates.OutsideScope);
+        Assert.False(candidates.FileMode);
+    }
+
+    [Fact]
+    public void CollectSymbolCandidates_RejectsNonSymbolRoute()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("content", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(0, "widget-symbol", "Widget", "src/Widget.cs", isTest: false));
+
+        Assert.Throws<InvalidOperationException>(() => SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(Query: "Widget", Limit: 5, Json: false, ExcludeTests: null)));
+    }
+
+    [Fact]
+    public void RunSymbols_RendersOnlyWhatTheCandidateListCarries()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(0, "widget-symbol", "Widget", "src/Widget.cs", isTest: false),
+            Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs", isTest: false));
+        var request = new SearchRouteExecutionRequest(
+            Query: "Widget",
+            Limit: 5,
+            Json: true,
+            ExcludeTests: null);
+
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(index, route, request);
+        var reordered = candidates with
+        {
+            Candidates = [candidates.Candidates[1], candidates.Candidates[0]],
+        };
+
+        string output = SearchTool.RenderSymbolCandidates(
+            reordered,
+            request.Query,
+            route.Mode,
+            request.Limit,
+            request.Json,
+            out int count);
+
+        Assert.Equal(2, count);
+        Assert.StartsWith("[{\"name\":\"Gadget\"", output, StringComparison.Ordinal);
+        Assert.Equal(
+            SearchRouteExecutor.RunSymbols(index, route, request).Output,
+            SearchTool.RenderSymbolCandidates(
+                candidates, request.Query, route.Mode, request.Limit, request.Json, out _));
+    }
+
     private static TextContentSearchHit TextHit(
         string id,
         string contentKind,

@@ -627,7 +627,7 @@ public static class CliDispatch
 
     private static int Metrics(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
+        const string usage = "miller metrics <churn|clones|complexity|risk|history> [--workspace-id SELECTOR] [--workspace DIR] [--limit N] [--json] [--range REV..REV] [--include-commits] [--min-count N] [--max-symbols-per-group N] [--near-duplicates] [--min-severity low|moderate|high] [--include-tests|--exclude-tests] [--metric a,b,…]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
@@ -642,18 +642,26 @@ public static class CliDispatch
         if (operation is not ("churn" or "clones" or "clone" or "duplicate" or "duplicates" or "complexity" or "hotspots" or "risk"))
             return Usage(err, usage);
 
-        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits");
+        CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits", "near-duplicates");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
         if (!RequireIndex(ctx, err))
             return 3;
 
-        // Only churn/risk record (the git-backed arms); clones/complexity are covered by the leader converge arm.
-        // Canonical = default range/limit/test-filter and no --include-commits; capture identity BEFORE computing.
-        bool recordable = operation is "churn" or "risk";
-        bool canonical = recordable
-            && !o.Has("range") && !o.Has("limit")
-            && !o.Has("include-tests") && !o.Has("exclude-tests") && !o.Has("include-commits");
+        // churn/risk record the git-backed arms; a clones run records ONLY when the opt-in Type-2 arm actually ran
+        // (exact clone counts stay owned by the leader converge arm). Capture identity BEFORE computing.
+        // Canonical for churn/risk = default range/limit/test-filter and no --include-commits. A clones run is
+        // ALWAYS canonical: near_duplicate_group_count is the exact group count of a fixed-bound scan, so no
+        // clones flag can change it — and a truncated scan is suppressed at the source (MetricsTool) rather than
+        // here, because only the scan knows whether it saw everything.
+        bool clonesRecordable =
+            (operation is "clones" or "clone" or "duplicate" or "duplicates") && o.Has("near-duplicates");
+        bool gitArm = operation is "churn" or "risk";
+        bool recordable = gitArm || clonesRecordable;
+        bool canonical = clonesRecordable
+            || (gitArm
+                && !o.Has("range") && !o.Has("limit")
+                && !o.Has("include-tests") && !o.Has("exclude-tests") && !o.Has("include-commits"));
         HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
 
         try
@@ -670,13 +678,18 @@ public static class CliDispatch
                 workspaceRoot: ctx.WorkspaceRoot,
                 range: o.Value("range", "HEAD~20..HEAD"),
                 includeCommits: o.Has("include-commits"),
-                historyReader: new ProcessGitHistoryReader());
+                historyReader: new ProcessGitHistoryReader(),
+                nearDuplicates: o.Has("near-duplicates"));
             WriteOutput(outw, result.Output);
             if (recordable)
                 RecordHeavyArmSnapshot(
                     ctx,
                     identity,
-                    operation == "churn" ? MetricHistoryHeavyArm.ChurnSource : MetricHistoryHeavyArm.RiskSource,
+                    clonesRecordable
+                        ? MetricHistoryHeavyArm.ClonesSource
+                        : operation == "churn"
+                            ? MetricHistoryHeavyArm.ChurnSource
+                            : MetricHistoryHeavyArm.RiskSource,
                     result.SnapshotMetrics ?? Array.Empty<MetricHistoryPoint>(),
                     canonical,
                     err);
@@ -759,11 +772,11 @@ public static class CliDispatch
 
     private static int Report(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
-        const string usage = "miller report [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]";
+        const string usage = "miller report [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests] [--near-duplicates]";
         if (args.Count > 0 && args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
 
-        CliOptions o = CliOptions.Parse(args.ToArray(), "json", "include-tests", "exclude-tests");
+        CliOptions o = CliOptions.Parse(args.ToArray(), "json", "include-tests", "exclude-tests", "near-duplicates");
         if (o.Positionals.Count > 0)
             return Usage(err, usage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
@@ -804,7 +817,8 @@ public static class CliDispatch
                 json: o.Has("json"),
                 includeTests: !o.Has("exclude-tests"),
                 historyReader: new ProcessGitHistoryReader(),
-                regionIndex: regionIndex);
+                regionIndex: regionIndex,
+                nearDuplicates: o.Has("near-duplicates"));
             WriteOutput(outw, result.Output);
             RecordHeavyArmSnapshot(
                 ctx, identity, MetricHistoryHeavyArm.ReportSource, result.SnapshotMetrics, canonical, err);

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Telemetry;
 
@@ -35,6 +36,8 @@ namespace Miller.Server.Tools;
 /// <param name="SearchSidecar">Status of the Miller-owned <c>search.db</c> sidecar, when known.</param>
 /// <param name="ContentCorpus">Status of the Miller-owned <c>content.db</c> sidecar, when known.</param>
 /// <param name="ArtifactId">The current extract artifact generation id, or null when the artifact is missing or unreadable.</param>
+/// <param name="Vectors">Status of the Miller-owned <c>vectors.db</c> sidecar, when known. A <c>disabled</c>
+/// state renders nowhere: with <c>MILLER_SEMANTIC</c> off, existing status output stays byte-identical.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -53,7 +56,8 @@ public readonly record struct WorkspaceFacts(
     int? ServerProcessId = null,
     SearchSidecarFacts? SearchSidecar = null,
     ContentCorpusFacts? ContentCorpus = null,
-    string? ArtifactId = null);
+    string? ArtifactId = null,
+    VectorSidecarFacts? Vectors = null);
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 /// <remarks><see cref="LastSeenAt"/> drives recency ordering (current first, then most-recently-seen); it is
@@ -272,6 +276,8 @@ public static class WorkspaceRender
             sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
         if (facts.ContentCorpus is { } corpus)
             sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, facts.BuiltRevision)).Append('\n');
+        if (VectorsLabel(facts.Vectors) is { } vectorsLabel)
+            sb.Append("vectors: ").Append(vectorsLabel).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -309,6 +315,25 @@ public static class WorkspaceRender
             : "UNREADABLE: " + facts.Error,
         _ => facts.State,
     };
+
+    // Null ⇒ render no `vectors:` line at all. Both an absent fact and the `disabled` state map to null, so a
+    // workspace with MILLER_SEMANTIC off produces byte-identical status output to a build without vectors.
+    private static string? VectorsLabel(VectorSidecarFacts? facts) => facts?.State switch
+    {
+        null or "disabled" => null,
+        "ready" => VectorsReadyLabel(facts),
+        "building" => $"building {facts.BuildProgressPercent ?? 0}% (not queryable)",
+        "unavailable" => string.IsNullOrWhiteSpace(facts.Reason)
+            ? "unavailable"
+            : $"unavailable ({facts.Reason})",
+        _ => facts.State,
+    };
+
+    // Serving from a retained generation is still `ready`: which generation answers queries is a JSON fact.
+    private static string VectorsReadyLabel(VectorSidecarFacts facts) =>
+        facts.LaggierCursor?.PendingFiles is > 0 and { } pending
+            ? $"ready (updating; {pending.ToString(CultureInfo.InvariantCulture)} files pending)"
+            : "ready";
 
     private static string ContentCorpusLabel(ContentCorpusFacts facts, long expectedRevision)
     {
@@ -455,6 +480,7 @@ public static class WorkspaceRender
             WriteSearchSidecarJson(w, facts.SearchSidecar);
             w.WritePropertyName("content_corpus");
             WriteContentCorpusJson(w, facts.ContentCorpus);
+            WriteVectorsJson(w, facts.Vectors);
             w.WriteEndObject();
 
             // Embed the telemetry breakdown as a nested object: re-parse TelemetryRender.Json so the two stay in
@@ -487,6 +513,86 @@ public static class WorkspaceRender
         else w.WriteNull("document_count");
         if (facts.Error is null) w.WriteNull("error");
         else w.WriteString("error", facts.Error);
+        w.WriteEndObject();
+    }
+
+    // Additive per workspace-status-v1/workspace-health-v1, and OMITTED entirely when semantic is off or absent
+    // so existing consumers see an unchanged document until the operator opts in.
+    private static void WriteVectorsJson(Utf8JsonWriter w, VectorSidecarFacts? facts)
+    {
+        if (facts is null || facts.State == "disabled")
+            return;
+
+        w.WritePropertyName("vectors");
+        w.WriteStartObject();
+        w.WriteString("state", facts.State);
+        if (facts.Path is null) w.WriteNull("path");
+        else w.WriteString("path", facts.Path);
+        if (facts.Reason is null) w.WriteNull("reason");
+        else w.WriteString("reason", facts.Reason);
+        if (facts.BuildProgressPercent is { } percent) w.WriteNumber("build_progress_percent", percent);
+        else w.WriteNull("build_progress_percent");
+        if (facts.ServingTag is null) w.WriteNull("serving_tag");
+        else w.WriteString("serving_tag", facts.ServingTag);
+        if (facts.ServingRole is null) w.WriteNull("serving_role");
+        else w.WriteString("serving_role", facts.ServingRole);
+        if (facts.ArtifactId is null) w.WriteNull("artifact_id");
+        else w.WriteString("artifact_id", facts.ArtifactId);
+        w.WritePropertyName("symbol_cursor");
+        WriteVectorCursorJson(w, facts.SymbolCursor);
+        w.WritePropertyName("chunk_cursor");
+        WriteVectorCursorJson(w, facts.ChunkCursor);
+        w.WritePropertyName("identity");
+        WriteVectorIdentityJson(w, facts.Identity);
+        w.WritePropertyName("retained_generations");
+        w.WriteStartArray();
+        foreach (VectorGenerationFacts generation in facts.Retained)
+        {
+            w.WriteStartObject();
+            w.WriteString("tag", generation.Tag);
+            w.WriteString("path", generation.Path);
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteVectorCursorJson(Utf8JsonWriter w, VectorCursorFacts? cursor)
+    {
+        if (cursor is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteNumber("completed_revision", cursor.CompletedRevision);
+        w.WriteNumber("target_revision", cursor.TargetRevision);
+        if (cursor.PendingFiles is { } pending) w.WriteNumber("pending_files", pending);
+        else w.WriteNull("pending_files");
+        if (cursor.LastError is null) w.WriteNull("last_error");
+        else w.WriteString("last_error", cursor.LastError);
+        if (cursor.LastErrorAt is null) w.WriteNull("last_error_at");
+        else w.WriteString("last_error_at", cursor.LastErrorAt);
+        w.WriteEndObject();
+    }
+
+    private static void WriteVectorIdentityJson(Utf8JsonWriter w, SemanticGenerationIdentity? identity)
+    {
+        if (identity is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteString("encoder_fingerprint", identity.EncoderFingerprint);
+        w.WriteString("storage_schema", identity.StorageSchema);
+        w.WriteString("corpus_generation", identity.CorpusGeneration);
+        w.WriteString("writer_version", identity.WriterVersion);
+        w.WriteString("min_reader_version", identity.MinReaderVersion);
+        w.WriteString("fusion_profile", identity.FusionProfile);
         w.WriteEndObject();
     }
 
@@ -636,6 +742,8 @@ public static class WorkspaceRender
             sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
         if (status.ContentCorpus is { } corpus)
             sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, status.BuiltRevision)).Append('\n');
+        if (VectorsLabel(status.Vectors) is { } vectorsLabel)
+            sb.Append("vectors: ").Append(vectorsLabel).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HistorySidecarLabel(history)).Append('\n');
         sb.Append("quality: ")
@@ -775,6 +883,7 @@ public static class WorkspaceRender
             WriteSearchSidecarJson(w, status.SearchSidecar);
             w.WritePropertyName("content_corpus");
             WriteContentCorpusJson(w, status.ContentCorpus);
+            WriteVectorsJson(w, status.Vectors);
             w.WritePropertyName("history_db");
             WriteHistorySidecarJson(w, facts.History);
             w.WriteEndObject();

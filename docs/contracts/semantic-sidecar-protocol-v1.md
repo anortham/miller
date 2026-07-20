@@ -364,15 +364,23 @@ The `capabilities` map gains llama.cpp-relevant backends alongside the four the 
   1. Sanitize, then prefix the role's instruction string.
   2. `eos_reserve` = the token count of the model's EOS marker under its own tokenizer (`1` for Qwen3's
      `<|endoftext|>`; `0` when the model declares no EOS append).
-  3. Tokenize the prefixed string exactly as embedding input is tokenized. If the sequence exceeds
-     `max_text_tokens − eos_reserve`, truncate the token sequence tail to that length.
-  4. **Round-trip stability rule:** detokenize and retokenize the truncated sequence; while the
+  3. `special_token_overhead` = the count of tokens the model's tokenizer adds around every embedding
+     input beyond the text itself (bge's `[CLS]`/`[SEP]`), measured once per model as the token-count
+     difference between tokenizing a probe string with and without special tokens (amended in review:
+     the committed goldens already encode this term — `eval/sidecar-conformance/generate.py`
+     `special_token_overhead()`/`fit_to_budget()`, `2` for bge, `1` for qwen3 — and without it a
+     512-content-token bge input would exceed the model's context as a 514-token request).
+  4. Tokenize the prefixed string exactly as embedding input is tokenized, **without** the
+     tokenizer-added special tokens. If the sequence exceeds
+     `max_text_tokens − eos_reserve − special_token_overhead`, truncate the token sequence tail to
+     that length.
+  5. **Round-trip stability rule:** detokenize and retokenize the truncated sequence; while the
      retokenization differs from the truncated sequence, drop one more trailing token and repeat
      (terminates — the sequence only shrinks; typically 0–1 iterations). The stable detokenization is
      the final text body. This makes a string-in/string-out implementation and a token-level
      implementation produce the same embedded tokens.
-  5. Append the EOS marker. The instruction prefix (truncation is tail-only) and the EOS marker
-     (reserved in step 3) therefore **always survive** — load-bearing for `pooling=last`, where the
+  6. Append the EOS marker. The instruction prefix (truncation is tail-only) and the EOS marker
+     (reserved in step 4) therefore **always survive** — load-bearing for `pooling=last`, where the
      final token carries the representation.
 - Truncation is not reported per item on the wire in v1. A caller that needs to know inspects
   `max_text_tokens` from `health` and measures its own inputs.
@@ -398,7 +406,7 @@ Application order, per input (amended in review — an earlier draft appended th
 which could cut the marker the knob table calls unconditional):
 
 1. Prefix the role's instruction string.
-2. Fit to `max_text_tokens − eos_reserve` per
+2. Fit to `max_text_tokens − eos_reserve − special_token_overhead` per
    [§ Truncation semantics](#truncation-semantics-v1-additive) (tail truncation + stability rule).
 3. Append the model's EOS marker, if the model declares one.
 4. Tokenize and embed with the model's pooling mode.
@@ -577,6 +585,11 @@ Obligations:
 ```json
 {"ready": false, "degraded_reason": "model_not_prepared"}
 ```
+
+(Amended in review: the reference's `protocol.py:63` runs `_validate_health_metadata` on **every**
+health result, which would reject this minimal not-ready payload and make row B3 unsatisfiable. A
+v1 implementation must apply full health-metadata validation only when `ready` is `true`; a
+not-ready health owes nothing beyond `ready` and `degraded_reason`.)
 
 `degraded_reason` is the exact string `model_not_prepared`. Because `ready` is false, a consumer
 refuses to construct (`sidecar_provider.rs:465-467`) and Miller surfaces the not-prepared state rather

@@ -29,7 +29,9 @@ public static class ReportTool
         bool json,
         bool includeTests,
         IGitHistoryReader? historyReader,
-        IRegionSearchIndex? regionIndex)
+        IRegionSearchIndex? regionIndex,
+        bool nearDuplicates = false,
+        int nearDuplicateCandidateCap = MetricsTool.NearDuplicateCandidateCap)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -45,8 +47,15 @@ public static class ReportTool
             dbPath, limit, minCount: 2, MetricsTool.DefaultCloneSymbolsPerGroup);
         GitSections git = ReadGitSections(dbPath, workspaceRoot, effectiveRange, limit, includeTests, historyReader);
 
+        // Opt-in for the same reason `metrics clones --near-duplicates` is: the Type-2 arm re-reads symbol bodies
+        // from disk. Off ⟹ the rollup is byte-identical to the version before this section existed.
+        NearDuplicateScan? nearDuplicateScan = nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
+            ? MetricsTool.ScanNearDuplicates(
+                dbPath, workspaceRoot, limit, MetricsTool.DefaultCloneSymbolsPerGroup, nearDuplicateCandidateCap)
+            : null;
+
         var report = new ReportFacts(
-            effectiveRange, limit, index, extraction, markers, complexity, clones, git);
+            effectiveRange, limit, index, extraction, markers, complexity, clones, git, nearDuplicateScan);
         return new ReportToolResult(
             json ? RenderJson(report) : RenderCompact(report),
             BuildSnapshotMetrics(report));
@@ -92,6 +101,13 @@ public static class ReportTool
                 points.Add(new MetricHistoryPoint(
                     MetricHistoryHeavyArm.RiskTopScore, report.Git.Risk.Rows.Max(row => row.Score), detail));
         }
+
+        // near_duplicate_group_count IS recordable from here, unlike clone_group_count: the scan's bounds are fixed
+        // constants rather than the report's SectionLimit, so `miller report --near-duplicates` and
+        // `metrics clones --near-duplicates` record the identical value for the same artifact. A truncated scan
+        // records nothing (MetricsTool suppresses it) rather than mixing a floor into the series.
+        if (MetricsTool.NearDuplicateSnapshotMetrics(report.NearDuplicates) is { } nearDuplicatePoints)
+            points.AddRange(nearDuplicatePoints);
 
         return points;
     }
@@ -219,6 +235,12 @@ public static class ReportTool
             if (group.Symbols.Count > 0)
                 sb.Append("  e.g. ").Append(group.Symbols[0].Path).Append(':').Append(group.Symbols[0].Line);
             sb.AppendLine();
+        }
+        if (report.NearDuplicates is { } scan)
+        {
+            sb.Append("near-duplicate groups: ").Append(scan.GroupCount).AppendLine();
+            if (scan.CandidatesTruncated)
+                sb.AppendLine(MetricsTool.NearDuplicateTruncationNote(scan));
         }
 
         sb.AppendLine();
@@ -374,6 +396,11 @@ public static class ReportTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            if (report.NearDuplicates is { } scan)
+            {
+                writer.WriteNumber("near_duplicate_groups", scan.GroupCount);
+                writer.WriteBoolean("near_duplicate_truncated", scan.CandidatesTruncated);
+            }
             writer.WriteEndObject();
 
             WriteChurnSection(writer, report.Git);
@@ -449,7 +476,8 @@ public static class ReportTool
         MarkerSection Markers,
         IReadOnlyList<ComplexityHotspot> Complexity,
         IReadOnlyList<CloneGroup> Clones,
-        GitSections Git);
+        GitSections Git,
+        NearDuplicateScan? NearDuplicates);
 
     private sealed record IndexSection(long Symbols, long Files, long Languages);
 

@@ -1315,6 +1315,56 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Metrics_Clones_NearDuplicatesFlag_IsAcceptedAndStaysAdditive()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        StampBodyHash(fx.DbPath, JulieDbFixture.UserServiceId, "clone-hash");
+        StampBodyHash(fx.DbPath, JulieDbFixture.GetUserId, "clone-hash");
+
+        var (code, outText, errText) = Run(
+            new[] { "metrics", "clones", "--json", "--near-duplicates" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement groups = doc.RootElement.GetProperty("groups");
+        Assert.Equal("clone-hash", groups[0].GetProperty("body_hash").GetString());
+        Assert.All(
+            groups.EnumerateArray().Where(g => g.TryGetProperty("kind", out _)),
+            g => Assert.Equal("near_duplicate", g.GetProperty("kind").GetString()));
+    }
+
+    [Fact]
+    public void Report_NearDuplicatesFlag_IsAcceptedAndAddsTheCountToTheClonesSection()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "report", "--json", "--near-duplicates" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement clones = doc.RootElement.GetProperty("clones");
+        Assert.True(clones.GetProperty("near_duplicate_groups").GetInt32() >= 0);
+        Assert.False(clones.GetProperty("near_duplicate_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void Report_WithoutNearDuplicatesFlag_LeavesTheClonesSectionUnchanged()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, _) = Run(new[] { "report", "--json" }, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.False(doc.RootElement.GetProperty("clones").TryGetProperty("near_duplicate_groups", out _));
+    }
+
+    [Fact]
     public void Metrics_Complexity_Json_EmitsRankedHotspots()
     {
         using var fx = JulieDbFixture.CreateForInspect();

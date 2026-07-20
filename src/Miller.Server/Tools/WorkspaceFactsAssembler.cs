@@ -19,13 +19,15 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegistryRow row,
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar contentSidecar)
+        ContentCorpusSidecar contentSidecar,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(contentSidecar);
 
+        VectorSidecar resolvedVectors = vectors ?? VectorSidecar.FromEnvironment();
         long revision = row.LastRevision ?? 0;
         try
         {
@@ -48,15 +50,16 @@ internal static class WorkspaceFactsAssembler
                 ServerVersion: MillerVersion.Current,
                 ServerProcessId: Environment.ProcessId,
                 SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-                ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+                ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+                Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
         }
         catch (FileNotFoundException)
         {
-            return MissingIndexFacts(registry, row, profile, sidecar, contentSidecar, revision);
+            return MissingIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision);
         }
         catch (Exception ex) when (IsHealthProfile(profile) && IsIndexReadException(ex))
         {
-            return UnreadableIndexFacts(registry, row, profile, sidecar, contentSidecar, revision, ex);
+            return UnreadableIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex);
         }
     }
 
@@ -64,7 +67,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceContext context,
         WorkspaceIndexFacts indexFacts,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar contentSidecar)
+        ContentCorpusSidecar contentSidecar,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -86,7 +90,10 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
-            ContentCorpus: contentSidecar.Inspect(context.ExtractDbPath, expectedRevision: 0));
+            ContentCorpus: contentSidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
+            Vectors: WithPendingFiles(
+                (vectors ?? VectorSidecar.FromEnvironment()).Inspect(context.WorkspaceRoot),
+                context.ExtractDbPath));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -95,7 +102,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
-        Exception exception)
+        Exception exception,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (!IsHealthProfile(profile))
@@ -107,6 +115,7 @@ internal static class WorkspaceFactsAssembler
             profile,
             sidecar,
             contentSidecar,
+            vectors ?? VectorSidecar.FromEnvironment(),
             row.LastRevision ?? 0,
             exception);
     }
@@ -142,6 +151,7 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
+        VectorSidecar vectors,
         long revision)
     {
         string warning = UsesMcpWarning(profile)
@@ -168,7 +178,8 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
@@ -177,6 +188,7 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
+        VectorSidecar vectors,
         long revision,
         Exception exception)
     {
@@ -201,8 +213,50 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
     }
+
+    /// <summary>
+    /// Resolves each cursor's pending-file count from the extract's own per-file change journal — the count the
+    /// compact <c>ready (updating; N files pending)</c> line reports. A caught-up cursor is zero without a read;
+    /// a span the journal cannot explain stays null (unknown), never a guessed zero.
+    /// </summary>
+    internal static VectorSidecarFacts WithPendingFiles(
+        VectorSidecarFacts facts,
+        Func<long, string?, RevisionDeltaResult> readDelta)
+    {
+        ArgumentNullException.ThrowIfNull(facts);
+        ArgumentNullException.ThrowIfNull(readDelta);
+
+        if (facts.State == "disabled")
+            return facts;
+
+        return facts with
+        {
+            SymbolCursor = WithPendingFiles(facts.SymbolCursor, facts.ArtifactId, readDelta),
+            ChunkCursor = WithPendingFiles(facts.ChunkCursor, facts.ArtifactId, readDelta),
+        };
+    }
+
+    private static VectorCursorFacts? WithPendingFiles(
+        VectorCursorFacts? cursor,
+        string? artifactId,
+        Func<long, string?, RevisionDeltaResult> readDelta)
+    {
+        if (cursor is null)
+            return null;
+        if (cursor.RevisionLag == 0)
+            return cursor with { PendingFiles = 0 };
+
+        RevisionDeltaResult delta = readDelta(cursor.CompletedRevision, artifactId);
+        return delta.Status == RevisionDeltaStatus.Complete
+            ? cursor with { PendingFiles = delta.ChangedPaths.Count }
+            : cursor;
+    }
+
+    private static VectorSidecarFacts WithPendingFiles(VectorSidecarFacts facts, string indexDbPath) =>
+        WithPendingFiles(facts, (from, artifactId) => RevisionDeltaReader.Read(indexDbPath, from, artifactId));
 
     private static bool? IndexFresh(WorkspaceRegistryRow row, WorkspaceRegisteredFactsProfile profile) =>
         UsesMcpFreshness(profile)
