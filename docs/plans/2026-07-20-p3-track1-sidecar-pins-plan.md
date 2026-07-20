@@ -90,10 +90,10 @@
 **What to build:** The runtime fallback (pure, tested with a temp base dir) and the build-time copy/guard.
 
 **Acceptance criteria:**
-- [ ] Env var set ⟹ wins even when a packaged file exists; env var unset + packaged file present ⟹ packaged path; neither ⟹ null (tests, temp dirs, no `.tools/` dependence)
-- [ ] `dotnet build Miller.slnx -c Release` clean BOTH with `.tools/julie-semantic-sidecar` present (current pin) and with it absent
-- [ ] Renaming a stale binary into `.tools/` (or pin-bump simulation) fails the build with the restore-script message
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Env var set ⟹ wins even when a packaged file exists; env var unset + packaged file present ⟹ packaged path; neither ⟹ null (tests, temp dirs, no `.tools/` dependence)
+- [x] `dotnet build Miller.slnx -c Release` clean BOTH with `.tools/julie-semantic-sidecar` present (current pin) and with it absent
+- [x] Pin-bump simulation via `MILLER_SEMANTIC_PINS` (temp rc.2 pin copy) fails the build with the restore-script message; guard regex admits prerelease suffixes and anchors on the `sidecar` object
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`ccdc20c`; 4108/0 fast at 25s, Release clean)
 
 ## Task G3: real-sidecar Scale tests
 
