@@ -27,3 +27,22 @@ Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit 9c
 Task 2: complete (parallel-lead-commit, Lead inline review clean + lead division-of-labor addition, lead commit 15dd864)
 Task 3: complete (parallel-lead-commit, Lead inline review clean + lead --verify re-run 78/78, lead commit 2c81b71)
 Task 4: complete (serial-worker-commit, worker commit b464721, Lead inline review clean — F5 encoder_fingerprint derivation fixed by lead in canary contract)
+
+## Verification ledger — P1 branch gate @ cd26381
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| branch-gate (build) | Release build clean | dotnet build Miller.slnx -c Release | cd26381 | PASS 0W/0E | 2026-07-19 19:20 |
+| branch-gate (fast) | Fast suite green | scripts/test.sh | cd26381 | PASS 3618/0; wall tripwire 54s>30s environmental (loadavg ~32) | 2026-07-19 19:21 |
+| branch-gate (scale) | Scale suite green | scripts/test.sh scale | cd26381 | PASS 54/54 | 2026-07-19 19:23 |
+| branch-gate (conformance) | Golden fixtures reproducible within frozen tolerance | python3 eval/sidecar-conformance/generate.py --verify | cd26381 | PASS 78/78 (lead re-run) | 2026-07-19 19:23 |
+
+## Verification ledger — P1 post-fix branch gate @ a739027
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| branch-gate (build) | Release build clean | dotnet build Miller.slnx -c Release | a739027 | PASS 0W/0E | 2026-07-19 19:47 |
+| branch-gate (fast) | Fast suite green | scripts/test.sh | a739027 | PASS 3618/0, 25s wall (tripwire clean) | 2026-07-19 19:49 |
+| branch-gate (scale) | Scale suite green | scripts/test.sh scale | a739027 | PASS 54/54 | 2026-07-19 19:47 |
+| branch-gate (conformance) | Goldens reproducible under frozen truncation | generate.py --verify | a739027 | PASS 78/78 (lead re-run) | 2026-07-19 19:46 |
+
+## P1 pre-merge codex review
+7 findings (3 high vectors-v1, 2 high fixtures, 1 med vectors-v1... full record .razorback/sdd/premerge-*-report.md + scratchpad p1-codex-review.json), ALL verified real by lead, ALL fixed: 505445b (D2 lead), fac8157 (vectors x4), 231360e+a739027 (fixtures x2 + frozen truncation 20fbb72). Zero dismissed. Zero false positives.
