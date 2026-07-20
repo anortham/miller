@@ -190,6 +190,6 @@ Commit mode: Batch A is `parallel-lead-commit`; F3–F5 are `serial-worker-commi
 **What to build:** The evaluation lever and the determinism proof for the whole query-time stack.
 
 **Acceptance criteria:**
-- [ ] `--arm` accepted on the search verb only; forces the named arm; absent flag = policy routing; unready artifact + forced semantic/hybrid ⟹ loud stated failure
-- [ ] Determinism: repeated identical runs byte-identical per arm (fake vectors)
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] `--arm` accepted on the search verb only; forces the named arm; absent flag = policy routing (byte-identical under the `off` default, pinned); unready artifact + forced semantic/hybrid ⟹ loud stated failure (exit 3, reason on stderr)
+- [x] Determinism: repeated identical runs byte-identical per arm (fake vectors; culture-invariant fixed-precision cosine)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`d601eb2`; 4151 passed fast at 24s — 2 foreign failures: pre-characterized leadership flake + impl-g3 in-flight guard mutation; Release clean)
