@@ -3,7 +3,7 @@
 **Status:** Complete
 **Plan:** docs/plans/2026-07-19-p1-freeze-and-conformance-plan.md
 **Branch:** worktree-semantic-p1
-**PR:** pending — push awaiting user approval
+**PR:** https://github.com/anortham/miller/pull/7
 **Duration:** ~1.5h wall (plan + 4 tasks + codex review + two-round fix)
 **Phases:** 2/7 program phases complete (P0, P1 of P0–P6)
 **Tasks:** 4/4 plan tasks + 7/7 review findings fixed
