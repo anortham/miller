@@ -1,3 +1,6 @@
+using System.Reflection;
+using Miller.Indexing.Semantic;
+
 namespace Miller.Indexing;
 
 /// <summary>
@@ -9,6 +12,51 @@ internal interface IVectorFileProbe
     bool FileExists(string path);
 
     IReadOnlyList<string> EnumerateRetainedGenerations(string millerDir);
+}
+
+/// <summary>
+/// Reads an artifact's <c>vectors_meta</c> so the sidecar can classify a generation it may turn out to be
+/// unable to serve. Separate from <see cref="IVectorFileProbe"/> because loading the sqlite-vec extension is
+/// the expensive question, and the off-guarantee forbids asking it at all.
+/// </summary>
+internal interface IVectorStoreOpener
+{
+    bool TryReadMeta(string path, out IReadOnlyDictionary<string, string> meta, out string failureReason);
+}
+
+/// <summary>
+/// Opens the artifact through <see cref="VectorStore"/>, which verifies <c>vec_version()</c> against the pin
+/// before any meta read. A build with no packaged extension reports that as the stated reason rather than
+/// silently degrading.
+/// </summary>
+internal sealed class SqliteVectorStoreOpener : IVectorStoreOpener
+{
+    public static SqliteVectorStoreOpener Instance { get; } = new();
+
+    public bool TryReadMeta(string path, out IReadOnlyDictionary<string, string> meta, out string failureReason)
+    {
+        meta = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        string? extension = VectorStore.ResolveExtensionPath();
+        if (extension is null)
+        {
+            failureReason = $"the sqlite-vec {VectorStore.PinnedVecVersion} extension is not available to this " +
+                            $"build (set {VectorStore.ExtensionPathEnvVar} to an absolute path to enable it)";
+            return false;
+        }
+
+        try
+        {
+            meta = VectorStore.ReadMetaAt(path, extension);
+            failureReason = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is VectorStoreException or Microsoft.Data.Sqlite.SqliteException or IOException)
+        {
+            failureReason = ex.Message;
+            return false;
+        }
+    }
 }
 
 internal sealed class SystemVectorFileProbe : IVectorFileProbe
@@ -39,15 +87,22 @@ internal sealed class SystemVectorFileProbe : IVectorFileProbe
 /// production routing path that fails visibly rather than silently degrading.
 /// </summary>
 /// <remarks>
-/// This build carries no vector store: <see cref="TryOpen"/> and <see cref="OpenRequired"/> validate activation
-/// and artifact presence and then report the store as not yet available. Enabled-but-broken degrades to lexical
-/// WITH a reason, never silently.
+/// The open path validates the artifact for real: <c>vec_version()</c> against the pin, then <c>vectors_meta</c>
+/// for the keys a reader must have, the encoder fingerprint it can interpret, and the <c>min_reader_version</c>
+/// gate. Enabled-but-broken degrades to lexical WITH a reason, never silently, and a generation this reader
+/// cannot interpret is reported <c>incompatible</c> without any rebuild, delete, or re-embed.
 /// </remarks>
 public sealed class VectorSidecar
 {
     public const string EnvVar = SemanticActivation.EnvVar;
 
+    private const string ReadyState = "ready";
+    private const string BuildingState = "building";
+    private const string UnavailableState = "unavailable";
+    private const string IncompatibleState = "incompatible";
+
     private readonly IVectorFileProbe _probe;
+    private readonly IVectorStoreOpener _opener;
 
     /// <summary>The off instance — the permanent zero-work guarantee of vectors-v1. No method on it reaches the
     /// filesystem.</summary>
@@ -58,12 +113,29 @@ public sealed class VectorSidecar
     {
     }
 
-    internal VectorSidecar(SemanticMode mode, IVectorFileProbe probe)
+    internal VectorSidecar(
+        SemanticMode mode,
+        IVectorFileProbe probe,
+        IVectorStoreOpener? opener = null,
+        SemanticReaderIdentity? reader = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
         Mode = mode;
         _probe = probe;
+        _opener = opener ?? SqliteVectorStoreOpener.Instance;
+        Reader = reader ?? DefaultReader;
     }
+
+    /// <summary>
+    /// The encoder this reader can interpret and the build it is. A generation is queryable only by an encoder
+    /// whose fingerprint matches exactly and whose version satisfies the generation's
+    /// <c>min_reader_version</c>.
+    /// </summary>
+    public static SemanticReaderIdentity DefaultReader { get; } = new(
+        MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
+        ResolveReaderVersion());
+
+    public SemanticReaderIdentity Reader { get; }
 
     public SemanticMode Mode { get; }
 
@@ -88,7 +160,7 @@ public sealed class VectorSidecar
         if (!Enabled)
             return new VectorSidecarFacts("disabled", PathFor(workspaceRoot), null);
 
-        return new VectorSidecarFacts("unavailable", PathFor(workspaceRoot), UnavailableReason(workspaceRoot));
+        return Classify(workspaceRoot);
     }
 
     /// <summary>
@@ -104,7 +176,14 @@ public sealed class VectorSidecar
             return false;
         }
 
-        unavailableReason = UnavailableReason(workspaceRoot);
+        VectorSidecarFacts facts = Classify(workspaceRoot);
+        if (facts.State == ReadyState)
+        {
+            unavailableReason = null;
+            return true;
+        }
+
+        unavailableReason = facts.Reason;
         return false;
     }
 
@@ -117,7 +196,9 @@ public sealed class VectorSidecar
         if (!Enabled)
             throw new InvalidOperationException($"Vector sidecar is disabled ({EnvVar}=off).");
 
-        throw new InvalidOperationException(UnavailableReason(workspaceRoot));
+        VectorSidecarFacts facts = Classify(workspaceRoot);
+        if (facts.State != ReadyState)
+            throw new InvalidOperationException(facts.Reason);
     }
 
     /// <summary>
@@ -133,15 +214,83 @@ public sealed class VectorSidecar
         return _probe.EnumerateRetainedGenerations(MillerDirFor(workspaceRoot));
     }
 
-    private string UnavailableReason(string workspaceRoot)
+    /// <summary>
+    /// Resolves the active generation to one of the vectors-v1 §Status vocabulary states. The order is
+    /// load-bearing: presence, then a real open that verifies <c>vec_version()</c>, then meta completeness,
+    /// then the two reader gates, then build state. An <c>incompatible</c> outcome is terminal for this
+    /// reader — it never rebuilds, deletes, or re-embeds.
+    /// </summary>
+    private VectorSidecarFacts Classify(string workspaceRoot)
     {
         string path = PathFor(workspaceRoot);
-        return _probe.FileExists(path)
-            ? $"Vector artifact at '{path}' cannot be read: this build has no vector store reader. " +
-              "Run `miller workspace refresh` after upgrading to rebuild it."
-            : $"Semantic retrieval is enabled but no vector artifact exists at '{path}'. " +
-              "Run `miller workspace refresh` to build it.";
+
+        if (!_probe.FileExists(path))
+        {
+            return Unavailable(path,
+                $"Semantic retrieval is enabled but no vector artifact exists at '{path}'. " +
+                "Run `miller workspace refresh` to build it.");
+        }
+
+        if (!_opener.TryReadMeta(path, out IReadOnlyDictionary<string, string> meta, out string failureReason))
+        {
+            return Unavailable(path,
+                $"Vector artifact at '{path}' cannot be read: {failureReason}. " +
+                "Run `miller workspace refresh` to rebuild it.");
+        }
+
+        if (meta.GetValueOrDefault("contract_version") is not MillerSemanticContract.ContractVersion)
+        {
+            return new VectorSidecarFacts(IncompatibleState, path,
+                $"Vector artifact at '{path}' declares contract_version " +
+                $"'{meta.GetValueOrDefault("contract_version") ?? "<missing>"}', not " +
+                $"'{MillerSemanticContract.ContractVersion}'.");
+        }
+
+        SemanticGenerationIdentity identity;
+        try
+        {
+            identity = VectorStore.IdentityFrom(meta);
+        }
+        catch (VectorStoreException ex)
+        {
+            return Unavailable(path,
+                $"Vector artifact at '{path}' is corrupt: {ex.Message} Run `miller workspace refresh` to rebuild it.");
+        }
+
+        if (identity.EncoderFingerprint != Reader.EncoderFingerprint)
+        {
+            return new VectorSidecarFacts(IncompatibleState, path,
+                $"Vector artifact at '{path}' was built by a different encoder " +
+                $"({identity.EncoderFingerprint}); this reader embeds with {Reader.EncoderFingerprint}. " +
+                "Degrading to lexical; the generation is left untouched.");
+        }
+
+        if (!MillerSemanticContract.SatisfiesMinReaderVersion(Reader.ReaderVersion, identity.MinReaderVersion))
+        {
+            return new VectorSidecarFacts(IncompatibleState, path,
+                $"Vector artifact at '{path}' requires reader version {identity.MinReaderVersion} or newer; " +
+                $"this reader is {Reader.ReaderVersion}. Degrading to lexical; the generation is left untouched.");
+        }
+
+        string buildState = meta.GetValueOrDefault("build_state", string.Empty);
+        if (buildState != "ready")
+        {
+            string percent = meta.GetValueOrDefault("build_progress_percent", "0");
+            return new VectorSidecarFacts(BuildingState, path,
+                $"Vector generation at '{path}' is {percent}% built and is not queryable until it is ready.");
+        }
+
+        return new VectorSidecarFacts(ReadyState, path, null);
     }
+
+    private static VectorSidecarFacts Unavailable(string path, string reason) =>
+        new(UnavailableState, path, reason);
+
+    private static string ResolveReaderVersion() =>
+        typeof(VectorSidecar).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion
+        ?? typeof(VectorSidecar).Assembly.GetName().Version?.ToString(3)
+        ?? MillerSemanticContract.MinReaderVersion;
 
     private static string MillerDirFor(string workspaceRoot)
     {
