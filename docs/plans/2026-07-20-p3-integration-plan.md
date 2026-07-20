@@ -109,10 +109,10 @@ Commit mode: Batch A is `parallel-lead-commit`; F3–F5 are `serial-worker-commi
 **What to build:** The read half of the vector artifact: embed the query, KNN, honor filters with deterministic refill, fail open with reasons.
 
 **Acceptance criteria:**
-- [ ] KNN returns rank+cosine hits mapped to SymbolId/path via the mapping tables; deterministic ordering (distance, then rowid)
-- [ ] Filtered query with rejecting predicate refills deterministically and never silently returns fewer than available allowed hits (bounded escalation test)
-- [ ] Every failure mode (off, no artifact, incompatible, circuit-open, embed failure) yields empty + reason, never an exception; off performs zero work
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] KNN returns rank+cosine hits mapped to SymbolId/path via the mapping tables; deterministic ordering (distance, then rowid)
+- [x] Filtered query with rejecting predicate refills deterministically and never silently returns fewer than available allowed hits (bounded escalation test)
+- [x] Every failure mode (off, no artifact, incompatible, circuit-open, embed failure) yields empty + reason, never an exception; off performs zero work
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task F3: RRF fusion at the executor seam
 

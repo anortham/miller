@@ -637,17 +637,9 @@ public sealed class VectorConvergeService : BackgroundService
         public bool Promoted { get; set; }
     }
 
-    /// <summary>L2-normalized floats to the pinned int8 lane. Slice and renormalize already happened inside the
-    /// sidecar; quantization to the lane element type is the writer's job at storage time.</summary>
-    internal static sbyte[] QuantizeToInt8(IReadOnlyList<float> vector)
-    {
-        ArgumentNullException.ThrowIfNull(vector);
-
-        var quantized = new sbyte[vector.Count];
-        for (int i = 0; i < vector.Count; i++)
-            quantized[i] = (sbyte)Math.Clamp((int)MathF.Round(vector[i] * 127f), -127, 127);
-        return quantized;
-    }
+    /// <summary>The writer's half of the shared lane quantization; the reader's query path quantizes with the
+    /// same <see cref="SemanticVectorQuantizer"/> so both sides land in one space.</summary>
+    internal static sbyte[] QuantizeToInt8(IReadOnlyList<float> vector) => SemanticVectorQuantizer.ToInt8(vector);
 
     internal static (string Completed, string Target, string Error, string ErrorAt) Keys(VectorUnitKind kind) =>
         kind is VectorUnitKind.Symbol

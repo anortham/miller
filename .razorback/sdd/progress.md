@@ -67,3 +67,5 @@ Task B5 follow-up: complete (serial-worker-commit, worker commit 1e8ceef, Lead i
 Task B6: complete (serial-worker-commit, worker commit f4f44cc, Lead inline review clean; VectorSidecar.cs deviation accepted — sole facts producer/off-guarantee seam; TagsWithLiveReaders decision recorded: P2 posture = soak-window-only GC protection, registration lands with the P4 GC scheduler)
 ## P2 execution COMPLETE — all 11 tasks landed. P4 follow-ups recorded in task-B6-report.md concerns (top: converge_pause_state producer; disk preflight; downloading producer; GC scheduler + live-reader registry).
 P2 pre-merge review (codex): 4 findings — 3 real (all fixed in ce791aa, lead-reviewed), 1 dismissed (canary unwired = stated P2 posture, wiring is P3/P5). Post-fix branch gate PASS at ce791aa.
+Task F1: complete (parallel-lead-commit, Lead inline review clean, lead commit 5a25e5c)
+Follow-up (recorded, not P3 scope): lift QueryShapeFor + shape predicates from SearchTool.cs into a Core QueryShape helper after F3/F4 land; SemanticQueryPolicy.HasCodeSyntax is deliberately byte-identical to LooksLikeSourceCodeQuery until then (F1 judgment call 2).

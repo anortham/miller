@@ -1,0 +1,295 @@
+namespace Miller.Indexing.Semantic;
+
+/// <summary>
+/// One semantic hit: the unit the vector stood for, where it lives, its 1-based rank within the allowed set,
+/// and its cosine similarity to the query. Exactly one of <paramref name="SymbolId"/> and
+/// <paramref name="DocId"/> is populated — the symbol corpus and the chunk corpus are different things, and a
+/// caller that renders one as the other would misreport what it found.
+/// </summary>
+public sealed record SemanticHit(string? SymbolId, string? DocId, string FilePath, int Rank, double Cosine);
+
+/// <summary>
+/// The outcome of one semantic query. A failure is an empty hit list plus a stated
+/// <see cref="UnavailableReason"/> for status/telemetry, never an exception: the caller's correct response is
+/// always to serve its lexical result unchanged.
+/// </summary>
+public sealed record SemanticQueryResult(IReadOnlyList<SemanticHit> Hits, string? UnavailableReason)
+{
+    /// <summary>Whether the arm actually consulted the artifact. An empty served result means the corpus had
+    /// no allowed neighbours, which is not the same fact as the arm being unable to run.</summary>
+    public bool Served => UnavailableReason is null;
+
+    public static SemanticQueryResult Unavailable(string reason) => new([], reason);
+}
+
+/// <summary>The read surface of an opened vector artifact, as the retrieval arm needs it.</summary>
+public interface IVectorSearchPort : IDisposable
+{
+    SemanticStorageLane Lane { get; }
+
+    IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k);
+}
+
+/// <summary>Opens the serving generation, or returns null with a stated reason — the shape of
+/// <see cref="VectorSidecar.TryOpen"/>, which is the only artifact gate.</summary>
+public delegate IVectorSearchPort? VectorSearchPortFactory(string workspaceRoot, out string? unavailableReason);
+
+/// <summary>
+/// L2-normalized floats to the pinned int8 lane. Slice and renormalize already happened inside the sidecar;
+/// quantization to the lane element type happens on both sides of the artifact — the writer at storage time and
+/// the reader at query time — so the two must be one implementation or a query lands in a different space than
+/// the vectors it is compared against.
+/// </summary>
+public static class SemanticVectorQuantizer
+{
+    public static sbyte[] ToInt8(IReadOnlyList<float> vector)
+    {
+        ArgumentNullException.ThrowIfNull(vector);
+
+        var quantized = new sbyte[vector.Count];
+        for (int i = 0; i < vector.Count; i++)
+            quantized[i] = (sbyte)Math.Clamp((int)MathF.Round(vector[i] * 127f), -127, 127);
+        return quantized;
+    }
+}
+
+/// <summary>
+/// The read half of the vectors-v1 artifact: embed the query, KNN over one corpus, map vec0 rowids to unit ids
+/// and paths, and honour a caller-supplied allow predicate with deterministic bounded refill.
+/// </summary>
+/// <remarks>
+/// <para><b>Fail-open, per call.</b> Off, no artifact, an incompatible generation, a missing sidecar binary, an
+/// open circuit, an embed failure and an unexpected store fault all resolve to an empty result WITH a reason.
+/// Nothing here throws at the caller, because a semantic problem must never break a lexical success.</para>
+/// <para><b>Zero work when off.</b> Under <c>MILLER_SEMANTIC=off</c> the arm returns before asking the gate for
+/// the artifact and before asking for a session, so no file is stat-ed and no child process is launched.</para>
+/// <para><b>Refill, not truncation.</b> A rejecting filter is answered by fetching deeper — <c>k</c>, then
+/// doubling to <see cref="MaxCandidates"/> — rather than by returning the survivors of one shallow fetch, so a
+/// filtered hybrid query never silently loses hits that exist within the bound. Escalation stops early when the
+/// corpus is exhausted, which is the difference between "no more allowed hits" and "did not look far enough".</para>
+/// <para>The arm opens the store per query and disposes it: a reader connection held across queries would keep
+/// a generation's inode alive across a promote. The session is owned by the caller — a resident child process,
+/// its restart count and an open circuit are exactly the state a per-query session would silently reset.</para>
+/// </remarks>
+public sealed class SemanticSearchArm
+{
+    /// <summary>The recall ceiling one query may escalate to, mirroring the lexical arm's 500-candidate
+    /// escalation (design §6.2) so a hostile filter cannot turn one query into a corpus scan.</summary>
+    public const int MaxCandidates = 500;
+
+    private const string CosineMetric = "cosine";
+
+    private readonly string _workspaceRoot;
+    private readonly bool _enabled;
+    private readonly VectorSearchPortFactory _openPort;
+    private readonly Func<SemanticEmbeddingSession?> _openSession;
+
+    public SemanticSearchArm(
+        string workspaceRoot,
+        VectorSidecar sidecar,
+        Func<SemanticEmbeddingSession?> openSession)
+        : this(
+            workspaceRoot,
+            (sidecar ?? throw new ArgumentNullException(nameof(sidecar))).Enabled,
+            (string root, out string? reason) => VectorStoreSearchPort.TryOpen(sidecar, root, out reason),
+            openSession)
+    {
+    }
+
+    internal SemanticSearchArm(
+        string workspaceRoot,
+        bool enabled,
+        VectorSearchPortFactory openPort,
+        Func<SemanticEmbeddingSession?> openSession)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentNullException.ThrowIfNull(openPort);
+        ArgumentNullException.ThrowIfNull(openSession);
+
+        _workspaceRoot = workspaceRoot;
+        _enabled = enabled;
+        _openPort = openPort;
+        _openSession = openSession;
+    }
+
+    /// <summary>
+    /// The production session locator, mirroring the converge service's: a start-on-demand session over the
+    /// pinned sidecar binary beside the executable, or null when that binary is not installed.
+    /// </summary>
+    public static SemanticEmbeddingSession? ProcessSession(string toolsRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
+
+        string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
+        string executable = Path.Combine(toolsRoot, name);
+        return File.Exists(executable)
+            ? new SemanticEmbeddingSession(new ProcessSemanticSidecarLauncher(executable))
+            : null;
+    }
+
+    /// <summary>KNN over the symbol-card corpus.</summary>
+    public Task<SemanticQueryResult> QuerySymbolsAsync(
+        string query,
+        int k,
+        Func<VectorMatch, bool>? allow = null,
+        CancellationToken cancellationToken = default) =>
+        QueryAsync(VectorUnitKind.Symbol, query, k, allow, cancellationToken);
+
+    /// <summary>KNN over the docs/config chunk corpus.</summary>
+    public Task<SemanticQueryResult> QueryChunksAsync(
+        string query,
+        int k,
+        Func<VectorMatch, bool>? allow = null,
+        CancellationToken cancellationToken = default) =>
+        QueryAsync(VectorUnitKind.Chunk, query, k, allow, cancellationToken);
+
+    private async Task<SemanticQueryResult> QueryAsync(
+        VectorUnitKind kind,
+        string query,
+        int k,
+        Func<VectorMatch, bool>? allow,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
+
+        if (!_enabled)
+            return SemanticQueryResult.Unavailable($"Semantic retrieval is disabled ({VectorSidecar.EnvVar}=off).");
+
+        // The artifact gate runs before the sidecar: a workspace with no vectors must never pay for a child
+        // process, and a generation this reader cannot interpret is a reason, not an embed.
+        IVectorSearchPort? port = _openPort(_workspaceRoot, out string? unavailableReason);
+        if (port is null)
+            return SemanticQueryResult.Unavailable(unavailableReason ?? "The vector artifact is unavailable.");
+
+        try
+        {
+            if (_openSession() is not { } session)
+            {
+                return SemanticQueryResult.Unavailable(
+                    "The julie-semantic-sidecar binary is not installed, so queries cannot be embedded.");
+            }
+
+            SemanticEmbedOutcome outcome = await session.EmbedQueryAsync(query, cancellationToken).ConfigureAwait(false);
+            if (!outcome.Succeeded || outcome.Vectors.Count == 0)
+            {
+                return SemanticQueryResult.Unavailable(
+                    outcome.FailureReason ?? "The sidecar returned no vector for the query.");
+            }
+
+            return Retrieve(port, kind, outcome.Vectors[0], k, allow);
+        }
+        catch (Exception ex) when (ex is VectorStoreException or InvalidOperationException or IOException)
+        {
+            return SemanticQueryResult.Unavailable($"The semantic arm could not serve this query: {ex.Message}");
+        }
+        finally
+        {
+            port.Dispose();
+        }
+    }
+
+    private static SemanticQueryResult Retrieve(
+        IVectorSearchPort port,
+        VectorUnitKind kind,
+        float[] embedding,
+        int k,
+        Func<VectorMatch, bool>? allow)
+    {
+        SemanticStorageLane lane = port.Lane;
+        if (embedding.Length != lane.Dims)
+        {
+            return SemanticQueryResult.Unavailable(
+                $"The query embedded to {embedding.Length} dims but lane '{lane.Lane}' declares {lane.Dims}.");
+        }
+
+        if (!string.Equals(lane.Metric, CosineMetric, StringComparison.Ordinal))
+        {
+            return SemanticQueryResult.Unavailable(
+                $"Lane '{lane.Lane}' scores by '{lane.Metric}'; this reader only converts cosine distance to a " +
+                "cosine similarity.");
+        }
+
+        sbyte[] quantized = SemanticVectorQuantizer.ToInt8(embedding);
+        List<VectorMatch> allowed = Recall(port, kind, quantized, k, allow);
+
+        var hits = new List<SemanticHit>(allowed.Count);
+        for (int i = 0; i < allowed.Count; i++)
+        {
+            VectorMatch match = allowed[i];
+            hits.Add(new SemanticHit(
+                kind is VectorUnitKind.Symbol ? match.UnitId : null,
+                kind is VectorUnitKind.Chunk ? match.UnitId : null,
+                match.Path,
+                i + 1,
+                Cosine(match.Distance)));
+        }
+
+        return new SemanticQueryResult(hits, null);
+    }
+
+    /// <summary>
+    /// Fetches until <paramref name="k"/> allowed hits exist, the corpus is exhausted, or the candidate ceiling
+    /// is reached. Each fetch is re-read from scratch rather than paged, because vec0 KNN has no cursor — the
+    /// escalation is what makes the deeper result set a superset of the shallower one.
+    /// </summary>
+    private static List<VectorMatch> Recall(
+        IVectorSearchPort port,
+        VectorUnitKind kind,
+        sbyte[] query,
+        int k,
+        Func<VectorMatch, bool>? allow)
+    {
+        int fetch = Math.Min(k, MaxCandidates);
+        while (true)
+        {
+            IReadOnlyList<VectorMatch> matches = Ordered(port.Search(kind, query, fetch));
+            List<VectorMatch> allowed = [.. (allow is null ? matches : matches.Where(allow)).Take(k)];
+
+            bool corpusExhausted = matches.Count < fetch;
+            if (allowed.Count >= k || corpusExhausted || fetch >= MaxCandidates)
+                return allowed;
+
+            fetch = Math.Min(fetch * 2, MaxCandidates);
+        }
+    }
+
+    /// <summary>
+    /// Distance then rowid, restated here rather than trusted from the port: rank is the arm's output contract
+    /// and two runs of one query must agree exactly regardless of which store implementation answered.
+    /// </summary>
+    private static IReadOnlyList<VectorMatch> Ordered(IReadOnlyList<VectorMatch> matches)
+    {
+        var ordered = new List<VectorMatch>(matches);
+        ordered.Sort(static (left, right) =>
+        {
+            int byDistance = left.Distance.CompareTo(right.Distance);
+            return byDistance != 0 ? byDistance : left.RowId.CompareTo(right.RowId);
+        });
+        return ordered;
+    }
+
+    /// <summary>
+    /// The lane declares <c>distance_metric=cosine</c> (<see cref="VectorStore.SchemaDdl"/> renders it into the
+    /// vec0 declaration), and sqlite-vec's cosine distance is <c>1 - cos</c>. Quantization can push the value a
+    /// hair outside the range, so the result is clamped rather than reported as an impossible similarity.
+    /// </summary>
+    private static double Cosine(double distance) => Math.Clamp(1d - distance, -1d, 1d);
+}
+
+/// <summary>The production port: the opened serving generation, behind the read surface the arm needs.</summary>
+internal sealed class VectorStoreSearchPort(VectorStore store) : IVectorSearchPort
+{
+    public static IVectorSearchPort? TryOpen(VectorSidecar sidecar, string workspaceRoot, out string? unavailableReason)
+    {
+        VectorStore? store = sidecar.TryOpen(workspaceRoot, out unavailableReason);
+        return store is null ? null : new VectorStoreSearchPort(store);
+    }
+
+    public SemanticStorageLane Lane => store.Lane;
+
+    public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k) =>
+        store.Search(kind, query, k);
+
+    public void Dispose() => store.Dispose();
+}
