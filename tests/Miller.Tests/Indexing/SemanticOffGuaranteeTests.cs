@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -31,12 +32,12 @@ public sealed class SemanticOffGuaranteeTests : IDisposable
         var sidecar = new VectorSidecar(SemanticActivation.FromEnvValue(envValue), probe);
 
         VectorSidecarFacts facts = sidecar.Inspect(_root);
-        bool opened = sidecar.TryOpen(_root, out string? reason);
+        VectorStore? opened = sidecar.TryOpen(_root, out string? reason);
         IReadOnlyList<string> retained = sidecar.RetainedGenerations(_root);
-        Assert.Throws<InvalidOperationException>(() => sidecar.OpenRequired(_root));
+        Assert.Throws<InvalidOperationException>(() => { sidecar.OpenRequired(_root); });
 
         Assert.Equal("disabled", facts.State);
-        Assert.False(opened);
+        Assert.Null(opened);
         Assert.False(string.IsNullOrWhiteSpace(reason));
         Assert.Empty(retained);
         Assert.Empty(probe.Calls);

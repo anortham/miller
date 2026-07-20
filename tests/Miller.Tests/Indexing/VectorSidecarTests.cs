@@ -58,23 +58,23 @@ public sealed class VectorSidecarTests : IDisposable
     }
 
     [Fact]
-    public void TryOpen_Off_ReturnsFalseWithDisabledReasonAndNeverThrows()
+    public void TryOpen_Off_ReturnsNoStoreWithDisabledReasonAndNeverThrows()
     {
-        Assert.False(VectorSidecar.Disabled.TryOpen(_root, out string? reason));
+        Assert.Null(VectorSidecar.Disabled.TryOpen(_root, out string? reason));
         Assert.Contains("disabled", reason!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void TryOpen_EnabledWithoutArtifact_ReturnsFalseWithReason()
+    public void TryOpen_EnabledWithoutArtifact_ReturnsNoStoreWithReason()
     {
-        Assert.False(new VectorSidecar(SemanticMode.On).TryOpen(_root, out string? reason));
+        Assert.Null(new VectorSidecar(SemanticMode.On).TryOpen(_root, out string? reason));
         Assert.False(string.IsNullOrWhiteSpace(reason));
     }
 
     [Fact]
     public void OpenRequired_Off_FailsVisiblyAsDisabled()
     {
-        var ex = Assert.Throws<InvalidOperationException>(() => VectorSidecar.Disabled.OpenRequired(_root));
+        var ex = Assert.Throws<InvalidOperationException>(() => { VectorSidecar.Disabled.OpenRequired(_root); });
 
         Assert.Contains("disabled", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -82,7 +82,7 @@ public sealed class VectorSidecarTests : IDisposable
     [Fact]
     public void OpenRequired_EnabledButMissing_TellsTheOperatorToRefresh()
     {
-        var ex = Assert.Throws<InvalidOperationException>(() => new VectorSidecar(SemanticMode.On).OpenRequired(_root));
+        var ex = Assert.Throws<InvalidOperationException>(() => { new VectorSidecar(SemanticMode.On).OpenRequired(_root); });
 
         Assert.Contains(VectorSidecar.PathFor(_root), ex.Message, StringComparison.Ordinal);
         Assert.Contains("miller workspace refresh", ex.Message, StringComparison.Ordinal);
@@ -93,7 +93,7 @@ public sealed class VectorSidecarTests : IDisposable
     {
         File.WriteAllText(VectorSidecar.PathFor(_root), "not a real vector store yet");
 
-        var ex = Assert.Throws<InvalidOperationException>(() => new VectorSidecar(SemanticMode.Shadow).OpenRequired(_root));
+        var ex = Assert.Throws<InvalidOperationException>(() => { new VectorSidecar(SemanticMode.Shadow).OpenRequired(_root); });
 
         Assert.False(string.IsNullOrWhiteSpace(ex.Message));
     }

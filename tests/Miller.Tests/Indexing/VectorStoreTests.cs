@@ -168,14 +168,11 @@ public sealed class VectorSidecarOpenPathTests : IDisposable
     public VectorSidecarOpenPathTests() => Directory.CreateDirectory(Path.Combine(_root, ".miller"));
 
     [Fact]
-    public void ReadyGeneration_OpensAndReportsReady()
+    public void ReadyGeneration_ClassifiesAsReady()
     {
         VectorSidecar sidecar = SidecarOver(ReadyMeta());
 
-        Assert.True(sidecar.TryOpen(_root, out string? reason));
-        Assert.Null(reason);
         Assert.Equal("ready", sidecar.Inspect(_root).State);
-        sidecar.OpenRequired(_root);
     }
 
     [Fact]
@@ -244,8 +241,8 @@ public sealed class VectorSidecarOpenPathTests : IDisposable
 
         Assert.Equal("incompatible", facts.State);
         Assert.Contains("2.0.0", facts.Reason!, StringComparison.Ordinal);
-        Assert.False(sidecar.TryOpen(_root, out _));
-        Assert.Throws<InvalidOperationException>(() => sidecar.OpenRequired(_root));
+        Assert.Null(sidecar.TryOpen(_root, out _));
+        Assert.Throws<InvalidOperationException>(() => { sidecar.OpenRequired(_root); });
     }
 
     [Fact]
@@ -337,6 +334,14 @@ public sealed class VectorSidecarOpenPathTests : IDisposable
             meta = _meta;
             failureReason = string.Empty;
             return true;
+        }
+
+        /// <summary>A fake cannot manufacture a real sqlite-vec-backed store, so the ready-open path is
+        /// covered by <see cref="VectorStoreTests.TryOpen_ReadyGeneration_ReturnsAUsableStore"/> instead.</summary>
+        public VectorStore? OpenStore(string path, out string failureReason)
+        {
+            failureReason = "the fake opener manufactures no store";
+            return null;
         }
     }
 
@@ -492,6 +497,52 @@ public sealed class VectorStoreTests : IDisposable
             reopened.Identity);
         Assert.Equal("ready", reopened.Meta("build_state"));
         Assert.Equal(512, reopened.Lane.Dims);
+    }
+
+    [Fact]
+    public void TryOpen_ReadyGeneration_ReturnsAUsableStore()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        string workspaceRoot = Path.Combine(_dir, "workspace");
+        Directory.CreateDirectory(Path.Combine(workspaceRoot, ".miller"));
+        string artifact = VectorSidecar.PathFor(workspaceRoot);
+
+        using (VectorStore created = VectorStore.Create(
+                   artifact,
+                   MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder),
+                   ArtifactId,
+                   extension))
+        {
+            created.Upsert(VectorUnitKind.Symbol, 1, "unit", "src/A.cs", Vector(100), "h1", 1, "class", isTest: false);
+            created.SetMeta("build_state", "ready");
+        }
+
+        var sidecar = new VectorSidecar(
+            SemanticMode.On, SystemVectorFileProbe.Instance, new RealOpener(extension));
+
+        using VectorStore? opened = sidecar.TryOpen(workspaceRoot, out string? reason);
+
+        Assert.NotNull(opened);
+        Assert.Null(reason);
+        Assert.Equal("unit", Assert.Single(opened!.Search(VectorUnitKind.Symbol, Vector(100), k: 4)).UnitId);
+    }
+
+    /// <summary>Opens the real artifact through an explicit extension path, so the test never mutates the
+    /// process environment (unsafe under xunit's parallel collections).</summary>
+    private sealed class RealOpener(string extensionPath) : IVectorStoreOpener
+    {
+        public bool TryReadMeta(string path, out IReadOnlyDictionary<string, string> meta, out string failureReason)
+        {
+            meta = VectorStore.ReadMetaAt(path, extensionPath);
+            failureReason = string.Empty;
+            return true;
+        }
+
+        public VectorStore? OpenStore(string path, out string failureReason)
+        {
+            failureReason = string.Empty;
+            return VectorStore.Open(path, extensionPath, readOnly: true);
+        }
     }
 
     [Fact]

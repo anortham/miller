@@ -22,6 +22,12 @@ internal interface IVectorFileProbe
 internal interface IVectorStoreOpener
 {
     bool TryReadMeta(string path, out IReadOnlyDictionary<string, string> meta, out string failureReason);
+
+    /// <summary>
+    /// Opens the artifact for reading. Called only once classification has already found the generation
+    /// serviceable, so a failure here is an unexpected race (the file changed under us), not a routine state.
+    /// </summary>
+    VectorStore? OpenStore(string path, out string failureReason);
 }
 
 /// <summary>
@@ -55,6 +61,27 @@ internal sealed class SqliteVectorStoreOpener : IVectorStoreOpener
         {
             failureReason = ex.Message;
             return false;
+        }
+    }
+
+    public VectorStore? OpenStore(string path, out string failureReason)
+    {
+        string? extension = VectorStore.ResolveExtensionPath();
+        if (extension is null)
+        {
+            failureReason = $"the sqlite-vec {VectorStore.PinnedVecVersion} extension is not available to this build";
+            return null;
+        }
+
+        try
+        {
+            failureReason = string.Empty;
+            return VectorStore.Open(path, extension, readOnly: true);
+        }
+        catch (Exception ex) when (ex is VectorStoreException or Microsoft.Data.Sqlite.SqliteException or IOException)
+        {
+            failureReason = ex.Message;
+            return null;
         }
     }
 }
@@ -164,41 +191,51 @@ public sealed class VectorSidecar
     }
 
     /// <summary>
-    /// Non-throwing availability probe for tests and evaluation. Returns false with a stated
+    /// Non-throwing open. Returns the opened store, or <c>null</c> with a stated
     /// <paramref name="unavailableReason"/> whenever the semantic arm cannot serve — including when it is
-    /// simply off.
+    /// simply off. The reason is what makes "degrades to lexical WITH a reason" observable in status/health,
+    /// so it is always populated on the null path.
     /// </summary>
-    public bool TryOpen(string workspaceRoot, out string? unavailableReason)
+    /// <remarks>The caller owns the returned store and must dispose it.</remarks>
+    public VectorStore? TryOpen(string workspaceRoot, out string? unavailableReason)
     {
         if (!Enabled)
         {
             unavailableReason = $"Semantic retrieval is disabled ({EnvVar}=off).";
-            return false;
+            return null;
         }
 
         VectorSidecarFacts facts = Classify(workspaceRoot);
-        if (facts.State == ReadyState)
+        if (facts.State != ReadyState)
         {
-            unavailableReason = null;
-            return true;
+            unavailableReason = facts.Reason;
+            return null;
         }
 
-        unavailableReason = facts.Reason;
-        return false;
+        VectorStore? store = _opener.OpenStore(PathFor(workspaceRoot), out string failureReason);
+        if (store is null)
+        {
+            unavailableReason =
+                $"Vector artifact at '{facts.Path}' classified ready but could not be opened: {failureReason}.";
+            return null;
+        }
+
+        unavailableReason = null;
+        return store;
     }
 
     /// <summary>
     /// Production routing path. Unlike <see cref="TryOpen"/>, an enabled-but-unusable sidecar fails visibly so
     /// semantic problems never silently allocate a substitute.
     /// </summary>
-    public void OpenRequired(string workspaceRoot)
+    /// <remarks>The caller owns the returned store and must dispose it.</remarks>
+    public VectorStore OpenRequired(string workspaceRoot)
     {
         if (!Enabled)
             throw new InvalidOperationException($"Vector sidecar is disabled ({EnvVar}=off).");
 
-        VectorSidecarFacts facts = Classify(workspaceRoot);
-        if (facts.State != ReadyState)
-            throw new InvalidOperationException(facts.Reason);
+        return TryOpen(workspaceRoot, out string? unavailableReason)
+            ?? throw new InvalidOperationException(unavailableReason);
     }
 
     /// <summary>
