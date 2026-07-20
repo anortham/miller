@@ -163,10 +163,10 @@ Commit mode: Batch A is `parallel-lead-commit`; F3–F5 are `serial-worker-commi
 **What to build:** The last-resort semantic affordance and the mode contracts, without touching symbol-route ranking (that is F3's).
 
 **Acceptance criteria:**
-- [ ] Rescue fires only when rescue-eligible AND policy says semantically-shaped AND artifact ready; emits ≤2 labeled rows; telemetry kind stamped; JSON unaffected
-- [ ] `mode=content` hybrid reorders chunk hits under gating; `mode=source` never returns a card and appends the note only when the arm was consultable
-- [ ] All off/shadow/unready states byte-identical on every touched route
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Rescue fires only when rescue-eligible AND policy says semantically-shaped AND artifact ready; emits ≤2 labeled rows; telemetry kind stamped (query text proven absent); JSON unaffected
+- [x] `mode=content` hybrid reorders chunk hits under gating (membership unchanged); `mode=source` never returns a card and appends the note only when the arm was consultable
+- [x] All off/shadow/unready states byte-identical on every touched route (throwing-factory proof of non-consultation under off/shadow)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit (`26d3a7a`; 4127/0 fast at 27s, Release clean)
 
 ### Task F5: CLI `--arm` + determinism contract
 

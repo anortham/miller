@@ -73,3 +73,4 @@ Task F2: complete (parallel-lead-commit, Lead inline review clean, lead commit 6
 Task G1 (Track 1): complete (serial-worker-commit c4c3270, Lead inline review clean; fast-suite tripwire waived on isolation proof — compile failure owned by F3 in-flight TDD)
 Task F3: complete (commits a88f8ee, serial-worker-commit, Lead inline review clean — SemanticMode.On gate verified, blast radius confirmed via FusionArm-only reachability)
 Task G2 (Track 1): complete (serial-worker-commit ccdc20c, Lead inline review clean — prerelease-aware guard regex + sidecar-anchored pin regex both verified as load-bearing divergences)
+Task F4: complete (commits 26d3a7a, serial-worker-commit, Lead inline review clean — ctor-composition over registered services ACCEPTED (WorkspaceContext pre-bind throw verified; activation pinned by test); DI-lift into MillerServiceRegistration recorded as candidate follow-up, path-level chunk join recorded as eval datapoint)
