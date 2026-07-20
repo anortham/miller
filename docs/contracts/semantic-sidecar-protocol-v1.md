@@ -635,6 +635,12 @@ Constraints and restated identically in the fixture README:
 | L2 norm of every emitted vector | Within **`1e-3`** of `1.0`. |
 | Cosine similarity to the CPU-generated golden vector | **`≥ 0.999`** per text. |
 
+"Emitted vector" means a wire vector, which is always float — the wire never carries quantized
+vectors (`vectors-v1.md` § Storage schema, division of labor). Quantized **storage codes** are not
+held to the norm bar (symmetric-int8 rounding at lane dims drifts ~1.5e-3 inherently); the fixture
+set bounds them by dual cosine checks (vs. golden and vs. their own pre-quantization float) plus a
+code-range check instead.
+
 **Bitwise equality is explicitly not the bar.** Metal, Vulkan, and CPU backends produce different
 low-order bits for the same input; a bitwise gate would fail every accelerated build for no
 correctness reason. Goldens are generated on the **CPU backend** precisely because it is the

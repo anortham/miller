@@ -141,11 +141,11 @@ Exact values — copy verbatim, never re-derive:
 **Approach:** Keep committed goldens compact: round floats to 6 decimals (well inside the 0.999-cosine bar — state this in the README) and target < 2 MB total; if native-1024d goldens for 40 texts exceed that, keep native goldens for a documented 12-text core subset and lane-sliced goldens for all texts. Empty-string handling: record the reference implementation's actual behavior (embed or error) as the golden fact rather than assuming — check `runtime.py`. Fixture generation must be deterministic given the cache (fixed corpus order, fixed server settings, temperature-free embedding).
 
 **Acceptance criteria:**
-- [ ] `generate.py --verify` green from the existing cache: regenerates both models on CPU and every text passes the tolerance policy against committed goldens
-- [ ] Corpus covers all listed edge-case classes; each row labels its class and role
-- [ ] Committed fixture payload < 2 MB and contains no model weights or binaries
-- [ ] README documents regeneration, tolerance, rounding, and the pass/fail rule for implementations
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] `generate.py --verify` green from the existing cache: regenerates both models on CPU and every text passes the tolerance policy against committed goldens
+- [x] Corpus covers all listed edge-case classes; each row labels its class and role
+- [x] Committed fixture payload < 2 MB and contains no model weights or binaries
+- [x] README documents regeneration, tolerance, rounding, and the pass/fail rule for implementations
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ## Task 4: Docs map + cross-contract consistency pass
 
