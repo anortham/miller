@@ -292,6 +292,72 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         Assert.False(string.IsNullOrWhiteSpace(vectors.GetProperty("reason").GetString()));
     }
 
+    [Fact]
+    public void PendingFiles_CaughtUpCursorIsZeroWithoutReadingTheDeltaJournal()
+    {
+        var facts = new VectorSidecarFacts("ready", "/repo/.miller/vectors.db", null)
+        {
+            SymbolCursor = new VectorCursorFacts("symbol", 42, 42, null, null),
+            ChunkCursor = new VectorCursorFacts("chunk", 42, 42, null, null),
+        };
+
+        VectorSidecarFacts enriched = WorkspaceFactsAssembler.WithPendingFiles(
+            facts,
+            (_, _) => throw new InvalidOperationException("a caught-up cursor must not read the journal"));
+
+        Assert.Equal(0, enriched.SymbolCursor!.PendingFiles);
+        Assert.Equal(0, enriched.ChunkCursor!.PendingFiles);
+    }
+
+    [Fact]
+    public void PendingFiles_BehindCursorCountsTheChangedPathsSinceItsCompletedRevision()
+    {
+        var facts = new VectorSidecarFacts("ready", "/repo/.miller/vectors.db", null)
+        {
+            ArtifactId = "art-1",
+            SymbolCursor = new VectorCursorFacts("symbol", 40, 42, null, null),
+            ChunkCursor = new VectorCursorFacts("chunk", 42, 42, null, null),
+        };
+
+        VectorSidecarFacts enriched = WorkspaceFactsAssembler.WithPendingFiles(
+            facts,
+            (from, artifactId) =>
+            {
+                Assert.Equal(40, from);
+                Assert.Equal("art-1", artifactId);
+                return new RevisionDeltaResult(
+                    RevisionDeltaStatus.Complete, from, 42, artifactId, ["a.cs", "b.cs", "c.cs"], "complete");
+            });
+
+        Assert.Equal(3, enriched.SymbolCursor!.PendingFiles);
+    }
+
+    [Fact]
+    public void PendingFiles_UnreconstructableSpanLeavesTheCountUnknownRatherThanGuessingZero()
+    {
+        var facts = new VectorSidecarFacts("ready", "/repo/.miller/vectors.db", null)
+        {
+            SymbolCursor = new VectorCursorFacts("symbol", 40, 42, null, null),
+        };
+
+        VectorSidecarFacts enriched = WorkspaceFactsAssembler.WithPendingFiles(
+            facts,
+            (from, artifactId) => new RevisionDeltaResult(
+                RevisionDeltaStatus.Unavailable, from, 42, artifactId, [], "pruned_history"));
+
+        Assert.Null(enriched.SymbolCursor!.PendingFiles);
+    }
+
+    [Fact]
+    public void PendingFiles_DisabledFactsAreLeftUntouched()
+    {
+        var facts = new VectorSidecarFacts("disabled", "/repo/.miller/vectors.db", null);
+
+        Assert.Same(facts, WorkspaceFactsAssembler.WithPendingFiles(
+            facts,
+            (_, _) => throw new InvalidOperationException("off means no journal read")));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_temp))

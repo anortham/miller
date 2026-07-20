@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Telemetry;
 
@@ -320,11 +321,19 @@ public static class WorkspaceRender
     private static string? VectorsLabel(VectorSidecarFacts? facts) => facts?.State switch
     {
         null or "disabled" => null,
+        "ready" => VectorsReadyLabel(facts),
+        "building" => $"building {facts.BuildProgressPercent ?? 0}% (not queryable)",
         "unavailable" => string.IsNullOrWhiteSpace(facts.Reason)
             ? "unavailable"
             : $"unavailable ({facts.Reason})",
         _ => facts.State,
     };
+
+    // Serving from a retained generation is still `ready`: which generation answers queries is a JSON fact.
+    private static string VectorsReadyLabel(VectorSidecarFacts facts) =>
+        facts.LaggierCursor?.PendingFiles is > 0 and { } pending
+            ? $"ready (updating; {pending.ToString(CultureInfo.InvariantCulture)} files pending)"
+            : "ready";
 
     private static string ContentCorpusLabel(ContentCorpusFacts facts, long expectedRevision)
     {
@@ -521,6 +530,69 @@ public static class WorkspaceRender
         else w.WriteString("path", facts.Path);
         if (facts.Reason is null) w.WriteNull("reason");
         else w.WriteString("reason", facts.Reason);
+        if (facts.BuildProgressPercent is { } percent) w.WriteNumber("build_progress_percent", percent);
+        else w.WriteNull("build_progress_percent");
+        if (facts.ServingTag is null) w.WriteNull("serving_tag");
+        else w.WriteString("serving_tag", facts.ServingTag);
+        if (facts.ServingRole is null) w.WriteNull("serving_role");
+        else w.WriteString("serving_role", facts.ServingRole);
+        if (facts.ArtifactId is null) w.WriteNull("artifact_id");
+        else w.WriteString("artifact_id", facts.ArtifactId);
+        w.WritePropertyName("symbol_cursor");
+        WriteVectorCursorJson(w, facts.SymbolCursor);
+        w.WritePropertyName("chunk_cursor");
+        WriteVectorCursorJson(w, facts.ChunkCursor);
+        w.WritePropertyName("identity");
+        WriteVectorIdentityJson(w, facts.Identity);
+        w.WritePropertyName("retained_generations");
+        w.WriteStartArray();
+        foreach (VectorGenerationFacts generation in facts.Retained)
+        {
+            w.WriteStartObject();
+            w.WriteString("tag", generation.Tag);
+            w.WriteString("path", generation.Path);
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+        w.WriteEndObject();
+    }
+
+    private static void WriteVectorCursorJson(Utf8JsonWriter w, VectorCursorFacts? cursor)
+    {
+        if (cursor is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteNumber("completed_revision", cursor.CompletedRevision);
+        w.WriteNumber("target_revision", cursor.TargetRevision);
+        if (cursor.PendingFiles is { } pending) w.WriteNumber("pending_files", pending);
+        else w.WriteNull("pending_files");
+        if (cursor.LastError is null) w.WriteNull("last_error");
+        else w.WriteString("last_error", cursor.LastError);
+        if (cursor.LastErrorAt is null) w.WriteNull("last_error_at");
+        else w.WriteString("last_error_at", cursor.LastErrorAt);
+        w.WriteEndObject();
+    }
+
+    private static void WriteVectorIdentityJson(Utf8JsonWriter w, SemanticGenerationIdentity? identity)
+    {
+        if (identity is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteString("encoder_fingerprint", identity.EncoderFingerprint);
+        w.WriteString("storage_schema", identity.StorageSchema);
+        w.WriteString("corpus_generation", identity.CorpusGeneration);
+        w.WriteString("writer_version", identity.WriterVersion);
+        w.WriteString("min_reader_version", identity.MinReaderVersion);
+        w.WriteString("fusion_profile", identity.FusionProfile);
         w.WriteEndObject();
     }
 

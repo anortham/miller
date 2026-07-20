@@ -127,6 +127,10 @@ public sealed class VectorSidecar
     private const string BuildingState = "building";
     private const string UnavailableState = "unavailable";
     private const string IncompatibleState = "incompatible";
+    private const string CircuitOpenState = "circuit-open";
+    private const string DiskBlockedState = "disk-blocked";
+    private const string ActiveRole = "active";
+    private const string RetainedRole = "retained";
 
     private readonly IVectorFileProbe _probe;
     private readonly IVectorStoreOpener _opener;
@@ -259,15 +263,44 @@ public sealed class VectorSidecar
     /// </summary>
     private VectorSidecarFacts Classify(string workspaceRoot)
     {
-        string path = PathFor(workspaceRoot);
+        IReadOnlyList<VectorGenerationFacts> retained = RetainedInventory(workspaceRoot);
 
-        if (!_probe.FileExists(path))
-        {
-            return Unavailable(path,
-                $"Semantic retrieval is enabled but no vector artifact exists at '{path}'. " +
+        string activePath = PathFor(workspaceRoot);
+        VectorSidecarFacts active = _probe.FileExists(activePath)
+            ? ClassifyGeneration(activePath, ActiveRole)
+            : Unavailable(activePath,
+                $"Semantic retrieval is enabled but no vector artifact exists at '{activePath}'. " +
                 "Run `miller workspace refresh` to build it.");
+
+        if (active.State == ReadyState)
+            return active with { Retained = retained };
+
+        // vectors-v1 §Status: `incompatible` means NO generation — active or retained — this reader can
+        // interpret, so a superseded generation matching the reader's encoder keeps serving.
+        foreach (VectorGenerationFacts generation in retained)
+        {
+            VectorSidecarFacts candidate = ClassifyGeneration(generation.Path, RetainedRole, generation.Tag);
+            if (candidate.State == ReadyState)
+                return candidate with { Retained = retained };
         }
 
+        return active with { Retained = retained };
+    }
+
+    private IReadOnlyList<VectorGenerationFacts> RetainedInventory(string workspaceRoot)
+    {
+        var generations = new List<VectorGenerationFacts>();
+        foreach (string path in _probe.EnumerateRetainedGenerations(MillerDirFor(workspaceRoot)))
+        {
+            if (VectorGenerationManager.TagFromRetainedPath(path) is { } tag)
+                generations.Add(new VectorGenerationFacts(tag, path));
+        }
+
+        return generations;
+    }
+
+    private VectorSidecarFacts ClassifyGeneration(string path, string role, string? tag = null)
+    {
         if (!_opener.TryReadMeta(path, out IReadOnlyDictionary<string, string> meta, out string failureReason))
         {
             return Unavailable(path,
@@ -309,16 +342,67 @@ public sealed class VectorSidecar
                 $"this reader is {Reader.ReaderVersion}. Degrading to lexical; the generation is left untouched.");
         }
 
+        VectorSidecarFacts generation = new(ReadyState, path, null)
+        {
+            Identity = identity,
+            ArtifactId = meta.GetValueOrDefault("artifact_id"),
+            SymbolCursor = CursorFrom(meta, "symbol"),
+            ChunkCursor = CursorFrom(meta, "chunk"),
+            ServingTag = tag ?? MillerSemanticContract.GenerationTag(identity),
+            ServingRole = role,
+            BuildProgressPercent = ProgressPercent(meta),
+        };
+
         string buildState = meta.GetValueOrDefault("build_state", string.Empty);
         if (buildState != "ready")
         {
-            string percent = meta.GetValueOrDefault("build_progress_percent", "0");
-            return new VectorSidecarFacts(BuildingState, path,
-                $"Vector generation at '{path}' is {percent}% built and is not queryable until it is ready.");
+            generation = generation with
+            {
+                State = BuildingState,
+                Reason = $"Vector generation at '{path}' is {generation.BuildProgressPercent ?? 0}% built " +
+                         "and is not queryable until it is ready.",
+                ServingTag = null,
+                ServingRole = null,
+            };
         }
 
-        return new VectorSidecarFacts(ReadyState, path, null);
+        // Convergence pauses are recorded on the artifact so a reader instance — not just the leader that
+        // tripped them — reports why the generation stopped moving.
+        if (PauseState(meta) is { } pause)
+        {
+            return generation with
+            {
+                State = pause,
+                Reason = meta.GetValueOrDefault("converge_pause_reason") ?? generation.Reason,
+            };
+        }
+
+        return generation;
     }
+
+    private static string? PauseState(IReadOnlyDictionary<string, string> meta) =>
+        meta.GetValueOrDefault("converge_pause_state") switch
+        {
+            CircuitOpenState => CircuitOpenState,
+            DiskBlockedState => DiskBlockedState,
+            _ => null,
+        };
+
+    private static int? ProgressPercent(IReadOnlyDictionary<string, string> meta) =>
+        int.TryParse(meta.GetValueOrDefault("build_progress_percent"), out int percent) ? percent : null;
+
+    private static VectorCursorFacts CursorFrom(IReadOnlyDictionary<string, string> meta, string name) =>
+        new(
+            name,
+            Revision(meta, $"{name}_completed_revision"),
+            Revision(meta, $"{name}_target_revision"),
+            NullIfEmpty(meta.GetValueOrDefault($"{name}_last_error")),
+            NullIfEmpty(meta.GetValueOrDefault($"{name}_last_error_at")));
+
+    private static long Revision(IReadOnlyDictionary<string, string> meta, string key) =>
+        long.TryParse(meta.GetValueOrDefault(key), out long revision) ? revision : 0;
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static VectorSidecarFacts Unavailable(string path, string reason) =>
         new(UnavailableState, path, reason);
@@ -336,9 +420,70 @@ public sealed class VectorSidecar
     }
 }
 
-/// <summary>Status facts for the <c>vectors.db</c> sidecar. <c>State</c> uses the vectors-v1 §Status vocabulary;
-/// this build emits <c>disabled</c> and <c>unavailable</c>.</summary>
+/// <summary>
+/// One convergence cursor as recorded in <c>vectors_meta</c>. <see cref="PendingFiles"/> is not an artifact
+/// fact: it is the changed-file count the workspace-facts assembler resolves from the extract's own delta
+/// journal, and stays null when that span cannot be reconstructed (never a guessed zero).
+/// </summary>
+public sealed record VectorCursorFacts(
+    string Name,
+    long CompletedRevision,
+    long TargetRevision,
+    string? LastError,
+    string? LastErrorAt)
+{
+    public long? PendingFiles { get; init; }
+
+    public long RevisionLag => Math.Max(0, TargetRevision - CompletedRevision);
+}
+
+/// <summary>A discoverable generation beside the active artifact: its tag and the file it lives in.</summary>
+public sealed record VectorGenerationFacts(string Tag, string Path);
+
+/// <summary>
+/// Status facts for the <c>vectors.db</c> sidecar. <c>State</c> uses the vectors-v1 §Status vocabulary. Exact
+/// revisions, identity fields, the serving generation and the retained inventory ride here for JSON status/health
+/// output only — the compact line renders the vocabulary string and the laggier cursor's pending count.
+/// </summary>
 public sealed record VectorSidecarFacts(
     string State,
     string? Path,
-    string? Reason);
+    string? Reason)
+{
+    /// <summary>Meaningful only while <c>building</c>.</summary>
+    public int? BuildProgressPercent { get; init; }
+
+    public VectorCursorFacts? SymbolCursor { get; init; }
+
+    public VectorCursorFacts? ChunkCursor { get; init; }
+
+    public SemanticGenerationIdentity? Identity { get; init; }
+
+    /// <summary>The <c>symbols.db</c> artifact this generation was built from.</summary>
+    public string? ArtifactId { get; init; }
+
+    /// <summary>The generation tag being served, or null when nothing is queryable.</summary>
+    public string? ServingTag { get; init; }
+
+    /// <summary><c>active</c> or <c>retained</c> — which artifact answers queries. JSON-only.</summary>
+    public string? ServingRole { get; init; }
+
+    public IReadOnlyList<VectorGenerationFacts> Retained { get; init; } = [];
+
+    /// <summary>
+    /// The cursor the compact status line reports. Pending files decide when both counts are known; otherwise the
+    /// revision lag does, so an unreconstructable delta still picks the cursor that is further behind.
+    /// </summary>
+    public VectorCursorFacts? LaggierCursor
+    {
+        get
+        {
+            if (SymbolCursor is null || ChunkCursor is null)
+                return SymbolCursor ?? ChunkCursor;
+
+            long symbol = SymbolCursor.PendingFiles ?? SymbolCursor.RevisionLag;
+            long chunk = ChunkCursor.PendingFiles ?? ChunkCursor.RevisionLag;
+            return chunk > symbol ? ChunkCursor : SymbolCursor;
+        }
+    }
+}

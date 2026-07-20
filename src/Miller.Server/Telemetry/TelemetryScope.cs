@@ -156,6 +156,23 @@ public sealed class TelemetryScope : IDisposable
         MetadataJson = metadata.ToJsonString();
     }
 
+    /// <summary>
+    /// Add or replace a string-array metadata property. Values must already be enums, opaque identifiers or
+    /// digests — the ledger never stores raw target/query text.
+    /// </summary>
+    public void SetMetadata(string key, IReadOnlyList<string> values)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(values);
+
+        JsonObject metadata = MetadataObject();
+        var array = new JsonArray();
+        foreach (string value in values)
+            array.Add(value);
+        metadata[key] = array;
+        MetadataJson = metadata.ToJsonString();
+    }
+
     /// <summary>Record the first wait reason observed during the call.</summary>
     public void SetWaitReason(string reason)
     {

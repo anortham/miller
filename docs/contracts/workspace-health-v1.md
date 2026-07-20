@@ -47,7 +47,9 @@ Removing or renaming documented fields requires a new contract version.
   `index_frozen_extractor_outdated` (the responding process is ineligible AND no live leader exists — nobody
   can index; upgrade miller or restore the pinned extractor via `scripts/restore-julie-extract`).
 - `index`: `document_count`, `known_extensions`, `built_revision`, `latest_revision`, `index_fresh`,
-  `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, `content_corpus`, and `history_db`.
+  `freshness_status`, `warning`, `queue_empty`, `search_sidecar`, `content_corpus`, `history_db`, and —
+  additively, only when semantic retrieval is enabled — `vectors` (same object as
+  [`workspace-status-v1.md`](workspace-status-v1.md); omitted entirely when `MILLER_SEMANTIC` is off).
   `history_db` is `null` only when history facts were not gathered; otherwise it is an object with:
   - `present`: whether `<workspace>/.miller/history.db` exists.
   - `unreadable`: whether a present sidecar could not be opened/read.

@@ -49,6 +49,7 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 - `queue_empty`: whether the leader work queue is empty from this process's perspective.
 - `search_sidecar`: search sidecar facts, or `null`.
 - `content_corpus`: content corpus sidecar facts, or `null`.
+- `vectors`: vector sidecar facts. Present only when semantic retrieval is enabled (see below).
 
 `content_corpus` when present:
 
@@ -60,6 +61,24 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 - `status_skipped`, `scope_skipped`, `too_large_skipped`, `missing_skipped`, `hash_mismatch_skipped`,
   `non_utf8_skipped`, `io_skipped`: skipped-source counters.
 - `error`: sidecar error text, or `null`.
+
+`vectors` (additive, present only when semantic retrieval is enabled):
+
+- Omitted entirely when `MILLER_SEMANTIC` is off or the sidecar is absent, so existing consumers see an
+  unchanged document until the operator opts in.
+- `state`: vectors-v1 status vocabulary — `ready`, `building`, `unavailable`, `incompatible`, `circuit-open`,
+  `disk-blocked`, or `downloading`.
+- `path`: path to the generation being reported, or `null`.
+- `reason`: stated reason for a non-`ready` state, or `null`.
+- `build_progress_percent`: 0-100 while building, else `null`.
+- `serving_tag`, `serving_role`: the generation answering queries and whether it is the `active` artifact or a
+  `retained` one. Both `null` when nothing is queryable.
+- `artifact_id`: the `symbols.db` artifact this generation was built from, or `null`.
+- `symbol_cursor`, `chunk_cursor`: `{completed_revision, target_revision, pending_files, last_error,
+  last_error_at}`. `pending_files` is `null` when the extract delta journal cannot reconstruct the span.
+- `identity`: the five generation-identity fields — `encoder_fingerprint`, `storage_schema`,
+  `corpus_generation`, `writer_version`, `min_reader_version`, `fusion_profile`.
+- `retained_generations`: array of `{tag, path}` for superseded generations still on disk.
 
 `telemetry` uses the same nested object shape as Miller's telemetry summary renderer.
 
