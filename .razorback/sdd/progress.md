@@ -59,3 +59,4 @@ Task D1: complete (parallel-lead-commit, Lead inline review clean, lead commit f
 Task D2: complete (parallel-lead-commit, Lead inline review clean, lead commit 42968e2)
 Task B2: complete (serial-worker-commit, worker commit 5f6511c, Lead inline review clean)
 - D2 lead rulings: (1) evidence-based narrowing of design §7.4 ACCEPTED — premises were false (fuzzy has successes; no replayable corpus exists by privacy design); only the cost-neutral cap change ships. (2) KnownCeilingGap precision defect ACCEPTED as documented + corpus-pinned; any ceiling change is a future evidence-backed task, out of P2 scope. (3) matched_mode telemetry enum recorded as the recommended post-P2 follow-up (unblocks the next fuzzy evaluation); not silently added to P2. (4) wait-in-EditService + poll-success-condition divergence ACCEPTED (content.db can lag symbols.db).
+Task E2: complete (parallel-lead-commit, Lead inline review clean + lead contract-doc additions, lead commit 6dff82b)
