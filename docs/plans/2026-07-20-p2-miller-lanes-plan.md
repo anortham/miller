@@ -251,12 +251,12 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** The write path: card/chunk text construction, hash-gated planning (pure, fast tests), and the drain-loop service (Scale tests with fake sidecar + real store).
 
 **Acceptance criteria:**
-- [ ] Card text v1 format/truncation proven by table-driven tests incl. word-boundary + comment-stripping cases; eligibility kind-driven with `is_test` marking
-- [ ] Planner: unchanged `embed_text_hash` ⟹ no work; changed ⟹ exactly the affected units; idempotent replay
-- [ ] Chunk cursor refuses to advance when content.db lags/identity mismatches (all four precondition rules covered by tests); each cursor carries independent last-error
-- [ ] Crash between staged batch and cursor advance leaves a re-runnable state, never a cursor ahead of content (test simulates kill between stages)
-- [ ] `HostStartupRegistrationTests` green (no bootstrap getter reads at construction)
-- [ ] Worker-scope verification passes; worker commits per serial-worker-commit
+- [x] Card text v1 format/truncation proven by table-driven tests incl. word-boundary + comment-stripping cases; eligibility kind-driven with `is_test` marking
+- [x] Planner: unchanged `embed_text_hash` ⟹ no work; changed ⟹ exactly the affected units; idempotent replay
+- [x] Chunk cursor refuses to advance when content.db lags/identity mismatches (all four precondition rules covered by tests); each cursor carries independent last-error
+- [x] Crash between staged batch and cursor advance leaves a re-runnable state, never a cursor ahead of content (test simulates kill between stages)
+- [x] `HostStartupRegistrationTests` green (no bootstrap getter reads at construction)
+- [x] Worker-scope verification passes; worker commits per serial-worker-commit
 
 ### Task B5: Shadow generations, promote, rollback, corruption recovery
 
