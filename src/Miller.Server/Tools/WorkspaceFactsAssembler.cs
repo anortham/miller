@@ -19,13 +19,15 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegistryRow row,
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar contentSidecar)
+        ContentCorpusSidecar contentSidecar,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
         ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(contentSidecar);
 
+        VectorSidecar resolvedVectors = vectors ?? VectorSidecar.FromEnvironment();
         long revision = row.LastRevision ?? 0;
         try
         {
@@ -48,15 +50,16 @@ internal static class WorkspaceFactsAssembler
                 ServerVersion: MillerVersion.Current,
                 ServerProcessId: Environment.ProcessId,
                 SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-                ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+                ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+                Vectors: resolvedVectors.Inspect(row.CanonicalRoot));
         }
         catch (FileNotFoundException)
         {
-            return MissingIndexFacts(registry, row, profile, sidecar, contentSidecar, revision);
+            return MissingIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision);
         }
         catch (Exception ex) when (IsHealthProfile(profile) && IsIndexReadException(ex))
         {
-            return UnreadableIndexFacts(registry, row, profile, sidecar, contentSidecar, revision, ex);
+            return UnreadableIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex);
         }
     }
 
@@ -64,7 +67,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceContext context,
         WorkspaceIndexFacts indexFacts,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar contentSidecar)
+        ContentCorpusSidecar contentSidecar,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -86,7 +90,8 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
-            ContentCorpus: contentSidecar.Inspect(context.ExtractDbPath, expectedRevision: 0));
+            ContentCorpus: contentSidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
+            Vectors: (vectors ?? VectorSidecar.FromEnvironment()).Inspect(context.WorkspaceRoot));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -95,7 +100,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
-        Exception exception)
+        Exception exception,
+        VectorSidecar? vectors = null)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (!IsHealthProfile(profile))
@@ -107,6 +113,7 @@ internal static class WorkspaceFactsAssembler
             profile,
             sidecar,
             contentSidecar,
+            vectors ?? VectorSidecar.FromEnvironment(),
             row.LastRevision ?? 0,
             exception);
     }
@@ -142,6 +149,7 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
+        VectorSidecar vectors,
         long revision)
     {
         string warning = UsesMcpWarning(profile)
@@ -168,7 +176,8 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+            Vectors: vectors.Inspect(row.CanonicalRoot));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
@@ -177,6 +186,7 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
+        VectorSidecar vectors,
         long revision,
         Exception exception)
     {
@@ -201,7 +211,8 @@ internal static class WorkspaceFactsAssembler
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
-            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision));
+            ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
+            Vectors: vectors.Inspect(row.CanonicalRoot));
     }
 
     private static bool? IndexFresh(WorkspaceRegistryRow row, WorkspaceRegisteredFactsProfile profile) =>

@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Xunit;
 
@@ -235,6 +237,59 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             WorkspaceFactsAssembler.ToListEntries(rows, _ => false);
 
         Assert.Equal(seen, Assert.Single(entries).LastSeenAt);
+    }
+
+    [Fact]
+    public void SemanticOff_FactsReportDisabledAndRenderNowhere()
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "workspaces.db"));
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws-vec-off",
+            "voff",
+            Path.Combine(_temp, "workspace-vec-off"),
+            Path.Combine(_temp, "workspace-vec-off", ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpStatus,
+            new SymbolSearchSidecar(enabled: true),
+            new ContentCorpusSidecar(),
+            VectorSidecar.Disabled);
+
+        Assert.Equal("disabled", facts.Vectors!.State);
+        Assert.DoesNotContain("vectors:", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false), StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        Assert.False(doc.RootElement.GetProperty("index").TryGetProperty("vectors", out _));
+    }
+
+    [Fact]
+    public void SemanticOn_WithoutArtifact_ReportsUnavailableWithReasonInCompactAndJson()
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "workspaces.db"));
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws-vec-on",
+            "von",
+            Path.Combine(_temp, "workspace-vec-on"),
+            Path.Combine(_temp, "workspace-vec-on", ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpStatus,
+            new SymbolSearchSidecar(enabled: true),
+            new ContentCorpusSidecar(),
+            new VectorSidecar(SemanticMode.On));
+
+        Assert.Equal("unavailable", facts.Vectors!.State);
+        Assert.Contains("vectors: unavailable (", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false), StringComparison.Ordinal);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement vectors = doc.RootElement.GetProperty("index").GetProperty("vectors");
+        Assert.Equal("unavailable", vectors.GetProperty("state").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(vectors.GetProperty("reason").GetString()));
     }
 
     public void Dispose()

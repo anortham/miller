@@ -173,10 +173,10 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **Approach:** The off-guarantee test observes the filesystem (e.g. workspace dir with a sentinel `vectors.gen-x.db` whose access would be detectable, plus asserting no vectors.db created and no path enumerated via an injected filesystem probe or directory watcher — choose the strongest observable the codebase supports). Status rendering follows the search-sidecar fact pattern exactly.
 
 **Acceptance criteria:**
-- [ ] `MILLER_SEMANTIC` unset/`off`/`0` ⟹ status `disabled`, zero filesystem touches under the vectors paths (test-enforced)
-- [ ] `shadow`/`on` with no artifact ⟹ `unavailable (reason)` fact via WorkspaceFactsAssembler in compact + JSON
-- [ ] VectorSidecar mirrors SymbolSearchSidecar's surface (EnvVar/Disabled/TryOpen/OpenRequired) with fail-visible messaging
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] `MILLER_SEMANTIC` unset/`off`/`0` ⟹ status `disabled`, zero filesystem touches under the vectors paths (test-enforced)
+- [x] `shadow`/`on` with no artifact ⟹ `unavailable (reason)` fact via WorkspaceFactsAssembler in compact + JSON
+- [x] VectorSidecar mirrors SymbolSearchSidecar's surface (EnvVar/Disabled/TryOpen/OpenRequired) with fail-visible messaging
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ### Task B2: Generation identity + vectors.db storage schema
 
