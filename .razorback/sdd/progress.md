@@ -21,3 +21,9 @@ Task 7: complete (serial-worker-commit, worker commit 367a7f2, Lead inline revie
 | branch-gate (fast) | Full fast suite green incl. new exception-path edit test | scripts/test.sh | 2e26dba | PASS 3618/0; wall tripwire 59s>30s under sustained external load (loadavg ~23); suite duration inflation is environmental — same suite 27s wall on quiet machine earlier today | 2026-07-19 18:12 |
 | branch-gate (scale) | Scale suite green | scripts/test.sh scale | 2e26dba | PASS 54/54 | 2026-07-19 18:13 |
 | worker (eval harness) | Cluster-unit weight invariance + report shape | dotnet test eval/retrieval-eval/tests -c Release | 7703e5f | PASS 31/31 (lead re-ran) | 2026-07-19 18:05 |
+
+## P1 execution (plan docs/plans/2026-07-19-p1-freeze-and-conformance-plan.md)
+Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit 9c4bbfe — incl. D1 error-vocabulary correction to plan+design)
+Task 2: complete (parallel-lead-commit, Lead inline review clean + lead division-of-labor addition, lead commit 15dd864)
+Task 3: complete (parallel-lead-commit, Lead inline review clean + lead --verify re-run 78/78, lead commit 2c81b71)
+Task 4: complete (serial-worker-commit, worker commit b464721, Lead inline review clean — F5 encoder_fingerprint derivation fixed by lead in canary contract)

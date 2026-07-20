@@ -170,7 +170,7 @@ Exact values — copy verbatim, never re-derive:
 **Approach:** Grep-driven: enumerate the shared literals from Global Constraints, grep each across the four documents, reconcile. Keep docs map hooks one line each per the map's existing style.
 
 **Acceptance criteria:**
-- [ ] `docs/README.md` lists both contracts and the fixture set in the active section
-- [ ] Recorded literal-by-literal consistency table in the report; zero unreconciled mismatches within owned files; lead-owned mismatches (if any) explicitly reported
-- [ ] Worker-scope verification passes (the consistency table) and the worker commits (serial-worker-commit)
+- [x] `docs/README.md` lists both contracts and the fixture set in the active section
+- [x] Recorded literal-by-literal consistency table in the report; zero unreconciled mismatches within owned files; lead-owned mismatches (if any) explicitly reported
+- [x] Worker-scope verification passes (the consistency table) and the worker commits (serial-worker-commit)
 

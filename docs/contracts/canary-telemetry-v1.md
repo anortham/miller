@@ -12,10 +12,11 @@ re-frozen analysis plan. Rows written under different contract versions are neve
 
 The one exception is **pre-ship amendment**: until P2b writes the first row under this contract, no data
 exists that a v2 could protect, so a defect found in review is fixed in place at
-`canary_contract_version` 1. Two such amendments have been made (the `miller_version` exact-set cohort
+`canary_contract_version` 1. Three such amendments have been made (the `miller_version` exact-set cohort
 rule; the gate-computability and qualified-attribution fixes of § Where each clause is computed,
-§ Frozen analysis parameters, `canary_result_qualified_hashes`, and `total_latency_bucket_counts`). Once
-the first canary row is written this exception is spent and the v2 rule is absolute.
+§ Frozen analysis parameters, `canary_result_qualified_hashes`, and `total_latency_bucket_counts`; the
+`canary_encoder_fingerprint` derivation rule tying it to `vectors_meta.encoder_fingerprint` in
+`vectors-v1.md`). Once the first canary row is written this exception is spent and the v2 rule is absolute.
 
 **Privacy posture (load-bearing).** Every field defined here is an enum, a counter, a version string, a
 bounded bucket label, or a SHA-256 hex digest produced by the *existing* `TelemetryScope.SetTarget`
@@ -469,7 +470,7 @@ condition does not hold is **absent**, never a fabricated zero or empty string.
 | `canary_eligibility` | enum string | see `eligibility` | Every row while the canary is `on` | 9-value enum. |
 | `canary_policy_version` | int | `SemanticQueryPolicy` version | Every row while the canary is `on` | Version integer. |
 | `canary_fusion_profile` | string | Versioned profile id, e.g. `rrf-mixed-v1` | `arm=treatment` and the semantic arm ran | Build-time identifier; workspace-independent. |
-| `canary_encoder_fingerprint` | string | Opaque lowercase hex, ≤32 chars | `arm` ∈ {`treatment`,`shadow`} and vectors were opened | Digest of model+tokenizer identity. Contains no workspace data. |
+| `canary_encoder_fingerprint` | string | Opaque lowercase hex, ≤32 chars: the first 16 hex chars of `vectors_meta.encoder_fingerprint` (`vectors-v1.md`) with its `sha256:` tag stripped | `arm` ∈ {`treatment`,`shadow`} and vectors were opened | Digest of model+tokenizer identity. Contains no workspace data. |
 | `canary_storage_schema` | string | Opaque lane id, e.g. `vec0-int8-256-cosine-v1` | as above | Build/config identifier. |
 | `canary_corpus_generation` | string | Opaque generation id | as above | Identifier of a schema version, not of content. |
 | `canary_lexical_result_count` | int | `≥0` | Every eligible row (both arms) | Counter. |
