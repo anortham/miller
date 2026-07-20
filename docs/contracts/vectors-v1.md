@@ -12,9 +12,15 @@ schema revision where the change is on-disk, and a re-frozen invalidation matrix
 different contract versions are never queried by a reader pinned to the other.
 
 The one exception is **pre-ship amendment**: until P2b writes the first `vectors.db` under this contract, no
-artifact exists that a v2 could protect, so a defect found in review is fixed in place at this version. No
-amendments have been made. Once the first artifact is written, this exception is spent and the v2 rule is
-absolute.
+artifact exists that a v2 could protect, so a defect found in review is fixed in place at this version. Once
+the first artifact is written, this exception is spent and the v2 rule is absolute.
+
+**Amendments made under the pre-ship exception (2026-07-19, pre-merge review):** generation-addressed
+retention replaced the single-file layout so [rollback](#shadow-generations-and-rollback) is actually
+deliverable; the [chunk-cursor gate](#cursors) was rebound from a resettable revision ordering to artifact
+identity plus per-source hash agreement; `corpus_generation` was removed from escalation trigger 3 to match
+the [invalidation matrix](#invalidation-matrix); `symbol_vector_map` gained `path` so glob prefiltering is
+implementable.
 
 **Design source.** [Semantic integration design](../plans/2026-07-19-miller-semantic-integration-design.md)
 §5.1 (sidecar class, five-field identity, status), §5.2 (corpus), §5.3 (convergence, writer discipline,
@@ -34,8 +40,9 @@ lexical ranking.
 
 | Fact | Value |
 |---|---|
-| Live artifact | `<workspace>/.miller/vectors.db` (plus `-wal` / `-shm`) |
+| Active generation | `<workspace>/.miller/vectors.db` (plus `-wal` / `-shm`) |
 | Shadow generation under construction | `<workspace>/.miller/vectors.db.rebuild` (plus its `-wal` / `-shm`) |
+| Retained (superseded) generations | `<workspace>/.miller/vectors.gen-<tag>.db` — self-contained, no `-wal`/`-shm` (see [Shadow generations and rollback](#shadow-generations-and-rollback)) |
 | Ownership | Miller-owned derived artifact, revision-keyed — same class as `search.db`, `content.db`, `telemetry.db`. Never a source of truth. |
 | Source of truth | `symbols.db` (symbol cards) and `content.db` (docs/config chunks). Deleting `vectors.db` loses nothing but compute. |
 | Activation env | `MILLER_SEMANTIC` — three-state: `off | shadow | on`. `0` aliases `off`. |
@@ -43,7 +50,9 @@ lexical ranking.
 `MILLER_SEMANTIC=off` is a **permanent zero-work guarantee**, not a query-time skip: no model download, no
 sidecar child process, no `vectors.db` open, create, or write, no GPU probe, no sqlite-vec extension load,
 and zero added latency on any code path. An implementation that opens the artifact "just to report status"
-under `off` violates this contract; the status is `disabled`, derived without touching the filesystem.
+under `off` violates this contract; the status is `disabled`, derived without touching the filesystem. The
+retained-generation probe is part of "no `vectors.db` open": under `off` no `vectors.gen-*.db` sibling is
+enumerated, stat-ed, or opened either.
 
 The writer path mirrors [`SymbolSearchSidecar`](../../src/Miller.Indexing/SymbolSearchSidecar.cs)
 (`src/Miller.Indexing/SymbolSearchSidecar.cs:12`) exactly: an `EnvVar` constant, a `Disabled` singleton, a
@@ -152,8 +161,8 @@ Changing a generation-identity field has exactly one defined consequence. Nothin
 
 | Field | What a change invalidates | Mechanism |
 |---|---|---|
-| `encoder_fingerprint` | **Every** stored vector — the vector space itself changed. Queries embedded by the new encoder are meaningless against old vectors. | **Shadow rebuild.** Build a full new generation beside the live one; the old generation stays queryable by any reader whose encoder still matches. Atomic promote, then GC after the soak window. |
-| `storage_schema` | Every stored vector's on-disk representation (dims, element type, metric, or table shape). | **Shadow rebuild.** Same lifecycle as above; the live vec0 tables cannot be altered in place. |
+| `encoder_fingerprint` | **Every** stored vector — the vector space itself changed. Queries embedded by the new encoder are meaningless against old vectors. | **Shadow rebuild.** Build a full new generation beside the active one; on promote the superseded generation is **retained** as `vectors.gen-<tag>.db` and stays queryable by any reader whose encoder still matches, until GC after the soak window. |
+| `storage_schema` | Every stored vector's on-disk representation (dims, element type, metric, or table shape). | **Shadow rebuild.** Same lifecycle and same retention as above; the active vec0 tables cannot be altered in place. |
 | `corpus_generation` | Only the corpus units whose constructed text changed under the new card/chunk policy. The vector space is unchanged. | **Targeted re-embed.** Re-construct unit texts, hash-gate on `embed_text_hash`, embed only changed units, in-place. Escalates to shadow rebuild if the changed-unit ratio exceeds the escalation threshold. |
 | `reader_compatibility` | **No vectors.** Only which binaries may open the artifact. | **Reader gate.** A too-old reader reports `incompatible` and degrades to lexical; it never rebuilds or deletes. |
 | `fusion_profile` | **Nothing.** Never invalidates stored vectors, never triggers re-embedding, never gates readers. | **Nothing.** Query-time only; recorded in telemetry. |
@@ -181,20 +190,56 @@ failure and lag behavior (design §5.3, doubt-pass correction).
 | Cursor | Meta keys | Source of truth |
 |---|---|---|
 | Symbol cursor | `symbol_completed_revision`, `symbol_target_revision`, `symbol_last_error`, `symbol_last_error_at` | `symbols.db` |
-| Chunk cursor | `chunk_completed_revision`, `chunk_target_revision`, `chunk_last_error`, `chunk_last_error_at`, `chunk_content_schema_version` | `content.db`, itself derived from `symbols.db` |
+| Chunk cursor | `chunk_completed_revision`, `chunk_target_revision`, `chunk_last_error`, `chunk_last_error_at`, `chunk_content_schema_version`, `chunk_source_artifact_id` | `content.db`, itself derived from `symbols.db` |
 
 **Each cursor carries its own last-error.** A failing chunk corpus must never stall symbol-card convergence,
 and vice versa. `*_last_error` is a bounded, scrubbed reason string — never query text, source text, or an
 absolute path (the RPC-boundary scrubbing rule in design §3 applies to anything persisted here).
 
-**Chunk-cursor precondition (load-bearing).** The chunk cursor advances to revision *R* only after
-`content.db` itself proves current at *R*: `content_meta.workspace_revision >= R` **and**
-`content_meta.schema_version` equals the value recorded in `chunk_content_schema_version`
-([content corpus contract](content-corpus-v1.md) pins `schema_version = 2`). Content-corpus convergence
-failures are caught-and-continued today, so a chunk cursor that trusted the workspace revision alone would
-claim a revision whose chunks do not exist. If `content.db` is missing, behind, or on a different schema
-version, the chunk cursor holds its `completed_revision`, records the reason in `chunk_last_error`, and the
-symbol cursor proceeds independently.
+**Chunk-cursor precondition (load-bearing).** Content-corpus convergence failures are caught-and-continued
+today, so a chunk cursor that trusted the workspace revision alone would claim a revision whose chunks do not
+exist. But **a revision number alone is not a safe gate either**: a full rebuild promoted underneath us
+restarts julie's revision counter ([`FullRebuildPromotion`](../../src/Miller.Indexing/FullRebuildPromotion.cs),
+escalation trigger 4), so a `>=` test against a resettable counter can accept a `content.db` carrying a
+*higher* revision number from the *previous* artifact and commit stale chunks as current. The gate is
+therefore bound to **artifact identity first, ordering only within an identity**.
+
+The chunk cursor advances to revision *R* only when all of the following hold:
+
+1. **Artifact binding.** `vectors_meta.artifact_id` equals the current
+   `symbols.db` `artifact_metadata.artifact_id`, and the chunk cursor's own recorded
+   `chunk_source_artifact_id` equals it too. **Whenever `artifact_metadata.artifact_id` changes, the chunk
+   cursor is reset** — `chunk_completed_revision` and `chunk_target_revision` go to `0` and
+   `chunk_source_artifact_id` is restamped — *before* any comparison against *R*. A reset cursor can never
+   accept a stale higher number, because there is no longer a higher number on its side of the comparison.
+2. **Schema and chunker agreement.** `content_meta.schema_version` equals the value recorded in
+   `chunk_content_schema_version` ([content corpus contract](content-corpus-v1.md) pins
+   `schema_version = 2`), and `content_meta.chunker_version` equals the chunker component encoded in
+   `corpus_generation`. A chunker-version change is a `corpus_generation` change and takes the targeted
+   re-embed path.
+3. **Ordering within the bound artifact.** `content_meta.workspace_revision >= R`. This comparison is only
+   meaningful *after* rule 1, and is valid only within one artifact identity.
+4. **Per-source hash agreement (the identity gate that does not depend on revision numbering).** Every
+   workspace-derived `content_sources` row with `status = 'active'` backing a chunk being committed must
+   carry a `content_hash` equal to that path's `files.content_hash` in the current `symbols.db` (both
+   normalized, both `blake3:` per the shared hash-algorithm guard). A chunk whose source hash disagrees is
+   **not embedded and not committed**; it is deferred to the next drain. The cursor advances to *R* only when
+   no deferred-for-hash-mismatch unit remains in the *R* span.
+
+If `content.db` is missing, behind, on a different schema or chunker version, bound to a different artifact,
+or carrying disagreeing source hashes, the chunk cursor holds its `completed_revision`, records the reason in
+`chunk_last_error`, and the symbol cursor proceeds independently.
+
+> **Why rule 4 exists, and a known P2b follow-up.** `content.db`'s `content_meta` records
+> `schema_version`, `workspace_revision`, and `chunker_version`, but **no binding to the `symbols.db`
+> artifact it was derived from** — there is no `artifact_id` column
+> (`src/Miller.Indexing/ContentCorpusSchema.cs`, `content_meta`). Rules 1 and 4 are therefore the strongest
+> gate implementable from fields that exist today: rule 1 makes the vectors side unable to carry a stale
+> comparison across an artifact swap, and rule 4 verifies each committed unit against the source of truth's
+> own content hash rather than trusting any counter. **P2b must extend `content.db`'s `content_meta` with the
+> source `symbols.db` `artifact_id`** (a content-corpus contract amendment, owned outside this document);
+> once that field exists, rule 3 becomes "exact `content_meta.artifact_id` match **and**
+> `workspace_revision >= R`", and rule 4 relaxes from a gate to a defence-in-depth check.
 
 **Atomic cursor-advance-with-staged-batch (load-bearing).** Inference happens **outside** any gate: snapshot
 the changed-path inputs under the gate, release, embed in bounded batches, reacquire briefly, re-validate
@@ -218,11 +263,19 @@ The incremental path escalates to a [shadow full rebuild](#shadow-generations-an
 1. Delta history is missing — `revision_file_changes` cannot explain the span from `completed_revision` to
    `target_revision`.
 2. The changed-vector ratio exceeds the escalation threshold (bulk refactors, mass renames).
-3. Any of `encoder_fingerprint`, `storage_schema`, or `corpus_generation` changed.
+3. Either `encoder_fingerprint` or `storage_schema` changed.
 4. `artifact_metadata.artifact_id` in `symbols.db` changed — a full rebuild was promoted underneath us
    ([`FullRebuildPromotion`](../../src/Miller.Indexing/FullRebuildPromotion.cs) restarts julie's revision
    counter, so rebuilds are **never** detected by revision comparison alone).
 5. The per-revision transaction would be too large to commit in one short transaction.
+
+**`corpus_generation` is deliberately absent from trigger 3.** Per the
+[invalidation matrix](#invalidation-matrix), a `corpus_generation` change takes the **targeted re-embed**
+path: the vector space is unchanged, so only the units whose constructed text changed are re-embedded, in
+place. It reaches a shadow rebuild **only** through trigger 2 — when the resulting changed-unit ratio exceeds
+the escalation threshold — never automatically by virtue of the field having changed. A
+`corpus_generation`-only escalation produces a shadow whose generation tag equals the live one, so it is a
+[compatible promote](#compatible-vs-incompatible-promotes) and retains nothing.
 
 ### Status reports the laggier cursor
 
@@ -272,7 +325,7 @@ CREATE TABLE vectors_meta (
 | `artifact_id` | `artifact_metadata.artifact_id` of the `symbols.db` this generation was built from |
 | `hash_algorithm` | `blake3` — matches the extract artifact's guard |
 | `symbol_completed_revision`, `symbol_target_revision`, `symbol_last_error`, `symbol_last_error_at` | Symbol cursor |
-| `chunk_completed_revision`, `chunk_target_revision`, `chunk_last_error`, `chunk_last_error_at`, `chunk_content_schema_version` | Chunk cursor |
+| `chunk_completed_revision`, `chunk_target_revision`, `chunk_last_error`, `chunk_last_error_at`, `chunk_content_schema_version`, `chunk_source_artifact_id` | Chunk cursor |
 | `build_state` | `building` \| `ready` — a generation is queryable only at `ready` |
 | `build_progress_percent` | Integer 0–100, meaningful only while `building` |
 
@@ -315,6 +368,7 @@ CREATE VIRTUAL TABLE chunk_vectors USING vec0(
 CREATE TABLE symbol_vector_map (
     rowid_ref       INTEGER PRIMARY KEY,
     symbol_id       TEXT NOT NULL UNIQUE,
+    path            TEXT NOT NULL,
     embed_text_hash TEXT NOT NULL,
     revision        INTEGER NOT NULL
 ) STRICT;
@@ -327,10 +381,18 @@ CREATE TABLE chunk_vector_map (
     revision        INTEGER NOT NULL
 ) STRICT;
 
+CREATE INDEX symbol_vector_map_path     ON symbol_vector_map(path);
 CREATE INDEX symbol_vector_map_revision ON symbol_vector_map(revision);
 CREATE INDEX chunk_vector_map_path      ON chunk_vector_map(path);
 CREATE INDEX chunk_vector_map_revision  ON chunk_vector_map(revision);
 ```
+
+Both mapping tables carry `path` because the mapping tables — not the vec0 metadata columns — are the
+**glob-resolution surface** for both unit kinds (see [Query rules](#query-rules)). `symbol_vector_map.path`
+is the defining file path of the symbol, in the same workspace-relative, forward-slash form as
+`symbol_vectors.path`; `chunk_vector_map.path` matches `chunk_vectors.path`. The mapping-table value and the
+vec0 metadata value for the same `rowid_ref` are always identical — the metadata column serves equality
+filters, the mapping column serves ordinary SQL (`LIKE`/`GLOB`) prefiltering.
 
 `rowid_ref` is the vec0 rowid. `embed_text_hash` is the hash of the **constructed** card/chunk text (not the
 file content hash): a unit re-embeds only when its constructed text changed, which is what makes replay
@@ -346,9 +408,10 @@ arbitrarily. Dedupe happens before fusion. A generation is queryable **only** by
 
 **Glob scoping uses the prefiltered manual-distance path.** vec0 metadata columns do not support `LIKE` or
 `GLOB`, so a glob-style `file_pattern` scope must **not** be expressed as a metadata constraint. Instead:
-resolve the matching `rowid_ref` set from the mapping table first (ordinary SQL over `path`), then
-brute-force distance over that subset. Equality-shaped filters (`kind`, `is_test`, exact `path`) use vec0
-metadata constraints directly.
+resolve the matching `rowid_ref` set from the mapping table first — ordinary SQL over
+`symbol_vector_map.path` for symbol units and `chunk_vector_map.path` for chunk units, the glob-resolution
+surface for both unit kinds — then brute-force distance over that subset. Equality-shaped filters (`kind`,
+`is_test`, exact `path`) use vec0 metadata constraints directly.
 
 **Oversampling is approximate and is documented as such.** Where prefiltering is impractical, a query may
 over-fetch KNN candidates and filter afterwards. This is an approximation — the true top-k under the filter
@@ -367,26 +430,99 @@ in-place compaction.
 The shadow lifecycle follows the lessons already encoded in
 [`FullRebuildPromotion`](../../src/Miller.Indexing/FullRebuildPromotion.cs)
 (`src/Miller.Indexing/FullRebuildPromotion.cs:69`): **build beside, then promote — never merge into the live
-served file.**
+served file.** Rollback additionally requires that a superseded generation survive the promote as a
+**discoverable file**, so this artifact adds generation-addressed retention on top of that pattern.
+
+### Generation tag
+
+Every generation has a **generation tag** derived from the two identity fields that gate readability:
+
+```
+tag = first 16 lowercase hex chars of SHA-256("<encoder_fingerprint>\n<storage_schema>")
+```
+
+`<encoder_fingerprint>` is the full `sha256:<64 hex>` string exactly as stored in `vectors_meta`;
+`<storage_schema>` is the full lane string (e.g. `vec0-int8-512-cosine-v1`); they are joined by a single
+`\n` (0x0A) with no trailing newline. The retained-generation filename is `vectors.gen-<tag>.db`. The tag
+deliberately excludes `corpus_generation`, `reader_compatibility`, and `fusion_profile`: none of them makes a
+generation unreadable by a matching encoder, and including them would retain files no reader could ever want.
+
+Two generations with the same tag are query-interchangeable, so **at most one retained file per tag exists**.
+
+### Compatible vs incompatible promotes
+
+| Promote kind | Condition | Retention |
+|---|---|---|
+| **Compatible** | The shadow's generation tag equals the live artifact's tag — an escalated full rebuild, fragmentation compaction, or a `corpus_generation`-only rebuild. | **None.** No reader can prefer the old file over the new one, so it is overwritten outright. |
+| **Incompatible** | The tag differs — `encoder_fingerprint` and/or `storage_schema` changed. | The live file is **retained under its own tag** before the shadow promotes. |
+
+A `min_reader_version` bump alone is not a tag change and therefore not an incompatible promote; an older
+reader gated out by `min_reader_version` is protected by the retained generation only when the upgrade also
+changed the tag. (A writer that raises `min_reader_version` without changing the tag is asserting the
+existing vectors stay valid; the too-old reader degrades to lexical with `incompatible`.)
+
+### Lifecycle
 
 1. **Build.** The shadow generation is written to `vectors.db.rebuild`, a fresh sibling in the same directory
-   (same directory ⟹ same filesystem ⟹ atomic overwrite-move on POSIX). Any stale `.rebuild` trio
-   (`.rebuild`, `-wal`, `-shm`) is deleted first. The live `vectors.db` stays fully queryable throughout;
-   readers see no interruption and no partial generation.
-2. **Self-containment.** Before promote, the shadow's WAL is folded into its main file, and the live
-   artifact's old `-wal`/`-shm` are removed so the promoted file can never pair with stale sidecars
-   (cross-inode WAL replay reads garbage pages). Every reader connection to this artifact opens with
-   pooling disabled, exactly as extract-DB opens do, so wholesale file replacement is safe.
-3. **Promote.** Overwrite-move the shadow over the live path. A failed promote leaves the live artifact
-   untouched — strictly better than a failed in-place merge. The caller must hold Miller's single-writer
-   lock. Where antivirus or held handles need longer retries, the same promote-retry timeout policy as the
-   extract artifact applies.
-4. **Rollback.** The last compatible generation is preserved through an incompatible upgrade: an older
-   Miller binary, or a reader whose `encoder_fingerprint` still matches the previous generation, keeps
-   reading it until GC. Rollback is therefore "do not GC yet", not a restore operation.
-5. **GC.** Abandoned and superseded generations are deleted after a soak window. GC never runs while a
-   compatible reader is known to be live against the generation, and never deletes the only `ready`
+   (same directory ⟹ same filesystem ⟹ atomic rename). Any stale `.rebuild` trio (`.rebuild`, `-wal`,
+   `-shm`) is deleted first. The active `vectors.db` stays fully queryable throughout; readers see no
+   interruption and no partial generation.
+2. **Self-containment.** Before promote, the shadow's WAL is folded into its main file. A file that is about
+   to be renamed — retained or promoted — must be **self-contained**: its WAL is checkpointed and its
+   `-wal`/`-shm` removed, so no renamed file can ever pair with a stale sidecar (cross-inode WAL replay reads
+   garbage pages). Every reader connection to this artifact opens with pooling disabled, exactly as
+   extract-DB opens do, so wholesale file replacement is safe.
+3. **Retain (incompatible promotes only).** Under the single-writer lock, and **before** the shadow is moved
+   into place: fold the active artifact's WAL and delete its `-wal`/`-shm`, then **rename**
+   `vectors.db` → `vectors.gen-<tag of the active generation>.db`. Rename, not copy — it is atomic, costs no
+   disk, and never leaves two live copies. If a file already exists at that target (a tag returning after a
+   revert), it is deleted first under the same lock. A retained file is immutable: the writer never opens it
+   for write again, and it carries the `build_state = ready` and full `vectors_meta` it had at retention.
+4. **Promote.** Rename the shadow over `vectors.db`. The caller must hold Miller's single-writer lock. Where
+   antivirus or held handles need longer retries, the same promote-retry timeout policy as the extract
+   artifact applies.
+   **Ordering and failure atomicity.** The steps are strictly retain-then-promote, both under one hold of the
+   writer lock. If the retain rename fails, the promote does **not** proceed: the active artifact is left
+   untouched and the shadow is left as `.rebuild` for the next attempt — strictly better than a failed
+   in-place merge. If the promote fails *after* a successful retain, there is briefly no `vectors.db`; this
+   is a recoverable state, not corruption, because the retained file is a complete `ready` generation. The
+   writer retries the promote; a writer that finds no `vectors.db` but at least one retained generation at
+   startup reports `unavailable (promote interrupted — rebuilding)` and rebuilds. Readers in that window see
+   a missing active artifact and fall back to the retained-generation probe below.
+5. **Discovery (how rollback is actually delivered).** A reader resolves its generation in this order:
+   1. Open `vectors.db`. If its `encoder_fingerprint` matches the reader's encoder, `build_state = ready`,
+      and the reader satisfies `min_reader_version` — use it. Done; no sibling is enumerated.
+   2. Otherwise enumerate `vectors.gen-*.db` siblings in `.miller/` and open each read-only, newest mtime
+      first. Use the first whose `encoder_fingerprint` matches, whose `storage_schema` the reader supports,
+      whose `build_state` is `ready`, and whose `min_reader_version` the reader satisfies.
+   3. If none matches, report `incompatible` and degrade to lexical. A reader **never** writes to, deletes,
+      or rebuilds a retained generation — that is leader-only work.
+   Readers open retained generations **read-only** and hold only short snapshots. A reader serving from a
+   retained generation reports `ready (retained generation)` in JSON facts; the compact line still says
+   `ready`, since the semantic arm is being served.
+6. **Rollback.** Rollback is therefore "do not GC yet", not a restore operation — but it is now backed by a
+   real, named, discoverable file rather than an open file handle. An older Miller binary, or a reader whose
+   `encoder_fingerprint` still matches the previous generation, keeps reading `vectors.gen-<tag>.db` until GC
+   removes it, including across process restarts.
+7. **GC.** GC is leader-only, runs under the writer lock, and its targets are exactly: stale `.rebuild`
+   trios, and retained `vectors.gen-*.db` files past the soak window. It **never** targets `vectors.db`. Its
+   rules:
+   - Never delete a retained generation within the soak window measured from its retention time (file mtime).
+   - Never delete a retained generation while a compatible reader is known to be live against it.
+   - Never delete the only `ready` generation — if `vectors.db` is absent or not `ready`, every retained
+     generation is off-limits regardless of soak.
+   - Retain at most one generation per tag, and bound total retention: past the cap, the **oldest-mtime**
+     eligible retained generations are deleted first.
+   Symmetrically, [corruption recovery](#corruption-recovery) may delete a corrupt retained generation
+   without touching `vectors.db`, and may delete/rebuild a corrupt `vectors.db` without touching any retained
    generation.
+
+**Windows semantics.** Retention and promote are plain file renames on every platform — there are no inode
+tricks, and nothing in this design depends on POSIX unlinked-but-open files. That is precisely why retention
+is a rename to a named sibling rather than "the old inode stays alive for open readers": an open handle dies
+on close, is invisible to GC, and does not exist on Windows at all. On Windows a rename over an open file
+fails rather than succeeding silently, which is why every reader connection opens with pooling disabled and
+short snapshots, and why the promote-retry timeout policy applies to both the retain and the promote rename.
 
 Full rebuilds **promote, never merge.** An implementation that points a full rebuild at the live served
 `vectors.db` violates this contract for the same reason the extract path forbids it: live readers keep the
@@ -423,7 +559,18 @@ WAL from checkpointing and the in-place merge collapses to a crawl.
 (`SQLITE_CORRUPT` / `SQLITE_NOTADB`, primary or extended, anywhere in the exception chain) and responds by
 deleting the derived artifact and rebuilding it.
 
-Recovery for this artifact is **per generation**: a corrupt generation is deleted and rebuilt on its own.
+Recovery for this artifact is **per generation**, and generations are now separate files, so "per
+generation" is literal:
+
+- A corrupt **active** `vectors.db` is deleted and rebuilt. Recovery must **not** delete any
+  `vectors.gen-*.db` — a retained generation is exactly the thing that keeps a compatible reader serving
+  while the active artifact is rebuilt.
+- A corrupt **retained** `vectors.gen-<tag>.db` is deleted on its own, under the writer lock, and is **not**
+  rebuilt (a retained generation is a historical file, not a convergence target). Recovery must **not**
+  touch `vectors.db`, and the reader that hit the corruption falls back to the next matching retained
+  generation or to lexical.
+- A corrupt shadow `vectors.db.rebuild` is deleted and the shadow build restarts.
+
 Recovery **never touches `symbols.db`** — the source of truth is unaffected by any vector corruption, and
 the worst case is recomputed embeddings. If the rebuild itself fails, the failure is logged and retried on
 the next convergence; the reported status is `unavailable (<reason>)` in the meantime.
@@ -443,17 +590,18 @@ vectors: ready | ready (updating; N files pending) | building 42% (not queryable
 
 | Status | Meaning |
 |---|---|
-| `ready` | A `ready` generation exists, both cursors are caught up, and the reader's encoder is compatible. |
+| `ready` | A `ready` generation exists, both cursors are caught up, and the reader's encoder is compatible. Identical whether that generation is the active `vectors.db` or a retained `vectors.gen-*.db`; which one is serving appears in JSON facts only. |
 | `ready (updating; N files pending)` | Queryable and serving, but the laggier cursor is behind by `N` files. |
 | `building 42% (not queryable)` | Initial build or shadow rebuild in progress; percentage from `build_progress_percent`. No semantic arm is offered. |
 | `downloading` | The sidecar is acquiring its pinned model; no vectors yet. |
 | `unavailable (reason)` | Enabled but unusable — missing artifact, failed open, sqlite-vec version mismatch, failed rebuild. The reason is always stated. |
-| `incompatible` | A generation exists but the reader's `encoder_fingerprint` does not match, or the reader is below `min_reader_version`. Degrades to lexical; never rebuilds. |
+| `incompatible` | A generation exists but **no** generation — active or retained — matches the reader's `encoder_fingerprint`, or every match is below the reader's `min_reader_version`. Degrades to lexical; never rebuilds, never deletes a retained generation. |
 | `circuit-open` | Repeated sidecar failures tripped the circuit breaker; convergence is paused. |
 | `disk-blocked` | Disk-space preflight failed; convergence is paused rather than filling the disk. |
 | `disabled` | `MILLER_SEMANTIC=off`. Derived without touching the filesystem. |
 
-Exact revisions, coverage counts, per-cursor errors, and all five identity fields appear in JSON
+Exact revisions, coverage counts, per-cursor errors, all five identity fields, the serving generation's tag,
+whether it is the active or a retained generation, and the retained-generation inventory appear in JSON
 `workspace status` / `workspace health` output only, never in the compact line. Facts flow through the
 existing workspace-facts assembly and render paths, exactly as search-sidecar facts do.
 
@@ -466,15 +614,23 @@ An implementation conforms to this contract when:
 1. All five generation-identity fields are present in `vectors_meta` with the composition specified above,
    and each field's change produces exactly the mechanism in the [invalidation matrix](#invalidation-matrix).
 2. Both cursors exist independently, each with its own last-error; the chunk cursor never advances past what
-   `content.db` proves; and no observable state has a cursor ahead of its staged batch.
+   `content.db` proves under **all four** [chunk-cursor precondition](#cursors) rules — including the
+   artifact-identity reset and per-source hash agreement, never a bare revision comparison; and no
+   observable state has a cursor ahead of its staged batch.
 3. Table shapes, column names, and vec0 declarations match the [storage schema](#storage-schema) for the
-   declared `storage_schema` lane, and `vec_version()` matches the pin at open.
+   declared `storage_schema` lane, both mapping tables carry `path`, and `vec_version()` matches the pin at
+   open.
 4. Quantization follows slice → renormalize → quantize, and emitted vectors satisfy the frozen tolerance
    policy in the [sidecar protocol contract](semantic-sidecar-protocol-v1.md): dims exactly equal to the
    lane, L2 norm within `1e-3` of 1.0, cosine similarity `≥ 0.999` to the CPU-generated golden vectors in
    [`eval/sidecar-conformance/`](../../eval/sidecar-conformance/).
 5. `MILLER_SEMANTIC=off` performs zero work by the definition in
-   [File placement and activation](#file-placement-and-activation).
+   [File placement and activation](#file-placement-and-activation), including no enumeration of retained
+   generations.
+6. An incompatible promote retains the superseded generation as a discoverable, self-contained
+   `vectors.gen-<tag>.db` before the shadow moves into place; a reader whose encoder matches a retained
+   generation serves from it across process restarts; and GC never deletes the only `ready` generation, a
+   generation inside its soak window, or one with a known live compatible reader.
 
 The invariant this contract exists to guarantee: **two independent implementations of this document produce
 artifacts each can query, and neither can produce an artifact the other silently misreads** — because every
