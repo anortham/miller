@@ -142,15 +142,22 @@ public static class VectorConvergePlanner
     /// <summary>Above this many units, the commit stops being one short transaction.</summary>
     public const int MaxUnitsPerTransaction = 2000;
 
+    /// <summary>The chunk cursor's over-cap hold: the drain commits this bounded batch without advancing and
+    /// immediately replans, so an arbitrarily large span converges within one wake.</summary>
+    public const string BoundedBatchHoldReason =
+        "the span exceeds one transaction; converging in bounded batches";
+
     private const string ChunkerComponentPrefix = "chunks-v";
 
-    /// <summary>Hash-gates one cursor's span and classifies whether it escalates.</summary>
+    /// <summary>Hash-gates one cursor's span and classifies whether it escalates. Only the symbol cursor may
+    /// escalate: a shadow rebuild rebuilds symbol cards, so a chunk-side trigger holds for that rebuild and an
+    /// over-cap chunk span converges in bounded batches instead.</summary>
     public static VectorConvergePlan Plan(VectorConvergeRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         if (Escalation(request) is var trigger and not VectorEscalationTrigger.None)
-            return Escalated(trigger);
+            return request.Kind is VectorUnitKind.Chunk ? ChunkHold(trigger) : Escalated(trigger);
 
         if (request.TargetRevision <= request.CompletedRevision)
         {
@@ -163,26 +170,7 @@ public static class VectorConvergePlanner
                 null);
         }
 
-        var stored = request.Stored.ToDictionary(static s => s.UnitId, static s => s.EmbedTextHash, StringComparer.Ordinal);
-
-        List<VectorWorkUnit> reEmbed = [];
-        foreach (VectorCorpusUnit candidate in request.Candidates)
-        {
-            string hash = SymbolCardBuilder.EmbedTextHash(candidate.Text);
-            if (stored.TryGetValue(candidate.UnitId, out string? storedHash)
-                && string.Equals(storedHash, hash, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            reEmbed.Add(new VectorWorkUnit(
-                candidate.UnitId,
-                candidate.Path,
-                candidate.Text,
-                hash,
-                candidate.SymbolKind,
-                candidate.IsTest));
-        }
+        IReadOnlyList<VectorWorkUnit> reEmbed = HashGate(request.Candidates, request.Stored);
 
         var live = request.Candidates.Select(static c => c.UnitId).ToHashSet(StringComparer.Ordinal);
         List<string> delete = [.. request.Stored
@@ -191,10 +179,26 @@ public static class VectorConvergePlanner
             .Distinct(StringComparer.Ordinal)];
 
         if (reEmbed.Count > MaxUnitsPerTransaction)
-            return Escalated(VectorEscalationTrigger.BatchTooLarge);
+        {
+            if (request.Kind is VectorUnitKind.Chunk)
+            {
+                return new VectorConvergePlan(
+                    VectorConvergeDecision.Incremental,
+                    VectorEscalationTrigger.None,
+                    [.. reEmbed.Take(MaxUnitsPerTransaction)],
+                    delete,
+                    0,
+                    BoundedBatchHoldReason);
+            }
 
-        if (ExceedsChangedRatio(request.TotalStoredUnits, reEmbed.Count + delete.Count))
+            return Escalated(VectorEscalationTrigger.BatchTooLarge);
+        }
+
+        if (request.Kind is not VectorUnitKind.Chunk
+            && ExceedsChangedRatio(request.TotalStoredUnits, reEmbed.Count + delete.Count))
+        {
             return Escalated(VectorEscalationTrigger.ChangedRatioAboveThreshold);
+        }
 
         bool holds = request.DeferredPaths.Count > 0;
         return new VectorConvergePlan(
@@ -287,6 +291,49 @@ public static class VectorConvergePlanner
             : null;
     }
 
+    /// <summary>
+    /// The whole-corpus work list of a shadow rebuild, hash-gated against what the shadow already stores but
+    /// never size-capped: the rebuild commits in bounded slices, so the transaction cap does not apply here.
+    /// </summary>
+    public static IReadOnlyList<VectorWorkUnit> RebuildWorkList(
+        IReadOnlyList<VectorCorpusUnit> candidates,
+        IReadOnlyList<VectorUnitState> stored)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(stored);
+
+        return HashGate(candidates, stored);
+    }
+
+    private static List<VectorWorkUnit> HashGate(
+        IReadOnlyList<VectorCorpusUnit> candidates,
+        IReadOnlyList<VectorUnitState> storedStates)
+    {
+        var stored = storedStates.ToDictionary(
+            static s => s.UnitId, static s => s.EmbedTextHash, StringComparer.Ordinal);
+
+        List<VectorWorkUnit> reEmbed = [];
+        foreach (VectorCorpusUnit candidate in candidates)
+        {
+            string hash = SymbolCardBuilder.EmbedTextHash(candidate.Text);
+            if (stored.TryGetValue(candidate.UnitId, out string? storedHash)
+                && string.Equals(storedHash, hash, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            reEmbed.Add(new VectorWorkUnit(
+                candidate.UnitId,
+                candidate.Path,
+                candidate.Text,
+                hash,
+                candidate.SymbolKind,
+                candidate.IsTest));
+        }
+
+        return reEmbed;
+    }
+
     private static VectorEscalationTrigger Escalation(VectorConvergeRequest request)
     {
         if (!request.DeltaHistoryComplete)
@@ -305,6 +352,15 @@ public static class VectorConvergePlanner
 
     private static VectorConvergePlan Escalated(VectorEscalationTrigger trigger) =>
         new(VectorConvergeDecision.ShadowRebuild, trigger, [], [], 0, trigger.ToString());
+
+    private static VectorConvergePlan ChunkHold(VectorEscalationTrigger trigger) =>
+        new(
+            VectorConvergeDecision.Incremental,
+            trigger,
+            [],
+            [],
+            0,
+            $"the chunk cursor holds while the symbol cursor's shadow rebuild ({trigger}) is pending");
 
     private static ChunkCursorDecision Hold(string reason, bool reset = false) =>
         new(CanAdvance: false, ResetCursor: reset, reason, DeferredPaths: []);
