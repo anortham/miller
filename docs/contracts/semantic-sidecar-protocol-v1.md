@@ -353,9 +353,27 @@ The `capabilities` map gains llama.cpp-relevant backends alongside the four the 
 - Truncation is the **sidecar's** job, silently and deterministically. An input longer than
   `max_text_tokens` is truncated to that budget rather than erroring. A caller never has to pre-measure
   tokens.
-- The instruction prefix is applied **first**, then the combined string is fit to the budget, so the
-  instruction is never the part that gets cut. This mirrors the benchmark harness's `_fit`
-  (`eval/model-bench/bench.py:144-156`).
+- **Frozen budget for the pinned models** (the value `health` reports): `max_text_tokens = 32768` for
+  `qwen3-0.6b-f16` and `512` for `bge-small-en-v1.5-f32` — each model's `context_length` in
+  [`bench-pins.json`](../../eval/model-bench/bench-pins.json). The budget covers the **entire** model
+  input: instruction prefix, text, and EOS marker.
+- **Frozen algorithm — token-based tail truncation.** (Amended in review: an earlier draft described the
+  fit by reference to the benchmark harness's `_fit`, a character-count approximation
+  (`eval/model-bench/bench.py:144-156`); that description is retired — tokens, not characters, are the
+  frozen unit.) Per input:
+  1. Sanitize, then prefix the role's instruction string.
+  2. `eos_reserve` = the token count of the model's EOS marker under its own tokenizer (`1` for Qwen3's
+     `<|endoftext|>`; `0` when the model declares no EOS append).
+  3. Tokenize the prefixed string exactly as embedding input is tokenized. If the sequence exceeds
+     `max_text_tokens − eos_reserve`, truncate the token sequence tail to that length.
+  4. **Round-trip stability rule:** detokenize and retokenize the truncated sequence; while the
+     retokenization differs from the truncated sequence, drop one more trailing token and repeat
+     (terminates — the sequence only shrinks; typically 0–1 iterations). The stable detokenization is
+     the final text body. This makes a string-in/string-out implementation and a token-level
+     implementation produce the same embedded tokens.
+  5. Append the EOS marker. The instruction prefix (truncation is tail-only) and the EOS marker
+     (reserved in step 3) therefore **always survive** — load-bearing for `pooling=last`, where the
+     final token carries the representation.
 - Truncation is not reported per item on the wire in v1. A caller that needs to know inspects
   `max_text_tokens` from `health` and measures its own inputs.
 - Truncation is **not** an error and does not flag the item.
@@ -376,11 +394,13 @@ Both pinned models use an empty `document_instruction`, so document embedding is
 transform on the input text. This is a value, not an absence: a future model may set it, and the
 sidecar applies whatever its manifest says.
 
-Application order, per input:
+Application order, per input (amended in review — an earlier draft appended the EOS before the fit,
+which could cut the marker the knob table calls unconditional):
 
 1. Prefix the role's instruction string.
-2. Append the model's EOS marker, if the model declares one.
-3. Fit to `max_text_tokens` (see [§ Truncation semantics](#truncation-semantics-v1-additive)).
+2. Fit to `max_text_tokens − eos_reserve` per
+   [§ Truncation semantics](#truncation-semantics-v1-additive) (tail truncation + stability rule).
+3. Append the model's EOS marker, if the model declares one.
 4. Tokenize and embed with the model's pooling mode.
 5. L2-normalize.
 
