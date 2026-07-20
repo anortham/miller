@@ -456,6 +456,61 @@ public sealed class ReportToolTests
             ],
             Error: null));
 
+    // ---- near_duplicate_group_count in the report rollup (Task E2) ------------------------------------------
+
+    private static ReportToolResult RunNearDuplicateReport(
+        JulieDbFixture fx,
+        bool json,
+        bool nearDuplicates,
+        int candidateCap = MetricsTool.NearDuplicateCandidateCap) =>
+        ReportTool.Run(
+            fx.DbPath, fx.WorkspaceRoot, range: "HEAD~20..HEAD", sectionLimit: 10, json: json,
+            includeTests: true, historyReader: null, regionIndex: null, nearDuplicates: nearDuplicates,
+            nearDuplicateCandidateCap: candidateCap);
+
+    [Fact]
+    public void Run_WithoutNearDuplicates_OmitsTheCountFromBothTheRollupAndTheSnapshot()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs();
+
+        ReportToolResult compact = RunNearDuplicateReport(fx, json: false, nearDuplicates: false);
+        ReportToolResult json = RunNearDuplicateReport(fx, json: true, nearDuplicates: false);
+
+        Assert.DoesNotContain("near-duplicate", compact.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("near_duplicate", json.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(compact.SnapshotMetrics, p => p.Metric == "near_duplicate_group_count");
+    }
+
+    [Fact]
+    public void Run_WithNearDuplicates_SurfacesTheCountInTheRollupAndRecordsIt()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs(secondPair: true);
+
+        ReportToolResult compact = RunNearDuplicateReport(fx, json: false, nearDuplicates: true);
+        ReportToolResult json = RunNearDuplicateReport(fx, json: true, nearDuplicates: true);
+
+        Assert.Contains("near-duplicate groups: 2", compact.Output, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(json.Output);
+        JsonElement clones = doc.RootElement.GetProperty("clones");
+        Assert.Equal(2, clones.GetProperty("near_duplicate_groups").GetInt32());
+        Assert.False(clones.GetProperty("near_duplicate_truncated").GetBoolean());
+
+        MetricHistoryPoint point = Assert.Single(
+            compact.SnapshotMetrics, p => p.Metric == "near_duplicate_group_count");
+        Assert.Equal(2.0, point.Value);
+    }
+
+    [Fact]
+    public void Run_NearDuplicateScanTruncated_SuppressesTheMetricButStillSaysWhatItSaw()
+    {
+        using var fx = NearDuplicateFixtures.CreatePairs(secondPair: true);
+
+        ReportToolResult compact = RunNearDuplicateReport(fx, json: false, nearDuplicates: true, candidateCap: 2);
+
+        Assert.Contains("near-duplicate scan truncated", compact.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(compact.SnapshotMetrics, p => p.Metric == "near_duplicate_group_count");
+    }
+
     private static RegionSearchHit Hit(string path, int line, string text) =>
         new(path, 1.0, line, "comment", text, text, $"region-{path}-{line}",
             ContainingSymbolId: null, ContainingSymbolName: null, Language: "csharp");

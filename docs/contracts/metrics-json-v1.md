@@ -101,6 +101,15 @@ Each near-duplicate group:
 | `symbols_truncated` | boolean | `true` when `count` is larger than the listed `symbols` sample. |
 | `symbols` | array | Bounded symbols, same shape and ordering as exact groups. |
 
+When the arm ran, the response also carries a top-level `near_duplicate_scan` object describing the
+bounded candidate scan (absent when the flag is off, so v1 output stays byte-identical):
+
+| Field | Type | Description |
+|---|---|---|
+| `candidate_cap` | number | The candidate-symbol bound the scan ran under. |
+| `candidates_truncated` | boolean | `true` when the cap was hit — `group_count` is then a floor and no history point is recorded (see `metrics-history-v1.md`). |
+| `group_count` | number | Exact near-duplicate group count from the scan, computed before any display limit. |
+
 The clone surface does not emit source body text and does not suggest cleanup.
 
 ## Complexity

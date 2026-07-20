@@ -357,6 +357,6 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit` (lead reviews 
 **What to build:** Trend surfacing for the new metric through the existing history/dashboard/report machinery.
 
 **Acceptance criteria:**
-- [ ] Snapshots record `near_duplicate_group_count`; `miller metrics history` surfaces it per contract
-- [ ] Dashboard shows the trend at count level only; report rollup includes the count
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Snapshots record `near_duplicate_group_count`; `miller metrics history` surfaces it per contract
+- [x] Dashboard shows the trend at count level only; report rollup includes the count
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode

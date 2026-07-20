@@ -12,7 +12,8 @@ namespace Miller.Server.Tools;
 
 /// <summary>
 /// The heavy-arm metric-history vocabulary shared across the commands that record snapshots
-/// (<c>miller report</c>, <c>metrics churn|risk</c>, <c>references candidates</c>): the <c>snapshots.source</c>
+/// (<c>miller report</c>, <c>metrics churn|risk</c>, <c>metrics clones --near-duplicates</c>,
+/// <c>references candidates</c>): the <c>snapshots.source</c>
 /// values and the heavy-only metric names, plus the tiny <c>detail_json</c> params builder those producers stamp.
 /// The cheap-arm names (<c>symbol_count</c>, <c>clone_group_count</c>, …) stay single-sourced on
 /// <see cref="MetricSnapshotAggregates"/>; only names the cheap arm does NOT emit live here so producer and the
@@ -25,6 +26,7 @@ internal static class MetricHistoryHeavyArm
     public const string ChurnSource = "churn";
     public const string RiskSource = "risk";
     public const string CandidatesSource = "candidates";
+    public const string ClonesSource = "clones";
 
     // Heavy-only metric names (the cheap arm never emits these; the Task 4/6 read surfaces key off them).
     public const string ChurnFilesChanged = "churn_files_changed";
@@ -32,6 +34,7 @@ internal static class MetricHistoryHeavyArm
     public const string RiskRows = "risk_rows";
     public const string DeadCodeCandidateCount = "dead_code_candidate_count";
     public const string DeadCodeSuppressedTotal = "dead_code_suppressed_total";
+    public const string NearDuplicateGroupCount = "near_duplicate_group_count";
 
     /// <summary>The canonical params stamped in <c>detail_json</c> so a churn/risk trend point is self-describing.</summary>
     public static string RangeLimitDetail(string range, int limit)
@@ -43,6 +46,25 @@ internal static class MetricHistoryHeavyArm
             w.WriteStartObject();
             w.WriteString("range", range);
             w.WriteNumber("limit", limit);
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    /// <summary>
+    /// The scan bounds stamped in <c>detail_json</c> so a near-duplicate trend point states the analyzer
+    /// configuration it was produced under. The value itself is bound-free — a point is only recorded when the
+    /// scan examined every eligible symbol — but a later bound change must be readable from the stored history.
+    /// </summary>
+    public static string NearDuplicateScanDetail(int candidateCap, double minSimilarity)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(
+            buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("candidate_cap", candidateCap);
+            w.WriteNumber("min_similarity", minSimilarity);
             w.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -88,7 +110,8 @@ public static class MetricsTool
         string? range = null,
         bool includeCommits = false,
         IGitHistoryReader? historyReader = null,
-        bool nearDuplicates = false)
+        bool nearDuplicates = false,
+        int nearDuplicateCandidateCap = NearDuplicateCandidateCap)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -97,10 +120,12 @@ public static class MetricsTool
         return op switch
         {
             "clones" => RunClones(
-                dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup, workspaceRoot, nearDuplicates),
+                dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup, workspaceRoot, nearDuplicates,
+                nearDuplicateCandidateCap),
             "complexity" => RunComplexity(dbPath, boundedLimit, json, minSeverity, includeTests),
-            // NOTE: churn/risk carry SnapshotMetrics for the CLI heavy-arm history recorder; clones/complexity
-            // leave it null (the leader converge arm already records clone_group_count from symbols.db).
+            // NOTE: churn/risk carry SnapshotMetrics for the CLI heavy-arm history recorder, as does a clones run
+            // whose opt-in Type-2 arm completed. complexity and the EXACT clone count stay null — the leader
+            // converge arm already records clone_group_count from symbols.db.
             "churn" => RunChurn(
                 dbPath,
                 workspaceRoot,
@@ -125,7 +150,7 @@ public static class MetricsTool
     /// Symbols examined by the opt-in Type-2 arm, in <c>(path, start_line, symbol_id)</c> order. Bounded because
     /// each candidate costs one disk-verified body read; a bigger sweep belongs in a background arm, not a CLI verb.
     /// </summary>
-    private const int NearDuplicateCandidateCap = 2000;
+    internal const int NearDuplicateCandidateCap = 2000;
 
     /// <summary>Body-span byte floor for a Type-2 candidate — below it a body cannot clear the analyzer's token floor.</summary>
     private const int NearDuplicateMinBodyBytes = 160;
@@ -137,25 +162,43 @@ public static class MetricsTool
         int minCount,
         int maxSymbolsPerGroup,
         string? workspaceRoot,
-        bool nearDuplicates)
+        bool nearDuplicates,
+        int candidateCap)
     {
         int boundedSymbolLimit = Math.Clamp(maxSymbolsPerGroup, 1, CloneGroupReader.MaxSymbolsPerGroup);
         IReadOnlyList<CloneGroup> groups = CloneGroupReader.Read(dbPath, limit, minCount, boundedSymbolLimit);
 
         // Off by default: the Type-2 arm re-reads symbol bodies from disk (hash-verified per file), so it must
         // never ride along on a plain `metrics clones`. With it off the output below is byte-identical to v1.
-        IReadOnlyList<NearDuplicateCloneGroup> near =
-            nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
-                ? ReadNearDuplicateGroups(dbPath, workspaceRoot, limit, boundedSymbolLimit)
-                : [];
+        NearDuplicateScan? scan = nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
+            ? ScanNearDuplicates(dbPath, workspaceRoot, limit, boundedSymbolLimit, candidateCap)
+            : null;
+        IReadOnlyList<NearDuplicateCloneGroup> near = scan?.Groups ?? [];
 
         return new MetricsToolResult(
             json
-                ? RenderClonesJson(groups, near, boundedSymbolLimit)
-                : RenderClonesCompact(groups, near, boundedSymbolLimit),
+                ? RenderClonesJson(groups, near, boundedSymbolLimit, scan)
+                : RenderClonesCompact(groups, near, boundedSymbolLimit, scan),
             groups.Count + near.Count,
-            SnapshotMetrics: null);
+            NearDuplicateSnapshotMetrics(scan));
     }
+
+    /// <summary>
+    /// The recorded near-duplicate history point, or <c>null</c> when there is nothing honest to record. A
+    /// truncated scan never records: <see cref="NearDuplicateScan.GroupCount"/> would be a floor over an
+    /// arbitrary path-ordered prefix of the workspace, and the history contract's absent-vs-zero rule makes an
+    /// unexaminable metric absent rather than misleading. A complete scan that found nothing records <c>0</c>.
+    /// </summary>
+    internal static IReadOnlyList<MetricHistoryPoint>? NearDuplicateSnapshotMetrics(NearDuplicateScan? scan) =>
+        scan is not { CandidatesTruncated: false } complete
+            ? null
+            : [
+                new MetricHistoryPoint(
+                    MetricHistoryHeavyArm.NearDuplicateGroupCount,
+                    complete.GroupCount,
+                    MetricHistoryHeavyArm.NearDuplicateScanDetail(
+                        complete.CandidateCap, NearDuplicateAnalyzer.DefaultMinSimilarity)),
+            ];
 
     /// <summary>
     /// The Type-2 arm: read a bounded, deterministically ordered candidate set of symbol bodies from disk and
@@ -163,15 +206,17 @@ public static class MetricsTool
     /// content is skipped by <see cref="ExtractReader.ReadBody"/> rather than sliced stale, so a stale workspace
     /// yields fewer groups — never wrong ones.
     /// </summary>
-    private static IReadOnlyList<NearDuplicateCloneGroup> ReadNearDuplicateGroups(
+    internal static NearDuplicateScan ScanNearDuplicates(
         string dbPath,
         string workspaceRoot,
-        int limit,
-        int symbolLimit)
+        int renderLimit,
+        int symbolLimit,
+        int candidateCap = NearDuplicateCandidateCap)
     {
-        IReadOnlyList<NearDuplicateCandidate> candidates = ReadNearDuplicateCandidates(dbPath);
+        IReadOnlyList<NearDuplicateCandidate> candidates = ReadNearDuplicateCandidates(dbPath, candidateCap);
+        bool truncated = candidates.Count >= candidateCap;
         if (candidates.Count < 2)
-            return [];
+            return new NearDuplicateScan([], 0, truncated, candidateCap);
 
         var inputs = new List<NearDuplicateInput>(candidates.Count);
         var bySymbolId = new Dictionary<string, CloneSymbol>(StringComparer.Ordinal);
@@ -192,11 +237,14 @@ public static class MetricsTool
             bySymbolId[candidate.Symbol.SymbolId] = candidate.Symbol;
         }
 
+        // Analyzed UNBOUNDED, then rendered bounded: the analyzer applies MaxGroups after its total ordering, so
+        // taking the first `renderLimit` groups here is byte-identical to asking for that cap — and the recorded
+        // count stays the exact number of groups the scan found, insensitive to any display limit.
         IReadOnlyList<NearDuplicateGroup> analyzed =
-            NearDuplicateAnalyzer.FindGroups(inputs, new NearDuplicateOptions { MaxGroups = limit });
+            NearDuplicateAnalyzer.FindGroups(inputs, new NearDuplicateOptions { MaxGroups = int.MaxValue });
 
-        var results = new List<NearDuplicateCloneGroup>(analyzed.Count);
-        foreach (NearDuplicateGroup group in analyzed)
+        var results = new List<NearDuplicateCloneGroup>(Math.Min(analyzed.Count, Math.Max(renderLimit, 0)));
+        foreach (NearDuplicateGroup group in analyzed.Take(Math.Max(renderLimit, 0)))
         {
             List<CloneSymbol> symbols = group.MemberIds
                 .Select(id => bySymbolId[id])
@@ -209,12 +257,12 @@ public static class MetricsTool
                 symbols.Count,
                 symbols.Take(symbolLimit).ToList()));
         }
-        return results;
+        return new NearDuplicateScan(results, analyzed.Count, truncated, candidateCap);
     }
 
     // Runs only AFTER CloneGroupReader.Read has already opened the same artifact through the D5 schema gate, so an
     // incompatible artifact fails there with the standard actionable message before this query is ever reached.
-    private static IReadOnlyList<NearDuplicateCandidate> ReadNearDuplicateCandidates(string dbPath)
+    private static IReadOnlyList<NearDuplicateCandidate> ReadNearDuplicateCandidates(string dbPath, int candidateCap)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -236,7 +284,7 @@ public static class MetricsTool
             LIMIT $cap;
             """;
         command.Parameters.AddWithValue("$min_bytes", NearDuplicateMinBodyBytes);
-        command.Parameters.AddWithValue("$cap", NearDuplicateCandidateCap);
+        command.Parameters.AddWithValue("$cap", candidateCap);
 
         var candidates = new List<NearDuplicateCandidate>();
         using SqliteDataReader reader = command.ExecuteReader();
@@ -392,13 +440,26 @@ public static class MetricsTool
         return points;
     }
 
+    /// <summary>
+    /// The one line that makes the candidate cap visible. Without it a capped scan reads exactly like a complete
+    /// one, and a reader would take a floor for a count.
+    /// </summary>
+    internal static string NearDuplicateTruncationNote(NearDuplicateScan scan) =>
+        $"near-duplicate scan truncated at {scan.CandidateCap} candidate symbols — "
+        + "the group count is a floor and is not recorded.";
+
     private static string RenderClonesCompact(
         IReadOnlyList<CloneGroup> groups,
         IReadOnlyList<NearDuplicateCloneGroup> nearDuplicates,
-        int symbolLimit)
+        int symbolLimit,
+        NearDuplicateScan? scan)
     {
         if (groups.Count == 0 && nearDuplicates.Count == 0)
-            return "No clone groups.";
+        {
+            return scan is { CandidatesTruncated: true }
+                ? "No clone groups.\n" + NearDuplicateTruncationNote(scan)
+                : "No clone groups.";
+        }
 
         var sb = new StringBuilder();
         if (groups.Count > 0)
@@ -452,6 +513,9 @@ public static class MetricsTool
                 }
             }
         }
+
+        if (scan is { CandidatesTruncated: true } truncatedScan)
+            sb.AppendLine(NearDuplicateTruncationNote(truncatedScan));
         return sb.ToString().TrimEnd();
     }
 
@@ -504,7 +568,8 @@ public static class MetricsTool
     private static string RenderClonesJson(
         IReadOnlyList<CloneGroup> groups,
         IReadOnlyList<NearDuplicateCloneGroup> nearDuplicates,
-        int symbolLimit)
+        int symbolLimit,
+        NearDuplicateScan? scan)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -564,6 +629,16 @@ public static class MetricsTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            // Present only when the Type-2 arm ran, so v1 output stays byte-identical without it. It carries the
+            // scan bounds so a consumer can tell a complete count from a capped floor.
+            if (scan is { } ran)
+            {
+                writer.WriteStartObject("near_duplicate_scan");
+                writer.WriteNumber("candidate_cap", ran.CandidateCap);
+                writer.WriteBoolean("candidates_truncated", ran.CandidatesTruncated);
+                writer.WriteNumber("group_count", ran.GroupCount);
+                writer.WriteEndObject();
+            }
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -858,6 +933,15 @@ internal readonly record struct MetricsToolResult(
 /// <see cref="Symbols"/> is bounded by the caller's symbol limit.
 /// </summary>
 internal sealed record NearDuplicateCloneGroup(double Similarity, int Count, IReadOnlyList<CloneSymbol> Symbols);
+
+/// <summary>
+/// One run of the Type-2 arm. <paramref name="Groups"/> is display-bounded; <paramref name="GroupCount"/> is the
+/// exact number of groups found and is what a history point records. <paramref name="CandidatesTruncated"/> means
+/// the candidate query hit <paramref name="CandidateCap"/>, so later files (by path order) were never examined
+/// and the count is a floor.
+/// </summary>
+internal sealed record NearDuplicateScan(
+    IReadOnlyList<NearDuplicateCloneGroup> Groups, int GroupCount, bool CandidatesTruncated, int CandidateCap);
 
 /// <summary>One symbol eligible for Type-2 analysis, with the body span the disk re-source needs.</summary>
 internal sealed record NearDuplicateCandidate(
