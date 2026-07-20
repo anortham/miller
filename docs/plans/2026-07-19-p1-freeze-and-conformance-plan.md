@@ -173,4 +173,3 @@ Exact values — copy verbatim, never re-derive:
 - [x] `docs/README.md` lists both contracts and the fixture set in the active section
 - [x] Recorded literal-by-literal consistency table in the report; zero unreconciled mismatches within owned files; lead-owned mismatches (if any) explicitly reported
 - [x] Worker-scope verification passes (the consistency table) and the worker commits (serial-worker-commit)
-
