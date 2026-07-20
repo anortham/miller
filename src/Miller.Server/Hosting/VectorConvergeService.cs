@@ -185,6 +185,9 @@ public sealed class VectorConvergeService : BackgroundService
     internal const string ChunkErrorAtKey = "chunk_last_error_at";
     internal const string ChunkSchemaVersionKey = "chunk_content_schema_version";
     internal const string ChunkSourceArtifactKey = "chunk_source_artifact_id";
+    internal const string ConvergePauseStateKey = "converge_pause_state";
+    internal const string ConvergePauseReasonKey = "converge_pause_reason";
+    internal const string CircuitOpenPauseValue = "circuit-open";
 
     /// <summary>Bounded so one embed call can never outgrow the sidecar's per-request budget.</summary>
     internal const int EmbedBatchSize = 64;
@@ -390,6 +393,7 @@ public sealed class VectorConvergeService : BackgroundService
         VectorCursorOutcome chunks = await DrainChunkToCompletionAsync(
             port, session, state, cancellationToken).ConfigureAwait(false);
 
+        ApplyCircuitPause(port, session);
         return [symbols, chunks];
     }
 
@@ -755,6 +759,36 @@ public sealed class VectorConvergeService : BackgroundService
     {
         port.SetMeta(errorKey, string.Empty);
         port.SetMeta(errorAtKey, string.Empty);
+    }
+
+    /// <summary>
+    /// Records or clears the convergence pause on the artifact so a reader instance — not just the leader that
+    /// tripped it — reports <c>circuit-open</c> instead of a stale <c>ready</c>. The transition is detected
+    /// against the artifact's own meta rather than an in-process flag: an open circuit is permanent for a
+    /// <see cref="SemanticEmbeddingSession"/>'s life, so recovery is inherently a later process observing the
+    /// stale stamp and clearing it on its first successful wake. Writing only on the open⟶stamp and
+    /// recovered⟶clear edges keeps the hot drain loop off <c>vectors_meta</c>. A cleared pause is an empty value,
+    /// which the consumer's <c>VectorSidecar.PauseState</c> treats as absent.
+    /// </summary>
+    private static void ApplyCircuitPause(IVectorConvergePort port, SemanticEmbeddingSession session)
+    {
+        bool circuitOpen = session.State is SemanticSessionState.CircuitOpen;
+        bool stamped = string.Equals(
+            port.Meta(ConvergePauseStateKey), CircuitOpenPauseValue, StringComparison.Ordinal);
+
+        if (circuitOpen == stamped)
+            return;
+
+        if (circuitOpen)
+        {
+            port.SetMeta(ConvergePauseStateKey, CircuitOpenPauseValue);
+            port.SetMeta(ConvergePauseReasonKey, Scrub(session.UnavailableReason));
+        }
+        else
+        {
+            port.SetMeta(ConvergePauseStateKey, string.Empty);
+            port.SetMeta(ConvergePauseReasonKey, string.Empty);
+        }
     }
 
     /// <summary>Persisted last-errors are bounded and carry no path: anything absolute is replaced by its file

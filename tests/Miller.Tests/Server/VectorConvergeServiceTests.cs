@@ -831,6 +831,73 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_WakeEndsWithCircuitOpen_StampsCircuitOpenPauseAndANonEmptyReason()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.CrashMidBatch), FastOptions);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+        Assert.Equal("circuit-open", port.Meta("converge_pause_state"));
+        Assert.False(string.IsNullOrWhiteSpace(port.Meta("converge_pause_reason")));
+    }
+
+    [Fact]
+    public async Task Drain_FirstSuccessfulWakeAfterRecovery_ClearsAStaleCircuitOpenPause()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        port.Metadata["converge_pause_state"] = "circuit-open";
+        port.Metadata["converge_pause_reason"] = "sidecar restarts exhausted";
+
+        await using var healthy = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        await NewService().DrainAsync(port, healthy, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(SemanticSessionState.CircuitOpen, healthy.State);
+
+        // Empty is what the consumer's PauseState treats as absent (its switch falls through to null), so
+        // VectorSidecar classification returns to ready/building — fixed by VectorSidecarClassificationTests.
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_state")));
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_reason")));
+    }
+
+    [Fact]
+    public async Task Drain_SteadyHealthyWake_WritesNoPauseMeta()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        await DrainAsync(port);
+
+        Assert.DoesNotContain("converge_pause_state", port.MetaWrites);
+        Assert.DoesNotContain("converge_pause_reason", port.MetaWrites);
+    }
+
+    [Fact]
+    public async Task Drain_CircuitStaysOpenAcrossWakes_StampsThePauseExactlyOnce()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.CrashMidBatch), FastOptions);
+        VectorConvergeService service = NewService();
+
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+        await service.DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticSessionState.CircuitOpen, session.State);
+        Assert.Equal(1, port.MetaWrites.Count(key => key == "converge_pause_state"));
+    }
+
+    [Fact]
     public async Task Drain_SidecarUnavailable_HoldsTheCursorAndRecordsTheReason()
     {
         var port = new FakePort();
