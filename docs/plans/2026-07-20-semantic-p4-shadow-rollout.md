@@ -172,10 +172,10 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Marker probing goes through the existing `IVectorFileProbe` seam (extend it rather than raw `File` calls) so classification stays unit-testable. Pid-alive check: `Process.GetProcessById` try/catch behind the probe seam.
 
 **Acceptance criteria:**
-- [ ] Live marker (pid alive) → compact status `downloading`; JSON carries the model id from the marker.
-- [ ] Stale marker (pid dead) → classification unchanged from today; no error.
-- [ ] Precedence: pause states beat `downloading`; `downloading` beats `unavailable (model_not_prepared)`.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Live marker (pid alive) → compact status `downloading`; JSON carries the model id from the marker.
+- [x] Stale marker (pid dead) → classification unchanged from today; no error.
+- [x] Precedence: pause states beat `downloading`; `downloading` beats `unavailable (model_not_prepared)` (structural: marker consulted only when classification would report unavailable).
+- [x] Worker-scope verification passes and the change is committed (parallel-lead-commit — lead commit; DiskPreflight swap into SemanticPrepareCli landed here).
 
 ### Task 5: GC scheduler + live-reader registry
 

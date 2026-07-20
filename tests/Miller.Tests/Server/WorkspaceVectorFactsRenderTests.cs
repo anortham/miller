@@ -115,6 +115,21 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Json_Downloading_CarriesTheModelIdFromTheMarker()
+    {
+        var facts = new VectorSidecarFacts("downloading", "/repo/.miller/vectors.db", "downloading the model")
+        {
+            DownloadingModel = "qwen3-0.6b-f16",
+        };
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Status(Facts(facts), TelemetrySummary.Empty, json: true));
+        JsonElement vectors = doc.RootElement.GetProperty("index").GetProperty("vectors");
+
+        Assert.Equal("downloading", vectors.GetProperty("state").GetString());
+        Assert.Equal("qwen3-0.6b-f16", vectors.GetProperty("downloading_model").GetString());
+    }
+
+    [Fact]
     public void Compact_Disabled_RendersNothingAndLeavesOutputByteIdentical()
     {
         string withoutSemantic = WorkspaceRender.Status(Facts(null), TelemetrySummary.Empty, json: false);

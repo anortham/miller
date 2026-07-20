@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Miller.Indexing.Semantic;
 
 namespace Miller.Server.Cli;
 
@@ -10,9 +11,9 @@ namespace Miller.Server.Cli;
 internal sealed record SemanticPrepareRequest(string? Model, bool Json);
 
 /// <summary>
-/// A disk-space verdict for the model cache target. A conservative in-verb default lives in
-/// <see cref="SemanticPrepareCli.DefaultPreflight"/>; Task 4 rewires this seam to the shared
-/// <c>Miller.Indexing.Semantic.DiskPreflight</c> once that lands (it does not exist in this lane yet).
+/// A disk-space verdict for the model cache target. Production delegates to the shared
+/// <see cref="DiskPreflight"/> (Task 4 swap); the fast suite injects a stub through
+/// <see cref="ISemanticPreparePreflight"/>.
 /// </summary>
 internal readonly record struct SemanticPreparePreflightResult(bool Ok, long FreeBytes, long RequiredBytes, string? Reason);
 
@@ -76,9 +77,10 @@ internal sealed class SemanticPrepareCli
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
     }
 
-    /// <summary>The production wiring: real filesystem probe, real drive-space preflight, real child process.</summary>
+    /// <summary>The production wiring: real filesystem probe, the shared <see cref="DiskPreflight"/>, real child
+    /// process.</summary>
     public static SemanticPrepareCli Production() =>
-        new(File.Exists, DefaultPreflight.Instance, RunProcess, () => Environment.ProcessId, () => DateTimeOffset.UtcNow);
+        new(File.Exists, SharedDiskPreflight.Instance, RunProcess, () => Environment.ProcessId, () => DateTimeOffset.UtcNow);
 
     /// <summary>The absolute path of the progress marker for a workspace's <c>.miller</c> directory.</summary>
     internal static string MarkerPathFor(string millerDir) => Path.Combine(millerDir, MarkerFileName);
@@ -288,42 +290,20 @@ internal sealed class SemanticPrepareCli
             : (value / (1024d * 1024d)).ToString("0", CultureInfo.InvariantCulture) + " MiB";
     }
 
-    /// <summary>The conservative default preflight: available free space on the model cache drive vs the stated
-    /// model footprint. Replaced by the shared <c>DiskPreflight</c> in Task 4's lane slot.</summary>
-    private sealed class DefaultPreflight : ISemanticPreparePreflight
+    /// <summary>Production preflight: the shared <see cref="DiskPreflight"/> probe and verdict logic against the
+    /// stated model footprint (<see cref="DefaultRequiredBytes"/> until Task 7's Q8_0 benchmark refines it). An
+    /// unknown free-space reading never blocks a consented download — that clemency lives in
+    /// <see cref="DiskPreflight.Check"/>.</summary>
+    private sealed class SharedDiskPreflight : ISemanticPreparePreflight
     {
-        public static readonly DefaultPreflight Instance = new();
+        public static readonly SharedDiskPreflight Instance = new();
+
+        private readonly DiskPreflight _preflight = new();
 
         public SemanticPreparePreflightResult Check(string cacheDir)
         {
-            long free = AvailableFreeBytes(cacheDir);
-            if (free < 0)
-                return new SemanticPreparePreflightResult(true, free, DefaultRequiredBytes, null);
-
-            bool ok = free >= DefaultRequiredBytes;
-            return new SemanticPreparePreflightResult(ok, free, DefaultRequiredBytes, null);
-        }
-
-        // Walk up to the nearest existing ancestor so DriveInfo has a real path even before the cache dir is
-        // created. A probe failure returns -1 (unknown) so a preflight fault never blocks a consented download.
-        private static long AvailableFreeBytes(string cacheDir)
-        {
-            try
-            {
-                string? probe = cacheDir;
-                while (!string.IsNullOrEmpty(probe) && !Directory.Exists(probe))
-                    probe = Path.GetDirectoryName(probe);
-
-                if (string.IsNullOrEmpty(probe))
-                    return -1;
-
-                return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(probe)) ?? probe).AvailableFreeSpace;
-            }
-            catch (Exception ex) when (
-                ex is IOException or UnauthorizedAccessException or ArgumentException or DriveNotFoundException)
-            {
-                return -1;
-            }
+            DiskPreflightVerdict verdict = _preflight.Check(cacheDir, DefaultRequiredBytes);
+            return new SemanticPreparePreflightResult(verdict.Ok, verdict.FreeBytes, verdict.RequiredBytes, null);
         }
     }
 }
