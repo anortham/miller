@@ -1,81 +1,93 @@
-# Task 5 report: GC scheduler + live-reader registry
+# Task 5 — Symbol-route canary go-live (P5)
 
-**Status:** COMPLETE. Retained vector generations are now garbage-collected. The pure GC plan in
-`VectorGenerationManager` has real callers for the first time; an in-process live-reader registry populates
-`TagsWithLiveReaders`.
+## Worktree state (verified)
+- pwd: `/Users/murphy/source/miller/.claude/worktrees/worktree-semantic-p5`
+- branch: `worktree-semantic-p5`
+- HEAD at start: `5b7b946`
 
-## What shipped
+## Status: COMPLETE
 
-- **`VectorLiveReaderRegistry`** (new, `src/Miller.Indexing/Semantic/`): process-wide, thread-safe refcount over
-  generation tags. `Register(tag) : IDisposable` (idempotent dispose), `LiveTags` snapshot backed by
-  `ConcurrentDictionary<string,int>`. `Shared` static instance pairs the reader arm with the leader's GC — the
-  same pattern as `VectorConvergeSignal.Shared`.
-- **`IVectorGenerationGc` + `VectorGenerationGc`** (new seam in `VectorConvergeService.cs`): enumerates
-  `manager.Retained()`, calls the pure `PlanGarbageCollection`, and deletes each eligible generation on its own —
-  one info log per deletion, and a held-handle failure (`IOException`/`UnauthorizedAccessException`) logged and
-  left for the next wake instead of aborting the pass. Decision logic stays pure in the manager; this class is
-  the "when/who" glue only.
-- **`VectorGenerationManager.DeleteRetained(RetainedGeneration)`** (new public seam): single-generation trio
-  delete, so the scheduler can drive deletions one at a time with per-item logging + resilience. This is the only
-  manager change — the plan logic was untouched.
-- **`VectorConvergeService` wiring**: `_openGc` factory + lazy `_gc` field (bound in `DrainOnceAsync`, like
-  `_session`) + `_readerRegistry`. `CollectGarbage(port)` runs at the tail of every `DrainAsync` (both the
-  normal branch and the post-promote reopened branch), reading `ActiveIsReady` from the port's `build_state` and
-  live tags from the registry. Wrapped so a GC fault can never crash the drain.
-- **`SemanticSearchArm` reader registration**: registers the served generation tag for the port's open lifetime
-  and disposes on close. `IVectorSearchPort.Tag` added as a **default interface member** (`=> ""`) so the many
-  fake ports in non-owned test files (`HybridSearchTests`, `CliDispatchTests`, `SearchDeterminismTests`,
-  `SemanticSearchArmTests`) need no change; `VectorStoreSearchPort.Tag` returns
-  `GenerationTag(store.Identity)`. Registry injected via an optional ctor arg defaulting to `Shared`, so all
-  existing construction sites are unchanged.
+The randomized-holdout canary is live on the symbol route (ops `auto`/`text`/`symbol`, plus `file` -> off-surface).
+With `MILLER_SEMANTIC_CANARY` off the symbol path is the untouched pre-program code path (no keys, byte-identical).
+With it on, every symbol-route call records the frozen contract row: eligible units split 50/50, treatment serves the
+production hybrid path, control and every ineligible call serve today's lexical bytes.
 
-## Plan-mismatch note (reader lifetime)
+## Implementation
 
-The brief flagged this to report rather than invent: **`SemanticSearchArm` opens and disposes the port inside a
-single `QueryAsync` (try/finally) — there is no long-lived reader handle.** This is deliberate (the arm's own
-docs: a connection held across queries would pin a generation's inode across a promote). So the in-process
-protection window equals one query's duration; cross-query protection is the soak window's job. This still meets
-the acceptance bar — a live in-process reader blocks deletion, disposal unblocks it — proven directly at the
-registry+GC level (`GcScheduler_ALiveReaderBlocksDeletion_AndDisposalLetsTheNextPassCollectIt`). No lifetime was
-invented. Cross-process readers stay soak-window-only, as the P2 B6 posture requires.
+### CanaryTelemetry.cs (owned)
+- Assignment flip (`CanaryAssignment.ResolveArm`): placeholder control-always -> frozen `bucket < 50 ? control : treatment`.
+- Eligibility ladder (`CanaryEligibility.Resolve`): first-match-wins over the frozen order -- off-surface -> semantic-disabled ->
+  query-class -> vectors-unavailable (absent/building/downloading/disk-blocked) -> vectors-incompatible -> circuit-open ->
+  cross-workspace-no-generation -> eligible. Pure, primitive params (no Indexing dependency); reusable by Tasks 6/7.
+- `CanaryEligibility.RequiresVectorProbe` lets the caller skip the filesystem probe on a call already ineligible by a cheaper rung.
 
-## Miller-first orientation (evidence)
+### CanaryQueryClassifier.cs (new, Miller.Core, I/O-free)
+- `Classify(op, query, route) : string` -> one of the six frozen classes. Reason map: Empty/Short->short_token,
+  IdentifierLike/CodeSyntax->identifier, PathLike->path, Prose->docs_like when op==content or the query carries a docs-vocabulary
+  word (readme, docs, documentation, config, configuration, guide, install, setup, changelog, license, tutorial, faq) else prose,
+  Ambiguous*->mixed. Whole-word, case-insensitive vocabulary match.
 
-- `trace PlanGarbageCollection` / `trace CollectGarbage`: only non-test references were inside
-  `VectorGenerationManager` itself — confirmed the plan was caller-less before this task.
-- Read of `VectorGenerationManager.cs` (records `RetainedGeneration`/`VectorGcDecision`/`VectorGcPlan`,
-  `VectorGcInputs`, `IVectorGenerationFiles`, `DefaultRetentionCap=2`, `DefaultSoakWindow=24h`,
-  `PlanGarbageCollection`, `Classify`), `VectorConvergeService.cs` (Task 1/2 `DrainState`+`DiskGate`+`ResolvePause`
-  shape confirmed from the current file), `SemanticSearchArm.cs` (per-query open/dispose), and `VectorSidecar.cs`
-  (read-only — owned by another worker): confirmed `facts.ServingTag` for a retained-serving reader equals the
-  retained file tag, which equals `GenerationTag(store.Identity)`, so the registry key matches the GC key for
-  both active and retained ports.
+### SearchTool.cs (owned)
+- Retains the injected VectorSidecar + Lazy<SemanticEmbeddingSession?> (previously consumed and discarded by the greediest public
+  ctor that DI selects) so the tool can build a treatment arm and probe vector state.
+- `RunSymbolsWithCanary(...)` -- the single orchestration seam (Tasks 6/7 reuse for content): classify (route computed with
+  LexicalEvidence.None), walk the ladder, assign, pick the arm, execute, assemble facts. Off / empty-workspace-id ->
+  request.FusionArm untouched, no facts.
+- Treatment arm = production SemanticSymbolFusionArm forced to SemanticMode.On (mode gate bypassed) so treatment behaves exactly
+  like MILLER_SEMANTIC=on even under shadow. Control and every ineligible call pass a null arm -> pure lexical.
+- ExecuteSymbols mirrors SearchRouteExecutor.RunSymbols byte-for-byte (collect -> optional fuse -> render) plus the served page
+  slice and pre-fusion lexical count.
+- RenderSymbolCandidates gained an overload returning the served page slice (out IReadOnlyList<SymbolCandidate>); the old
+  signature delegates. Served-result hashes cover exactly the rendered page; parent names resolved at stamp time via
+  FindBySymbolId(SymbolId).ParentId -> parent Name (one-level Parent.Member only).
+- Facts assembly maps Task 3's SemanticQueryDiagnostics -> contract fields: fallback (SemanticFallbackKind -> 13 snake_case
+  strings), backend, warmth (cold/warm/none), embed+KNN latency, identity (fingerprint/schema/generation when vectors opened),
+  fusion profile; counters (lexical always; semantic/fused/contribution only when fusion ran).
+- Symbol branch of Search now calls the orchestrator, then the existing auto-rescue block, then stamps (so canary_rescue_kind
+  reflects the rescue outcome for op=auto).
 
-## Tests (TDD, red→green)
+## Judgment calls (contract -> plan -> code evidence)
+1. UtcDate: the row ts is a SQLite now DEFAULT set at insert (Dispose); the scope holds no timestamp. UtcDate is DateTime.UtcNow
+   date at stamp time -- identical to the persisted ts date except a sub-millisecond midnight straddle. canary_bucket is
+   persisted so a rendered row stays self-auditing regardless.
+2. Cross-workspace rung: the symbol route passes crossWorkspaceNoGeneration: false. Per the frozen ladder order, a foreign read
+   with unavailable vectors is already caught by ineligible_vectors_unavailable (rung 4, before rung 8); a foreign read whose own
+   vectors.db probes ready genuinely has a ready generation. The distinct rung is retained, ordered, and unit-tested for when a
+   future corpus-generation compat signal exists (design 5.3). No behavioral gap for v1's same-/foreign-workspace paths.
+3. canary_rescue_kind: copies the auto-rescue outcome into the frozen 7-value enum; the lexical docs_config rung (absent from the
+   canary enum) folds into source -- the nearest frozen lexical text rescue (file is a filename rescue, wrong shape).
+   null -> none; semantic rungs pass through.
+4. Backend normalization: diagnostics.Backend passes through when in the frozen 5-value set, else none. The sidecar resolves to
+   metal/vulkan/cuda/cpu so this is defensive.
+5. Scope: only the symbol route is wired (Task 5's stated scope). Non-symbol non-content surfaces
+   (markers/regions/source/external/web) do not yet stamp ineligible_surface; that follows the plan's per-route rollout. op=file
+   reaches the symbol branch and exercises the ineligible_surface rung in production and tests.
 
-- Registry: register/dispose, refcount, idempotent double-dispose, `LiveTags` snapshot isolation, empty-tag
-  reject, concurrent register/release smoke (`VectorLiveReaderRegistryTests`).
-- GC execution via the fake files seam + fake clock (`VectorGenerationManagerTests`): deletes past-soak/no-reader;
-  keeps within-soak; keeps when active-not-ready; live reader blocks then disposal collects; a throwing delete is
-  swallowed and retried next pass.
-- Scheduler wiring (`VectorConvergeServiceTests`): GC runs on a leader wake with `ActiveIsReady` from the port
-  and tags from the registry; `ActiveIsReady=false` when `build_state != ready`; GC never runs without a converge
-  wake (a reader instance's signal is never stamped → proves GC is leader-only).
-
-**Gate invariant per test:** registry tests assert refcount/snapshot correctness independent of GC; GC-execution
-tests assert the three keep-outcomes and the delete-outcome are honored on real file mutations; wiring tests
-assert GC is invoked exactly when (and only when) a drain runs, with inputs derived from the port + registry.
+## Necessary edit outside the strict ownership list
+tests/Miller.Tests/Server/CanaryTelemetryTests.cs::Assignment_ArmStaysControlForEveryBucketUntilP5 asserted control for every
+bucket -- the exact P2 "until P5" behavior this task flips. Rewrote it to Assignment_SplitsFiftyFiftyOnBucketFiftyAtP5 (control
+<50, treatment >=50). This is the explicit criteria revision the flip requires. The other two control-asserting tests still pass
+unchanged: their fixture (ws-hex/prose) lands in bucket 23 -> control post-flip.
 
 ## Verification
+- worker-red-green: CanaryQueryClassifierTests + CanarySearchTests -> 46 passed, 0 failed.
+- Regression suites: CanaryTelemetryTests, HybridSearchTests, SearchGoldenParityTests, SearchDeterminismTests, CanaryExportTests,
+  CanaryGateReportTests, SemanticQueryDiagnosticsTests -> 112 passed, 0 failed.
+- worker-ceiling: scripts/test.sh -> 4351 passed, 2 skipped, 0 failed, 17s wall (< 30s ceiling).
+- Diagnostic: dotnet build Miller.slnx -c Release -> 0 warnings / 0 errors.
+- Known pre-existing flake (RepositoryIndexLoaderBridgeTests) not triggered.
 
-- worker-red-green: `dotnet test --filter VectorGenerationManagerTests|VectorLiveReaderRegistry|VectorConvergeServiceTests`
-  → **78 passed, 0 failed**.
-- worker-ceiling: `scripts/test.sh` (Release, warnings-as-errors) → **4223 passed, 2 skipped, 0 failed, 28s**
-  (under the 30s ceiling; the known Task 8 wall-flake did not trip this run).
+## Acceptance criteria
+- [x] Canary off => no canary_* keys, byte-identical output (CanaryOff_..., off path = pre-program code path).
+- [x] Eligible: arm from the frozen derivation (bucket 23->control, 94->treatment pinned); control lexical byte-identical;
+      treatment fused identical to MILLER_SEMANTIC=on over the same fixture.
+- [x] Facts per the field table: counters, fallback/backend/warmth/latency, identity, three hash arrays + shared truncation flag
+      (11-result fixture).
+- [x] CanaryQueryClassifier table test pins all six classes incl. docs vocabulary and op=content promotion.
+- [x] Ineligible rows record exactly arm/eligibility/query_class (+ contract/experiment/assignment/policy version) -- Stamp
+      enforces; OffSurfaceCall_... verifies no bucket/counters/hashes.
+- [x] Worker-scope verification passes; committed per serial-worker-commit.
 
 ## Concerns
-
-- None blocking. The per-query registration window (above) is by design, not a gap.
-- File footprint is exactly the allowed set; the concurrently-edited files (`VectorSidecar.cs`,
-  `SemanticPrepareCli.cs`, and their tests) were read-only references, untouched.
-- No DI registration was needed: arm and service both default to `VectorLiveReaderRegistry.Shared`.
+None blocking. The two documented limitations (UtcDate midnight straddle; cross-workspace rung awaiting a corpus-generation compat
+signal) are noted judgment calls, not gaps for v1.

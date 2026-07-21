@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -164,6 +165,8 @@ public sealed class SearchTool
     private readonly IWorkspaceTextContentSearchProvider _textContentProvider;
     private readonly ISymbolFusionArm? _fusionArm;
     private readonly ISemanticTextArm? _semanticArm;
+    private readonly VectorSidecar? _semanticSidecar;
+    private readonly Lazy<SemanticEmbeddingSession?>? _embeddingSession;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -221,7 +224,9 @@ public sealed class SearchTool
             regionProvider,
             textContentProvider,
             fusionArm,
-            SemanticTextArm.For(semanticSidecar, embeddingSession))
+            SemanticTextArm.For(semanticSidecar, embeddingSession),
+            semanticSidecar,
+            embeddingSession)
     {
     }
 
@@ -231,7 +236,9 @@ public sealed class SearchTool
         IWorkspaceRegionSearchProvider regionProvider,
         IWorkspaceTextContentSearchProvider textContentProvider,
         ISymbolFusionArm? fusionArm,
-        ISemanticTextArm? semanticArm)
+        ISemanticTextArm? semanticArm,
+        VectorSidecar? semanticSidecar = null,
+        Lazy<SemanticEmbeddingSession?>? embeddingSession = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
@@ -242,6 +249,8 @@ public sealed class SearchTool
         _textContentProvider = textContentProvider;
         _fusionArm = fusionArm;
         _semanticArm = semanticArm;
+        _semanticSidecar = semanticSidecar;
+        _embeddingSession = embeddingSession;
     }
 
     [McpServerTool(Name = "search")]
@@ -415,22 +424,37 @@ public sealed class SearchTool
             {
                 WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                SearchRouteExecutionResult result = SearchRouteExecutor.RunSymbols(
+                var request = new SearchRouteExecutionRequest(
+                    query,
+                    limit,
+                    json,
+                    exclude_tests,
+                    compactBanner,
+                    HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
+                    FilePattern: file_pattern,
+                    Language: language,
+                    FusionArm: _fusionArm,
+                    WorkspaceRoot: context.WorkspaceRoot);
+
+                CanaryMode canaryMode = CanaryActivation.FromEnvironment();
+                SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
+                string canaryOp = ModeName(route.Mode);
+                SymbolCanaryOutcome canary = RunSymbolsWithCanary(
                     context.Index,
                     route,
-                    new SearchRouteExecutionRequest(
-                        query,
-                        limit,
-                        json,
-                        exclude_tests,
-                        compactBanner,
-                        HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
-                        FilePattern: file_pattern,
-                        Language: language,
-                        FusionArm: _fusionArm,
-                        WorkspaceRoot: context.WorkspaceRoot));
-                output = result.Output;
-                count = result.Count;
+                    request,
+                    canaryMode,
+                    canaryOp,
+                    semanticDisabled: semanticMode is SemanticMode.Off,
+                    context.WorkspaceId ?? string.Empty,
+                    DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    () => _semanticSidecar!.Inspect(context.WorkspaceRoot).State,
+                    crossWorkspaceNoGeneration: false,
+                    BuildTreatmentArmFactory(context.WorkspaceRoot));
+                output = canary.Result.Output;
+                count = canary.Result.Count;
+
+                string? canaryRescueKind = canaryOp == "auto" ? "none" : null;
                 if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))
                 {
                     AutoTextRescueResult? rescue = TryRunAutoTextRescue(
@@ -445,6 +469,7 @@ public sealed class SearchTool
                         language,
                         compactBanner,
                         context);
+                    canaryRescueKind = MapCanaryRescueKind(rescue);
                     if (scope is not null)
                     {
                         scope.SetMetadata("auto_rescue_attempted", true);
@@ -465,6 +490,13 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
                     scope.SetMetadata("search_backend", SearchBackendName(context.Index));
+                    if (canary.Facts is { } canaryFacts)
+                    {
+                        CanaryTelemetry.Stamp(
+                            scope,
+                            canaryMode,
+                            canaryRescueKind is null ? canaryFacts : canaryFacts with { RescueKind = canaryRescueKind });
+                    }
                 }
             }
 
@@ -1131,6 +1163,18 @@ public sealed class SearchTool
         SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
         out int renderedCount, string? compactBanner = null,
         Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null) =>
+        RenderSymbolCandidates(
+            candidates, query, mode, limit, json, out renderedCount, out _, compactBanner, hasDocLookup, fusion);
+
+    /// <summary>
+    /// Renders collected candidates and also exposes the served page slice — the exact rows the caller rendered,
+    /// in served order — so the canary writer can hash precisely what an agent saw without re-deriving the page.
+    /// </summary>
+    internal static string RenderSymbolCandidates(
+        SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
+        out int renderedCount, out IReadOnlyList<SymbolCandidate> servedPage, string? compactBanner = null,
+        Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
         IReadOnlyDictionary<string, FusedCandidate>? fusion = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
@@ -1140,6 +1184,7 @@ public sealed class SearchTool
         int total = kept.Count;
         int page = Math.Min(limit, total);
         renderedCount = page;
+        servedPage = page > 0 ? [.. kept.Take(page)] : [];
 
         if (total == 0)
         {
@@ -1180,6 +1225,239 @@ public sealed class SearchTool
             compact += "\n" + NextStepHint.Render(
                 $"inspect target=\"{EscapeCallString(kept[0].Name)}\" depth=overview");
         return compact;
+    }
+
+    /// <summary>
+    /// The result of a symbol-route call that ran under an active or inactive canary: the rendered output and,
+    /// when the canary is <c>on</c>, the assembled row facts the caller finalizes with the rescue kind and stamps.
+    /// <see cref="Facts"/> is null when the canary is off — the pre-program path, no stamping, byte-identical bytes.
+    /// </summary>
+    internal sealed record SymbolCanaryOutcome(SearchRouteExecutionResult Result, CanaryCallFacts? Facts);
+
+    /// <summary>
+    /// The symbol route under the canary (<c>canary-telemetry-v1</c>): classify the query, walk the eligibility
+    /// ladder, assign an arm, and serve the treatment fusion arm (bypassing the mode gate so treatment behaves
+    /// exactly like <c>MILLER_SEMANTIC=on</c>) or the lexical bytes for control and every ineligible call. Off is
+    /// the pre-program path — <paramref name="request"/>'s own <c>FusionArm</c>, no facts, no added work. The
+    /// single orchestration seam Tasks 6/7 reuse for the content route.
+    /// </summary>
+    internal static SymbolCanaryOutcome RunSymbolsWithCanary(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        CanaryMode mode,
+        string op,
+        bool semanticDisabled,
+        string workspaceId,
+        string utcDate,
+        Func<string> vectorStateProbe,
+        bool crossWorkspaceNoGeneration,
+        Func<SemanticSymbolFusionArm>? treatmentArmFactory)
+    {
+        ArgumentNullException.ThrowIfNull(vectorStateProbe);
+
+        if (mode == CanaryMode.Off || string.IsNullOrEmpty(workspaceId))
+            return new SymbolCanaryOutcome(ExecuteSymbols(index, route, request, request.FusionArm).Result, Facts: null);
+
+        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
+        string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
+        string vectorState = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
+            ? vectorStateProbe()
+            : "none";
+        string eligibility =
+            CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
+
+        bool eligible = eligibility == CanaryEligibility.Eligible;
+        bool treatment = eligible &&
+            CanaryAssignment.ResolveArm(
+                CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
+                == CanaryArm.Treatment;
+
+        SemanticSymbolFusionArm? treatmentArm = treatment ? treatmentArmFactory?.Invoke() : null;
+        SymbolExecution execution = ExecuteSymbols(index, route, request, treatmentArm);
+
+        CanaryCallFacts facts = BuildCanaryFacts(
+            workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index);
+        return new SymbolCanaryOutcome(execution.Result, facts);
+    }
+
+    private readonly record struct SymbolExecution(
+        SearchRouteExecutionResult Result,
+        IReadOnlyList<SymbolCandidate> ServedPage,
+        int LexicalResultCount,
+        IReadOnlyDictionary<string, FusedCandidate>? Fusion);
+
+    /// <summary>
+    /// Candidate generation, optional fusion, and rendering for the symbol route — the exact pipeline of
+    /// <see cref="SearchRouteExecutor.RunSymbols"/>, so a null arm renders byte-identical lexical bytes, plus the
+    /// served page slice and pre-fusion lexical count the canary writer needs.
+    /// </summary>
+    private static SymbolExecution ExecuteSymbols(
+        ISymbolLookupIndex index, SearchRoute route, SearchRouteExecutionRequest request, ISymbolFusionArm? arm)
+    {
+        SymbolCandidateSet candidates = CollectSymbolCandidates(
+            index, request.Query, route.Mode, request.Limit, request.ExcludeTests, request.FilePattern, request.Language);
+        int lexicalResultCount = candidates.Candidates.Count;
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null;
+
+        if (arm is not null && !candidates.FileMode)
+        {
+            var fusionRequest = new SymbolFusionRequest(
+                request.Query,
+                candidates.Candidates,
+                request.Limit,
+                candidates.Visibility is { } visibility ? visibility.Allows : static _ => true,
+                request.WorkspaceRoot);
+            if (arm.Fuse(index, fusionRequest) is { Count: > 0 } fused)
+            {
+                candidates = candidates with { Candidates = [.. fused.Select(static row => row.Candidate)] };
+                fusion = fused.ToDictionary(static row => row.Candidate.SymbolId, StringComparer.Ordinal);
+            }
+        }
+
+        string output = RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            route.Mode,
+            request.Limit,
+            request.Json,
+            out int count,
+            out IReadOnlyList<SymbolCandidate> servedPage,
+            request.CompactBanner,
+            request.HasDocLookup,
+            fusion);
+
+        return new SymbolExecution(new SearchRouteExecutionResult(output, count), servedPage, lexicalResultCount, fusion);
+    }
+
+    private static CanaryCallFacts BuildCanaryFacts(
+        string workspaceId,
+        string utcDate,
+        string queryClass,
+        string eligibility,
+        SymbolExecution execution,
+        SemanticQueryDiagnostics? diagnostics,
+        ISymbolLookupIndex index)
+    {
+        var facts = new CanaryCallFacts
+        {
+            WorkspaceId = workspaceId,
+            UtcDate = utcDate,
+            QueryClass = queryClass,
+            Eligibility = eligibility,
+        };
+
+        if (eligibility != CanaryEligibility.Eligible)
+            return facts;
+
+        facts = facts with
+        {
+            ResultCount = execution.Result.Count,
+            LexicalResultCount = execution.LexicalResultCount,
+            ServedResults = BuildServedResults(execution.ServedPage, index),
+            FallbackReason = diagnostics is { } d ? MapFallbackReason(d.Fallback) : CanaryFallbackReason.None,
+            Backend = diagnostics is { } b ? NormalizeBackend(b.Backend) : CanaryBackend.None,
+            EmbedWarmth = ResolveWarmth(diagnostics),
+            EmbedLatencyMs = diagnostics?.EmbedMs,
+            KnnLatencyMs = diagnostics?.KnnMs,
+            EncoderFingerprint = diagnostics?.Identity?.EncoderFingerprint,
+            StorageSchema = diagnostics?.Identity?.StorageSchema,
+            CorpusGeneration = diagnostics?.Identity?.CorpusGeneration,
+            FusionProfile = diagnostics?.FusionProfile,
+        };
+
+        if (execution.Fusion is { } fusion)
+        {
+            facts = facts with
+            {
+                SemanticResultCount = fusion.Values.Count(static row => row.SemanticRank is not null),
+                FusedResultCount = fusion.Count,
+                SemanticContributionCount = execution.ServedPage.Count(
+                    candidate => fusion.TryGetValue(candidate.SymbolId, out FusedCandidate? row) && SemanticIsTop(row)),
+            };
+        }
+
+        return facts;
+    }
+
+    private static IReadOnlyList<CanaryServedResult> BuildServedResults(
+        IReadOnlyList<SymbolCandidate> servedPage, ISymbolLookupIndex index)
+    {
+        var results = new List<CanaryServedResult>(servedPage.Count);
+        foreach (SymbolCandidate candidate in servedPage)
+        {
+            string? qualified = null;
+            if (index.FindBySymbolId(candidate.SymbolId) is { ParentId: { } parentId } &&
+                index.FindBySymbolId(parentId) is { Name.Length: > 0 } parent)
+            {
+                qualified = $"{parent.Name}.{candidate.Name}";
+            }
+
+            results.Add(new CanaryServedResult(candidate.Name, candidate.FilePath, qualified));
+        }
+
+        return results;
+    }
+
+    private static bool SemanticIsTop(FusedCandidate row) =>
+        row.SemanticRank is { } semantic && (row.LexicalRank is not { } lexical || semantic < lexical);
+
+    private static string ResolveWarmth(SemanticQueryDiagnostics? diagnostics) => diagnostics switch
+    {
+        { EmbedMs: not null } d => d.ColdEmbed ? "cold" : "warm",
+        _ => CanaryEmbedWarmth.None,
+    };
+
+    private static string NormalizeBackend(string backend) =>
+        CanaryBackend.All.Contains(backend) ? backend : CanaryBackend.None;
+
+    /// <summary>The <see cref="SemanticFallbackKind"/> mirror of the thirteen frozen <c>fallback_reason</c> strings.</summary>
+    private static string MapFallbackReason(SemanticFallbackKind fallback) => fallback switch
+    {
+        SemanticFallbackKind.None => "none",
+        SemanticFallbackKind.VectorsMissing => "vectors_missing",
+        SemanticFallbackKind.VectorsStale => "vectors_stale",
+        SemanticFallbackKind.VectorsIncompatible => "vectors_incompatible",
+        SemanticFallbackKind.VectorsBuilding => "vectors_building",
+        SemanticFallbackKind.ModelNotPrepared => "model_not_prepared",
+        SemanticFallbackKind.CircuitOpen => "circuit_open",
+        SemanticFallbackKind.EmbedTimeout => "embed_timeout",
+        SemanticFallbackKind.EmbedError => "embed_error",
+        SemanticFallbackKind.KnnError => "knn_error",
+        SemanticFallbackKind.DiskBlocked => "disk_blocked",
+        SemanticFallbackKind.Disabled => "disabled",
+        _ => "unknown",
+    };
+
+    /// <summary>
+    /// Copies the existing auto-rescue outcome into the frozen <c>canary_rescue_kind</c> vocabulary: no rescue
+    /// object maps to <c>none</c>; the lexical docs/config rung folds into <c>source</c> (the nearest frozen
+    /// lexical text rescue, since the enum has no lexical-docs value); every other kind is already a frozen value.
+    /// </summary>
+    private static string MapCanaryRescueKind(AutoTextRescueResult? rescue) => rescue?.Kind switch
+    {
+        null or "none" => "none",
+        "source" or "docs_config" => "source",
+        "semantic_symbol" => "semantic_symbol",
+        "semantic_docs" => "semantic_docs",
+        "semantic_mixed" => "semantic_mixed",
+        "unavailable" => "unavailable",
+        _ => "unavailable",
+    };
+
+    /// <summary>
+    /// The treatment fusion arm: the production <see cref="SemanticSymbolFusionArm"/> with the mode gate forced to
+    /// <see cref="SemanticMode.On"/> so treatment fuses even under <c>MILLER_SEMANTIC=shadow</c>. Null when the
+    /// semantic graph is absent, which leaves an assigned treatment call serving lexical bytes.
+    /// </summary>
+    private Func<SemanticSymbolFusionArm>? BuildTreatmentArmFactory(string workspaceRoot)
+    {
+        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+            return null;
+
+        return () => new SemanticSymbolFusionArm(
+            SemanticMode.On,
+            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
     }
 
     /// <summary>

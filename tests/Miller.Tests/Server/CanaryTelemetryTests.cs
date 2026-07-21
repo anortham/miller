@@ -190,10 +190,12 @@ public sealed class CanaryTelemetryTests : IDisposable
     }
 
     [Fact]
-    public void Assignment_ArmStaysControlForEveryBucketUntilP5()
+    public void Assignment_SplitsFiftyFiftyOnBucketFiftyAtP5()
     {
-        for (int bucket = 0; bucket < 100; bucket++)
+        for (int bucket = 0; bucket < 50; bucket++)
             Assert.Equal(CanaryArm.Control, CanaryAssignment.ResolveArm(bucket));
+        for (int bucket = 50; bucket < 100; bucket++)
+            Assert.Equal(CanaryArm.Treatment, CanaryAssignment.ResolveArm(bucket));
     }
 
     [Fact]

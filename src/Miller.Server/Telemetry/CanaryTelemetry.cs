@@ -70,6 +70,59 @@ public static class CanaryEligibility
         IneligibleVectorsUnavailable, IneligibleVectorsIncompatible, IneligibleCircuitOpen,
         IneligibleCrossWorkspaceNoGeneration, IneligibleSurface,
     ];
+
+    /// <summary>The instrumented search ops of <c>canary-telemetry-v1</c> §Activation; any other op is off-surface.</summary>
+    private static readonly IReadOnlySet<string> InstrumentedOps =
+        new HashSet<string>(StringComparer.Ordinal) { "auto", "text", "symbol", "content" };
+
+    private static readonly IReadOnlySet<string> CanaryEligibleClasses = new HashSet<string>(StringComparer.Ordinal)
+    {
+        CanaryQueryClass.Prose, CanaryQueryClass.DocsLike, CanaryQueryClass.Mixed,
+    };
+
+    /// <summary>
+    /// The frozen eligibility ladder, first match wins (§Ineligible calls, §Where each clause is computed). The
+    /// canary-off short-circuit is the caller's — this resolves a call already known to be on an active canary.
+    /// <paramref name="vectorState"/> is the vectors-v1 §Status vocabulary from the sidecar probe; anything but
+    /// <c>ready</c>, <c>incompatible</c>, or <c>circuit-open</c> (absent, building, downloading, disk-blocked)
+    /// is treated as unavailable.
+    /// </summary>
+    public static string Resolve(
+        string op,
+        bool semanticDisabled,
+        string queryClass,
+        string vectorState,
+        bool crossWorkspaceNoGeneration)
+    {
+        if (!InstrumentedOps.Contains(op))
+            return IneligibleSurface;
+        if (semanticDisabled)
+            return IneligibleSemanticDisabled;
+        if (!CanaryEligibleClasses.Contains(queryClass))
+            return IneligibleQueryClass;
+
+        switch (vectorState)
+        {
+            case "ready":
+                break;
+            case "incompatible":
+                return IneligibleVectorsIncompatible;
+            case "circuit-open":
+                return IneligibleCircuitOpen;
+            default:
+                return IneligibleVectorsUnavailable;
+        }
+
+        return crossWorkspaceNoGeneration ? IneligibleCrossWorkspaceNoGeneration : Eligible;
+    }
+
+    /// <summary>
+    /// Whether <see cref="Resolve"/> would consult <c>vectorState</c> for these inputs — true only past the
+    /// surface, semantic-disabled, and query-class rungs. Lets the caller skip the filesystem probe on a call
+    /// already known ineligible by a cheaper rung.
+    /// </summary>
+    public static bool RequiresVectorProbe(string op, bool semanticDisabled, string queryClass) =>
+        InstrumentedOps.Contains(op) && !semanticDisabled && CanaryEligibleClasses.Contains(queryClass);
 }
 
 public static class CanaryFallbackReason
@@ -158,12 +211,11 @@ public static class CanaryAssignment
     }
 
     /// <summary>
-    /// P2 ships the plumbing, not the experiment: every eligible call serves — and records — the constant
-    /// <c>control</c> arm, so behaviour stays byte-identical to the pre-program lexical path. P5 replaces this
-    /// body with the contract's <c>bucket &lt; 50</c> split; the bucket is already persisted so the flip needs no
-    /// telemetry migration.
+    /// The frozen 50/50 split of <c>canary-telemetry-v1</c> §Assignment: <c>bucket &lt; 50</c> holds out on the
+    /// lexical control arm, the rest serve the hybrid treatment arm. Pure and offline-reproducible from the
+    /// persisted <c>canary_bucket</c>.
     /// </summary>
-    public static string ResolveArm(int bucket) => CanaryArm.Control;
+    public static string ResolveArm(int bucket) => bucket < 50 ? CanaryArm.Control : CanaryArm.Treatment;
 }
 
 /// <summary>One served result, in the three spellings an agent could address it by on a follow-up call.</summary>
