@@ -15,11 +15,13 @@ namespace Miller.Tests.Indexing;
 /// binary through <see cref="ScaleTestSupport.RequireSemanticSidecar"/>, which skips rather than fails when
 /// restore has not run, and the round trip additionally skips when the pinned sqlite-vec extension is absent.</para>
 /// <para>The extension path is passed explicitly rather than through <c>MILLER_SQLITE_VEC_PATH</c>, exactly as
-/// <see cref="VectorStoreTests"/> does, so this class mutates no process-global state and needs no serializing
-/// collection.</para>
+/// <see cref="VectorStoreTests"/> does — this class mutates no process-global state itself, but it still LOADS
+/// the packaged vec0 file, and a test in the SqliteVecEnvironment collection parks that file for its duration,
+/// so the class serializes on the collection to never overlap the parked window.</para>
 /// <para>Timeouts are deliberately far above production defaults: a cold machine's first <c>serve</c> downloads
 /// the model before it can answer <c>health</c>, and a gate that flakes on a slow download proves nothing.</para>
 /// </remarks>
+[Collection(SqliteVecEnvironment.Name)]
 [Trait("Category", "Scale")]
 public sealed class SemanticSidecarScaleTests : IDisposable
 {

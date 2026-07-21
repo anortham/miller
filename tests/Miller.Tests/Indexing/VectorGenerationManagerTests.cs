@@ -548,8 +548,10 @@ public sealed class VectorGenerationManagerTests
 /// The rollback guarantee of vectors-v1 conformance clause 6 against the real pinned sqlite-vec extension: an
 /// incompatible promote retains the superseded generation, and a reader whose encoder matches it serves from it
 /// across a process restart. Scale-tagged because it loads the native loadable extension; it SKIPs rather than
-/// fails when the extension has not been fetched.
+/// fails when the extension has not been fetched. Serialized on the SqliteVecEnvironment collection because a
+/// test there parks the packaged vec0 file for its duration — extension loads must not overlap that window.
 /// </summary>
+[Collection(SqliteVecEnvironment.Name)]
 [Trait("Category", "Scale")]
 public sealed class VectorGenerationManagerScaleTests : IDisposable
 {

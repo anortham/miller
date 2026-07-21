@@ -355,8 +355,11 @@ public sealed class VectorSidecarOpenPathTests : IDisposable
 /// <summary>
 /// The physical artifact against the real pinned sqlite-vec extension. Scale-tagged because it loads a native
 /// loadable extension; every test funnels through <see cref="SqliteVecTestSupport.RequireExtension"/>, which
-/// skips rather than fails when the extension has not been fetched.
+/// skips rather than fails when the extension has not been fetched. Serialized on the SqliteVecEnvironment
+/// collection: another class in it PARKS the packaged vec0 file for a test's duration, so any class that loads
+/// the extension must never overlap that window.
 /// </summary>
+[Collection(SqliteVecEnvironment.Name)]
 [Trait("Category", "Scale")]
 public sealed class VectorStoreTests : IDisposable
 {
