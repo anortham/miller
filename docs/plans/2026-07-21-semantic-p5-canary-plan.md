@@ -242,9 +242,9 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **What to build:** Extend the canary to the fourth instrumented surface. The content route renders path+snippet rows outside the symbol-candidate seam, so the arm split and stamping hook into the content dispatch instead.
 
 **Acceptance criteria:**
-- [ ] Content-op canary rows carry path hashes only; name/qualified arrays absent.
-- [ ] Control/off byte-identical to today's content output; treatment identical to `MILLER_SEMANTIC=on` content hybrid.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Content-op canary rows carry path hashes only; name/qualified arrays absent.
+- [x] Control/off byte-identical to today's content output; treatment identical to `MILLER_SEMANTIC=on` content hybrid.
+- [x] Worker-scope verification passes and the change is committed per commit mode.
 
 ### Task 7: Identifier shadow population
 
@@ -270,10 +270,10 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **Approach:** Shadow work runs synchronously after finalization, bounded by the embed deadline (the row's own `duration_ms` includes it — acceptable: shadow rows are excluded from the latency gate by construction). Unsampled identifier calls record the ordinary `arm=ineligible` row (Task 5 behavior, `eligibility=ineligible_query_class`); sampled calls upgrade to the shadow row (same eligibility value, arm=shadow, hybrid-experiment keys replaced by the noninferiority experiment id).
 
 **Acceptance criteria:**
-- [ ] Sampling honors `bucket < 10` under the noninferiority experiment id (pinned test vectors).
-- [ ] Ok path records exactly the shadow key set above; overlap/top1/rank values verified against a fixture with known lexical and hybrid rankings.
-- [ ] Timeout/error/skipped paths record status only; served output and `outcome` provably untouched (fault-injection tests on the fake arm).
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Sampling honors `bucket < 10` under the noninferiority experiment id (pinned test vectors).
+- [x] Ok path records exactly the shadow key set above; overlap/top1/rank values verified against a fixture with known lexical and hybrid rankings.
+- [x] Timeout/error/skipped paths record status only; served output and `outcome` provably untouched (fault-injection tests on the fake arm).
+- [x] Worker-scope verification passes and the change is committed per commit mode. (Lead rulings: `ShadowSymbolArm` policy-gate bypass accepted — production arm abstains on identifiers, which would have degenerated every shadow row; `canary_semantic_result_count` omitted on shadow rows per §Shadow step 4 "counters only" — flagged for codex focus.)
 
 ### Task 8: Docs, runbook, closeout
 

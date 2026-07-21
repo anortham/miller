@@ -108,3 +108,5 @@ Task 3: complete (parallel-lead-commit, Lead inline review — 1 finding (EmbedT
 | affected-change (fast) | Fast suite green after T1-T4 | scripts/test.sh | 5b7b946 | PASS 4305/0 (2 skip), 19s wall | 2026-07-21 |
 | affected-change (scale, escalation: VectorConvergeService) | Converge/vec0/sidecar paths green | scripts/test.sh scale | 5b7b946 | PASS 86/86 | 2026-07-21 |
 | affected-change (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | 5b7b946 | PASS | 2026-07-21 |
+Task 5: complete (serial-worker-commit 4f4797e + fix-round commit 2c4ce8a, Lead inline review — 1 finding (mirrored symbol pipeline) fixed round 1 via RunSymbolsCore unification; CanaryTelemetryTests 'until P5' criteria revision accepted; lead gate fast 4351/0 + Release 0W/0E at 2c4ce8a)
+Task 6: complete (serial-worker-commit 44f3b36, Lead inline review clean — path-only stamping without CanaryTelemetry.cs edit accepted (T7 owns that file; absent-vs-zero honored); content semantic_contribution_count = path-membership analogue noted for analysis layer; lead gate fast 4359/0 + Release 0W/0E)
