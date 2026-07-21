@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.ComponentModel;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -344,48 +345,38 @@ public sealed class SearchTool
                 WorkspaceTextContentSearchContext content =
                     _textContentProvider.ResolveTextContentSearch(workspace_id, ensureFresh);
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
-                Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank =
-                    SemanticContentRerank(query, content.WorkspaceRoot);
-                SearchRouteExecutionResult result;
-                if (rerank is null)
-                {
-                    result = SearchRouteExecutor.RunContent(
-                        content.Index,
-                        route,
-                        new SearchRouteExecutionRequest(
-                            query,
-                            limit,
-                            json,
-                            exclude_tests,
-                            contentBanner,
-                            FilePattern: file_pattern,
-                            Language: language,
-                            SuggestionLookup: identifier =>
-                                SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
-                }
-                else
-                {
-                    string hybridOutput = RunContentCorpus(
-                        content.Index,
-                        query,
-                        limit,
-                        json,
-                        out int hybridCount,
-                        out long hybridBytes,
-                        contentBanner,
-                        file_pattern,
-                        language,
-                        identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
-                        rerank);
-                    result = new SearchRouteExecutionResult(hybridOutput, hybridCount, hybridBytes);
-                }
-                output = result.Output;
-                count = result.Count;
+
+                CanaryMode canaryMode = CanaryActivation.FromEnvironment();
+                SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
+                ContentCanaryOutcome canary = RunContentWithCanary(
+                    content.Index,
+                    query,
+                    limit,
+                    json,
+                    contentBanner,
+                    file_pattern,
+                    language,
+                    identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
+                    SemanticContentRerank(query, content.WorkspaceRoot),
+                    canaryMode,
+                    ModeName(route.Mode),
+                    semanticDisabled: semanticMode is SemanticMode.Off,
+                    content.WorkspaceId ?? string.Empty,
+                    content.WorkspaceRoot,
+                    DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    () => _semanticSidecar!.Inspect(content.WorkspaceRoot).State,
+                    crossWorkspaceNoGeneration: false,
+                    BuildTreatmentContentArm(content.WorkspaceRoot));
+                output = canary.Result.Output;
+                count = canary.Result.Count;
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
-                    scope.SourceBytes = result.SourceBytes;
+                    scope.SourceBytes = canary.Result.SourceBytes;
                     scope.SetMetadata("search_backend", "content_disk");
+                    if (canary.Facts is { } contentFacts)
+                        StampContentCanary(
+                            scope, canaryMode, contentFacts, canary.ResultPathHashes, canary.ResultHashTruncated);
                 }
             }
             else if (route.Kind == SearchRouteKind.TextContent)
@@ -1413,6 +1404,198 @@ public sealed class SearchTool
     }
 
     /// <summary>
+    /// The treatment content arm: a <see cref="SemanticTextArm"/> forced to <see cref="SemanticMode.On"/> so the
+    /// content-mode hybrid reranks even under <c>MILLER_SEMANTIC=shadow</c>, exactly as
+    /// <see cref="BuildTreatmentArmFactory"/> does for the symbol route. Null when the semantic graph is absent,
+    /// which leaves an assigned treatment call serving lexical content bytes.
+    /// </summary>
+    private ISemanticTextArm? BuildTreatmentContentArm(string workspaceRoot)
+    {
+        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+            return null;
+
+        return new SemanticTextArm(
+            SemanticMode.On,
+            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+    }
+
+    /// <summary>
+    /// The result of a content-route call under an active or inactive canary: the rendered output plus, when the
+    /// canary is <c>on</c>, the row facts and the served path digests the caller stamps. Content rows carry PATH
+    /// hashes only — a content result is a path+line chunk with no symbol name, so the name and qualified arrays
+    /// are absent per the absent-vs-zero rule, which is why the path digests ride here instead of on
+    /// <see cref="CanaryCallFacts.ServedResults"/> (populating that field would emit a name array).
+    /// </summary>
+    internal sealed record ContentCanaryOutcome(
+        SearchRouteExecutionResult Result,
+        CanaryCallFacts? Facts,
+        IReadOnlyList<string> ResultPathHashes,
+        bool ResultHashTruncated);
+
+    /// <summary>≤10 served results per canary-telemetry-v1 §Served-result hashes; the path array shares that cap.</summary>
+    private const int ContentResultHashCap = 10;
+
+    /// <summary>
+    /// The content route under the canary (<c>canary-telemetry-v1</c>, <c>op=content</c>): classify the query,
+    /// walk the eligibility ladder, assign an arm, and serve the treatment content-hybrid arm (forced past the
+    /// mode gate so it behaves exactly like <c>MILLER_SEMANTIC=on</c>) or byte-identical lexical content for
+    /// control and every ineligible call. Off is the pre-program path — the production rerank untouched, no facts.
+    /// Mirrors <see cref="RunSymbolsWithCanary"/> but renders path+snippet rows, so the served-result hashes are
+    /// path-only.
+    /// </summary>
+    internal static ContentCanaryOutcome RunContentWithCanary(
+        ITextContentSearchIndex index,
+        string query,
+        int limit,
+        bool json,
+        string? compactBanner,
+        string? filePattern,
+        string? language,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup,
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? productionRerank,
+        CanaryMode mode,
+        string op,
+        bool semanticDisabled,
+        string workspaceId,
+        string workspaceRoot,
+        string utcDate,
+        Func<string> vectorStateProbe,
+        bool crossWorkspaceNoGeneration,
+        ISemanticTextArm? treatmentArm)
+    {
+        ArgumentNullException.ThrowIfNull(vectorStateProbe);
+
+        if (mode == CanaryMode.Off || string.IsNullOrEmpty(workspaceId))
+        {
+            string offOutput = RunContentCorpus(
+                index, query, limit, json, out int offCount, out long offBytes, out _, out _,
+                compactBanner, filePattern, language, suggestionLookup, productionRerank);
+            return new ContentCanaryOutcome(
+                new SearchRouteExecutionResult(offOutput, offCount, offBytes), Facts: null, [], ResultHashTruncated: false);
+        }
+
+        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        string queryClass = CanaryQueryClassifier.Classify(op, query, policyRoute);
+        string vectorState = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
+            ? vectorStateProbe()
+            : "none";
+        string eligibility =
+            CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
+
+        bool eligible = eligibility == CanaryEligibility.Eligible;
+        bool treatment = eligible &&
+            CanaryAssignment.ResolveArm(
+                CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
+                == CanaryArm.Treatment;
+
+        SemanticQueryResult? consulted = null;
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank =
+            treatment && treatmentArm is { } arm
+                ? BuildContentRerank(arm, query, workspaceRoot, result => consulted = result)
+                : null;
+
+        string output = RunContentCorpus(
+            index, query, limit, json, out int count, out long sourceBytes,
+            out int lexicalResultCount, out IReadOnlyList<ContentSearchHit> servedPage,
+            compactBanner, filePattern, language, suggestionLookup, rerank);
+
+        CanaryCallFacts facts = BuildContentCanaryFacts(
+            workspaceId, utcDate, queryClass, eligibility, count, lexicalResultCount, consulted, servedPage);
+
+        IReadOnlyList<string> pathHashes = [];
+        bool truncated = false;
+        if (eligible && count > 0 && servedPage.Count > 0)
+        {
+            pathHashes = [.. servedPage.Take(ContentResultHashCap).Select(hit => ContentPathDigest(hit.Path))];
+            truncated = servedPage.Count > ContentResultHashCap;
+        }
+
+        return new ContentCanaryOutcome(
+            new SearchRouteExecutionResult(output, count, sourceBytes), facts, pathHashes, truncated);
+    }
+
+    private static CanaryCallFacts BuildContentCanaryFacts(
+        string workspaceId,
+        string utcDate,
+        string queryClass,
+        string eligibility,
+        int resultCount,
+        int lexicalResultCount,
+        SemanticQueryResult? consulted,
+        IReadOnlyList<ContentSearchHit> servedPage)
+    {
+        var facts = new CanaryCallFacts
+        {
+            WorkspaceId = workspaceId,
+            UtcDate = utcDate,
+            QueryClass = queryClass,
+            Eligibility = eligibility,
+        };
+
+        if (eligibility != CanaryEligibility.Eligible)
+            return facts;
+
+        SemanticQueryDiagnostics? diagnostics = consulted?.Diagnostics;
+        facts = facts with
+        {
+            ResultCount = resultCount,
+            LexicalResultCount = lexicalResultCount,
+            FallbackReason = diagnostics is { } d ? MapFallbackReason(d.Fallback) : CanaryFallbackReason.None,
+            Backend = diagnostics is { } b ? NormalizeBackend(b.Backend) : CanaryBackend.None,
+            EmbedWarmth = ResolveWarmth(diagnostics),
+            EmbedLatencyMs = diagnostics?.EmbedMs,
+            KnnLatencyMs = diagnostics?.KnnMs,
+            EncoderFingerprint = diagnostics?.Identity?.EncoderFingerprint,
+            StorageSchema = diagnostics?.Identity?.StorageSchema,
+            CorpusGeneration = diagnostics?.Identity?.CorpusGeneration,
+        };
+
+        if (consulted is { Served: true } served && served.Hits.Count > 0)
+        {
+            var semanticPaths = new HashSet<string>(
+                served.Hits.Select(static hit => hit.FilePath), StringComparer.Ordinal);
+            facts = facts with
+            {
+                SemanticResultCount = served.Hits.Count,
+                FusedResultCount = lexicalResultCount,
+                SemanticContributionCount = servedPage.Count(hit => semanticPaths.Contains(hit.Path)),
+                FusionProfile = RrfFusion.FusionProfile,
+            };
+        }
+
+        return facts;
+    }
+
+    /// <summary>
+    /// Stamps a content-route canary row: the frozen <see cref="CanaryTelemetry.Stamp"/> writes every field but
+    /// the served-result hashes (its <see cref="CanaryCallFacts.ServedResults"/> is empty for content, so it emits
+    /// no name/path/qualified array), then the path-only served hashes are written here. Content results are
+    /// path+line chunks with no symbol name, so the name and qualified arrays stay absent.
+    /// </summary>
+    internal static void StampContentCanary(
+        TelemetryScope scope,
+        CanaryMode mode,
+        CanaryCallFacts facts,
+        IReadOnlyList<string> pathHashes,
+        bool truncated)
+    {
+        CanaryTelemetry.Stamp(scope, mode, facts);
+        if (pathHashes.Count == 0)
+            return;
+
+        scope.SetMetadata("canary_result_path_hashes", pathHashes);
+        scope.SetMetadata("canary_result_hash_truncated", truncated);
+    }
+
+    /// <summary>
+    /// The SHA-256 lower-hex digest <see cref="TelemetryScope.SetTarget"/> and <see cref="CanaryTelemetry"/> apply,
+    /// so a served content-path digest matches a later <c>inspect</c>/<c>content read</c> <c>target_hash</c> on the
+    /// same path.
+    /// </summary>
+    private static string ContentPathDigest(string path) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(path)));
+
+    /// <summary>
     /// The pure content-search execution core (no MCP/DI/telemetry): rank docs-like file content and render
     /// path + best line + snippet hits. A distinct result kind from <see cref="Run"/> — never a fake symbol —
     /// so <c>exclude_tests</c> does not apply. Sets <paramref name="renderedCount"/> to the page size.
@@ -1501,6 +1684,30 @@ public sealed class SearchTool
         string? filePattern = null,
         string? language = null,
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null) =>
+        RunContentCorpus(
+            index, query, limit, json, out renderedCount, out sourceBytes, out _, out _,
+            compactBanner, filePattern, language, suggestionLookup, rerank);
+
+    /// <summary>
+    /// The content core with the canary facts exposed alongside the render: <paramref name="lexicalResultCount"/>
+    /// is the ranked hit count before paging and <paramref name="servedPage"/> the exact rows rendered in served
+    /// order, so a canary row hashes precisely what an agent saw without re-deriving the page. Same pattern as the
+    /// served-page overload of <see cref="RenderSymbolCandidates"/>.
+    /// </summary>
+    internal static string RunContentCorpus(
+        ITextContentSearchIndex index,
+        string query,
+        int limit,
+        bool json,
+        out int renderedCount,
+        out long sourceBytes,
+        out int lexicalResultCount,
+        out IReadOnlyList<ContentSearchHit> servedPage,
+        string? compactBanner = null,
+        string? filePattern = null,
+        string? language = null,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
         Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -1543,6 +1750,8 @@ public sealed class SearchTool
         int total = hits.Count;
         int page = Math.Min(limit, total);
         renderedCount = page;
+        lexicalResultCount = total;
+        servedPage = page > 0 ? [.. hits.Take(page)] : [];
 
         if (total == 0)
         {
@@ -1837,11 +2046,22 @@ public sealed class SearchTool
     /// </remarks>
     private Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? SemanticContentRerank(
         string query,
-        string workspaceRoot)
-    {
-        if (_semanticArm is not { } arm)
-            return null;
+        string workspaceRoot) =>
+        _semanticArm is { } arm ? BuildContentRerank(arm, query, workspaceRoot) : null;
 
+    /// <summary>
+    /// The content-mode rerank over one <see cref="ISemanticTextArm"/>: a reordering of the chunk hits the lexical
+    /// corpus already returned. Returns null — "run the untouched lexical path" — for a query the policy routes
+    /// lexical-only. <paramref name="onConsult"/> observes each arm consultation so the canary can read its
+    /// diagnostics without changing what is served. The production path passes the injected arm (its mode gates
+    /// serving); the treatment path passes an arm forced to <see cref="SemanticMode.On"/>.
+    /// </summary>
+    internal static Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? BuildContentRerank(
+        ISemanticTextArm arm,
+        string query,
+        string workspaceRoot,
+        Action<SemanticQueryResult>? onConsult = null)
+    {
         SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
         if (!route.IsHybrid)
             return null;
@@ -1856,6 +2076,7 @@ public sealed class SearchTool
                 workspaceRoot,
                 query,
                 Math.Clamp(lexical.Count, 1, SemanticSearchArm.MaxCandidates));
+            onConsult?.Invoke(semantic);
             return semantic.Served && semantic.Hits.Count > 0
                 ? FuseContentHits(lexical, semantic.Hits, weights)
                 : lexical;
