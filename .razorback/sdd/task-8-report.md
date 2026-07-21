@@ -1,94 +1,86 @@
-# Task 8 report — fast-suite wall-ceiling fix
+# Task 8 Report — Docs, runbook, closeout (P5 Canary Stage)
+
+## Working-directory guard
+- pwd: `/Users/murphy/source/miller/.claude/worktrees/worktree-semantic-p5`
+- branch: `worktree-semantic-p5`
+- HEAD at start: `c3fb3aa`; HEAD after commit: `4495cea`
+- All work done inside the worktree; nothing touched under `/Users/murphy` or the primary checkout.
 
 ## Status
-COMPLETE. Fast suite green, comfortably under the 20s target with 3 consecutive clean runs; the
-previously-flaky `IndexerServiceScanTests` timing is hardened. No production code changed, no guard
-weakened, ceiling stays 30s.
+DONE. Commit `4495cea` (serial-worker-commit, not pushed).
 
-## Root cause
-`JulieDbFixture.Create` — the shared read-contract harness used by ~30 test classes — built a ~30-table
-WAL SQLite DB per test with **every DDL/INSERT auto-committed as its own transaction**. Under WAL that is
-one WAL-frame flush per statement (~50+ per fixture). With ~16 fixtures building in parallel across the
-suite, those flushes serialize on the disk, so the fast suite was disk-fsync-bound, not CPU-bound. That is
-exactly why it amplified so violently under ambient load (33s/63s/102s/104s trips): parallel fsyncs
-contend super-linearly.
+## What I wrote
 
-## Moves made (test-only)
-1. **`tests/Miller.Tests/Indexing/JulieDbFixture.cs` — batch the fixture build.** Added
-   `PRAGMA synchronous=OFF` and wrapped the whole build (all DDL + all INSERTs) in a single raw
-   `BEGIN;`/`COMMIT;`. Throwaway test DBs need no durability; one commit replaces ~50 flushes. Raw
-   BEGIN/COMMIT (not a `SqliteTransaction`) leaves every `CreateCommand` call site untouched. **The final
-   DB file is byte-for-identical** — same tables, same rows, same WAL mode — so every reader's coverage is
-   unchanged. This one change is the whole wall-time win because it removes the fsync-contention amplifier,
-   which is also the load-fragility the task was chartered to fix.
-2. **`tests/Miller.Tests/Server/IndexerServiceScanTests.cs` — de-flake the scan-signal waits.** The six
-   `ScanCalled.Wait(5000)` / `acquireAttempted.Wait(5000)` sites already use event-based
-   `ManualResetEventSlim` (correct primitive); the fragility was purely the 5s ceiling being too tight when
-   the thread pool is starved under load. Introduced `private const int ScanSignalTimeoutMs = 30_000` and
-   routed all six waits through it. The event fires in ~90ms on a quiet box, so the happy path is unchanged;
-   the ceiling only extends patience under scheduler starvation. Assertion semantics unchanged (still
-   `Assert.True(...Wait(...))`).
+- **`docs/findings/2026-07-21-p5-canary-runbook.md`** (new). Operator runbook, operational-only, links the
+  frozen contract instead of restating field definitions. Covers:
+  - Enable — the two switches (`MILLER_SEMANTIC`, `MILLER_SEMANTIC_CANARY`), the `off` outranks rule, the two
+    typical setups (shadow-measure vs on-serve), what/where gets recorded (`~/.miller/telemetry.db`,
+    instrumented surfaces, assignment unit, identifier shadow 10% sampling).
+  - Observe/export — `miller telemetry canary [--json] [--from] [--to]`, default 30-day window, suppression,
+    determinism.
+  - Retention squeeze — 30-day prune, no slack, export weekly and archive off-box.
+  - Gate — `miller telemetry canary --gate [--json]`, per exact `miller_version` cohort, three clauses,
+    `gate_passes` = success AND warm-latency, shadow reported separately, exit codes.
+  - Interpret — pass/fail/underpowered/indeterminate meanings; underpowered/indeterminate = need more
+    traffic, not a threshold change.
+  - Model swap — `MILLER_SEMANTIC_MODEL` registry, `miller semantic prepare --model <id>`, shadow-rebuild on
+    swap, rollback via retained generation (revert env + restart), and the placeholder note that the model
+    comparison list/eval is a later phase.
+  - Quick-reference command block.
+- **`docs/README.md`** — added the runbook pointer under Current docs, immediately after the
+  `canary-telemetry-v1` contract line, matching the existing map format.
+- **`README.md`** — extended the semantic bullet in Known limits (the closest thing to an env/config section;
+  there is no dedicated env table) to document the opt-in experimental env vars and link the runbook. Release
+  facts and quickstart untouched.
 
-No tests retagged to Scale — the transaction fix made retagging unnecessary, so fast/scale coverage
-placement is untouched.
+## Spelling verification (every documented token checked against shipped code)
 
-## Profile — before (baseline plain run: 23s test duration / 26.8s wall)
-Ranked by summed CPU (xUnit parallelizes collections; summed CPU >> wall):
-
-| class | sum_s | n | avg_ms |
-|---|---:|---:|---:|
-| WorkspaceToolTests | 19.46 | 58 | 335.6 |
-| SmartTargetResolverTests | 16.77 | 36 | 465.9 |
-| EditToolTests | 16.15 | 116 | 139.2 |
-| WorkspaceIndexProviderTests | 15.08 | 49 | 307.8 |
-| BlazorComponentGraphReaderTests | 14.79 | 27 | 547.7 |
-| CliDispatchTests | 14.06 | 157 | 89.5 |
-| BlazorNamespaceCatalogTests | 14.03 | 36 | 389.6 |
-| MetricsToolTests | 13.95 | 28 | 498.1 |
-| ContentToolTests | 11.83 | 82 | 144.3 |
-| IndexerServiceScanTests | 11.36 | 29 | 391.6 |
-
-Total CPU across all classes: **414s**. (A follow-up trx profile ran under heavy ambient load and reported
-inflated per-class numbers — e.g. InspectTool 4× its quiet-box avg, 42s duration — which is the very
-load-sensitivity this task targets; it is noted here as noise, not signal.)
-
-## After — wall times
-- Plain `dotnet test --filter Category!=Scale` (no build): **13–14s** test duration; **15.98 / 15.61 /
-  16.49s** wall across 3 runs.
-- Official ceiling `scripts/test.sh` (includes the incremental build the tripwire measures): **18s / 19s /
-  18s** across 3 consecutive runs — all under the 20s target, 11–12s of headroom below the 30s ceiling. All
-  runs: `Failed: 0, Passed: 4223, Skipped: 2`.
-- Before→after: **~27s → ~18s** ceiling wall (**~23s → ~14s** pure test duration).
+| Documented spelling | Verifying file:line |
+| --- | --- |
+| `MILLER_SEMANTIC_MODEL` | `src/Miller.Indexing/Semantic/MillerSemanticContract.cs:315` |
+| `qwen3-0.6b-f16` (default model id) | `MillerSemanticContract.cs:95` |
+| `bge-small-en-v1.5-f32` (fallback model id) | `MillerSemanticContract.cs:106` |
+| unset/empty/unknown → default + one stderr warning | `MillerSemanticContract.cs:318,349` |
+| encoder change → `ShadowRebuild` (invalidation matrix) | `MillerSemanticContract.cs:202-206` |
+| `MILLER_SEMANTIC_CANARY` = `off`/`on`, `0`/`1` aliases, unknown→off | `src/Miller.Server/Telemetry/CanaryTelemetry.cs:21,25-29` |
+| `MILLER_SEMANTIC` = `off`/`shadow`/`on`, default off | `src/Miller.Indexing/SemanticActivation.cs:25,37-42` |
+| `miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]` | `src/Miller.Server/Cli/CliDispatch.cs:1093,1119-1140` |
+| `miller telemetry canary --gate [--json]` | `CliDispatch.cs:1094,1125-1129` |
+| default export window last 30 days | `CliDispatch.cs:1131-1132` |
+| bad date → usage error exit 2 | `CliDispatch.cs:1133-1136,1144-1145` |
+| gate/export exit 0 when computed | `CliDispatch.cs:1128,1141` |
+| `miller semantic prepare [--model <id>] [--json]` | `CliDispatch.cs:329` |
+| verdicts `pass`/`fail`/`underpowered`/`indeterminate` | `src/Miller.Server/Telemetry/CanaryGateReport.cs:301-307` |
+| `gate_passes` = success-rate pass AND warm-latency pass | `CanaryGateReport.cs:46-47` |
+| clause minimums 5/30/100/30, thresholds 1.20/0.05/8.0 | `CanaryGateReport.cs:60-66` |
+| instrumented surfaces `search` op auto/text/symbol/content | contract §Activation (frozen) + `CanaryTelemetry.cs` op stamping |
+| assignment unit `(workspace_id, utc_date, query_class)`, 50/50 | `CanaryTelemetry.cs:206,219` |
+| identifier shadow: canary-on + semantic∈{shadow,on}, bucket<10 (10%) | `src/Miller.Server/Tools/SearchTool.cs:1313-1316` |
+| `semantic_identifier_noninferiority_v1` / `semantic_hybrid_search_v1` | `CanaryTelemetry.cs:202,204` |
+| store `~/.miller/telemetry.db`, machine-global | `src/Miller.Server/Hosting/WorkspaceContext.cs:18,47` |
+| retention 30 days | `src/Miller.Server/Hosting/IndexBootstrapService.cs:472` |
+| shadow serve-first, failure never changes served result | `SearchTool.cs:1307-1322` (and contract §Shadow Population) |
 
 ## Verification
-- **worker-red-green:** touched classes (`IndexerServiceScanTests`, `SmartTargetResolverTests`,
-  `EditToolTests`, `MetricsToolTests`, `WorkspaceIndexProviderTests`, `InspectToolTests`) — 335 passed, 0
-  failed.
-- **Flaky-test stress:** `StartAsync_WhenEnabledLeaderAndSidecarBuildFails_StillMarksRegistryScanned` run
-  10× consecutively — 10/10 passed.
-- **worker-ceiling:** `scripts/test.sh` ×3 → 18s / 19s / 18s, all green (evidence above).
-- **Scale suite:** `scripts/test.sh scale` (binaries present in `.tools/`) — 86 passed, 0 failed. Confirms
-  the shared-fixture change did not break Scale consumers.
-- **ScaleTraitConventionTests** (runs in the fast suite): green — no julie-spawning test lost its trait.
+- **worker-ceiling (fast suite):** `scripts/test.sh` → **Passed 4390, Skipped 2, Failed 0**, wall 20s. All six
+  projects compiled 0-warning during the test build (warnings are errors), so the diagnostic build is
+  effectively covered; `AgentInstructionsTests` green and untouched (no guidance-channel edits).
+- Known pre-existing flake `RepositoryIndexLoaderBridgeTests` did not surface this run.
 
-## Inventory arithmetic (before vs after)
-- Fast suite run count: 4225 total (4223 passed + 2 skipped) — **unchanged**.
-- Scale suite run count: 86 passed — **unchanged**.
-- Distinct listed methods (Theories collapse): fast 4193, scale 86.
-- Zero tests moved between suites (no retags), so `scripts/test.sh all` runs the identical inventory; the
-  win is purely faster fixture construction. before(fast 4225 / scale 86) == after(fast 4225 / scale 86).
-
-## Miller-first orientation calls used
-- `mcp__miller__inspect tests/Miller.Tests/Server/IndexerServiceScanTests.cs` — enumerated the class's
-  symbols (fields/methods/the `ScanCalled` event property) before editing.
-- Profiling itself was bash/trx work (trx parse via python), as expected for this task.
+## Judgment calls
+- **No dedicated env table exists in README.** Searched the whole file — env vars are documented inline per
+  feature. Chose the semantic bullet under `## Known limits` as the env/config home, grouping with the
+  adjacent `MILLER_REGION_INDEX`/`MILLER_REGION_MAX_BYTES` config bullets. Reworded "not shipped yet" to "off
+  by default" since the opt-in canary now ships, keeping the default-lexical guarantee accurate. Release
+  facts and quickstart untouched.
+- **Runbook in `docs/findings/`** per the plan's stated path (not `docs/contracts/`), matching an existing
+  findings header style (title, **Date:**, **Scope:**).
+- **Operational-only.** The runbook never restates a normative field/enum/window definition; it links
+  `canary-telemetry-v1.md` and states the contract wins on any conflict.
+- **Model comparison placeholder.** Documented the two-entry registry as the shipped surface and explicitly
+  marked the comparison list/eval as a later phase, so the fallback entry is not read as a switch
+  recommendation.
 
 ## Concerns
-- Ceiling wall is 18–19s: meets the ≤20s target but the ~4–5s incremental build inside `dotnet test`
-  (which the tripwire measures by design, and which the task forbids removing via `--no-build`) is a fixed
-  floor. Pure test execution is ~14s. If more margin is ever wanted, the next lever is `IClassFixture`
-  sharing for the heavy read-only classes (SmartTargetResolver/Edit/Metrics/Inspect build an identical
-  immutable fixture per test) — deliberately not done here because the target is met and per-class
-  rewrites carry more risk than the transaction fix's zero-semantic-change win.
-- `PRAGMA synchronous=OFF` is safe only because these are throwaway per-test DBs deleted on Dispose; it
-  must never migrate to production fixture/DB code.
+- None blocking. Docs-only change; no code, no guidance channels, no release facts touched. Commit not pushed
+  per instructions.

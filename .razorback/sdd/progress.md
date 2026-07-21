@@ -120,3 +120,11 @@ Task 8: complete (serial-worker-commit 4495cea, Lead inline review clean — REA
 | branch-gate (scale) | Scale suite green incl. converge/vec0/sidecar | scripts/test.sh all (scale leg) | 049fa9d | PASS 86/86 | 2026-07-21 |
 | branch-gate (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | 049fa9d | PASS | 2026-07-21 |
 Codex fix F5+F8: complete (parallel-lead-commit, lead commit f538962)
+Codex fix F2+F3+F4+F6+F7: complete (parallel-lead-commit, lead commit 6a8ea37; TelemetryScope/TelemetryRecord ownership expansion accepted for the single-instant ts fix)
+
+## Verification ledger — P5 post-fix branch gate @ 6a8ea37
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| branch-gate (fast) | Fast suite green incl. 7 codex-fix test additions | scripts/test.sh all (fast leg) | 6a8ea37 | PASS 4401/0 (2 skip) | 2026-07-21 |
+| branch-gate (scale) | Scale suite green | scripts/test.sh all (scale leg) | 6a8ea37 | PASS 86/86 | 2026-07-21 |
+| branch-gate (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | 6a8ea37 | PASS | 2026-07-21 |
