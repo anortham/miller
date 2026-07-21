@@ -271,6 +271,59 @@ public sealed class CanaryTelemetryTests : IDisposable
         Assert.Contains("\"canary_arm\":\"control\"", persisted, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void MidnightStraddle_RowTsDateEqualsTheStampedAssignmentDateAndRecomputesTheSameBucket()
+    {
+        var clock = new FixedClock(new DateTimeOffset(2026, 7, 20, 23, 59, 59, 900, TimeSpan.Zero));
+        string dbPath = Path.Combine(_temp, "straddle.db");
+        string assignmentDate;
+        int bucket;
+        using (TelemetryLedger ledger = TelemetryLedger.Open(dbPath, "ws-hex", _temp, clock))
+        using (TelemetryScope scope = ledger.Measure("search", "auto"))
+        {
+            assignmentDate = scope.UtcDate;
+            clock.Now = new DateTimeOffset(2026, 7, 21, 0, 0, 0, 500, TimeSpan.Zero);
+            CanaryTelemetry.Stamp(scope, CanaryMode.On, Call() with { UtcDate = assignmentDate });
+            bucket = CanaryAssignment.Bucket(
+                CanaryAssignment.HybridExperimentId, "ws-hex", assignmentDate, CanaryQueryClass.Prose);
+        }
+
+        Assert.Equal("2026-07-20", assignmentDate);
+
+        (string ts, int storedBucket) = ReadTsAndBucket(dbPath);
+        Assert.StartsWith(assignmentDate, ts, StringComparison.Ordinal);
+        Assert.Equal(bucket, storedBucket);
+        Assert.Equal(
+            CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, "ws-hex", ts[..10], CanaryQueryClass.Prose),
+            storedBucket);
+    }
+
+    private static (string Ts, int Bucket) ReadTsAndBucket(string dbPath)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+        connection.Open();
+        using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT ts, metadata_json FROM tool_telemetry ORDER BY ts DESC LIMIT 1;";
+        using Microsoft.Data.Sqlite.SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        string ts = reader.GetString(0);
+        int bucket = JsonDocument.Parse(reader.GetString(1)).RootElement.GetProperty("canary_bucket").GetInt32();
+        return (ts, bucket);
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     private JsonElement Stamp(CanaryCallFacts call)
     {
         using TelemetryLedger ledger = OpenLedger();

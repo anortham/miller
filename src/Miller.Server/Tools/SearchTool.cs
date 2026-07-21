@@ -363,7 +363,7 @@ public sealed class SearchTool
                     semanticDisabled: semanticMode is SemanticMode.Off,
                     content.WorkspaceId ?? string.Empty,
                     content.WorkspaceRoot,
-                    DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    CanaryUtcDate(scope),
                     () => _semanticSidecar!.Inspect(content.WorkspaceRoot).State,
                     crossWorkspaceNoGeneration: false,
                     BuildTreatmentContentArm(content.WorkspaceRoot));
@@ -438,7 +438,7 @@ public sealed class SearchTool
                     canaryOp,
                     semanticDisabled: semanticMode is SemanticMode.Off,
                     context.WorkspaceId ?? string.Empty,
-                    DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    CanaryUtcDate(scope),
                     () => _semanticSidecar!.Inspect(context.WorkspaceRoot).State,
                     crossWorkspaceNoGeneration: false,
                     BuildTreatmentArmFactory(context.WorkspaceRoot),
@@ -447,6 +447,7 @@ public sealed class SearchTool
                 count = canary.Result.Count;
 
                 string? canaryRescueKind = canaryOp == "auto" ? "none" : null;
+                IReadOnlyList<string> rescueServedPaths = [];
                 if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))
                 {
                     AutoTextRescueResult? rescue = TryRunAutoTextRescue(
@@ -474,6 +475,7 @@ public sealed class SearchTool
                     {
                         output = rescue.Output;
                         count += rescue.Count;
+                        rescueServedPaths = rescue.ServedPaths;
                         if (scope is not null)
                             scope.SourceBytes += rescue.SourceBytes;
                     }
@@ -488,10 +490,15 @@ public sealed class SearchTool
                     }
                     else if (canary.Facts is { } canaryFacts)
                     {
-                        CanaryTelemetry.Stamp(
-                            scope,
-                            canaryMode,
-                            canaryRescueKind is null ? canaryFacts : canaryFacts with { RescueKind = canaryRescueKind });
+                        CanaryCallFacts finalFacts = canaryRescueKind is null
+                            ? canaryFacts
+                            : canaryFacts with { RescueKind = canaryRescueKind };
+                        // Rescue rows the agent actually follows up on are content rows served after the primary
+                        // page; without their path digests attribution is arm-differential (weak lexical results
+                        // rescue more often), so fold them into the served path hashes before stamping.
+                        if (rescueServedPaths.Count > 0 && finalFacts.Eligibility == CanaryEligibility.Eligible)
+                            finalFacts = finalFacts with { ResultCount = count, AdditionalServedPaths = rescueServedPaths };
+                        CanaryTelemetry.Stamp(scope, canaryMode, finalFacts);
                     }
                 }
             }
@@ -517,6 +524,14 @@ public sealed class SearchTool
             return $"search failed: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// The assignment <c>utc_date</c> for this call: the telemetry scope's single captured call-start instant, so
+    /// the persisted row <c>ts</c> and the assignment date come from one instant and can never straddle midnight.
+    /// Falls back to now only when no scope is measuring (a direct call outside the telemetry filter).
+    /// </summary>
+    private static string CanaryUtcDate(TelemetryScope? scope) =>
+        scope?.UtcDate ?? DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     // internal (not private): the CLI search verb reuses the EXACT same mode mapping so `miller search --mode x`
     // and the MCP tool agree on interpretation — one source of truth.
@@ -1241,7 +1256,8 @@ public sealed class SearchTool
         bool Served,
         SemanticFallbackKind? Fallback,
         IReadOnlyList<string> HybridSymbolIds,
-        SemanticGenerationIdentity? Identity);
+        SemanticGenerationIdentity? Identity,
+        int SemanticResultCount = 0);
 
     /// <summary>
     /// The symbol route under the canary (<c>canary-telemetry-v1</c>): classify the query, walk the eligibility
@@ -1266,7 +1282,11 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
-        if (mode == CanaryMode.Off || string.IsNullOrEmpty(workspaceId))
+        // MILLER_SEMANTIC=off is a permanent zero-side-effect guarantee (design §3, contract §Activation) that
+        // outranks the canary flag: no classification, no vector probe, no shadow, no stamping, byte-identical
+        // lexical bytes — exactly the canary-off path. The IneligibleSemanticDisabled rung stays in the frozen
+        // vocabulary but v1 never reaches it.
+        if (mode == CanaryMode.Off || semanticDisabled || string.IsNullOrEmpty(workspaceId))
             return new SymbolCanaryOutcome(
                 SearchRouteExecutor.RunSymbolsCore(index, route, request, request.FusionArm).Result, Facts: null);
 
@@ -1367,6 +1387,7 @@ public sealed class SearchTool
         return facts with
         {
             Status = CanaryShadowStatus.Ok,
+            SemanticResultCount = execution.SemanticResultCount,
             OverlapAt10 = overlap,
             Top1Changed = top1Changed,
             LexicalTop1Rank = rank,
@@ -1588,7 +1609,9 @@ public sealed class SearchTool
             IReadOnlyList<string> hybridIds = arm.LastFused is { } fused
                 ? [.. fused.Select(static row => row.Candidate.SymbolId)]
                 : [];
-            return new ShadowExecution(arm.Served, arm.LastDiagnostics?.Fallback, hybridIds, arm.LastDiagnostics?.Identity);
+            return new ShadowExecution(
+                arm.Served, arm.LastDiagnostics?.Fallback, hybridIds, arm.LastDiagnostics?.Identity,
+                arm.LastSemanticHitCount);
         };
     }
 
@@ -1609,6 +1632,9 @@ public sealed class SearchTool
 
         public IReadOnlyList<FusedCandidate>? LastFused { get; private set; }
 
+        /// <summary>Count of hits the semantic arm returned pre-fusion — the shadow row's semantic result count.</summary>
+        public int LastSemanticHitCount { get; private set; }
+
         public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
         {
             ArgumentNullException.ThrowIfNull(index);
@@ -1623,6 +1649,7 @@ public sealed class SearchTool
 
             LastDiagnostics = result.Diagnostics;
             Served = result.Served;
+            LastSemanticHitCount = result.Hits.Count;
             if (!result.Served)
                 return null;
 
@@ -1712,10 +1739,12 @@ public sealed class SearchTool
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
-        if (mode == CanaryMode.Off || string.IsNullOrEmpty(workspaceId))
+        // MILLER_SEMANTIC=off is inert exactly like canary-off (contract §Activation): the production rerank runs
+        // untouched, no probe, no facts, no stamping — the semantic-off lexical bytes verbatim.
+        if (mode == CanaryMode.Off || semanticDisabled || string.IsNullOrEmpty(workspaceId))
         {
             string offOutput = RunContentCorpus(
-                index, query, limit, json, out int offCount, out long offBytes, out _, out _,
+                index, query, limit, json, out int offCount, out long offBytes, out _, out _, out _,
                 compactBanner, filePattern, language, suggestionLookup, productionRerank);
             return new ContentCanaryOutcome(
                 new SearchRouteExecutionResult(offOutput, offCount, offBytes), Facts: null, [], ResultHashTruncated: false);
@@ -1744,10 +1773,11 @@ public sealed class SearchTool
         string output = RunContentCorpus(
             index, query, limit, json, out int count, out long sourceBytes,
             out int lexicalResultCount, out IReadOnlyList<ContentSearchHit> servedPage,
+            out IReadOnlyList<ContentSearchHit> lexicalOrder,
             compactBanner, filePattern, language, suggestionLookup, rerank);
 
         CanaryCallFacts facts = BuildContentCanaryFacts(
-            workspaceId, utcDate, queryClass, eligibility, count, lexicalResultCount, consulted, servedPage);
+            workspaceId, utcDate, queryClass, eligibility, count, lexicalResultCount, consulted, servedPage, lexicalOrder);
 
         IReadOnlyList<string> pathHashes = [];
         bool truncated = false;
@@ -1769,7 +1799,8 @@ public sealed class SearchTool
         int resultCount,
         int lexicalResultCount,
         SemanticQueryResult? consulted,
-        IReadOnlyList<ContentSearchHit> servedPage)
+        IReadOnlyList<ContentSearchHit> servedPage,
+        IReadOnlyList<ContentSearchHit> lexicalOrder)
     {
         var facts = new CanaryCallFacts
         {
@@ -1799,18 +1830,47 @@ public sealed class SearchTool
 
         if (consulted is { Served: true } served && served.Hits.Count > 0)
         {
-            var semanticPaths = new HashSet<string>(
-                served.Hits.Select(static hit => hit.FilePath), StringComparer.Ordinal);
             facts = facts with
             {
                 SemanticResultCount = served.Hits.Count,
                 FusedResultCount = lexicalResultCount,
-                SemanticContributionCount = servedPage.Count(hit => semanticPaths.Contains(hit.Path)),
+                SemanticContributionCount = CountContentSemanticContributions(servedPage, lexicalOrder, served.Hits),
                 FusionProfile = RrfFusion.FusionProfile,
             };
         }
 
         return facts;
+    }
+
+    /// <summary>
+    /// Rank-aware content <c>canary_semantic_contribution_count</c> (contract field table): a served row counts
+    /// only when its semantic rank is strictly better than its lexical rank (a row absent from lexical but present
+    /// in semantic counts; a row absent from semantic never counts). Ranks join on file path, mirroring the
+    /// content fusion; the lexical rank is the row's 1-based position in the pre-rerank order.
+    /// </summary>
+    private static int CountContentSemanticContributions(
+        IReadOnlyList<ContentSearchHit> servedPage,
+        IReadOnlyList<ContentSearchHit> lexicalOrder,
+        IReadOnlyList<SemanticHit> semanticHits)
+    {
+        var semanticRankByPath = new Dictionary<string, int>(semanticHits.Count, StringComparer.Ordinal);
+        foreach (SemanticHit hit in semanticHits)
+            semanticRankByPath.TryAdd(hit.FilePath, hit.Rank);
+
+        var lexicalRankByPath = new Dictionary<string, int>(lexicalOrder.Count, StringComparer.Ordinal);
+        for (int i = 0; i < lexicalOrder.Count; i++)
+            lexicalRankByPath.TryAdd(lexicalOrder[i].Path, i + 1);
+
+        int count = 0;
+        foreach (ContentSearchHit hit in servedPage)
+        {
+            if (!semanticRankByPath.TryGetValue(hit.Path, out int semanticRank))
+                continue;
+            if (!lexicalRankByPath.TryGetValue(hit.Path, out int lexicalRank) || semanticRank < lexicalRank)
+                count++;
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -1933,14 +1993,15 @@ public sealed class SearchTool
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
         Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null) =>
         RunContentCorpus(
-            index, query, limit, json, out renderedCount, out sourceBytes, out _, out _,
+            index, query, limit, json, out renderedCount, out sourceBytes, out _, out _, out _,
             compactBanner, filePattern, language, suggestionLookup, rerank);
 
     /// <summary>
     /// The content core with the canary facts exposed alongside the render: <paramref name="lexicalResultCount"/>
-    /// is the ranked hit count before paging and <paramref name="servedPage"/> the exact rows rendered in served
-    /// order, so a canary row hashes precisely what an agent saw without re-deriving the page. Same pattern as the
-    /// served-page overload of <see cref="RenderSymbolCandidates"/>.
+    /// is the ranked hit count before paging, <paramref name="servedPage"/> the exact rows rendered in served
+    /// order, and <paramref name="lexicalOrder"/> the pre-rerank lexical ranking so a canary row can tell which
+    /// served rows the semantic arm actually ranked higher. Same pattern as the served-page overload of
+    /// <see cref="RenderSymbolCandidates"/>.
     /// </summary>
     internal static string RunContentCorpus(
         ITextContentSearchIndex index,
@@ -1951,6 +2012,7 @@ public sealed class SearchTool
         out long sourceBytes,
         out int lexicalResultCount,
         out IReadOnlyList<ContentSearchHit> servedPage,
+        out IReadOnlyList<ContentSearchHit> lexicalOrder,
         string? compactBanner = null,
         string? filePattern = null,
         string? language = null,
@@ -1990,7 +2052,9 @@ public sealed class SearchTool
         });
 
         // Reordering happens after escalation and before paging, so the hybrid arm sees the same candidate set
-        // the lexical arm settled on and cannot change which hits exist — only which of them make the page.
+        // the lexical arm settled on and cannot change which hits exist — only which of them make the page. The
+        // pre-rerank order is the lexical ranking the canary's contribution count compares each served row against.
+        lexicalOrder = [.. hits];
         if (rerank is not null && hits.Count > 1)
             hits = [.. rerank(hits)];
 
@@ -2064,7 +2128,8 @@ public sealed class SearchTool
         string? compactBanner = null,
         string? filePattern = null,
         string? language = null,
-        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null)
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
+        Action<IReadOnlyList<string>>? servedPathsSink = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2117,6 +2182,7 @@ public sealed class SearchTool
             .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
             .Sum(static group => group.Max(static hit => hit.SourceBytes));
 
+        servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
             ? RenderTextContentJson(hits, page)
             : RenderTextContentCompact(hits, page, total, compactBanner);
@@ -2133,7 +2199,8 @@ public sealed class SearchTool
         out long sourceBytes,
         string? compactBanner = null,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        Action<IReadOnlyList<string>>? servedPathsSink = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2180,6 +2247,7 @@ public sealed class SearchTool
             .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
             .Sum(static group => group.Max(static hit => hit.SourceBytes));
 
+        servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
             ? RenderTextContentJson(hits, page)
             : RenderTextContentCompact(hits, page, total, compactBanner);
@@ -2366,7 +2434,14 @@ public sealed class SearchTool
             ? weights.Semantic / (RrfFusion.RankConstant + semanticRank)
             : 0d);
 
-    private sealed record AutoTextRescueResult(string Output, int Count, long SourceBytes, string Kind);
+    private sealed record AutoTextRescueResult(
+        string Output, int Count, long SourceBytes, string Kind, IReadOnlyList<string> ServedPaths)
+    {
+        public AutoTextRescueResult(string output, int count, long sourceBytes, string kind)
+            : this(output, count, sourceBytes, kind, [])
+        {
+        }
+    }
 
     /// <summary>The rescue block's hard row budget (design §6.3) — an affordance, not a result page.</summary>
     private const int SemanticRescueRows = 2;
@@ -2490,6 +2565,7 @@ public sealed class SearchTool
         string? filePattern,
         string? language)
     {
+        IReadOnlyList<string> servedPaths = [];
         string sourceOutput = RunTextContent(
             index,
             query,
@@ -2501,7 +2577,8 @@ public sealed class SearchTool
             out long sourceBytes,
             compactBanner: null,
             filePattern,
-            language);
+            language,
+            paths => servedPaths = paths);
         return sourceCount == 0
             ? new AutoTextRescueResult(primaryOutput, 0, sourceBytes, "none")
             : new AutoTextRescueResult(
@@ -2514,7 +2591,8 @@ public sealed class SearchTool
                     "Rerun with mode=source for more source snippets."),
                 sourceCount,
                 sourceBytes,
-                "source");
+                "source",
+                servedPaths);
     }
 
     private static AutoTextRescueResult? TryRunAutoDocsConfigRescue(
@@ -2527,6 +2605,7 @@ public sealed class SearchTool
         string? filePattern,
         string? language)
     {
+        IReadOnlyList<string> servedPaths = [];
         string docsOutput = RunTextContent(
             index,
             query,
@@ -2538,7 +2617,9 @@ public sealed class SearchTool
             out long sourceBytes,
             compactBanner: null,
             filePattern,
-            language);
+            language,
+            suggestionLookup: null,
+            servedPathsSink: paths => servedPaths = paths);
         return docsCount == 0
             ? null
             : new AutoTextRescueResult(
@@ -2551,7 +2632,8 @@ public sealed class SearchTool
                     "Rerun with mode=content for more docs/config snippets."),
                 docsCount,
                 sourceBytes,
-                "docs_config");
+                "docs_config",
+                servedPaths);
     }
 
     /// <summary>
@@ -2592,21 +2674,24 @@ public sealed class SearchTool
             match => index.FindBySymbolId(match.UnitId) is { } symbol && visibility.Allows(symbol));
         SemanticQueryResult chunks = arm.QueryChunks(root, query, SemanticRescueRecall);
 
-        List<string> symbolRows =
+        List<IndexedSymbol> symbolHits =
         [
             .. symbols.Hits
                 .Select(hit => hit.SymbolId is { } id ? index.FindBySymbolId(id) : null)
                 .Where(symbol => symbol is not null)
-                .Select(symbol => $"  semantic symbol  {symbol!.Name}  {symbol.FilePath}:{symbol.StartLine}"),
+                .Select(symbol => symbol!),
         ];
-        List<string> chunkRows =
+        List<string> symbolRows =
+            [.. symbolHits.Select(symbol => $"  semantic symbol  {symbol.Name}  {symbol.FilePath}:{symbol.StartLine}")];
+        List<string> symbolPaths = [.. symbolHits.Select(symbol => symbol.FilePath)];
+        List<string> chunkPaths =
         [
             .. chunks.Hits
                 .Where(hit => hit.DocId is not null)
                 .Select(hit => hit.FilePath)
-                .Distinct(StringComparer.Ordinal)
-                .Select(path => $"  semantic docs  {path}"),
+                .Distinct(StringComparer.Ordinal),
         ];
+        List<string> chunkRows = [.. chunkPaths.Select(path => $"  semantic docs  {path}")];
 
         if (symbolRows.Count == 0 && chunkRows.Count == 0)
             return null;
@@ -2616,6 +2701,7 @@ public sealed class SearchTool
         int symbolTake = chunkRows.Count == 0 ? SemanticRescueRows : Math.Min(symbolRows.Count, 1);
         int chunkTake = SemanticRescueRows - symbolTake;
         List<string> rows = [.. symbolRows.Take(symbolTake), .. chunkRows.Take(chunkTake)];
+        IReadOnlyList<string> servedPaths = [.. symbolPaths.Take(symbolTake), .. chunkPaths.Take(chunkTake)];
 
         string kind = (symbolTake > 0 && symbolRows.Count > 0, chunkTake > 0 && chunkRows.Count > 0) switch
         {
@@ -2634,7 +2720,8 @@ public sealed class SearchTool
                 SemanticRescueAffordance(kind, rows)),
             rows.Count,
             SourceBytes: 0,
-            kind);
+            kind,
+            servedPaths);
     }
 
     private static string SemanticRescueAffordance(string kind, IReadOnlyList<string> rows) =>

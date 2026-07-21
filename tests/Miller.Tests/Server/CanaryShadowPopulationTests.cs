@@ -103,19 +103,20 @@ public sealed class CanaryShadowPopulationTests : IDisposable
     }
 
     [Fact]
-    public void SemanticDisabled_RunsNoShadowWorkAndRecordsPlainIneligible()
+    public void SemanticDisabled_IsInertLikeCanaryOff_RunsNoShadowWorkAndRecordsNothing()
     {
         RecordingSymbolLookupIndex index = ThreeSymbolIndex();
         var probe = new InvocationCounter();
 
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, Request(IdentifierQuery), CanaryMode.On, "symbol", semanticDisabled: true,
-            SampledWorkspace, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, treatmentArmFactory: null,
-            probe.Wrap(ServedHybrid("sym-a")));
+            SampledWorkspace, UtcDate, () => throw new InvalidOperationException("probe must not run when semantic is off"),
+            crossWorkspaceNoGeneration: false, treatmentArmFactory: null, probe.Wrap(ServedHybrid("sym-a")));
 
+        Assert.Null(outcome.Facts);
         Assert.Null(outcome.ShadowFacts);
         Assert.Equal(0, probe.Count);
-        Assert.Equal(CanaryEligibility.IneligibleSemanticDisabled, outcome.Facts!.Eligibility);
+        Assert.Equal(LexicalOutput(index), outcome.Result.Output);
     }
 
     [Fact]
@@ -133,6 +134,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
 
         CanaryShadowFacts facts = outcome.ShadowFacts!;
         Assert.Equal(CanaryShadowStatus.Ok, facts.Status);
+        Assert.Equal(1, facts.SemanticResultCount);
         Assert.Equal(3, facts.OverlapAt10);
         Assert.True(facts.Top1Changed);
         Assert.Equal(2, facts.LexicalTop1Rank);
@@ -304,8 +306,9 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         {
             "canary_contract_version", "canary_experiment_id", "canary_assignment_version", "canary_query_class",
             "canary_eligibility", "canary_policy_version", "canary_arm", "canary_bucket", "canary_shadow_status",
-            "canary_shadow_overlap_at_10", "canary_shadow_top1_changed", "canary_shadow_lexical_top1_rank",
-            "canary_encoder_fingerprint", "canary_storage_schema", "canary_corpus_generation",
+            "canary_semantic_result_count", "canary_shadow_overlap_at_10", "canary_shadow_top1_changed",
+            "canary_shadow_lexical_top1_rank", "canary_encoder_fingerprint", "canary_storage_schema",
+            "canary_corpus_generation",
         })
         {
             Assert.True(metadata.TryGetProperty(present, out _), present);
@@ -314,7 +317,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         foreach (string absent in new[]
         {
             "canary_backend", "canary_embed_warmth", "canary_embed_latency_bucket", "canary_knn_latency_bucket",
-            "canary_lexical_result_count", "canary_semantic_result_count", "canary_fused_result_count",
+            "canary_lexical_result_count", "canary_fused_result_count",
             "canary_semantic_contribution_count", "canary_fallback_reason", "canary_rescue_kind",
             "canary_fusion_profile", "canary_result_name_hashes", "canary_result_path_hashes",
             "canary_result_qualified_hashes", "canary_result_hash_truncated",
@@ -325,8 +328,33 @@ public sealed class CanaryShadowPopulationTests : IDisposable
 
         Assert.Equal(CanaryArm.Shadow, metadata.GetProperty("canary_arm").GetString());
         Assert.Equal(CanaryAssignment.IdentifierExperimentId, metadata.GetProperty("canary_experiment_id").GetString());
+        Assert.Equal(4, metadata.GetProperty("canary_semantic_result_count").GetInt32());
         Assert.True(metadata.GetProperty("canary_shadow_top1_changed").GetBoolean());
         Assert.Equal(2, metadata.GetProperty("canary_shadow_lexical_top1_rank").GetInt32());
+    }
+
+    [Fact]
+    public void StampShadow_OkPath_WithZeroSemanticHits_WritesTheCountAsZeroNotAbsent()
+    {
+        JsonElement metadata = Stamp(OkFacts() with { SemanticResultCount = 0 });
+
+        Assert.True(metadata.TryGetProperty("canary_semantic_result_count", out JsonElement count));
+        Assert.Equal(0, count.GetInt32());
+    }
+
+    [Fact]
+    public void StampShadow_NonOkPath_OmitsSemanticResultCount()
+    {
+        JsonElement metadata = Stamp(OkFacts() with
+        {
+            Status = CanaryShadowStatus.Timeout,
+            SemanticResultCount = null,
+            OverlapAt10 = null,
+            Top1Changed = null,
+            LexicalTop1Rank = null,
+        });
+
+        Assert.False(metadata.TryGetProperty("canary_semantic_result_count", out _));
     }
 
     [Fact]
@@ -396,6 +424,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         QueryClass = CanaryQueryClass.Identifier,
         Eligibility = CanaryEligibility.IneligibleQueryClass,
         Status = CanaryShadowStatus.Ok,
+        SemanticResultCount = 4,
         OverlapAt10 = 3,
         Top1Changed = true,
         LexicalTop1Rank = 2,

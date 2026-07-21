@@ -225,6 +225,69 @@ public sealed class CanarySearchTests : IDisposable
     }
 
     [Fact]
+    public void RescuePaths_ExtendThePathArrayInServedOrderWithoutAddingNameEntries()
+    {
+        var served = new[]
+        {
+            new CanaryServedResult("Alpha", "src/Alpha.cs", null),
+            new CanaryServedResult("Bravo", "src/Bravo.cs", null),
+        };
+
+        JsonElement metadata = Stamp(EligibleFacts() with
+        {
+            ResultCount = 4,
+            ServedResults = served,
+            AdditionalServedPaths = ["docs/rescue-a.md", "docs/rescue-b.md"],
+        });
+
+        Assert.Equal(2, metadata.GetProperty("canary_result_name_hashes").GetArrayLength());
+        Assert.Equal(4, metadata.GetProperty("canary_result_path_hashes").GetArrayLength());
+        Assert.False(metadata.GetProperty("canary_result_hash_truncated").GetBoolean());
+        Assert.Contains(TargetHash("docs/rescue-a.md"), Hashes(metadata, "canary_result_path_hashes"));
+        Assert.Contains(TargetHash("docs/rescue-b.md"), Hashes(metadata, "canary_result_path_hashes"));
+        Assert.DoesNotContain(TargetHash("docs/rescue-a.md"), Hashes(metadata, "canary_result_name_hashes"));
+    }
+
+    [Fact]
+    public void RescuePaths_ZeroPrimaryPage_HashesOnlyTheRescueRowsAndNoNameArray()
+    {
+        JsonElement metadata = Stamp(EligibleFacts() with
+        {
+            ResultCount = 2,
+            ServedResults = [],
+            AdditionalServedPaths = ["docs/only-a.md", "docs/only-b.md"],
+        });
+
+        Assert.Equal(2, metadata.GetProperty("canary_result_path_hashes").GetArrayLength());
+        Assert.False(metadata.TryGetProperty("canary_result_name_hashes", out _));
+        Assert.False(metadata.TryGetProperty("canary_result_qualified_hashes", out _));
+        Assert.False(metadata.GetProperty("canary_result_hash_truncated").GetBoolean());
+        Assert.Contains(TargetHash("docs/only-a.md"), Hashes(metadata, "canary_result_path_hashes"));
+    }
+
+    [Fact]
+    public void RescuePaths_ShareTheTenCapWithTheServedResultsAndSetTheTruncationFlag()
+    {
+        var served = Enumerable.Range(0, 8)
+            .Select(i => new CanaryServedResult($"Name{i}", $"src/File{i}.cs", null))
+            .ToList();
+
+        JsonElement metadata = Stamp(EligibleFacts() with
+        {
+            ResultCount = 12,
+            ServedResults = served,
+            AdditionalServedPaths = ["docs/r0.md", "docs/r1.md", "docs/r2.md", "docs/r3.md"],
+        });
+
+        Assert.Equal(8, metadata.GetProperty("canary_result_name_hashes").GetArrayLength());
+        Assert.Equal(10, metadata.GetProperty("canary_result_path_hashes").GetArrayLength());
+        Assert.True(metadata.GetProperty("canary_result_hash_truncated").GetBoolean());
+        Assert.Contains(TargetHash("docs/r0.md"), Hashes(metadata, "canary_result_path_hashes"));
+        Assert.Contains(TargetHash("docs/r1.md"), Hashes(metadata, "canary_result_path_hashes"));
+        Assert.DoesNotContain(TargetHash("docs/r2.md"), Hashes(metadata, "canary_result_path_hashes"));
+    }
+
+    [Fact]
     public void AttributionCase_BareTargetMatchesTheNameHash()
     {
         JsonElement metadata = StampSaved();

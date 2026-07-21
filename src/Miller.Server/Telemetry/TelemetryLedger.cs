@@ -48,9 +48,13 @@ public sealed class TelemetryLedger : IDisposable
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
     private readonly SqliteCommand _insert;
+    private readonly TimeProvider _clock;
     private string? _workspaceId;
     private string? _workspaceRoot;
     private bool _disposed;
+
+    /// <summary>The clock every scope this ledger opens reads its call-start instant from.</summary>
+    public TimeProvider Clock => _clock;
 
     /// <summary>The workspace id stamped onto every row, or null if unknown at open time.</summary>
     public string? WorkspaceId
@@ -68,25 +72,30 @@ public sealed class TelemetryLedger : IDisposable
     /// <summary>Count of telemetry rows that failed to persist and were swallowed (never throws).</summary>
     public long DroppedWrites { get; private set; }
 
-    private TelemetryLedger(SqliteConnection connection, string dbPath, string? workspaceId, string? workspaceRoot)
+    private TelemetryLedger(
+        SqliteConnection connection, string dbPath, string? workspaceId, string? workspaceRoot, TimeProvider clock)
     {
         _connection = connection;
         DbPath = dbPath;
         _workspaceId = workspaceId;
         _workspaceRoot = workspaceRoot;
+        _clock = clock;
 
         _insert = _connection.CreateCommand();
+        // ts falls back to the column DEFAULT (strftime now) when $ts is null, so a direct caller that carries no
+        // scope instant keeps the historic behavior while a scope writes its captured call-start instant verbatim.
         _insert.CommandText = """
             INSERT INTO tool_telemetry
-                (id, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
+                (id, ts, tool, op, workspace_id, workspace_root, duration_ms, outcome, error_kind, result_count,
                  error_message, error_detail, bytes_examined, bytes_returned, source_bytes, est_tokens, index_fresh,
                  target_hash, metadata_json, miller_version)
             VALUES
-                ($id, $tool, $op, $ws, $wsroot, $dur, $outcome, $errkind, $rc,
-                 $errmsg, $errdetail, $bex, $bret, $src, $est, $fresh, $hash, $meta, $version);
+                ($id, COALESCE($ts, strftime('%Y-%m-%dT%H:%M:%fZ','now')), $tool, $op, $ws, $wsroot, $dur, $outcome,
+                 $errkind, $rc, $errmsg, $errdetail, $bex, $bret, $src, $est, $fresh, $hash, $meta, $version);
             """;
         // Declare parameters once; values are set per Record() call. Prepared and reused on the hot path.
         _insert.Parameters.Add("$id", SqliteType.Text);
+        _insert.Parameters.Add("$ts", SqliteType.Text);
         _insert.Parameters.Add("$tool", SqliteType.Text);
         _insert.Parameters.Add("$op", SqliteType.Text);
         _insert.Parameters.Add("$ws", SqliteType.Text);
@@ -117,7 +126,8 @@ public sealed class TelemetryLedger : IDisposable
     /// <paramref name="workspaceId"/> + <paramref name="workspaceRoot"/> and <see cref="Summarize"/> scopes back
     /// to <paramref name="workspaceId"/> so a per-workspace view never reports another workspace's rows.
     /// </summary>
-    public static TelemetryLedger Open(string dbPath, string? workspaceId, string? workspaceRoot = null)
+    public static TelemetryLedger Open(
+        string dbPath, string? workspaceId, string? workspaceRoot = null, TimeProvider? clock = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -152,7 +162,8 @@ public sealed class TelemetryLedger : IDisposable
         EnsureTextColumn(connection, "error_detail");
         EnsureTextColumn(connection, "miller_version");
 
-        return new TelemetryLedger(connection, Path.GetFullPath(dbPath), workspaceId, workspaceRoot);
+        return new TelemetryLedger(
+            connection, Path.GetFullPath(dbPath), workspaceId, workspaceRoot, clock ?? TimeProvider.System);
     }
 
     private static void EnsureTextColumn(SqliteConnection connection, string columnName)
@@ -196,7 +207,7 @@ public sealed class TelemetryLedger : IDisposable
     public TelemetryScope Measure(string tool, string? op, string? correlationId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tool);
-        return new TelemetryScope(this, tool, op, correlationId);
+        return new TelemetryScope(this, tool, op, correlationId, _clock);
     }
 
     /// <summary>
@@ -235,6 +246,9 @@ public sealed class TelemetryLedger : IDisposable
 
                 _insert.Parameters["$id"].Value =
                     string.IsNullOrWhiteSpace(id) ? Guid.CreateVersion7().ToString() : id;
+                _insert.Parameters["$ts"].Value = record.StartedAtUtc is { } startedAt
+                    ? startedAt.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture)
+                    : DBNull.Value;
                 _insert.Parameters["$tool"].Value = record.Tool;
                 _insert.Parameters["$op"].Value = (object?)record.Op ?? DBNull.Value;
                 string? defaultWorkspaceId = _workspaceId;

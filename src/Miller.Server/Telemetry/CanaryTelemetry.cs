@@ -280,6 +280,13 @@ public sealed record CanaryCallFacts
     public string? FusionProfile { get; init; }
 
     public IReadOnlyList<CanaryServedResult> ServedResults { get; init; } = [];
+
+    /// <summary>
+    /// Workspace-relative paths of rows served <em>after</em> the primary page — the auto-rescue content rows that
+    /// replaced or extended the served page. They carry a path digest only (a content row has no symbol name), and
+    /// they share the ≤10 cap and single truncation flag with <see cref="ServedResults"/>, appended in served order.
+    /// </summary>
+    public IReadOnlyList<string> AdditionalServedPaths { get; init; } = [];
 }
 
 /// <summary>
@@ -307,6 +314,13 @@ public sealed record CanaryShadowFacts
     public bool? Top1Changed { get; init; }
 
     public int? LexicalTop1Rank { get; init; }
+
+    /// <summary>
+    /// Count of hits the shadow arm returned pre-fusion, written on <see cref="CanaryShadowStatus.Ok"/> rows only
+    /// (including zero — the field table scopes <c>canary_semantic_result_count</c> to rows where the semantic arm
+    /// ran, and a status=ok shadow row is exactly such a row). Null on every non-ok status.
+    /// </summary>
+    public int? SemanticResultCount { get; init; }
 
     public string? EncoderFingerprint { get; init; }
 
@@ -414,6 +428,8 @@ public static class CanaryTelemetry
         if (facts.Status != CanaryShadowStatus.Ok)
             return;
 
+        if (facts.SemanticResultCount is { } semantic)
+            scope.SetMetadata("canary_semantic_result_count", semantic);
         if (facts.OverlapAt10 is { } overlap)
             scope.SetMetadata("canary_shadow_overlap_at_10", overlap);
         if (facts.Top1Changed is { } changed)
@@ -424,12 +440,21 @@ public static class CanaryTelemetry
 
     private static void StampServedResults(TelemetryScope scope, CanaryCallFacts facts)
     {
-        if (facts.ResultCount <= 0 || facts.ServedResults.Count == 0)
+        if (facts.ResultCount <= 0)
             return;
 
-        IReadOnlyList<CanaryServedResult> served = [.. facts.ServedResults.Take(ResultHashCap)];
-        scope.SetMetadata("canary_result_name_hashes", [.. served.Select(r => Digest(r.Name))]);
-        scope.SetMetadata("canary_result_path_hashes", [.. served.Select(r => Digest(r.Path))]);
+        int symbolTaken = Math.Min(facts.ServedResults.Count, ResultHashCap);
+        IReadOnlyList<CanaryServedResult> served = [.. facts.ServedResults.Take(symbolTaken)];
+        IReadOnlyList<string> rescuePaths = [.. facts.AdditionalServedPaths.Take(ResultHashCap - symbolTaken)];
+        if (served.Count == 0 && rescuePaths.Count == 0)
+            return;
+
+        if (served.Count > 0)
+            scope.SetMetadata("canary_result_name_hashes", [.. served.Select(r => Digest(r.Name))]);
+
+        scope.SetMetadata(
+            "canary_result_path_hashes",
+            [.. served.Select(r => Digest(r.Path)), .. rescuePaths.Select(Digest)]);
 
         string[] qualified =
         [
@@ -440,7 +465,9 @@ public static class CanaryTelemetry
         if (qualified.Length > 0)
             scope.SetMetadata("canary_result_qualified_hashes", qualified);
 
-        scope.SetMetadata("canary_result_hash_truncated", facts.ServedResults.Count > ResultHashCap);
+        scope.SetMetadata(
+            "canary_result_hash_truncated",
+            facts.ServedResults.Count + facts.AdditionalServedPaths.Count > ResultHashCap);
     }
 
     /// <summary>The first 16 hex chars of the fingerprint, with its <c>sha256:</c> tag stripped.</summary>

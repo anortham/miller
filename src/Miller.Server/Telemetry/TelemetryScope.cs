@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -18,15 +19,18 @@ public sealed class TelemetryScope : IDisposable
 
     private readonly TelemetryLedger _ledger;
     private readonly long _startTimestamp;
+    private readonly DateTimeOffset _startedAtUtc;
     private readonly TelemetryScope? _previousCurrent;
     private bool _disposed;
     private bool _waitReasonSet;
 
-    internal TelemetryScope(TelemetryLedger ledger, string tool, string? op, string? correlationId = null)
+    internal TelemetryScope(
+        TelemetryLedger ledger, string tool, string? op, string? correlationId = null, TimeProvider? clock = null)
     {
         _ledger = ledger;
         Tool = tool;
         _op = op;
+        _startedAtUtc = (clock ?? TimeProvider.System).GetUtcNow();
         // The correlation id is BOTH this row's persisted id and the Serilog 'cid' on the call's log lines (M8
         // decision-2). The central filter supplies it; a direct Measure() caller (or a test) passes null and we
         // self-generate the same UUIDv7 the ledger would have, so direct callers keep a valid unique id unchanged.
@@ -51,6 +55,16 @@ public sealed class TelemetryScope : IDisposable
     /// no id is supplied (a direct <see cref="TelemetryLedger.Measure"/> caller) it is self-generated as a UUIDv7.
     /// </summary>
     public string CorrelationId { get; }
+
+    /// <summary>
+    /// The single UTC instant captured at call start. It is the persisted row <c>ts</c> and the one clock any
+    /// per-call date derivation (e.g. the canary assignment's <c>utc_date</c>) must read, so the timestamp and the
+    /// derived date share one instant and can never straddle a boundary.
+    /// </summary>
+    public DateTimeOffset StartedAtUtc => _startedAtUtc;
+
+    /// <summary>The <c>YYYY-MM-DD</c> UTC prefix of <see cref="StartedAtUtc"/>.</summary>
+    public string UtcDate => _startedAtUtc.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private string? _op;
     private string? _workspaceId;
@@ -311,7 +325,8 @@ public sealed class TelemetryScope : IDisposable
             TargetHash: TargetHash,
             MetadataJson: MetadataJson,
             ErrorMessage: ErrorMessage,
-            ErrorDetail: ErrorDetail);
+            ErrorDetail: ErrorDetail,
+            StartedAtUtc: _startedAtUtc);
 
         _ledger.Record(in record, CorrelationId); // best-effort; never throws
     }

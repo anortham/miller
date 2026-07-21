@@ -91,7 +91,7 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Equal(3, facts.LexicalResultCount);
         Assert.Equal(2, facts.SemanticResultCount);
         Assert.Equal(3, facts.FusedResultCount);
-        Assert.Equal(2, facts.SemanticContributionCount);
+        Assert.Equal(1, facts.SemanticContributionCount);
         Assert.Equal(RrfFusion.FusionProfile, facts.FusionProfile);
         Assert.Equal("cpu", facts.Backend);
         Assert.Equal("warm", facts.EmbedWarmth);
@@ -100,6 +100,21 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Equal("sha256:abcdef0123456789aa", facts.EncoderFingerprint);
         Assert.Equal("cards-v1", facts.StorageSchema);
         Assert.Equal("gen-7", facts.CorpusGeneration);
+    }
+
+    [Fact]
+    public void SemanticContributionCount_CountsOnlyRowsWhereSemanticOutranksLexical()
+    {
+        ITextContentSearchIndex index = ContentIndex(
+            Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"), Docs("docs/c.md", 3, "gamma"));
+        var arm = ContentArm(chunks: [Chunk("docs/b.md", 1), Chunk("docs/a.md", 3)], diagnostics: ServedDiagnostics());
+
+        SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
+
+        CanaryCallFacts facts = outcome.Facts!;
+        Assert.Equal(CanaryArm.Treatment, Arm(facts));
+        Assert.Equal(2, facts.SemanticResultCount);
+        Assert.Equal(1, facts.SemanticContributionCount);
     }
 
     [Fact]
@@ -161,16 +176,35 @@ public sealed class CanaryContentSearchTests : IDisposable
     {
         ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"));
         SearchTool.ContentCanaryOutcome outcome = Run(
-            index, ConceptualQuery, ControlWorkspace, treatmentArm: null, semanticDisabled: true);
+            index, ConceptualQuery, ControlWorkspace, treatmentArm: null, vectorState: "unavailable");
 
         Assert.Empty(outcome.ResultPathHashes);
 
         JsonElement metadata = Stamp(outcome);
         Assert.Equal("ineligible", metadata.GetProperty("canary_arm").GetString());
-        Assert.Equal(CanaryEligibility.IneligibleSemanticDisabled, metadata.GetProperty("canary_eligibility").GetString());
+        Assert.Equal(CanaryEligibility.IneligibleVectorsUnavailable, metadata.GetProperty("canary_eligibility").GetString());
         Assert.False(metadata.TryGetProperty("canary_bucket", out _));
         Assert.False(metadata.TryGetProperty("canary_lexical_result_count", out _));
         Assert.False(metadata.TryGetProperty("canary_result_path_hashes", out _));
+    }
+
+    [Fact]
+    public void SemanticDisabled_IsInertLikeCanaryOff_NoProbeNoFactsByteIdentical()
+    {
+        ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"));
+
+        SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanary(
+            index, ConceptualQuery, 10, json: false, compactBanner: null, filePattern: null, language: null,
+            suggestionLookup: null, productionRerank: null, CanaryMode.On, "content", semanticDisabled: true,
+            ControlWorkspace, Root, UtcDate,
+            () => throw new InvalidOperationException("the vector probe must not run when semantic is off"),
+            crossWorkspaceNoGeneration: false, treatmentArm: null);
+
+        Assert.Null(outcome.Facts);
+        Assert.Empty(outcome.ResultPathHashes);
+        Assert.Equal(
+            SearchTool.RunContentCorpus(index, ConceptualQuery, 10, json: false, out _, out _),
+            outcome.Result.Output);
     }
 
     [Fact]
