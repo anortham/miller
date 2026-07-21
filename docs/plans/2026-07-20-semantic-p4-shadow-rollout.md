@@ -254,8 +254,8 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Lead-executed (not delegated) — benchmarks share the machine. If the manifest lacks a Q8_0 entry, write the short finding saying exactly that and what adding it costs (manifest entry + conformance goldens + eval-gate re-run), then stop.
 
 **Acceptance criteria:**
-- [ ] Findings doc with either (a) measured f16-vs-Q8_0 table or (b) the manifest-gap record with the cost of closing it.
-- [ ] No model pin, manifest, or default changed.
+- [x] Findings doc with either (a) measured f16-vs-Q8_0 table or (b) the manifest-gap record with the cost of closing it — (b) recorded, PLUS measured f16-vs-bge table (9.0× throughput, 0.15× RSS) since bge is manifest-pinned and cached.
+- [x] No model pin, manifest, or default changed.
 
 ### Task 8: fast-suite wall-ceiling fix
 
