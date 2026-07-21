@@ -99,3 +99,4 @@ Lead fix: complete (commit 412033d, vec0 park-race — serialized VectorStoreTes
 Branch gate (final, post-review): PASS at 412033d — scripts/test.sh all (fast 4227 passed/2 skips, scale 86/86, exit 0; one transient fast failure in an intermediate run did not reproduce across two clean full runs) + Release build 0W/0E
 Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit fffe9d8) — P5 plan docs/plans/2026-07-21-semantic-p5-canary-plan.md
 Task 2: complete (parallel-lead-commit, Lead inline review clean — contract judgment calls verified against frozen doc, lead commit f6bd105)
+Task 4: complete (parallel-lead-commit, Lead inline review clean; plan mismatch accepted: no in-flight JSON rebuild field exists — hint keys on ShadowRebuildPendingMarker; follow-up: vectors.db.rebuild disk probe for the single-wake window, lead commit c3bd69e)

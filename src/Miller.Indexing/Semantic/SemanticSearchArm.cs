@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Miller.Indexing.Semantic;
 
 /// <summary>
@@ -9,6 +11,43 @@ namespace Miller.Indexing.Semantic;
 public sealed record SemanticHit(string? SymbolId, string? DocId, string FilePath, int Rank, double Cosine);
 
 /// <summary>
+/// The classified reason a semantic arm consultation did not contribute, mirroring the thirteen frozen
+/// <c>fallback_reason</c> values of the canary-telemetry contract one-for-one. <see cref="None"/> is the served
+/// path. The map from these to the contract's wire strings lives in the server telemetry layer, not here.
+/// </summary>
+public enum SemanticFallbackKind
+{
+    None,
+    VectorsMissing,
+    VectorsStale,
+    VectorsIncompatible,
+    VectorsBuilding,
+    ModelNotPrepared,
+    CircuitOpen,
+    EmbedTimeout,
+    EmbedError,
+    KnnError,
+    DiskBlocked,
+    Disabled,
+    Unknown,
+}
+
+/// <summary>
+/// The measurement facts of one arm consultation: whether and why it fell back, the embed backend and warmth,
+/// the separate embed and KNN latencies (integer milliseconds, floored; <c>null</c> when that step did not run),
+/// the served generation's identity, and the fusion profile a fusing caller applied. Present on every
+/// <see cref="SemanticQueryResult"/> the arm returns; the canary telemetry writer turns it into contract fields.
+/// </summary>
+public sealed record SemanticQueryDiagnostics(
+    SemanticFallbackKind Fallback,
+    string Backend,
+    bool ColdEmbed,
+    long? EmbedMs,
+    long? KnnMs,
+    SemanticGenerationIdentity? Identity,
+    string? FusionProfile);
+
+/// <summary>
 /// The outcome of one semantic query. A failure is an empty hit list plus a stated
 /// <see cref="UnavailableReason"/> for status/telemetry, never an exception: the caller's correct response is
 /// always to serve its lexical result unchanged.
@@ -18,6 +57,13 @@ public sealed record SemanticQueryResult(IReadOnlyList<SemanticHit> Hits, string
     /// <summary>Whether the arm actually consulted the artifact. An empty served result means the corpus had
     /// no allowed neighbours, which is not the same fact as the arm being unable to run.</summary>
     public bool Served => UnavailableReason is null;
+
+    /// <summary>
+    /// The measurement facts of this consultation — non-null whenever the arm was actually consulted (every
+    /// result the arm itself returns). Null on a result synthesized without consulting the arm: a not-serving
+    /// mode, or a caller that fabricated an unavailable result.
+    /// </summary>
+    public SemanticQueryDiagnostics? Diagnostics { get; init; }
 
     public static SemanticQueryResult Unavailable(string reason) => new([], reason);
 }
@@ -31,6 +77,11 @@ public interface IVectorSearchPort : IDisposable
     /// (vectors-v1 §Shadow generations and rollback). Empty ⟹ the port does not track a generation — a test
     /// double, or a generation the GC scheduler would never key against — so the arm skips registration.</summary>
     string Tag => string.Empty;
+
+    /// <summary>The identity of the generation this port serves, threaded into query diagnostics so a canary row
+    /// can name the encoder, lane, and generation it read. <c>null</c> ⟹ the port does not carry one — a test
+    /// double.</summary>
+    SemanticGenerationIdentity? Identity => null;
 
     IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k);
 }
@@ -83,6 +134,9 @@ public sealed class SemanticSearchArm
     public const int MaxCandidates = 500;
 
     private const string CosineMetric = "cosine";
+
+    /// <summary>The <c>backend</c> value for a call that executed no embed (contract enum's <c>none</c>).</summary>
+    private const string NoBackend = "none";
 
     private readonly string _workspaceRoot;
     private readonly bool _enabled;
@@ -162,39 +216,63 @@ public sealed class SemanticSearchArm
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
 
         if (!_enabled)
-            return SemanticQueryResult.Unavailable($"Semantic retrieval is disabled ({VectorSidecar.EnvVar}=off).");
+            return Abstain(SemanticFallbackKind.Disabled, $"Semantic retrieval is disabled ({VectorSidecar.EnvVar}=off).");
 
         // The artifact gate runs before the sidecar: a workspace with no vectors must never pay for a child
         // process, and a generation this reader cannot interpret is a reason, not an embed.
         IVectorSearchPort? port = _openPort(_workspaceRoot, out string? unavailableReason);
         if (port is null)
-            return SemanticQueryResult.Unavailable(unavailableReason ?? "The vector artifact is unavailable.");
+            return Abstain(SemanticFallbackKind.VectorsMissing, unavailableReason ?? "The vector artifact is unavailable.");
 
         // The generation this query reads is off-limits to the leader's GC for as long as the port is open. The
         // arm opens and disposes per query, so this window is one query long — cross-query protection is the soak
         // window's job. A test double serves an empty tag and is not registered.
         IDisposable? registration = string.IsNullOrEmpty(port.Tag) ? null : _readerRegistry.Register(port.Tag);
+        SemanticGenerationIdentity? identity = port.Identity;
 
         try
         {
             if (_openSession() is not { } session)
             {
-                return SemanticQueryResult.Unavailable(
-                    "The julie-semantic-sidecar binary is not installed, so queries cannot be embedded.");
+                return Abstain(
+                    SemanticFallbackKind.ModelNotPrepared,
+                    "The julie-semantic-sidecar binary is not installed, so queries cannot be embedded.",
+                    identity);
             }
 
+            // Warmth is the session's state BEFORE this embed: anything but Ready with an accepted handshake means
+            // this call pays sidecar start and/or model load.
+            bool coldEmbed = session.State != SemanticSessionState.Ready || session.Handshake is null;
+
+            var embedClock = Stopwatch.StartNew();
             SemanticEmbedOutcome outcome = await session.EmbedQueryAsync(query, cancellationToken).ConfigureAwait(false);
+            embedClock.Stop();
+            long embedMs = (long)embedClock.Elapsed.TotalMilliseconds;
+
             if (!outcome.Succeeded || outcome.Vectors.Count == 0)
             {
-                return SemanticQueryResult.Unavailable(
-                    outcome.FailureReason ?? "The sidecar returned no vector for the query.");
+                SemanticFallbackKind fallback = session.State switch
+                {
+                    SemanticSessionState.CircuitOpen => SemanticFallbackKind.CircuitOpen,
+                    _ when outcome.TimedOut => SemanticFallbackKind.EmbedTimeout,
+                    _ => SemanticFallbackKind.EmbedError,
+                };
+                return Abstain(
+                    fallback,
+                    outcome.FailureReason ?? "The sidecar returned no vector for the query.",
+                    identity,
+                    NoBackend,
+                    coldEmbed,
+                    embedMs);
             }
 
-            return Retrieve(port, kind, outcome.Vectors[0], k, allow);
+            string backend = session.Handshake?.ResolvedBackend is { Length: > 0 } resolved ? resolved : NoBackend;
+            return Retrieve(
+                port, kind, outcome.Vectors[0], k, allow, new EmbedContext(identity, backend, coldEmbed, embedMs));
         }
         catch (Exception ex) when (ex is VectorStoreException or InvalidOperationException or IOException)
         {
-            return SemanticQueryResult.Unavailable($"The semantic arm could not serve this query: {ex.Message}");
+            return Abstain(SemanticFallbackKind.KnnError, $"The semantic arm could not serve this query: {ex.Message}", identity);
         }
         finally
         {
@@ -208,24 +286,45 @@ public sealed class SemanticSearchArm
         VectorUnitKind kind,
         float[] embedding,
         int k,
-        Func<VectorMatch, bool>? allow)
+        Func<VectorMatch, bool>? allow,
+        EmbedContext embed)
     {
         SemanticStorageLane lane = port.Lane;
         if (embedding.Length != lane.Dims)
         {
-            return SemanticQueryResult.Unavailable(
-                $"The query embedded to {embedding.Length} dims but lane '{lane.Lane}' declares {lane.Dims}.");
+            return Abstain(
+                SemanticFallbackKind.VectorsIncompatible,
+                $"The query embedded to {embedding.Length} dims but lane '{lane.Lane}' declares {lane.Dims}.",
+                embed.Identity, embed.Backend, embed.ColdEmbed, embed.EmbedMs);
         }
 
         if (!string.Equals(lane.Metric, CosineMetric, StringComparison.Ordinal))
         {
-            return SemanticQueryResult.Unavailable(
+            return Abstain(
+                SemanticFallbackKind.VectorsIncompatible,
                 $"Lane '{lane.Lane}' scores by '{lane.Metric}'; this reader only converts cosine distance to a " +
-                "cosine similarity.");
+                "cosine similarity.",
+                embed.Identity, embed.Backend, embed.ColdEmbed, embed.EmbedMs);
         }
 
         sbyte[] quantized = SemanticVectorQuantizer.ToInt8(embedding);
-        List<VectorMatch> allowed = Recall(port, kind, quantized, k, allow);
+
+        var knnClock = Stopwatch.StartNew();
+        List<VectorMatch> allowed;
+        try
+        {
+            allowed = Recall(port, kind, quantized, k, allow);
+        }
+        catch (Exception ex) when (ex is VectorStoreException or InvalidOperationException or IOException)
+        {
+            return Abstain(
+                SemanticFallbackKind.KnnError,
+                $"The semantic arm could not serve this query: {ex.Message}",
+                embed.Identity, embed.Backend, embed.ColdEmbed, embed.EmbedMs);
+        }
+
+        knnClock.Stop();
+        long knnMs = (long)knnClock.Elapsed.TotalMilliseconds;
 
         var hits = new List<SemanticHit>(allowed.Count);
         for (int i = 0; i < allowed.Count; i++)
@@ -239,8 +338,30 @@ public sealed class SemanticSearchArm
                 Cosine(match.Distance)));
         }
 
-        return new SemanticQueryResult(hits, null);
+        return new SemanticQueryResult(hits, null)
+        {
+            Diagnostics = new SemanticQueryDiagnostics(
+                SemanticFallbackKind.None, embed.Backend, embed.ColdEmbed, embed.EmbedMs, knnMs, embed.Identity, null),
+        };
     }
+
+    private static SemanticQueryResult Abstain(
+        SemanticFallbackKind fallback,
+        string reason,
+        SemanticGenerationIdentity? identity = null,
+        string backend = NoBackend,
+        bool coldEmbed = false,
+        long? embedMs = null) =>
+        new([], reason)
+        {
+            Diagnostics = new SemanticQueryDiagnostics(fallback, backend, coldEmbed, embedMs, null, identity, null),
+        };
+
+    private readonly record struct EmbedContext(
+        SemanticGenerationIdentity? Identity,
+        string Backend,
+        bool ColdEmbed,
+        long EmbedMs);
 
     /// <summary>
     /// Fetches until <paramref name="k"/> allowed hits exist, the corpus is exhausted, or the candidate ceiling
@@ -301,6 +422,8 @@ internal sealed class VectorStoreSearchPort(VectorStore store) : IVectorSearchPo
     }
 
     public SemanticStorageLane Lane => store.Lane;
+
+    public SemanticGenerationIdentity? Identity => store.Identity;
 
     public string Tag => MillerSemanticContract.GenerationTag(store.Identity);
 

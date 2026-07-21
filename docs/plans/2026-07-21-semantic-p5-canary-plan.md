@@ -152,10 +152,10 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **Approach:** Thread `VectorStore.Identity` through `VectorStoreSearchPort` (it already exposes `Lane`/`Tag`). Existing callers ignore the new fields — zero behavior change; the P3 determinism tests must stay green untouched.
 
 **Acceptance criteria:**
-- [ ] Every abstention path yields the mapped `SemanticFallbackKind` (table-driven test over the fake sidecar/store fixtures).
-- [ ] A served arm call yields `Fallback=None`, non-null `EmbedMs`/`KnnMs`, backend, warmth, identity, fusion profile.
-- [ ] No change to any rendered search output (fast suite green, P3 determinism tests untouched).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Every abstention path yields the mapped `SemanticFallbackKind` (table-driven test over the fake sidecar/store fixtures).
+- [x] A served arm call yields `Fallback=None`, non-null `EmbedMs`/`KnnMs`, backend, warmth, identity, fusion profile.
+- [x] No change to any rendered search output (fast suite green, P3 determinism tests untouched).
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode. (Fix round 1: typed `TimedOut` propagation makes `EmbedTimeout` producible; VectorsStale/VectorsBuilding/DiskBlocked stay eligibility-layer facts for Task 5.)
 
 ### Task 4: Converge follow-ups — starvation retry wake, incremental disk gate, deferred-source log, status hint
 

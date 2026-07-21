@@ -249,6 +249,13 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, Se
     {
     }
 
+    /// <summary>
+    /// The diagnostics of the most recent consultation on this instance, or <c>null</c> when the arm was never
+    /// consulted (off/shadow mode or a lexical-only route). The arm is DI-transient — one instance per tool
+    /// call — so this holds a single call's facts for the canary writer to read out-of-band after fusion.
+    /// </summary>
+    public SemanticQueryDiagnostics? LastDiagnostics { get; private set; }
+
     public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -266,6 +273,10 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, Se
             .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
             .GetAwaiter()
             .GetResult();
+
+        LastDiagnostics = result.Diagnostics is { } diagnostics && result.Served
+            ? diagnostics with { FusionProfile = RrfFusion.FusionProfile }
+            : result.Diagnostics;
 
         if (!result.Served || result.Hits.Count == 0)
             return null;

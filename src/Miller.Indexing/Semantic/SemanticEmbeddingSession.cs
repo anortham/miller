@@ -46,13 +46,14 @@ public sealed record SemanticEmbedOutcome(
     bool Succeeded,
     IReadOnlyList<float[]> Vectors,
     IReadOnlyList<int> FlaggedIndices,
-    string? FailureReason)
+    string? FailureReason,
+    bool TimedOut = false)
 {
     public static SemanticEmbedOutcome Ok(IReadOnlyList<float[]> vectors, IReadOnlyList<int> flagged) =>
         new(true, vectors, flagged, null);
 
-    public static SemanticEmbedOutcome Fail(string reason) =>
-        new(false, [], [], reason);
+    public static SemanticEmbedOutcome Fail(string reason, bool timedOut = false) =>
+        new(false, [], [], reason, timedOut);
 }
 
 /// <summary>One live child process, reduced to the two pipes and the kill switch the session needs.</summary>
@@ -293,15 +294,19 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             if (!TryEnterCall(out string? blockedReason))
                 return SemanticEmbedOutcome.Fail(blockedReason!);
 
+            // Carries the character of the most recent transport fault to the returned outcome, so the arm can
+            // count an embed timeout distinctly from any other embed error without parsing the reason string.
+            bool lastTimedOut = false;
+
             for (int attempt = 0; attempt < MaxAttemptsPerCall; attempt++)
             {
                 if (attempt > 0 && !await BackoffAsync(attempt, cancellationToken).ConfigureAwait(false))
-                    return SemanticEmbedOutcome.Fail(UnavailableReason!);
+                    return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
 
                 if (!await StartIfNeededAsync(cancellationToken).ConfigureAwait(false))
                 {
                     if (State == SemanticSessionState.CircuitOpen)
-                        return SemanticEmbedOutcome.Fail(UnavailableReason!);
+                        return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     continue;
                 }
 
@@ -317,8 +322,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                 }
                 catch (SidecarTransportException ex)
                 {
+                    lastTimedOut = ex.TimedOut;
                     if (RecordFatal(ex.Message))
-                        return SemanticEmbedOutcome.Fail(UnavailableReason!);
+                        return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     continue;
                 }
 
@@ -340,13 +346,14 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                     }
                     catch (SidecarTransportException ex)
                     {
+                        lastTimedOut = ex.TimedOut;
                         if (RecordFatal(ex.Message))
-                            return SemanticEmbedOutcome.Fail(UnavailableReason!);
+                            return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     }
                 }
             }
 
-            return SemanticEmbedOutcome.Fail(UnavailableReason ?? "sidecar request failed after a restart");
+            return SemanticEmbedOutcome.Fail(UnavailableReason ?? "sidecar request failed after a restart", lastTimedOut);
         }
         finally
         {
@@ -522,9 +529,11 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         string? response = await reader.ReadLineAsync(timeout, cancellationToken).ConfigureAwait(false);
         if (response is null)
         {
-            throw new SidecarTransportException(reader.EndedByTimeout
-                ? $"no response to '{method}' within {timeout.TotalMilliseconds:F0} ms"
-                : $"sidecar stdout closed while awaiting '{method}'");
+            throw new SidecarTransportException(
+                reader.EndedByTimeout
+                    ? $"no response to '{method}' within {timeout.TotalMilliseconds:F0} ms"
+                    : $"sidecar stdout closed while awaiting '{method}'",
+                reader.EndedByTimeout);
         }
 
         return SidecarResponse.Parse(response, requestId);
@@ -774,10 +783,15 @@ public sealed record SemanticSidecarHealth(
 /// <summary>A connection-fatal transport condition. Internal on purpose: callers see stated outcomes, not throws.</summary>
 internal sealed class SidecarTransportException : Exception
 {
-    public SidecarTransportException(string message)
+    public SidecarTransportException(string message, bool timedOut = false)
         : base(message)
     {
+        TimedOut = timedOut;
     }
+
+    /// <summary>True when this fault was the per-request budget elapsing, not any other transport failure —
+    /// the distinction the canary's <c>embed_timeout</c> reason is counted from.</summary>
+    public bool TimedOut { get; }
 }
 
 internal sealed record SidecarError(string Code, string Message);

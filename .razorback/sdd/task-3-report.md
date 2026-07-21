@@ -1,117 +1,191 @@
-# Task 3 report — `miller semantic prepare` CLI verb (consented model download)
+# Task 3 Report — Semantic query diagnostics (P5 Canary Stage)
 
-> Replaced a stale `task-3-report.md` from a DIFFERENT plan ("Edit failure-reason completeness"). This path
-> collides across plans; this content is the P4 semantic Task 3 report.
+> Replaces a stale `task-3-report.md` from a different plan (P4 `miller semantic prepare`). This path
+> collides across plans; this content is the P5 Canary Task 3 report.
 
-## Status
-Complete. Verb implemented, wired, and tested. Commit deferred (parallel-lead-commit).
+Status: **DONE**. Commit SHA: none — parallel-lead-commit.
 
-## Files
-- Create: `src/Miller.Server/Cli/SemanticPrepareCli.cs`
-- Modify: `src/Miller.Server/Cli/CliDispatch.cs` (verb-table case, `Semantic` dispatcher, help text)
-- Test: `tests/Miller.Tests/Server/SemanticPrepareCliTests.cs` (create, 16 tests)
+## What I implemented
 
-## Miller-first orientation (calls + what they proved)
-Read/Grep against the worktree source the Miller MCP indexes (live build in this worktree). Evidence:
-- `CliDispatch.cs` verb table (lines 90–154): flat `switch (verb.ToLowerInvariant())`, one case per verb →
-  added `case "semantic"`. Proved the branch pattern (`version`/`dashboard` load no index).
-- `CliDispatch.cs:525–532` (`RunSymbolRoute`): existing missing-sidecar wording
-  (`"needs the pinned julie-semantic-sidecar binary under '{ctx.ToolsRoot}'; run the restore script and retry."`)
-  — matched in the missing-binary refusal.
-- `VectorConvergeService.cs:792–799` (`ProcessSession`): exact sidecar resolution
-  (`Path.Combine(ToolsRoot, OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar")`)
-  — reused verbatim.
-- `DashboardCliLauncher.cs`: the established process-spawn shape (`ProcessStartInfo`, injected
-  `Func<ProcessStartInfo,Process?>` seam, `UseShellExecute=false`, `CreateNoWindow`). Mirrored the
-  inject-the-runner discipline instead of inventing a spawn path.
-- `CliOptions.cs`: `Parse(args, booleanFlags…)`, `Value`/`Has`/`Positionals`/`FlagNames` — used for
-  `--model`/`--json` parsing and unknown-flag rejection (same technique as the `rules` verb).
-- `WorkspaceContext.cs`: `ExtractDbPath = <root>/.miller/symbols.db` → marker dir is
-  `Path.GetDirectoryName(ExtractDbPath)`; `ToolsRoot` is app-base `.tools`, not the repo.
-- `FakeSemanticSidecar.cs`: fakes the **RPC** protocol (health/embed), NOT the `prepare` subcommand — so
-  prepare shells out as a plain child process, faked in the fast suite via an injected
-  `SemanticPrepareProcessRunner` delegate (no RPC, no real spawn).
+The measurement layer every canary fact needs. Every consultation of the semantic arm — served,
+abstained, or failed — now yields exactly one `SemanticQueryDiagnostics`. No rendered output changed; no
+orchestration or telemetry write was added.
 
-## API-shape evidence (every signature relied on)
-- `WorkspaceContext.ToolsRoot` / `.ExtractDbPath` — record props (WorkspaceContext.cs:15–23).
-- `CliOptions.Parse`/`Value`/`Has`/`Positionals`/`FlagNames` — CliOptions.cs.
-- `CliDispatch.Usage(err, usage)` → 2 — existing helper.
-- `Environment.ProcessId` (int), `DriveInfo.AvailableFreeSpace`, `Utf8JsonWriter`, `Process.Start` — BCL,
-  AOT-safe (marker + JSON refusals via `Utf8JsonWriter`, no reflection serializer, so the Native-AOT main
-  binary stays clean).
+New types (in `Miller.Indexing.Semantic`, assembly `Miller.Indexing`):
 
-## Architecture as built
-Approved shape held: **consent in Miller, mechanics in the sidecar.** `SemanticPrepareCli` is a pure core
-with three injected seams — binary probe (`Func<string,bool>`), preflight (`ISemanticPreparePreflight`),
-process runner (`SemanticPrepareProcessRunner`) — plus pid/clock funcs. `CliDispatch.Semantic` parses and
-validates, then calls `SemanticPrepareCli.Production()`. No host build, no index load, no Serilog. No MCP
-tool or parameter added (MCP-stinginess honored).
+- `SemanticFallbackKind` enum — mirrors the contract's 13 `fallback_reason` values one-for-one:
+  `None, VectorsMissing, VectorsStale, VectorsIncompatible, VectorsBuilding, ModelNotPrepared, CircuitOpen,
+  EmbedTimeout, EmbedError, KnnError, DiskBlocked, Disabled, Unknown`.
+- `SemanticQueryDiagnostics` record — `(SemanticFallbackKind Fallback, string Backend, bool ColdEmbed,
+  long? EmbedMs, long? KnnMs, SemanticGenerationIdentity? Identity, string? FusionProfile)`.
 
-Flow: resolve `<ToolsRoot>/julie-semantic-sidecar[.exe]` → absent ⇒ fail loud (exit 3, restore-script
-message), no marker; → disk preflight on the model cache dir, blocked ⇒ refuse (exit 3, free/required in
-message), no spawn, no marker; → write marker → run child (`prepare [--model <id>] [--json]`) streaming
-stdout/stderr → **finally** delete marker → return the child's exit code.
+Threading:
 
-## Marker contract as implemented (load-bearing for Task 4)
-- Path: `<workspace>/.miller/semantic-prepare.marker` (`SemanticPrepareCli.MarkerFileName`;
-  `MarkerPathFor(millerDir)` helper exposed).
-- Content: one JSON object, e.g.
-  `{"model":"qwen3-0.6b-f16","pid":4242,"createdUtc":"2026-07-20T18:30:00.0000000Z"}`.
-  - `model` — the `--model` value, or literal `"default"` (`DefaultModelLabel`) when omitted.
-  - `pid` — CLI process id (`Environment.ProcessId`); Task 4 checks pid-alive, a dead-pid marker is stale.
-  - `createdUtc` — ISO-8601 round-trip (`"O"`) UTC.
-- Lifecycle: created BEFORE the child; ALWAYS deleted in a `finally` — success, nonzero exit, AND exception
-  (delete is best-effort, never masks the child's exit code).
-- Task 4 note: `VectorSidecar` (Miller.Indexing) cannot reference Miller.Server, so Task 4 must derive the
-  same path and parse these three fields on its side; the constant/format above is the contract to mirror.
+- `SemanticQueryResult` gained `Diagnostics { get; init; }` (nullable, default null). Kept the positional
+  ctor unchanged so all existing `new(hits, null)` / `Unavailable(reason)` callers still compile. Non-null
+  on every result the arm itself returns; null on results synthesized without consulting the arm
+  (`Unavailable` factory used by `SemanticTextArm.NotServing`, CLI, rescue).
+- `IVectorSearchPort` gained `SemanticGenerationIdentity? Identity => null;` (default surface). Production
+  `VectorStoreSearchPort.Identity => store.Identity`. Test doubles inherit the null default → zero behavior
+  change, existing callers ignore the new member.
+- `SemanticSearchArm.QueryAsync` / `Retrieve` build diagnostics at each abstention site and on the served
+  path. Embed RPC and KNN are timed with separate `Stopwatch`es (integer-ms floor via
+  `(long)Elapsed.TotalMilliseconds`). Warmth captured **before** the embed
+  (`State != Ready || Handshake is null`). Backend from `session.Handshake.ResolvedBackend` on a successful
+  embed, `"none"` otherwise. A `KnnError` catch now lives **inside** `Retrieve` so the KnnError row keeps the
+  real embed context (backend/warmth/embedMs); the outer catch remains a fail-open backstop.
+- `SemanticSymbolFusionArm` gained `LastDiagnostics { get; private set; }`, set right after
+  `QuerySymbolsAsync`. When the arm served, it is augmented with `FusionProfile = RrfFusion.FusionProfile`;
+  when the arm abstained, the raw arm diagnostics are exposed; when the arm was never consulted (off/shadow
+  mode, lexical-only route) it stays null. Exposed on the concrete DI-transient class only — NOT on the
+  `ISymbolFusionArm` interface, so `ForcedHybridFusionArm` (CliDispatch, not owned) is untouched.
 
-## Disk preflight seam (plan-mismatch note — anticipated by the brief)
-`src/Miller.Indexing/Semantic/DiskPreflight.cs` (Task 2) does NOT exist in this lane yet. Per instructions
-I did NOT create it. The verb owns a local seam (`ISemanticPreparePreflight`) with a conservative
-`DefaultPreflight`: nearest-existing-ancestor `DriveInfo.AvailableFreeSpace` on the resolved cache dir vs a
-stated `DefaultRequiredBytes = 1.2 GiB`; a probe fault returns unknown/OK so a glitch never blocks a
-consented download. **Wiring to the shared `DiskPreflight` is Task 4's lane-2 slot** (swap `DefaultPreflight`;
-footprint constant should track Task 7's Q8_0 benchmark).
+## Abstention-site → SemanticFallbackKind map
 
-Cache dir resolution (preflight only; Miller never parses model URLs): `JULIE_EMBEDDING_CACHE_DIR` → else
-`%LOCALAPPDATA%/julie-semantic` (Windows) / `$XDG_CACHE_HOME|~/.cache` + `/julie-semantic` (unix).
+| Site (SemanticSearchArm) | Kind | Signal |
+|---|---|---|
+| `!_enabled` | `Disabled` | env off |
+| `port is null` (artifact gate) | `VectorsMissing` | gate returned null + string; see judgment call |
+| `_openSession() is null` (binary missing) | `ModelNotPrepared` | closest available kind |
+| embed fail + `State == CircuitOpen` | `CircuitOpen` | session state |
+| embed fail otherwise | `EmbedError` | outcome fail |
+| dims mismatch (Retrieve) | `VectorsIncompatible` | lane.Dims |
+| non-cosine metric (Retrieve) | `VectorsIncompatible` | lane.Metric |
+| store fault during KNN | `KnnError` | VectorStoreException |
+| served | `None` | — |
 
-## `--json`
-Passes through to the sidecar (`prepare … --json`, sidecar owns progress format) AND governs Miller's
-PRE-spawn refusal output: missing-binary/disk-blocked emit a JSON object to stdout
-(`{"status":"sidecar_missing"|"disk_blocked","message":…,"free_bytes":…,"required_bytes":…}`) instead of a
-stderr line. After the child spawns, the sidecar owns all output.
+Kinds `VectorsStale`, `VectorsBuilding`, `DiskBlocked`, `EmbedTimeout` are defined in the enum (contract
+mirror) but not produced from the query arm: staleness/building/disk are the converge/gate layer's facts,
+and a timeout is not distinguishable from a transport error without a typed embed outcome the session does
+not expose. See judgment calls.
 
-## Gate invariants (per test)
-worker-red-green: `dotnet test --filter FullyQualifiedName~SemanticPrepareCliTests` → **16 passed, 0 failed**.
-- `CreatesMarkerBeforeSpawn_RecordingModelAndPid_AndDeletesOnSuccess` — marker exists during the child with
-  model+pid+createdUtc; gone after (live exactly while downloading).
-- `WithoutModel_RecordsDefaultLabelInMarker` — omitted `--model` ⇒ `"default"`.
-- `DeletesMarker_WhenSidecarFails` / `DeletesMarker_WhenRunnerThrows` — finally-delete on failure AND
-  exception (no stale live-marker after a crash).
-- `PassesExitCodeThrough` — sidecar status is the verb's status.
-- `ForwardsPrepareSubcommand_ModelAndJsonFlags` / `ForwardsBarePrepare_WhenNoModelOrJson` — arg contract
-  `prepare [--model <id>] [--json]`.
-- `MissingBinary_FailsLoud_…_NoSpawn_NoMarker` + `_Json_…` — exit 3, restore wording, no spawn/marker; JSON
-  refusal on stdout.
-- `PreflightBlocked_ShortCircuits_NoSpawn_NoMarker_…` + `_Json_CarriesFreeAndRequiredBytes` — refusal
-  short-circuits the spawn with free/required facts.
-- `Dispatch_SemanticWithoutOperation` / `_UnknownSemanticOperation` / `_UnknownOption` — usage errors (2).
-- `Dispatch_PrepareWithMissingSidecar_ReturnsOperationalFailure` — end-to-end wiring ⇒ exit 3.
-- `Help_DocumentsTheSemanticVerb` — verb registered in `help`.
+## Verification
 
-worker-ceiling: `scripts/test.sh` (fast) → **4188 passed, 2 skipped, 0 failed**, wall 28s (< 30s ceiling;
-the >10s target is Task 8's separate concern — these 16 tests add ~54ms). `dotnet build -c Release`:
-0 warnings / 0 errors (warnings-are-errors, AOT-clean).
+- **worker-red-green** — invariant: every abstention site maps to its kind; a served call carries the full
+  facts. `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~SemanticQueryDiagnosticsTests"`
+  → **Passed 14, Failed 0** (83 ms). 2026-07-21.
+- **worker-ceiling** — invariant: no rendered-output regression; P3 determinism + all existing semantic/hybrid
+  tests stay green. `scripts/test.sh` → **Passed 4304, Failed 0, Skipped 2** (16 s wall). No Canary* failures.
+  2026-07-21.
+- **Diagnostic** — invariant: 0W/0E, warnings-as-errors. `dotnet build Miller.slnx -c Release`
+  → **Build succeeded, 0 Warning(s) 0 Error(s)**. 2026-07-21.
 
-## Decisions
-- No real-process test — packaged smoke covers a real spawn; the fast suite fakes the runner (brief's
-  stated preference). No `[Trait("Category","Scale")]` needed.
-- Exit codes: 0 / sidecar-passthrough on spawn; 3 for Miller's operational refusals; usage errors (2) in
-  CliDispatch.
-- `Run` lets an unexpected runner exception propagate (marker still deleted in finally); CliDispatch's outer
-  catch maps it to exit 1 — consistent with every other verb.
+## Files changed (owned only)
 
-## Concerns
-- None blocking. Coordination note: Task 4 must mirror the marker path+JSON in `Miller.Indexing` and swap
-  the placeholder `DefaultPreflight` for the shared `DiskPreflight` + Task 7's real footprint constant.
+- `src/Miller.Indexing/Semantic/SemanticSearchArm.cs` — enum + diagnostics record; `Diagnostics` on result;
+  `Identity` on port interface + production port; diagnostics in QueryAsync/Retrieve; `Abstain` helper +
+  `EmbedContext` + `NoBackend`.
+- `src/Miller.Server/Tools/SearchRouteExecutor.cs` — `LastDiagnostics` accessor on `SemanticSymbolFusionArm`.
+- `tests/Miller.Tests/Indexing/SemanticQueryDiagnosticsTests.cs` — new; table-driven abstention theory +
+  served/warmth/pre-embed/embed-failure/fusion facts.
+- `src/Miller.Server/Tools/SearchTool.cs` — **not modified.** Diagnostics ride the returned
+  `SemanticQueryResult`, so the content arm (`SemanticTextArm`) surfaces them with zero code change; editing
+  it would be gold-plating. Its `NotServing` constant correctly carries null diagnostics (arm not consulted).
+
+## Miller calls used + what each confirmed
+
+- `context(query='semantic search arm abstention fallback fusion')` — entry points: SemanticSearchArm,
+  SemanticSymbolFusionArm, SemanticTextArm, SemanticQueryResult.
+- `inspect SemanticSearchArm/SemanticQueryResult/SemanticSymbolFusionArm/VectorStoreSearchPort depth=full` —
+  proved abstention sites, `SemanticQueryResult(Hits, UnavailableReason)` shape + `Served`/`Unavailable`,
+  fusion `Fuse` body, and that `VectorStoreSearchPort` already exposes `Lane`/`Tag` (add `Identity` alongside).
+- `inspect SemanticEmbeddingSession depth=full` — `State` (`SemanticSessionState`), `Handshake`
+  (`SemanticEncoderHandshake.ResolvedBackend`), circuit semantics; `SemanticEmbedOutcome` (only `Succeeded` +
+  `FailureReason`, no typed timeout/circuit flag).
+- `inspect SemanticSidecarHealth depth=full` — `ResolvedBackend` field origin (`resolved_backend` health key).
+- `inspect VectorSidecar.TryOpen depth=full` — the artifact gate returns only a string reason + null port; the
+  typed `VectorSidecarFacts.State` is NOT exposed through `VectorSearchPortFactory`.
+- `inspect SemanticGenerationIdentity depth=full` — the 6 identity fields incl. `FusionProfile`; `VectorStore`
+  exposes `Identity`.
+- `trace SemanticQueryResult mode=refs` / `trace IVectorSearchPort mode=refs` — enumerated every consumer
+  before changing the public shapes; confirmed init-property + interface-default are additive.
+- `MillerServiceRegistration` (read) — confirmed `services.AddTransient<ISymbolFusionArm>` → the fusion arm is
+  DI-transient, so per-call `LastDiagnostics` state is safe (matches the approved plan assumption).
+- `RrfFusion` (grep; index stale for one inspect) — `FusionProfile = "fusion-v1"` const is the profile the
+  fusion arm applies.
+
+## API-shape evidence (proven, not inferred)
+
+- `SemanticSidecarHealth.ResolvedBackend` — real field; `MatchEncoder` copies it into
+  `SemanticEncoderHandshake.ResolvedBackend`. Fake sidecar reports `"cpu"` (health `resolved_backend`).
+- `SemanticSessionState` — enum `NotStarted, Ready, Restarting, CircuitOpen, Stopped`. Used for warmth
+  (`!= Ready`) and CircuitOpen classification.
+- `VectorStore.Identity` — `SemanticGenerationIdentity` property; threaded through
+  `VectorStoreSearchPort.Identity`.
+- Abstention sites — the six `SemanticQueryResult.Unavailable(...)` returns in QueryAsync/Retrieve plus the
+  served `new SemanticQueryResult(hits, null)`, all confirmed in the worktree file.
+- DI lifetime — `AddTransient<ISymbolFusionArm>` in `MillerServiceRegistration.AddMillerServices`.
+
+## Judgment calls
+
+- `SemanticSearchArm.cs` port-null gate → chose `VectorsMissing` over per-reason classification
+  (stale/building/incompatible/disk_blocked) because the gate (`VectorSidecar.TryOpen`) collapses all
+  unavailability into a null port + free-text string; the typed `VectorSidecarFacts.State` is not exposed
+  through `VectorSearchPortFactory`, and threading it would change the delegate signature and every test
+  double (P3 risk). Faithful finer classification belongs where the state already exists, not here.
+- `SemanticSearchArm.cs` embed-failure branch → `CircuitOpen` when `session.State == CircuitOpen`, else
+  `EmbedError`. Chose not to synthesize `EmbedTimeout` because `SemanticEmbedOutcome` carries only a string
+  `FailureReason`; distinguishing a timeout from other transport faults would require fragile string parsing
+  (explicitly warned against in project memory) or a typed outcome the session does not yet emit.
+- `SemanticSearchArm.cs` no-binary branch → `ModelNotPrepared` over `Unknown` because `Unknown` is documented
+  as an instrumentation-bug signal; a missing sidecar binary is a real, expected "embedding capability not
+  prepared" state.
+- Backend on a failed/abstained embed → `"none"` (contract: backend `none` = no embed executed). `EmbedMs`
+  is still reported for a failed attempt (it is a real measurement); Task 5 decides bucket mapping.
+- `KnnError` catch moved inside `Retrieve` so the row keeps embed context; the outer QueryAsync catch stays as
+  a fail-open backstop mapped to `KnnError`. Existing `AnUnexpectedStoreFailure` test still green (message
+  preserved).
+- `SearchTool.cs` left unmodified (see Files changed) — plan-consistent minimal option.
+- Fusion `LastDiagnostics` exposed on the concrete class only (no new interface), per the approved shape and
+  to avoid forcing a change to the non-owned `ForcedHybridFusionArm`.
+
+## Self-review
+
+- All 13 enum values defined (contract mirror); every abstention site covered by a table-driven theory case
+  (8 kinds reachable from the arm) + served/warmth/pre-embed/embed-failure/fusion facts.
+- Asserts on real values (backend `"cpu"`, non-null EmbedMs/KnnMs, identity value-equality, cold→warm
+  transition, `FusionProfile == RrfFusion.FusionProfile`), not just non-null.
+- Zero rendered-output change confirmed by the full fast suite (P3 determinism + HybridSearch + SemanticSearchArm
+  all green). No P3 test edited.
+- No overbuild: one record + one enum, additive threading, one instance accessor. No decorator, no new
+  interface, no callback framework.
+- Tests carry contract-faithful metadata (real `PinnedIdentity`, real lane schemas, real fake-sidecar
+  handshake reporting `resolved_backend=cpu`).
+
+## Issues / concerns
+
+- None blocking. Note for Task 5: `VectorsStale`, `VectorsBuilding`, `DiskBlocked` are enum members with no
+  producer in the query arm by design — they are converge/gate-layer facts, not query-time facts. `EmbedTimeout`
+  IS now produced (see Fix round 1). Port-null gate stays `VectorsMissing` (the gate exposes only a string
+  reason, not the typed `VectorSidecarFacts.State`).
+
+## Fix round 1 — `EmbedTimeout` now producible via the existing typed signal
+
+Lead review found the transport layer already carries the timeout/error distinction typed — it was only
+dropped before reaching the arm. Fixed by propagating the existing flag (no string parsing, no
+retry/circuit behavior change).
+
+Changes (all owned files):
+
+- `SemanticEmbeddingSession.cs`
+  - `SidecarTransportException` gained `bool TimedOut` (ctor `timedOut = false`). Set `true` only at the
+    read-null site (`:~525`) from `reader.EndedByTimeout`; the stdin-write catch and every parse/handshake
+    throw keep the default `false` (none are response-timeout-caused).
+  - `SemanticEmbedOutcome` gained `bool TimedOut = false` (record) and `Fail(string reason, bool timedOut = false)`.
+    `Ok` unchanged.
+  - `CallAsync` tracks `bool lastTimedOut`, updated from `ex.TimedOut` at both `SidecarTransportException`
+    catches (transport exchange + `ReadVectors` parse), and threads it into every post-loop `Fail(...)`
+    return. Reports the FINAL attempt's character; a parse fault on the last attempt correctly resets it to
+    `false`. Circuit-open returns still carry it, but the arm classifies `CircuitOpen` first, so it never
+    masks a circuit.
+- `SemanticSearchArm.cs` — embed-failure mapping is now
+  `State == CircuitOpen → CircuitOpen; else outcome.TimedOut → EmbedTimeout; else EmbedError`.
+- Tests — added `Scenario.EmbedTimeout` to the table-driven theory: a `StallForever` fake with a 300ms
+  `RequestTimeout` yields `Fallback=EmbedTimeout`; the existing `Scenario.EmbedError` (ErrorEnvelope) still
+  yields `EmbedError`, proving the two are distinguished. No real 30s waits; the fake surfaces the typed flag.
+
+Re-verification (2026-07-21):
+
+- worker-red-green: `--filter FullyQualifiedName~SemanticQueryDiagnosticsTests` → **Passed 15, Failed 0** (676 ms).
+- worker-ceiling: `scripts/test.sh` → **Passed 4305, Failed 0, Skipped 2** (18 s). No Canary* failures.
+- Diagnostic: `dotnet build Miller.slnx -c Release` → **0 Warning(s) 0 Error(s)**.
