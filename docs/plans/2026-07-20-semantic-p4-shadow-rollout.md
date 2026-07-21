@@ -201,10 +201,10 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Registry is a `ConcurrentDictionary<string,int>` refcount; readers register on open, dispose on close. Scheduler runs under the leader's converge lock only (readers never GC). Deletion failures (Windows held handles) log and retry next wake — never crash the drain. TDD with the fake files seam (`IVectorGenerationFiles`) already used by `VectorGenerationManager` tests.
 
 **Acceptance criteria:**
-- [ ] After promote, generations beyond the soak window with no live reader are deleted; `LiveReader`/`WithinSoakWindow`/`OnlyReadyGeneration` outcomes are respected (existing plan semantics unchanged).
-- [ ] A registered live reader blocks deletion until disposed; disposal makes the next wake collect it.
-- [ ] GC never runs on reader instances (non-leader), proved by test.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] After promote, generations beyond the soak window with no live reader are deleted; `LiveReader`/`WithinSoakWindow`/`OnlyReadyGeneration` outcomes are respected (existing plan semantics unchanged).
+- [x] A registered live reader blocks deletion until disposed; disposal makes the next wake collect it (arm registration window is per-query by design — reported plan mismatch, accepted per B6 soak-window posture).
+- [x] GC never runs on reader instances (non-leader), proved by test.
+- [x] Worker-scope verification passes and the change is committed (parallel-lead-commit — lead commit).
 
 ### Task 6: RC→v0.1.0 promotion gate — target-machine throughput floor (sidecar repo)
 

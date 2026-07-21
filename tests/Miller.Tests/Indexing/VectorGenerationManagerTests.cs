@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Server.Hosting;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -356,6 +358,85 @@ public sealed class VectorGenerationManagerTests
         Assert.Equal(100, update.ProgressPercent);
     }
 
+    [Fact]
+    public void GcScheduler_DeletesAnEligibleGenerationPastSoakWithNoLiveReader()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ActivePath, "active");
+        files.Write(manager.RetainedPathFor(ActiveTag), "retained");
+        files.SetLastWriteTime(manager.RetainedPathFor(ActiveTag), Now.AddDays(-30));
+
+        Gc(manager).Collect(activeIsReady: true, Now, NoLiveReaders);
+
+        Assert.False(files.Exists(manager.RetainedPathFor(ActiveTag)));
+        Assert.True(files.Exists(manager.ActivePath));
+    }
+
+    [Fact]
+    public void GcScheduler_KeepsAGenerationInsideItsSoakWindow()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ActivePath, "active");
+        files.Write(manager.RetainedPathFor(ActiveTag), "retained");
+        files.SetLastWriteTime(manager.RetainedPathFor(ActiveTag), Now.AddHours(-1));
+
+        Gc(manager).Collect(activeIsReady: true, Now, NoLiveReaders);
+
+        Assert.True(files.Exists(manager.RetainedPathFor(ActiveTag)));
+    }
+
+    [Fact]
+    public void GcScheduler_KeepsEveryGenerationWhenTheActiveArtifactIsNotReady()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.RetainedPathFor(ActiveTag), "retained");
+        files.SetLastWriteTime(manager.RetainedPathFor(ActiveTag), Now.AddDays(-30));
+
+        Gc(manager).Collect(activeIsReady: false, Now, NoLiveReaders);
+
+        Assert.True(files.Exists(manager.RetainedPathFor(ActiveTag)));
+    }
+
+    [Fact]
+    public void GcScheduler_ALiveReaderBlocksDeletion_AndDisposalLetsTheNextPassCollectIt()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        var registry = new VectorLiveReaderRegistry();
+        files.Write(manager.ActivePath, "active");
+        files.Write(manager.RetainedPathFor(ActiveTag), "retained");
+        files.SetLastWriteTime(manager.RetainedPathFor(ActiveTag), Now.AddDays(-30));
+
+        IDisposable reader = registry.Register(ActiveTag);
+        Gc(manager).Collect(activeIsReady: true, Now, registry.LiveTags);
+        Assert.True(files.Exists(manager.RetainedPathFor(ActiveTag)));
+
+        reader.Dispose();
+        Gc(manager).Collect(activeIsReady: true, Now, registry.LiveTags);
+        Assert.False(files.Exists(manager.RetainedPathFor(ActiveTag)));
+    }
+
+    [Fact]
+    public void GcScheduler_ADeletionThatThrows_IsSwallowedAndRetriedOnTheNextPass()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ActivePath, "active");
+        files.Write(manager.RetainedPathFor(ActiveTag), "retained");
+        files.SetLastWriteTime(manager.RetainedPathFor(ActiveTag), Now.AddDays(-30));
+        files.FailDeleteOf = manager.RetainedPathFor(ActiveTag);
+
+        Gc(manager).Collect(activeIsReady: true, Now, NoLiveReaders);
+        Assert.True(files.Exists(manager.RetainedPathFor(ActiveTag)));
+
+        files.FailDeleteOf = null;
+        Gc(manager).Collect(activeIsReady: true, Now, NoLiveReaders);
+        Assert.False(files.Exists(manager.RetainedPathFor(ActiveTag)));
+    }
+
+    private static readonly IReadOnlySet<string> NoLiveReaders = new HashSet<string>(StringComparer.Ordinal);
+
+    private static VectorGenerationGc Gc(VectorGenerationManager manager) =>
+        new(manager, NullLogger.Instance);
+
     private static (VectorGenerationManager Manager, FakeGenerationFiles Files) Manager()
     {
         var files = new FakeGenerationFiles();
@@ -382,6 +463,8 @@ public sealed class VectorGenerationManagerTests
 
         public string? FailMoveTo { get; set; }
 
+        public string? FailDeleteOf { get; set; }
+
         public void Write(string path, string content)
         {
             _contents[path] = content;
@@ -396,6 +479,9 @@ public sealed class VectorGenerationManagerTests
 
         public void Delete(string path)
         {
+            if (string.Equals(path, FailDeleteOf, StringComparison.Ordinal))
+                throw new IOException($"cannot delete '{path}'.");
+
             _contents.Remove(path);
             _times.Remove(path);
         }

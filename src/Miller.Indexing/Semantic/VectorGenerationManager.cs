@@ -299,6 +299,16 @@ public sealed class VectorGenerationManager
         return new VectorGcPlan(decisions, survivors > inputs.RetentionCap);
     }
 
+    /// <summary>Deletes one retained generation's file trio. Exposed so the GC scheduler can drive deletions one
+    /// at a time — logging each and letting a held-handle failure retry on the next wake rather than aborting the
+    /// whole pass. It never targets <c>vectors.db</c>: the caller passes only <see cref="VectorGcPlan.Deletions"/>
+    /// entries, which are retained generations by construction.</summary>
+    public void DeleteRetained(RetainedGeneration generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        DeleteTrio(generation.Path);
+    }
+
     /// <summary>Plans and executes one GC pass: the eligible retained generations plus any stale shadow trio.
     /// It never targets <c>vectors.db</c>.</summary>
     public VectorGcPlan CollectGarbage(VectorGcInputs inputs)

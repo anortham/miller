@@ -759,6 +759,107 @@ public sealed class VectorConvergeServiceTests
         }
     }
 
+    [Fact]
+    public async Task Drain_OnALeaderWake_RunsGcWithActiveReadinessFromThePortAndTheLiveReaderTags()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-gc-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+            port.Metadata["build_state"] = "ready";
+
+            var gc = new RecordingGc();
+            var registry = new VectorLiveReaderRegistry();
+            using IDisposable held = registry.Register("aaaaaaaaaaaaaaaa");
+
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceOverWorkspace(
+                root, symbols, _ => port, _ => session, openGc: _ => gc, registry: registry);
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, gc.Collects);
+            Assert.True(gc.LastActiveIsReady);
+            Assert.Contains("aaaaaaaaaaaaaaaa", gc.LastTags);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Drain_WhenTheActiveArtifactIsNotReady_RunsGcWithActiveReadinessFalse()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-gc-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+            port.Metadata["build_state"] = "building";
+
+            var gc = new RecordingGc();
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceOverWorkspace(root, symbols, _ => port, _ => session, openGc: _ => gc);
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, gc.Collects);
+            Assert.False(gc.LastActiveIsReady);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Gc_NeverRunsWithoutAConvergeWake_SoAReaderInstanceNeverCollects()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-gc-reader-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = new FakePort();
+            var gc = new RecordingGc();
+
+            // A reader instance's converge signal is never stamped — only the indexer leader stamps it — so its
+            // drain, and the GC piggybacked on the drain, never runs.
+            var signal = new VectorConvergeSignal(enabled: true);
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service =
+                ServiceOverWorkspace(root, symbols, _ => port, _ => session, signal, openGc: _ => gc);
+
+            await service.StartAsync(CancellationToken.None);
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(0, gc.Collects);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class RecordingGc : IVectorGenerationGc
+    {
+        public int Collects { get; private set; }
+
+        public bool LastActiveIsReady { get; private set; }
+
+        public IReadOnlySet<string> LastTags { get; private set; } = new HashSet<string>(StringComparer.Ordinal);
+
+        public void Collect(bool activeIsReady, DateTimeOffset now, IReadOnlySet<string> tagsWithLiveReaders)
+        {
+            Collects++;
+            LastActiveIsReady = activeIsReady;
+            LastTags = tagsWithLiveReaders;
+        }
+    }
+
     private static SemanticSessionOptions FastOptions => new()
     {
         RequestTimeout = TimeSpan.FromSeconds(10),
@@ -815,7 +916,9 @@ public sealed class VectorConvergeServiceTests
         string symbolsDbPath,
         Func<WorkspaceContext, IVectorConvergePort?> openPort,
         Func<WorkspaceContext, SemanticEmbeddingSession?> openSession,
-        VectorConvergeSignal? signal = null)
+        VectorConvergeSignal? signal = null,
+        Func<WorkspaceContext, IVectorGenerationGc?>? openGc = null,
+        VectorLiveReaderRegistry? registry = null)
     {
         IndexBootstrapService bootstrap = IsolatedBootstrap();
         bootstrap.SeedForTest(WorkspaceAt(root, symbolsDbPath), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
@@ -827,7 +930,9 @@ public sealed class VectorConvergeServiceTests
             NullLogger.Instance,
             openPort,
             openSession,
-            () => DateTimeOffset.UnixEpoch);
+            () => DateTimeOffset.UnixEpoch,
+            openGc: openGc,
+            readerRegistry: registry);
     }
 
     [Fact]

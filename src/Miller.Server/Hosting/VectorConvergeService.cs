@@ -146,6 +146,19 @@ internal interface IVectorShadowRebuilder
 }
 
 /// <summary>
+/// The garbage-collection arm of a drain, behind one seam: enumerate the retained generations, plan the GC pass
+/// from the pure rules in <see cref="VectorGenerationManager"/>, and delete the eligible ones. Splitting it out
+/// is what lets the drain schedule GC without touching a real disk, and keeps the drain unaware of file
+/// mechanics — those live in <see cref="VectorGenerationManager"/>.
+/// </summary>
+internal interface IVectorGenerationGc
+{
+    /// <summary>Plans and executes one GC pass over the workspace's retained generations. Never throws: a
+    /// held-handle deletion failure is logged and left for the next wake.</summary>
+    void Collect(bool activeIsReady, DateTimeOffset now, IReadOnlySet<string> tagsWithLiveReaders);
+}
+
+/// <summary>
 /// The changed-path inputs of one span, read under the gate. <see cref="FullPass"/> is the initial build: the
 /// cursor is at zero, so the span is the whole corpus rather than a delta.
 /// </summary>
@@ -217,8 +230,11 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly Func<Exception, string, Action, bool> _recoverCorrupt;
     private readonly Func<WorkspaceContext, IVectorConvergePort, DiskGate> _diskGateFactory;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<WorkspaceContext, IVectorGenerationGc?> _openGc;
+    private readonly VectorLiveReaderRegistry _readerRegistry;
 
     private SemanticEmbeddingSession? _session;
+    private IVectorGenerationGc? _gc;
 
     public VectorConvergeService(
         IndexBootstrapService bootstrap,
@@ -239,7 +255,9 @@ public sealed class VectorConvergeService : BackgroundService
         Func<DateTimeOffset>? clock,
         Func<WorkspaceContext, IVectorShadowRebuilder?>? openShadow = null,
         Func<Exception, string, Action, bool>? recoverCorrupt = null,
-        Func<WorkspaceContext, IVectorConvergePort, DiskGate>? diskGateFactory = null)
+        Func<WorkspaceContext, IVectorConvergePort, DiskGate>? diskGateFactory = null,
+        Func<WorkspaceContext, IVectorGenerationGc?>? openGc = null,
+        VectorLiveReaderRegistry? readerRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -259,6 +277,8 @@ public sealed class VectorConvergeService : BackgroundService
             SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(failure, path, rebuild, logger));
         _diskGateFactory = diskGateFactory ?? ProductionDiskGate;
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
+        _openGc = openGc ?? (workspace => VectorGenerationGc.Create(workspace, _logger));
+        _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -317,6 +337,10 @@ public sealed class VectorConvergeService : BackgroundService
         _session ??= _openSession(workspace);
         if (_session is null)
             return;
+
+        // The GC arm is bound the first time a real workspace drains. Direct DrainAsync callers (the fast-suite
+        // entry points) leave it null, so a drain over a FakePort never reaches a real disk.
+        _gc ??= _openGc(workspace);
 
         await DrainAsync(
                 port,
@@ -448,6 +472,7 @@ public sealed class VectorConvergeService : BackgroundService
                 VectorCursorOutcome promotedChunks = await DrainChunkToCompletionAsync(
                     reopened, session, state, cancellationToken).ConfigureAwait(false);
                 ResolvePause(reopened, session, state);
+                CollectGarbage(reopened);
                 return [symbols, promotedChunks];
             }
         }
@@ -456,7 +481,32 @@ public sealed class VectorConvergeService : BackgroundService
             port, session, state, cancellationToken).ConfigureAwait(false);
 
         ResolvePause(port, session, state);
+        CollectGarbage(port);
         return [symbols, chunks];
+    }
+
+    /// <summary>
+    /// One GC pass at the tail of a drain, on the leader that just converged: a fresh promote leaves a superseded
+    /// generation beside the active artifact, and every leader wake sweeps whatever aged past its soak window with
+    /// no live in-process reader. GC is wake-gated by construction — a reader instance's converge signal is never
+    /// stamped, so it never drains and never collects. Failures are swallowed so a GC fault can never crash the
+    /// drain; the retained files are simply revisited next wake.
+    /// </summary>
+    private void CollectGarbage(IVectorConvergePort port)
+    {
+        if (_gc is null)
+            return;
+
+        bool activeIsReady = string.Equals(port.Meta("build_state"), "ready", StringComparison.Ordinal);
+        try
+        {
+            _gc.Collect(activeIsReady, _clock(), _readerRegistry.LiveTags);
+        }
+        catch (Exception ex) when (IsConvergeException(ex))
+        {
+            _logger.LogWarning(ex,
+                "Vector generation GC failed; the retained generations will be revisited on the next wake.");
+        }
     }
 
     /// <summary>
@@ -982,6 +1032,59 @@ internal sealed class SqliteVectorShadowRebuilder(WorkspaceContext workspace, Ve
         manager.Promote(
             MillerSemanticContract.GenerationTag(built),
             MillerSemanticContract.GenerationTag(live));
+}
+
+/// <summary>
+/// The production GC arm: enumerate the retained generations beside the active artifact, plan the pass with the
+/// pure never-delete rules of <see cref="VectorGenerationManager"/>, and delete each eligible generation on its
+/// own — one log line per deletion, and a held-handle failure logged and retried on the next wake rather than
+/// aborting the pass or crashing the drain.
+/// </summary>
+internal sealed class VectorGenerationGc(VectorGenerationManager manager, ILogger logger) : IVectorGenerationGc
+{
+    public static IVectorGenerationGc Create(WorkspaceContext workspace, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        return new VectorGenerationGc(
+            new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot), logger);
+    }
+
+    public void Collect(bool activeIsReady, DateTimeOffset now, IReadOnlySet<string> tagsWithLiveReaders)
+    {
+        ArgumentNullException.ThrowIfNull(tagsWithLiveReaders);
+
+        IReadOnlyList<RetainedGeneration> retained = manager.Retained();
+        if (retained.Count == 0)
+            return;
+
+        VectorGcPlan plan = VectorGenerationManager.PlanGarbageCollection(new VectorGcInputs
+        {
+            Retained = retained,
+            ActiveIsReady = activeIsReady,
+            Now = now,
+            TagsWithLiveReaders = tagsWithLiveReaders,
+        });
+
+        foreach (RetainedGeneration generation in plan.Deletions)
+        {
+            try
+            {
+                manager.DeleteRetained(generation);
+                logger.LogInformation(
+                    "Garbage-collected retained vector generation {Tag}: past the {SoakHours}h soak window with no " +
+                    "live reader (retained {RetainedAt:O}).",
+                    generation.Tag,
+                    VectorGenerationManager.DefaultSoakWindow.TotalHours,
+                    generation.RetainedAt);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex,
+                    "Could not delete retained vector generation {Tag}; it will be retried on the next wake.",
+                    generation.Tag);
+            }
+        }
+    }
 }
 
 internal sealed class SqliteVectorConvergePort : IVectorConvergePort
