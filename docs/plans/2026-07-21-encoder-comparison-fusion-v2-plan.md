@@ -141,8 +141,8 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **Approach:** TDD on the tests project: routing honored (identifier query → lexical passthrough), fusion parity with a hand-computed RRF fixture, doc-collapse-after-fusion, deterministic output. Keep Program.cs thin over a testable `FusionRunner` class.
 
 **Acceptance criteria:**
-- [ ] Adapter builds and tests green (`dotnet test eval/fusion-arm/tests/FusionArm.Tests.csproj`).
-- [ ] Fixture run produces contract-valid results.jsonl (`retrieval-eval score` accepts it, exit 0).
+- [x] Adapter builds and tests green (`dotnet test eval/fusion-arm/tests/FusionArm.Tests.csproj`).
+- [x] Fixture run produces contract-valid results.jsonl (`retrieval-eval score` accepts it, exit 0).
 - [ ] Parity smoke DEFERRED to Task 4 start (needs live vectors): 5 dev prose queries, adapter at fusion-v1 vs `miller search --arm hybrid --json` — ranks must match.
 
 ### Task 4: Arm generation + scoring (serial; long-running)

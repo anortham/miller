@@ -1,191 +1,105 @@
-# Task 3 Report — Semantic query diagnostics (P5 Canary Stage)
+# Task 3 report — `eval/fusion-arm` adapter (encoder-comparison + fusion-v2 plan)
 
-> Replaces a stale `task-3-report.md` from a different plan (P4 `miller semantic prepare`). This path
-> collides across plans; this content is the P5 Canary Task 3 report.
+> This path collides across plans. It previously held the **P5 Canary** "Semantic query diagnostics" Task 3
+> report (commit `067c1f7`); git history preserves it. This content is the fusion-v2 plan's Task 3 report.
 
-Status: **DONE**. Commit SHA: none — parallel-lead-commit.
+**Status:** complete. Adapter builds (Release, 0 warnings / 0 errors), tests green (7/7), fixture end-to-end
+accepted by `retrieval-eval score` (exit 0).
 
-## What I implemented
+## What was built
 
-The measurement layer every canary fact needs. Every consultation of the semantic arm — served,
-abstained, or failed — now yields exactly one `SemanticQueryDiagnostics`. No rendered output changed; no
-orchestration or telemetry write was added.
+Files created under `eval/fusion-arm/**` (nothing else touched):
 
-New types (in `Miller.Indexing.Semantic`, assembly `Miller.Indexing`):
+- `FusionArm.csproj` — net10.0 console, `OutputType=Exe`, `AssemblyName=fusion-arm`, **outside `Miller.slnx`**,
+  references `src/Miller.Core/Miller.Core.csproj` only, mirrors `retrieval-eval`'s `Compile Remove="tests/**"`
+  isolation.
+- `Model.cs` — `ArmInputRow` (`symbol_id`/`doc_id`/`score`/nullable `rank`), `QueryRow`, `FusedResultRow`, and a
+  `Json` helper (JSONL query-set reader that skips `#`/blank lines; per-query array reader; compact single-line
+  results serializer).
+- `Fuser.cs` — the pure core. `Plan()` routes; `Apply()` fuses + collapses. Routing IS
+  `SemanticQueryPolicy.Route`, fusion IS `RrfFusion.Fuse` — no reimplementation.
+- `FusionRunner.cs` — file orchestration: per-query load, missing-file skip+count, results write. Thin,
+  testable, returns a `FusionRunSummary`.
+- `Program.cs` — thin CLI over `FusionRunner.Run` with a small flag-aware arg parser.
+- `README.md`, `tests/FusionArm.Tests.csproj`, `tests/FusionArmTests.cs`.
 
-- `SemanticFallbackKind` enum — mirrors the contract's 13 `fallback_reason` values one-for-one:
-  `None, VectorsMissing, VectorsStale, VectorsIncompatible, VectorsBuilding, ModelNotPrepared, CircuitOpen,
-  EmbedTimeout, EmbedError, KnnError, DiskBlocked, Disabled, Unknown`.
-- `SemanticQueryDiagnostics` record — `(SemanticFallbackKind Fallback, string Backend, bool ColdEmbed,
-  long? EmbedMs, long? KnnMs, SemanticGenerationIdentity? Identity, string? FusionProfile)`.
+`Program.cs` is thin: it parses args and calls `FusionRunner.Run`. All behavior lives in `Fuser`/`FusionRunner`.
 
-Threading:
+## Test list (`dotnet test eval/fusion-arm/tests/FusionArm.Tests.csproj` → 7 passed)
 
-- `SemanticQueryResult` gained `Diagnostics { get; init; }` (nullable, default null). Kept the positional
-  ctor unchanged so all existing `new(hits, null)` / `Unavailable(reason)` callers still compile. Non-null
-  on every result the arm itself returns; null on results synthesized without consulting the arm
-  (`Unavailable` factory used by `SemanticTextArm.NotServing`, CLI, rescue).
-- `IVectorSearchPort` gained `SemanticGenerationIdentity? Identity => null;` (default surface). Production
-  `VectorStoreSearchPort.Identity => store.Identity`. Test doubles inherit the null default → zero behavior
-  change, existing callers ignore the new member.
-- `SemanticSearchArm.QueryAsync` / `Retrieve` build diagnostics at each abstention site and on the served
-  path. Embed RPC and KNN are timed with separate `Stopwatch`es (integer-ms floor via
-  `(long)Elapsed.TotalMilliseconds`). Warmth captured **before** the embed
-  (`State != Ready || Handshake is null`). Backend from `session.Handshake.ResolvedBackend` on a successful
-  embed, `"none"` otherwise. A `KnnError` catch now lives **inside** `Retrieve` so the KnnError row keeps the
-  real embed context (backend/warmth/embedMs); the outer catch remains a fail-open backstop.
-- `SemanticSymbolFusionArm` gained `LastDiagnostics { get; private set; }`, set right after
-  `QuerySymbolsAsync`. When the arm served, it is augmented with `FusionProfile = RrfFusion.FusionProfile`;
-  when the arm abstained, the raw arm diagnostics are exposed; when the arm was never consulted (off/shadow
-  mode, lexical-only route) it stays null. Exposed on the concrete DI-transient class only — NOT on the
-  `ISymbolFusionArm` interface, so `ForcedHybridFusionArm` (CliDispatch, not owned) is untouched.
+1. `IdentifierQuery_RoutesLexicalPassthrough_IgnoringSemantic` — identifier query → lexical passthrough; semantic
+   `docC` absent (Route honored).
+2. `ProseQuery_Fuses_AndConceptualRatioReordersPredictably` (Theory ×2) — hand-computed RRF fixture (2 lexical +
+   2 semantic, one overlap on symbol B/docB). ratio 1.0 → `[docB, docA, docC]`; ratio 3.0 → `[docB, docC, docA]`
+   (semantic-only docC overtakes lexical-only docA). Exact order asserted for both.
+3. `DocCollapse_HappensAfterFusion_DedupingByBestFusedRank` — two symbols → same `docX`; a semantic boost lifts
+   `docY` above both. Result `[docY, docX]` proves collapse follows fusion order and `docX` keeps its best
+   (symbol A) rank, not lexical array order.
+4. `Run_IsDeterministic_ByteIdenticalAcrossRuns` — two runs, `File.ReadAllBytes` equal.
+5. `MissingInputFile_EmitsNoRow_AndIsCountedInSummary` — `q2` lacks a lexical file → no row, `MissingCount==1`,
+   `MissingQueryIds==["q2"]`, only `q1` emitted.
+6. `ForcedHybrid_BypassesRoute_ForIdentifierQuery` — same identifier query: honored → passthrough (`docB`
+   absent); `--forced-hybrid` → fused `[docA, docB]` (semantic pulled in). Proves the bypass.
 
-## Abstention-site → SemanticFallbackKind map
+### Hand-computed RRF check (test 2, kConst 60, weights `(1.0, ratio)`)
 
-| Site (SemanticSearchArm) | Kind | Signal |
-|---|---|---|
-| `!_enabled` | `Disabled` | env off |
-| `port is null` (artifact gate) | `VectorsMissing` | gate returned null + string; see judgment call |
-| `_openSession() is null` (binary missing) | `ModelNotPrepared` | closest available kind |
-| embed fail + `State == CircuitOpen` | `CircuitOpen` | session state |
-| embed fail otherwise | `EmbedError` | outcome fail |
-| dims mismatch (Retrieve) | `VectorsIncompatible` | lane.Dims |
-| non-cosine metric (Retrieve) | `VectorsIncompatible` | lane.Metric |
-| store fault during KNN | `KnnError` | VectorStoreException |
-| served | `None` | — |
+- A (lex rank 1): `1/61 = 0.016393`
+- B (lex 2, sem 1): `1/62 + ratio/61 = 0.016129 + ratio·0.016393`
+- C (sem rank 2): `ratio/62 = ratio·0.016129`
 
-Kinds `VectorsStale`, `VectorsBuilding`, `DiskBlocked`, `EmbedTimeout` are defined in the enum (contract
-mirror) but not produced from the query arm: staleness/building/disk are the converge/gate layer's facts,
-and a timeout is not distinguishable from a transport error without a typed embed outcome the session does
-not expose. See judgment calls.
+ratio 1.0 → B 0.03252 > A 0.01639 > C 0.01613 → `[docB, docA, docC]`.
+ratio 3.0 → B 0.06531 > C 0.04839 > A 0.01639 → `[docB, docC, docA]`. ✓ matches asserted output.
 
-## Verification
+## Fixture end-to-end (arm-contract compliance)
 
-- **worker-red-green** — invariant: every abstention site maps to its kind; a served call carries the full
-  facts. `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~SemanticQueryDiagnosticsTests"`
-  → **Passed 14, Failed 0** (83 ms). 2026-07-21.
-- **worker-ceiling** — invariant: no rendered-output regression; P3 determinism + all existing semantic/hybrid
-  tests stay green. `scripts/test.sh` → **Passed 4304, Failed 0, Skipped 2** (16 s wall). No Canary* failures.
-  2026-07-21.
-- **Diagnostic** — invariant: 0W/0E, warnings-as-errors. `dotnet build Miller.slnx -c Release`
-  → **Build succeeded, 0 Warning(s) 0 Error(s)**. 2026-07-21.
+Two-query fixture (prose `e1`, identifier `e2`) → `fusion-arm fuse` produced:
 
-## Files changed (owned only)
+```
+{"query_id":"e1","ranked":["src/Parser.cs","src/Other.cs","src/Tree.cs"]}
+{"query_id":"e2","ranked":["src/Bm25.cs"]}
+```
 
-- `src/Miller.Indexing/Semantic/SemanticSearchArm.cs` — enum + diagnostics record; `Diagnostics` on result;
-  `Identity` on port interface + production port; diagnostics in QueryAsync/Retrieve; `Abstain` helper +
-  `EmbedContext` + `NoBackend`.
-- `src/Miller.Server/Tools/SearchRouteExecutor.cs` — `LastDiagnostics` accessor on `SemanticSymbolFusionArm`.
-- `tests/Miller.Tests/Indexing/SemanticQueryDiagnosticsTests.cs` — new; table-driven abstention theory +
-  served/warmth/pre-embed/embed-failure/fusion facts.
-- `src/Miller.Server/Tools/SearchTool.cs` — **not modified.** Diagnostics ride the returned
-  `SemanticQueryResult`, so the content arm (`SemanticTextArm`) surfaces them with zero code change; editing
-  it would be gold-plating. Its `NotServing` constant correctly carries null diagnostics (arm not consulted).
+`dotnet run --project eval/retrieval-eval -- score --queries … --results … --out …` → **exit 0** (parsed and
+scored cleanly). `e1` fused (Parser lifted by the lexical∩semantic overlap); `e2` identifier passed through
+lexical-only (semantic `src/Other.cs` correctly excluded).
 
-## Miller calls used + what each confirmed
+## Miller MCP calls used
 
-- `context(query='semantic search arm abstention fallback fusion')` — entry points: SemanticSearchArm,
-  SemanticSymbolFusionArm, SemanticTextArm, SemanticQueryResult.
-- `inspect SemanticSearchArm/SemanticQueryResult/SemanticSymbolFusionArm/VectorStoreSearchPort depth=full` —
-  proved abstention sites, `SemanticQueryResult(Hits, UnavailableReason)` shape + `Served`/`Unavailable`,
-  fusion `Fuse` body, and that `VectorStoreSearchPort` already exposes `Lane`/`Tag` (add `Identity` alongside).
-- `inspect SemanticEmbeddingSession depth=full` — `State` (`SemanticSessionState`), `Handshake`
-  (`SemanticEncoderHandshake.ResolvedBackend`), circuit semantics; `SemanticEmbedOutcome` (only `Succeeded` +
-  `FailureReason`, no typed timeout/circuit flag).
-- `inspect SemanticSidecarHealth depth=full` — `ResolvedBackend` field origin (`resolved_backend` health key).
-- `inspect VectorSidecar.TryOpen depth=full` — the artifact gate returns only a string reason + null port; the
-  typed `VectorSidecarFacts.State` is NOT exposed through `VectorSearchPortFactory`.
-- `inspect SemanticGenerationIdentity depth=full` — the 6 identity fields incl. `FusionProfile`; `VectorStore`
-  exposes `Identity`.
-- `trace SemanticQueryResult mode=refs` / `trace IVectorSearchPort mode=refs` — enumerated every consumer
-  before changing the public shapes; confirmed init-property + interface-default are additive.
-- `MillerServiceRegistration` (read) — confirmed `services.AddTransient<ISymbolFusionArm>` → the fusion arm is
-  DI-transient, so per-call `LastDiagnostics` state is safe (matches the approved plan assumption).
-- `RrfFusion` (grep; index stale for one inspect) — `FusionProfile = "fusion-v1"` const is the profile the
-  fusion arm applies.
+None. The four API-shape files were read directly (Read/grep) and the shapes were unambiguous, so I did not
+incur MCP-hang risk. Evidence below is cited from source lines.
 
-## API-shape evidence (proven, not inferred)
+## API-shape evidence (verified against source, worktree checkout)
 
-- `SemanticSidecarHealth.ResolvedBackend` — real field; `MatchEncoder` copies it into
-  `SemanticEncoderHandshake.ResolvedBackend`. Fake sidecar reports `"cpu"` (health `resolved_backend`).
-- `SemanticSessionState` — enum `NotStarted, Ready, Restarting, CircuitOpen, Stopped`. Used for warmth
-  (`!= Ready`) and CircuitOpen classification.
-- `VectorStore.Identity` — `SemanticGenerationIdentity` property; threaded through
-  `VectorStoreSearchPort.Identity`.
-- Abstention sites — the six `SemanticQueryResult.Unavailable(...)` returns in QueryAsync/Retrieve plus the
-  served `new SemanticQueryResult(hits, null)`, all confirmed in the worktree file.
-- DI lifetime — `AddTransient<ISymbolFusionArm>` in `MillerServiceRegistration.AddMillerServices`.
+- `RrfFusion.Fuse(IReadOnlyList<SymbolCandidate>, IReadOnlyList<SemanticRankedCandidate>, FusionWeights, int rankConstant = 60)` — `src/Miller.Core/Search/RrfFusion.cs:56`. Dedupes each arm by `SymbolId`; on overlap the **lexical** candidate is the one rendered (`RrfFusion.cs:84-87`) — so `Candidate.FilePath` carries the correct `doc_id` for the fused row regardless of arm origin.
+- `FusedCandidate(SymbolCandidate Candidate, double RrfScore, int? LexicalRank, int? SemanticRank)` — `RrfFusion.cs:21`.
+- `SymbolCandidate(int DocId, string SymbolId, string Name, string? Signature, string Kind, string FilePath, int StartLine, double Score)` — `src/Miller.Core/Search/SymbolCandidate.cs:10`. Fuse reads only `SymbolId` (dedup) and `Score` (tie-break); I set `SymbolId`/`Score` from input, `FilePath` = input `doc_id` (used for collapse), and fill the rest with inert defaults (`DocId 0`, `Name` = symbol_id, `Signature` null, `Kind` "", `StartLine` 0).
+- `SemanticRankedCandidate(SymbolCandidate Candidate, int Rank)` — `RrfFusion.cs:14`. Built with the input file's explicit `rank`.
+- `FusionWeights(double Lexical, double Semantic)` — `RrfFusion.cs:8`.
+- `RrfFusion.WeightsFor(SemanticFusionClass)` — `RrfFusion.cs:44` (SymbolLookup `(1.0,0.3)`, Conceptual `(0.5,1.0)`, Mixed `(0.8,0.8)`). Used for SymbolLookup/Mixed hybrid routes.
+- `SemanticQueryPolicy.Route(string?, LexicalEvidence?)` → `SemanticQueryRoute(bool IsHybrid, SemanticFusionClass HybridClass, SemanticQueryReason Reason)` — `SemanticQueryPolicy.cs:104` / `:70`.
+- `LexicalEvidence(int HitCount, double TopScore, double RunnerUpScore)` — `SemanticQueryPolicy.cs:54`. Built from the lexical file per the brief (`HitCount` = rows, `TopScore` = rows[0], `RunnerUpScore` = rows[1] or 0).
 
 ## Judgment calls
 
-- `SemanticSearchArm.cs` port-null gate → chose `VectorsMissing` over per-reason classification
-  (stale/building/incompatible/disk_blocked) because the gate (`VectorSidecar.TryOpen`) collapses all
-  unavailability into a null port + free-text string; the typed `VectorSidecarFacts.State` is not exposed
-  through `VectorSearchPortFactory`, and threading it would change the delegate signature and every test
-  double (P3 risk). Faithful finer classification belongs where the state already exists, not here.
-- `SemanticSearchArm.cs` embed-failure branch → `CircuitOpen` when `session.State == CircuitOpen`, else
-  `EmbedError`. Chose not to synthesize `EmbedTimeout` because `SemanticEmbedOutcome` carries only a string
-  `FailureReason`; distinguishing a timeout from other transport faults would require fragile string parsing
-  (explicitly warned against in project memory) or a typed outcome the session does not yet emit.
-- `SemanticSearchArm.cs` no-binary branch → `ModelNotPrepared` over `Unknown` because `Unknown` is documented
-  as an instrumentation-bug signal; a missing sidecar binary is a real, expected "embedding capability not
-  prepared" state.
-- Backend on a failed/abstained embed → `"none"` (contract: backend `none` = no embed executed). `EmbedMs`
-  is still reported for a failed attempt (it is a real measurement); Task 5 decides bucket mapping.
-- `KnnError` catch moved inside `Retrieve` so the row keeps embed context; the outer QueryAsync catch stays as
-  a fail-open backstop mapped to `KnnError`. Existing `AnUnexpectedStoreFailure` test still green (message
-  preserved).
-- `SearchTool.cs` left unmodified (see Files changed) — plan-consistent minimal option.
-- Fusion `LastDiagnostics` exposed on the concrete class only (no new interface), per the approved shape and
-  to avoid forcing a change to the non-owned `ForcedHybridFusionArm`.
+- **`doc_id` travels via `SymbolCandidate.FilePath`.** Rather than a parallel `symbol_id → doc_id` map, I store
+  the input `doc_id` in `FilePath`. Because Fuse renders the lexical candidate on overlap and the semantic one
+  otherwise, `FusedCandidate.Candidate.FilePath` is always the right doc for that fused row. No side map, no
+  divergence risk (same `symbol_id` ⇒ same `doc_id` in both files by construction).
+- **Semantic file required only when fusion runs.** A lexical-only route never reads the semantic file, so a
+  missing semantic file only skips a query when the route (or `--forced-hybrid`) actually fuses. Missing lexical
+  file always skips. Both cases count into the summary; neither throws. (A present-but-malformed file — e.g. a
+  semantic row without `rank` — fails loud via `InvalidDataException`, mirroring retrieval-eval's reader.)
+- **`--k-const` / `--conceptual-ratio` are required, not defaulted.** This is a sweep arm; explicit values keep
+  runs reproducible and self-documenting rather than depending on a hidden default that could drift.
+- **Output is compact single-line JSONL** (`WriteIndented=false`, explicit `\n`) so retrieval-eval's line reader
+  consumes one row per line and runs are byte-identical.
 
-## Self-review
+## Deferred (not attempted, per brief)
 
-- All 13 enum values defined (contract mirror); every abstention site covered by a table-driven theory case
-  (8 kinds reachable from the arm) + served/warmth/pre-embed/embed-failure/fusion facts.
-- Asserts on real values (backend `"cpu"`, non-null EmbedMs/KnnMs, identity value-equality, cold→warm
-  transition, `FusionProfile == RrfFusion.FusionProfile`), not just non-null.
-- Zero rendered-output change confirmed by the full fast suite (P3 determinism + HybridSearch + SemanticSearchArm
-  all green). No P3 test edited.
-- No overbuild: one record + one enum, additive threading, one instance accessor. No decorator, no new
-  interface, no callback framework.
-- Tests carry contract-faithful metadata (real `PinnedIdentity`, real lane schemas, real fake-sidecar
-  handshake reporting `resolved_backend=cpu`).
+The 5-query **live parity smoke** (adapter fusion-v1 vs `miller search --arm hybrid --json`) is deferred to
+Task 4 — it needs live vectors this task does not produce. Not attempted here.
 
-## Issues / concerns
+## Commit
 
-- None blocking. Note for Task 5: `VectorsStale`, `VectorsBuilding`, `DiskBlocked` are enum members with no
-  producer in the query arm by design — they are converge/gate-layer facts, not query-time facts. `EmbedTimeout`
-  IS now produced (see Fix round 1). Port-null gate stays `VectorsMissing` (the gate exposes only a string
-  reason, not the typed `VectorSidecarFacts.State`).
-
-## Fix round 1 — `EmbedTimeout` now producible via the existing typed signal
-
-Lead review found the transport layer already carries the timeout/error distinction typed — it was only
-dropped before reaching the arm. Fixed by propagating the existing flag (no string parsing, no
-retry/circuit behavior change).
-
-Changes (all owned files):
-
-- `SemanticEmbeddingSession.cs`
-  - `SidecarTransportException` gained `bool TimedOut` (ctor `timedOut = false`). Set `true` only at the
-    read-null site (`:~525`) from `reader.EndedByTimeout`; the stdin-write catch and every parse/handshake
-    throw keep the default `false` (none are response-timeout-caused).
-  - `SemanticEmbedOutcome` gained `bool TimedOut = false` (record) and `Fail(string reason, bool timedOut = false)`.
-    `Ok` unchanged.
-  - `CallAsync` tracks `bool lastTimedOut`, updated from `ex.TimedOut` at both `SidecarTransportException`
-    catches (transport exchange + `ReadVectors` parse), and threads it into every post-loop `Fail(...)`
-    return. Reports the FINAL attempt's character; a parse fault on the last attempt correctly resets it to
-    `false`. Circuit-open returns still carry it, but the arm classifies `CircuitOpen` first, so it never
-    masks a circuit.
-- `SemanticSearchArm.cs` — embed-failure mapping is now
-  `State == CircuitOpen → CircuitOpen; else outcome.TimedOut → EmbedTimeout; else EmbedError`.
-- Tests — added `Scenario.EmbedTimeout` to the table-driven theory: a `StallForever` fake with a 300ms
-  `RequestTimeout` yields `Fallback=EmbedTimeout`; the existing `Scenario.EmbedError` (ErrorEnvelope) still
-  yields `EmbedError`, proving the two are distinguished. No real 30s waits; the fake surfaces the typed flag.
-
-Re-verification (2026-07-21):
-
-- worker-red-green: `--filter FullyQualifiedName~SemanticQueryDiagnosticsTests` → **Passed 15, Failed 0** (676 ms).
-- worker-ceiling: `scripts/test.sh` → **Passed 4305, Failed 0, Skipped 2** (18 s). No Canary* failures.
-- Diagnostic: `dotnet build Miller.slnx -c Release` → **0 Warning(s) 0 Error(s)**.
+Left unstaged per parallel-lead-commit. Only `eval/fusion-arm/**` is mine; other dirty paths
+(`.razorback/sdd/*`, `eval/model-bench/*`, `docs/…`) belong to sibling tasks and were not touched.
