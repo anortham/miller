@@ -71,7 +71,11 @@ miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
   (`YYYY-MM-DD`, UTC) to narrow it; a malformed date is a usage error (exit 2).
 - Units with fewer than 5 eligible calls are suppressed and counted in `suppressed_unit_count`, so a
   single-call unit cannot be reasoned back to one action.
-- Output is deterministic: an unchanged window re-exports byte-identically.
+- Output is deterministic: an unchanged window re-exports byte-identically. `generated_at_utc` is derived
+  from the window (00:00:00 UTC the day after `--to`), not the wall clock, so repeated exports of the same
+  window match byte-for-byte.
+- Only frozen-vocabulary counter keys are serialized; unknown or out-of-range metadata labels are excluded
+  fail-closed (they never reach the export) and remain inspectable only in the local raw ledger.
 
 ### Retention squeeze — export before rows age out (load-bearing)
 

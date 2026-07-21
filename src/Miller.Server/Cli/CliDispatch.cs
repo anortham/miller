@@ -1137,7 +1137,8 @@ public static class CliDispatch
         if (!o.Has("from") && o.Has("to"))
             from = to.AddDays(-30);
 
-        outw.WriteLine(CanaryExport.BuildJson(ctx.TelemetryDbPath, from, to, DateTimeOffset.UtcNow));
+        var generatedAt = new DateTimeOffset(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        outw.WriteLine(CanaryExport.BuildJson(ctx.TelemetryDbPath, from, to, generatedAt));
         return 0;
     }
 

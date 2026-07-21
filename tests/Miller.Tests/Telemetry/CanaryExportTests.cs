@@ -254,6 +254,70 @@ public sealed class CanaryExportTests : IDisposable
         Assert.Equal(5, shadow.GetProperty("overlap_at_10_histogram").GetProperty("9").GetInt32());
     }
 
+    [Fact]
+    public void PoisonedCountMapLabels_AreExcludedWhileValidKeysSurvive()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+                seeder.InsertCanary(
+                    "ws-hex-a", "2026-07-14", "prose", "treatment",
+                    embedWarmth: "warm", fallbackReason: "../../../etc/passwd");
+        }
+
+        string json = CanaryExport.BuildJson(Db, new DateOnly(2026, 7, 2), new DateOnly(2026, 8, 1), _generatedAt);
+        JsonElement unit = JsonDocument.Parse(json).RootElement.GetProperty("units")[0];
+
+        Assert.DoesNotContain("etc/passwd", json, StringComparison.Ordinal);
+        Assert.Empty(unit.GetProperty("fallback_reason_counts").EnumerateObject());
+        Assert.Equal(5, unit.GetProperty("embed_warmth_counts").GetProperty("warm").GetInt32());
+    }
+
+    [Fact]
+    public void OutOfRangeHistogramKeys_AreExcludedWhileInRangeKeysSurvive()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 3; i++)
+                seeder.InsertShadow("ws-hex-a", "2026-07-14", "ok", overlapAt10: 9, top1Changed: false, lexicalTop1Rank: 2);
+            for (int i = 0; i < 2; i++)
+                seeder.InsertShadow("ws-hex-a", "2026-07-14", "ok", overlapAt10: 99, top1Changed: false, lexicalTop1Rank: 999);
+        }
+
+        JsonElement shadow = ParseExport("2026-07-02", "2026-08-01").GetProperty("shadow_units")[0];
+        JsonElement overlap = shadow.GetProperty("overlap_at_10_histogram");
+        JsonElement rank = shadow.GetProperty("lexical_top1_rank_histogram");
+
+        Assert.Equal(3, overlap.GetProperty("9").GetInt32());
+        Assert.False(overlap.TryGetProperty("99", out _));
+        Assert.Equal(3, rank.GetProperty("2").GetInt32());
+        Assert.False(rank.TryGetProperty("999", out _));
+    }
+
+    [Fact]
+    public void GeneratedAtUtc_DerivedFromWindow_ReExportsByteIdenticalAcrossInvocations()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 6; i++)
+                seeder.InsertCanary("ws-hex-a", "2026-07-14", "prose", "treatment");
+        }
+
+        var from = new DateOnly(2026, 7, 2);
+        var to = new DateOnly(2026, 8, 1);
+
+        string first = CanaryExport.BuildJson(Db, from, to, DerivedGeneratedAt(to));
+        string second = CanaryExport.BuildJson(Db, from, to, DerivedGeneratedAt(to));
+
+        Assert.Equal(first, second);
+        Assert.Equal(
+            "2026-08-02T00:00:00Z",
+            JsonDocument.Parse(first).RootElement.GetProperty("generated_at_utc").GetString());
+    }
+
+    private static DateTimeOffset DerivedGeneratedAt(DateOnly to) =>
+        new(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+
     private JsonElement ParseExport(string from, string to)
     {
         string json = CanaryExport.BuildJson(Db, DateOnly.Parse(from), DateOnly.Parse(to), _generatedAt);

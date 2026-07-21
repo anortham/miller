@@ -199,8 +199,8 @@ public static class CanaryExport
         w.WriteNumber("calls", unit.Calls);
         WriteCountMap(w, "shadow_status_counts", unit.ShadowStatusCounts, CanaryShadowStatus.All);
         w.WriteNumber("top1_changed_calls", unit.Top1ChangedCalls);
-        WriteHistogram(w, "overlap_at_10_histogram", unit.OverlapAt10Histogram);
-        WriteHistogram(w, "lexical_top1_rank_histogram", unit.LexicalTop1RankHistogram);
+        WriteHistogram(w, "overlap_at_10_histogram", unit.OverlapAt10Histogram, 0, 10);
+        WriteHistogram(w, "lexical_top1_rank_histogram", unit.LexicalTop1RankHistogram, 0, 50);
         w.WriteEndObject();
     }
 
@@ -213,21 +213,16 @@ public static class CanaryExport
             if (counts.TryGetValue(key, out int count) && count > 0)
                 w.WriteNumber(key, count);
         }
-        foreach (KeyValuePair<string, int> pair in counts
-            .Where(p => p.Value > 0 && !order.Contains(p.Key))
-            .OrderBy(p => p.Key, StringComparer.Ordinal))
-        {
-            w.WriteNumber(pair.Key, pair.Value);
-        }
         w.WriteEndObject();
     }
 
-    private static void WriteHistogram(Utf8JsonWriter w, string name, IReadOnlyDictionary<int, int> histogram)
+    private static void WriteHistogram(
+        Utf8JsonWriter w, string name, IReadOnlyDictionary<int, int> histogram, int minKey, int maxKey)
     {
         w.WriteStartObject(name);
         foreach (KeyValuePair<int, int> pair in histogram.OrderBy(p => p.Key))
         {
-            if (pair.Value > 0)
+            if (pair.Value > 0 && pair.Key >= minKey && pair.Key <= maxKey)
                 w.WriteNumber(pair.Key.ToString(CultureInfo.InvariantCulture), pair.Value);
         }
         w.WriteEndObject();
