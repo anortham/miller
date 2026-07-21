@@ -1,28 +1,29 @@
-### Task 5: Canary telemetry contract (frozen)
+### Task 5: GC scheduler + live-reader registry
 
 **Files:**
-- Create: `docs/contracts/canary-telemetry-v1.md`
-- Note: the `docs/README.md` map line is handed to the lead as text (Task 1 owns that file)
+- Create: `src/Miller.Indexing/Semantic/VectorLiveReaderRegistry.cs`
+- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`; `src/Miller.Indexing/Semantic/VectorGenerationManager.cs` only if an input seam is missing; reader open sites (`SemanticSearchArm`/`WorkspaceIndexProvider` vector open path) to register/unregister
+- Test: `tests/Miller.Tests/Indexing/VectorGenerationManagerTests.cs` (registry), `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs` (scheduler wiring)
 
 **Interfaces:**
-- Consumes: design §9.1 (canary requirements), Task 2's `miller_version` column (referenced, not implemented here).
-- Produces: the frozen field/semantics contract P2b implements and P5 gates on. Field list is exact and exhaustive — implementers may not add fields without a v2.
+- Consumes: `VectorGcInputs { Retained, ActiveIsReady, Now, TagsWithLiveReaders, SoakWindow, RetentionCap }` and the GC plan logic in `VectorGenerationManager` (`src/Miller.Indexing/Semantic/VectorGenerationManager.cs:41-68`) — pure, tested, currently caller-less; `RetainedPathFor`/`TagFromRetainedPath`/`EnumerateRetained`.
+- Produces: `VectorLiveReaderRegistry` — process-wide, thread-safe `Register(tag) : IDisposable` / `LiveTags` snapshot; GC execution after each successful shadow promote and on leader wakes (piggybacked on the existing drain timer, no new hosted service): build inputs, apply `plan.Deletions` (delete files + fold WAL via `IVectorGenerationFiles`), log one line per deletion with the outcome reason.
 
-**Contract inputs:** Telemetry privacy constraint. Existing telemetry vocabulary (`tool_telemetry` columns, `metadata_json` conventions — verify names with Miller before writing).
+**Contract inputs:** P2 B6 decision (recorded in `.razorback/sdd/progress.md`): "P2 posture = soak-window-only GC protection, registration lands with the P4 GC scheduler." Cross-process readers stay protected by the soak window ONLY — the registry is in-process; do not attempt cross-process reader tracking.
 
-**File ownership:** Create: `docs/contracts/canary-telemetry-v1.md`
+**File ownership:** Create: `src/Miller.Indexing/Semantic/VectorLiveReaderRegistry.cs`; Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`, `src/Miller.Indexing/Semantic/VectorGenerationManager.cs` (if needed), reader open sites; Test: `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`, `tests/Miller.Tests/Indexing/VectorGenerationManagerTests.cs`
 
-**Serialization required:** No
+**Serialization required:** Yes
 
-**Dependency reason:** None - safe parallel batch (docs/README.md line goes through the lead to avoid conflict with Task 1).
+**Dependency reason:** Follows Task 2 in Lane 1 (same files).
 
-**What to build:** The complete contract: assignment unit (stable per workspace+day+query-class bucket, hash-derived — define the exact derivation so assignment is deterministic and balanced); `experiment_id`/`arm` enums; `query_class` enum (mirrors SemanticQueryPolicy classes, enumerated now: `identifier`, `path`, `short_token`, `prose`, `docs_like`, `mixed`); opaque result identifiers (existing target-hash mechanism, named explicitly) with a follow-up attribution window (definition: a subsequent `inspect`/`content read` whose target hash matches a result served within the window; window length stated); the success event definition; per-row fields (arm, eligibility, per-arm result counts, rescue/fallback reason enum, backend enum, cold/warm flag, latency bucket enum with exact bucket edges); shadow-population semantics for identifier non-inferiority (shadow-execute, compare offline, never affects served results); retention and aggregation-export shapes (enums/counters only). State explicitly which fields land in columns vs `metadata_json`.
+**What to build:** Retained generations currently accumulate forever (`vectors.gen-*.db` are never deleted). Wire the existing pure GC plan to real execution so rollback generations disappear after the soak window unless a live in-process reader holds them, capped at `DefaultRetentionCap`.
 
-**Approach:** Follow `docs/contracts/` house style (e.g. `references-candidates-v1.md`, `metrics-history-v1.md`). Every field gets: name, type, enum values, when written, privacy note.
+**Approach:** Registry is a `ConcurrentDictionary<string,int>` refcount; readers register on open, dispose on close. Scheduler runs under the leader's converge lock only (readers never GC). Deletion failures (Windows held handles) log and retry next wake — never crash the drain. TDD with the fake files seam (`IVectorGenerationFiles`) already used by `VectorGenerationManager` tests.
 
 **Acceptance criteria:**
-- [ ] Contract is implementable without further design decisions (a P2b worker could build it from this doc alone)
-- [ ] No field can carry query text or paths; each field's privacy note says why
-- [ ] Assignment determinism + attribution window + success event are exactly defined
-- [ ] Worker-scope verification (doc self-check: no TBDs, all enums enumerated); diff handed to lead (parallel-lead-commit)
+- [ ] After promote, generations beyond the soak window with no live reader are deleted; `LiveReader`/`WithinSoakWindow`/`OnlyReadyGeneration` outcomes are respected (existing plan semantics unchanged).
+- [ ] A registered live reader blocks deletion until disposed; disposal makes the next wake collect it.
+- [ ] GC never runs on reader instances (non-leader), proved by test.
+- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
 
