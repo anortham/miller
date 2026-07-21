@@ -532,6 +532,8 @@ public static class WorkspaceRender
         else w.WriteString("reason", facts.Reason);
         if (facts.BuildProgressPercent is { } percent) w.WriteNumber("build_progress_percent", percent);
         else w.WriteNull("build_progress_percent");
+        if (facts.DownloadingModel is null) w.WriteNull("downloading_model");
+        else w.WriteString("downloading_model", facts.DownloadingModel);
         if (facts.ServingTag is null) w.WriteNull("serving_tag");
         else w.WriteString("serving_tag", facts.ServingTag);
         if (facts.ServingRole is null) w.WriteNull("serving_role");

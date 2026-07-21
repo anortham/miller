@@ -101,6 +101,10 @@ internal interface IVectorGenerationFiles
 
     void Move(string source, string destination);
 
+    /// <summary>Stamps a file's last-write time to now so retention age is measured from promotion, not from the
+    /// superseded artifact's inherited mtime (<see cref="File.Move(string, string)"/> preserves it).</summary>
+    void Touch(string path);
+
     DateTimeOffset LastWriteTime(string path);
 
     IReadOnlyList<string> EnumerateRetained(string millerDir);
@@ -259,6 +263,7 @@ public sealed class VectorGenerationManager
                     DeleteTrio(retainedPath);
 
                 _files.Move(ActivePath, retainedPath);
+                _files.Touch(retainedPath);
             }
         }
 
@@ -297,6 +302,16 @@ public sealed class VectorGenerationManager
 
         int survivors = decisions.Count(static decision => decision.Outcome is not VectorGcOutcome.Deleted);
         return new VectorGcPlan(decisions, survivors > inputs.RetentionCap);
+    }
+
+    /// <summary>Deletes one retained generation's file trio. Exposed so the GC scheduler can drive deletions one
+    /// at a time — logging each and letting a held-handle failure retry on the next wake rather than aborting the
+    /// whole pass. It never targets <c>vectors.db</c>: the caller passes only <see cref="VectorGcPlan.Deletions"/>
+    /// entries, which are retained generations by construction.</summary>
+    public void DeleteRetained(RetainedGeneration generation)
+    {
+        ArgumentNullException.ThrowIfNull(generation);
+        DeleteTrio(generation.Path);
     }
 
     /// <summary>Plans and executes one GC pass: the eligible retained generations plus any stale shadow trio.
@@ -381,6 +396,8 @@ internal sealed class SystemVectorGenerationFiles : IVectorGenerationFiles
 
     public void Move(string source, string destination) =>
         Retry(() => File.Move(source, destination, overwrite: true));
+
+    public void Touch(string path) => Retry(() => File.SetLastWriteTimeUtc(path, DateTime.UtcNow));
 
     public DateTimeOffset LastWriteTime(string path) => File.GetLastWriteTimeUtc(path);
 

@@ -1,126 +1,94 @@
-# Task 8: Trends time axis — Worker Report
+# Task 8 report — fast-suite wall-ceiling fix
 
-**Status:** COMPLETE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/dashboard-ux-fixes`
-**Branch:** `worktree-dashboard-ux-fixes`
-**Baseline:** 7ba6f22 (T7)
-**Commit:** see ledger below
+## Status
+COMPLETE. Fast suite green, comfortably under the 20s target with 3 consecutive clean runs; the
+previously-flaky `IndexerServiceScanTests` timing is hardened. No production code changed, no guard
+weakened, ceiling stays 30s.
 
-## Ledger
+## Root cause
+`JulieDbFixture.Create` — the shared read-contract harness used by ~30 test classes — built a ~30-table
+WAL SQLite DB per test with **every DDL/INSERT auto-committed as its own transaction**. Under WAL that is
+one WAL-frame flush per statement (~50+ per fixture). With ~16 fixtures building in parallel across the
+suite, those flushes serialize on the disk, so the fast suite was disk-fsync-bound, not CPU-bound. That is
+exactly why it amplified so violently under ambient load (33s/63s/102s/104s trips): parallel fsyncs
+contend super-linearly.
 
-| Step | Result |
-| --- | --- |
-| Miller orientation (record shape, construction sites, point record, reader loop, contract) | done |
-| Failing tests written (reader bounds ×3, panel render ×3) | red — CS1739/CS1061, fields absent |
-| `DashboardTrendSeries` additive fields + `HasRecordedWindow` | done |
-| `DashboardIndexFactsReader.ReadTrends` populates bounds from plotted points | done |
-| `WorkspaceTrendsPanel.razor` renders window line | done |
-| `dashboard.css` `.sparkline-window` | done |
-| Focused suite `(Category!=Scale)&(FullyQualifiedName~Trend)` | green — 23/23 |
-| Fast suite `scripts/test.sh` | green — 3574 passed, 0 failed, 26s (< 30s ceiling) |
-| `dotnet build Miller.slnx -c Release` | Build succeeded, 0 Warning(s), 0 Error(s) |
-| Plan Task 8 checkboxes ticked | done |
+## Moves made (test-only)
+1. **`tests/Miller.Tests/Indexing/JulieDbFixture.cs` — batch the fixture build.** Added
+   `PRAGMA synchronous=OFF` and wrapped the whole build (all DDL + all INSERTs) in a single raw
+   `BEGIN;`/`COMMIT;`. Throwaway test DBs need no durability; one commit replaces ~50 flushes. Raw
+   BEGIN/COMMIT (not a `SqliteTransaction`) leaves every `CreateCommand` call site untouched. **The final
+   DB file is byte-for-identical** — same tables, same rows, same WAL mode — so every reader's coverage is
+   unchanged. This one change is the whole wall-time win because it removes the fsync-contention amplifier,
+   which is also the load-fragility the task was chartered to fix.
+2. **`tests/Miller.Tests/Server/IndexerServiceScanTests.cs` — de-flake the scan-signal waits.** The six
+   `ScanCalled.Wait(5000)` / `acquireAttempted.Wait(5000)` sites already use event-based
+   `ManualResetEventSlim` (correct primitive); the fragility was purely the 5s ceiling being too tight when
+   the thread pool is starved under load. Introduced `private const int ScanSignalTimeoutMs = 30_000` and
+   routed all six waits through it. The event fires in ~90ms on a quiet box, so the happy path is unchanged;
+   the ceiling only extends patience under scheduler starvation. Assertion semantics unchanged (still
+   `Assert.True(...Wait(...))`).
 
-## Files changed
+No tests retagged to Scale — the transaction fix made retagging unnecessary, so fast/scale coverage
+placement is untouched.
 
-| File | Change |
-| --- | --- |
-| `src/Miller.Dashboard/DashboardData.cs` | `DashboardTrendSeries` gains `FirstRecordedAtUtc`/`LatestRecordedAtUtc` (nullable, defaulted, JSON `first_recorded_at_utc`/`latest_recorded_at_utc`) + `[JsonIgnore] HasRecordedWindow` |
-| `src/Miller.Dashboard/DashboardIndexFactsReader.cs` | grouping loop now keeps `MetricHistoryTrendPoint` rows (was `double`) so bounds come from the plotted endpoints |
-| `src/Miller.Dashboard/Components/WorkspaceTrendsPanel.razor` | `.sparkline-window` line under the scale, gated on `HasRecordedWindow`; `WindowLabel` helper |
-| `src/Miller.Dashboard/wwwroot/dashboard.css` | `.sparkline-window` rule (muted, mono, 11px, opacity .8) beside `.sparkline-scale` |
-| `tests/Miller.Tests/Server/DashboardRegistryReadTests.cs` | `RecordSnapshotAt` overload (explicit `recordedAtUtc`); 3 reader tests |
-| `tests/Miller.Tests/Server/DashboardActivityFeedTests.cs` | 3 panel render tests |
-| `docs/plans/2026-07-16-dashboard-ux-fixes.md` | Task 8 checkboxes |
+## Profile — before (baseline plain run: 23s test duration / 26.8s wall)
+Ranked by summed CPU (xUnit parallelizes collections; summed CPU >> wall):
 
-## Miller calls + API-shape evidence
+| class | sum_s | n | avg_ms |
+|---|---:|---:|---:|
+| WorkspaceToolTests | 19.46 | 58 | 335.6 |
+| SmartTargetResolverTests | 16.77 | 36 | 465.9 |
+| EditToolTests | 16.15 | 116 | 139.2 |
+| WorkspaceIndexProviderTests | 15.08 | 49 | 307.8 |
+| BlazorComponentGraphReaderTests | 14.79 | 27 | 547.7 |
+| CliDispatchTests | 14.06 | 157 | 89.5 |
+| BlazorNamespaceCatalogTests | 14.03 | 36 | 389.6 |
+| MetricsToolTests | 13.95 | 28 | 498.1 |
+| ContentToolTests | 11.83 | 82 | 144.3 |
+| IndexerServiceScanTests | 11.36 | 29 | 391.6 |
 
-No guessed shapes. Each below is a real call or `grep` against the worktree.
+Total CPU across all classes: **414s**. (A follow-up trx profile ran under heavy ambient load and reported
+inflated per-class numbers — e.g. InspectTool 4× its quiet-box avg, 42s duration — which is the very
+load-sensitivity this task targets; it is noted here as noise, not signal.)
 
-1. `inspect(target='DashboardTrendSeries', depth='full')` → `src/Miller.Dashboard/DashboardData.cs:231`; params
-   `(Metric, Label, Points IReadOnlyList<double>, First double, Latest double)`; one child `HasTrend => Points.Count >= 2`.
-2. `trace(target='DashboardTrendSeries', mode='refs')` → **14 refs, only 2 CONSTRUCTION sites**:
-   `DashboardIndexFactsReader.cs:84` (`call`) and `DashboardActivityFeedTests.cs:758` (`call`). Every other ref is
-   `type_usage`. ⟹ appending two defaulted params is safe; no construction site needed a change. Confirmed by the
-   green build.
-3. `grep -n "record MetricHistoryTrendPoint" src/ -r` → `src/Miller.Indexing/MetricHistoryStore.cs:42`; the timestamp
-   property is **`RecordedAtUtc`** (string, non-null), positionally
-   `(SnapshotId, RecordedAtUtc, ArtifactId, Revision, Source, Metric, Value)`.
-4. `inspect(target='ReadTrend', depth='full')` → `MetricHistoryStore.cs:317`. Body evidence: the SQL orders
-   `BY sm.metric, s.snapshot_id`; the returned rows are **downsampled before return**
-   (`foreach group … result.AddRange(UniformStride(group.ToList(), maxPoints))`), then re-sorted by
-   `(SnapshotId, Metric)`.
-5. `grep "UniformStride" -A 20` (`MetricHistoryStore.cs:590`) → endpoints are preserved: `idx = round(i*(n-1)/(maxPoints-1))`
-   gives `i=0 → 0` and `i=maxPoints-1 → n-1`.
-6. `grep -n "AbsoluteShort" src/Miller.Dashboard/DashboardFormat.cs` → `:82`, `AbsoluteShort(string?)` →
-   `"MMM d, HH:mm 'UTC'"`, raw fallback on unparseable, `string.Empty` on null/blank. In razor scope via
-   `Components/_Imports.razor:5` (`@using static Miller.Dashboard.DashboardFormat`).
-7. `grep -n "recorded_at_utc" docs/contracts/metrics-history-v1.md` → **`:63`** "Points are ordered by **`snapshot_id`**
-   (the append order), never by `recorded_at_utc`", and `:109` "display metadata; not the sort axis".
-8. `grep "RecordConverge" / "FormatTimestamp"` → `RecordConverge(path, snapshot, DateTime? recordedAtUtc = null)`
-   (`:147`), stored via `FormatTimestamp` (`:582`) as `yyyy-MM-ddTHH:mm:ss.fffffffZ`. This is why the tests can pin
-   exact timestamp strings.
+## After — wall times
+- Plain `dotnet test --filter Category!=Scale` (no build): **13–14s** test duration; **15.98 / 15.61 /
+  16.49s** wall across 3 runs.
+- Official ceiling `scripts/test.sh` (includes the incremental build the tripwire measures): **18s / 19s /
+  18s** across 3 consecutive runs — all under the 20s target, 11–12s of headroom below the 30s ceiling. All
+  runs: `Failed: 0, Passed: 4223, Skipped: 2`.
+- Before→after: **~27s → ~18s** ceiling wall (**~23s → ~14s** pure test duration).
 
-## The downsampling CAUTION — resolved, not worked around
+## Verification
+- **worker-red-green:** touched classes (`IndexerServiceScanTests`, `SmartTargetResolverTests`,
+  `EditToolTests`, `MetricsToolTests`, `WorkspaceIndexProviderTests`, `InspectToolTests`) — 335 passed, 0
+  failed.
+- **Flaky-test stress:** `StartAsync_WhenEnabledLeaderAndSidecarBuildFails_StillMarksRegistryScanned` run
+  10× consecutively — 10/10 passed.
+- **worker-ceiling:** `scripts/test.sh` ×3 → 18s / 19s / 18s, all green (evidence above).
+- **Scale suite:** `scripts/test.sh scale` (binaries present in `.tools/`) — 86 passed, 0 failed. Confirms
+  the shared-fixture change did not break Scale consumers.
+- **ScaleTraitConventionTests** (runs in the fast suite): green — no julie-spawning test lost its trait.
 
-The brief warned the window must match the sparkline's actual first/last **plotted** points, given `TrendMaxPoints = 50`.
+## Inventory arithmetic (before vs after)
+- Fast suite run count: 4225 total (4223 passed + 2 skipped) — **unchanged**.
+- Scale suite run count: 86 passed — **unchanged**.
+- Distinct listed methods (Theories collapse): fast 4193, scale 86.
+- Zero tests moved between suites (no retags), so `scripts/test.sh all` runs the identical inventory; the
+  win is purely faster fixture construction. before(fast 4225 / scale 86) == after(fast 4225 / scale 86).
 
-Evidence (#4 + #5) shows this is satisfied structurally rather than by extra logic: `ReadTrend` downsamples **before
-returning**, so the rows the reader groups *are* the points the panel plots. Taking `metricPoints[0]` /
-`metricPoints[^1]` therefore yields exactly the plotted endpoints by construction. And because `UniformStride` always
-keeps index `0` and `n-1`, the plotted endpoints are also the true recorded range — the window is correct on both
-readings, with no reconciliation code.
+## Miller-first orientation calls used
+- `mcp__miller__inspect tests/Miller.Tests/Server/IndexerServiceScanTests.cs` — enumerated the class's
+  symbols (fields/methods/the `ScanCalled` event property) before editing.
+- Profiling itself was bash/trx work (trx parse via python), as expected for this task.
 
-Locked in by `ReadTrends_BoundsMatchPlottedEndpointsWhenDownsampled` (51 snapshots → 50 points; asserts point count,
-values, and both bounds).
-
-## Self-review
-
-- **Additive:** both new params defaulted `= null`; existing constructions compile untouched (build green, and the
-  pre-existing `WorkspaceTrendsPanel_SparklineShowsMinMaxLatestLabels` still passes unmodified).
-- **No re-sort:** the reader consumes the store's order verbatim. `ReadTrends_BoundsFollowSnapshotOrderNotRecordedAtOrder`
-  writes deliberately out-of-order timestamps and asserts the bounds follow snapshot order — a regression guard against
-  a future "helpful" sort.
-- **Absent bounds render unchanged:** gate is `HasRecordedWindow` (both bounds non-blank). Two negative tests cover
-  no-bounds and one-bound-only.
-- **No new abstractions:** two record fields, one computed flag, one render line, one CSS rule.
-- **Comments:** none added to tests; source comments state constraints (why the bounds match the plot; why the flag
-  exists), not narration.
-
-## Judgment calls
-
-1. **`HasRecordedWindow` as a computed flag** (`DashboardData.cs`) rather than a null-check in the razor. Mirrors the
-   existing `HasTrend`/`HasData` idiom in the same file, keeps the `.razor` declarative, and is `[JsonIgnore]`d so
-   `snapshot.json` gains only the two data fields.
-2. **Window renders inside the `HasTrend` branch.** A single-point series keeps its "No trend data yet" hint with no
-   window — the window describes a sparkline, and there is no sparkline there.
-3. **Clock-skewed windows render as-is** (possibly reading "later → earlier"). The contract calls `recorded_at_utc`
-   writer-clock display metadata, and the plan's stated intent is that the window match the actual first/last plotted
-   points. Hiding or reordering a skewed window would misdescribe the plot. Rare; honest when it happens.
-4. **`RecordSnapshotAt` overload** instead of changing `RecordSnapshot`'s signature — `params` can't follow an optional
-   param, and the existing helper has other callers in the file. Old helper delegates with `null`.
-5. **51 snapshots, not 120, in the downsample test.** See concern #1.
-
-## Concerns / notes for the lead
-
-1. **Fast-suite budget is tight and I trimmed my own test to respect it (no action needed, but worth knowing).**
-   My first draft of `ReadTrends_BoundsMatchPlottedEndpointsWhenDownsampled` wrote 120 snapshots; under full-suite
-   parallel load that measured **2s**, tying it for *slowest test in the fast suite* — against the CLAUDE.md rule that
-   the fast suite stays genuinely fast. Trimmed to 51 snapshots (the minimum that triggers 50-point downsampling):
-   **413ms**, same coverage.
-2. **The `scripts/test.sh` tripwire is cold-build sensitive — not a real breach, but it will bite the next worker.**
-   My first `scripts/test.sh` run reported **53s** and `ERROR: fast suite took 53s (> 30s ceiling)`. The script starts
-   its timer *before* `dotnet test` (`scripts/test.sh:44-46`), so the timed window includes compiling 6 projects; that
-   run was also contending for CPU with a background job of mine. Re-run warm: **26s, passing, 3574/0**. My 6 tests add
-   ~0.5s total, so they cannot explain a 23s delta. Flagging because the warm number (26s) still sits close to the 30s
-   ceiling against a <10s local target — a pre-existing condition on `main`'s trajectory, outside Task 8's ownership,
-   and a plausible false-alarm source for Tasks 9–10.
-3. **Attempted baseline measurement was inconclusive and is not evidence.** I stood up a throwaway worktree at 7ba6f22
-   in `/tmp` to get a clean baseline; it reported only 2011 tests (vs 3574) with 1 failure — almost certainly missing
-   repo setup (e.g. unrestored `.tools/julie-extract`) rather than a real T7 regression. I did **not** chase it and did
-   **not** treat it as a baseline; the warm re-run in-tree (concern #2) is the decisive evidence. The `/tmp` worktree was
-   removed (`git worktree remove --force`). No other worktree was touched.
-4. **No contract doc needed updating.** `docs/contracts/metrics-history-v1.md` governs the `miller metrics history` CLI
-   JSON, not the dashboard `snapshot.json`; no contract doc pins the dashboard trend-series shape. The new fields are
-   additive to `snapshot.json` as the plan allows.
-5. **No plan mismatch.** The contract's `snapshot_id` ordering rule held exactly as the plan described.
+## Concerns
+- Ceiling wall is 18–19s: meets the ≤20s target but the ~4–5s incremental build inside `dotnet test`
+  (which the tripwire measures by design, and which the task forbids removing via `--no-build`) is a fixed
+  floor. Pure test execution is ~14s. If more margin is ever wanted, the next lever is `IClassFixture`
+  sharing for the heavy read-only classes (SmartTargetResolver/Edit/Metrics/Inspect build an identical
+  immutable fixture per test) — deliberately not done here because the target is met and per-class
+  rewrites carry more risk than the transaction fix's zero-semantic-change win.
+- `PRAGMA synchronous=OFF` is safe only because these are throwaway per-test DBs deleted on Dispose; it
+  must never migrate to production fixture/DB code.

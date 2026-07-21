@@ -27,6 +27,11 @@ public interface IVectorSearchPort : IDisposable
 {
     SemanticStorageLane Lane { get; }
 
+    /// <summary>The generation tag of the artifact this port is serving, for the in-process live-reader registry
+    /// (vectors-v1 §Shadow generations and rollback). Empty ⟹ the port does not track a generation — a test
+    /// double, or a generation the GC scheduler would never key against — so the arm skips registration.</summary>
+    string Tag => string.Empty;
+
     IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k);
 }
 
@@ -83,6 +88,7 @@ public sealed class SemanticSearchArm
     private readonly bool _enabled;
     private readonly VectorSearchPortFactory _openPort;
     private readonly Func<SemanticEmbeddingSession?> _openSession;
+    private readonly VectorLiveReaderRegistry _readerRegistry;
 
     public SemanticSearchArm(
         string workspaceRoot,
@@ -100,7 +106,8 @@ public sealed class SemanticSearchArm
         string workspaceRoot,
         bool enabled,
         VectorSearchPortFactory openPort,
-        Func<SemanticEmbeddingSession?> openSession)
+        Func<SemanticEmbeddingSession?> openSession,
+        VectorLiveReaderRegistry? readerRegistry = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(openPort);
@@ -110,6 +117,7 @@ public sealed class SemanticSearchArm
         _enabled = enabled;
         _openPort = openPort;
         _openSession = openSession;
+        _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
     }
 
     /// <summary>
@@ -162,6 +170,11 @@ public sealed class SemanticSearchArm
         if (port is null)
             return SemanticQueryResult.Unavailable(unavailableReason ?? "The vector artifact is unavailable.");
 
+        // The generation this query reads is off-limits to the leader's GC for as long as the port is open. The
+        // arm opens and disposes per query, so this window is one query long — cross-query protection is the soak
+        // window's job. A test double serves an empty tag and is not registered.
+        IDisposable? registration = string.IsNullOrEmpty(port.Tag) ? null : _readerRegistry.Register(port.Tag);
+
         try
         {
             if (_openSession() is not { } session)
@@ -186,6 +199,7 @@ public sealed class SemanticSearchArm
         finally
         {
             port.Dispose();
+            registration?.Dispose();
         }
     }
 
@@ -287,6 +301,8 @@ internal sealed class VectorStoreSearchPort(VectorStore store) : IVectorSearchPo
     }
 
     public SemanticStorageLane Lane => store.Lane;
+
+    public string Tag => MillerSemanticContract.GenerationTag(store.Identity);
 
     public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k) =>
         store.Search(kind, query, k);

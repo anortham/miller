@@ -20,6 +20,10 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class IndexerServiceLeadershipTests : IDisposable
 {
+    // The signal fires in ~80ms on a quiet box; the generous ceiling only extends patience under
+    // scheduler starvation (same de-flake as IndexerServiceScanTests.ScanSignalTimeoutMs).
+    private const int ScanSignalTimeoutMs = 30_000;
+
     // Static because the service factory below is static; xUnit runs this class's tests serially,
     // so draining the bag per-test Dispose never races another test in this class.
     private static readonly System.Collections.Concurrent.ConcurrentBag<string> TempHomes = [];
@@ -312,7 +316,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             var service = NewStartedService(workspace, _ => lease, ops, ownVersion: "3.0.0", artifactVersion: "2.0.0");
 
             await service.StartAsync(CancellationToken.None);
-            Assert.True(ops.ScansReached.Wait(5000, CancellationToken.None));
+            Assert.True(ops.ScansReached.Wait(ScanSignalTimeoutMs, CancellationToken.None));
 
             // D5: leader.json carries the extractor version so readers can compare fitness against a LIVE leader.
             LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
@@ -342,7 +346,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             var service = NewStartedService(workspace, _ => lease, ops, ownVersion: "3.0.0", artifactVersion: "3.0.0");
 
             await service.StartAsync(CancellationToken.None);
-            Assert.True(ops.ScansReached.Wait(5000, CancellationToken.None));
+            Assert.True(ops.ScansReached.Wait(ScanSignalTimeoutMs, CancellationToken.None));
             await service.StopAsync(CancellationToken.None);
 
             Assert.Equal(new[] { false }, ops.ScanForce); // equal versions: no upgrade rescan (D7 swarm calm)

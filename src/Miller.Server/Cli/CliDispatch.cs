@@ -147,6 +147,8 @@ public static class CliDispatch
                     return Dashboard(rest, context, stdout, stderr, dashboardLauncher);
                 case "workspace":
                     return Workspace(rest, context, stdout, stderr);
+                case "semantic":
+                    return Semantic(rest, context, stdout, stderr);
                 default:
                     stderr.WriteLine($"unknown command '{verb}'.");
                     stderr.WriteLine(HelpText);
@@ -315,6 +317,47 @@ public static class CliDispatch
         else
             outw.WriteLine($"{status}: {result.Url}");
         return 0;
+    }
+
+    // `semantic prepare` is the explicit, consented model-download entry point: it shells out to the pinned
+    // julie-semantic-sidecar's `prepare` subcommand (all download mechanics sidecar-owned, design §4.4), streams
+    // its progress, and passes its exit status through. Like `version`/`dashboard` it loads NO index — it needs
+    // only the tools root (where the sidecar ships) and the workspace `.miller` dir (where the progress marker
+    // lives). Running the verb IS the consent act; Miller never auto-downloads.
+    private static int Semantic(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        const string usage = "miller semantic prepare [--model <id>] [--json]";
+        if (args.Count == 0 || args[0] is "--help" or "-h" or "help")
+            return Usage(err, usage);
+
+        string operation = args[0].ToLowerInvariant();
+        if (operation != "prepare")
+        {
+            err.WriteLine($"unknown semantic operation '{args[0]}'.");
+            return Usage(err, usage);
+        }
+
+        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
+        if (o.Positionals.Count > 0)
+            return Usage(err, usage);
+        foreach (string flag in o.FlagNames)
+        {
+            if (!flag.Equals("model", StringComparison.OrdinalIgnoreCase) &&
+                !flag.Equals("json", StringComparison.OrdinalIgnoreCase))
+            {
+                err.WriteLine($"unknown option '--{flag}'.");
+                return Usage(err, usage);
+            }
+        }
+
+        string millerDir = Path.GetDirectoryName(ctx.ExtractDbPath)
+            ?? throw new InvalidOperationException("Cannot determine the workspace .miller directory.");
+        return SemanticPrepareCli.Production().Run(
+            new SemanticPrepareRequest(o.Value("model"), o.Has("json")),
+            ctx.ToolsRoot,
+            millerDir,
+            outw,
+            err);
     }
 
     // ---------- read verbs (over the current workspace's symbols.db) ----------
@@ -2715,6 +2758,10 @@ public static class CliDispatch
                              remove (--id ID | --path DIR)  Delete a workspace's .miller index dir.
                              prune  [--dry-run]              Remove registry rows whose roots no longer exist.
                              [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json]
+          semantic <op>      Optional semantic retrieval lifecycle. op = prepare.
+                             prepare [--model <id>] [--json]   Consent to and run the pinned sidecar's model
+                             download (sha256-verified, into the shared cache). Streams progress; exits with the
+                             sidecar's status. Running this verb IS the consent — Miller never auto-downloads.
           version            Print the build version (e.g. 0.3.2+<sha>).
           help               Show this help.
           serve              Run the MCP stdio server (the default when launched with no arguments).

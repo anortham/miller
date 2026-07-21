@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Server.Cli;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -155,6 +156,80 @@ public sealed class VectorSidecarClassificationTests
         Assert.Empty(facts.Retained);
     }
 
+    [Fact]
+    public void LivePrepareMarker_WithNoArtifact_ReportsDownloadingAndSurfacesTheModel()
+    {
+        VectorSidecarFacts facts = ClassifyMissingActive(
+            MarkerJson("qwen3-0.6b-f16", pid: 4242), markerPidAlive: true);
+
+        Assert.Equal("downloading", facts.State);
+        Assert.Equal("qwen3-0.6b-f16", facts.DownloadingModel);
+    }
+
+    [Fact]
+    public void StalePrepareMarker_DeadPid_LeavesClassificationUnavailable()
+    {
+        VectorSidecarFacts facts = ClassifyMissingActive(
+            MarkerJson("qwen3-0.6b-f16", pid: 4242), markerPidAlive: false);
+
+        Assert.Equal("unavailable", facts.State);
+        Assert.Null(facts.DownloadingModel);
+    }
+
+    [Fact]
+    public void MalformedPrepareMarker_IsIgnored_LeavesClassificationUnavailable()
+    {
+        VectorSidecarFacts facts = ClassifyMissingActive("{ not json", markerPidAlive: true);
+
+        Assert.Equal("unavailable", facts.State);
+        Assert.Null(facts.DownloadingModel);
+    }
+
+    [Fact]
+    public void PauseState_BeatsALivePrepareMarker()
+    {
+        var meta = Meta();
+        meta["converge_pause_state"] = "circuit-open";
+        meta["converge_pause_reason"] = "sidecar restarts exhausted";
+
+        var opener = new FakeOpener();
+        opener.Metas[VectorSidecar.PathFor(Root)] = meta;
+        var probe = new FakeProbe(
+            [], [VectorSidecar.PathFor(Root)], MarkerJson("qwen3-0.6b-f16", pid: 4242), markerPidAlive: true);
+        var sidecar = new VectorSidecar(SemanticMode.On, probe, opener, CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.Inspect(Root);
+
+        Assert.Equal("circuit-open", facts.State);
+    }
+
+    [Fact]
+    public void Disabled_NeverProbesThePrepareMarker()
+    {
+        var probe = new FakeProbe([], [], marker: null, markerPidAlive: false) { ThrowOnMarkerRead = true };
+        var sidecar = new VectorSidecar(SemanticMode.Off, probe, new FakeOpener(), CompatibleReader);
+
+        VectorSidecarFacts facts = sidecar.Inspect(Root);
+
+        Assert.Equal("disabled", facts.State);
+    }
+
+    [Fact]
+    public void MarkerFileName_MirrorsTheProducerContract()
+    {
+        Assert.Equal(SemanticPrepareCli.MarkerFileName, SemanticPrepareMarker.FileName);
+    }
+
+    private static VectorSidecarFacts ClassifyMissingActive(string marker, bool markerPidAlive)
+    {
+        var probe = new FakeProbe([], [], marker, markerPidAlive);
+        var sidecar = new VectorSidecar(SemanticMode.On, probe, new FakeOpener(), CompatibleReader);
+        return sidecar.Inspect(Root);
+    }
+
+    private static string MarkerJson(string model, int pid) =>
+        $"{{\"model\":\"{model}\",\"pid\":{pid},\"createdUtc\":\"2026-07-20T18:30:00.0000000Z\"}}";
+
     private static VectorSidecarFacts Classify(Dictionary<string, string> meta)
     {
         var opener = new FakeOpener();
@@ -193,11 +268,22 @@ public sealed class VectorSidecarClassificationTests
             ["chunk_target_revision"] = "7",
         };
 
-    private sealed class FakeProbe(IReadOnlyList<string> retained, IReadOnlyList<string> existing) : IVectorFileProbe
+    private sealed class FakeProbe(
+        IReadOnlyList<string> retained,
+        IReadOnlyList<string> existing,
+        string? marker = null,
+        bool markerPidAlive = false) : IVectorFileProbe
     {
+        public bool ThrowOnMarkerRead { get; init; }
+
         public bool FileExists(string path) => existing.Contains(path, StringComparer.Ordinal);
 
         public IReadOnlyList<string> EnumerateRetainedGenerations(string millerDir) => retained;
+
+        public string? ReadPrepareMarker(string millerDir) =>
+            ThrowOnMarkerRead ? throw new InvalidOperationException("off-mode must not probe the marker") : marker;
+
+        public bool IsProcessAlive(int pid) => markerPidAlive;
     }
 
     private sealed class FakeOpener : IVectorStoreOpener

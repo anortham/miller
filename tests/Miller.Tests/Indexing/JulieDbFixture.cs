@@ -524,6 +524,11 @@ internal sealed class JulieDbFixture : IDisposable
             // Miller only READS.
             Exec(conn, "PRAGMA journal_mode=WAL;");
             Exec(conn, "PRAGMA foreign_keys=OFF;");
+            // Throwaway test DB: skip per-statement fsync and batch the whole build into one commit so a
+            // fixture is tens of ms, not one WAL-frame flush per DDL/INSERT. Raw BEGIN/COMMIT (not a
+            // SqliteTransaction) keeps every CreateCommand call site below untouched.
+            Exec(conn, "PRAGMA synchronous=OFF;");
+            Exec(conn, "BEGIN;");
 
             Exec(conn, FilesDdl);
             Exec(conn, SymbolsDdl);
@@ -825,6 +830,8 @@ internal sealed class JulieDbFixture : IDisposable
                 if (referenceResolutionVersion is not null)
                     Meta("reference_resolution_version", referenceResolutionVersion);
             }
+
+            Exec(conn, "COMMIT;");
         }
 
         // The write connection above was Pooling=false, so its handle is already released — no global

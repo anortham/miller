@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using Miller.Indexing.Semantic;
 
 namespace Miller.Indexing;
@@ -12,6 +14,15 @@ internal interface IVectorFileProbe
     bool FileExists(string path);
 
     IReadOnlyList<string> EnumerateRetainedGenerations(string millerDir);
+
+    /// <summary>The raw <c>semantic-prepare.marker</c> content, or null when it is absent or unreadable. The
+    /// default answers "no consented download in flight" so a probe that does not know about the marker never
+    /// invents a <c>downloading</c> state.</summary>
+    string? ReadPrepareMarker(string millerDir) => null;
+
+    /// <summary>Whether the marker's writer process is still alive. The default is dead, so a dead- or reused-pid
+    /// marker never keeps a stale <c>downloading</c> state on screen.</summary>
+    bool IsProcessAlive(int pid) => false;
 }
 
 /// <summary>
@@ -105,6 +116,35 @@ internal sealed class SystemVectorFileProbe : IVectorFileProbe
             return [];
         }
     }
+
+    public string? ReadPrepareMarker(string millerDir)
+    {
+        try
+        {
+            string path = SemanticPrepareMarker.PathFor(millerDir);
+            return File.Exists(path) ? File.ReadAllText(path) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    public bool IsProcessAlive(int pid)
+    {
+        if (pid <= 0)
+            return false;
+
+        try
+        {
+            using Process process = Process.GetProcessById(pid);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>
@@ -129,6 +169,7 @@ public sealed class VectorSidecar
     private const string IncompatibleState = "incompatible";
     private const string CircuitOpenState = "circuit-open";
     private const string DiskBlockedState = "disk-blocked";
+    private const string DownloadingState = "downloading";
     private const string ActiveRole = "active";
     private const string RetainedRole = "retained";
 
@@ -300,7 +341,33 @@ public sealed class VectorSidecar
                 return candidate with { Retained = retained };
         }
 
-        return active with { Retained = retained };
+        VectorSidecarFacts resolved = active with { Retained = retained };
+        return resolved.State == UnavailableState
+            ? DownloadingIfPrepareLive(workspaceRoot, resolved)
+            : resolved;
+    }
+
+    // A consented `miller semantic prepare` records a marker while it downloads the model. The marker is the
+    // ONLY cross-process signal (no polling, no watchers), and it is only consulted when the reader would
+    // otherwise report `unavailable` — so a pause (circuit-open/disk-blocked) always wins and a ready reader
+    // never touches the marker file. A dead- or reused-pid marker is stale and falls through unchanged.
+    private VectorSidecarFacts DownloadingIfPrepareLive(string workspaceRoot, VectorSidecarFacts fallthrough)
+    {
+        if (_probe.ReadPrepareMarker(MillerDirFor(workspaceRoot)) is not { } raw)
+            return fallthrough;
+
+        if (!SemanticPrepareMarker.TryParse(raw, out string model, out int pid) || !_probe.IsProcessAlive(pid))
+            return fallthrough;
+
+        string? downloadingModel = string.IsNullOrEmpty(model) ? null : model;
+        return fallthrough with
+        {
+            State = DownloadingState,
+            Reason = downloadingModel is null
+                ? "A consented `miller semantic prepare` is downloading the embedding model."
+                : $"A consented `miller semantic prepare` is downloading the embedding model '{downloadingModel}'.",
+            DownloadingModel = downloadingModel,
+        };
     }
 
     private IReadOnlyList<VectorGenerationFacts> RetainedInventory(string workspaceRoot)
@@ -437,6 +504,53 @@ public sealed class VectorSidecar
 }
 
 /// <summary>
+/// The consumer side of the <c>semantic-prepare.marker</c> contract owned by
+/// <c>Miller.Server.Cli.SemanticPrepareCli</c>. Miller.Indexing cannot reference Miller.Server, so the file name
+/// and the three-field JSON shape (<c>model</c>, <c>pid</c>, <c>createdUtc</c>) are mirrored here; a cross-project
+/// test pins <see cref="FileName"/> to the producer constant so the two never drift.
+/// </summary>
+internal static class SemanticPrepareMarker
+{
+    internal const string FileName = "semantic-prepare.marker";
+
+    internal static string PathFor(string millerDir) => Path.Combine(millerDir, FileName);
+
+    /// <summary>Parses the marker's <c>model</c> and <c>pid</c>. Returns false for any malformed content — a bad
+    /// marker is ignored, never an error. <paramref name="model"/> is empty when the field is absent or non-string
+    /// (the producer records the literal <c>"default"</c> when the user passed no <c>--model</c>).</summary>
+    internal static bool TryParse(string json, out string model, out int pid)
+    {
+        model = string.Empty;
+        pid = 0;
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!root.TryGetProperty("pid", out JsonElement pidElement) ||
+                pidElement.ValueKind != JsonValueKind.Number ||
+                !pidElement.TryGetInt32(out pid))
+            {
+                return false;
+            }
+
+            model = root.TryGetProperty("model", out JsonElement modelElement) &&
+                    modelElement.ValueKind == JsonValueKind.String
+                ? modelElement.GetString() ?? string.Empty
+                : string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+}
+
+/// <summary>
 /// One convergence cursor as recorded in <c>vectors_meta</c>. <see cref="PendingFiles"/> is not an artifact
 /// fact: it is the changed-file count the workspace-facts assembler resolves from the extract's own delta
 /// journal, and stays null when that span cannot be reconstructed (never a guessed zero).
@@ -468,6 +582,10 @@ public sealed record VectorSidecarFacts(
 {
     /// <summary>Meaningful only while <c>building</c>.</summary>
     public int? BuildProgressPercent { get; init; }
+
+    /// <summary>The model id a consented <c>miller semantic prepare</c> is fetching. Set only while the state is
+    /// <c>downloading</c>; JSON status carries it so a fresh setup shows which model is on the way.</summary>
+    public string? DownloadingModel { get; init; }
 
     public VectorCursorFacts? SymbolCursor { get; init; }
 
