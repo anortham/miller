@@ -92,8 +92,8 @@
 **Owns:**
 
 - `.julieignore`
-- `src/Miller.Indexing/WatchPathFilter.cs`
-- `tests/Miller.Tests/Indexing/WatchPathFilterTests.cs`
+- `src/Miller.Server/Hosting/WatchPathFilter.cs`
+- `tests/Miller.Tests/Server/WatchPathFilterTests.cs`
 - one existing scale test file if required to prove extractor scope
 
 **Red tests:**

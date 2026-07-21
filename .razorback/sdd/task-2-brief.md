@@ -1,29 +1,30 @@
-### Task 2: Corpus freeze, exclusions, findings skeleton
+## Task 2: Enforce vector freshness and share one process-local sidecar session
 
-**Files:**
-- Modify: `eval/model-bench/build_corpus.py` (extend `GOLDEN_SET_EXCLUSIONS` mechanism with a benchmark-derived-docs list)
-- Create: `docs/findings/2026-07-21-fused-arm-encoder-benchmark.md` (skeleton with pre-registered gates)
+**Owns:**
 
-**Interfaces:**
-- Consumes: dev manifest repo list (`eval/retrieval-eval/sets/dev/manifest.json`); current local HEADs of miller + julie.
-- Produces: frozen clean worktrees at `<scratchpad>/frozen-miller` and `<scratchpad>/frozen-julie` (SHAs recorded in the findings doc); `build_corpus.py` exclusion list `BENCHMARK_DOC_EXCLUSIONS` covering `docs/plans/2026-07-21-encoder-comparison-fusion-v2-design.md`, `docs/plans/2026-07-19-miller-semantic-integration-design.md`, `docs/findings/2026-07-19-model-benchmark.md`, `docs/findings/2026-07-21-fused-arm-encoder-benchmark.md`, `docs/findings/2026-07-07-dead-code-candidates-dogfood.md` plus any doc whose text names a graded `doc_id` (grep the dev set's doc_ids against docs/ at the frozen SHA and list what hits); Task 4 and Task 6 consume the worktrees.
-- Findings skeleton contains the T5 gates verbatim from the spec (numbers, not prose) under "Pre-registered gates", dated before any scoring.
+- `src/Miller.Indexing/VectorSidecar.cs`
+- `src/Miller.Indexing/Semantic/SemanticSearchArm.cs`
+- a new session broker under `src/Miller.Indexing/Semantic/` or `src/Miller.Server/Hosting/`
+- `src/Miller.Server/Hosting/VectorConvergeService.cs`
+- `src/Miller.Server/Hosting/MillerServiceRegistration.cs`
+- focused vector/session/registration tests
 
-**Contract inputs:** spec R1; frozen SHAs = current local `main` HEAD of each repo at freeze time (miller includes this branch's base 59c2c79; record exact SHAs). `git worktree add --detach <path> <sha>` from each repo. Each frozen worktree needs `.miller/symbols.db` + `content.db` built: run the worktree-built `miller` with `workspace open` + full index against that root (no semantic env needed), record artifact ids.
+**Red tests:**
 
-**File ownership:** Modify: `eval/model-bench/build_corpus.py`; Create: `docs/findings/2026-07-21-fused-arm-encoder-benchmark.md`, frozen worktrees outside repo (scratch)
+1. Ready generation with a different live artifact ID returns `VectorsStale` before embedding.
+2. Cursor lag outside the accepted freshness rule returns `VectorsStale` before embedding.
+3. Artifact promotion or cursor change during embedding returns `VectorsStale` before KNN can serve.
+4. Missing, stale, building, incompatible, disk-blocked, timeout, and circuit-open states remain distinguishable.
+5. Concurrent query and convergence demand creates one session/child and shares restart/circuit state.
+6. Semantic off never calls the broker factory.
+7. Rebinding workspace A to B recreates root-bound generation cleanup state.
 
-**Serialization required:** No
+**Implementation:**
 
-**Dependency reason:** None - safe parallel batch.
+- Add a typed vector open/classification result rather than using `TryOpen` null as every failure.
+- Pass the live workspace artifact/cursor expectation into query execution and revalidate after embedding.
+- Introduce a singleton lazy broker used by `SemanticSearchArm` and `VectorConvergeService`; preserve query priority and bounded cancellation.
+- Reset root-bound cleanup objects when the bound workspace identity changes.
 
-**What to build:** The frozen evaluation substrate and the findings doc that pre-registers every decision gate before numbers exist.
-
-**Approach:** Run `dotnet run --project eval/retrieval-eval -- validate --queries eval/retrieval-eval/sets/dev/queries.jsonl --corpus miller=<frozen-miller> --corpus julie=<frozen-julie>` and require exit 0 — this proves every graded doc exists at the frozen SHAs. Exclusion list keyed on repo-relative path prefix, same mechanism as `GOLDEN_SET_EXCLUSIONS` (build_corpus.py:44-46).
-
-**Acceptance criteria:**
-- [ ] Frozen worktrees exist, SHAs + index artifact ids recorded in the findings skeleton.
-- [ ] `validate` exits 0 against both frozen corpora.
-- [ ] Findings skeleton contains the pre-registered T5 gates verbatim and the R1 within-run-only comparability note.
-- [ ] `build_corpus.py` excludes the benchmark-derived docs; a one-line proof (corpus row count without/with exclusions) recorded.
+**Worker verification:** focused `VectorSidecar*`, `SemanticSearchArm*`, `SemanticEmbeddingSession*`, `VectorConvergeServiceTests`, and `HostStartupRegistrationTests`.
 

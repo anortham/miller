@@ -1,26 +1,29 @@
-### Task 1: CodeRankEmbed feasibility spike
+## Task 1: Make canary assignment govern the full search and add true content retrieval
 
-**Files:**
-- Create: `eval/model-bench/bench-pins.local.json` (local overlay, add to `eval/model-bench/.gitignore`)
-- Test: n/a (spike; evidence is the parity report pasted into the task result)
+**Owns:**
 
-**Interfaces:**
-- Consumes: pinned llama.cpp from `eval/model-bench/bench-pins.json` (`llama_cpp` entry: release tag + sha256); HF model `nomic-ai/CodeRankEmbed` (pin the exact revision hash you fetch).
-- Produces: on pass — overlay entry with the same candidate shape as `bench-pins.json` `candidates[]` (id `coderankembed-f16`, local file path, sha256, pooling `cls`, dims 768, `query_prefix: "Represent this query for searching relevant code: "`), consumed by Task 4. On fail — a written drop reason for the findings doc.
+- `src/Miller.Server/Tools/SearchTool.cs`
+- `src/Miller.Indexing/ITextContentSearchIndex.cs` only if the optional interface belongs beside it
+- a new narrow semantic content lookup interface under `src/Miller.Indexing/`
+- `src/Miller.Indexing/FtsTextContentSearchIndex.cs`
+- focused search/content indexing tests
 
-**Contract inputs:** spec T1 stop conditions; MIT license verification; sentence-transformers parity gate cosine ≥ 0.99 vs HF reference on the sidecar conformance texts (`eval/sidecar-conformance/corpus.jsonl` non-empty `text` rows).
+**Red tests:**
 
-**File ownership:** Create: `eval/model-bench/bench-pins.local.json` (gitignored), scratch under bench `.cache/`; Modify: `eval/model-bench/.gitignore`
+1. An eligible control query with a weak primary result never invokes semantic rescue and matches semantic-off bytes.
+2. An eligible shadow query may execute shadow measurement but returns lexical bytes even when semantic ranks a different result.
+3. `MILLER_SEMANTIC=shadow` never constructs a serving treatment arm.
+4. Content lexical-zero plus a valid semantic chunk returns a materialized hit in treatment.
+5. A semantic-only content hit still obeys content-kind and `excludeTests` filters.
+6. An index without the optional materializer and every semantic fallback remain lexical byte-identical.
 
-**Serialization required:** No
+**Implementation:**
 
-**Dependency reason:** None - safe parallel batch.
+- Represent request serving policy once and carry it through `RunSymbolsWithCanary`, the rescue ladder, and content canary execution.
+- Permit semantic rescue only for treatment or the existing explicitly non-canary production arm.
+- Keep shadow measurement separate from serving output.
+- Materialize semantic chunk IDs through the FTS-owned metadata map, union lexical and semantic membership, then use deterministic fusion/tie-breaking.
+- Do not widen `ITextContentSearchIndex` for adapters that cannot materialize chunk IDs; prefer a separate optional capability.
 
-**What to build:** Attempt GGUF conversion of CodeRankEmbed with the pinned llama.cpp converter; validate pooling + embedding fidelity; produce an overlay pin or a drop reason.
-
-**Approach:** Stage order with hard stops: (1) `huggingface-cli download` at a pinned revision, record license file; (2) `convert_hf_to_gguf.py` — NomicBert-long architecture unsupported by the pinned converter ⟹ STOP (drop reason: converter); (3) f16 GGUF through `bench.py sanity`; (4) parity: embed ~20 conformance texts via llama-server AND via `sentence-transformers` (uv/pip ephemeral env, `trust_remote_code=True`), report min cosine — < 0.99 ⟹ STOP (drop reason: fidelity). Remember the query prefix applies to queries only, not documents. Budget: one session; any ambiguity → drop with reason, do not extend.
-
-**Acceptance criteria:**
-- [ ] Either an overlay pin with recorded revision/converter/sha256/pooling/prefix AND min-cosine ≥ 0.99 evidence, or a written drop reason naming the failed stage.
-- [ ] Nothing machine-specific committed; `bench-pins.local.json` gitignored.
+**Worker verification:** focused `CanarySearchTests`, `CanaryContentSearchTests`, `SearchToolRescueTests`, and `FtsTextContentSearchIndexTests`.
 
