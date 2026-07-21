@@ -127,15 +127,20 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
     private ISemanticSidecarChannel? _channel;
     private SidecarLineReader? _reader;
+    private readonly SemanticEncoderPin? _expectedEncoder;
     private int _consecutiveFatals;
     private long _requestSequence;
     private bool _disposed;
 
-    public SemanticEmbeddingSession(ISemanticSidecarLauncher launcher, SemanticSessionOptions? options = null)
+    public SemanticEmbeddingSession(
+        ISemanticSidecarLauncher launcher,
+        SemanticSessionOptions? options = null,
+        SemanticEncoderPin? expectedEncoder = null)
     {
         ArgumentNullException.ThrowIfNull(launcher);
         _launcher = launcher;
         _options = options ?? new SemanticSessionOptions();
+        _expectedEncoder = expectedEncoder;
     }
 
     public SemanticSessionState State { get; private set; } = SemanticSessionState.NotStarted;
@@ -156,6 +161,31 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     /// stated refusal, never a coerced match: writing vectors under a fingerprint the sidecar did not produce
     /// would make the store's generation identity a lie.
     /// </summary>
+    /// <summary>
+    /// <see cref="MatchEncoder(SemanticSidecarHealth, out string?)"/> plus the stricter requirement that the
+    /// sidecar loaded the encoder Miller actually selected. Without this, a sidecar serving a different — but
+    /// still pinned — encoder passes the handshake and the mismatch only surfaces as a dimension error at
+    /// vector-commit time, permanently wedging the build (the bge-under-qwen3-sidecar failure, 2026-07-21).
+    /// </summary>
+    public static SemanticEncoderHandshake? MatchEncoder(
+        SemanticSidecarHealth health,
+        SemanticEncoderPin expected,
+        out string? refusalReason)
+    {
+        ArgumentNullException.ThrowIfNull(health);
+        ArgumentNullException.ThrowIfNull(expected);
+
+        if (health.Ready && !string.Equals(health.ModelId, expected.ModelId, StringComparison.Ordinal))
+        {
+            refusalReason =
+                $"sidecar loaded model_id '{health.ModelId}' but Miller selected '{expected.ModelId}' — " +
+                "the sidecar must be launched with `serve --model` matching the active encoder";
+            return null;
+        }
+
+        return MatchEncoder(health, out refusalReason);
+    }
+
     public static SemanticEncoderHandshake? MatchEncoder(SemanticSidecarHealth health, out string? refusalReason)
     {
         ArgumentNullException.ThrowIfNull(health);
@@ -430,7 +460,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             }
         }
 
-        SemanticEncoderHandshake? handshake = MatchEncoder(health, out string? refusal);
+        SemanticEncoderHandshake? handshake = _expectedEncoder is null
+            ? MatchEncoder(health, out string? refusal)
+            : MatchEncoder(health, _expectedEncoder, out refusal);
         if (handshake is null)
         {
             // A not-ready or wrong-encoder sidecar is a stated refusal, not a transport fault worth restarting.
@@ -972,6 +1004,20 @@ public sealed class ProcessSemanticSidecarLauncher : ISemanticSidecarLauncher
         _arguments = arguments ?? [];
         _environment = environment ?? new Dictionary<string, string>(StringComparer.Ordinal);
     }
+
+    /// <summary>
+    /// The serve-mode launcher for <paramref name="pin"/>: the verb and model id are passed explicitly so the
+    /// child can never silently serve a different encoder than the one Miller selected. The sidecar reads no
+    /// environment for model selection — <c>serve --model</c> is the only channel.
+    /// </summary>
+    public static ProcessSemanticSidecarLauncher ForServe(string executable, SemanticEncoderPin pin)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        return new ProcessSemanticSidecarLauncher(executable, ["serve", "--model", pin.ModelId]);
+    }
+
+    /// <summary>The argv passed to the sidecar, exposed so launch wiring is provable without spawning.</summary>
+    public IReadOnlyList<string> Arguments => _arguments;
 
     public ISemanticSidecarChannel Launch()
     {

@@ -285,6 +285,46 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public void MatchEncoder_RefusesAKnownEncoderThatIsNotTheExpectedPin()
+    {
+        SemanticEncoderPin other = MillerSemanticContract.FallbackEncoder;
+        var health = new SemanticSidecarHealth(
+            Ready: true,
+            Dims: other.Dims,
+            ModelId: other.ModelId,
+            ModelSha256: other.ModelSha256,
+            ModelRevision: other.ModelRevision,
+            Pooling: other.Pooling,
+            Normalization: "l2",
+            ResolvedBackend: "cpu",
+            Accelerated: false,
+            DegradedReason: null);
+
+        SemanticEncoderHandshake? handshake = SemanticEmbeddingSession.MatchEncoder(health, Pin, out string? reason);
+
+        Assert.Null(handshake);
+        Assert.Contains(other.ModelId, reason);
+        Assert.Contains(Pin.ModelId, reason);
+    }
+
+    [Fact]
+    public void MatchEncoder_WithExpectedPin_AcceptsTheExpectedEncoder()
+    {
+        SemanticEncoderHandshake? handshake = SemanticEmbeddingSession.MatchEncoder(ReadyHealth(), Pin, out string? reason);
+
+        Assert.Null(reason);
+        Assert.NotNull(handshake);
+    }
+
+    [Fact]
+    public void ForServe_LauncherPassesTheExplicitServeVerbAndSelectedModel()
+    {
+        var launcher = ProcessSemanticSidecarLauncher.ForServe("/tools/julie-semantic-sidecar", Pin);
+
+        Assert.Equal(["serve", "--model", Pin.ModelId], launcher.Arguments);
+    }
+
+    [Fact]
     public void AbsentSidecarExecutable_MakesThisVeryTestReportSkippedInsteadOfFailed()
     {
         FakeSemanticSidecar.RequireSidecarExecutable(located: null);

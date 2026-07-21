@@ -1100,8 +1100,11 @@ public sealed class VectorConvergeService : BackgroundService
     {
         string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
         string executable = Path.Combine(workspace.ToolsRoot, name);
+        SemanticEncoderPin active = SemanticEncoderSelection.Active;
         return File.Exists(executable)
-            ? new SemanticEmbeddingSession(new ProcessSemanticSidecarLauncher(executable))
+            ? new SemanticEmbeddingSession(
+                ProcessSemanticSidecarLauncher.ForServe(executable, active),
+                expectedEncoder: active)
             : null;
     }
 }
