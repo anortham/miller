@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
@@ -690,8 +691,10 @@ public sealed class VectorConvergeService : BackgroundService
                 return Failed(kind, completed, diskBlocked);
             }
 
+            var embedClock = Stopwatch.StartNew();
             (List<VectorCommit> embedded, _, string? embedFailure) =
                 await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
+            embedClock.Stop();
             if (embedFailure is not null)
                 return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, embedFailure));
 
@@ -711,6 +714,13 @@ public sealed class VectorConvergeService : BackgroundService
                 ClearError(port, errorKey, errorAtKey);
             else
                 RecordError(port, errorKey, errorAtKey, plan.HoldReason ?? "some units could not be embedded");
+
+            if (embedded.Count > 0)
+            {
+                _logger.LogInformation(
+                    "Vector {Cursor} convergence embedded {Count} unit(s) in {ElapsedMs} ms.",
+                    kind, embedded.Count, embedClock.ElapsedMilliseconds);
+            }
 
             return new VectorCursorOutcome(
                 kind,
@@ -776,6 +786,7 @@ public sealed class VectorConvergeService : BackgroundService
                     "a shadow generation could not be created; the cursor holds"));
             }
 
+            var buildClock = Stopwatch.StartNew();
             (int embedded, int flagged, string? failure) =
                 await BuildShadowAsync(shadow, session, state, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
@@ -791,10 +802,14 @@ public sealed class VectorConvergeService : BackgroundService
             state.Promoted = true;
 
             state.Rebuilder.Promote(superseded, built);
+            buildClock.Stop();
             _logger.LogInformation(
-                "Promoted a shadow vector generation with {Embedded} embedded symbol cards ({Flagged} flagged).",
+                "Promoted a shadow vector generation with {Embedded} embedded symbol cards ({Flagged} flagged) " +
+                "in {ElapsedMs} ms ({CardsPerSecond:F0} cards/s).",
                 embedded,
-                flagged);
+                flagged,
+                buildClock.ElapsedMilliseconds,
+                embedded / Math.Max(buildClock.Elapsed.TotalSeconds, 0.001));
 
             return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, embedded, 0, completed, null);
         }

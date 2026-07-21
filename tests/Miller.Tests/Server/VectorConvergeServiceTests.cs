@@ -1174,6 +1174,44 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_IncrementalEmbed_LogsTheUnitCountAndElapsedMilliseconds()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a v2"), Card("b", "src/A.cs", "card b")];
+        port.SymbolStored = [State("a", "src/A.cs", "card a"), State("b", "src/A.cs", "card b")];
+        var logger = new RecordingLogger();
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        await ServiceWithLogger(logger).DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        LogEntry info = Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("embedded 1 unit", StringComparison.Ordinal));
+        Assert.Contains(" ms", info.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Drain_ShadowRebuildPromote_LogsTheBuildDurationAndThroughput()
+    {
+        var live = new FakePort();
+        live.SymbolSnapshot = live.SymbolSnapshot with { DeltaHistoryComplete = false };
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a"), Card("b", "src/B.cs", "card b")];
+        var logger = new RecordingLogger();
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        await ServiceWithLogger(logger).DrainAsync(
+            live, session, new FakeShadowRebuilder(shadow), TestContext.Current.CancellationToken);
+
+        LogEntry info = Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("Promoted a shadow", StringComparison.Ordinal));
+        Assert.Contains("2 embedded symbol cards", info.Message, StringComparison.Ordinal);
+        Assert.Contains(" ms", info.Message, StringComparison.Ordinal);
+        Assert.Contains("cards/s", info.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HeldChunkCursorOnAQuietWorkspace_ReDrainsAfterTheRetryDelayWithNoExternalStamp()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-retry-").FullName;
