@@ -305,6 +305,6 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** Lead-executed. Use `MILLER_SEMANTIC=shadow` per-invocation (no global env change); scratch workspaces cleaned up and pruned afterward (the 2026-07-20 benchmark's cleanup discipline). At least one deliberately-induced fault (e.g., kill the sidecar mid-converge) to verify the circuit-open pause self-reports and self-clears.
 
 **Acceptance criteria:**
-- [ ] Findings doc covering ≥3 real workspaces with the metrics above and at least one induced-fault observation.
-- [ ] All observed defects either fixed on this branch (small) or recorded as explicit follow-ups with severity.
-- [ ] Workspaces/registry left clean (`workspace prune` verified).
+- [x] Findings doc covering ≥3 real workspaces with the metrics above and at least one induced-fault observation (goldfish/eros/julie; 3-kill circuit-open campaign on eros, self-reported in 16s, self-cleared on recovery).
+- [x] All observed defects either fixed on this branch (small) or recorded as explicit follow-ups with severity (5 findings: chunk-cursor starvation medium, deferred-source logging low, RSS peaks monitor, ready-while-rebuilding polish, harness lesson).
+- [x] Workspaces/registry left clean (`workspace prune --dry-run` → 0 pruned / 52 kept; no servers or sidecars left running).
