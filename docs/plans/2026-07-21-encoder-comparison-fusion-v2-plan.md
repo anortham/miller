@@ -168,8 +168,8 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 
 **Acceptance criteria:**
 - [x] Parity smoke passed and recorded.
-- [ ] Score reports exist for every candidate × {13 profiles, lexical, semantic-only, forced-hybrid}; all `score` exits 0.
-- [ ] Every report dir carries `meta.json` with frozen SHAs + artifact ids.
+- [x] Score reports exist for every candidate × {13 profiles, lexical, semantic-only, forced-hybrid}; all `score` exits 0. (43 reports; v1 control = k60-r2 within the 12-profile grid.)
+- [x] Every report dir carries `meta.json` with frozen SHAs + artifact ids.
 
 ### Task 5: Selection analysis
 
@@ -194,8 +194,8 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **Approach:** Winner must be modal under leave-one-unit-out re-selection; report per-class/per-language secondaries as the scorer defines them (per-query). If no profile passes the bar for BOTH shippable encoders, fusion-v1 stands — write that outcome explicitly.
 
 **Acceptance criteria:**
-- [ ] Selection (or v1-stands) recorded with CI + LOUO evidence against the pre-registered gates, nothing post-hoc.
-- [ ] Pin rule applied to fused numbers + footprint facts; decision recorded.
+- [x] Selection (or v1-stands) recorded with CI + LOUO evidence against the pre-registered gates, nothing post-hoc. (Winner bar NOT met — qwen3 CI includes zero; **fusion-v1 stands**.)
+- [x] Pin rule applied to fused numbers + footprint facts; decision recorded. (**Pin → bge-small-en-v1.5-f32** per the pre-registered rule.)
 
 ### Task 6: Real-artifact cost (parallel with Task 4)
 
@@ -221,6 +221,11 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 - [ ] Bench-lane wall-clock for research arms labeled harness-not-engine.
 
 ### Task 7: fusion-v2 product change (iff Task 5 bar met)
+
+> **SKIPPED — precondition failed.** Task 5's winner bar was not met (qwen3 paired CI includes
+> zero); fusion-v1 stands and no constants change ships. The pin change to bge-small (Task 5's
+> pin-rule outcome) is a separate scoped change per the design's acceptance criteria
+> ("registry/docs/conformance goldens updated iff the pin changed").
 
 **Files:**
 - Modify: `src/Miller.Core/Search/RrfFusion.cs` (constants + `FusionProfile = "fusion-v2"`), `src/Miller.Server/Tools/SearchTool.cs:2374-2440` (chunk mirror constants), `tests/Miller.Tests/Core/RrfFusionTests.cs`, canary fusion-profile expectations (`CanarySearchTests`, `CanaryContentSearchTests`, `SemanticQueryDiagnosticsTests:227-250`)

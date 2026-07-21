@@ -311,4 +311,27 @@ public class ScorerTests
 
         Assert.Throws<InvalidOperationException>(() => Scorer.Score(queries, [], k: 10));
     }
+
+    [Fact]
+    public void Units_block_lists_every_evaluation_unit_and_reconciles_with_overall()
+    {
+        var queries = new[]
+        {
+            Positive("solo1", "csharp", "prose", ["a"]),
+            Positive("c1-a", "rust", "prose", ["b"], cluster: "shared-intent"),
+            Positive("c1-b", "rust", "prose", ["b"], cluster: "shared-intent"),
+            Negative("n1"),
+        };
+        var results = new[] { Ranked("solo1", "a"), Ranked("c1-a", "b"), Ranked("c1-b", "zz"), Ranked("n1") };
+
+        var report = Scorer.Score(queries, results, k: 10);
+
+        Assert.Equal(report.EvaluationUnitCount, report.Units.Count);
+        Assert.Contains(report.Units, u => u.UnitId == "query:solo1" && u.QueryCount == 1);
+        var cluster = Assert.Single(report.Units, u => u.UnitId == "cluster:shared-intent");
+        Assert.Equal(2, cluster.QueryCount);
+        Assert.Equal(0.5, cluster.NdcgAtK, 1e-9);
+        Assert.Equal(report.Overall.NdcgAtK, report.Units.Average(u => u.NdcgAtK), 1e-9);
+        Assert.Equal(report.Overall.RecallAtK, report.Units.Average(u => u.RecallAtK), 1e-9);
+    }
 }

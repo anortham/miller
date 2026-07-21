@@ -311,6 +311,11 @@ def cmd_rank(args):
     doc_repo = np.array([u["repo"] for u in corpus])
     doc_id = np.array([u["doc_id"] for u in corpus])
     is_test = np.array([bool(u.get("is_test")) for u in corpus])
+    # Symbol-card units carry the real symbols.db id inside their unit_id
+    # ("{repo}:sym:{symbol_id}"), which is the join key the fusion-arm adapter
+    # shares with the lexical CLI dumps.
+    unit_sym = np.array([u["unit_id"].split(":", 2)[2] if u["unit_id"].split(":", 2)[1] == "sym" else ""
+                         for u in corpus])
 
     # Production parity (design §5.2): test symbols get cards but are excluded
     # from default search recall via the is_test metadata filter, and Miller's
@@ -320,11 +325,24 @@ def cmd_rank(args):
     eligible = np.ones(len(corpus), dtype=bool) if args.include_tests else ~is_test
     excluded_tests = int(is_test.sum()) if not args.include_tests else 0
 
+    if args.symbol_dump is not None:
+        args.symbol_dump.mkdir(parents=True, exist_ok=True)
+
     rows, kept_counts = [], []
     for qi, q in enumerate(queries):
         mask = (doc_repo == q["repo"]) & eligible
         sims = doc_vecs[mask] @ q_vecs[qi]
         ids = doc_id[mask]
+
+        if args.symbol_dump is not None:
+            # Production semantic-arm shape: symbol cards only, top-k by cosine,
+            # unthresholded (the serving arm's KNN has no cosine floor).
+            syms = unit_sym[mask]
+            sym_rows = [(float(s), sid, did) for s, sid, did in zip(sims, syms, ids) if sid]
+            sym_rows.sort(key=lambda t: (-t[0], t[1]))
+            dump = [{"symbol_id": sid, "doc_id": did, "score": 0.0, "rank": n + 1}
+                    for n, (_, sid, did) in enumerate(sym_rows[: args.symbol_k])]
+            (args.symbol_dump / f"{q['query_id']}.json").write_text(json.dumps(dump))
 
         # Collapse unit scores onto doc_ids: a file's score is its best unit.
         best = {}
@@ -389,6 +407,10 @@ def main():
             p.add_argument("--ratio", type=float, default=0.85)
             p.add_argument("--include-tests", action="store_true",
                            help="rank is_test corpus units too (off by default: production parity)")
+            p.add_argument("--symbol-dump", type=Path, default=None,
+                           help="also write per-query symbol-level rankings (fusion-arm adapter input) here")
+            p.add_argument("--symbol-k", type=int, default=20,
+                           help="symbol-dump depth: production semantic KNN k for a limit-10 request")
 
     args = ap.parse_args()
     return {"sanity": cmd_sanity, "embed": cmd_embed, "rank": cmd_rank}[args.cmd](args)

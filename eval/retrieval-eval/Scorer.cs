@@ -8,6 +8,7 @@ sealed record ScoredQuery(EvalQuery Query, double Recall, double Ndcg, bool Hit)
 /// best-member view used by the secondary cluster-max metrics.
 /// </summary>
 sealed record EvalUnit(
+    string UnitId,
     string Language,
     double Recall,
     double Ndcg,
@@ -131,6 +132,17 @@ public static class Scorer
             WorstLanguage = worst,
             PerQueryClass = perQueryClass,
             PerIntentCluster = clusters,
+            Units = units
+                .OrderBy(u => u.UnitId, StringComparer.Ordinal)
+                .Select(u => new UnitRow
+                {
+                    UnitId = u.UnitId,
+                    Language = u.Language,
+                    RecallAtK = u.Recall,
+                    NdcgAtK = u.Ndcg,
+                    QueryCount = u.QueryCount,
+                })
+                .ToList(),
             IntentClusterSummary = new ClusterSummary
             {
                 ClusterCount = clusters.Count,
@@ -162,7 +174,7 @@ public static class Scorer
         var units = new List<EvalUnit>();
 
         foreach (var solo in positives.Where(s => string.IsNullOrWhiteSpace(s.Query.IntentCluster)))
-            units.Add(new EvalUnit(solo.Query.Language, solo.Recall, solo.Ndcg, solo.Recall, solo.Ndcg, 1));
+            units.Add(new EvalUnit($"query:{solo.Query.QueryId}", solo.Query.Language, solo.Recall, solo.Ndcg, solo.Recall, solo.Ndcg, 1));
 
         var clustered = positives
             .Where(s => !string.IsNullOrWhiteSpace(s.Query.IntentCluster))
@@ -172,6 +184,7 @@ public static class Scorer
         foreach (var cluster in clustered)
         {
             units.Add(new EvalUnit(
+                $"cluster:{cluster.Key}",
                 DominantLanguage(cluster),
                 cluster.Average(s => s.Recall),
                 cluster.Average(s => s.Ndcg),

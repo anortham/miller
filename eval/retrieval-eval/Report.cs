@@ -57,6 +57,20 @@ public sealed record ClusterRollup
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
 }
 
+/// <summary>
+/// One evaluation unit's scores, for paired per-unit analysis (bootstrap, leave-one-unit-out). Unit ids are
+/// namespaced: <c>cluster:&lt;intent_cluster&gt;</c> for paraphrase clusters, <c>query:&lt;query_id&gt;</c> for
+/// standalone queries, so the two spaces cannot collide and pairing across arms is by exact id.
+/// </summary>
+public sealed record UnitRow
+{
+    [JsonPropertyName("unit_id")] public string UnitId { get; init; } = "";
+    [JsonPropertyName("language")] public string Language { get; init; } = "";
+    [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
+    [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("query_count")] public int QueryCount { get; init; }
+}
+
 public sealed record ClusterSummary
 {
     [JsonPropertyName("cluster_count")] public int ClusterCount { get; init; }
@@ -104,6 +118,8 @@ public sealed record EvalReport
     /// </summary>
     [JsonPropertyName("per_query_class")] public IReadOnlyDictionary<string, MetricBlock> PerQueryClass { get; init; } = new Dictionary<string, MetricBlock>();
     [JsonPropertyName("per_intent_cluster")] public IReadOnlyList<ClusterRollup> PerIntentCluster { get; init; } = [];
+    /// <summary>Every evaluation unit the primary metrics average over, keyed for cross-arm pairing.</summary>
+    [JsonPropertyName("units")] public IReadOnlyList<UnitRow> Units { get; init; } = [];
     [JsonPropertyName("intent_cluster_summary")] public ClusterSummary IntentClusterSummary { get; init; } = new();
     [JsonPropertyName("negatives")] public NegativeBlock Negatives { get; init; } = new();
     [JsonPropertyName("missing_results")] public IReadOnlyList<string> MissingResults { get; init; } = [];
