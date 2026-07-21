@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller semantic integration program (P0–P6)
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-20T20:02:13.025Z
+updated: 2026-07-21T01:59:18.510Z
 tags:
   - semantic-search
   - program
@@ -22,13 +22,16 @@ tags:
 - No new MCP tools. No ServerInstructions growth. Canary telemetry contract frozen in P0; randomized holdout is the causal gate.
 - **Miller stays LOCAL until the plan completes (user directive 2026-07-20):** no miller pushes — main or branch — without asking. Exception: `worktree-semantic-p2` stays on origin (sidecar CI pins miller fixtures at `8edfa14`). Sidecar repo pushes unaffected.
 - **ModelRevision pin = HF repo revision ("main"), never the gguf file name** — corrected f68dad8 after the live RC handshake caught it; encoder fingerprints changed pre-ship.
+- **Harness numbers ≠ engine numbers (2026-07-20 lesson):** the RC shipped 12x under the P0 llama-server floor (CPU-only backend selection + `n_seq_max` never set → silent per-text bisection). RC→release promotion must include a target-machine throughput floor. Memory: `validate-hardware-perf-on-real-artifact`.
 
 ## Phase state
 - P0 (governance/gates): DONE. P1 (freeze/conformance): DONE (miller PR #7). P2a (sidecar v1): DONE (sidecar PR #1).
 - P2 (Miller-side lanes): DONE 2026-07-20 — merged to local main 40ca89a after codex review (3/3 real findings fixed).
-- P3 (query-time hybrid + Track 1 pins/packaging): DONE 2026-07-20 — merged to local main a8c499c. Hybrid RRF at the executor seam, rescue rung, mode contracts, CLI --arm + determinism. Sidecar v0.1.0-rc.1 PUBLISHED (prerelease); pins/restore/build-guard/real-sidecar Scale tests; RC promotion gate PASSES live. Codex review: 5/5 verified findings fixed. Local main ~46 commits ahead of origin, held.
-- NEXT: **P4 shadow** — run shadow in real workspaces and act on shadow evidence; P4 backlog: GC scheduler + live-reader registry (TagsWithLiveReaders unwired), converge_pause_state producer (top diagnosability item), disk preflight, `downloading` status producer, model-footprint decision (Q8_0 ~640MB re-benchmark vs f16 ~1.1GiB vs bge-small tier), fast-suite wall-ceiling pressure (at the 30s cliff). Then P5 canary→default-on (wire CanaryTelemetry arms + randomized holdout), P6 eval-gated extensions (all-source corpus etc.).
-- Pending user decisions: RC→v0.1.0 promotion (gate passed, ready); miller push timing (plan-complete definition).
+- P3 (query-time hybrid + Track 1 pins/packaging): DONE 2026-07-20 — merged to local main a8c499c. Sidecar v0.1.0-rc.1 published; RC promotion gate passed live.
+- Initial-converge scale fix + sidecar throughput fix: DONE 2026-07-20 (post-P3 interlude, merged d9b65e5; sidecar v0.1.0-rc.2 published, pin bumped a921bae). ~3.5 min clean initial semantic index. Evidence: `docs/findings/2026-07-20-first-real-shadow-converge-benchmark.md`.
+- **P4 (shadow rollout): DONE 2026-07-21 — merged to local main 43abbed** after codex review (4 findings: F1 retention-mtime, F2 Unix disk-probe, F4 marker race fixed; F3 dismissed→pre-P5 follow-up). Shipped: converge_pause_state producer (circuit-open + disk-blocked), DiskPreflight, `miller semantic prepare` CLI verb + marker, `downloading` status, generation GC + VectorLiveReaderRegistry, sidecar promotion-gate throughput floor (≥40 u/s M2 Ultra warm 64-batch) + bench script with RSS, fast-suite fsync fix (~15s), shadow dogfood across goldfish/eros/julie (fault campaign clean). Evidence: `docs/findings/2026-07-20-p4-shadow-dogfood.md`, `docs/findings/2026-07-20-q8-footprint-benchmark.md`, run report `.memories/autonomous-run-2026-07-21-semantic-p4-shadow-rollout.md`.
+- NEXT: **P5 canary→default-on** (wire CanaryTelemetry arms + randomized holdout). Pre-P5 follow-ups: chunk-cursor starvation retry wake (medium — planner holds cursor with AdvanceTo=0 on hash-disagreement deferral; quiet workspace never re-wakes), incremental-path disk gate (codex F3), deferred-source logging (low), sidecar RSS peak ceiling check, compact "ready (rebuilding)" hint. Then P6 eval-gated extensions.
+- **Pending user decisions:** (1) model footprint — NO Q8_0 manifest pin exists; measured f16 82.9 u/s @1.27GiB vs bge-small 743.7 u/s @196MiB (`docs/findings/2026-07-20-q8-footprint-benchmark.md`); (2) sidecar RC→v0.1.0 promotion — re-run gate WITH the new 40 u/s floor (sidecar main ahead 3 of origin, unpushed); (3) miller push timing (main ~78 ahead of origin, held).
 
 ## Status
-No active worktrees; miller main a8c499c clean (another session's untracked machine-service files present). Sidecar main green at 2a02f35 with v0.1.0-rc.1 released.
+No active worktrees; miller main 43abbed (P4 merged; pushes held; another session's untracked machine-service files present in the checkout). Sidecar main 34866ba local (ahead 3 of origin: bench --model/RSS + gate floor).
