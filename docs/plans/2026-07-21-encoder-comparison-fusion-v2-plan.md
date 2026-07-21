@@ -85,8 +85,8 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **Approach:** Stage order with hard stops: (1) `huggingface-cli download` at a pinned revision, record license file; (2) `convert_hf_to_gguf.py` — NomicBert-long architecture unsupported by the pinned converter ⟹ STOP (drop reason: converter); (3) f16 GGUF through `bench.py sanity`; (4) parity: embed ~20 conformance texts via llama-server AND via `sentence-transformers` (uv/pip ephemeral env, `trust_remote_code=True`), report min cosine — < 0.99 ⟹ STOP (drop reason: fidelity). Remember the query prefix applies to queries only, not documents. Budget: one session; any ambiguity → drop with reason, do not extend.
 
 **Acceptance criteria:**
-- [ ] Either an overlay pin with recorded revision/converter/sha256/pooling/prefix AND min-cosine ≥ 0.99 evidence, or a written drop reason naming the failed stage.
-- [ ] Nothing machine-specific committed; `bench-pins.local.json` gitignored.
+- [x] Either an overlay pin with recorded revision/converter/sha256/pooling/prefix AND min-cosine ≥ 0.99 evidence, or a written drop reason naming the failed stage.
+- [x] Nothing machine-specific committed; `bench-pins.local.json` gitignored.
 
 ### Task 2: Corpus freeze, exclusions, findings skeleton
 
@@ -143,7 +143,7 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **Acceptance criteria:**
 - [x] Adapter builds and tests green (`dotnet test eval/fusion-arm/tests/FusionArm.Tests.csproj`).
 - [x] Fixture run produces contract-valid results.jsonl (`retrieval-eval score` accepts it, exit 0).
-- [ ] Parity smoke DEFERRED to Task 4 start (needs live vectors): 5 dev prose queries, adapter at fusion-v1 vs `miller search --arm hybrid --json` — ranks must match.
+- [x] Parity smoke DEFERRED to Task 4 start (needs live vectors): 5 dev prose queries, adapter at fusion-v1 vs `miller search --arm hybrid --json` — ranks must match.
 
 ### Task 4: Arm generation + scoring (serial; long-running)
 
@@ -167,7 +167,7 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **Approach:** Lead-driven with a background monitor per lane; parity smoke (Task 3 AC) runs first at fusion-v1 before any sweep scoring. Record corpus SHAs/artifact ids into each report directory (`meta.json`).
 
 **Acceptance criteria:**
-- [ ] Parity smoke passed and recorded.
+- [x] Parity smoke passed and recorded.
 - [ ] Score reports exist for every candidate × {13 profiles, lexical, semantic-only, forced-hybrid}; all `score` exits 0.
 - [ ] Every report dir carries `meta.json` with frozen SHAs + artifact ids.
 

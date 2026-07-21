@@ -95,7 +95,7 @@
     },
     {
       "model": "CodeRankEmbed",
-      "reason": "community GGUF with unclear license"
+      "reason": "License is NOT the blocker: the first-party base model nomic-ai/CodeRankEmbed is MIT (cardData.license=mit and repo tag license:mit at HF revision 3c4b60807d71f79b43f3c4363786d9493691f8b1) — the earlier 'unclear license' note referred only to third-party GGUF repackagings. The real blocker is the pinned llama.cpp converter: b10068 (through the current newest release b10076) convert_hf_to_gguf.py recognizes NomicBertModel but conversion/bert.py:372 calls find_hparam(['num_local_experts','num_experts']) unconditionally, so it KeyErrors on every non-MoE NomicBert (this model + nomic-embed-text-v1 class). No released build guards the lookup; unblock requires a fixed upstream release, not a source patch. Evidence: task-1-report.md."
     },
     {
       "model": "yixuan-chia/snowflake-arctic-embed-s-GGUF",

@@ -1,114 +1,94 @@
-# Task 1 Report — Encoder pin registry + `MILLER_SEMANTIC_MODEL` swap seam
+# Task 1 report — CodeRankEmbed feasibility spike
 
-## Status
-DONE. commit SHA: none - parallel-lead-commit.
+**Status: DROP — drop reason `converter` (Stage 2).**
+**One-line:** Pinned llama.cpp `b10068` `convert_hf_to_gguf.py` recognizes `NomicBertModel` but crashes with `KeyError: ['num_local_experts','num_experts']` at `conversion/bert.py:372` for this non-MoE model — no f16 GGUF produced, so the sanity and parity gates never run. No overlay written.
 
-## What I implemented
-A registry + selection seam so swapping the embedding model is one env var, built on top of the existing
-`MillerSemanticContract` (no new abstraction layers, no decorator).
+> Note to lead: this file previously held a stale report titled "Encoder pin registry + `MILLER_SEMANTIC_MODEL` swap seam" from an earlier plan iteration (timestamped with the 12:07 worktree reset). It did not match `task-1-brief.md` (the CodeRankEmbed spike). Overwritten with the correct Task 1 report per your instruction to write here.
 
-- `MillerSemanticContract.KnownEncoders : IReadOnlyList<SemanticEncoderPin>` = `[DefaultEncoder, FallbackEncoder]`
-  (qwen3 first, bge-small second).
-- `MillerSemanticContract.FindEncoder(string modelId) : SemanticEncoderPin?` — exact ordinal `ModelId` match over
-  `KnownEncoders`; null-safe (a null argument returns null, preserving the old `FindPin` behavior).
-- `SemanticEncoderResolution(SemanticEncoderPin Pin, string? UnknownModelId)` — the pure resolution outcome;
-  `UnknownModelId` is the single signal that a fallback-to-default warning is warranted.
-- `SemanticEncoderSelection` (same file, `Miller.Indexing.Semantic`):
-  - `EnvVar = "MILLER_SEMANTIC_MODEL"`.
-  - `Resolve(string? raw) : SemanticEncoderResolution` — pure, side-effect free. Unset/empty/whitespace →
-    `DefaultEncoder` (no unknown); trimmed exact match → that pin; unrecognized → `DefaultEncoder` + `UnknownModelId`.
-  - `Active` / `FromEnvironment()` → the process-wide pin, resolved **once** via a `Lazy` reading `MILLER_SEMANTIC_MODEL`,
-    so the fallback warning fires at most once for the process lifetime (matches "read once").
-  - `ResolveAndWarn(string? raw, Action<string> warn)` — internal seam: resolves and emits exactly one warning when
-    the value is unrecognized. The `Lazy` uses it with `Console.Error.WriteLine` as the default sink.
-- Threaded the active pin to every prior `DefaultEncoder` hard-code:
-  - `VectorSidecar` — added `Encoder : SemanticEncoderPin` (defaults to `SemanticEncoderSelection.Active`, injectable via
-    the existing internal ctor's new `encoder` param). `Reader` now derives from `Encoder` via a private
-    `ReaderIdentityFor` helper (replaced the static `DefaultReader`, which had a single internal reference), so the
-    reader fingerprint tracks the active encoder (old :207 fingerprint site).
-  - `VectorConvergeService` :591 and :1139 — `PinnedIdentity(MillerSemanticContract.DefaultEncoder[, …])` →
-    `PinnedIdentity(SemanticEncoderSelection.Active[, …])`.
-  - `SemanticEmbeddingSession.MatchEncoder` — `FindPin(...)` → `MillerSemanticContract.FindEncoder(...)`; deleted the
-    now-redundant private `FindPin`.
+Worktree: `/Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval`, branch `worktree-fusion-v2-eval`, HEAD `067c1f7`.
 
-## `semantic prepare` trace (no CliDispatch edit needed)
-Traced `semantic prepare` in `CliDispatch`: `CliDispatch.Semantic` (:327) parses `--model` and constructs
-`SemanticPrepareRequest(o.Value("model"), o.Has("json"))`, then `SemanticPrepareCli.Run` →
-`BuildArguments` (:143) passes the raw `--model` string straight through to the pinned sidecar's `prepare` subcommand
-(sidecar owns download mechanics). **Neither path references `DefaultEncoder`** — the "fix if hard-coded" condition is
-not met, so I left `CliDispatch.cs` untouched (also respecting Task 2's territory). Defaulting an unset `--model` to the
-active pin's `ModelId` would be new download-selection behavior, which the task explicitly excludes ("No new download
-logic"); not done.
+---
 
-## Verification
-- **worker-red-green** — invariant: the selection API resolves the right pin and the swap classifies as a shadow rebuild.
-  `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~SemanticEncoderSelectionTests"` →
-  **Passed 16/16, 0 failed** (2026-07-21). Confirmed red first (CS0117/CS0103/CS1739 for the missing APIs), then green.
-- **worker-ceiling** — invariant: my change leaves the fast suite green and pure.
-  `scripts/test.sh` → **4255 passed, 2 skipped, 1 failed**. The single failure is
-  `Miller.Tests.Core.CanaryGateMathTests.StudentTCritical_MatchesPublishedTableValues(df:4)` — a Student-t numerical
-  tolerance issue in an **untracked sibling-worker file** (`tests/Miller.Tests/Core/CanaryGateMathTests.cs` +
-  `src/Miller.Core/Telemetry/`, neither in my ownership) with zero dependency on encoder selection. Isolating my feature's
-  surface — `dotnet test --filter "…SemanticEncoderSelectionTests|…MillerSemanticContractTests|…VectorSidecar|…SemanticEmbeddingSessionTests"`
-  → **124 passed, 1 skipped, 0 failed** (2026-07-21).
-- **Build diagnostic** — invariant: 0 warnings / 0 errors (warnings are errors).
-  `dotnet build Miller.slnx -c Release` → **Build succeeded, 0 Warning(s), 0 Error(s)** (2026-07-21).
+## Stages executed
 
-## Files changed
-- `src/Miller.Indexing/Semantic/MillerSemanticContract.cs` — added `KnownEncoders`, `FindEncoder`,
-  `SemanticEncoderResolution`, `SemanticEncoderSelection`.
-- `src/Miller.Indexing/VectorSidecar.cs` — added `Encoder`; `Reader` derives from it; removed static `DefaultReader`.
-- `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` — use `FindEncoder`; deleted `FindPin`.
-- `src/Miller.Server/Hosting/VectorConvergeService.cs` — two pinned-identity sites use `SemanticEncoderSelection.Active`.
-- `tests/Miller.Tests/Indexing/SemanticEncoderSelectionTests.cs` — new.
+### Stage 1 — download + license — PASS
+- `hf download nomic-ai/CodeRankEmbed --revision 3c4b60807d71f79b43f3c4363786d9493691f8b1 --local-dir .cache/hf/CodeRankEmbed`
+- **HF revision pinned:** `3c4b60807d71f79b43f3c4363786d9493691f8b1`
+- **License: MIT** — `cardData.license = mit` AND repo tag `license:mit` (from `https://huggingface.co/api/models/nomic-ai/CodeRankEmbed`). This clears the stale `bench-pins.json` `rejected_candidates` note ("community GGUF with unclear license"): the **base model** is unambiguously MIT. The objection only ever applied to third-party GGUF repackagings, not to a first-party conversion of the MIT weights.
+- Config confirms the T1 contract: `architectures=["NomicBertModel"]`, `model_type=nomic_bert`, `n_embd=768`, `1_Pooling/config.json → pooling_mode_cls_token=true` (CLS pooling), `n_positions=8192`, `max_trained_positions=2048`, `activation_function=swiglu`, non-MoE (no `moe_every_n_layers`).
+- Pinned llama.cpp `b10068` **binary** archive downloaded and **sha256 verified** against `bench-pins.json` (`13aa2d40c76ad1dcb8ebeec5f0d2814bf3b2f84a66935c7d4dc6f7cca8e38d68` — exact match). Source tarball for tag `b10068` downloaded to obtain `convert_hf_to_gguf.py` (not shipped in the prebuilt binary archive).
+- Converter venv built from the pin's own `requirements/requirements-convert_hf_to_gguf.txt` (torch 2.11.0, transformers 4.57.6, gguf, numpy 1.26.4, sentencepiece) via `uv pip install --index-strategy unsafe-best-match`.
 
-## Miller calls used (API-shape evidence)
-- `context(query="semantic encoder pin generation identity DefaultEncoder …")` — located seeds `DefaultEncoder`/`FallbackEncoder`
-  (:94/:105), `FindPin` (:685), `PinnedIdentity`, and the contract test suite.
-- `inspect(MillerSemanticContract, depth=full)` — proved the pin values, `PinnedIdentity`, `EncoderFingerprint`,
-  `CanonicalEncoderString`, and `ClassifyChange` (EncoderFingerprint|StorageSchema change ⟹ `ShadowRebuild`); confirmed I
-  must not touch pin values / `CanonicalEncoderString`.
-- `inspect(SemanticEncoderPin, depth=full)` — proved the 9-field record shape (ModelId, …, StorageSchema).
-- `inspect(FindPin, depth=full)` — proved the exact body to generalize into `FindEncoder`.
-- `trace(DefaultEncoder, mode=refs)` — proved the complete production call-site set: `SemanticEmbeddingSession` :686/:687,
-  `VectorSidecar` :207, `VectorConvergeService` :591/:1139 (rest are tests). Drove the guard test.
-- `trace(DefaultReader, mode=refs)` — proved `DefaultReader` had a single internal reference (:198), safe to replace.
-- `inspect(SemanticActivation, depth=full)` — mirrored its `EnvVar` + `FromEnvironment`/pure-mapping split.
-- `inspect(IVectorFileProbe, depth=full)` — proved the probe interface (`FileExists`, `EnumerateRetainedGenerations`) for the test stub.
-- `inspect(src/Miller.Server/Cli/SemanticPrepareCli.cs)` + `search(mode=source, "semantic prepare")` — proved the prepare
-  path passes `--model` through with no `DefaultEncoder` reference.
+### Stage 2 — convert (`convert_hf_to_gguf.py --outtype f16`) — **FAIL → HARD STOP**
+Command:
+```
+python .cache/src/llama.cpp-b10068/convert_hf_to_gguf.py \
+  .cache/hf/CodeRankEmbed --outtype f16 \
+  --outfile .cache/gguf/coderankembed-f16.gguf
+```
+Output tail (evidence — `.cache/gguf/convert.log`):
+```
+INFO:hf-to-gguf:Model architecture: NomicBertModel      <- architecture IS registered/recognized
+INFO:hf-to-gguf:Exporting model...
+  File ".../conversion/bert.py", line 372, in modify_tensors
+    n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+  File ".../conversion/base.py", line 198, in find_hparam
+    raise KeyError(f"could not find any of: {keys}")
+KeyError: "could not find any of: ['num_local_experts', 'num_experts']"
+```
+No `.cache/gguf/*.gguf` produced. Exit code 1.
 
-## Acceptance criteria
-- [x] `MILLER_SEMANTIC_MODEL=bge-small-en-v1.5-f32` resolves the bge pin; its `PinnedIdentity` differs from qwen3's
-  (fingerprint AND storage schema) and `ClassifyChange` yields `ShadowRebuild`
-  (`SelectingTheFallbackPin_ClassifiesAsAShadowRebuildAgainstTheDefault`).
-- [x] Unset/unknown env values resolve `DefaultEncoder`; unknown logs one warning
-  (`Resolve_*`, `ResolveAndWarn_*` tests — one warning for unknown, zero for known/unset).
-- [x] `VectorConvergeService`, `VectorSidecar`, and the `semantic prepare` path all consume the resolved pin (prepare never
-  referenced `DefaultEncoder`); no remaining direct `DefaultEncoder` reads outside `MillerSemanticContract` and tests —
-  guarded by `NoProductionSiteReadsDefaultEncoderDirectlyOutsideTheContractFile` (source-scan of `src/**`, 50+ files).
-- [x] Worker-scope verification passes; handed to lead per parallel-lead-commit (no git add/commit).
+**Root cause (pinned-source-verified, `conversion/bert.py:371-388`):** `NomicBertModel.modify_tensors` calls `find_hparam(["num_local_experts","num_experts"])` **unconditionally** at the top of the method. That value is only consumed inside the MoE tensor branches (`"mlp.experts.mlp.w1/w2" in name`). CodeRankEmbed is non-MoE (`self.is_moe = bool(hparams.get("moe_every_n_layers"))` → `False`), so no experts hparam exists and the lookup raises `KeyError` on the **first** tensor. The lookup should be `optional=True` or moved inside the MoE branch. This is a converter bug in the pinned `b10068` build that trips **every** non-MoE `NomicBertModel` (nomic-embed-text-v1 class), not a CodeRankEmbed-specific gap.
 
-## Self-review
-- Completeness: all acceptance criteria met; every prior `DefaultEncoder` hard-code routed through the seam and enforced by
-  a guard test.
-- Quality: `Resolve` is pure/testable; process-wide-once via `Lazy`; warning seam injectable so the "one warning" behavior is
-  asserted without env mutation or real I/O. `Reader` derives from `Encoder` so an injected encoder can never diverge from the
-  reader fingerprint. Zero code/test narration comments; only API doc comments added.
-- Discipline: no pin-value or `CanonicalEncoderString` changes (existing artifact fingerprints unmoved); no new MCP tool; no
-  new files outside the owned set (selection types live inside `MillerSemanticContract.cs`).
+### Stage 3 — sanity gate — NOT RUN (blocked by Stage 2, no GGUF).
+### Stage 4 — parity gate — NOT RUN (blocked by Stage 2, no GGUF).
+
+The sanity/parity harness was fully staged before the stop and is ready if the converter is unblocked: `.cache/parity/` holds `texts.json` (20 non-empty conformance rows: 12 documents, 8 queries), `parity_llama.py` (reuses `bench.py`'s `LlamaServer`, CLS pooling, `--embd-normalize 2`), `parity_ref.py` (`SentenceTransformer(..., trust_remote_code=True)`, `normalize_embeddings=True`, query prefix applied to `role=query` rows only), and `compare.py` (per-row cosine, min/mean, 0.99 gate). A reference venv (`sentence-transformers` + `einops`) is also built. None of this executed because there is no f16 GGUF to embed with.
+
+## What each gate would have proven (unreached)
+- **sanity** ⟹ CLS pooling is wired correctly in the GGUF (anchor↔similar minus anchor↔dissimilar ≥ 0.10 margin, dims == 768).
+- **parity** ⟹ conversion preserved the reference model's geometry (min cosine ≥ 0.99 between llama-server f16 and sentence-transformers fp32 over the 20 conformance texts).
+
+## Decision
+Per the T1 contract, converter failure is an enumerated HARD STOP and the budget is one session with "any ambiguity → drop with reason, do not extend." Patching the pinned converter to get past line 372 would (a) violate "do not extend" and (b) make any resulting overlay dishonest — it would claim conversion by the pinned `b10068` release when the model in fact required a source patch. So: **no `bench-pins.local.json` overlay written; `eval/model-bench/.gitignore` left unchanged** (nothing machine-specific was produced to ignore; `.cache/` is already gitignored).
+
+## Remediation options for the plan (not acted on — needs a pin/approval decision)
+- Bump the benchmark's llama.cpp pin to a `b#####` build where `bert.py`'s MoE-hparam lookup is guarded (`optional=True` / moved into the MoE branch), then re-run this spike end to end. This is the clean path — CodeRankEmbed is a standard non-MoE NomicBert, so once the converter bug is gone conversion should be uneventful.
+- Or track the one-line upstream fix explicitly as a pinned patch (documented, sha-recorded) if a converter bump is undesirable — heavier process, same result.
+- License is **not** a blocker (clean MIT, verified above); the only blocker is the converter build.
+
+## Miller MCP calls used
+None. The brief pre-named every essential file (`bench-pins.json`, `bench.py`, `README.md`, `run-bench.sh`, corpus) and they are small, so direct reads located them without a search. Given CAVEAT 2 (shared MCP connection; abandon on >60s hang) and that no discovery was needed, direct file reads were the lower-risk path. Reported honestly rather than manufacturing a search call.
+
+## API-shape evidence (`bench-pins.json` `candidates[]` shape, copied exactly)
+Candidate objects use these keys: `id`, `tier`, `model`, `hf_repo`, `hf_repo_owner`, `license`, `license_verified_from`, `file`, `url`, `sha256`, `size_bytes`, `native_dims`, `pooling`, `mrl`, `mrl_lanes`, `instruction_aware`, `query_instruction`, `document_instruction`, `context_length`. The pooling gate reads `pooling`, `native_dims`, `context_length`; the query-prefix field consumed by `bench.py` (`prep_query`) is **`query_instruction`**, not `query_prefix`. The T1 brief names the overlay field `query_prefix`; had the gates passed, the overlay would have carried **both** (`query_prefix` for the T1 contract and `query_instruction` = same value for `bench.py` compatibility), plus the recorded `hf_revision` and `converter_command`. Recorded here so Task 4 inherits the exact shape decision even though no overlay was emitted.
 
 ## Judgment calls
-- `src/Miller.Server/Cli/CliDispatch.cs` — chose NO edit over editing the prepare call site, because `Semantic`/`SemanticPrepareCli`
-  pass `--model` through and never read `DefaultEncoder`; the conditional-edit trigger is unmet and prepare-default selection would
-  be out-of-scope new download logic.
-- `MillerSemanticContract.cs:117` area — placed `SemanticEncoderSelection`/`SemanticEncoderResolution` inside this file rather than
-  a new file, because the owned-file set excludes new files and the guard's "outside MillerSemanticContract" exemption is file-scoped.
-- `VectorSidecar.cs:206` — removed static `DefaultReader` (single internal ref) and derived `Reader` from the new `Encoder`, over
-  keeping `DefaultReader` as a second source of truth, so the reader fingerprint always matches the active encoder.
-- Warning sink — `Console.Error.WriteLine` default, because Miller.Indexing has no logging framework (no Serilog/ILogger package)
-  and stderr is the safe channel for the MCP stdio server (stdout is the protocol); it is injectable for tests.
+- `conversion/bert.py:372` (pinned b10068): classified the failure as drop reason **`converter`** — the architecture is registered (`Model architecture: NomicBertModel` logged) but the pinned converter cannot emit a GGUF for this non-MoE config. Same terminal stage the brief labels "converter"; the specific mechanism (MoE-hparam lookup bug) is narrower than "unsupported architecture" and is reported as such.
+- Did **not** patch the pinned converter to continue to Stages 3–4 — see Decision above (pin fidelity + "do not extend").
+- Parity text selection (`.cache/parity/texts.json`): first 20 non-empty `text` rows of `eval/sidecar-conformance/corpus.jsonl` (12 documents / 8 queries), query prefix applied to `role=query` only, matching CodeRankEmbed's queries-only prefix rule.
 
-## Issues / concerns
-- Fast-suite failure `CanaryGateMathTests.StudentTCritical_MatchesPublishedTableValues(df:4)` is a **sibling worker's untracked
-  file**, not mine — flagged for the lead; it does not gate this task.
+---
+
+# Retry round (lead-sanctioned pin-bump attempt) — FINAL DROP stands
+
+**Status: DROP — drop reason `converter` (both reasons: MIT-clean license, converter unfixed in all releases). No pin bump, no overlay, no converter patch.**
+
+Lead sanctioned one bounded round under remediation option 1: bump the bench `llama_cpp` pin to the earliest released tag > b10068 where `conversion/bert.py`'s MoE-hparam lookup is guarded, then re-run Stages 2–4. Term 2 was explicit: if NO released build contains the fix, STOP with final DROP.
+
+## Finding: no released build fixes the lookup — the bug is live on master today
+
+- **The offending line is byte-identical from b10068 through the current newest release.** `conversion/bert.py:372` reads `n_experts = self.find_hparam(["num_local_experts", "num_experts"])` — unconditional, only consumed by the MoE tensor branches — on the pinned b10068 source AND on `master` HEAD (fetched raw, cache-busted). Newest release at check time: **`b10076`** (published `2026-07-21T15:52:50Z`), i.e. *after* b10068; it snapshots the same unfixed master.
+- **The file has not been touched since before b10068.** GitHub API (`/repos/ggml-org/llama.cpp/commits?path=conversion/bert.py`) shows the last three commits to that file are `bfb4308b` (2026-06-02, granite embeddings R2), `d4c8e2c2` (2026-05-31, jina-v2-zh tokenizer), `cc7200bf` (2026-05-15, "Refactor: convert_hf_to_gguf.py"). None post-dates b10068; none guards the experts lookup. Releases are build-numbered snapshots of master, so every tag in `(b10068, b10076]` carries the identical unguarded line.
+- **The crash is architecture-wide, not CodeRankEmbed-specific.** `nomic-ai/nomic-embed-text-v1`'s `config.json` (the canonical non-MoE NomicBert) also has **no** `num_experts`/`num_local_experts` (verified live); only `nomic-embed-text-v2-moe` carries them (`num_experts: 8`, `moe_every_n_layers: 2`). Probing CodeRankEmbed's hparams with the **pinned loader itself** (`ModelBase.load_hparams`, read-only, no patch) returns zero moe/expert keys and `is_moe=False`. So `modify_tensors`'s first line KeyErrors on any non-MoE NomicBert. The fix is a one-liner upstream (`optional=True` / move into the MoE branch) but it has not shipped in any release.
+
+## Decision
+Term 2's STOP condition is met: no released build > b10068 contains the fix, and patching converter source is out of bounds (would produce a dishonest overlay claiming conversion by a pinned release). **Final DROP stands.** Stages 3 (sanity) and 4 (parity) remain unreached; the `.cache/parity/` harness is still staged for the day a fixed llama.cpp release exists — at which point this spike re-runs unchanged with only the `llama_cpp` pin swapped.
+
+## File changes this round
+- **`eval/model-bench/bench-pins.json`** — `llama_cpp`/`runtime` entry **left unchanged** (no fixed release to point at). Updated the `rejected_candidates` CodeRankEmbed note (lead-sanctioned): corrected the stale "unclear license" reason to record MIT-clean license at revision `3c4b6080…` and the true converter blocker with the `bert.py:372` mechanism and the b10068→b10076 release span. JSON re-validated.
+- **No `bench-pins.local.json` overlay** (fail path). **`.gitignore` unchanged.** No `git add`/`commit`.
+
+## Retry judgment calls
+- Did not bump the `llama_cpp` pin: the earliest-fixed-release search terminates with "no fixed release exists" because master itself is unfixed — an existence proof, no per-tag enumeration needed.
+- Applied the `rejected_candidates` correction even though the round STOPped before a pin bump: the lead sanctioned it independently and it is evidence-backed. Kept CodeRankEmbed in `rejected_candidates` (still rejected) but replaced the false reason with the accurate one rather than deleting the entry.

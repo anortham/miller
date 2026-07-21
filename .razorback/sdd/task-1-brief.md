@@ -1,31 +1,26 @@
-### Task 1: Encoder pin registry + `MILLER_SEMANTIC_MODEL` swap seam
+### Task 1: CodeRankEmbed feasibility spike
 
 **Files:**
-- Modify: `src/Miller.Indexing/Semantic/MillerSemanticContract.cs` (`DefaultEncoder`/`FallbackEncoder` at :94/:105)
-- Modify: `src/Miller.Indexing/VectorSidecar.cs` (:207 direct `DefaultEncoder` ref; `FromEnvironment` at :162 area)
-- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs` (:591, :1139 direct `DefaultEncoder` refs)
-- Modify: `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` (`FindPin` :685)
-- Test: `tests/Miller.Tests/Indexing/SemanticEncoderSelectionTests.cs` (new)
+- Create: `eval/model-bench/bench-pins.local.json` (local overlay, add to `eval/model-bench/.gitignore`)
+- Test: n/a (spike; evidence is the parity report pasted into the task result)
 
 **Interfaces:**
-- Consumes: existing `SemanticEncoderPin`, `MillerSemanticContract.PinnedIdentity`, `ClassifyChange` (fingerprint change ⟹ `ShadowRebuild` — already tested).
-- Produces: `MillerSemanticContract.KnownEncoders` — `IReadOnlyList<SemanticEncoderPin>` containing the qwen3 and bge-small pins keyed by `ModelId`; `MillerSemanticContract.FindEncoder(string modelId) : SemanticEncoderPin?`; `SemanticEncoderSelection.FromEnvironment() : SemanticEncoderPin` reading env var `MILLER_SEMANTIC_MODEL` (exact `ModelId` match against `KnownEncoders`; unset/empty → `DefaultEncoder`; unknown value → `DefaultEncoder` + one warning log at first resolution); `VectorSidecar.Encoder : SemanticEncoderPin` (the resolved active pin, set in `FromEnvironment`, injectable in tests via existing construction seams).
+- Consumes: pinned llama.cpp from `eval/model-bench/bench-pins.json` (`llama_cpp` entry: release tag + sha256); HF model `nomic-ai/CodeRankEmbed` (pin the exact revision hash you fetch).
+- Produces: on pass — overlay entry with the same candidate shape as `bench-pins.json` `candidates[]` (id `coderankembed-f16`, local file path, sha256, pooling `cls`, dims 768, `query_prefix: "Represent this query for searching relevant code: "`), consumed by Task 4. On fail — a written drop reason for the findings doc.
 
-**Contract inputs:** `MILLER_SEMANTIC_MODEL` is the env var name. The active pin flows to every site that today hard-codes `DefaultEncoder`: `VectorSidecar` :207 fingerprint, `VectorConvergeService` :591/:1139 pinned identity. `FindPin` in `SemanticEmbeddingSession` generalizes to `MillerSemanticContract.FindEncoder`. Do NOT change `DefaultEncoder`'s pin values or `CanonicalEncoderString` — fingerprints of existing artifacts must not move.
+**Contract inputs:** spec T1 stop conditions; MIT license verification; sentence-transformers parity gate cosine ≥ 0.99 vs HF reference on the sidecar conformance texts (`eval/sidecar-conformance/corpus.jsonl` non-empty `text` rows).
 
-**File ownership:** `src/Miller.Indexing/Semantic/MillerSemanticContract.cs`, `src/Miller.Indexing/VectorSidecar.cs`, `src/Miller.Server/Hosting/VectorConvergeService.cs` (encoder refs only), `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` (FindPin only), `tests/Miller.Tests/Indexing/SemanticEncoderSelectionTests.cs`
+**File ownership:** Create: `eval/model-bench/bench-pins.local.json` (gitignored), scratch under bench `.cache/`; Modify: `eval/model-bench/.gitignore`
 
 **Serialization required:** No
 
 **Dependency reason:** None - safe parallel batch.
 
-**What to build:** A registry + selection seam so swapping the embedding model is one env var. Selecting the fallback pin must produce its `PinnedIdentity`, which the existing generation-identity machinery classifies as `ShadowRebuild` — the swap then converges via the normal shadow-generation path with the old generation retained for rollback. No new download logic: `miller semantic prepare` and the sidecar `prepare` contract already key off the pin handed to them (verify the prepare path receives the active pin, not `DefaultEncoder`, and fix if hard-coded — trace `semantic prepare` in `CliDispatch`).
+**What to build:** Attempt GGUF conversion of CodeRankEmbed with the pinned llama.cpp converter; validate pooling + embedding fidelity; produce an overlay pin or a drop reason.
 
-**Approach:** Keep `DefaultEncoder`/`FallbackEncoder` properties (tests reference them); add the registry on top. Resolution is process-wide and read once (matching `VectorSidecar.FromEnvironment`'s pattern); tests construct `VectorSidecar` with an explicit pin rather than mutating the environment.
+**Approach:** Stage order with hard stops: (1) `huggingface-cli download` at a pinned revision, record license file; (2) `convert_hf_to_gguf.py` — NomicBert-long architecture unsupported by the pinned converter ⟹ STOP (drop reason: converter); (3) f16 GGUF through `bench.py sanity`; (4) parity: embed ~20 conformance texts via llama-server AND via `sentence-transformers` (uv/pip ephemeral env, `trust_remote_code=True`), report min cosine — < 0.99 ⟹ STOP (drop reason: fidelity). Remember the query prefix applies to queries only, not documents. Budget: one session; any ambiguity → drop with reason, do not extend.
 
 **Acceptance criteria:**
-- [ ] `MILLER_SEMANTIC_MODEL=bge-small-en-v1.5-f32` resolves the bge pin; its `PinnedIdentity` differs from qwen3's and `ClassifyChange` yields `ShadowRebuild`.
-- [ ] Unset/unknown env values resolve `DefaultEncoder`; unknown logs one warning.
-- [ ] `VectorConvergeService`, `VectorSidecar`, and the `semantic prepare` path all consume the resolved pin (no remaining direct `DefaultEncoder` reads outside `MillerSemanticContract` and tests — guard with a source-scan or reference test).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [ ] Either an overlay pin with recorded revision/converter/sha256/pooling/prefix AND min-cosine ≥ 0.99 evidence, or a written drop reason naming the failed stage.
+- [ ] Nothing machine-specific committed; `bench-pins.local.json` gitignored.
 
