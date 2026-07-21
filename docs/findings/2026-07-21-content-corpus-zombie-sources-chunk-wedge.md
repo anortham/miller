@@ -70,8 +70,12 @@ just no longer a wedge.
 
 - `miller refresh --json --wait --workspace <root>` reported `status: lock_busy` repeatedly while
   `lsof` showed no holder of `<root>/.miller/indexer.lock`, and a subsequently spawned server claimed
-  leadership instantly. Either the CLI probes the wrong `.miller` dir (current-workspace vs target
-  row) or the busy-wait window (2s) misreports; needs a targeted test.
+  leadership instantly. Code review cleared the lock itself (right directory from the registry row,
+  EAGAIN-only contention mapping); the busy results were most plausibly real-but-transient holders
+  (an MCP client crash-looping its killed server claims the lock briefly on each respawn). The
+  DIAGNOSTIC gap is fixed same-day: a `lock_busy` result now names the recorded leader identity and
+  its liveness ("recorded leader is miller pid X (version Y), and it is alive" / "is no longer
+  running" / "no leader identity is recorded"), so an invisible-holder mystery reads as what it is.
 - `workspace leader` kept reporting an exited pid as `alive` (stale identity record) until a new
   claimant overwrote it; the queued `--handoff` from that state was never observed. Staleness
   detection for the recorded identity would make the diagnose verb trustworthy.

@@ -285,6 +285,85 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_LockBusy_ReportsTheRecordedLiveHolderInTheWarning()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-live-holder");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int currentPid = Environment.ProcessId;
+        Miller.Server.Hosting.LeaderIdentityFile.Write(
+            Path.GetDirectoryName(dbPath)!,
+            new Miller.Server.Hosting.LeaderIdentity(
+                currentPid, "9.9.9-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 7);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Contains(currentPid.ToString(), result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("9.9.9-test", result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("alive", result.WarningText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_WithNoRecordedIdentity_SaysTheHolderIsUnknown()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-unknown-holder");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 7);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Contains("no leader identity", result.WarningText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Refresh_LockBusy_WithAnExitedRecordedLeader_ReportsTheStaleIdentity()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-stale-holder");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        const int deadPid = 0x7FFFFFF0;
+        Miller.Server.Hosting.LeaderIdentityFile.Write(
+            Path.GetDirectoryName(dbPath)!,
+            new Miller.Server.Hosting.LeaderIdentity(
+                deadPid, "9.9.8-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => 7);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Contains(deadPid.ToString(), result.WarningText, StringComparison.Ordinal);
+        Assert.Contains("no longer running", result.WarningText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Refresh_ForceLockBusy_RequestsLeaderFullScanAndReturnsRefreshedWhenRevisionAppears()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

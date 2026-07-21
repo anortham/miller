@@ -364,11 +364,12 @@ public sealed class CrossWorkspaceRefreshService
                 ArtifactId: TryReadArtifactId(row));
         }
 
-        string warning = requestWarning ??
+        string warning = (requestWarning ??
             (force
                 ? "Target workspace indexer lock is busy; requested the leader to run a full scan, but freshness " +
                   "was not confirmed before serving the latest readable DB."
-                : "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB.");
+                : "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB."))
+            + " " + DescribeLockHolder(millerDir);
         return new WorkspaceRefreshResult(
             WorkspaceRefreshStatus.LockBusy,
             row.WorkspaceId,
@@ -379,6 +380,36 @@ public sealed class CrossWorkspaceRefreshService
             WarningText: warning,
             TotalDuration: total.Elapsed,
             ArtifactId: TryReadArtifactId(row));
+    }
+
+    /// <summary>
+    /// Who holds the busy lock, from the leader identity sidecar — so a lock_busy result names the holder
+    /// instead of leaving an invisible-owner mystery. Identity is advisory (a crash leaves a stale file; a
+    /// holder mid-startup has not written one yet), so each state is reported as exactly what it proves.
+    /// </summary>
+    private static string DescribeLockHolder(string millerDir)
+    {
+        Hosting.LeaderIdentity? identity;
+        try
+        {
+            identity = Hosting.LeaderIdentityFile.TryRead(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            identity = null;
+        }
+
+        if (identity is null)
+        {
+            return "No leader identity is recorded for the holder — it is likely mid-startup, or exited " +
+                "without recording one.";
+        }
+
+        return Hosting.LeaderIdentityFile.IsProcessAlive(identity)
+            ? $"The recorded leader is miller pid {identity.Pid} (version {identity.Version}), and it is alive."
+            : $"The recorded leader (miller pid {identity.Pid}, version {identity.Version}) is no longer " +
+              "running — the actual holder has not recorded an identity (likely mid-startup or a " +
+              "crash-looping instance).";
     }
 
     private bool TryReadLatestRevision(WorkspaceRegistryRow row, out long revision)
