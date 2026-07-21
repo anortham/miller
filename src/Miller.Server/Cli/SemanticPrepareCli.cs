@@ -131,7 +131,7 @@ internal sealed class SemanticPrepareCli
         WriteMarker(markerPath, model, nonce);
         try
         {
-            return _runProcess(executable, BuildArguments(model, request.Json), stdout, stderr);
+            return _runProcess(executable, BuildArguments(model), stdout, stderr);
         }
         finally
         {
@@ -139,13 +139,11 @@ internal sealed class SemanticPrepareCli
         }
     }
 
-    private static IReadOnlyList<string> BuildArguments(string model, bool json)
-    {
-        var arguments = new List<string> { "prepare", "--model", model };
-        if (json)
-            arguments.Add("--json");
-        return arguments;
-    }
+    // The pinned sidecar's prepare verb accepts only --model (0.1.0-rc.2 rejects --json with a usage
+    // error); its progress events are already JSONL, so Miller's --json flag shapes only Miller-side
+    // refusal envelopes and is never forwarded.
+    private static IReadOnlyList<string> BuildArguments(string model) =>
+        ["prepare", "--model", model];
 
     private void WriteMarker(string markerPath, string model, string nonce)
     {

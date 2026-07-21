@@ -152,7 +152,7 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Fact]
-    public void Prepare_ForwardsPrepareSubcommand_ModelAndJsonFlags()
+    public void Prepare_ForwardsOnlyModelToTheSidecar_NeverMillerJsonFlag()
     {
         IReadOnlyList<string>? captured = null;
         var cli = Build(binaryExists: true, preflight: Ok(), runner: (_, args, _, _) =>
@@ -163,7 +163,7 @@ public sealed class SemanticPrepareCliTests : IDisposable
 
         Run(cli, new SemanticPrepareRequest("custom-id", Json: true));
 
-        Assert.Equal(new[] { "prepare", "--model", "custom-id", "--json" }, captured);
+        Assert.Equal(new[] { "prepare", "--model", "custom-id" }, captured);
     }
 
     [Fact]
