@@ -28,6 +28,11 @@ public sealed class IndexerServiceScanTests : IDisposable
     // so draining the bag per-test Dispose never races another test in this class.
     private static readonly System.Collections.Concurrent.ConcurrentBag<string> TempHomes = [];
 
+    // The background scan runs on a thread pool the whole fast suite is contending for; a 5s ceiling
+    // false-negatives under ambient load. The event fires in ~90ms on a quiet box, so a generous ceiling
+    // costs nothing on the happy path and only extends patience when the scheduler is starved.
+    private const int ScanSignalTimeoutMs = 30_000;
+
     private static string CreateTempHome()
     {
         string tempHome = Path.Combine(Path.GetTempPath(), "miller-scan-home-" + Guid.NewGuid().ToString("N"));
@@ -468,7 +473,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewStartedService(workspace, _ => lease, (_, _, _) => ops);
 
         await service.StartAsync(CancellationToken.None);
-        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+        Assert.True(ops.ScanCalled.Wait(ScanSignalTimeoutMs, CancellationToken.None));
 
         LeaderIdentity? identity = LeaderIdentityFile.TryRead(millerDir);
         Assert.NotNull(identity);
@@ -497,7 +502,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewStartedService(workspace, _ => lease, (_, _, _) => ops);
 
         await service.StartAsync(CancellationToken.None);
-        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+        Assert.True(ops.ScanCalled.Wait(ScanSignalTimeoutMs, CancellationToken.None));
 
         // L1: a failed write must never leave the predecessor's stale identity as the visible truth — health
         // would report a dead/mismatched leader while a healthy one runs.
@@ -729,7 +734,7 @@ public sealed class IndexerServiceScanTests : IDisposable
                 });
 
             await service.StartAsync(CancellationToken.None);
-            Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+            Assert.True(ops.ScanCalled.Wait(ScanSignalTimeoutMs, CancellationToken.None));
             await service.StopAsync(CancellationToken.None);
 
             Assert.Equal(new[] { false }, ops.ScanForce);
@@ -1074,7 +1079,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewStartedService(WorkspaceWithDb(julie.DbPath), _ => lease, (_, _, _) => ops, sidecar);
 
         await service.StartAsync(CancellationToken.None);
-        Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+        Assert.True(ops.ScanCalled.Wait(ScanSignalTimeoutMs, CancellationToken.None));
         await service.StopAsync(CancellationToken.None); // awaits ExecuteAsync, so RunStartupDeltaScan has finished
 
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
@@ -1105,7 +1110,7 @@ public sealed class IndexerServiceScanTests : IDisposable
                 workspace, _ => lease, (_, _, _) => ops, new SymbolSearchSidecar(enabled: true));
 
             await service.StartAsync(CancellationToken.None);
-            Assert.True(ops.ScanCalled.Wait(5000, CancellationToken.None));
+            Assert.True(ops.ScanCalled.Wait(ScanSignalTimeoutMs, CancellationToken.None));
             await service.StopAsync(CancellationToken.None); // awaits ExecuteAsync ⇒ RunStartupDeltaScan finished
 
             using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
@@ -1145,7 +1150,7 @@ public sealed class IndexerServiceScanTests : IDisposable
                 });
 
             await service.StartAsync(CancellationToken.None);
-            Assert.True(acquireAttempted.Wait(5000, CancellationToken.None));
+            Assert.True(acquireAttempted.Wait(ScanSignalTimeoutMs, CancellationToken.None));
             await service.StopAsync(CancellationToken.None);
 
             Assert.Equal(0, Volatile.Read(ref factoryCalls));
