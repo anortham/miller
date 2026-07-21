@@ -441,7 +441,8 @@ public sealed class SearchTool
                     DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     () => _semanticSidecar!.Inspect(context.WorkspaceRoot).State,
                     crossWorkspaceNoGeneration: false,
-                    BuildTreatmentArmFactory(context.WorkspaceRoot));
+                    BuildTreatmentArmFactory(context.WorkspaceRoot),
+                    BuildShadowRunner(context.WorkspaceRoot));
                 output = canary.Result.Output;
                 count = canary.Result.Count;
 
@@ -481,7 +482,11 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
                     scope.SetMetadata("search_backend", SearchBackendName(context.Index));
-                    if (canary.Facts is { } canaryFacts)
+                    if (canary.ShadowFacts is { } shadowFacts)
+                    {
+                        CanaryTelemetry.StampShadow(scope, shadowFacts);
+                    }
+                    else if (canary.Facts is { } canaryFacts)
                     {
                         CanaryTelemetry.Stamp(
                             scope,
@@ -1223,7 +1228,20 @@ public sealed class SearchTool
     /// when the canary is <c>on</c>, the assembled row facts the caller finalizes with the rescue kind and stamps.
     /// <see cref="Facts"/> is null when the canary is off — the pre-program path, no stamping, byte-identical bytes.
     /// </summary>
-    internal sealed record SymbolCanaryOutcome(SearchRouteExecutionResult Result, CanaryCallFacts? Facts);
+    internal sealed record SymbolCanaryOutcome(
+        SearchRouteExecutionResult Result, CanaryCallFacts? Facts, CanaryShadowFacts? ShadowFacts = null);
+
+    /// <summary>
+    /// One forced-hybrid shadow pass: whether the semantic arm actually served, the fallback that stopped it
+    /// otherwise, the ordered hybrid ranking by symbol id (empty when it did not serve), and the generation
+    /// identity when vectors were opened. The forced fusion is why this is measured through a dedicated arm and
+    /// not the production one, which correctly abstains for an identifier query's lexical-only route.
+    /// </summary>
+    internal sealed record ShadowExecution(
+        bool Served,
+        SemanticFallbackKind? Fallback,
+        IReadOnlyList<string> HybridSymbolIds,
+        SemanticGenerationIdentity? Identity);
 
     /// <summary>
     /// The symbol route under the canary (<c>canary-telemetry-v1</c>): classify the query, walk the eligibility
@@ -1243,7 +1261,8 @@ public sealed class SearchTool
         string utcDate,
         Func<string> vectorStateProbe,
         bool crossWorkspaceNoGeneration,
-        Func<SemanticSymbolFusionArm>? treatmentArmFactory)
+        Func<SemanticSymbolFusionArm>? treatmentArmFactory,
+        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? shadowRunner = null)
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
@@ -1268,10 +1287,142 @@ public sealed class SearchTool
         SemanticSymbolFusionArm? treatmentArm = treatment ? treatmentArmFactory?.Invoke() : null;
         SymbolExecution execution = SearchRouteExecutor.RunSymbolsCore(index, route, request, treatmentArm);
 
+        if (ShadowSampled(eligibility, queryClass, workspaceId, utcDate))
+        {
+            CanaryShadowFacts shadowFacts = RunIdentifierShadow(
+                workspaceId,
+                utcDate,
+                queryClass,
+                eligibility,
+                [.. execution.ServedPage.Select(static candidate => candidate.SymbolId)],
+                shadowRunner is null ? null : () => shadowRunner(index, route, request));
+            return new SymbolCanaryOutcome(execution.Result, Facts: null, ShadowFacts: shadowFacts);
+        }
+
         CanaryCallFacts facts = BuildCanaryFacts(
             workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index);
         return new SymbolCanaryOutcome(execution.Result, facts);
     }
+
+    /// <summary>
+    /// A call is a shadow sample when it is an identifier query the canary can never serve, and its bucket under
+    /// the non-inferiority experiment id falls in the frozen 10% (<c>canary-telemetry-v1</c> §Shadow Population
+    /// step 1). The eligibility rung already encodes "canary on and semantic not disabled": under
+    /// <c>MILLER_SEMANTIC=off</c> the class rung is never reached, so <c>off</c> does zero shadow work.
+    /// </summary>
+    private static bool ShadowSampled(string eligibility, string queryClass, string workspaceId, string utcDate) =>
+        eligibility == CanaryEligibility.IneligibleQueryClass &&
+        queryClass == CanaryQueryClass.Identifier &&
+        CanaryAssignment.Bucket(CanaryAssignment.IdentifierExperimentId, workspaceId, utcDate, queryClass) < 10;
+
+    /// <summary>
+    /// The identifier non-inferiority measurement (<c>canary-telemetry-v1</c> §Shadow Population steps 3–5), run
+    /// after the lexical result is finalized. Any failure — a missing arm, an abstaining arm, or a throwing one —
+    /// records a status and nothing else and can never touch the served result or the row's outcome.
+    /// </summary>
+    private static CanaryShadowFacts RunIdentifierShadow(
+        string workspaceId,
+        string utcDate,
+        string queryClass,
+        string eligibility,
+        IReadOnlyList<string> servedLexicalIds,
+        Func<ShadowExecution>? execute)
+    {
+        var facts = new CanaryShadowFacts
+        {
+            WorkspaceId = workspaceId,
+            UtcDate = utcDate,
+            QueryClass = queryClass,
+            Eligibility = eligibility,
+            Status = CanaryShadowStatus.Skipped,
+        };
+
+        if (execute is null)
+            return facts;
+
+        ShadowExecution execution;
+        try
+        {
+            execution = execute();
+        }
+        catch (Exception)
+        {
+            return facts with { Status = CanaryShadowStatus.Error };
+        }
+
+        if (execution.Identity is { } identity)
+        {
+            facts = facts with
+            {
+                EncoderFingerprint = identity.EncoderFingerprint,
+                StorageSchema = identity.StorageSchema,
+                CorpusGeneration = identity.CorpusGeneration,
+            };
+        }
+
+        if (!execution.Served)
+            return facts with { Status = MapShadowStatus(execution.Fallback) };
+
+        (int overlap, bool top1Changed, int rank) = CompareShadow(servedLexicalIds, execution.HybridSymbolIds);
+        return facts with
+        {
+            Status = CanaryShadowStatus.Ok,
+            OverlapAt10 = overlap,
+            Top1Changed = top1Changed,
+            LexicalTop1Rank = rank,
+        };
+    }
+
+    /// <summary>
+    /// The frozen shadow comparison (<c>canary-telemetry-v1</c> §Shadow Population step 4): top-10 overlap by
+    /// symbol identity, whether the hybrid arm would have changed rank 1, and the 1-based rank of the served
+    /// lexical top-1 within the hybrid top 50 (0 when absent from it). Neither ranking is persisted.
+    /// </summary>
+    private static (int OverlapAt10, bool Top1Changed, int LexicalTop1Rank) CompareShadow(
+        IReadOnlyList<string> servedLexicalIds, IReadOnlyList<string> hybridIds)
+    {
+        string? servedTop1 = servedLexicalIds.Count > 0 ? servedLexicalIds[0] : null;
+        string? hybridTop1 = hybridIds.Count > 0 ? hybridIds[0] : null;
+        bool top1Changed = !string.Equals(servedTop1, hybridTop1, StringComparison.Ordinal);
+
+        var hybridTop10 = new HashSet<string>(hybridIds.Take(10), StringComparer.Ordinal);
+        int overlap = servedLexicalIds.Take(10).Distinct(StringComparer.Ordinal).Count(hybridTop10.Contains);
+
+        int rank = 0;
+        if (servedTop1 is not null)
+        {
+            for (int i = 0; i < hybridIds.Count && i < 50; i++)
+            {
+                if (string.Equals(hybridIds[i], servedTop1, StringComparison.Ordinal))
+                {
+                    rank = i + 1;
+                    break;
+                }
+            }
+        }
+
+        return (overlap, top1Changed, rank);
+    }
+
+    /// <summary>
+    /// Maps an abstaining arm's fallback to a shadow status (<c>canary-telemetry-v1</c> §shadow_status):
+    /// an embed deadline is <c>timeout</c>; an unavailable/unusable artifact, an open circuit, or an unprepared
+    /// model are prerequisites the sample cannot run against, so <c>skipped</c>; an embed or KNN execution failure
+    /// is <c>error</c>. <see cref="SemanticFallbackKind.None"/> never reaches here — a served arm is <c>ok</c>.
+    /// </summary>
+    private static string MapShadowStatus(SemanticFallbackKind? fallback) => fallback switch
+    {
+        SemanticFallbackKind.EmbedTimeout => CanaryShadowStatus.Timeout,
+        SemanticFallbackKind.VectorsMissing => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.VectorsStale => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.VectorsIncompatible => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.VectorsBuilding => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.ModelNotPrepared => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.CircuitOpen => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.DiskBlocked => CanaryShadowStatus.Skipped,
+        SemanticFallbackKind.Disabled => CanaryShadowStatus.Skipped,
+        _ => CanaryShadowStatus.Error,
+    };
 
     private static CanaryCallFacts BuildCanaryFacts(
         string workspaceId,
@@ -1401,6 +1552,102 @@ public sealed class SearchTool
         return () => new SemanticSymbolFusionArm(
             SemanticMode.On,
             root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+    }
+
+    /// <summary>
+    /// The identifier shadow runner: it runs a forced-hybrid pass over the same lexical candidate pool the served
+    /// lexical result was rendered from, so a discarded hybrid ranking can be compared against the served one.
+    /// Null when the semantic graph is absent, which makes a sampled shadow record <c>status=skipped</c>.
+    /// </summary>
+    private Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? BuildShadowRunner(
+        string workspaceRoot)
+    {
+        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+            return null;
+
+        return ShadowRunnerFor(
+            root => new SemanticSearchArm(
+                string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+    }
+
+    /// <summary>
+    /// Wraps a semantic-arm opener into a shadow runner: it forces the hybrid pass through
+    /// <see cref="ShadowSymbolArm"/>, discards the rendered output, and reports the ordered hybrid ranking plus
+    /// the arm's served/fallback/identity facts. The rendered output is thrown away, so the shadow pass can never
+    /// change what a call served.
+    /// </summary>
+    internal static Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution> ShadowRunnerFor(
+        Func<string, SemanticSearchArm> openArm)
+    {
+        ArgumentNullException.ThrowIfNull(openArm);
+
+        return (index, route, request) =>
+        {
+            var arm = new ShadowSymbolArm(openArm);
+            SearchRouteExecutor.RunSymbolsCore(index, route, request, arm);
+            IReadOnlyList<string> hybridIds = arm.LastFused is { } fused
+                ? [.. fused.Select(static row => row.Candidate.SymbolId)]
+                : [];
+            return new ShadowExecution(arm.Served, arm.LastDiagnostics?.Fallback, hybridIds, arm.LastDiagnostics?.Identity);
+        };
+    }
+
+    /// <summary>
+    /// The shadow arm: it consults the semantic arm and fuses <b>regardless of the query's lexical-only route</b>,
+    /// which is exactly what the production <see cref="SemanticSymbolFusionArm"/> refuses to do for an identifier
+    /// query. It reuses the same recall clamp, allow predicate, and <see cref="RrfFusion"/> the served path uses,
+    /// and captures the ordered fused ranking for the shadow comparison — it never serves, so a served result can
+    /// never see it.
+    /// </summary>
+    private sealed class ShadowSymbolArm(Func<string, SemanticSearchArm> openArm) : ISymbolFusionArm
+    {
+        private const int MinimumRecall = 10;
+
+        public bool Served { get; private set; }
+
+        public SemanticQueryDiagnostics? LastDiagnostics { get; private set; }
+
+        public IReadOnlyList<FusedCandidate>? LastFused { get; private set; }
+
+        public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(index);
+            ArgumentNullException.ThrowIfNull(request);
+
+            SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query, EvidenceFrom(request.Candidates));
+            int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
+            SemanticQueryResult result = openArm(request.WorkspaceRoot)
+                .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
+                .GetAwaiter()
+                .GetResult();
+
+            LastDiagnostics = result.Diagnostics;
+            Served = result.Served;
+            if (!result.Served)
+                return null;
+
+            var semantic = new List<SemanticRankedCandidate>(result.Hits.Count);
+            foreach (SemanticHit hit in result.Hits)
+            {
+                if (hit.SymbolId is { } symbolId && index.FindBySymbolId(symbolId) is { } symbol)
+                    semantic.Add(new SemanticRankedCandidate(ToCandidate(symbol, score: 0), hit.Rank));
+            }
+
+            IReadOnlyList<FusedCandidate> fused =
+                RrfFusion.Fuse(request.Candidates, semantic, RrfFusion.WeightsFor(route.HybridClass));
+            LastFused = fused;
+            return fused.Count > 0 ? fused : null;
+        }
+
+        private static bool Admits(ISymbolLookupIndex index, SymbolFusionRequest request, VectorMatch match) =>
+            index.FindBySymbolId(match.UnitId) is { } symbol && request.Allows(symbol);
+
+        private static LexicalEvidence EvidenceFrom(IReadOnlyList<SymbolCandidate> candidates) => candidates.Count switch
+        {
+            0 => LexicalEvidence.None,
+            1 => new LexicalEvidence(1, candidates[0].Score, 0),
+            _ => new LexicalEvidence(candidates.Count, candidates[0].Score, candidates[1].Score),
+        };
     }
 
     /// <summary>

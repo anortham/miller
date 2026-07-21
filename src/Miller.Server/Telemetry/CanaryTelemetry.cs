@@ -153,7 +153,12 @@ public static class CanaryEmbedWarmth
 
 public static class CanaryShadowStatus
 {
-    public static IReadOnlyList<string> All { get; } = ["ok", "timeout", "error", "skipped"];
+    public const string Ok = "ok";
+    public const string Timeout = "timeout";
+    public const string Error = "error";
+    public const string Skipped = "skipped";
+
+    public static IReadOnlyList<string> All { get; } = [Ok, Timeout, Error, Skipped];
 }
 
 public static class CanaryRescueKind
@@ -278,6 +283,39 @@ public sealed record CanaryCallFacts
 }
 
 /// <summary>
+/// The identifier non-inferiority shadow facts of one sampled call (<c>canary-telemetry-v1</c> §Shadow
+/// Population). The comparison counters are present only when <see cref="Status"/> is
+/// <see cref="CanaryShadowStatus.Ok"/>; the generation identity is present only when vectors were opened.
+/// </summary>
+public sealed record CanaryShadowFacts
+{
+    public required string WorkspaceId { get; init; }
+
+    /// <summary>The <c>YYYY-MM-DD</c> UTC prefix of the row's timestamp — the shadow unit's date component.</summary>
+    public required string UtcDate { get; init; }
+
+    public required string QueryClass { get; init; }
+
+    public required string Eligibility { get; init; }
+
+    public int PolicyVersion { get; init; } = 1;
+
+    public required string Status { get; init; }
+
+    public int? OverlapAt10 { get; init; }
+
+    public bool? Top1Changed { get; init; }
+
+    public int? LexicalTop1Rank { get; init; }
+
+    public string? EncoderFingerprint { get; init; }
+
+    public string? StorageSchema { get; init; }
+
+    public string? CorpusGeneration { get; init; }
+}
+
+/// <summary>
 /// Writes the <c>canary-telemetry-v1</c> metadata keys onto the ordinary tool-call row. The canary never writes
 /// rows of its own and adds no column: every field lands in <c>metadata_json</c> under the <c>canary_</c> prefix.
 /// Persisted values are enums, counters, opaque build identifiers and digests — never query text and never a path.
@@ -339,6 +377,49 @@ public static class CanaryTelemetry
             scope.SetMetadata("canary_fusion_profile", profile);
 
         StampServedResults(scope, facts);
+    }
+
+    /// <summary>
+    /// Writes the shadow row of a sampled identifier call (<c>canary-telemetry-v1</c> §Shadow Population): the
+    /// standard version/class keys under the non-inferiority experiment id, <c>arm=shadow</c>, the bucket, the
+    /// status, the generation identity when vectors were opened, and — only on the <c>ok</c> path — the three
+    /// comparison counters. Backend/warmth/latency and lexical/semantic counters are deliberately absent: a
+    /// shadow row is not an eligible row, and the field table scopes those to eligible rows.
+    /// </summary>
+    public static void StampShadow(TelemetryScope scope, CanaryShadowFacts facts)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentNullException.ThrowIfNull(facts);
+
+        scope.SetMetadata("canary_contract_version", ContractVersion);
+        scope.SetMetadata("canary_experiment_id", CanaryAssignment.IdentifierExperimentId);
+        scope.SetMetadata("canary_assignment_version", CanaryAssignment.AssignmentVersion);
+        scope.SetMetadata("canary_query_class", facts.QueryClass);
+        scope.SetMetadata("canary_eligibility", facts.Eligibility);
+        scope.SetMetadata("canary_policy_version", facts.PolicyVersion);
+        scope.SetMetadata("canary_arm", CanaryArm.Shadow);
+
+        int bucket = CanaryAssignment.Bucket(
+            CanaryAssignment.IdentifierExperimentId, facts.WorkspaceId, facts.UtcDate, facts.QueryClass);
+        scope.SetMetadata("canary_bucket", bucket);
+        scope.SetMetadata("canary_shadow_status", facts.Status);
+
+        if (facts.EncoderFingerprint is { } fingerprint)
+            scope.SetMetadata("canary_encoder_fingerprint", ShortFingerprint(fingerprint));
+        if (facts.StorageSchema is { } lane)
+            scope.SetMetadata("canary_storage_schema", lane);
+        if (facts.CorpusGeneration is { } corpus)
+            scope.SetMetadata("canary_corpus_generation", corpus);
+
+        if (facts.Status != CanaryShadowStatus.Ok)
+            return;
+
+        if (facts.OverlapAt10 is { } overlap)
+            scope.SetMetadata("canary_shadow_overlap_at_10", overlap);
+        if (facts.Top1Changed is { } changed)
+            scope.SetMetadata("canary_shadow_top1_changed", changed);
+        if (facts.LexicalTop1Rank is { } rank)
+            scope.SetMetadata("canary_shadow_lexical_top1_rank", rank);
     }
 
     private static void StampServedResults(TelemetryScope scope, CanaryCallFacts facts)
