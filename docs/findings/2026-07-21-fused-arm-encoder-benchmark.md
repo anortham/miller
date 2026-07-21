@@ -4,7 +4,9 @@
 **Program:** Encoder comparison + fusion-v2 selection
 **Spec:** [`docs/plans/2026-07-21-encoder-comparison-fusion-v2-design.md`](../plans/2026-07-21-encoder-comparison-fusion-v2-design.md) (rev 2, codex-reviewed)
 **Plan:** [`docs/plans/2026-07-21-encoder-comparison-fusion-v2-plan.md`](../plans/2026-07-21-encoder-comparison-fusion-v2-plan.md)
-**Status:** SKELETON — pre-registered before any scoring. Result sections (Tasks 4/5/6) are empty stubs.
+**Status:** COMPLETE — gates were pre-registered before any scoring; Tasks 4–6 results and the Task 8
+freeze record are filled. Verdict: fusion-v1 stands (winner bar not met); default encoder pin moved to
+bge-small per the pre-registered pin rule; sealed acceptance requested.
 
 This document pre-registers every decision gate before a single number exists. Nothing below the
 "Pre-registered gates" line may be edited after scoring begins except to fill the result stubs; the
@@ -442,3 +444,51 @@ on cost. Two caveats the pin record should carry: (1) the memory story is the **
 12.3 GiB vs bge 470 MiB), which `time -l` never sees — the `miller` host is ~336 MiB either way; (2) bge's
 build was impossible until commit `bf58afd` fixed the `--model` forwarding, so **shipping the bge pin
 depends on that fix being in the release** — the two are inseparable.
+
+## Results — Task 8: Freeze record + sealed acceptance request
+
+**Frozen 2026-07-21.** Per `eval/retrieval-eval/sets/SEALED-SET-PROTOCOL.md` §Handoff steps 1–2. No
+further tuning after this point; a change to anything below voids this freeze and requires a new one.
+
+### Frozen configuration
+
+| Fact | Value |
+|---|---|
+| Encoder (default pin) | `bge-small-en-v1.5-f32` — sha256 `bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65`, revision `main`, GGUF `bge-small-en-v1.5-f32.gguf` |
+| Dims / quant / lane | 384-dim, int8, `vec0-int8-384-cosine-v1`, pooling `cls`, normalization `l2` |
+| Fusion profile | `fusion-v1` (unchanged — sweep winner failed the bar): `RankConstant=60`; weights (lexical, semantic) — SymbolLookup (1.0, 0.3), Conceptual (0.5, 1.0), Mixed (0.8, 0.8) |
+| Routing | production `SemanticQueryPolicy.Route` (identifier/path/short-token → LexicalOnly) |
+| Serving posture (declared) | top-k, **no abstention threshold** — negatives are report-only |
+| Miller commit (frozen arm) | `0153adc` on branch `worktree-fusion-v2-eval` (contains the required `bf58afd` sidecar `--model` forwarding fix — inseparable from the bge pin) |
+| Sidecar | `julie-semantic-sidecar` 0.1.0-rc.2 (binary manifest default tier is still qwen3; Miller forwards `serve --model` explicitly) |
+| Dev corpora SHAs | miller `59c2c79e8633940de5d394f73235f10acbe2c2b8`, julie `9d1d22c5dcca8509e412db96b6dbb5ff19d4311a` |
+| Bench runtime pin | llama.cpp `b10068` per `eval/model-bench/bench-pins.json`; no local overlay (CodeRankEmbed FINAL DROP, upstream [llama.cpp#25970](https://github.com/ggml-org/llama.cpp/issues/25970)) |
+
+### Dev reference numbers at the frozen configuration (bge fused, fusion-v1, symbol route)
+
+overall nDCG@10 **0.5727** / recall@10 0.6163; language-macro nDCG **0.4165**; worst language markdown
+**0** (structural: doc-chunk answers unreachable on the symbol route); identifier nDCG **0.9989**
+(byte-identical to lexical control — policy passthrough); prose nDCG 0.3782.
+
+### Pre-registered sealed thresholds (spec T7 formulas applied to the dev numbers above)
+
+1. **Overall:** sealed overall cluster-unit nDCG@10 ≥ 0.85 × 0.5727 = **0.4868**.
+2. **Language macro:** sealed macro nDCG ≥ 0.85 × 0.4165 = **0.3540**.
+3. **Worst language:** formula (dev worst − 0.05) = −0.05 → **non-binding** on this route (nDCG ≥ 0 by
+   definition; dev worst is a structural zero). Recorded as vacuously satisfied; the sealed worst-language
+   value is still returned and logged, and the **next-worst** language comparison is report-only context.
+4. **Identifier non-inferiority:** the dev diagnostic margin is exact equality (fused ≡ lexical under
+   LexicalOnly routing). Sealed fused identifier nDCG must **equal** the sealed lexical-arm identifier
+   nDCG; any difference indicates a routing defect and fails this gate.
+5. **Negatives:** report-only (production is declared top-k/no-abstention; the offline arms return 6/6
+   structurally).
+
+### Sealed acceptance request (handed to the user 2026-07-21)
+
+Run the acceptance event per SEALED-SET-PROTOCOL §Handoff steps 3–6: execute the frozen arm — Miller at
+commit `0153adc`, `MILLER_SEMANTIC=on`, default encoder (bge-small resolves automatically), production
+`search` — over the sealed queries; score with `eval/retrieval-eval` (`--k 10`); return **aggregates
+only** (`overall`, `language_macro_average`, `worst_language`, `per_query_class`,
+`intent_cluster_summary`, `negatives`). Decision is against thresholds 1–5 above, fixed before any sealed
+number exists. No sealed content enters the repo, logs, or transcripts; the slice is spent for this
+configuration once aggregates are known.
