@@ -279,9 +279,9 @@ Commit mode: **serial-worker-commit** for every task (all lanes are serialized; 
 **Approach:** `dotnet test --logger "console;verbosity=normal"`-level durations or `trx` report to rank test classes by wall time; fix the top ~5; re-run 3× to confirm stability. Every retag to Scale must satisfy the convention guard (spawns-julie ⟹ Scale stays one-directional; Scale-for-weight is allowed).
 
 **Acceptance criteria:**
-- [ ] Fast suite ≤20s cold on this machine, 3 consecutive clean runs, 0 failures, test count accounted for (moved tests still run in `scripts/test.sh all`).
-- [ ] No guard weakened; no production code changed; ceiling still 30s.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [x] Fast suite ≤20s cold on this machine, 3 consecutive clean runs (18/19/18s), 0 failures, test count accounted for (no retags; fast 4225 / scale 86 unchanged).
+- [x] No guard weakened; no production code changed; ceiling still 30s.
+- [x] Worker-scope verification passes and the change is committed per `serial-worker-commit` (45ae5e4).
 
 ### Task 9: shadow dogfood + P4 findings (exit evidence)
 
