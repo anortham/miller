@@ -49,8 +49,9 @@ public sealed class DiskPreflight
     private readonly Func<string, long> _freeSpaceProbe;
 
     /// <summary>Creates a preflight over an injected free-space probe. The default probe walks up to the nearest
-    /// existing ancestor of the target path and reads <see cref="DriveInfo.AvailableFreeSpace"/>, returning a
-    /// negative value on any probe fault.</summary>
+    /// existing ancestor of the target path and reads the free space on the volume that actually contains it —
+    /// the directory itself on Unix (its mount point) and its drive letter on Windows — returning a negative
+    /// value on any probe fault.</summary>
     public DiskPreflight(Func<string, long>? freeSpaceProbe = null) =>
         _freeSpaceProbe = freeSpaceProbe ?? ProbeAvailableFreeBytes;
 
@@ -93,7 +94,11 @@ public sealed class DiskPreflight
             if (string.IsNullOrEmpty(probe))
                 return -1;
 
-            return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(probe)) ?? probe).AvailableFreeSpace;
+            string fullProbe = Path.GetFullPath(probe);
+            string mount = OperatingSystem.IsWindows()
+                ? Path.GetPathRoot(fullProbe) ?? fullProbe
+                : fullProbe;
+            return new DriveInfo(mount).AvailableFreeSpace;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or DriveNotFoundException)

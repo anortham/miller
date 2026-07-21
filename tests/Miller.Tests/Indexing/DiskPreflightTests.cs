@@ -101,5 +101,27 @@ public sealed class DiskPreflightTests
         Assert.Contains("400", reason, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DefaultProbe_OnADeepExistingDirectory_ReturnsNonNegativeFreeSpace()
+    {
+        string deep = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "miller-preflight-probe", "a", "b");
+        Directory.CreateDirectory(deep);
+
+        DiskPreflightVerdict verdict = new DiskPreflight().Check(deep, requiredBytes: 1);
+
+        Assert.True(verdict.FreeBytes >= 0);
+    }
+
+    [Fact]
+    public void DefaultProbe_OnAMissingDeepPath_WalksUpToAnExistingAncestor()
+    {
+        string missing = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "miller-preflight-probe", "does-not-exist", "x", "y");
+
+        DiskPreflightVerdict verdict = new DiskPreflight().Check(missing, requiredBytes: 1);
+
+        Assert.True(verdict.FreeBytes >= 0);
+    }
+
     private static DiskPreflight Preflight(long free) => new(_ => free);
 }
