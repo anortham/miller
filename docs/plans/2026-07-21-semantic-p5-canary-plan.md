@@ -298,6 +298,6 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **What to build:** The operating documentation that makes the canary runnable by the user (and future sessions) without re-reading the frozen contract.
 
 **Acceptance criteria:**
-- [ ] Runbook covers enable → observe → export → gate → interpret, plus model swap; docs/README map updated.
-- [ ] Every documented command/env var spelling verified against the shipped code.
-- [ ] Worker-scope verification passes (fast suite green) and the change is committed per commit mode.
+- [x] Runbook covers enable → observe → export → gate → interpret, plus model swap; docs/README map updated.
+- [x] Every documented command/env var spelling verified against the shipped code.
+- [x] Worker-scope verification passes (fast suite green) and the change is committed per commit mode.

@@ -1,26 +1,26 @@
-### Task 8: fast-suite wall-ceiling fix
+### Task 8: Docs, runbook, closeout
 
 **Files:**
-- Modify: offending test files (discovered by profiling); `scripts/test.sh` only if the comment/target text needs updating — the 30s ceiling value itself does not move up
+- Create: `docs/findings/2026-07-21-p5-canary-runbook.md`
+- Modify: `docs/README.md` (map pointer)
+- Modify: `README.md` (environment/configuration section — locate the existing env table with Miller search before editing)
+- Test: none (docs); `AgentInstructionsTests` must stay green untouched (no guidance-channel changes)
 
 **Interfaces:**
-- Consumes: `scripts/test.sh` tripwire (`FAST_BUDGET_SECONDS=30`, target <10s); current fast wall ~28s (4,168 tests) with observed ambient-load trips at 33s/63s this week.
-- Produces: fast suite comfortably under the ceiling (target: ≤20s cold on this machine) via the profile's top offenders — typical moves: retag genuinely heavy tests `Scale`, collapse per-test artifact builds into shared fixtures (`IClassFixture`/collection fixtures), and cut redundant real-SQLite churn in hot test classes. No production code changes.
+- Consumes: everything shipped in Tasks 1–7.
+- Produces: the operator runbook: enabling the canary (`MILLER_SEMANTIC_CANARY=on` + `MILLER_SEMANTIC=shadow|on`), what gets recorded and where, running `miller telemetry canary --json` / `--gate`, reading underpowered/indeterminate verdicts, the 30-day retention squeeze (export before rows age out), and the model-swap how-to (`MILLER_SEMANTIC_MODEL`, the shadow-rebuild it triggers, rollback via retained generations) with the current registry (qwen3-0.6b-f16 default, bge-small-en-v1.5-f32) and a placeholder note that the model comparison list/eval is a later phase.
 
-**Contract inputs:** CLAUDE.md testing rules: the split is load-bearing; guards must not be weakened; a "fast" test doing real I/O belongs in Scale. Raising `FAST_BUDGET_SECONDS` is NOT an accepted fix.
+**Contract inputs:** Documented env vars and CLI flags must match the shipped spellings exactly. README release facts stay untouched (no release in this plan).
 
-**File ownership:** Modify: offending test files (discovered), possibly `scripts/test.sh` comment; Test: full fast suite
+**File ownership:** `docs/findings/2026-07-21-p5-canary-runbook.md`, `docs/README.md`, `README.md` (env/config section)
 
 **Serialization required:** Yes
 
-**Dependency reason:** Profiles and edits test files other lanes own; runs after Lanes 1–2 complete.
+**Dependency reason:** Documents behavior shipped by Tasks 1–7.
 
-**What to build:** Headroom. The suite trips its own tripwire under ambient load, which erodes trust in the gate.
-
-**Approach:** `dotnet test --logger "console;verbosity=normal"`-level durations or `trx` report to rank test classes by wall time; fix the top ~5; re-run 3× to confirm stability. Every retag to Scale must satisfy the convention guard (spawns-julie ⟹ Scale stays one-directional; Scale-for-weight is allowed).
+**What to build:** The operating documentation that makes the canary runnable by the user (and future sessions) without re-reading the frozen contract.
 
 **Acceptance criteria:**
-- [ ] Fast suite ≤20s cold on this machine, 3 consecutive clean runs, 0 failures, test count accounted for (moved tests still run in `scripts/test.sh all`).
-- [ ] No guard weakened; no production code changed; ceiling still 30s.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
-
+- [ ] Runbook covers enable → observe → export → gate → interpret, plus model swap; docs/README map updated.
+- [ ] Every documented command/env var spelling verified against the shipped code.
+- [ ] Worker-scope verification passes (fast suite green) and the change is committed per commit mode.
