@@ -291,7 +291,7 @@ public sealed class VectorSidecarOpenPathTests : IDisposable
     {
         ["contract_version"] = MillerSemanticContract.ContractVersion,
         ["encoder_fingerprint"] = MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
-        ["storage_schema"] = "vec0-int8-512-cosine-v1",
+        ["storage_schema"] = MillerSemanticContract.DefaultEncoder.StorageSchema,
         ["corpus_generation"] = "cards-v1-chunks-v1",
         ["writer_version"] = "1.13.0+abc1234",
         ["min_reader_version"] = "1.13.0",
@@ -379,7 +379,7 @@ public sealed class VectorStoreTests : IDisposable
         Assert.Equal(
             MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
             store.Meta("encoder_fingerprint"));
-        Assert.Equal("vec0-int8-512-cosine-v1", store.Meta("storage_schema"));
+        Assert.Equal(MillerSemanticContract.DefaultEncoder.StorageSchema, store.Meta("storage_schema"));
         Assert.Equal("cards-v1-chunks-v1", store.Meta("corpus_generation"));
         Assert.Equal(MillerSemanticContract.MinReaderVersion, store.Meta("min_reader_version"));
         Assert.Equal(MillerSemanticContract.FusionProfile, store.Meta("fusion_profile"));
@@ -469,7 +469,7 @@ public sealed class VectorStoreTests : IDisposable
         var ex = Assert.Throws<VectorStoreException>(() => store.Upsert(
             VectorUnitKind.Symbol, 1, "unit", "src/A.cs", new sbyte[8], "hash", 1, "class", isTest: false));
 
-        Assert.Contains("512", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("384", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -499,7 +499,7 @@ public sealed class VectorStoreTests : IDisposable
             MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder),
             reopened.Identity);
         Assert.Equal("ready", reopened.Meta("build_state"));
-        Assert.Equal(512, reopened.Lane.Dims);
+        Assert.Equal(MillerSemanticContract.DefaultEncoder.Dims, reopened.Lane.Dims);
     }
 
     [Fact]
@@ -610,7 +610,7 @@ public sealed class VectorStoreTests : IDisposable
 
     private static sbyte[] Vector(sbyte leading)
     {
-        var values = new sbyte[512];
+        var values = new sbyte[MillerSemanticContract.DefaultEncoder.Dims];
         values[0] = leading;
         return values;
     }

@@ -7,10 +7,10 @@ namespace Miller.Tests.Indexing;
 public sealed class SemanticEncoderSelectionTests
 {
     [Fact]
-    public void KnownEncoders_AreTheQwen3AndBgeSmallPinsKeyedByModelId()
+    public void KnownEncoders_AreTheBgeSmallAndQwen3PinsKeyedByModelId()
     {
         Assert.Equal(
-            new[] { "qwen3-0.6b-f16", "bge-small-en-v1.5-f32" },
+            new[] { "bge-small-en-v1.5-f32", "qwen3-0.6b-f16" },
             MillerSemanticContract.KnownEncoders.Select(pin => pin.ModelId));
 
         Assert.Contains(MillerSemanticContract.DefaultEncoder, MillerSemanticContract.KnownEncoders);
@@ -20,8 +20,8 @@ public sealed class SemanticEncoderSelectionTests
     [Fact]
     public void FindEncoder_ReturnsTheExactModelIdMatchOrNull()
     {
-        Assert.Same(MillerSemanticContract.DefaultEncoder, MillerSemanticContract.FindEncoder("qwen3-0.6b-f16"));
-        Assert.Same(MillerSemanticContract.FallbackEncoder, MillerSemanticContract.FindEncoder("bge-small-en-v1.5-f32"));
+        Assert.Same(MillerSemanticContract.FallbackEncoder, MillerSemanticContract.FindEncoder("qwen3-0.6b-f16"));
+        Assert.Same(MillerSemanticContract.DefaultEncoder, MillerSemanticContract.FindEncoder("bge-small-en-v1.5-f32"));
         Assert.Null(MillerSemanticContract.FindEncoder("qwen3-0.6b-f16 "));
         Assert.Null(MillerSemanticContract.FindEncoder("nope"));
         Assert.Null(MillerSemanticContract.FindEncoder(null!));
@@ -42,9 +42,9 @@ public sealed class SemanticEncoderSelectionTests
     [Fact]
     public void Resolve_AKnownModelId_SelectsThatPinAndTrimsSurroundingWhitespace()
     {
-        Assert.Same(MillerSemanticContract.FallbackEncoder, SemanticEncoderSelection.Resolve("bge-small-en-v1.5-f32").Pin);
-        Assert.Same(MillerSemanticContract.DefaultEncoder, SemanticEncoderSelection.Resolve("qwen3-0.6b-f16").Pin);
-        Assert.Same(MillerSemanticContract.FallbackEncoder, SemanticEncoderSelection.Resolve("  bge-small-en-v1.5-f32  ").Pin);
+        Assert.Same(MillerSemanticContract.DefaultEncoder, SemanticEncoderSelection.Resolve("bge-small-en-v1.5-f32").Pin);
+        Assert.Same(MillerSemanticContract.FallbackEncoder, SemanticEncoderSelection.Resolve("qwen3-0.6b-f16").Pin);
+        Assert.Same(MillerSemanticContract.DefaultEncoder, SemanticEncoderSelection.Resolve("  bge-small-en-v1.5-f32  ").Pin);
     }
 
     [Fact]
@@ -85,13 +85,25 @@ public sealed class SemanticEncoderSelectionTests
     [Fact]
     public void SelectingTheFallbackPin_ClassifiesAsAShadowRebuildAgainstTheDefault()
     {
-        SemanticGenerationIdentity qwen3 = MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder);
-        SemanticGenerationIdentity bge = MillerSemanticContract.PinnedIdentity(
-            SemanticEncoderSelection.Resolve("bge-small-en-v1.5-f32").Pin);
+        SemanticGenerationIdentity bge = MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder);
+        SemanticGenerationIdentity qwen3 = MillerSemanticContract.PinnedIdentity(
+            SemanticEncoderSelection.Resolve("qwen3-0.6b-f16").Pin);
 
-        Assert.NotEqual(qwen3.EncoderFingerprint, bge.EncoderFingerprint);
-        Assert.NotEqual(qwen3.StorageSchema, bge.StorageSchema);
-        Assert.Equal(InvalidationAction.ShadowRebuild, MillerSemanticContract.ClassifyChange(qwen3, bge));
+        Assert.NotEqual(bge.EncoderFingerprint, qwen3.EncoderFingerprint);
+        Assert.NotEqual(bge.StorageSchema, qwen3.StorageSchema);
+        Assert.Equal(InvalidationAction.ShadowRebuild, MillerSemanticContract.ClassifyChange(bge, qwen3));
+    }
+
+    /// <summary>The pin-flip migration path itself: a live qwen3-stamped artifact under the new bge default
+    /// converges as a shadow rebuild with the old generation retained, never a hard failure.</summary>
+    [Fact]
+    public void ExistingQwen3Artifact_UnderTheBgeDefault_ClassifiesAsAShadowRebuild()
+    {
+        SemanticGenerationIdentity stamped = MillerSemanticContract.PinnedIdentity(
+            MillerSemanticContract.FindEncoder("qwen3-0.6b-f16")!);
+        SemanticGenerationIdentity active = MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder);
+
+        Assert.Equal(InvalidationAction.ShadowRebuild, MillerSemanticContract.ClassifyChange(stamped, active));
     }
 
     [Fact]

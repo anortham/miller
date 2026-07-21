@@ -7,8 +7,8 @@ without needing the other side to exist.
 | File | What it is |
 |---|---|
 | `corpus.jsonl` | 39 input texts, fixed order, each labelled with an edge-case `class` and a `role` |
-| `golden-qwen3-0.6b-f16.jsonl` | Golden vectors for the pinned default model (1024d native, 512d int8 lane) |
-| `golden-bge-small-f32.jsonl` | Golden vectors for the pinned fallback model (384d native, 384d int8 lane) |
+| `golden-qwen3-0.6b-f16.jsonl` | Golden vectors for the pinned fallback model (1024d native, 512d int8 lane) |
+| `golden-bge-small-f32.jsonl` | Golden vectors for the pinned default model (384d native, 384d int8 lane) |
 | `generate.py` | Regenerates the goldens, and (`--verify`) asserts the tolerance policy against them |
 
 Committed payload is ~790 KiB of JSONL. No model weights or binaries live here.

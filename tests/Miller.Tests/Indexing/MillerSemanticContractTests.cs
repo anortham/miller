@@ -14,14 +14,28 @@ public sealed class MillerSemanticContractTests
         Assert.Equal("1", MillerSemanticContract.ContractVersion);
         Assert.Equal("blake3", MillerSemanticContract.HashAlgorithm);
         Assert.Equal("cards-v1-chunks-v1", MillerSemanticContract.CorpusGeneration);
-        Assert.Equal("vec0-int8-512-cosine-v1", MillerSemanticContract.DefaultEncoder.StorageSchema);
-        Assert.Equal("vec0-int8-384-cosine-v1", MillerSemanticContract.FallbackEncoder.StorageSchema);
+        Assert.Equal("vec0-int8-384-cosine-v1", MillerSemanticContract.DefaultEncoder.StorageSchema);
+        Assert.Equal("vec0-int8-512-cosine-v1", MillerSemanticContract.FallbackEncoder.StorageSchema);
     }
 
     [Fact]
-    public void DefaultEncoderPin_IsTheQwen3LaneFromBenchPins()
+    public void DefaultEncoderPin_IsTheBgeSmallLaneFromBenchPins()
     {
         SemanticEncoderPin pin = MillerSemanticContract.DefaultEncoder;
+
+        Assert.Equal("bge-small-en-v1.5-f32", pin.ModelId);
+        Assert.Equal("bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65", pin.ModelSha256);
+        Assert.Equal("main", pin.ModelRevision);
+        Assert.Equal(384, pin.Dims);
+        Assert.Equal("cls", pin.Pooling);
+        Assert.Equal("", pin.EosAppend);
+        Assert.Equal("Represent this sentence for searching relevant passages: ", pin.QueryInstruction);
+    }
+
+    [Fact]
+    public void FallbackEncoderPin_IsTheQwen3LaneFromBenchPins()
+    {
+        SemanticEncoderPin pin = MillerSemanticContract.FallbackEncoder;
 
         Assert.Equal("qwen3-0.6b-f16", pin.ModelId);
         Assert.Equal("421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340", pin.ModelSha256);
@@ -36,23 +50,9 @@ public sealed class MillerSemanticContractTests
     }
 
     [Fact]
-    public void FallbackEncoderPin_IsTheBgeSmallLaneFromBenchPins()
-    {
-        SemanticEncoderPin pin = MillerSemanticContract.FallbackEncoder;
-
-        Assert.Equal("bge-small-en-v1.5-f32", pin.ModelId);
-        Assert.Equal("bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65", pin.ModelSha256);
-        Assert.Equal("main", pin.ModelRevision);
-        Assert.Equal(384, pin.Dims);
-        Assert.Equal("cls", pin.Pooling);
-        Assert.Equal("", pin.EosAppend);
-        Assert.Equal("Represent this sentence for searching relevant passages: ", pin.QueryInstruction);
-    }
-
-    [Fact]
     public void CanonicalEncoderString_IsTheContractsFieldOrderWithEscapedNewlines()
     {
-        string canonical = MillerSemanticContract.CanonicalEncoderString(MillerSemanticContract.DefaultEncoder);
+        string canonical = MillerSemanticContract.CanonicalEncoderString(MillerSemanticContract.FindEncoder("qwen3-0.6b-f16")!);
 
         Assert.Equal(
             string.Join('\n',
@@ -101,8 +101,8 @@ public sealed class MillerSemanticContractTests
         Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { ModelSha256 = "deadbeef" }));
         Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { ModelRevision = "other.gguf" }));
         Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { Dims = 256 }));
-        Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { Pooling = "cls" }));
-        Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { EosAppend = "" }));
+        Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { Pooling = "last" }));
+        Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { EosAppend = "<|endoftext|>" }));
         Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { QueryInstruction = "q: " }));
         Assert.NotEqual(baseline, MillerSemanticContract.EncoderFingerprint(pin with { DocumentInstruction = "d: " }));
     }
@@ -136,7 +136,7 @@ public sealed class MillerSemanticContractTests
             MillerSemanticContract.GenerationTag(identity with { EncoderFingerprint = "sha256:00" }));
         Assert.NotEqual(
             MillerSemanticContract.GenerationTag(identity),
-            MillerSemanticContract.GenerationTag(identity with { StorageSchema = "vec0-int8-384-cosine-v1" }));
+            MillerSemanticContract.GenerationTag(identity with { StorageSchema = "vec0-int8-512-cosine-v1" }));
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public sealed class MillerSemanticContractTests
         SemanticGenerationIdentity current = field switch
         {
             "encoder_fingerprint" => previous with { EncoderFingerprint = "sha256:changed" },
-            "storage_schema" => previous with { StorageSchema = "vec0-int8-384-cosine-v1" },
+            "storage_schema" => previous with { StorageSchema = "vec0-int8-512-cosine-v1" },
             "corpus_generation" => previous with { CorpusGeneration = "cards-v2-chunks-v1" },
             "writer_version" => previous with { WriterVersion = "9.9.9+ffffffff" },
             "min_reader_version" => previous with { MinReaderVersion = "9.9.9" },
@@ -284,7 +284,7 @@ public sealed class MillerSemanticContractTests
 
         Assert.Equal(MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
             identity.EncoderFingerprint);
-        Assert.Equal("vec0-int8-512-cosine-v1", identity.StorageSchema);
+        Assert.Equal("vec0-int8-384-cosine-v1", identity.StorageSchema);
         Assert.Equal("cards-v1-chunks-v1", identity.CorpusGeneration);
         Assert.Equal(MillerSemanticContract.MinReaderVersion, identity.MinReaderVersion);
         Assert.Equal(MillerSemanticContract.FusionProfile, identity.FusionProfile);

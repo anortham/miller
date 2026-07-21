@@ -145,7 +145,11 @@ public sealed class SemanticSidecarScaleTests : IDisposable
     }
 
     private SemanticEmbeddingSession StartSession() =>
-        new(new ProcessSemanticSidecarLauncher(ScaleTestSupport.RequireSemanticSidecar()), LiveBudgets);
+        new(
+            ProcessSemanticSidecarLauncher.ForServe(
+                ScaleTestSupport.RequireSemanticSidecar(), MillerSemanticContract.DefaultEncoder),
+            LiveBudgets,
+            expectedEncoder: MillerSemanticContract.DefaultEncoder);
 
     /// <summary>Opens the real artifact through an explicit extension path, mirroring
     /// <see cref="VectorStoreTests"/>: the environment override is process-global and unsafe to set under

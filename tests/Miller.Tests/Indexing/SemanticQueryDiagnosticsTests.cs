@@ -112,7 +112,7 @@ public sealed class SemanticQueryDiagnosticsTests
 
             case Scenario.IncompatibleDims:
             {
-                var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-384-cosine-v1") };
+                var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-512-cosine-v1") };
                 await using var session = NewSession();
                 var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, () => session);
                 result = await arm.QuerySymbolsAsync("q", 4, cancellationToken: ct);
@@ -121,7 +121,7 @@ public sealed class SemanticQueryDiagnosticsTests
 
             case Scenario.IncompatibleMetric:
             {
-                var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-512-l2-v1") };
+                var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-384-l2-v1") };
                 await using var session = NewSession();
                 var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, () => session);
                 result = await arm.QuerySymbolsAsync("q", 4, cancellationToken: ct);

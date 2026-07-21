@@ -228,21 +228,21 @@ public sealed class SemanticSearchArmTests
     [Fact]
     public async Task LaneDimsDisagreeingWithTheEmbedding_DegradesWithAReasonInsteadOfThrowing()
     {
-        var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-384-cosine-v1") };
+        var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-512-cosine-v1") };
         await using SemanticEmbeddingSession session = NewSession();
         var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, () => session);
 
         SemanticQueryResult result = await arm.QuerySymbolsAsync("q", 4, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Hits);
-        Assert.Contains("384", result.UnavailableReason!, StringComparison.Ordinal);
+        Assert.Contains("512", result.UnavailableReason!, StringComparison.Ordinal);
         Assert.Empty(port.RequestedK);
     }
 
     [Fact]
     public async Task NonCosineLane_DegradesRatherThanReportingAFabricatedCosine()
     {
-        var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-512-l2-v1") };
+        var port = new RecordingPort { Lane = MillerSemanticContract.ParseStorageSchema("vec0-int8-384-l2-v1") };
         await using SemanticEmbeddingSession session = NewSession();
         var arm = new SemanticSearchArm(Root, enabled: true, port.Factory, () => session);
 

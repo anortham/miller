@@ -217,8 +217,8 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **What to build:** The adopter-cost evidence for the pin decision.
 
 **Acceptance criteria:**
-- [ ] Cost table with both cursors end-to-end, ≥2 runs each model, median/range, peak RSS, artifact sizes.
-- [ ] Bench-lane wall-clock for research arms labeled harness-not-engine.
+- [x] Cost table with both cursors end-to-end, ≥2 runs each model, median/range, peak RSS, artifact sizes. (bge 40.4s/470MiB vs qwen3 312.7s/12.34GiB; required bf58afd.)
+- [x] Bench-lane wall-clock for research arms labeled harness-not-engine. (723.0/186.4/207.5s corpus embed.)
 
 ### Task 7: fusion-v2 product change (iff Task 5 bar met)
 

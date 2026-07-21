@@ -164,7 +164,8 @@ Named-but-not-in-grep (excluded unconditionally; do not exist or carry no graded
 **CodeRankEmbed: FINAL DROP** — `drop-reason=converter`: the llama.cpp GGUF converter
 (`conversion/bert.py:372`) crashes on all non-MoE NomicBert models through b10076 and master; no
 released pin can convert it. The model itself is MIT-clean (rev `3c4b608`); a retry harness is staged
-in `eval/model-bench/.cache/parity/` for a future fixed pin.
+in `eval/model-bench/.cache/parity/` for a future fixed pin. Filed upstream (user-approved) as
+[ggml-org/llama.cpp#25970](https://github.com/ggml-org/llama.cpp/issues/25970).
 
 **Parity smoke (R3): PASS 5/5 exact.** 5 prose dev queries through live `miller search --arm hybrid`
 vs the `eval/fusion-arm` adapter at fusion-v1 constants (k=60, Conceptual ratio 2:1) produced
@@ -377,7 +378,13 @@ harness, **not** production embed throughput — do not compare it to the cost t
 
 | lane | wall-clock | label |
 |---|---|---|
-| fusion-arm bench (qwen3 / bge / research) | _pending (task 4 lead)_ | **harness-not-engine** |
+| qwen3-0.6b-f16 corpus embed (35,392 units, llama-server f16) | 723.0 s | **harness-not-engine** |
+| bge-small-en-v1.5-f32 corpus embed (35,392 units) | 186.4 s | **harness-not-engine** |
+| arctic-embed-s-f16 corpus embed (35,392 units) | 207.5 s | **harness-not-engine** |
+
+Even in the offline harness the same shape holds (bge ~3.9× faster than qwen3 at embed), but these
+wall-clocks include llama-server HTTP batching at native dims over a 3.5× larger unit count — compare
+lanes to each other only, never to the production cost table above.
 
 ### bge-small build blocker (load-bearing for the pin decision)
 

@@ -426,6 +426,12 @@ is in the pins file — see [§ Deviations from design](#deviations-from-design)
 **Callers never pass these.** They are the sidecar's internal, model-keyed configuration, reported
 through `health` and frozen here so two independent implementations produce interchangeable vectors.
 
+> **Note (2026-07-21):** "default"/"fallback" in this table are the **sidecar binary's manifest tiers**,
+> unchanged in sidecar 0.1.0-rc.2. *Miller's* default pin flipped to bge-small on 2026-07-21
+> (`MillerSemanticContract.DefaultEncoder`; see the vectors contract §Pinned initial values), and Miller
+> always launches the sidecar with an explicit `serve --model <active pin>`, so the manifest default tier
+> is not load-bearing for Miller serve paths.
+
 | Knob | `Qwen3-Embedding-0.6B` (default) | `bge-small-en-v1.5` (fallback) | Source |
 |---|---|---|---|
 | Pins entry id | `qwen3-0.6b-f16` | `bge-small-en-v1.5-f32` | `bench-pins.json:24`, `:46` |

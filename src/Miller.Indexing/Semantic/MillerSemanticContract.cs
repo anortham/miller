@@ -91,18 +91,12 @@ public static class MillerSemanticContract
 
     private const int GenerationTagLength = 16;
 
+    /// <summary>
+    /// bge-small holds the default pin per the 2026-07-21 fused benchmark: fused quality within 1.2% relative
+    /// of qwen3 on the dev set, at a 9× smaller download, ~27× smaller sidecar footprint, and ~5× faster query
+    /// embeds (pre-registered pin rule; see docs/findings/2026-07-21-fused-arm-encoder-benchmark.md).
+    /// </summary>
     public static SemanticEncoderPin DefaultEncoder { get; } = new(
-        ModelId: "qwen3-0.6b-f16",
-        ModelSha256: "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
-        ModelRevision: "main",
-        Dims: 512,
-        Pooling: "last",
-        EosAppend: "<|endoftext|>",
-        QueryInstruction: "Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ",
-        DocumentInstruction: "",
-        StorageSchema: "vec0-int8-512-cosine-v1");
-
-    public static SemanticEncoderPin FallbackEncoder { get; } = new(
         ModelId: "bge-small-en-v1.5-f32",
         ModelSha256: "bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65",
         ModelRevision: "main",
@@ -112,6 +106,17 @@ public static class MillerSemanticContract
         QueryInstruction: "Represent this sentence for searching relevant passages: ",
         DocumentInstruction: "",
         StorageSchema: "vec0-int8-384-cosine-v1");
+
+    public static SemanticEncoderPin FallbackEncoder { get; } = new(
+        ModelId: "qwen3-0.6b-f16",
+        ModelSha256: "421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340",
+        ModelRevision: "main",
+        Dims: 512,
+        Pooling: "last",
+        EosAppend: "<|endoftext|>",
+        QueryInstruction: "Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ",
+        DocumentInstruction: "",
+        StorageSchema: "vec0-int8-512-cosine-v1");
 
     /// <summary>The encoders Miller can build and read, newest-canonical first. The active encoder is selected
     /// from this set by <see cref="SemanticEncoderSelection"/>; nothing outside it is a valid Miller pin.</summary>

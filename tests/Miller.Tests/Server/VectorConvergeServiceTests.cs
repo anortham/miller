@@ -233,7 +233,7 @@ public sealed class VectorConvergeServiceTests
         Assert.Equal(["a"], commit.Vectors.Select(v => v.Unit.UnitId));
         Assert.Equal(5, commit.AdvanceTo);
         Assert.Equal(VectorConvergeService.SymbolCompletedKey, commit.CompletedRevisionKey);
-        Assert.Equal(512, commit.Vectors[0].Embedding.Length);
+        Assert.Equal(384, commit.Vectors[0].Embedding.Length);
     }
 
     [Fact]

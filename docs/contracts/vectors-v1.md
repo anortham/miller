@@ -103,25 +103,32 @@ identity — never re-derive these values):
 
 | | Default pin | Fallback pin |
 |---|---|---|
-| `model_id` | `qwen3-0.6b-f16` | `bge-small-en-v1.5-f32` |
-| Model | `Qwen3-Embedding-0.6B`, f16 GGUF | `bge-small-en-v1.5`, f32 GGUF |
-| `model_sha256` | `421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340` | `bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65` |
-| `model_revision` | `Qwen3-Embedding-0.6B-f16.gguf` | `bge-small-en-v1.5-f32.gguf` |
-| Native dims | `1024` (MRL) | `384` (no MRL) |
-| Emitted `dims` | `512` (MRL lane) | `384` |
-| `pooling` | `last` | `cls` |
-| `eos_append` | `<|endoftext|>` — appended to every input before tokenization | *(empty — no EOS append)* |
-| `query_instruction` | `Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ` | `Represent this sentence for searching relevant passages: ` |
+| `model_id` | `bge-small-en-v1.5-f32` | `qwen3-0.6b-f16` |
+| Model | `bge-small-en-v1.5`, f32 GGUF | `Qwen3-Embedding-0.6B`, f16 GGUF |
+| `model_sha256` | `bf40c42ad7d89382e9ba7376d5c4b73f6b556cb541fab37aaa1da9c320149b65` | `421a27e58d165478cc7acb984a688c2aa41404968b0203e7cd743ece44c54340` |
+| `model_revision` | `bge-small-en-v1.5-f32.gguf` | `Qwen3-Embedding-0.6B-f16.gguf` |
+| Native dims | `384` (no MRL) | `1024` (MRL) |
+| Emitted `dims` | `384` | `512` (MRL lane) |
+| `pooling` | `cls` | `last` |
+| `eos_append` | *(empty — no EOS append)* | `<|endoftext|>` — appended to every input before tokenization |
+| `query_instruction` | `Represent this sentence for searching relevant passages: ` | `Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ` |
 | `document_instruction` | *(empty string)* | *(empty string)* |
 | `normalization` | L2, always | L2, always |
-| `storage_schema` | `vec0-int8-512-cosine-v1` | `vec0-int8-384-cosine-v1` |
+| `storage_schema` | `vec0-int8-384-cosine-v1` | `vec0-int8-512-cosine-v1` |
+
+> **Pin flip (2026-07-21).** bge-small holds the default pin and qwen3 is the fallback, per the
+> pre-registered pin rule of the fused encoder benchmark
+> ([`docs/findings/2026-07-21-fused-arm-encoder-benchmark.md`](../findings/2026-07-21-fused-arm-encoder-benchmark.md)):
+> fused quality within 1.2% relative at a 9× smaller download, ~27× smaller sidecar footprint, and ~5×
+> faster query embeds. The sidecar *binary's* own manifest still labels qwen3 its `default` tier — Miller
+> always forwards `serve --model <active pin>` explicitly, so that binary default is not load-bearing.
 
 > The P1 plan's Global Constraints name the fallback pins entry `bge-small-f32`; the actual key in
 > `bench-pins.json` is `bge-small-en-v1.5-f32`. The pins file wins — it is the single source for model
 > identity — and this contract records the real key.
 
 **`storage_schema`** format: `vec0-<element>-<dims>-<metric>-v<schema rev>`. Pinned default lane
-`vec0-int8-512-cosine-v1`; fallback lane `vec0-int8-384-cosine-v1`. The schema revision suffix is bumped by
+`vec0-int8-384-cosine-v1`; fallback lane `vec0-int8-512-cosine-v1`. The schema revision suffix is bumped by
 any change to table shapes, column names, mapping semantics, or metadata-column set — not by a dims or
 element change, which are already encoded in the string.
 

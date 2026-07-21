@@ -732,7 +732,8 @@ Warnings are errors (`Directory.Build.props`).
   lexical and structural only, and `MILLER_SEMANTIC=off` (the default) is a permanent zero-work guarantee.
   Optional local semantics is opt-in and experimental — set `MILLER_SEMANTIC=shadow` (build/measure, never
   fuse) or `MILLER_SEMANTIC=on` (fuse the semantic arm into results); `MILLER_SEMANTIC_MODEL` selects the
-  embedding encoder (`qwen3-0.6b-f16` default, `bge-small-en-v1.5-f32`), downloaded with
+  embedding encoder (`bge-small-en-v1.5-f32` default — 134 MB, 384-dim; `qwen3-0.6b-f16` optional — 1.2 GB,
+  512-dim, marginally stronger raw-semantic quality at ~8× the build time), downloaded with
   `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on is enabled with
   `MILLER_SEMANTIC_CANARY=on` (requires semantic on/shadow) and read with `miller telemetry canary`
   / `--gate`; see the operator runbook
