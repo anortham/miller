@@ -48,6 +48,18 @@ public interface ISymbolFusionArm
 
 internal sealed record SearchRouteExecutionResult(string Output, int Count, long SourceBytes = 0);
 
+/// <summary>
+/// One symbol-route serving pass: the rendered result plus the facts a canary row needs — the served page slice
+/// (the exact rows rendered, in served order), the pre-fusion lexical candidate count, and the fusion map when an
+/// arm reshaped the ranking. Produced by the single <see cref="SearchRouteExecutor.RunSymbolsCore"/> pipeline so
+/// the served bytes and these facts can never disagree.
+/// </summary>
+internal sealed record SymbolExecution(
+    SearchRouteExecutionResult Result,
+    IReadOnlyList<SymbolCandidate> ServedPage,
+    int LexicalResultCount,
+    IReadOnlyDictionary<string, FusedCandidate>? Fusion);
+
 internal static class SearchRouteExecutor
 {
     /// <summary>
@@ -77,12 +89,27 @@ internal static class SearchRouteExecutor
     public static SearchRouteExecutionResult RunSymbols(
         ISymbolLookupIndex index,
         SearchRoute route,
-        SearchRouteExecutionRequest request)
+        SearchRouteExecutionRequest request) =>
+        RunSymbolsCore(index, route, request, request.FusionArm).Result;
+
+    /// <summary>
+    /// The one symbol-route serving pipeline — candidate generation, optional fusion, rendering — shared by the
+    /// public <see cref="RunSymbols"/> wrapper and the canary orchestrator. <paramref name="armOverride"/> is the
+    /// arm actually consulted (the request's own arm, a canary treatment arm, or null for a lexical serve), so a
+    /// null arm renders byte-identical lexical bytes. Also returns the served page slice and pre-fusion lexical
+    /// count a canary row records.
+    /// </summary>
+    public static SymbolExecution RunSymbolsCore(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        ISymbolFusionArm? armOverride)
     {
         SymbolCandidateSet candidates = CollectSymbolCandidates(index, route, request);
+        int lexicalResultCount = candidates.Candidates.Count;
         IReadOnlyDictionary<string, FusedCandidate>? fusion = null;
 
-        if (request.FusionArm is { } arm &&
+        if (armOverride is { } arm &&
             !candidates.FileMode &&
             arm.Fuse(index, FusionRequestFor(candidates, request)) is { Count: > 0 } fused)
         {
@@ -97,11 +124,12 @@ internal static class SearchRouteExecutor
             request.Limit,
             request.Json,
             out int count,
+            out IReadOnlyList<SymbolCandidate> servedPage,
             request.CompactBanner,
             request.HasDocLookup,
             fusion);
 
-        return new SearchRouteExecutionResult(output, count);
+        return new SymbolExecution(new SearchRouteExecutionResult(output, count), servedPage, lexicalResultCount, fusion);
     }
 
     public static SearchRouteExecutionResult RunContent(

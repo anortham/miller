@@ -91,3 +91,25 @@ unchanged: their fixture (ws-hex/prose) lands in bucket 23 -> control post-flip.
 ## Concerns
 None blocking. The two documented limitations (UtcDate midnight straddle; cross-workspace rung awaiting a corpus-generation compat
 signal) are noted judgment calls, not gaps for v1.
+
+## Fix round 1 — unify the duplicated serving pipeline
+
+Lead finding: SearchTool.ExecuteSymbols mirrored SearchRouteExecutor.RunSymbols line-for-line (two copies of the same
+load-bearing pipeline that would drift). Now own SearchRouteExecutor.cs for this round.
+
+Change (no behavior change anywhere):
+- Extracted the symbol-route pipeline into one `SearchRouteExecutor.RunSymbolsCore(index, route, request, armOverride)`
+  returning `SymbolExecution` (result, served page slice, pre-fusion lexical count, fusion map). `SymbolExecution` now lives
+  next to it in SearchRouteExecutor.cs (moved from SearchTool).
+- `SearchRouteExecutor.RunSymbols` is now a thin wrapper: `RunSymbolsCore(index, route, request, request.FusionArm).Result`
+  (public signature + behavior unchanged for all existing callers).
+- `SearchTool.RunSymbolsWithCanary` calls `RunSymbolsCore` directly (treatment arm, or request.FusionArm on the off path);
+  `SearchTool.ExecuteSymbols` and its private record are deleted.
+
+Verification:
+- red-green + regression (golden parity, determinism, hybrid, canary telemetry/export/gate, diagnostics, SearchRouteExecutor)
+  -> 165 passed, 0 failed.
+- scripts/test.sh -> 4351 passed, 2 skipped, 0 failed, 16s.
+- dotnet build Miller.slnx -c Release -> 0W/0E.
+
+Owned files touched this round: SearchTool.cs, SearchRouteExecutor.cs (report is documentation).

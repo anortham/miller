@@ -1257,7 +1257,8 @@ public sealed class SearchTool
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
         if (mode == CanaryMode.Off || string.IsNullOrEmpty(workspaceId))
-            return new SymbolCanaryOutcome(ExecuteSymbols(index, route, request, request.FusionArm).Result, Facts: null);
+            return new SymbolCanaryOutcome(
+                SearchRouteExecutor.RunSymbolsCore(index, route, request, request.FusionArm).Result, Facts: null);
 
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
         string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
@@ -1274,60 +1275,11 @@ public sealed class SearchTool
                 == CanaryArm.Treatment;
 
         SemanticSymbolFusionArm? treatmentArm = treatment ? treatmentArmFactory?.Invoke() : null;
-        SymbolExecution execution = ExecuteSymbols(index, route, request, treatmentArm);
+        SymbolExecution execution = SearchRouteExecutor.RunSymbolsCore(index, route, request, treatmentArm);
 
         CanaryCallFacts facts = BuildCanaryFacts(
             workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index);
         return new SymbolCanaryOutcome(execution.Result, facts);
-    }
-
-    private readonly record struct SymbolExecution(
-        SearchRouteExecutionResult Result,
-        IReadOnlyList<SymbolCandidate> ServedPage,
-        int LexicalResultCount,
-        IReadOnlyDictionary<string, FusedCandidate>? Fusion);
-
-    /// <summary>
-    /// Candidate generation, optional fusion, and rendering for the symbol route — the exact pipeline of
-    /// <see cref="SearchRouteExecutor.RunSymbols"/>, so a null arm renders byte-identical lexical bytes, plus the
-    /// served page slice and pre-fusion lexical count the canary writer needs.
-    /// </summary>
-    private static SymbolExecution ExecuteSymbols(
-        ISymbolLookupIndex index, SearchRoute route, SearchRouteExecutionRequest request, ISymbolFusionArm? arm)
-    {
-        SymbolCandidateSet candidates = CollectSymbolCandidates(
-            index, request.Query, route.Mode, request.Limit, request.ExcludeTests, request.FilePattern, request.Language);
-        int lexicalResultCount = candidates.Candidates.Count;
-        IReadOnlyDictionary<string, FusedCandidate>? fusion = null;
-
-        if (arm is not null && !candidates.FileMode)
-        {
-            var fusionRequest = new SymbolFusionRequest(
-                request.Query,
-                candidates.Candidates,
-                request.Limit,
-                candidates.Visibility is { } visibility ? visibility.Allows : static _ => true,
-                request.WorkspaceRoot);
-            if (arm.Fuse(index, fusionRequest) is { Count: > 0 } fused)
-            {
-                candidates = candidates with { Candidates = [.. fused.Select(static row => row.Candidate)] };
-                fusion = fused.ToDictionary(static row => row.Candidate.SymbolId, StringComparer.Ordinal);
-            }
-        }
-
-        string output = RenderSymbolCandidates(
-            candidates,
-            request.Query,
-            route.Mode,
-            request.Limit,
-            request.Json,
-            out int count,
-            out IReadOnlyList<SymbolCandidate> servedPage,
-            request.CompactBanner,
-            request.HasDocLookup,
-            fusion);
-
-        return new SymbolExecution(new SearchRouteExecutionResult(output, count), servedPage, lexicalResultCount, fusion);
     }
 
     private static CanaryCallFacts BuildCanaryFacts(
