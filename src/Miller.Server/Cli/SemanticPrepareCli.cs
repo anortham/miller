@@ -62,25 +62,29 @@ internal sealed class SemanticPrepareCli
     private readonly SemanticPrepareProcessRunner _runProcess;
     private readonly Func<int> _currentPid;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<string> _newNonce;
 
     internal SemanticPrepareCli(
         Func<string, bool> fileExists,
         ISemanticPreparePreflight preflight,
         SemanticPrepareProcessRunner runProcess,
         Func<int> currentPid,
-        Func<DateTimeOffset> utcNow)
+        Func<DateTimeOffset> utcNow,
+        Func<string> newNonce)
     {
         _fileExists = fileExists ?? throw new ArgumentNullException(nameof(fileExists));
         _preflight = preflight ?? throw new ArgumentNullException(nameof(preflight));
         _runProcess = runProcess ?? throw new ArgumentNullException(nameof(runProcess));
         _currentPid = currentPid ?? throw new ArgumentNullException(nameof(currentPid));
         _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
+        _newNonce = newNonce ?? throw new ArgumentNullException(nameof(newNonce));
     }
 
     /// <summary>The production wiring: real filesystem probe, the shared <see cref="DiskPreflight"/>, real child
     /// process.</summary>
     public static SemanticPrepareCli Production() =>
-        new(File.Exists, SharedDiskPreflight.Instance, RunProcess, () => Environment.ProcessId, () => DateTimeOffset.UtcNow);
+        new(File.Exists, SharedDiskPreflight.Instance, RunProcess, () => Environment.ProcessId,
+            () => DateTimeOffset.UtcNow, () => Guid.NewGuid().ToString("N"));
 
     /// <summary>The absolute path of the progress marker for a workspace's <c>.miller</c> directory.</summary>
     internal static string MarkerPathFor(string millerDir) => Path.Combine(millerDir, MarkerFileName);
@@ -124,14 +128,15 @@ internal sealed class SemanticPrepareCli
 
         string markerPath = MarkerPathFor(millerDir);
         string model = string.IsNullOrWhiteSpace(request.Model) ? DefaultModelLabel : request.Model!.Trim();
-        WriteMarker(markerPath, model);
+        string nonce = _newNonce();
+        WriteMarker(markerPath, model, nonce);
         try
         {
             return _runProcess(executable, BuildArguments(request), stdout, stderr);
         }
         finally
         {
-            DeleteMarker(markerPath);
+            DeleteMarker(markerPath, nonce);
         }
     }
 
@@ -149,7 +154,7 @@ internal sealed class SemanticPrepareCli
         return arguments;
     }
 
-    private void WriteMarker(string markerPath, string model)
+    private void WriteMarker(string markerPath, string model, string nonce)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(markerPath)!);
         var buffer = new MemoryStream();
@@ -159,22 +164,44 @@ internal sealed class SemanticPrepareCli
             writer.WriteString("model", model);
             writer.WriteNumber("pid", _currentPid());
             writer.WriteString("createdUtc", _utcNow().ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            writer.WriteString("nonce", nonce);
             writer.WriteEndObject();
         }
 
         File.WriteAllBytes(markerPath, buffer.ToArray());
     }
 
-    private static void DeleteMarker(string markerPath)
+    private static void DeleteMarker(string markerPath, string nonce)
     {
         try
         {
+            if (!OwnsMarker(markerPath, nonce))
+                return;
             File.Delete(markerPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort cleanup: a stale marker whose pid is dead is ignored by the Task 4 classifier, and the
             // next `semantic prepare` run overwrites it. Never let a delete failure mask the child's exit code.
+        }
+    }
+
+    // Delete only a marker THIS invocation still owns. A concurrent prepare overwrites the shared path with its own
+    // nonce; deleting that would drop the `downloading` status while its consented download is still running.
+    private static bool OwnsMarker(string markerPath, string nonce)
+    {
+        try
+        {
+            if (!File.Exists(markerPath))
+                return false;
+            using JsonDocument marker = JsonDocument.Parse(File.ReadAllBytes(markerPath));
+            return marker.RootElement.TryGetProperty("nonce", out JsonElement value)
+                && value.ValueKind == JsonValueKind.String
+                && string.Equals(value.GetString(), nonce, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
         }
     }
 

@@ -98,6 +98,47 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Fact]
+    public void Prepare_DoesNotDeleteMarker_OwnedByConcurrentInvocation()
+    {
+        using var secondMarkerWritten = new ManualResetEventSlim(false);
+        using var secondMayFinish = new ManualResetEventSlim(false);
+
+        var second = Build(binaryExists: true, preflight: Ok(), pid: 9999, nonce: "second-nonce",
+            runner: (_, _, _, _) =>
+            {
+                secondMarkerWritten.Set();
+                secondMayFinish.Wait();
+                return 0;
+            });
+
+        Thread? secondThread = null;
+        var first = Build(binaryExists: true, preflight: Ok(), pid: FakePid, nonce: "first-nonce",
+            runner: (_, _, _, _) =>
+            {
+                secondThread = new Thread(() => second.Run(
+                    new SemanticPrepareRequest("second-model", Json: false),
+                    _toolsRoot, _millerDir, new StringWriter(), new StringWriter()));
+                secondThread.Start();
+                secondMarkerWritten.Wait();
+                return 0;
+            });
+
+        Run(first, new SemanticPrepareRequest("first-model", Json: false));
+
+        Assert.True(File.Exists(MarkerPath));
+        using (JsonDocument marker = JsonDocument.Parse(File.ReadAllText(MarkerPath)))
+        {
+            Assert.Equal("second-model", marker.RootElement.GetProperty("model").GetString());
+            Assert.Equal(9999, marker.RootElement.GetProperty("pid").GetInt32());
+            Assert.Equal("second-nonce", marker.RootElement.GetProperty("nonce").GetString());
+        }
+
+        secondMayFinish.Set();
+        secondThread!.Join();
+        Assert.False(File.Exists(MarkerPath));
+    }
+
+    [Fact]
     public void Prepare_PassesExitCodeThrough()
     {
         var cli = Build(binaryExists: true, preflight: Ok(), runner: (_, _, _, _) => 3);
@@ -252,8 +293,10 @@ public sealed class SemanticPrepareCliTests : IDisposable
     private SemanticPrepareCli Build(
         bool binaryExists,
         ISemanticPreparePreflight preflight,
-        SemanticPrepareProcessRunner runner) =>
-        new(_ => binaryExists, preflight, runner, () => FakePid, () => FakeNow);
+        SemanticPrepareProcessRunner runner,
+        int pid = FakePid,
+        string nonce = "test-nonce") =>
+        new(_ => binaryExists, preflight, runner, () => pid, () => FakeNow, () => nonce);
 
     private (int Code, string Out, string Err) Run(SemanticPrepareCli cli, SemanticPrepareRequest request)
     {
