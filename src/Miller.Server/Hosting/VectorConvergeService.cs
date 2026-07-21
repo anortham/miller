@@ -588,7 +588,7 @@ public sealed class VectorConvergeService : BackgroundService
                 ArtifactIdChanged = !string.Equals(
                     snapshot.ArtifactId, port.Meta("artifact_id"), StringComparison.Ordinal),
                 IdentityAction = MillerSemanticContract.ClassifyChange(
-                    port.StoredIdentity, MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder)),
+                    port.StoredIdentity, MillerSemanticContract.PinnedIdentity(SemanticEncoderSelection.Active)),
                 DeferredPaths = deferredPaths,
             };
 
@@ -1136,7 +1136,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
             using VectorStore created = VectorStore.Create(
                 vectorsPath,
-                MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder, MillerVersion.Current),
+                MillerSemanticContract.PinnedIdentity(SemanticEncoderSelection.Active, MillerVersion.Current),
                 artifactId,
                 extension);
         }

@@ -189,23 +189,28 @@ public sealed class VectorSidecar
         SemanticMode mode,
         IVectorFileProbe probe,
         IVectorStoreOpener? opener = null,
-        SemanticReaderIdentity? reader = null)
+        SemanticReaderIdentity? reader = null,
+        SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
         Mode = mode;
         _probe = probe;
         _opener = opener ?? SqliteVectorStoreOpener.Instance;
-        Reader = reader ?? DefaultReader;
+        Encoder = encoder ?? SemanticEncoderSelection.Active;
+        Reader = reader ?? ReaderIdentityFor(Encoder);
     }
+
+    /// <summary>The active encoder this sidecar builds and reads against — the process-wide selection unless a
+    /// test injects one. Its fingerprint is what <see cref="Reader"/> must carry to open a generation.</summary>
+    public SemanticEncoderPin Encoder { get; }
 
     /// <summary>
     /// The encoder this reader can interpret and the build it is. A generation is queryable only by an encoder
     /// whose fingerprint matches exactly and whose version satisfies the generation's
     /// <c>min_reader_version</c>.
     /// </summary>
-    public static SemanticReaderIdentity DefaultReader { get; } = new(
-        MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
-        ResolveReaderVersion());
+    private static SemanticReaderIdentity ReaderIdentityFor(SemanticEncoderPin pin) =>
+        new(MillerSemanticContract.EncoderFingerprint(pin), ResolveReaderVersion());
 
     public SemanticReaderIdentity Reader { get; }
 

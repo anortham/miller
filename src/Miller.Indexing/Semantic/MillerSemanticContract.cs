@@ -113,6 +113,23 @@ public static class MillerSemanticContract
         DocumentInstruction: "",
         StorageSchema: "vec0-int8-384-cosine-v1");
 
+    /// <summary>The encoders Miller can build and read, newest-canonical first. The active encoder is selected
+    /// from this set by <see cref="SemanticEncoderSelection"/>; nothing outside it is a valid Miller pin.</summary>
+    public static IReadOnlyList<SemanticEncoderPin> KnownEncoders { get; } = [DefaultEncoder, FallbackEncoder];
+
+    /// <summary>The known encoder whose <see cref="SemanticEncoderPin.ModelId"/> exactly equals
+    /// <paramref name="modelId"/>, or null when none matches (including a null argument).</summary>
+    public static SemanticEncoderPin? FindEncoder(string modelId)
+    {
+        foreach (SemanticEncoderPin pin in KnownEncoders)
+        {
+            if (string.Equals(pin.ModelId, modelId, StringComparison.Ordinal))
+                return pin;
+        }
+
+        return null;
+    }
+
     /// <summary>The identity a fresh generation is stamped with for <paramref name="pin"/>.</summary>
     public static SemanticGenerationIdentity PinnedIdentity(SemanticEncoderPin pin, string? writerVersion = null)
     {
@@ -278,4 +295,60 @@ public static class MillerSemanticContract
 
     private static string Sha256Hex(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+}
+
+/// <summary>The outcome of resolving a requested model id against <see cref="MillerSemanticContract.KnownEncoders"/>:
+/// the pin to use, and the requested id when it was a non-empty value that matched no known encoder (the single
+/// signal that a fallback-to-default warning is warranted).</summary>
+public readonly record struct SemanticEncoderResolution(SemanticEncoderPin Pin, string? UnknownModelId);
+
+/// <summary>
+/// Selects the active semantic encoder from <c>MILLER_SEMANTIC_MODEL</c>. An unset or empty value keeps the
+/// <see cref="MillerSemanticContract.DefaultEncoder"/>; an exact <see cref="SemanticEncoderPin.ModelId"/> match
+/// against <see cref="MillerSemanticContract.KnownEncoders"/> swaps to that pin; an unrecognized value falls
+/// back to the default and warns once. The swap is a pin change only — its
+/// <see cref="MillerSemanticContract.PinnedIdentity"/> classifies as a <see cref="InvalidationAction.ShadowRebuild"/>,
+/// which the existing generation machinery converges with the old generation retained for rollback.
+/// </summary>
+public static class SemanticEncoderSelection
+{
+    public const string EnvVar = "MILLER_SEMANTIC_MODEL";
+
+    private static readonly Lazy<SemanticEncoderPin> ResolvedActive =
+        new(() => ResolveAndWarn(Environment.GetEnvironmentVariable(EnvVar), Console.Error.WriteLine));
+
+    /// <summary>The process-wide active encoder, resolved once on first access so the fallback warning fires at
+    /// most once for the process lifetime.</summary>
+    public static SemanticEncoderPin Active => ResolvedActive.Value;
+
+    /// <summary>Reads <see cref="EnvVar"/> and returns the active pin. Cached — repeated calls never re-read the
+    /// environment nor re-warn.</summary>
+    public static SemanticEncoderPin FromEnvironment() => ResolvedActive.Value;
+
+    /// <summary>The pure env-value ⇒ resolution mapping, side-effect free so selection is testable without
+    /// mutating the process environment.</summary>
+    public static SemanticEncoderResolution Resolve(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return new SemanticEncoderResolution(MillerSemanticContract.DefaultEncoder, null);
+
+        string modelId = raw.Trim();
+        SemanticEncoderPin? match = MillerSemanticContract.FindEncoder(modelId);
+        return match is not null
+            ? new SemanticEncoderResolution(match, null)
+            : new SemanticEncoderResolution(MillerSemanticContract.DefaultEncoder, modelId);
+    }
+
+    internal static SemanticEncoderPin ResolveAndWarn(string? raw, Action<string> warn)
+    {
+        ArgumentNullException.ThrowIfNull(warn);
+        SemanticEncoderResolution resolution = Resolve(raw);
+        if (resolution.UnknownModelId is { } unknown)
+        {
+            string known = string.Join(", ", MillerSemanticContract.KnownEncoders.Select(pin => pin.ModelId));
+            warn($"{EnvVar}='{unknown}' is not a known Miller encoder ({known}); using '{resolution.Pin.ModelId}'.");
+        }
+
+        return resolution.Pin;
+    }
 }

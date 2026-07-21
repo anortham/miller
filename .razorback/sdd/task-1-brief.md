@@ -1,28 +1,31 @@
-### Task 1: circuit-open pause producer
+### Task 1: Encoder pin registry + `MILLER_SEMANTIC_MODEL` swap seam
 
 **Files:**
-- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`
-- Test: `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`
+- Modify: `src/Miller.Indexing/Semantic/MillerSemanticContract.cs` (`DefaultEncoder`/`FallbackEncoder` at :94/:105)
+- Modify: `src/Miller.Indexing/VectorSidecar.cs` (:207 direct `DefaultEncoder` ref; `FromEnvironment` at :162 area)
+- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs` (:591, :1139 direct `DefaultEncoder` refs)
+- Modify: `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` (`FindPin` :685)
+- Test: `tests/Miller.Tests/Indexing/SemanticEncoderSelectionTests.cs` (new)
 
 **Interfaces:**
-- Consumes: `SemanticSessionState.CircuitOpen` (existing), `VectorStore.SetMeta(key, value)` (`src/Miller.Indexing/Semantic/VectorStore.cs:186`), existing consumer `VectorSidecar.PauseState` (`src/Miller.Indexing/VectorSidecar.cs:400`) with keys `converge_pause_state`/`converge_pause_reason`.
-- Produces: `converge_pause_state=circuit-open` + human-readable `converge_pause_reason` stamped on the active artifact when the session circuit opens during a drain; both keys **cleared** (deleted or set empty — match `PauseState`'s null semantics) on the first successful drain wake after recovery.
+- Consumes: existing `SemanticEncoderPin`, `MillerSemanticContract.PinnedIdentity`, `ClassifyChange` (fingerprint change ⟹ `ShadowRebuild` — already tested).
+- Produces: `MillerSemanticContract.KnownEncoders` — `IReadOnlyList<SemanticEncoderPin>` containing the qwen3 and bge-small pins keyed by `ModelId`; `MillerSemanticContract.FindEncoder(string modelId) : SemanticEncoderPin?`; `SemanticEncoderSelection.FromEnvironment() : SemanticEncoderPin` reading env var `MILLER_SEMANTIC_MODEL` (exact `ModelId` match against `KnownEncoders`; unset/empty → `DefaultEncoder`; unknown value → `DefaultEncoder` + one warning log at first resolution); `VectorSidecar.Encoder : SemanticEncoderPin` (the resolved active pin, set in `FromEnvironment`, injectable in tests via existing construction seams).
 
-**Contract inputs:** `VectorSidecarClassificationTests.CircuitOpenPause_OverridesReady` (`tests/Miller.Tests/Indexing/VectorSidecarClassificationTests.cs:73`) fixes the consumer's expected key/values — the producer must emit exactly those.
+**Contract inputs:** `MILLER_SEMANTIC_MODEL` is the env var name. The active pin flows to every site that today hard-codes `DefaultEncoder`: `VectorSidecar` :207 fingerprint, `VectorConvergeService` :591/:1139 pinned identity. `FindPin` in `SemanticEmbeddingSession` generalizes to `MillerSemanticContract.FindEncoder`. Do NOT change `DefaultEncoder`'s pin values or `CanonicalEncoderString` — fingerprints of existing artifacts must not move.
 
-**File ownership:** Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`; Test: `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`
+**File ownership:** `src/Miller.Indexing/Semantic/MillerSemanticContract.cs`, `src/Miller.Indexing/VectorSidecar.cs`, `src/Miller.Server/Hosting/VectorConvergeService.cs` (encoder refs only), `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` (FindPin only), `tests/Miller.Tests/Indexing/SemanticEncoderSelectionTests.cs`
 
-**Serialization required:** Yes
+**Serialization required:** No
 
-**Dependency reason:** Tasks 1, 2, 5 all modify `VectorConvergeService.cs` and its test file; ordered lane.
+**Dependency reason:** None - safe parallel batch.
 
-**What to build:** When a drain wake ends with the circuit open, stamp the pause on the artifact so `workspace status` from ANY process reports `circuit-open` instead of a stale `ready`. When a later wake completes a request cleanly, clear the pause. This closes the top concern from the P2 B6 report ("a paused convergence reports ready").
+**What to build:** A registry + selection seam so swapping the embedding model is one env var. Selecting the fallback pin must produce its `PinnedIdentity`, which the existing generation-identity machinery classifies as `ShadowRebuild` — the swap then converges via the normal shadow-generation path with the old generation retained for rollback. No new download logic: `miller semantic prepare` and the sidecar `prepare` contract already key off the pin handed to them (verify the prepare path receives the active pin, not `DefaultEncoder`, and fix if hard-coded — trace `semantic prepare` in `CliDispatch`).
 
-**Approach:** Stamp inside the drain path where the session's circuit state is already observed (after `DrainOnceAsync`/error recording), via the already-open converge port's store. Write only on state *transitions* (open→stamp, recovered→clear), not every wake — vectors_meta writes on a hot loop would churn WAL. Reuse the existing `RecordError` neighborhood; do not add a new hosted service. TDD against the existing `FakePort` (extend it to expose meta writes).
+**Approach:** Keep `DefaultEncoder`/`FallbackEncoder` properties (tests reference them); add the registry on top. Resolution is process-wide and read once (matching `VectorSidecar.FromEnvironment`'s pattern); tests construct `VectorSidecar` with an explicit pin rather than mutating the environment.
 
 **Acceptance criteria:**
-- [ ] Circuit opening during drain stamps `converge_pause_state=circuit-open` and a non-empty `converge_pause_reason` on the artifact.
-- [ ] A subsequent successful wake clears both keys; `workspace status` classification returns to `ready`/`building` (proved via `VectorSidecar.Inspect` on the same store in-test).
-- [ ] No meta write occurs on wakes with no state transition.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [ ] `MILLER_SEMANTIC_MODEL=bge-small-en-v1.5-f32` resolves the bge pin; its `PinnedIdentity` differs from qwen3's and `ClassifyChange` yields `ShadowRebuild`.
+- [ ] Unset/unknown env values resolve `DefaultEncoder`; unknown logs one warning.
+- [ ] `VectorConvergeService`, `VectorSidecar`, and the `semantic prepare` path all consume the resolved pin (no remaining direct `DefaultEncoder` reads outside `MillerSemanticContract` and tests — guard with a source-scan or reference test).
+- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
 

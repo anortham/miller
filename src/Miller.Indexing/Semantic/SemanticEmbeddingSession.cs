@@ -166,7 +166,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             return null;
         }
 
-        SemanticEncoderPin? pin = FindPin(health.ModelId);
+        SemanticEncoderPin? pin = MillerSemanticContract.FindEncoder(health.ModelId);
         if (pin is null)
         {
             refusalReason = $"sidecar loaded model_id '{health.ModelId}', which is not a pinned Miller encoder";
@@ -681,13 +681,6 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
         return [.. flagged];
     }
-
-    private static SemanticEncoderPin? FindPin(string modelId) =>
-        string.Equals(modelId, MillerSemanticContract.DefaultEncoder.ModelId, StringComparison.Ordinal)
-            ? MillerSemanticContract.DefaultEncoder
-            : string.Equals(modelId, MillerSemanticContract.FallbackEncoder.ModelId, StringComparison.Ordinal)
-                ? MillerSemanticContract.FallbackEncoder
-                : null;
 
     private static string? FirstDisagreement(SemanticEncoderPin pin, SemanticSidecarHealth health)
     {
