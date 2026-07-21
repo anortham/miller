@@ -44,6 +44,76 @@ CODE_KINDS = {
 # every arm. These prefixes are excluded from every corpus, unconditionally.
 GOLDEN_SET_EXCLUSIONS = ("eval/", ".razorback/", ".claude/")
 
+# Benchmark-derived docs that name the dev set's graded answer paths. A plan or
+# findings doc that enumerates the answer files is a leaked cheat sheet: a
+# semantic arm can match a query to that doc's chunk, so the answer key must not
+# sit in the corpus. This list was frozen at miller main HEAD 59c2c79 (spec R1)
+# by grepping every graded `doc_id` from
+# `eval/retrieval-eval/sets/dev/queries.jsonl` against `docs/` — the five
+# design/findings docs the plan names, plus every other `docs/` file whose text
+# contains at least one graded doc_id. miller-only: julie's graded answer docs
+# live under the same relative paths in a different repo, so these apply to the
+# miller corpus alone (guarded by repo in `excluded`). Regenerate and re-freeze
+# if the frozen SHA or the dev set changes.
+BENCHMARK_DOC_EXCLUSIONS = (
+    "docs/contracts/canary-telemetry-v1.md",
+    "docs/contracts/semantic-sidecar-protocol-v1.md",
+    "docs/contracts/vectors-v1.md",
+    "docs/findings/2026-06-05-julie-side-by-side-audit.md",
+    "docs/findings/2026-06-05-tool-output-token-savings.md",
+    "docs/findings/2026-06-23-1.0-readiness-review.md",
+    "docs/findings/2026-07-07-dead-code-candidates-dogfood.md",
+    "docs/findings/2026-07-19-model-benchmark.md",
+    "docs/findings/2026-07-21-fused-arm-encoder-benchmark.md",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/final-baseline/results.csv",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/final-baseline/results.json",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.csv",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/search-inspect-recovery-hardening/results.json",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.csv",
+    "docs/findings/benchmarks/2026-06-27-foundation-matrix/task3-retrieval-inspect-ambiguity/results.json",
+    "docs/plans/2026-05-31-workspace-registry-freshness-plan.md",
+    "docs/plans/2026-06-01-julie-extractors-migration-plan.md",
+    "docs/plans/2026-06-04-cli-workspace-open-remove-design.md",
+    "docs/plans/2026-06-04-symbol-search-collapsed-trigram-design.md",
+    "docs/plans/2026-06-05-source-regions-pillar3-implementation-plan.md",
+    "docs/plans/2026-06-07-content-corpus-fts5-search-plan.md",
+    "docs/plans/2026-06-07-incremental-search-sidecar.md",
+    "docs/plans/2026-06-09-miller-data-opportunities-plan.md",
+    "docs/plans/2026-06-09-miller-quality-review-goal-implementation-plan.md",
+    "docs/plans/2026-06-09-patterns-tool-implementation-plan.md",
+    "docs/plans/2026-06-09-reference-aware-context-design.md",
+    "docs/plans/2026-06-10-review-findings-fixes.md",
+    "docs/plans/2026-06-11-version-aware-leadership-design.md",
+    "docs/plans/2026-06-11-version-aware-leadership.md",
+    "docs/plans/2026-06-23-telemetry-workspace-onboarding-implementation-plan.md",
+    "docs/plans/2026-06-27-search-inspect-effectiveness-implementation-plan.md",
+    "docs/plans/2026-06-27-search-no-results-recall-plan.md",
+    "docs/plans/2026-07-02-guidance-delivery-design.md",
+    "docs/plans/2026-07-02-guidance-delivery-implementation.md",
+    "docs/plans/2026-07-02-tool-output-compaction.md",
+    "docs/plans/2026-07-05-rust-ct-impact-single-release.md",
+    "docs/plans/2026-07-06-background-bootstrap-design.md",
+    "docs/plans/2026-07-06-background-bootstrap-implementation-plan.md",
+    "docs/plans/2026-07-07-dead-code-candidates-implementation-plan.md",
+    "docs/plans/2026-07-07-metric-history-implementation-plan.md",
+    "docs/plans/2026-07-08-dashboard-registry-hygiene.md",
+    "docs/plans/2026-07-09-impact-traversal-evidence-implementation-plan.md",
+    "docs/plans/2026-07-12-telemetry-diagnosis-hardening.md",
+    "docs/plans/2026-07-16-agent-interaction-improvements.md",
+    "docs/plans/2026-07-17-julie-extract-2.15.0-adoption.md",
+    "docs/plans/2026-07-19-miller-semantic-integration-design.md",
+    "docs/plans/2026-07-19-p0-governance-and-gates-plan.md",
+    "docs/plans/2026-07-19-p1-freeze-and-conformance-plan.md",
+    "docs/plans/2026-07-20-p2-miller-lanes-plan.md",
+    "docs/plans/2026-07-20-p3-integration-plan.md",
+    "docs/plans/2026-07-20-p3-track1-sidecar-pins-plan.md",
+    "docs/plans/2026-07-20-semantic-p4-shadow-rollout.md",
+    "docs/plans/2026-07-21-encoder-comparison-fusion-v2-design.md",
+    "docs/plans/2026-07-21-semantic-p5-canary-plan.md",
+    "docs/release-notes/v0.1.0-beta.1.md",
+    "docs/release-notes/v1.4.0.md",
+)
+
 BUILD_EXCLUSIONS = (".miller/", "node_modules/", "target/", "docs/site/")
 BUILD_PATH_FRAGMENTS = ("/obj/", "/bin/", "/node_modules/", "/target/")
 
@@ -52,8 +122,10 @@ XML_DOC_TAGS = re.compile(r"</?(summary|remarks|param|returns|typeparam|see|para
 WHITESPACE = re.compile(r"\s+")
 
 
-def excluded(path: str) -> bool:
+def excluded(path: str, repo: str = None) -> bool:
     if path.startswith(GOLDEN_SET_EXCLUSIONS) or path.startswith(BUILD_EXCLUSIONS):
+        return True
+    if repo == "miller" and path.startswith(BENCHMARK_DOC_EXCLUSIONS):
         return True
     return any(frag in "/" + path for frag in BUILD_PATH_FRAGMENTS)
 
@@ -109,7 +181,7 @@ def build_symbol_cards(db: Path, repo: str):
     conn.close()
 
     for row in rows:
-        if row["kind"] in INELIGIBLE_KINDS or excluded(row["path"]):
+        if row["kind"] in INELIGIBLE_KINDS or excluded(row["path"], repo):
             continue
         if not eligibility.get(row["language"], {}).get("eligible"):
             continue
@@ -169,7 +241,7 @@ def build_doc_chunks(db: Path, repo: str):
 
     for row in rows:
         path = row["path"] or row["display_path"]
-        if not path or excluded(path):
+        if not path or excluded(path, repo):
             continue
         header = f"{Path(path).name} {path}"
         for i, piece in enumerate(window(row["raw_text"])):
@@ -237,6 +309,12 @@ def main() -> int:
         "ineligible_kinds": sorted(INELIGIBLE_KINDS),
         "excluded_prefixes": list(GOLDEN_SET_EXCLUSIONS + BUILD_EXCLUSIONS),
         "excluded_path_fragments": list(BUILD_PATH_FRAGMENTS),
+        "benchmark_doc_exclusions": {
+            "repo": "miller",
+            "frozen_sha": "59c2c79e8633940de5d394f73235f10acbe2c2b8",
+            "count": len(BENCHMARK_DOC_EXCLUSIONS),
+            "paths": list(BENCHMARK_DOC_EXCLUSIONS),
+        },
         "total_units": len(units),
         "per_repo": stats,
         "golden_set_leak_check": {
