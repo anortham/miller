@@ -1088,19 +1088,61 @@ public static class CliDispatch
         }
     }
 
+    private const string TelemetryUsage =
+        "miller telemetry export [--jsonl] [--workspace-id ID|all] | " +
+        "miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD] | " +
+        "miller telemetry canary --gate [--json]";
+
     private static int Telemetry(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count == 0)
-            return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
+            return Usage(err, TelemetryUsage);
 
         string operation = args[0].ToLowerInvariant();
-        CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "jsonl");
-        if (operation != "export" || o.Positionals.Count > 0)
-            return Usage(err, "miller telemetry export [--jsonl] [--workspace-id ID|all]");
+        IReadOnlyList<string> tail = args.Skip(1).ToArray();
 
-        TelemetryExportReader.WriteJsonLines(ctx.TelemetryDbPath, outw, o.Value("workspace-id"));
+        if (operation == "export")
+        {
+            CliOptions o = CliOptions.Parse(tail, "jsonl");
+            if (o.Positionals.Count > 0)
+                return Usage(err, TelemetryUsage);
+            TelemetryExportReader.WriteJsonLines(ctx.TelemetryDbPath, outw, o.Value("workspace-id"));
+            return 0;
+        }
+
+        if (operation == "canary")
+            return Canary(tail, ctx, outw, err);
+
+        return Usage(err, TelemetryUsage);
+    }
+
+    private static int Canary(IReadOnlyList<string> tail, WorkspaceContext ctx, TextWriter outw, TextWriter err)
+    {
+        CliOptions o = CliOptions.Parse(tail, "json", "gate");
+        if (o.Positionals.Count > 0)
+            return Usage(err, TelemetryUsage);
+
+        if (o.Has("gate"))
+        {
+            outw.WriteLine(CanaryGateReport.Render(ctx.TelemetryDbPath, o.Has("json")));
+            return 0;
+        }
+
+        DateOnly to = DateOnly.FromDateTime(DateTime.UtcNow);
+        DateOnly from = to.AddDays(-30);
+        if (o.Value("to") is { } toText && !TryParseIsoDate(toText, out to))
+            return Usage(err, TelemetryUsage);
+        if (o.Value("from") is { } fromText && !TryParseIsoDate(fromText, out from))
+            return Usage(err, TelemetryUsage);
+        if (!o.Has("from") && o.Has("to"))
+            from = to.AddDays(-30);
+
+        outw.WriteLine(CanaryExport.BuildJson(ctx.TelemetryDbPath, from, to, DateTimeOffset.UtcNow));
         return 0;
     }
+
+    private static bool TryParseIsoDate(string value, out DateOnly date) =>
+        DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
 
     // The bulk artifact JSONL feeds (`symbols export`, `references export`, `complexity export`; cli-eros-v1): a fleet
     // orchestrator's alternative to per-query reads or Miller-private SQLite. One subop (`export`), the
@@ -2730,8 +2772,10 @@ public static class CliDispatch
                              history [--metric a,b,…] [--limit N] [--json] [--workspace-id SELECTOR] [--workspace DIR]
           report             One composed repo-quality report: index counts, extraction health, markers, complexity, clones, churn, risk.
                              [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
-          telemetry <op>     Export machine-global Miller telemetry.
+          telemetry <op>     Export machine-global Miller telemetry, or the semantic-canary aggregate/gate.
                              export [--jsonl] [--workspace-id ID|all]
+                             canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]   # frozen aggregate envelope (default last 30 days)
+                             canary --gate [--json]                                  # local gate verdict per miller_version cohort
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           references <op>    Bulk-export identifier/reference usage facts, or list dead-code candidates.

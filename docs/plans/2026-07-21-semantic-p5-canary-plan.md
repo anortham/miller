@@ -120,11 +120,11 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **Approach:** `CanaryLedgerReader` yields typed rows (columns + parsed canary metadata incl. the three hash arrays); `CanaryExport` aggregates units; `CanaryGateReport` computes attribution then per-unit rates then the three clauses, and renders a human summary (per clause: value, threshold, pass/fail/underpowered/indeterminate) plus `--json`. Welch t-quantile: implement the inverse-t via a small deterministic approximation (e.g. Hill's algorithm) in `CanaryGateMath` with unit tests against known values (df=10 t=2.228, df=30 t=2.042, df→∞ 1.960 within 1e-3). Gate exit code: 0 = computed (regardless of pass/fail; the verdict is in the output), nonzero only for I/O/usage errors.
 
 **Acceptance criteria:**
-- [ ] Export envelope matches the contract example shape byte-for-byte on ordering/field names; suppression and truncation-free counters verified; re-export of an unchanged window is byte-identical.
-- [ ] Gate report reproduces the contract's six conformance attribution cases (bare/qualified/path/top-level/deeper-spelling/double-count) from seeded rows.
-- [ ] Underpowered (<30 units) and indeterminate (<100 latency rows) paths report as such and never as a pass; Welch interval + nearest-rank p95 unit-tested against hand-computed values.
-- [ ] `miller telemetry export` behavior unchanged.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] Export envelope matches the contract example shape byte-for-byte on ordering/field names; suppression and truncation-free counters verified; re-export of an unchanged window is byte-identical.
+- [x] Gate report reproduces the contract's six conformance attribution cases (bare/qualified/path/top-level/deeper-spelling/double-count) from seeded rows.
+- [x] Underpowered (<30 units) and indeterminate (<100 latency rows) paths report as such and never as a pass; Welch interval + nearest-rank p95 unit-tested against hand-computed values.
+- [x] `miller telemetry export` behavior unchanged.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 3: Semantic query diagnostics (typed reasons, warmth, backend, latency, identity)
 
