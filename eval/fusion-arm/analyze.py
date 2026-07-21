@@ -52,6 +52,33 @@ def selection_stat(reports, profile, drop_unit=None):
     return sum(per_encoder) / len(per_encoder)
 
 
+def selection_adjusted_p(reports, cand, winner, resamples, seed):
+    """Max-statistic bootstrap p-value for winner-vs-v1 that accounts for selecting the best of all
+    profiles on the same units (winner's-curse correction; the naive per-profile CI does not). Sharp
+    null: every profile's per-unit diffs vs v1 are mean-centered, resampled, and the max profile mean
+    per resample forms the null distribution of "best-looking profile by chance"."""
+    ids = sorted(reports[cand][V1]["_units"])
+    v1_units = reports[cand][V1]["_units"]
+    diffs_by_profile = {}
+    for p in PROFILES:
+        if p == V1:
+            continue
+        units = reports[cand][p]["_units"]
+        diffs = [units[i] - v1_units[i] for i in ids]
+        mean = sum(diffs) / len(diffs)
+        diffs_by_profile[p] = ([d - mean for d in diffs], mean)
+    observed = diffs_by_profile[winner][1] if winner != V1 else 0.0
+    rng = random.Random(seed + 1)
+    n = len(ids)
+    exceed = 0
+    for _ in range(resamples):
+        idx = [rng.randrange(n) for _ in range(n)]
+        null_max = max(sum(centered[i] for i in idx) / n for centered, _ in diffs_by_profile.values())
+        if null_max >= observed:
+            exceed += 1
+    return observed, exceed / resamples
+
+
 def paired_bootstrap(winner_units, v1_units, resamples, seed):
     ids = sorted(winner_units)
     if sorted(v1_units) != ids:
@@ -126,12 +153,15 @@ def main():
         mean_diff, ci_lo, ci_hi = paired_bootstrap(
             reports[cand][winner]["_units"], reports[cand][V1]["_units"], args.resamples, args.seed
         )
+        observed, adj_p = selection_adjusted_p(reports, cand, winner, args.resamples, args.seed)
         encoders[cand] = {
             "overall_ndcg_winner": reports[cand][winner]["overall"]["ndcg_at_k"],
             "overall_ndcg_v1": reports[cand][V1]["overall"]["ndcg_at_k"],
             "paired_mean_diff": mean_diff,
             "bootstrap_ci95": [ci_lo, ci_hi],
             "ci_excludes_zero": ci_lo > 0,
+            "selection_adjusted_p": adj_p,
+            "selection_adjusted_significant": adj_p < 0.05,
             "regressions": gate_checks(reports[cand][winner], reports[cand][V1]),
         }
 
@@ -179,7 +209,8 @@ def main():
     for cand, e in encoders.items():
         print(
             f"{cand}: dNDCG={e['paired_mean_diff']:+.4f} CI95=[{e['bootstrap_ci95'][0]:+.4f},{e['bootstrap_ci95'][1]:+.4f}] "
-            f"excl0={e['ci_excludes_zero']} regressions="
+            f"excl0={e['ci_excludes_zero']} sel-adj-p={e['selection_adjusted_p']:.4f} "
+            f"sig={e['selection_adjusted_significant']} regressions="
             + ", ".join(f"{k}:{v['delta']:+.4f}{'ok' if v['pass'] else 'FAIL'}" for k, v in e["regressions"].items())
         )
     print(f"winner_bar_met={bar_met} selected={selected} pin={result['pin_rule']['pin']}")

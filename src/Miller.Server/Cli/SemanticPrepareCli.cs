@@ -50,9 +50,6 @@ internal sealed class SemanticPrepareCli
     /// Lives beside the index under <c>&lt;workspace&gt;/.miller/</c>.</summary>
     internal const string MarkerFileName = "semantic-prepare.marker";
 
-    /// <summary>The model id recorded in the marker when the user passed no <c>--model</c> override.</summary>
-    internal const string DefaultModelLabel = "default";
-
     /// <summary>Conservative model-footprint floor for the preflight until Task 7's Q8_0 benchmark lands and Task 4
     /// wires the shared DiskPreflight. ~1.2 GiB matches the design's stated default-path budget.</summary>
     internal const long DefaultRequiredBytes = 1288490188L; // 1.2 * 1024^3
@@ -127,12 +124,14 @@ internal sealed class SemanticPrepareCli
         }
 
         string markerPath = MarkerPathFor(millerDir);
-        string model = string.IsNullOrWhiteSpace(request.Model) ? DefaultModelLabel : request.Model!.Trim();
+        string model = string.IsNullOrWhiteSpace(request.Model)
+            ? SemanticEncoderSelection.Active.ModelId
+            : request.Model!.Trim();
         string nonce = _newNonce();
         WriteMarker(markerPath, model, nonce);
         try
         {
-            return _runProcess(executable, BuildArguments(request), stdout, stderr);
+            return _runProcess(executable, BuildArguments(model, request.Json), stdout, stderr);
         }
         finally
         {
@@ -140,16 +139,10 @@ internal sealed class SemanticPrepareCli
         }
     }
 
-    private static IReadOnlyList<string> BuildArguments(SemanticPrepareRequest request)
+    private static IReadOnlyList<string> BuildArguments(string model, bool json)
     {
-        var arguments = new List<string> { "prepare" };
-        if (!string.IsNullOrWhiteSpace(request.Model))
-        {
-            arguments.Add("--model");
-            arguments.Add(request.Model!.Trim());
-        }
-
-        if (request.Json)
+        var arguments = new List<string> { "prepare", "--model", model };
+        if (json)
             arguments.Add("--json");
         return arguments;
     }

@@ -156,3 +156,16 @@ Task 6: complete (serial-worker-commit b6b81e6, Lead inline review clean — dif
 Pin-change implementation: complete (lead commit 0153adc — DefaultEncoder=bge-small/Fallback=qwen3 swap, TDD re-pin, 7 test files' dim collateral fixed, docs README/vectors-v1/sidecar-protocol/conformance-README updated, ShadowRebuild migration test added; test.sh all fast 4407/0 + scale 86/86 [live sidecar serve --model bge under strict handshake], Release 0W/0E).
 Task 7: SKIPPED by precondition (winner bar not met — fusion-v1 stands); recorded in plan.
 Task 8: freeze record + pre-registered sealed thresholds written (findings §Task 8); frozen arm 0153adc; sealed request handed to user in the session's final report.
+
+## Verification ledger — fusion-v2-eval branch gate @ 0f07ef1
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| branch-gate (fast) | Full fast suite green incl. pin-flip + forwarding-fix tests | scripts/test.sh all (fast leg) | 0f07ef1 | PASS 4407/0 (2 skip) | 2026-07-21 |
+| branch-gate (scale) | Scale suite green incl. LIVE sidecar serve --model bge + strict handshake (escalation-trigger requirement) | scripts/test.sh all (scale leg) | 0f07ef1 | PASS 86/86 | 2026-07-21 |
+| branch-gate (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | 0f07ef1 | PASS | 2026-07-21 |
+| branch-gate (eval) | Scorer suite green incl. units-block reconciliation | dotnet test eval/retrieval-eval/tests | 0f07ef1 | PASS 32/32 | 2026-07-21 |
+Codex pre-merge review @ 0f07ef1: needs-attention, 4 findings, all verified REAL by lead.
+- F2 (high) semantic prepare w/o --model prepares sidecar-manifest default (qwen3) not Miller's bge default → real-bug, dispatched fix-f2 worker (SemanticPrepareCli + tests + runbook; parallel-lead-commit).
+- F3 (medium) vectors-v1.md DDL/meta still declared 512 default → real-bug (doc contract), fixed inline (DDL lane, meta example, parameterization sentence).
+- F4 (medium) winner-vs-v1 CI is post-selection inference → real-improvement, fixed inline: analyze.py max-statistic selection-adjusted bootstrap. Result STRENGTHENS verdict: bge sel-adj-p=0.475 (naive CI excl-zero was winner's curse), qwen3 p=1.0. Findings updated; adjusted procedure recorded for future gate runs.
+- F1 (high) offline arm shape ≠ production request shape → real limitation, pre-registered (plan depth 50); explicit limitation note added to findings §Task 4; FULL regeneration at production shape FLAGGED for user judgment (encoder comparison arm-internal-valid; sealed event runs the real arm).

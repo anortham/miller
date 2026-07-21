@@ -190,6 +190,16 @@ analysis the scorer was extended with a `units` block (all 48 evaluation units:
 and headline metrics were verified unchanged (e.g. qwen3 k60-r2 overall nDCG 0.579363 before and
 after). Scorer suite 32/32 green including the new reconciliation test.
 
+**Arm-shape limitation (pre-registered depth; made explicit at pre-merge review).** The offline fused
+arms combine lexical dumps at the plan's sweep depth (`--limit 50`, whose candidate pool is the
+limit-dependent over-fetch window at THAT limit) with semantic top-20 — a shape no single production
+request emits (a production limit-10 request fuses its own over-fetch pool with semantic k=20). The
+parity smoke proves adapter ≡ production fusion at pool closure (limit 500), and every encoder was scored
+under the IDENTICAL arm shape, so encoder-vs-encoder comparisons (the pin rule) and profile-vs-profile
+comparisons are internally valid — but absolute numbers are not production-request replicas. The binding
+end-to-end check of the frozen configuration is the sealed acceptance event, which runs the real
+production arm.
+
 **Route caveats (structural, apply to every table below):**
 - Fused/lexical arms are **symbol-route only** (plan R4): doc-chunk answers are unreachable, so
   `docs_like` and the markdown language score **0 structurally** on those arms. The semantic-only
@@ -249,9 +259,19 @@ semantic (1:1) clearly loses.
 
 - LOUO: winner modal — k20-r2 wins 44/48 leave-one-out folds (k20-r3: 2, k60-r4: 1, k60-r2: 1).
 - qwen3: ΔnDCG **−0.0033**, bootstrap CI95 **[−0.0201, +0.0080]** — CI includes zero, direction negative.
-- bge-small: ΔnDCG **+0.0060**, bootstrap CI95 **[+0.0007, +0.0139]** — CI excludes zero.
+- bge-small: ΔnDCG **+0.0060**, bootstrap CI95 **[+0.0007, +0.0139]** — naive CI excludes zero, **but see
+  the selection adjustment below**.
 - Regression gates (macro / worst-language / docs_like / identifier): all pass for both encoders
   (worst-language, docs_like, identifier deltas are exactly 0; see route caveats).
+
+**Selection-adjusted inference (pre-merge review correction, 2026-07-21).** The naive per-profile CI is
+post-selection inference: the winner was chosen as the best of 12 profiles on the same 48 units, so its
+interval is biased optimistic (winner's curse). `analyze.py` now also computes a max-statistic bootstrap
+p-value under the sharp null (all profiles' per-unit diffs vs v1 mean-centered; null distribution = the
+best-looking profile per resample): qwen3 sel-adj-p **1.000**, bge-small sel-adj-p **0.475** — bge's
+apparent +0.0060 is indistinguishable from best-of-12 selection noise. This does not change the verdict
+(the bar had already failed on qwen3's CI) — it strengthens it — and the selection-adjusted p < 0.05 for
+BOTH encoders is recorded as the corrected significance procedure for any future re-run of this gate.
 
 **Verdict — winner bar NOT met: fusion-v1 stands.** The bar requires the paired CI to exclude zero
 for BOTH shippable encoders; qwen3's does not (and its point estimate is negative). No fusion-v2

@@ -306,9 +306,9 @@ text-primary-key vec0 is alpha and is not used.
 > exact pinned extension across all four RIDs is a P2b implementation gate, not a re-litigation of the lane
 > choice.
 
-All DDL below is written for the **pinned default lane** `vec0-int8-512-cosine-v1`. `{element}` and `{dims}`
-are taken from the lane string: `int8` / `512` for the default, `int8` / `384` for the fallback
-`vec0-int8-384-cosine-v1`. Column names, types, constraints, and vec0 declarations are contract-level and
+All DDL below is written for the **pinned default lane** `vec0-int8-384-cosine-v1` (bge-small; the
+2026-07-21 pin flip). `{element}` and `{dims}` are taken from the lane string: `int8` / `384` for the
+default, `int8` / `512` for the fallback `vec0-int8-512-cosine-v1` (qwen3). Column names, types, constraints, and vec0 declarations are contract-level and
 must match; incidental SQLite details (page size, index names beyond those stated, `PRAGMA` tuning) are not.
 
 ### `vectors_meta`
@@ -324,7 +324,7 @@ CREATE TABLE vectors_meta (
 |---|---|
 | `contract_version` | `1` |
 | `encoder_fingerprint` | `sha256:<64 hex>` per the composition above |
-| `storage_schema` | `vec0-int8-512-cosine-v1` (or the fallback lane) |
+| `storage_schema` | `vec0-int8-384-cosine-v1` (or the fallback lane) |
 | `corpus_generation` | `cards-v1-chunks-v1` |
 | `writer_version` | Miller build string `semver+gitsha` |
 | `min_reader_version` | semver |
@@ -344,22 +344,22 @@ A reader that finds `vectors_meta` missing, unreadable, or missing any of `contr
 
 ```sql
 CREATE VIRTUAL TABLE symbol_vectors USING vec0(
-    embedding int8[512] distance_metric=cosine,
+    embedding int8[384] distance_metric=cosine,
     path      TEXT,
     kind      TEXT,
     is_test   INTEGER
 );
 
 CREATE VIRTUAL TABLE chunk_vectors USING vec0(
-    embedding int8[512] distance_metric=cosine,
+    embedding int8[384] distance_metric=cosine,
     path      TEXT,
     kind      TEXT,
     is_test   INTEGER
 );
 ```
 
-- Element type and dims are **parameterized by `storage_schema`** — `int8[512]` for the default lane,
-  `int8[384]` for the fallback. The distance metric is `cosine` in both pinned lanes and is encoded in the
+- Element type and dims are **parameterized by `storage_schema`** — `int8[384]` for the default lane,
+  `int8[512]` for the fallback. The distance metric is `cosine` in both pinned lanes and is encoded in the
   lane string; an implementation must derive the declaration from the lane string rather than hard-coding it.
 - `path`, `kind`, `is_test` are vec0 **metadata columns** (filterable at query time). `language` is a
   partition key only if benchmarks later justify it; `path` is **never** a partition key (high cardinality).

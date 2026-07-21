@@ -138,10 +138,10 @@ The active embedding model is selected by one env var from a fixed registry:
 
 | Variable | Values |
 | --- | --- |
-| `MILLER_SEMANTIC_MODEL` | `qwen3-0.6b-f16` (default) · `bge-small-en-v1.5-f32` |
+| `MILLER_SEMANTIC_MODEL` | `bge-small-en-v1.5-f32` (default, 384-dim) · `qwen3-0.6b-f16` (512-dim) |
 
-- Unset, empty, or whitespace → the default (`qwen3-0.6b-f16`). An **unknown** value → the default plus one
-  stderr warning naming the known encoders; it never fails the process.
+- Unset, empty, or whitespace → the default (`bge-small-en-v1.5-f32`). An **unknown** value → the default plus
+  one stderr warning naming the known encoders; it never fails the process.
 - Download the model before serving with it: `miller semantic prepare --model <id> [--json]`. Running the
   verb is the consent act; Miller never auto-downloads.
 
@@ -149,8 +149,9 @@ The active embedding model is selected by one env var from a fixed registry:
 
 Changing `MILLER_SEMANTIC_MODEL` changes the pinned encoder identity, which the invalidation matrix
 classifies as a **shadow rebuild**: a fresh generation is built off to the side under the new encoder while
-the old generation keeps serving, then converges in normally. Served output is never interrupted by the
-rebuild.
+the old generation keeps serving, then converges in normally. The previous generation keeps serving until the
+new one converges, except that a generation built by a different encoder is not queryable by the active one,
+so semantic serving degrades to lexical-with-reason during the rebuild rather than serving uninterrupted.
 
 ### Rollback
 

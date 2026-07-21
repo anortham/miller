@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Cli;
 using Xunit;
@@ -59,7 +60,7 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Fact]
-    public void Prepare_WithoutModel_RecordsDefaultLabelInMarker()
+    public void Prepare_WithoutModel_RecordsActiveEncoderIdInMarker()
     {
         string? markerDuringSpawn = null;
         var cli = Build(binaryExists: true, preflight: Ok(), runner: (_, _, _, _) =>
@@ -71,7 +72,9 @@ public sealed class SemanticPrepareCliTests : IDisposable
         Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
 
         using JsonDocument marker = JsonDocument.Parse(markerDuringSpawn!);
-        Assert.Equal(SemanticPrepareCli.DefaultModelLabel, marker.RootElement.GetProperty("model").GetString());
+        Assert.Equal(
+            MillerSemanticContract.DefaultEncoder.ModelId,
+            marker.RootElement.GetProperty("model").GetString());
     }
 
     [Fact]
@@ -164,7 +167,7 @@ public sealed class SemanticPrepareCliTests : IDisposable
     }
 
     [Fact]
-    public void Prepare_ForwardsBarePrepare_WhenNoModelOrJson()
+    public void Prepare_ForwardsResolvedActiveEncoder_WhenNoModelGiven()
     {
         IReadOnlyList<string>? captured = null;
         var cli = Build(binaryExists: true, preflight: Ok(), runner: (_, args, _, _) =>
@@ -175,7 +178,9 @@ public sealed class SemanticPrepareCliTests : IDisposable
 
         Run(cli, new SemanticPrepareRequest(Model: null, Json: false));
 
-        Assert.Equal(new[] { "prepare" }, captured);
+        Assert.Equal(
+            new[] { "prepare", "--model", MillerSemanticContract.DefaultEncoder.ModelId },
+            captured);
     }
 
     [Fact]
