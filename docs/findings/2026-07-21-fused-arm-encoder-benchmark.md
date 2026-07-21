@@ -275,10 +275,19 @@ observation was a per-query anecdote, not a systematic under-weighting.
 
 ## Results — Task 6: Real-artifact cost
 
-> **STATUS (skeleton + protocol; medians pending machine-quiet).** Structure, methodology, download
-> sizes, and the two contaminated qwen3 shakedown runs are recorded. Clean medians land after the
-> concurrent model-bench embed lanes finish (they contend CPU/GPU and contaminate any timed run). A run
-> counts only if 1-min loadavg < 4 at start; contaminated runs are kept raw and never averaged.
+> **STATUS: COMPLETE.** Both encoders measured with n=2 clean runs + warm-query under the corrected gate
+> (below). bge required commit `bf58afd` (sidecar `--model` forwarding) before it could build at all. Two
+> qwen3 shakedown runs that overlapped real model-bench lanes, and the pre-fix bge attempt, stay
+> **discarded** (raw kept, never averaged).
+>
+> **Clean-run criterion (gate amendment, 2026-07-21 — supersedes loadavg<4).** A 1-min loadavg gate was a
+> miscalibration: ambient loadavg on this 24-core machine is 6–10 while it is ~77% idle (macOS loadavg
+> counts waking threads — Zoom, live sessions, watchdogs — not contention), so a <4 gate is below ambient
+> and never clears. The gate's intent is "no benchmark workloads contending", measured directly. **A run
+> counts iff, at run start:** (1) no benchmark workloads live —
+> `ps aux | grep -E "bench\.py|llama-server|dotnet (build|test)"` empty; and (2) CPU idle ≥ 60% from the
+> second sample of `top -l 2 -n 0 | grep "CPU usage" | tail -1`. Each run records that idle%, `vm.loadavg`,
+> and the top-5 CPU consumers for transparency.
 
 **What this measures.** The adopter cost of enabling Miller semantic retrieval for the first time on the
 frozen-miller workspace, per encoder. Each run is a *clean initial vector build*: `MILLER_SEMANTIC=shadow`
@@ -306,31 +315,42 @@ symbol cards** + **792 doc chunks**. Default identity with `MILLER_SEMANTIC_MODE
 | qwen3-0.6b-f16 (default) | `Qwen3-Embedding-0.6B-f16.gguf` | 1,197,629,632 | 1.198 GB |
 | bge-small-en-v1.5-f32 | `bge-small-en-v1.5-f32.gguf` | 133,609,568 | 133.6 MB |
 
-### Cost table — medians of clean runs (loadavg < 4)
+### Cost table — medians of clean runs (no bench workloads + CPU idle ≥ 60%)
 
-| Metric | qwen3-0.6b-f16 (default) | bge-small-en-v1.5-f32 |
-|---|---|---|
-| Model download | 1.198 GB | 133.6 MB |
-| E2E build (both cursors), median [range] | _pending clean runs_ | _pending clean runs_ |
-| Symbol converge s, median | _pending_ | _pending_ |
-| Symbol throughput (cards/s) | _pending_ | _pending_ |
-| Chunk converge s, median | _pending_ | _pending_ |
-| `vectors.db` size | ~10.27 MiB (512-dim; confirm clean) | _pending (384-dim → smaller)_ |
-| Host peak footprint (`time -l`) | _pending (~339 MiB indicative)_ | _pending_ |
-| Sidecar child peak RSS (sampled) | _pending (~10.9 GiB indicative, contended)_ | _pending_ |
-| Warm query embed — cold-load (first CLI) ms | _pending_ | _pending_ |
-| Warm query embed — warm (median of 2–3) ms | _pending_ | _pending_ |
+n=2 clean runs per model. bge measured on the post-fix binary (`bf58afd`). "Ratio" = qwen3 ÷ bge (how
+much cheaper bge is).
+
+| Metric | qwen3-0.6b-f16 (default) | bge-small-en-v1.5-f32 | ratio |
+|---|---|---|---|
+| Model download | 1.198 GB | 133.6 MB | 9.0× |
+| E2E build (both cursors), median [range] | **312.7 s** [306.2, 319.1] | **40.4 s** [34.1, 46.6] | **7.7×** |
+| Symbol converge s, median [range] | 190.5 s [184.1, 196.9] | 30.9 s [24.6, 37.2] | 6.2× |
+| Symbol throughput (cards/s), median [range] | 55 [53, 57] | 452 [364, 540] | 8.2× |
+| Chunk converge s (phase) | ~122 s | ~9.3 s | 13× |
+| `vectors.db` size | 10,768,384 B (10.27 MiB) | 9,326,592 B (8.89 MiB) | 1.15× |
+| Host peak footprint (`time -l`) | ~336 MiB [336, 337] | ~336 MiB [336, 336] | ~1× (model-agnostic host) |
+| Sidecar child peak RSS (sampled) | **12.34 GiB** [12.33, 12.34] | **470 MiB** [457, 483] | **~27×** |
+| Warm query embed — cold-load (first CLI) ms | 4118 | 876 | 4.7× |
+| Warm query embed — warm (median q2–q3) ms | 4048 | 802 | 5.0× |
+
+> **bge-small is far cheaper on every adopter-cost axis** — a ~27× smaller resident memory footprint (470 MiB
+> vs 12.3 GiB), ~8× faster to build, ~5× faster warm queries, 9× smaller download. The Task-5 pin move to
+> bge-small is strongly supported on cost. bge could not build until commit `bf58afd` fixed the sidecar
+> `--model` forwarding (see **"bge-small build blocker"**).
 
 ### Raw runs (all runs, contaminated included; medians drawn only from clean rows)
 
-| run | model | loadavg@start | status | E2E s | sym converge s | cards/s | chunk converge s | vectors.db bytes | host peak footprint | sidecar peak RSS |
+Gate column = idle% (amended criterion) for clean rows; the two window rows predate the amendment.
+
+| run | model | gate@start | status | E2E s | sym converge s | cards/s | chunk phase s | vectors.db bytes | host peak footprint | sidecar peak RSS |
 |---|---|---|---|---|---|---|---|---|---|---|
-| qwen3-run1 | qwen3-0.6b-f16 | 6.68 (window) | **contaminated — discarded** | 318 (log-derived; harness poll pre-fix bogus 688.8) | ~183 | 56 | 134.6 | 10,768,384 | 355,238,776 B (339 MiB) | ~10.9 GiB (sampled) |
-| qwen3-run2 | qwen3-0.6b-f16 | 7.30 (window) | **contaminated — discarded** | 332.0 | 203.6 | 50 | 128 (phase) | 10,768,384 | 353,928,128 B (337 MiB) | 12.2 GiB (sampled) |
-| qwen3-clean-1 | qwen3-0.6b-f16 | _<4_ | _pending_ | | | | | | | |
-| qwen3-clean-2 | qwen3-0.6b-f16 | _<4_ | _pending_ | | | | | | | |
-| bge-clean-1 | bge-small-en-v1.5-f32 | _<4_ | _pending_ | | | | | | | |
-| bge-clean-2 | bge-small-en-v1.5-f32 | _<4_ | _pending_ | | | | | | | |
+| qwen3-run1 | qwen3-0.6b-f16 | loadavg 6.68 (window) | **contaminated — discarded** | 318 (log-derived; harness poll pre-fix bogus 688.8) | ~183 | 56 | 134.6 | 10,768,384 | 355,238,776 B (339 MiB) | ~10.9 GiB (sampled) |
+| qwen3-run2 | qwen3-0.6b-f16 | loadavg 7.30 (window) | **contaminated — discarded** | 332.0 | 203.6 | 50 | 128 | 10,768,384 | 353,928,128 B (337 MiB) | 12.2 GiB (sampled) |
+| qwen3-clean-1 | qwen3-0.6b-f16 | idle 84.2%, no-bench | **CLEAN** | 319.1 | 196.9 | 53 | ~122 | 10,768,384 | 353,010,576 B (337 MiB) | 12,941,952 KB (12.34 GiB) |
+| qwen3-clean-2 | qwen3-0.6b-f16 | idle 82.1%, no-bench | **CLEAN** | 306.2 | 184.1 | 57 | ~122 | 10,768,384 | 351,994,768 B (336 MiB) | 12,932,400 KB (12.33 GiB) |
+| bge-clean-1 (pre-fix) | bge-small-en-v1.5-f32 | idle 85.2%, no-bench | ⛔ **build-blocked — discarded** (dim mismatch → the bug discovery, not a protocol failure) | — | — | — | — | — | — | — |
+| bge-clean-1 (post-fix `bf58afd`) | bge-small-en-v1.5-f32 | idle 66.7%, no-bench | **CLEAN** | 46.6 | 37.2 | 364 | ~9.3 | 9,326,592 | 352,125,888 B (336 MiB) | 494,576 KB (483 MiB) |
+| bge-clean-2 (post-fix `bf58afd`) | bge-small-en-v1.5-f32 | idle 66.6%, no-bench | **CLEAN** | 34.1 | 24.6 | 540 | ~9.4 | 9,326,592 | 352,666,512 B (336 MiB) | 468,400 KB (457 MiB) |
 
 ### Warm query embed latency (3 CLI `search --arm semantic` per model, after build)
 
@@ -339,8 +359,13 @@ Each CLI call is a fresh process that spawns its own sidecar and loads the model
 
 | model | q1 (cold-load) ms | q2 (warm) ms | q3 (warm) ms |
 |---|---|---|---|
-| qwen3-0.6b-f16 | _pending_ | _pending_ | _pending_ |
-| bge-small-en-v1.5-f32 | _pending_ | _pending_ | _pending_ |
+| qwen3-0.6b-f16 | 4118 | 4053 | 4043 |
+| bge-small-en-v1.5-f32 | 876 | 820 | 784 |
+
+Cold-vs-warm barely differ within a model: each CLI call spawns a fresh sidecar and reloads the model
+(already page-cache-warm from the build), so per-query wall is dominated by per-process model load, not the
+embed. The gap **between** models is the model size — qwen3 reloads 1.2 GB (~4 s), bge reloads 133 MB
+(~0.8 s). All queries served 5 semantic hits.
 
 ### Research-arm bench wall-clock — harness-not-engine
 
@@ -354,9 +379,59 @@ harness, **not** production embed throughput — do not compare it to the cost t
 |---|---|---|
 | fusion-arm bench (qwen3 / bge / research) | _pending (task 4 lead)_ | **harness-not-engine** |
 
+### bge-small build blocker (load-bearing for the pin decision)
+
+**Symptom.** Every bge-small initial build fails and retries forever: `MILLER_SEMANTIC=shadow
+MILLER_SEMANTIC_MODEL=bge-small-en-v1.5-f32` never converges; both cursors stay at 0. Serve log
+(`VectorConvergeService`), repeating on each ~5-min retry:
+
+```
+Vector "Symbol" convergence escalates to a shadow rebuild ("BatchTooLarge").
+Shadow vector rebuild failed; the cursor stays at 0.
+Miller.Indexing.Semantic.VectorStoreException: embedding has 512 dims but lane 'vec0-int8-384-cosine-v1' declares 384.
+Vector "Chunk" convergence failed; the cursor stays at 0.   (same exception)
+```
+
+**Root cause.** Miller's live semantic path launches the sidecar with **no `--model` argument**. The pinned
+`julie-semantic-sidecar` (0.1.0-rc.2) selects its model only via `serve [--model <id>]` (default = qwen3,
+512-dim); it does **not** read `MILLER_SEMANTIC_MODEL` (verified against the binary). Both
+`SemanticSearchArm.ProcessSession` and `VectorConvergeService.ProcessSession` construct
+`new ProcessSemanticSidecarLauncher(executable)` with no args/env, so the sidecar always loads qwen3. The
+only code path that passes `--model` is the separate `miller semantic prepare` download verb. Meanwhile
+Miller's C# side honours `MILLER_SEMANTIC_MODEL=bge` and creates the **384-dim** bge lane
+(`vec0-int8-384-cosine-v1`). The sidecar returns **512-dim** (qwen3) vectors → commit rejects them → the
+build can never converge. The encoder handshake does not catch it because `MatchEncoder` validates the
+sidecar's reported model against *itself* (`FindEncoder(health.ModelId)`), not against Miller's requested
+encoder — so a qwen3-reporting sidecar passes even when bge was requested.
+
+**Impact.** As wired, selecting bge-small produces a permanently-failing semantic build. The Task-5 pin rule
+moves the **default** encoder to bge-small; **that move cannot ship until the serve/CLI path forwards
+`serve --model <SemanticEncoderSelection.Active.ModelId>` to the sidecar** (fix localized to
+`ProcessSession` ×2 + the CLI's `CliSemanticSession`). More broadly, this means **`MILLER_SEMANTIC_MODEL`
+has never worked on the live serve/CLI path for any non-default encoder** — the self-referential handshake
+(`FindEncoder(health.ModelId)`) lets a qwen3-serving sidecar pass validation for a bge request, so the gap
+stays silent. It never surfaced because the shipping canary/dogfood default lane only ever exercised qwen3.
+
+**Resolution (commit `bf58afd`).** Fixed as a separate lead bug-fix commit (with tests): serve/CLI sidecar
+launches now pass `serve --model <Active.ModelId>`, and the handshake refuses a sidecar serving a
+known-but-not-selected encoder (a stated refusal instead of the commit-time dims wedge). Fast suite
+4406/0; Release 0W/0E. The default (qwen3) numbers above are unaffected — the forwarded id equals the
+sidecar default, so that lane is byte-identical. bge is measured below on the rebuilt binary under the same
+protocol. **`bge-clean-1` (first attempt) was the discovery of this bug, not a protocol failure**; the
+clean bge rows are the post-fix builds.
+
 ### What the evidence proves
 
 First-time semantic enablement cost per encoder, on a real 49k-symbol workspace, as an initial clean vector
 build through both cursors: model download, wall-clock to full convergence, per-cursor throughput,
-`vectors.db` artifact size, host + sidecar peak memory, and warm query-embed latency. Clean medians are
-gated on a quiet machine (loadavg < 4) so the numbers reflect the engine, not bench contention.
+`vectors.db` artifact size, host + sidecar peak memory, and warm query-embed latency. Clean medians (n=2
+per model) use the amended gate (no bench workloads + CPU idle ≥ 60%) so the numbers reflect the engine,
+not bench contention. Contaminated, and the pre-fix build-blocked, runs are recorded raw and excluded from
+every median.
+
+**bge-small is far cheaper than qwen3 on every adopter-cost axis** (~27× less resident memory, ~8× faster
+build, ~5× faster warm query, 9× smaller download), so the Task-5 pin move to bge-small is well-supported
+on cost. Two caveats the pin record should carry: (1) the memory story is the **sidecar child** (qwen3
+12.3 GiB vs bge 470 MiB), which `time -l` never sees — the `miller` host is ~336 MiB either way; (2) bge's
+build was impossible until commit `bf58afd` fixed the `--model` forwarding, so **shipping the bge pin
+depends on that fix being in the release** — the two are inseparable.

@@ -1,25 +1,23 @@
-### Task 6: Content-route canary
+### Task 6: Real-artifact cost (parallel with Task 4)
 
 **Files:**
-- Modify: `src/Miller.Server/Tools/SearchTool.cs` (content route — `RunContentCorpus` :1252 and its dispatch site)
-- Test: `tests/Miller.Tests/Server/CanaryContentSearchTests.cs` (new)
+- Modify: findings doc cost-table section only.
 
 **Interfaces:**
-- Consumes: Task 5's orchestration helper and classifier; the content-route semantic arm (`SemanticTextArm`) with Task 3 diagnostics.
-- Produces: `op=content` canary rows. Served-result hashes: path array only (content rows are path+line chunks, not symbols — name/qualified arrays are absent per the absent-vs-zero rule). Treatment = the P3 content-mode hybrid arm forced past the mode gate; control = lexical content search byte-identical.
+- Consumes: Task 2 frozen-miller worktree (its own `.miller/`, own leader — no contention with the live session).
+- Produces: cost table: end-to-end clean initial vector build through BOTH cursors (symbol + chunk), download size, cold session load, warm embed latency, peak RSS, `vectors.db` size; ≥2 runs, median/range; qwen3 + bge-small.
 
-**Contract inputs:** Same field table and eligibility ladder as Task 5. `query_class` for content queries still comes from `CanaryQueryClassifier` (op=content promotes prose → docs_like).
+**Contract inputs:** `MILLER_SEMANTIC=shadow MILLER_SEMANTIC_MODEL=<id>` on a serve process rooted at the frozen worktree; converge throughput lines (commit 59c2c79) + wall-clock around the whole build; `/usr/bin/time -l` for peak RSS. Between runs delete `<frozen>/.miller/vectors.db*` and retained generations. Models already cached — record download sizes from `~/.cache/julie-semantic` file sizes, do not re-download.
 
-**File ownership:** `src/Miller.Server/Tools/SearchTool.cs` (content route), `tests/Miller.Tests/Server/CanaryContentSearchTests.cs`
+**File ownership:** Owns frozen-worktree `.miller/` state + findings cost-table section (distinct section from Task 5)
 
-**Serialization required:** Yes
+**Serialization required:** No
 
-**Dependency reason:** Same file as Task 5 (`SearchTool.cs`); builds on its orchestration helper.
+**Dependency reason:** None - safe parallel batch (Batch B, alongside Task 4; distinct findings sections prevent write conflicts — lead merges).
 
-**What to build:** Extend the canary to the fourth instrumented surface. The content route renders path+snippet rows outside the symbol-candidate seam, so the arm split and stamping hook into the content dispatch instead.
+**What to build:** The adopter-cost evidence for the pin decision.
 
 **Acceptance criteria:**
-- [ ] Content-op canary rows carry path hashes only; name/qualified arrays absent.
-- [ ] Control/off byte-identical to today's content output; treatment identical to `MILLER_SEMANTIC=on` content hybrid.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [ ] Cost table with both cursors end-to-end, ≥2 runs each model, median/range, peak RSS, artifact sizes.
+- [ ] Bench-lane wall-clock for research arms labeled harness-not-engine.
 
