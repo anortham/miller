@@ -1,29 +1,33 @@
-### Task 5: GC scheduler + live-reader registry
+### Task 5: Symbol-route canary — assignment flip, arm serving, facts, result hashes
 
 **Files:**
-- Create: `src/Miller.Indexing/Semantic/VectorLiveReaderRegistry.cs`
-- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`; `src/Miller.Indexing/Semantic/VectorGenerationManager.cs` only if an input seam is missing; reader open sites (`SemanticSearchArm`/`WorkspaceIndexProvider` vector open path) to register/unregister
-- Test: `tests/Miller.Tests/Indexing/VectorGenerationManagerTests.cs` (registry), `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs` (scheduler wiring)
+- Modify: `src/Miller.Server/Telemetry/CanaryTelemetry.cs` (`CanaryAssignment.ResolveArm` :166 — flip to `bucket < 50 ? Control : Treatment` per the doc comment)
+- Modify: `src/Miller.Server/Tools/SearchTool.cs` (orchestration in `Search` around :400-467; `FusionArm` injection point :430; `RenderSymbolCandidates` :1130-1183 — expose the served page slice; rescue-kind copy at the :450-454 site)
+- Create: `src/Miller.Core/Search/CanaryQueryClassifier.cs`
+- Test: `tests/Miller.Tests/Core/CanaryQueryClassifierTests.cs`, `tests/Miller.Tests/Server/CanarySearchTests.cs` (new)
 
 **Interfaces:**
-- Consumes: `VectorGcInputs { Retained, ActiveIsReady, Now, TagsWithLiveReaders, SoakWindow, RetentionCap }` and the GC plan logic in `VectorGenerationManager` (`src/Miller.Indexing/Semantic/VectorGenerationManager.cs:41-68`) — pure, tested, currently caller-less; `RetainedPathFor`/`TagFromRetainedPath`/`EnumerateRetained`.
-- Produces: `VectorLiveReaderRegistry` — process-wide, thread-safe `Register(tag) : IDisposable` / `LiveTags` snapshot; GC execution after each successful shadow promote and on leader wakes (piggybacked on the existing drain timer, no new hosted service): build inputs, apply `plan.Deletions` (delete files + fold WAL via `IVectorGenerationFiles`), log one line per deletion with the outcome reason.
+- Consumes: `CanaryActivation.FromEnvironment()`, `CanaryTelemetry.Stamp` + `CanaryCallFacts`/`CanaryServedResult` (all exist), Task 3's `SemanticQueryDiagnostics`, `SemanticQueryPolicy.Route`, `RrfFusion`/`FusedCandidate` ranks, `VectorSidecar` state probe (reuse the CLI probe approach at CliDispatch :559-566 / `VectorSidecar.TryOpen`), `TelemetryContext.Current` scope + its row timestamp (align `CanaryCallFacts.UtcDate` with the scope's persisted `ts`).
+- Produces: `CanaryQueryClassifier.Classify(string op, string? query, SemanticQueryRoute route) : string` returning exactly one of the six frozen `query_class` values. Mapping (deterministic, fully test-pinned): reason `Empty`/`Short` → `short_token`; `IdentifierLike`/`CodeSyntax` → `identifier`; `PathLike` → `path`; `Prose` → `docs_like` when `op == "content"` or the query contains a word from a small fixed docs-vocabulary set (`readme, docs, documentation, config, configuration, guide, install, setup, changelog, license, tutorial, faq`), else `prose`; `AmbiguousWeakLexical`/`AmbiguousStrongLexical` → `mixed`. Also produces the per-call orchestration helper in `SearchTool` that Tasks 6/7 reuse: computes eligibility ladder → assignment → picks `FusionArm` (treatment ⟹ production `SemanticSymbolFusionArm` with the mode gate bypassed — treatment must behave exactly like `MILLER_SEMANTIC=on`; control ⟹ null) → assembles `CanaryCallFacts` → `Stamp`s on the ambient scope. And the finalize seam: `RenderSymbolCandidates` (or an overload) additionally returns the served page slice so served-result hashes cover exactly the rendered page; parent names for the ≤10 served rows resolved at stamp time via `index.FindBySymbolId(SymbolId).ParentId` → parent's `Name` (one-level `Parent.Member` only).
+- Eligibility ladder order (first match wins): canary off ⟹ no keys at all; op outside {auto,text,symbol,content} ⟹ `ineligible_surface`; `MILLER_SEMANTIC=off` ⟹ `ineligible_semantic_disabled`; query class ∉ {prose,docs_like,mixed} ⟹ `ineligible_query_class`; no artifact / building / downloading / disk-blocked ⟹ `ineligible_vectors_unavailable`; fingerprint mismatch ⟹ `ineligible_vectors_incompatible`; circuit open ⟹ `ineligible_circuit_open`; foreign-workspace read with no ready generation ⟹ `ineligible_cross_workspace_no_generation`; else `eligible`.
 
-**Contract inputs:** P2 B6 decision (recorded in `.razorback/sdd/progress.md`): "P2 posture = soak-window-only GC protection, registration lands with the P4 GC scheduler." Cross-process readers stay protected by the soak window ONLY — the registry is in-process; do not attempt cross-process reader tracking.
+**Contract inputs:** Contract §Assignment (unit = workspace_id × utc_date × query_class; bucket<50 = control), §Field Reference write conditions (literal), §Ineligible calls (ineligible rows record arm/eligibility/query_class and nothing else semantic; served behavior byte-identical lexical). `query_class` note: the classifier input route must be computed with `LexicalEvidence.None` for classification purposes (class must be recomputable offline from the query alone; evidence only affects the *treatment arm's* internal hybrid/lexical decision, never the class or the assignment). Treatment rows where the policy's evidence check kept the call lexical: `fallback_reason=none`, semantic counters absent (the arm didn't run) — representable per the field table.
 
-**File ownership:** Create: `src/Miller.Indexing/Semantic/VectorLiveReaderRegistry.cs`; Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs`, `src/Miller.Indexing/Semantic/VectorGenerationManager.cs` (if needed), reader open sites; Test: `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`, `tests/Miller.Tests/Indexing/VectorGenerationManagerTests.cs`
+**File ownership:** `src/Miller.Server/Tools/SearchTool.cs`, `src/Miller.Server/Telemetry/CanaryTelemetry.cs` (ResolveArm flip), `src/Miller.Core/Search/CanaryQueryClassifier.cs`, the two test files.
 
 **Serialization required:** Yes
 
-**Dependency reason:** Follows Task 2 in Lane 1 (same files).
+**Dependency reason:** Consumes Task 3 diagnostics; edits files owned by Tasks 2/3 in earlier batches.
 
-**What to build:** Retained generations currently accumulate forever (`vectors.gen-*.db` are never deleted). Wire the existing pure GC plan to real execution so rollback generations disappear after the soak window unless a live in-process reader holds them, capped at `DefaultRetentionCap`.
+**What to build:** The experiment goes live on the symbol route (ops auto/text/symbol). With canary off: zero canary keys, zero added work, byte-identical behavior (test-enforced). With canary on: every instrumented call records the contract row; eligible units split 50/50; treatment serves the production hybrid path; control and all ineligible calls serve today's lexical path byte-identically.
 
-**Approach:** Registry is a `ConcurrentDictionary<string,int>` refcount; readers register on open, dispose on close. Scheduler runs under the leader's converge lock only (readers never GC). Deletion failures (Windows held handles) log and retry next wake — never crash the drain. TDD with the fake files seam (`IVectorGenerationFiles`) already used by `VectorGenerationManager` tests.
+**Approach:** TDD with the fake sidecar/store fixtures from P2/P3 tests (contract-faithful). Include the contract's six attribution conformance cases at the stamping level (served-result arrays produce the exact digests the matching rule expects — shared fixture with Task 2's gate tests if convenient). Auto-op rescue: copy the existing `auto_rescue_kind` value into `canary_rescue_kind` (map `rescue==null` to `none`; keep `unavailable` as-is).
 
 **Acceptance criteria:**
-- [ ] After promote, generations beyond the soak window with no live reader are deleted; `LiveReader`/`WithinSoakWindow`/`OnlyReadyGeneration` outcomes are respected (existing plan semantics unchanged).
-- [ ] A registered live reader blocks deletion until disposed; disposal makes the next wake collect it.
-- [ ] GC never runs on reader instances (non-leader), proved by test.
-- [ ] Worker-scope verification passes and the change is committed per `serial-worker-commit`.
+- [ ] Canary off ⟹ no `canary_*` keys and byte-identical output (golden test).
+- [ ] Eligible call: arm from the frozen derivation (test vectors pin bucket values for fixed inputs); control serves lexical byte-identical; treatment serves fused output identical to `MILLER_SEMANTIC=on` for the same fixture.
+- [ ] Facts written per the field table: counters, fallback/backend/warmth/latency buckets, identity fields, the three hash arrays + shared truncation flag (11-result fixture proves the cap and the flag).
+- [ ] `CanaryQueryClassifier` table-driven test pins all six classes incl. the docs-vocabulary set and `op=content` promotion.
+- [ ] Ineligible rows record exactly arm/eligibility/query_class (+ contract/experiment/assignment/policy version keys) and nothing else.
+- [ ] Worker-scope verification passes and the change is committed per commit mode.
 

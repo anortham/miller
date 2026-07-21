@@ -100,3 +100,11 @@ Branch gate (final, post-review): PASS at 412033d — scripts/test.sh all (fast 
 Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit fffe9d8) — P5 plan docs/plans/2026-07-21-semantic-p5-canary-plan.md
 Task 2: complete (parallel-lead-commit, Lead inline review clean — contract judgment calls verified against frozen doc, lead commit f6bd105)
 Task 4: complete (parallel-lead-commit, Lead inline review clean; plan mismatch accepted: no in-flight JSON rebuild field exists — hint keys on ShadowRebuildPendingMarker; follow-up: vectors.db.rebuild disk probe for the single-wake window, lead commit c3bd69e)
+Task 3: complete (parallel-lead-commit, Lead inline review — 1 finding (EmbedTimeout unproducible; typed EndedByTimeout existed at transport layer) fixed round 1, lead commit 5b7b946)
+
+## Verification ledger — P5 Batch 1+2 gate @ 5b7b946
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| affected-change (fast) | Fast suite green after T1-T4 | scripts/test.sh | 5b7b946 | PASS 4305/0 (2 skip), 19s wall | 2026-07-21 |
+| affected-change (scale, escalation: VectorConvergeService) | Converge/vec0/sidecar paths green | scripts/test.sh scale | 5b7b946 | PASS 86/86 | 2026-07-21 |
+| affected-change (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | 5b7b946 | PASS | 2026-07-21 |

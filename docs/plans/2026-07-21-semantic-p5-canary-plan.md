@@ -214,12 +214,12 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **Approach:** TDD with the fake sidecar/store fixtures from P2/P3 tests (contract-faithful). Include the contract's six attribution conformance cases at the stamping level (served-result arrays produce the exact digests the matching rule expects — shared fixture with Task 2's gate tests if convenient). Auto-op rescue: copy the existing `auto_rescue_kind` value into `canary_rescue_kind` (map `rescue==null` to `none`; keep `unavailable` as-is).
 
 **Acceptance criteria:**
-- [ ] Canary off ⟹ no `canary_*` keys and byte-identical output (golden test).
-- [ ] Eligible call: arm from the frozen derivation (test vectors pin bucket values for fixed inputs); control serves lexical byte-identical; treatment serves fused output identical to `MILLER_SEMANTIC=on` for the same fixture.
-- [ ] Facts written per the field table: counters, fallback/backend/warmth/latency buckets, identity fields, the three hash arrays + shared truncation flag (11-result fixture proves the cap and the flag).
-- [ ] `CanaryQueryClassifier` table-driven test pins all six classes incl. the docs-vocabulary set and `op=content` promotion.
-- [ ] Ineligible rows record exactly arm/eligibility/query_class (+ contract/experiment/assignment/policy version keys) and nothing else.
-- [ ] Worker-scope verification passes and the change is committed per commit mode.
+- [x] Canary off ⟹ no `canary_*` keys and byte-identical output (golden test).
+- [x] Eligible call: arm from the frozen derivation (test vectors pin bucket values for fixed inputs); control serves lexical byte-identical; treatment serves fused output identical to `MILLER_SEMANTIC=on` for the same fixture.
+- [x] Facts written per the field table: counters, fallback/backend/warmth/latency buckets, identity fields, the three hash arrays + shared truncation flag (11-result fixture proves the cap and the flag).
+- [x] `CanaryQueryClassifier` table-driven test pins all six classes incl. the docs-vocabulary set and `op=content` promotion.
+- [x] Ineligible rows record exactly arm/eligibility/query_class (+ contract/experiment/assignment/policy version keys) and nothing else.
+- [x] Worker-scope verification passes and the change is committed per commit mode. (Fix round 1: mirrored pipeline unified into `SearchRouteExecutor.RunSymbolsCore`; `ExecuteSymbols` deleted.)
 
 ### Task 6: Content-route canary
 
