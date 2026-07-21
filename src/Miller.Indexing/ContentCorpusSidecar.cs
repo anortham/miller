@@ -27,12 +27,74 @@ public sealed class ContentCorpusSidecar
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string contentDbPath = ContentDbPathFor(symbolsDbPath);
-        if (IsFresh(contentDbPath, revision))
+        if (IsFresh(contentDbPath, revision) && WorkspaceSourcesAgree(contentDbPath, symbolsDbPath))
             return false;
 
         ContentCorpusWriter.Write(contentDbPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
         return true;
     }
+
+    /// <summary>
+    /// Revision equality alone cannot prove freshness: the extractor updates <c>files.content_hash</c> (and
+    /// drops rows) for symbol-free files WITHOUT advancing the revision, so a corpus that matches the revision
+    /// can still disagree with <c>symbols.db</c> forever — permanently wedging every consumer that gates on
+    /// per-source hash agreement (the vectors chunk cursor). Active workspace sources must exist in
+    /// <c>symbols.db</c> with an agreeing hash; external/web imports have no <c>symbols.db</c> counterpart and
+    /// are exempt. Any read failure counts as disagreement so the rebuild path surfaces the real error.
+    /// </summary>
+    private static bool WorkspaceSourcesAgree(string contentDbPath, string symbolsDbPath)
+    {
+        try
+        {
+            var symbolsHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+            using (var symbols = SqliteReadOnlyAccess.Open(symbolsDbPath))
+            using (var files = symbols.CreateCommand())
+            {
+                files.CommandText = "SELECT path, content_hash FROM files;";
+                using var reader = files.ExecuteReader();
+                while (reader.Read())
+                    symbolsHashes[reader.GetString(0)] = reader.IsDBNull(1) ? "" : reader.GetString(1);
+            }
+
+            using var content = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(contentDbPath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            content.Open();
+            using var sources = content.CreateCommand();
+            sources.CommandText = $"""
+                SELECT path, content_hash FROM content_sources
+                WHERE status = 'active'
+                  AND content_kind IN ('{TextContentKind.WorkspaceSource}', '{TextContentKind.WorkspaceDocs}', '{TextContentKind.WorkspaceConfig}')
+                  AND path IS NOT NULL AND path != '';
+                """;
+            using var sourceReader = sources.ExecuteReader();
+            while (sourceReader.Read())
+            {
+                if (!symbolsHashes.TryGetValue(sourceReader.GetString(0), out string? symbolsHash)
+                    || !HashesAgree(sourceReader.GetString(1), symbolsHash))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HashesAgree(string contentHash, string symbolsHash) =>
+        string.Equals(
+            contentHash.Trim().ToLowerInvariant(),
+            symbolsHash.Trim().ToLowerInvariant(),
+            StringComparison.Ordinal);
 
     /// <summary>Cheap status facts for human/JSON workspace status surfaces.</summary>
     public ContentCorpusFacts Inspect(string symbolsDbPath, long expectedRevision)

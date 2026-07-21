@@ -61,6 +61,69 @@ public sealed class ContentCorpusSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureBuilt_SymbolsHashMovedWithoutRevisionAdvance_RebuildsAndReturnsTrue()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+
+        ExecuteOn(fx.DbPath, "UPDATE files SET content_hash = 'blake3:feed1234feed1234' WHERE path = 'src/Api.cs'");
+
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+    }
+
+    [Fact]
+    public void EnsureBuilt_SourceDroppedFromSymbolsDbWithoutRevisionAdvance_RebuildsWithoutTheZombie()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+
+        ExecuteOn(fx.DbPath, "DELETE FROM files WHERE path = 'src/Api.cs'");
+        ExecuteOn(fx.DbPath, "DELETE FROM symbols WHERE path = 'src/Api.cs'");
+
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+        FtsTextContentSearchIndex index = sidecar.OpenRequired(fx.DbPath, expectedRevision: 7);
+        Assert.Empty(index.Search("KnownSourceError", TextContentKind.WorkspaceSource, limit: 10));
+    }
+
+    [Fact]
+    public void EnsureBuilt_ExternalSourceWithoutSymbolsCounterpart_StaysFreshAndSkipsRebuild()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+
+        ExecuteOn(
+            ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+            $"""
+            INSERT INTO content_sources
+                (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                 language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
+            VALUES
+                ('ext-1', '{TextContentKind.ExternalFile}', 'workspace-1', 7, '/imported/notes.md', NULL,
+                 'notes.md', 'markdown', 'blake3:0123abcd0123abcd', 42, 3, 0, 'active', '2026-07-21T00:00:00Z')
+            """);
+
+        Assert.False(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7));
+    }
+
+    private static void ExecuteOn(string dbPath, string sql)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void OpenRequired_MissingArtifact_FailsVisibly()
     {
         using var fx = SourceFixture();
