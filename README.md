@@ -728,8 +728,16 @@ Warnings are errors (`Directory.Build.props`).
 
 ## Known limits
 
-- Local semantic/vector retrieval is owned by Miller but **not shipped yet**: today's retrieval is lexical and
-  structural only. The boundary decision is
+- Local semantic/vector retrieval is owned by Miller but **off by default**: the default retrieval path is
+  lexical and structural only, and `MILLER_SEMANTIC=off` (the default) is a permanent zero-work guarantee.
+  Optional local semantics is opt-in and experimental — set `MILLER_SEMANTIC=shadow` (build/measure, never
+  fuse) or `MILLER_SEMANTIC=on` (fuse the semantic arm into results); `MILLER_SEMANTIC_MODEL` selects the
+  embedding encoder (`qwen3-0.6b-f16` default, `bge-small-en-v1.5-f32`), downloaded with
+  `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on is enabled with
+  `MILLER_SEMANTIC_CANARY=on` (requires semantic on/shadow) and read with `miller telemetry canary`
+  / `--gate`; see the operator runbook
+  [`docs/findings/2026-07-21-p5-canary-runbook.md`](docs/findings/2026-07-21-p5-canary-runbook.md). The
+  boundary decision is
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md) and the
   program design is
   [`docs/plans/2026-07-19-miller-semantic-integration-design.md`](docs/plans/2026-07-19-miller-semantic-integration-design.md).
