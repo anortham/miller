@@ -182,11 +182,11 @@ Commit mode: Batch 1 and Batch 2 run **parallel-lead-commit** (two workers per b
 **Approach:** For the retry wake, follow the existing fake/injectable patterns in `VectorConvergeServiceTests` (no real `Task.Delay` in tests). Escalation trigger applies: run the scale suite for this batch.
 
 **Acceptance criteria:**
-- [ ] A held cursor on a quiet workspace re-drains after the retry delay without an index-convergence stamp; a real wake cancels/absorbs the pending retry; no retry storm (at most one pending).
-- [ ] Incremental drain under a blocked disk gate: no vectors.db write, cursor held, disk-blocked pause state recorded; unblocking resumes.
-- [ ] Deferral logs one INFO line naming the deferred paths; stored reason unchanged.
-- [ ] Compact status shows `ready (rebuilding)` during a shadow rebuild; plain `ready` otherwise; JSON output unchanged.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] A held cursor on a quiet workspace re-drains after the retry delay without an index-convergence stamp; a real wake cancels/absorbs the pending retry; no retry storm (at most one pending).
+- [x] Incremental drain under a blocked disk gate: no vectors.db write, cursor held, disk-blocked pause state recorded; unblocking resumes.
+- [x] Deferral logs one INFO line naming the deferred paths; stored reason unchanged.
+- [x] Compact status shows `ready (rebuilding)` during a shadow rebuild; plain `ready` otherwise; JSON output unchanged. (Lead ruling: hint keys on the cross-wake shadow-pending cursor marker; the plan's assumed in-flight JSON field does not exist. Transient single-wake in-flight window recorded as a follow-up — `vectors.db.rebuild` disk probe.)
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 5: Symbol-route canary — assignment flip, arm serving, facts, result hashes
 

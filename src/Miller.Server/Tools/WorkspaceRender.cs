@@ -329,11 +329,25 @@ public static class WorkspaceRender
         _ => facts.State,
     };
 
-    // Serving from a retained generation is still `ready`: which generation answers queries is a JSON fact.
-    private static string VectorsReadyLabel(VectorSidecarFacts facts) =>
-        facts.LaggierCursor?.PendingFiles is > 0 and { } pending
+    // Serving from a retained generation is still `ready`: which generation answers queries is a JSON fact. A
+    // pending shadow rebuild — surfaced through the chunk cursor's hold reason, already in JSON — outranks the
+    // pending-files hint so a long rebuild does not read as idle.
+    private static string VectorsReadyLabel(VectorSidecarFacts facts)
+    {
+        if (ShadowRebuildPending(facts))
+            return "ready (rebuilding)";
+
+        return facts.LaggierCursor?.PendingFiles is > 0 and { } pending
             ? $"ready (updating; {pending.ToString(CultureInfo.InvariantCulture)} files pending)"
             : "ready";
+    }
+
+    private static bool ShadowRebuildPending(VectorSidecarFacts facts) =>
+        HoldsForShadowRebuild(facts.SymbolCursor) || HoldsForShadowRebuild(facts.ChunkCursor);
+
+    private static bool HoldsForShadowRebuild(VectorCursorFacts? cursor) =>
+        cursor?.LastError is { } error
+        && error.Contains(VectorConvergePlanner.ShadowRebuildPendingMarker, StringComparison.Ordinal);
 
     private static string ContentCorpusLabel(ContentCorpusFacts facts, long expectedRevision)
     {

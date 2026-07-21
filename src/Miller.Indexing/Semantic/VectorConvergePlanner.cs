@@ -147,6 +147,10 @@ public static class VectorConvergePlanner
     public const string BoundedBatchHoldReason =
         "the span exceeds one transaction; converging in bounded batches";
 
+    /// <summary>The stable fragment a chunk-cursor hold carries while the symbol cursor's shadow rebuild is
+    /// pending. Status rendering keys on it to hint <c>ready (rebuilding)</c>, so its value is a contract.</summary>
+    public const string ShadowRebuildPendingMarker = "the symbol cursor's shadow rebuild";
+
     private const string ChunkerComponentPrefix = "chunks-v";
 
     /// <summary>Hash-gates one cursor's span and classifies whether it escalates. Only the symbol cursor may
@@ -360,7 +364,7 @@ public static class VectorConvergePlanner
             [],
             [],
             0,
-            $"the chunk cursor holds while the symbol cursor's shadow rebuild ({trigger}) is pending");
+            $"the chunk cursor holds while {ShadowRebuildPendingMarker} ({trigger}) is pending");
 
     private static ChunkCursorDecision Hold(string reason, bool reset = false) =>
         new(CanAdvance: false, ResetCursor: reset, reason, DeferredPaths: []);

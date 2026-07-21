@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
@@ -1124,6 +1125,213 @@ public sealed class VectorConvergeServiceTests
         await service.StopAsync(CancellationToken.None);
 
         Assert.Empty(opened);
+    }
+
+    [Fact]
+    public async Task Drain_IncrementalReEmbedRefusedForDisk_HoldsTheCursorStampsDiskBlockedAndWritesNothing()
+    {
+        var port = new FakePort();
+        port.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+
+        IReadOnlyList<VectorCursorOutcome> blocked =
+            await DrainWithDiskAsync(port, rebuilder: null, Blocking(free: 399, required: 400));
+
+        VectorCursorOutcome symbols = blocked.Single(o => o.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(0, symbols.CompletedRevision);
+        Assert.DoesNotContain(port.Commits, c => c.Kind is VectorUnitKind.Symbol);
+        Assert.Equal("disk-blocked", port.Meta("converge_pause_state"));
+        string reason = port.Meta("converge_pause_reason")!;
+        Assert.Contains("399", reason, StringComparison.Ordinal);
+        Assert.Contains("400", reason, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrEmpty(port.Meta(VectorConvergeService.SymbolErrorKey)));
+
+        IReadOnlyList<VectorCursorOutcome> resumed = await DrainAsync(port);
+
+        VectorCursorOutcome symbolsAfter = resumed.Single(o => o.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(1, symbolsAfter.Embedded);
+        Assert.Equal(5, symbolsAfter.CompletedRevision);
+        Assert.True(string.IsNullOrEmpty(port.Meta("converge_pause_state")));
+    }
+
+    [Fact]
+    public async Task Drain_ChunkSourcesDeferred_LogsAnInfoLineNamingThePathsWhileTheStoredReasonStaysPathFree()
+    {
+        var port = new FakePort();
+        port.ChunkFactsValue = port.ChunkFactsValue with
+        {
+            Sources = [new ChunkSourceHash("docs/guide.md", "hashA", null)],
+        };
+        var logger = new RecordingLogger();
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        await ServiceWithLogger(logger).DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        LogEntry info = Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message.Contains("deferred", StringComparison.Ordinal));
+        Assert.Contains("docs/guide.md", info.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("docs/guide.md", port.Meta(VectorConvergeService.ChunkErrorKey)!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HeldChunkCursorOnAQuietWorkspace_ReDrainsAfterTheRetryDelayWithNoExternalStamp()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-retry-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = DeferredChunkPort();
+            var signal = new VectorConvergeSignal(enabled: true);
+            var gate = new DelayGate();
+
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceWithRetry(root, symbols, _ => port, _ => session, signal, gate.DelayAsync);
+
+            await service.StartAsync(CancellationToken.None);
+            signal.StampTarget(5, fullRebuild: false);
+
+            await gate.Requested.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("0", port.Meta(VectorConvergeService.ChunkCompletedKey));
+
+            AgreeChunkSources(port);
+            gate.Release();
+
+            await WaitUntil(() => port.Meta(VectorConvergeService.ChunkCompletedKey) == "5");
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(1, gate.RequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HeldChunkCursor_ARealConvergeWakeBeforeTheRetryDelay_CancelsThePendingRetry()
+    {
+        string root = Directory.CreateTempSubdirectory("miller-vec-retry-").FullName;
+        try
+        {
+            string symbols = SeedSymbolsDb(root);
+            var port = DeferredChunkPort();
+            var signal = new VectorConvergeSignal(enabled: true);
+            var gate = new DelayGate();
+
+            await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            VectorConvergeService service = ServiceWithRetry(root, symbols, _ => port, _ => session, signal, gate.DelayAsync);
+
+            await service.StartAsync(CancellationToken.None);
+            signal.StampTarget(5, fullRebuild: false);
+            await gate.Requested.WaitAsync(TestContext.Current.CancellationToken);
+
+            AgreeChunkSources(port);
+            signal.StampTarget(6, fullRebuild: false);
+
+            await WaitUntil(() => gate.Canceled && port.Meta(VectorConvergeService.ChunkCompletedKey) == "5");
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.True(gate.Canceled);
+            Assert.Equal(1, gate.RequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static FakePort DeferredChunkPort()
+    {
+        var port = new FakePort();
+        port.ChunkFactsValue = port.ChunkFactsValue with
+        {
+            Sources = [new ChunkSourceHash("docs/guide.md", "hashA", null)],
+        };
+        return port;
+    }
+
+    private static void AgreeChunkSources(FakePort port) =>
+        port.ChunkFactsValue = port.ChunkFactsValue with
+        {
+            Sources = [new ChunkSourceHash("docs/guide.md", "hashA", "hashA")],
+        };
+
+    private sealed record LogEntry(LogLevel Level, string Message);
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception)));
+    }
+
+    private sealed class DelayGate
+    {
+        private readonly TaskCompletionSource _requested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _requestCount;
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        public bool Canceled { get; private set; }
+
+        public Task Requested => _requested.Task;
+
+        public async Task DelayAsync(TimeSpan _, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _requestCount);
+            _requested.TrySetResult();
+            using (cancellationToken.Register(() =>
+            {
+                Canceled = true;
+                _release.TrySetCanceled(cancellationToken);
+            }))
+            {
+                await _release.Task.ConfigureAwait(false);
+            }
+        }
+
+        public void Release() => _release.TrySetResult();
+    }
+
+    private static VectorConvergeService ServiceWithLogger(ILogger logger) =>
+        new(
+            IsolatedBootstrap(),
+            new VectorSidecar(SemanticMode.On),
+            new VectorConvergeSignal(enabled: true),
+            logger,
+            _ => null,
+            _ => null,
+            () => DateTimeOffset.UnixEpoch);
+
+    private static VectorConvergeService ServiceWithRetry(
+        string root,
+        string symbolsDbPath,
+        Func<WorkspaceContext, IVectorConvergePort?> openPort,
+        Func<WorkspaceContext, SemanticEmbeddingSession?> openSession,
+        VectorConvergeSignal signal,
+        Func<TimeSpan, CancellationToken, Task> delay)
+    {
+        IndexBootstrapService bootstrap = IsolatedBootstrap();
+        bootstrap.SeedForTest(WorkspaceAt(root, symbolsDbPath), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+
+        return new VectorConvergeService(
+            bootstrap,
+            new VectorSidecar(SemanticMode.On),
+            signal,
+            NullLogger.Instance,
+            openPort,
+            openSession,
+            () => DateTimeOffset.UnixEpoch,
+            heldRetryDelay: TimeSpan.FromMinutes(5),
+            delay: delay);
     }
 
     private static VectorConvergeService NewService() =>

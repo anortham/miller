@@ -97,3 +97,5 @@ Lead fix: 642fb86 — IndexerServiceLeadershipTests 5s waits -> 30s ScanSignalTi
 Branch gate: PASS at 642fb86 — fast 4223/2/0 (20s wall), scale 86/86, Release 0W/0E.
 Lead fix: complete (commit 412033d, vec0 park-race — serialized VectorStoreTests/VectorGenerationManagerScaleTests/SemanticSidecarScaleTests on SqliteVecEnvironment)
 Branch gate (final, post-review): PASS at 412033d — scripts/test.sh all (fast 4227 passed/2 skips, scale 86/86, exit 0; one transient fast failure in an intermediate run did not reproduce across two clean full runs) + Release build 0W/0E
+Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit fffe9d8) — P5 plan docs/plans/2026-07-21-semantic-p5-canary-plan.md
+Task 2: complete (parallel-lead-commit, Lead inline review clean — contract judgment calls verified against frozen doc, lead commit f6bd105)

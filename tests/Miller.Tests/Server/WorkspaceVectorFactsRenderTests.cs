@@ -64,6 +64,19 @@ public sealed class WorkspaceVectorFactsRenderTests
     }
 
     [Fact]
+    public void Compact_ReadyWhileAShadowRebuildIsPending_HintsRebuilding()
+    {
+        VectorSidecarFacts facts = Ready() with
+        {
+            ChunkCursor = Cursor("chunk", 30, 42, pendingFiles: 11,
+                lastError:
+                    $"the chunk cursor holds while {VectorConvergePlanner.ShadowRebuildPendingMarker} (ArtifactIdChanged) is pending"),
+        };
+
+        Assert.Equal("vectors: ready (rebuilding)", CompactVectorsLine(facts));
+    }
+
+    [Fact]
     public void Compact_Building_ReportsProgressAndThatItIsNotQueryable()
     {
         VectorSidecarFacts facts = new("building", "/repo/.miller/vectors.db", "still building")

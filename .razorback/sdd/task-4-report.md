@@ -1,75 +1,141 @@
-# Task 4 report — `downloading` status state (consumer + producer)
+# Task 4 report — Converge follow-ups (P5 Canary Stage)
 
-> Replaced a stale `task-4-report.md` from a DIFFERENT plan ("sqlite-vec Native-AOT spike"). This path collides
-> across plans; the old content is tracked/recoverable in git. This is the P4 semantic Task 4 report.
+Status: **DONE** (with one documented plan-nuance on fix (d); see Judgment calls).
+Commit SHA: **none — parallel-lead-commit** (owned files edited; not staged/committed).
+Branch/worktree: `worktree-semantic-p5` at base HEAD `fffe9d8`, path
+`/Users/murphy/source/miller/.claude/worktrees/worktree-semantic-p5`.
 
-## Status
-Complete. Classification arm, marker consumer, JSON model surfacing, and the DiskPreflight swap all landed and
-tested. Commit deferred (parallel-lead-commit — no `git add`/`commit` run).
+## What I implemented
 
-## Files changed (all owned)
-- `src/Miller.Indexing/VectorSidecar.cs` — new `downloading` state, seam extension, marker mirror + parser,
-  `DownloadingModel` fact.
-- `src/Miller.Server/Cli/SemanticPrepareCli.cs` — DiskPreflight swap (see below).
-- `src/Miller.Server/Tools/WorkspaceRender.cs` — JSON `downloading_model` field.
-- `tests/Miller.Tests/Indexing/VectorSidecarClassificationTests.cs` — downloading/stale/malformed/precedence/off +
-  mirror-constant tests.
-- `tests/Miller.Tests/Server/WorkspaceVectorFactsRenderTests.cs` — JSON model-id test.
+All four fixes from the P4 shadow dogfood (`docs/findings/2026-07-20-p4-shadow-dogfood.md`), red-first,
+extending the existing service/planner/render in place — no new services, no new hosted registrations.
 
-## Miller-first orientation (calls + findings)
-- `inspect VectorSidecar.cs` — confirmed the 9 state constants and the `Classify`/`ClassifyGeneration` precedence
-  heart; `PauseState` already yields `circuit-open`/`disk-blocked`, so a pause is never an `unavailable` result.
-- `trace VectorSidecarFacts` — mapped consumers: `WorkspaceRender.WriteVectorsJson`/`VectorsLabel` render the
-  facts; `WorkspaceVectorFactsRenderTests` pins the vocabulary. Found the render seam **already** carries a
-  `Compact_Downloading_IsBareVocabulary` test (P2's generic `_ => facts.State` fallback), so the compact line
-  needed no code change — only the JSON model field did.
-- `grep IVectorFileProbe` — 4 implementers (1 prod `SystemVectorFileProbe`, 3 test stubs in unowned files:
-  `VectorSidecarOpenTests`, `VectorStoreTests`, `SemanticOffGuaranteeTests`).
+### (a) Held-cursor retry wake — finding 1 (chunk-cursor starvation, medium, "fix before P5")
+`VectorConvergeService`: the `ExecuteAsync` wake loop now, after a drain that ends with any held cursor,
+schedules **exactly one** delayed re-stamp of `VectorConvergeSignal` so a quiet workspace re-drains instead
+of starving. Mechanics:
+- `DrainOnceAsync` now returns `bool` (any cursor outcome with a non-null `LastError` ⟹ held).
+- `ScheduleHeldRetry` re-stamps the current `_signal.TargetRevision` after `_heldRetryDelay` (default
+  **5 min**), via injectable seams `heldRetryDelay` + `delay` (`Func<TimeSpan,CancellationToken,Task>`,
+  defaults to `Task.Delay`).
+- At most one pending retry (`Interlocked.CompareExchange` guard on `_pendingRetry`); a real wake calls
+  `CancelPendingRetry()` first, so the real converge absorbs/cancels the pending retry (no double-drain, no
+  storm). The re-stamp coalesces through the capacity-1 semaphore.
+- Cleaned up on stop (`finally { CancelPendingRetry(); … }`).
 
-## Architecture as built (matches approved shape)
-- **Seam-pure classification.** Extended `IVectorFileProbe` with `ReadPrepareMarker(millerDir)` (raw content or
-  null) and `IsProcessAlive(pid)`. Both are **default interface methods** (`=> null` / `=> false`) so the 3
-  unowned test stubs keep compiling untouched, and the defaults mean "no download in flight" — a probe that
-  doesn't know the marker never invents `downloading`. `SystemVectorFileProbe` overrides both (real
-  `File.ReadAllText` + `Process.GetProcessById` try/catch). JSON parsing is a **pure** static
-  `SemanticPrepareMarker.TryParse` (JsonDocument, no reflection serializer — AOT-safe), so pid-alive and parse
-  failure are both exercised through the fake probe.
-- **Marker is the only cross-process signal.** No polling, no watchers. It is consulted **only** when
-  classification would otherwise be `unavailable` (the `model_not_prepared` window), so: pause states win (they
-  are never `unavailable`), a `ready`/`building` reader never touches the marker file, and off-mode short-circuits
-  in `Inspect` before `Classify`.
-- **Precedence** exactly as specified: `circuit-open`/`disk-blocked` > `downloading` > `unavailable`.
-- **Mirror contract.** `SemanticPrepareMarker.FileName` in Miller.Indexing mirrors
-  `SemanticPrepareCli.MarkerFileName` (Miller.Indexing cannot reference Miller.Server); a cross-project test pins
-  the two strings together so they cannot drift.
-- **Model id in JSON.** `VectorSidecarFacts.DownloadingModel` (null unless downloading) → `downloading_model` in
-  the vectors JSON block, following the existing write-null-when-absent pattern. `"default"` (the no-`--model`
-  label) would surface verbatim.
+### (b) Incremental disk gate — mirrors the shadow path
+`DrainCursorAsync`: before an incremental `EmbedAsync`/`Commit` with growth (`plan.ReEmbed.Count > 0`), it
+consults `state.DiskGate`. Blocked ⟹ `RefuseIncrementalForDisk` marks disk-blocked, records the cursor error,
+holds the cursor (no partial `vectors.db` write, no hard fail). `ResolvePause` then stamps `disk-blocked`
+identically to the shadow path; unblocking on the next wake resumes and clears the pause. `DiskBlockedReason`
+was refactored to take an `action` phrase — the shadow output stays **byte-identical** (`ShadowBuildAction`
+constant), the incremental path reads "converge the vector cursor". Deletes shrink the artifact, so only a
+growing re-embed is gated.
 
-## DiskPreflight swap — LANDED (not pending)
-`src/Miller.Indexing/Semantic/DiskPreflight.cs` did NOT exist when I started, but the Task 2 worker created it
-mid-run. Its public API is stable — `DiskPreflight.Check(path, requiredBytes)` →
-`DiskPreflightVerdict(Ok, FreeBytes, RequiredBytes)` — so I performed the swap: `SemanticPrepareCli.Production()`
-now uses a `SharedDiskPreflight` adapter that delegates to `DiskPreflight`, keeping the `ISemanticPreparePreflight`
-seam (stub-injected in tests). The model-footprint floor stays the local `DefaultRequiredBytes` (~1.2 GiB) until
-**Task 7's Q8_0 benchmark** refines it. The old in-verb `DefaultPreflight` (private drive-probe copy) was deleted —
-the probe/verdict logic now lives once in the shared component. My swap depends only on the stable `Check`/verdict
-surface, not on `DiskPreflightVerdict.Reason` (whose formatting the Task 2 worker was still finishing).
+### (c) Deferred-source INFO log — finding 2 (low)
+`DrainCursorAsync` at the deferral consume site: one `LogInformation` line naming the workspace-relative
+deferred paths (`string.Join(", ", deferredPaths)`). The stored hold reason stays path-free (unchanged, still
+routed through `RecordError`/`Scrub`).
+
+### (d) `ready (rebuilding)` status hint — finding 4 (low, polish)
+`WorkspaceRender.VectorsReadyLabel`: renders `ready (rebuilding)` (precedence over `ready (updating; N …)`)
+when the active generation is `ready` and a cursor's `LastError` carries the shadow-rebuild-pending marker.
+The marker is surfaced as a planner contract const `VectorConvergePlanner.ShadowRebuildPendingMarker`
+(`"the symbol cursor's shadow rebuild"`) used by the existing `ChunkHold` string — its produced string is
+**byte-identical** to before. JSON output is untouched (compact render only). See Judgment calls for the
+scope nuance.
 
 ## Verification
-- **worker-red-green** — `dotnet test --filter VectorSidecarClassificationTests|SemanticPrepareCliTests|WorkspaceVectorFactsRenderTests`
-  → **48 passed, 0 failed** (~48ms). Invariant: the `downloading` classification arm, precedence, marker
-  parse/pid-alive, off-mode zero-work, the mirror constant, the DiskPreflight swap, and the JSON model field are
-  all green together.
-- **worker-ceiling** — `scripts/test.sh` → **4209 passed, 0 failed, 2 skipped**. Invariant: no regression across
-  the fast suite; the new pure tests add negligible time. Wall-time: an early solo run measured **25s (< 30s
-  ceiling)**; a later run during concurrent-worker load measured 102s and tripped the wall tripwire. This is
-  machine contention (two workers testing the same worktree) plus Task 8's known <10s/ceiling concern — NOT a
-  leaked slow test from Task 4 (its 48 tests run in ~48ms, pure logic, no I/O). No Task-4 test failure at any point.
-- Release build (via `scripts/test.sh`) is 0 warnings / 0 errors (warnings-are-errors).
 
-## Concerns
-- **DiskPreflight swap: LANDED** (the coordination item from Task 3's report is closed). It consumes only the
-  Task 2 worker's stable public `Check` surface.
-- **Footprint constant still provisional** (~1.2 GiB) — tracks Task 7's Q8_0 benchmark, as designed.
-- **No blockers.** The only non-green signal was the fast-suite wall tripwire under concurrent load (Task 8's lane).
+- **worker-red-green** — invariant: the four fixes behave (retry re-drains/cancels; incremental disk block
+  holds+stamps; deferral logs paths; render hints rebuilding). Scope: owned test classes.
+  `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-build --filter
+  "FullyQualifiedName~VectorConvergeServiceTests|FullyQualifiedName~WorkspaceVectorFactsRenderTests"` →
+  **Passed 60, Failed 0, Skipped 0** (2026-07-21).
+- **Diagnostic build** — invariant: 0W/0E, analyzers-as-errors clean. `dotnet build Miller.slnx -c Release`
+  → **Build succeeded, 0 Warning(s), 0 Error(s)** (2026-07-21).
+- **worker-ceiling** — invariant: fast suite stays green and pure. `scripts/test.sh` → **Passed 4290,
+  Failed 0, Skipped 2**, wall 17s (2026-07-21).
+  - First `scripts/test.sh` run showed **1 flake**:
+    `RepositoryIndexLoaderBridgeTests.Load_RootMillerJsonUnknownProvider_DoesNotRunDefaultProvider`
+    (`ObjectDisposedException: 'SQLitePCL.sqlite3'` in `BuildChainDb`) — a cross-test SQLite pool-disposal
+    race in a class I do not own and do not touch. Passed 18/18 in isolation and green on fast-suite re-run.
+    Pre-existing non-determinism, unrelated to this change. **Not a Canary\* class**; flagged for the lead.
+- Scale suite intentionally NOT run (lead runs it for this batch; escalation trigger on VectorConvergeService).
+
+## Files changed (owned)
+- `src/Miller.Indexing/Semantic/VectorConvergePlanner.cs` — add `ShadowRebuildPendingMarker` const; use it in
+  `ChunkHold` (produced string unchanged).
+- `src/Miller.Server/Hosting/VectorConvergeService.cs` — retry seams/fields/ctor params; `ExecuteAsync` loop;
+  `DrainOnceAsync`→bool; deferral log; incremental disk gate; `RefuseIncrementalForDisk` +
+  `DiskBlockedReason(action)` refactor; `Schedule/Run/CancelPendingRetry`.
+- `src/Miller.Server/Tools/WorkspaceRender.cs` — `VectorsReadyLabel` rebuilding hint + `ShadowRebuildPending`
+  helpers.
+- `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs` — 4 tests (incremental disk block; deferral log;
+  retry re-drain; real-wake cancels retry) + `RecordingLogger`/`LogEntry`/`DelayGate`/`ServiceWithLogger`/
+  `ServiceWithRetry` helpers.
+- `tests/Miller.Tests/Server/WorkspaceVectorFactsRenderTests.cs` — 1 test (ready-while-rebuilding hint).
+
+Sibling in-flight files present in the worktree but **not touched by me**: `SemanticSearchArm.cs`,
+`SearchRouteExecutor.cs`, `SemanticQueryDiagnosticsTests.cs` (Task 3).
+
+## Miller calls used
+Miller MCP tools were unavailable at the start of orientation and surfaced mid-session as deferred tools; I
+had already oriented by reading the worktree files directly (the authoritative source, since the index serves
+the base checkout and does not include this branch's edits). Miller `inspect/context/trace` schemas were
+loaded but the direct reads already gave exact, current line numbers, so I proceeded with those to avoid the
+shared-index jam risk noted in the brief. Orientation evidence gathered by reading:
+`VectorConvergeService.cs` (full), `VectorConvergePlanner.cs` (full), `WorkspaceRender.cs`
+(VectorsLabel/VectorsReadyLabel/WriteVectorsJson), `VectorSidecar.cs` (Classify/PauseState/VectorSidecarFacts),
+both test files, and the P4 finding doc.
+
+## API-shape evidence (proven by reading)
+- `DiskGate` = `delegate DiskPreflightVerdict DiskGate(int workUnits)`; `ProductionDiskGate` and
+  `AlwaysAvailable` at the documented sites. `RefuseForDisk`/`BlockedForDisk` mark `state.MarkDiskBlocked` and
+  return the recorded reason; `ResolvePause` stamps `converge_pause_state` = `disk-blocked` with precedence
+  below `circuit-open`. My incremental gate reuses this exact path.
+- `VectorConvergePlanner.EvaluateChunkCursor` returns `ChunkCursorDecision.DeferredPaths` (from
+  `content_sources` hash disagreement); the drain consumes them at the site I logged.
+- `WriteVectorsJson` (:521) serializes: state, path, reason, build_progress_percent, downloading_model,
+  serving_tag, serving_role, artifact_id, symbol_cursor, chunk_cursor, identity, retained_generations. **There
+  is no shadow-rebuild-in-progress field** — the basis for the (d) judgment call below.
+- `VectorConvergeServiceTests` fake seams: `FakePort` (contract-faithful `Merged` stored view),
+  `FakeShadowRebuilder`, `Blocking(free,required)` `DiskGate`, `FastOptions` session, `ServiceOverWorkspace` +
+  `SeedForTest`, `WaitUntil`. I followed these (added `DelayGate` for the injectable retry delay,
+  `RecordingLogger` for the log assertion) — no real `Task.Delay`, no vec0, fast-suite pure.
+
+## Self-review findings
+- Hold-reason format: `ChunkHold` produced string and the shadow disk-block reason are byte-identical to base
+  (const-extraction only). JSON status/health output unchanged (verified by the untouched JSON render tests).
+- No narration/step comments in tests; intent-named tests. Off-guarantee untouched (`_sidecar.Enabled` early
+  return unchanged).
+- Retry cannot storm: single-pending guard + real-wake cancel; a persistent hold becomes a bounded ~5-min
+  poll, not a spin. `target <= 0` guard means direct/unstamped drains never schedule a retry.
+
+## Judgment calls
+- `WorkspaceRender.cs` real path is `src/Miller.Server/Tools/WorkspaceRender.cs` (brief said
+  `Miller.Core/Workspace/…`); render tests' real home is
+  `tests/Miller.Tests/Server/WorkspaceVectorFactsRenderTests.cs` (brief said `WorkspaceRenderTests`). Edited the
+  actual files.
+- **Fix (d) scope nuance (plan-reality nuance, decided + noted, not blocking).**
+  `src/Miller.Server/Tools/WorkspaceRender.cs:333` — chose to key `ready (rebuilding)` on the **chunk-hold
+  shadow-rebuild-pending marker** (an existing, JSON-carried, cross-wake-persistent cursor `LastError`) over a
+  disk probe, because: (1) the brief's premise that `VectorSidecarFacts`/`WriteVectorsJson` already carries a
+  shadow-rebuild-in-progress field is **not true** — no such field exists; (2) the only other artifact-mediated
+  signal of an in-flight rebuild is the on-disk `vectors.db.rebuild` file, which would require probing in
+  `VectorSidecar.Classify` (**outside this task's file ownership**) and a new `VectorSidecarFacts`/JSON field
+  (**violates "JSON untouched"**). My implementation renders `ready (rebuilding)` for a rebuild that is
+  **pending/deferred/failed across wakes** (rebuilder unavailable, shadow open/build failed, or the chunk cursor
+  holding while the symbol shadow rebuild is pending — the operationally-visible "stuck long rebuild" an operator
+  would misread as idle). It does **not** cover the transient single-wake in-flight window of a rebuild that
+  promotes within one wake (finding 4's literal goldfish case, ArtifactIdChanged same-identity) — that window has
+  no artifact signal without the `.rebuild` disk probe. Follow-up for the lead: if the transient in-flight window
+  must render too, add a `vectors.db.rebuild` existence probe to `VectorSidecar.Classify` surfacing a
+  compact-only `RebuildInProgress` flag (needs VectorSidecar ownership; keep it out of `WriteVectorsJson` to
+  preserve the JSON contract).
+
+## Issues / concerns
+- The (d) nuance above is the only open item — a scope/ownership boundary, decided plan-consistently and
+  flagged for the lead's call.
+- Pre-existing fast-suite flake in `RepositoryIndexLoaderBridgeTests` (SQLite pool disposal) — not mine;
+  flagged so the lead's batch run doesn't misattribute it.

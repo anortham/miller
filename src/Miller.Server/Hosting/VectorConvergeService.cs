@@ -232,9 +232,12 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly Func<DateTimeOffset> _clock;
     private readonly Func<WorkspaceContext, IVectorGenerationGc?> _openGc;
     private readonly VectorLiveReaderRegistry _readerRegistry;
+    private readonly TimeSpan _heldRetryDelay;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     private SemanticEmbeddingSession? _session;
     private IVectorGenerationGc? _gc;
+    private CancellationTokenSource? _pendingRetry;
 
     public VectorConvergeService(
         IndexBootstrapService bootstrap,
@@ -257,7 +260,9 @@ public sealed class VectorConvergeService : BackgroundService
         Func<Exception, string, Action, bool>? recoverCorrupt = null,
         Func<WorkspaceContext, IVectorConvergePort, DiskGate>? diskGateFactory = null,
         Func<WorkspaceContext, IVectorGenerationGc?>? openGc = null,
-        VectorLiveReaderRegistry? readerRegistry = null)
+        VectorLiveReaderRegistry? readerRegistry = null,
+        TimeSpan? heldRetryDelay = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -279,6 +284,8 @@ public sealed class VectorConvergeService : BackgroundService
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _openGc = openGc ?? (workspace => VectorGenerationGc.Create(workspace, _logger));
         _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
+        _heldRetryDelay = heldRetryDelay ?? TimeSpan.FromMinutes(5);
+        _delay = delay ?? (static (span, token) => Task.Delay(span, token));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -300,9 +307,14 @@ public sealed class VectorConvergeService : BackgroundService
                     return;
                 }
 
+                // A real wake supersedes any scheduled held-cursor retry: it either produced this wake or renders
+                // the pending one redundant. Cancelling first keeps at most one retry alive and never double-drains.
+                CancelPendingRetry();
+
                 try
                 {
-                    await DrainOnceAsync(stoppingToken).ConfigureAwait(false);
+                    if (await DrainOnceAsync(stoppingToken).ConfigureAwait(false))
+                        ScheduleHeldRetry(stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -317,32 +329,35 @@ public sealed class VectorConvergeService : BackgroundService
         }
         finally
         {
+            CancelPendingRetry();
             await DisposeSessionAsync().ConfigureAwait(false);
         }
     }
 
-    internal async Task DrainOnceAsync(CancellationToken cancellationToken)
+    /// <summary>Drains once and reports whether any cursor ended held: a hold on a quiet workspace never gets
+    /// another index-convergence wake, so the loop schedules a delayed retry when this returns true.</summary>
+    internal async Task<bool> DrainOnceAsync(CancellationToken cancellationToken)
     {
         WorkspaceContext? workspace = TryGetWorkspace();
         if (workspace is null)
-            return;
+            return false;
 
         using IVectorConvergePort? port = OpenPortWithRecovery(workspace);
         if (port is null)
-            return;
+            return false;
 
         // ONE session for the life of the service: the resident child process, its restart count, and an open
         // circuit are exactly the state a per-wake session would silently reset. A circuit-open session is kept
         // and keeps stating its reason rather than being replaced by a fresh one that has forgotten why.
         _session ??= _openSession(workspace);
         if (_session is null)
-            return;
+            return false;
 
         // The GC arm is bound the first time a real workspace drains. Direct DrainAsync callers (the fast-suite
         // entry points) leave it null, so a drain over a FakePort never reaches a real disk.
         _gc ??= _openGc(workspace);
 
-        await DrainAsync(
+        IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(
                 port,
                 _session,
                 _openShadow(workspace),
@@ -350,6 +365,8 @@ public sealed class VectorConvergeService : BackgroundService
                 _diskGateFactory(workspace, port),
                 cancellationToken)
             .ConfigureAwait(false);
+
+        return outcomes.Any(static outcome => outcome.LastError is not null);
     }
 
     /// <summary>
@@ -390,6 +407,51 @@ public sealed class VectorConvergeService : BackgroundService
 
         _session = null;
         await session.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Schedules exactly one delayed re-stamp of the converge signal after a held drain, so a quiet
+    /// workspace re-drains instead of starving. A retry already pending is left alone (no stacking), and the
+    /// re-stamp carries the current target so the re-drain recomputes the same span idempotently.</summary>
+    private void ScheduleHeldRetry(CancellationToken stoppingToken)
+    {
+        long target = _signal.TargetRevision;
+        if (target <= 0)
+            return;
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        if (Interlocked.CompareExchange(ref _pendingRetry, cts, null) is not null)
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = RunHeldRetryAsync(target, cts);
+    }
+
+    private async Task RunHeldRetryAsync(long target, CancellationTokenSource cts)
+    {
+        try
+        {
+            await _delay(_heldRetryDelay, cts.Token).ConfigureAwait(false);
+            _signal.StampTarget(target, fullRebuild: false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (Interlocked.CompareExchange(ref _pendingRetry, null, cts) == cts)
+                cts.Dispose();
+        }
+    }
+
+    private void CancelPendingRetry()
+    {
+        if (Interlocked.Exchange(ref _pendingRetry, null) is { } cts)
+        {
+            cts.Cancel();
+            cts.Dispose();
+        }
     }
 
     /// <summary>
@@ -570,6 +632,13 @@ public sealed class VectorConvergeService : BackgroundService
                     return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, gate.Reason));
 
                 deferredPaths = gate.DeferredPaths;
+                if (deferredPaths.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Vector chunk convergence deferred {Count} source(s) for symbols.db hash disagreement: {Paths}.",
+                        deferredPaths.Count,
+                        string.Join(", ", deferredPaths));
+                }
             }
 
             IReadOnlyList<string>? paths = snapshot.FullPass
@@ -610,6 +679,15 @@ public sealed class VectorConvergeService : BackgroundService
                     RecordError(port, errorKey, errorAtKey, plan.HoldReason);
                 return new VectorCursorOutcome(
                     kind, plan.Decision, plan.Trigger, 0, 0, Math.Max(plan.AdvanceTo, completed), plan.HoldReason);
+            }
+
+            // Mirror the shadow path: an incremental re-embed that could not fit holds the cursor with a
+            // disk-blocked pause instead of writing a partial vectors.db or hard-failing. Deletes shrink the
+            // artifact, so only a growing re-embed is gated.
+            if (plan.ReEmbed.Count > 0
+                && RefuseIncrementalForDisk(state, port, plan.ReEmbed.Count, errorKey, errorAtKey) is { } diskBlocked)
+            {
+                return Failed(kind, completed, diskBlocked);
             }
 
             (List<VectorCommit> embedded, _, string? embedFailure) =
@@ -852,7 +930,20 @@ public sealed class VectorConvergeService : BackgroundService
             return null;
 
         state.MarkDiskBlocked(verdict);
-        return RecordError(live, errorKey, errorAtKey, DiskBlockedReason(verdict));
+        return RecordError(live, errorKey, errorAtKey, DiskBlockedReason(verdict, ShadowBuildAction));
+    }
+
+    /// <summary>The incremental variant: an in-place re-embed that cannot fit marks the pause and records a
+    /// disk-blocked hold on the same cursor, so status renders it exactly as the shadow path's block does.</summary>
+    private string? RefuseIncrementalForDisk(
+        DrainState state, IVectorConvergePort port, int workUnits, string errorKey, string errorAtKey)
+    {
+        DiskPreflightVerdict verdict = state.DiskGate(workUnits);
+        if (verdict.Ok)
+            return null;
+
+        state.MarkDiskBlocked(verdict);
+        return RecordError(port, errorKey, errorAtKey, DiskBlockedReason(verdict, "converge the vector cursor"));
     }
 
     /// <summary>The mid-build variant: a slice boundary refusal marks the pause and returns the build-failure
@@ -864,11 +955,13 @@ public sealed class VectorConvergeService : BackgroundService
             return null;
 
         state.MarkDiskBlocked(verdict);
-        return DiskBlockedReason(verdict);
+        return DiskBlockedReason(verdict, ShadowBuildAction);
     }
 
-    private static string DiskBlockedReason(DiskPreflightVerdict verdict) =>
-        $"not enough free disk under .miller to build a shadow vector generation ({verdict.Reason}); the cursor holds";
+    private const string ShadowBuildAction = "build a shadow vector generation";
+
+    private static string DiskBlockedReason(DiskPreflightVerdict verdict, string action) =>
+        $"not enough free disk under .miller to {action} ({verdict.Reason}); the cursor holds";
 
     /// <summary>Per-wake state shared by the two cursors: the shadow arm is attempted at most once, a promote
     /// ends the drain, and a disk refusal is remembered so the pause is resolved once at the end.</summary>
