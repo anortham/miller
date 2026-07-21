@@ -113,6 +113,31 @@ public sealed class VectorGenerationManagerTests
     }
 
     [Fact]
+    public void Promote_Incompatible_StampsRetentionTimeSoAnIdleWorkspaceKeepsItsRollbackGeneration()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        DateTimeOffset promotedAt = Now;
+        DateTimeOffset staleActiveMtime = Now.AddDays(-30);
+        files.Write(manager.ActivePath, "old-generation");
+        files.SetLastWriteTime(manager.ActivePath, staleActiveMtime);
+        files.Write(manager.ShadowPath, "new-generation");
+        files.TouchTime = promotedAt;
+
+        manager.Promote(ShadowTag, ActiveTag);
+
+        Assert.Contains(manager.RetainedPathFor(ActiveTag), files.Touched);
+
+        RetainedGeneration retained = Assert.Single(manager.Retained());
+        Assert.Equal(promotedAt, retained.RetainedAt);
+
+        VectorGcPlan plan = VectorGenerationManager.PlanGarbageCollection(
+            Inputs(activeIsReady: true) with { Retained = manager.Retained(), Now = promotedAt });
+
+        Assert.Empty(plan.Deletions);
+        Assert.Equal(VectorGcOutcome.WithinSoakWindow, Assert.Single(plan.Decisions).Outcome);
+    }
+
+    [Fact]
     public void Promote_Compatible_OverwritesTheActiveArtifactAndRetainsNothing()
     {
         (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
@@ -461,6 +486,10 @@ public sealed class VectorGenerationManagerTests
 
         public List<string> Folded { get; } = [];
 
+        public List<string> Touched { get; } = [];
+
+        public DateTimeOffset TouchTime { get; set; } = Now;
+
         public string? FailMoveTo { get; set; }
 
         public string? FailDeleteOf { get; set; }
@@ -494,6 +523,12 @@ public sealed class VectorGenerationManagerTests
             _contents[destination] = _contents[source];
             _times[destination] = _times[source];
             Delete(source);
+        }
+
+        public void Touch(string path)
+        {
+            Touched.Add(path);
+            _times[path] = TouchTime;
         }
 
         public DateTimeOffset LastWriteTime(string path) => _times.GetValueOrDefault(path);

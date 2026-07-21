@@ -101,6 +101,10 @@ internal interface IVectorGenerationFiles
 
     void Move(string source, string destination);
 
+    /// <summary>Stamps a file's last-write time to now so retention age is measured from promotion, not from the
+    /// superseded artifact's inherited mtime (<see cref="File.Move(string, string)"/> preserves it).</summary>
+    void Touch(string path);
+
     DateTimeOffset LastWriteTime(string path);
 
     IReadOnlyList<string> EnumerateRetained(string millerDir);
@@ -259,6 +263,7 @@ public sealed class VectorGenerationManager
                     DeleteTrio(retainedPath);
 
                 _files.Move(ActivePath, retainedPath);
+                _files.Touch(retainedPath);
             }
         }
 
@@ -391,6 +396,8 @@ internal sealed class SystemVectorGenerationFiles : IVectorGenerationFiles
 
     public void Move(string source, string destination) =>
         Retry(() => File.Move(source, destination, overwrite: true));
+
+    public void Touch(string path) => Retry(() => File.SetLastWriteTimeUtc(path, DateTime.UtcNow));
 
     public DateTimeOffset LastWriteTime(string path) => File.GetLastWriteTimeUtc(path);
 
