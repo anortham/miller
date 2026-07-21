@@ -169,3 +169,11 @@ Codex pre-merge review @ 0f07ef1: needs-attention, 4 findings, all verified REAL
 - F3 (medium) vectors-v1.md DDL/meta still declared 512 default → real-bug (doc contract), fixed inline (DDL lane, meta example, parameterization sentence).
 - F4 (medium) winner-vs-v1 CI is post-selection inference → real-improvement, fixed inline: analyze.py max-statistic selection-adjusted bootstrap. Result STRENGTHENS verdict: bge sel-adj-p=0.475 (naive CI excl-zero was winner's curse), qwen3 p=1.0. Findings updated; adjusted procedure recorded for future gate runs.
 - F1 (high) offline arm shape ≠ production request shape → real limitation, pre-registered (plan depth 50); explicit limitation note added to findings §Task 4; FULL regeneration at production shape FLAGGED for user judgment (encoder comparison arm-internal-valid; sealed event runs the real arm).
+Codex fix round: complete (lead commit db5a3c6 — F2 worker fix reviewed+staged, F3/F4/F1 lead-inline). Branch gate RE-RUN at db5a3c6: fast 4407/0, scale 86/86, Release 0W/0E. Freeze record's frozen-arm commit updated 0153adc → db5a3c6 (serving path identical; prepare fix required for bge adopter path).
+
+## Verification ledger — post-codex-fix branch gate @ db5a3c6 (+ final freeze-pointer commit)
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| branch-gate (fast) | Fast suite green incl. F2 prepare-default tests | scripts/test.sh all (fast leg) | db5a3c6 | PASS 4407/0 (2 skip) | 2026-07-21 |
+| branch-gate (scale) | Scale suite green (live sidecar, bge default) | scripts/test.sh all (scale leg) | db5a3c6 | PASS 86/86 | 2026-07-21 |
+| branch-gate (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | db5a3c6 | PASS | 2026-07-21 |

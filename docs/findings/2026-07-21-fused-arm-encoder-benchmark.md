@@ -479,7 +479,7 @@ further tuning after this point; a change to anything below voids this freeze an
 | Fusion profile | `fusion-v1` (unchanged — sweep winner failed the bar): `RankConstant=60`; weights (lexical, semantic) — SymbolLookup (1.0, 0.3), Conceptual (0.5, 1.0), Mixed (0.8, 0.8) |
 | Routing | production `SemanticQueryPolicy.Route` (identifier/path/short-token → LexicalOnly) |
 | Serving posture (declared) | top-k, **no abstention threshold** — negatives are report-only |
-| Miller commit (frozen arm) | `0153adc` on branch `worktree-fusion-v2-eval` (contains the required `bf58afd` sidecar `--model` forwarding fix — inseparable from the bge pin) |
+| Miller commit (frozen arm) | `db5a3c6` on branch `worktree-fusion-v2-eval` (contains `bf58afd` sidecar `--model` forwarding and the codex-review F2 prepare-default fix — both required for the bge pin; serving-path fusion/routing/encoder behavior is identical to `0153adc`) |
 | Sidecar | `julie-semantic-sidecar` 0.1.0-rc.2 (binary manifest default tier is still qwen3; Miller forwards `serve --model` explicitly) |
 | Dev corpora SHAs | miller `59c2c79e8633940de5d394f73235f10acbe2c2b8`, julie `9d1d22c5dcca8509e412db96b6dbb5ff19d4311a` |
 | Bench runtime pin | llama.cpp `b10068` per `eval/model-bench/bench-pins.json`; no local overlay (CodeRankEmbed FINAL DROP, upstream [llama.cpp#25970](https://github.com/ggml-org/llama.cpp/issues/25970)) |
@@ -506,7 +506,7 @@ overall nDCG@10 **0.5727** / recall@10 0.6163; language-macro nDCG **0.4165**; w
 ### Sealed acceptance request (handed to the user 2026-07-21)
 
 Run the acceptance event per SEALED-SET-PROTOCOL §Handoff steps 3–6: execute the frozen arm — Miller at
-commit `0153adc`, `MILLER_SEMANTIC=on`, default encoder (bge-small resolves automatically), production
+commit `db5a3c6`, `MILLER_SEMANTIC=on`, default encoder (bge-small resolves automatically), production
 `search` — over the sealed queries; score with `eval/retrieval-eval` (`--k 10`); return **aggregates
 only** (`overall`, `language_macro_average`, `worst_language`, `per_query_class`,
 `intent_cluster_summary`, `negatives`). Decision is against thresholds 1–5 above, fixed before any sealed

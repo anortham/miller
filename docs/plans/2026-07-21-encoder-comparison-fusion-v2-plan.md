@@ -272,5 +272,5 @@ Commit mode: Batch A and Batch B tasks are `parallel-lead-commit`; serial tasks 
 **What to build:** The freeze that makes the sealed event decidable in advance.
 
 **Acceptance criteria:**
-- [x] Freeze record complete with exact identifiers and pre-registered sealed thresholds. (Findings §Task 8; frozen arm = 0153adc, bge-small 384d int8, fusion-v1.)
+- [x] Freeze record complete with exact identifiers and pre-registered sealed thresholds. (Findings §Task 8; frozen arm = db5a3c6, bge-small 384d int8, fusion-v1.)
 - [x] Sealed request text handed to the user; no sealed content anywhere in the repo.
