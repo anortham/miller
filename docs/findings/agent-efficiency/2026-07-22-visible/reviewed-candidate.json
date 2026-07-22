@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "visible_run_commit": "1f4724f11ca97aa46388702fd4782c23738d7682",
+  "reviewed_candidate": {
+    "commit": "1445282edb89253eb43106570142b4173e158bd0",
+    "version": "1.13.0+1445282edb89",
+    "binary_path": "src/Miller.Server/bin/Release/net10.0/miller.dll",
+    "binary_sha256": "43d28783e217357611e58f30f957f067fe27443b2dcc1b33bbe5ed37f1ab643d"
+  },
+  "review_fix": {
+    "reviewer": "claude",
+    "finding_count": 2,
+    "fixed_count": 2,
+    "output_equivalence": "binary search returns the same largest retained priority prefix as linear tail trimming for budgets at or above the canonical empty envelope",
+    "tiny_budget_contract": "budgets below the canonical empty envelope return that valid envelope with selectedCount zero",
+    "visible_replay_repeated": false,
+    "reason_not_repeated": "the single-pass review fix preserves response bytes and retained priority prefix and is not a second benchmark-tuning repair"
+  }
+}

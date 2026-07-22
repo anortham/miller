@@ -8,7 +8,7 @@
 - Both runs used Codex `gpt-5.6-sol`, medium reasoning, seed `731`, `tiktoken 0.13.0` with `o200k_base`, at most eight calls, 12,000 cumulative tool-output tokens, and 120 seconds.
 - Both runs completed with zero harness voids. The only reruns were the predeclared three repetitions for the post-repair `dev-006` one-arm disagreement.
 - Julie was `7.16.0` at `27d39714339778b18f412c6a5f1110de1257dcd3`, using production CodeRankEmbed on MPS.
-- The baseline used Miller `1.13.0+072f1f1779e0`; the frozen candidate used `1.13.0+1f4724f11ca9`, production BGE-small, and code-artifact SHA-256 `7a75751f8264eab64d79a1f8d275e0900145ae4648ea81a3214717994560c065`.
+- The baseline used Miller `1.13.0+072f1f1779e0`; the visible candidate used `1.13.0+1f4724f11ca9`, production BGE-small, and code-artifact SHA-256 `7a75751f8264eab64d79a1f8d275e0900145ae4648ea81a3214717994560c065`.
 - The committed identity manifests contain every product, snapshot, model, tool, schema, tokenizer, and environment hash. The baseline manifest's Miller binary field identified the stable apphost; the candidate harness correction additionally hashes the actual managed code artifact.
 
 ## Paired gates
@@ -51,13 +51,24 @@ The identical-corpus diagnostic used the same 22 normalized excerpts, boundaries
 
 ## Freeze consequence
 
-No second visible repair, task edit, semantic-canary edit, or model swap is permitted. The candidate is frozen at `1f4724f11ca97aa46388702fd4782c23738d7682` for the user-controlled 30-pair sealed run. Under the predeclared decision rule, any sealed correctness or efficiency failure keeps Julie primary immediately; only a sealed aggregate proving both products share the same architectural limit can justify a separate new-project design.
+No second visible repair, task edit, semantic-canary edit, or model swap is permitted. The visible replay remains frozen at `1f4724f11ca97aa46388702fd4782c23738d7682`. Single-pass pre-merge review then produced a byte-equivalent render-work fix at `1445282edb89253eb43106570142b4173e158bd0`; that reviewed commit, version `1.13.0+1445282edb89`, and code-artifact SHA-256 `43d28783e217357611e58f30f957f067fe27443b2dcc1b33bbe5ed37f1ab643d` are the candidate identity for the user-controlled 30-pair sealed run. Under the predeclared decision rule, any sealed correctness or efficiency failure keeps Julie primary immediately; only a sealed aggregate proving both products share the same architectural limit can justify a separate new-project design.
+
+The review fix did not trigger another visible agent replay because it does not alter ranking, selected priority prefix, or response bytes for any budget at or above the canonical empty envelope. It replaces linear tail removal with binary search for the same largest fitting prefix. A caller-level 668-item regression proved identical retained JSON while reducing measured allocation from 1,626,385,624 bytes to below 32 MB. Budgets smaller than a valid empty envelope now take an explicit deterministic fast path and return that same canonical envelope.
+
+## External review
+
+- Reviewer: Claude Code 2.1.218, ephemeral adversarial read-only run over the full branch diff.
+- Returned: 2 findings; fixed: 2 in `1445282e`; dismissed: 0; flagged: 0.
+- Medium: quadratic context trimming — verified real and fixed with logarithmic prefix search.
+- Low: tiny positive budgets cannot contain a valid empty envelope — verified real improvement, documented, and covered in all four ordinary/reference-aware compact/JSON cases.
+- The offline harness was also verified absent from Miller project content and release packaging.
+- Cost: 6 direct input tokens plus 245,342 cache-creation and 475,347 cache-read tokens; 9,444 output tokens; `$2.93`.
 
 The reproducible scorer exports and manifests are under [`docs/findings/agent-efficiency/2026-07-22-visible/`](agent-efficiency/2026-07-22-visible/).
 
 ## Verification ledger
 
-All entries ran against commit `1f4724f11ca97aa46388702fd4782c23738d7682` plus this Task 6 evidence working tree on 2026-07-22 UTC.
+The visible replay ran at `1f4724f11ca97aa46388702fd4782c23738d7682`. The post-review code gates below ran at reviewed candidate `1445282edb89253eb43106570142b4173e158bd0` plus this evidence update on 2026-07-22 UTC.
 
 | Scope | Command | Result |
 | --- | --- | --- |
@@ -65,7 +76,8 @@ All entries ran against commit `1f4724f11ca97aa46388702fd4782c23738d7682` plus t
 | evaluator | `dotnet test eval/retrieval-eval/tests/RetrievalEval.Tests.csproj -c Release --no-restore` | pass: 81 tests |
 | dependency boundary | no `PackageReference` or `ProjectReference` in `RetrievalEval.csproj` | pass |
 | Release build | `dotnet build Miller.slnx -c Release --no-restore` | pass: 0 warnings, 0 errors |
-| fast suite | `scripts/test.sh` | pass: 4,557 passed, 2 expected skips, 19 seconds |
+| focused review fix | `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~ContextToolTests` | pass: 41 tests |
+| fast suite | `scripts/test.sh` | pass: 4,562 passed, 2 expected skips, 18 seconds |
 | Scale suite | `scripts/test.sh scale` | pass: exit 0 with the real pinned extractor path |
 | evidence integrity | SHA-256 check of every artifact listed by both evidence manifests | pass |
 | repository hygiene | JSON parse plus `git diff --check` | pass |

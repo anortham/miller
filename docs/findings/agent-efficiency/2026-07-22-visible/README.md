@@ -6,3 +6,4 @@
 - Raw Codex transcripts remain outside the repository; `miller-loss-classification.json` retains the bounded trajectory evidence used by the finding.
 - `semantic-model-diagnostic.json` records the identical-corpus BGE-small/CodeRankEmbed isolation.
 - `context-budget-replay.json` records direct post-repair rendering checks.
+- `reviewed-candidate.json` records the byte-equivalent post-review candidate that the sealed operator must build and identify.
