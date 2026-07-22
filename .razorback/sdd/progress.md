@@ -177,3 +177,14 @@ Codex fix round: complete (lead commit db5a3c6 — F2 worker fix reviewed+staged
 | branch-gate (fast) | Fast suite green incl. F2 prepare-default tests | scripts/test.sh all (fast leg) | db5a3c6 | PASS 4407/0 (2 skip) | 2026-07-21 |
 | branch-gate (scale) | Scale suite green (live sidecar, bge default) | scripts/test.sh all (scale leg) | db5a3c6 | PASS 86/86 | 2026-07-21 |
 | branch-gate (build) | Release 0W/0E | dotnet build Miller.slnx -c Release | db5a3c6 | PASS | 2026-07-21 |
+
+## Semantic production-readiness repair
+Task 3: complete (parallel-lead-commit, lead inline review clean, lead commit e392ede — `.claude/worktrees/**` excluded from watcher and fresh extractor scan; watcher 61/61, live full-repo scale 1/1).
+Task 2: complete (parallel-lead-commit, lead inline review clean, lead commit 9cfd632 — typed pre/post-embed freshness, one process-local broker, query priority, rebind-safe GC; focused 147 passed/1 skip).
+Task 1: complete (parallel-lead-commit, lead inline review clean, lead commit 6a19fe1 — control/shadow lexical serving, full-pipeline policy, semantic-only content union; focused 79/79; Task 4 owns shadow-arm telemetry labeling).
+
+## Verification ledger — semantic repair Batch A @ 6a19fe1
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| affected-change (build) | Release clean, warnings-as-errors | `dotnet build Miller.slnx -c Release` | 6a19fe1 | PASS 0W/0E | 2026-07-21 |
+| affected-change (focused) | Search/canary/content/vector/session/converge/DI/watcher | focused `dotnet test ... -c Release --no-build` | 6a19fe1 | PASS 294/0, 1 skip | 2026-07-21 |
