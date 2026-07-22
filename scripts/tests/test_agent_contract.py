@@ -124,7 +124,7 @@ def _create_snapshot(root: Path) -> SnapshotIdentity:
         "def create_candidate():\n    return 'token-baseline'\n",
         encoding="utf-8",
     )
-    (root / ".gitignore").write_text(".miller/\n.razorback/\nnested/\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".miller/\n.razorback/\nnested/\n*.tmp\n", encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "fixture")
     return SnapshotIdentity.capture("snapshot-001", "fixture", ("python",), root)
@@ -314,6 +314,7 @@ class AgentContractTests(unittest.TestCase):
         cases = [
             ("src/factory.py", "changed\n", "working tree is dirty"),
             ("untracked.txt", "untracked\n", "working tree is dirty"),
+            ("ignored.tmp", "ignored\n", "working tree is dirty"),
             ("nested/.git", "gitdir: elsewhere\n", "nested Git worktree"),
             ("nested/.miller/vectors.db", "vectors", "product or benchmark artifact"),
             (".eros/cache.db", "cache", "product or benchmark artifact"),
@@ -703,6 +704,11 @@ class AgentContractTests(unittest.TestCase):
         self.assertEqual(1, task["$defs"]["evidenceAnchor"]["properties"]["line_start"]["minimum"])
         self.assertEqual(["answered", "not_found", "blocked"], answer["properties"]["status"]["enum"])
         self.assertEqual(8, answer["properties"]["evidence"]["maxItems"])
+        evidence = answer["properties"]["evidence"]["items"]
+        self.assertEqual(set(evidence["properties"]), set(evidence["required"]))
+        self.assertEqual(["string", "null"], evidence["properties"]["symbol"]["type"])
+        self.assertEqual(["integer", "null"], evidence["properties"]["line"]["type"])
+        self.assertNotIn("pattern", evidence["properties"]["path"])
         self.assertEqual(["miller", "julie"], run["properties"]["product"]["enum"])
         self.assertEqual(
             [

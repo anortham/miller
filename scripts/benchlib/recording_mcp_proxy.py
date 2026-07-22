@@ -48,12 +48,14 @@ class RecordingProxy:
         cwd: Path,
         max_calls: int,
         max_output_tokens: int,
+        product_environment: dict[str, str] | None = None,
     ) -> None:
         self._events = events
         self._command = command
         self._cwd = cwd
         self._max_calls = max_calls
         self._max_output_tokens = max_output_tokens
+        self._product_environment = dict(product_environment or {})
         self._state_lock = threading.Lock()
         self._stdout_lock = threading.Lock()
         self._stop = threading.Event()
@@ -77,6 +79,7 @@ class RecordingProxy:
         self._process = subprocess.Popen(
             self._command,
             cwd=self._cwd,
+            env={**os.environ, **self._product_environment},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -84,11 +87,13 @@ class RecordingProxy:
         )
         self._events.write("downstream_started", pid=self._process.pid, cwd=str(self._cwd), command=self._command)
         previous_handlers = self._install_signal_handlers()
-        threads = [
-            threading.Thread(target=self._pump_controller, name="mcp-controller", daemon=True),
-            threading.Thread(target=self._pump_product, name="mcp-product", daemon=True),
-            threading.Thread(target=self._pump_stderr, name="mcp-stderr", daemon=True),
-        ]
+        controller_thread = threading.Thread(
+            target=self._pump_controller, name="mcp-controller", daemon=True)
+        product_thread = threading.Thread(
+            target=self._pump_product, name="mcp-product", daemon=True)
+        stderr_thread = threading.Thread(
+            target=self._pump_stderr, name="mcp-stderr", daemon=True)
+        threads = [controller_thread, product_thread, stderr_thread]
         for thread in threads:
             thread.start()
 
@@ -114,8 +119,9 @@ class RecordingProxy:
                     break
                 time.sleep(0.01)
             returncode = self._wait_for_process()
-            for thread in threads:
-                thread.join(timeout=1)
+            product_thread.join()
+            stderr_thread.join()
+            controller_thread.join(timeout=1)
             self._events.write(
                 "downstream_exit",
                 returncode=returncode,
@@ -451,6 +457,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-calls", type=int, required=True)
     parser.add_argument("--max-output-tokens", type=int, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
+    parser.add_argument("--product-env", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:
@@ -459,6 +466,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("a product command is required after --")
     if args.max_calls < 1 or args.max_output_tokens < 1:
         parser.error("budgets must be positive")
+    product_environment: dict[str, str] = {}
+    for item in args.product_env:
+        if "=" not in item:
+            parser.error("--product-env must be NAME=VALUE")
+        name, value = item.split("=", 1)
+        if not name or name in product_environment or "\0" in value:
+            parser.error("--product-env names must be unique and non-empty")
+        product_environment[name] = value
+    args.product_environment = product_environment
     return args
 
 
@@ -472,6 +488,7 @@ def main() -> int:
             args.cwd,
             args.max_calls,
             args.max_output_tokens,
+            args.product_environment,
         ).run()
     finally:
         events.close()

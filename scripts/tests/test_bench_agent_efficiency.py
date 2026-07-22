@@ -123,6 +123,9 @@ def _runtime_identity(product: Path, snapshot_roots=None):
             "readiness": readiness,
             "binary_sha256": digest,
             "commit": "c" * 40,
+            "environment": {
+                "JULIE_HOME": str(product.parent / "isolated-julie-home"),
+            },
         }
     return {"schema_version": 1, "products": products}
 
@@ -168,15 +171,19 @@ class ScriptedCodexAgentRunner(CodexAgentRunner):
         _proxy_events(proxy)
         verification = VerificationResult(classification == "valid", () if classification == "valid" else ("failed",), ())
         failure_reason = None if classification == "valid" else "incorrect"
-        if classification == "harness_failure":
+        if classification in {"harness_failure", "product_failure"}:
             failure_reason = "product_error"
         return AgentRun(
-            outcome="completed" if classification != "harness_failure" else "failed",
+            outcome=(
+                "failed" if classification == "harness_failure"
+                else "timeout" if classification == "product_failure"
+                else "completed"
+            ),
             classification=classification,
             failure_reason=failure_reason,
             answer=(
                 StructuredAnswer(status="answered", answer="fixture answer", evidence=())
-                if classification != "harness_failure"
+                if classification not in {"harness_failure", "product_failure"}
                 else None
             ),
             verification=verification,
@@ -214,7 +221,7 @@ time.sleep(60)
 """,
             )
             with self.assertRaisesRegex(ValueError, "timed out"):
-                module._command_output((str(timeout_command), str(timeout_pid)), timeout=0.2)
+                module._command_output((str(timeout_command), str(timeout_pid)), timeout=2.0)
             timeout_child = int(timeout_pid.read_text(encoding="utf-8"))
 
             probe_pid = root / "probe-child.pid"
@@ -346,6 +353,45 @@ for line in sys.stdin:
         self.assertEqual(len(result.julie_rows), 1)
         self.assertEqual(resumed_runner.calls, [])
         self.assertEqual(resumed.miller_rows, result.miller_rows)
+
+    def test_product_timeout_is_scored_without_voiding_the_pair(self):
+        module = _load_module()
+        task = _task("dev-001")
+        runner = ScriptedCodexAgentRunner(
+            {
+                ("dev-001", "miller"): ["product_failure"],
+                ("dev-001", "julie"): ["product_failure"],
+            }
+        )
+        arms = {
+            "miller": AgentArm("miller", ("miller", "serve")),
+            "julie": AgentArm("julie", ("julie",)),
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = module.execute_paired_tasks(
+                tasks=(task,),
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=runner,
+                output_root=root / "raw",
+                seed=9,
+                identity_sha256="3" * 64,
+                void_ledger_path=root / "void-ledger.jsonl",
+            )
+
+            self.assertFalse((root / "void-ledger.jsonl").exists())
+
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(
+            (result.miller_rows[0]["completed"], result.miller_rows[0]["failure_reason"]),
+            (False, "product_error"),
+        )
+        self.assertEqual(
+            (result.julie_rows[0]["completed"], result.julie_rows[0]["failure_reason"]),
+            (False, "product_error"),
+        )
 
     def test_discordant_rerun_stops_after_a_pair_void(self):
         module = _load_module()
@@ -535,8 +581,12 @@ for line in sys.stdin:
             _write_executable(
                 product,
                 """import json
+import os
 import sys
 from pathlib import Path
+
+if not os.environ.get("JULIE_HOME"):
+    raise SystemExit("missing JULIE_HOME")
 
 if len(sys.argv) > 1 and sys.argv[1] == "version":
     print(f"{sys.argv[2]} 1.0.0")
@@ -602,11 +652,17 @@ for line in sys.stdin:
                 {"snapshot-001", "snapshot-002"},
             )
             self.assertIn("command_sha256", identity["products"]["miller"])
+            self.assertEqual(["JULIE_HOME"], identity["products"]["miller"]["environment_keys"])
+            self.assertIn("environment_sha256", identity["products"]["miller"])
+            self.assertNotIn(str(root / "isolated-julie-home"), json.dumps(identity))
             self.assertEqual(set(identity["inputs"]), {"task_manifest_sha256", "snapshot_manifest_sha256"})
             self.assertIn("environment_keys", identity)
-            self.assertNotIn("environment_keys", identity["products"]["miller"])
             self.assertEqual(identity["tokenizer"]["version"], "0.13.0")
-            probe = module._probe_mcp((str(product), "serve", "miller"), snapshot_root)
+            probe = module._probe_mcp(
+                (str(product), "serve", "miller"),
+                snapshot_root,
+                environment=runtime["products"]["miller"]["environment"],
+            )
             self.assertIn("tools_sha256", probe)
 
             with self.assertRaisesRegex(ValueError, "model identity"):

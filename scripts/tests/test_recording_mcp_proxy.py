@@ -28,8 +28,9 @@ def _proxy_command(
     product_args: list[str],
     max_calls: int = 8,
     max_output_tokens: int = 12000,
+    product_environment: dict[str, str] | None = None,
 ) -> list[str]:
-    return [
+    command = [
         sys.executable,
         str(PROXY),
         "--events",
@@ -42,6 +43,11 @@ def _proxy_command(
         str(max_output_tokens),
         "--cwd",
         str(cwd),
+    ]
+    for name, value in sorted((product_environment or {}).items()):
+        command.extend(("--product-env", f"{name}={value}"))
+    return [
+        *command,
         "--",
         sys.executable,
         str(FAKE_SERVER),
@@ -80,6 +86,27 @@ def _wait_for_process_exit(pid: int, timeout: float = 5) -> bool:
 
 
 class RecordingMcpProxyTests(unittest.TestCase):
+    def test_product_environment_is_passed_to_the_product_process(self) -> None:
+        request = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events = root / "events.jsonl"
+            environment_file = root / "environment.txt"
+            completed = subprocess.run(
+                _proxy_command(
+                    events,
+                    root,
+                    ["--env-file", str(environment_file)],
+                    product_environment={"JULIE_HOME": str(root / "julie-home")},
+                ),
+                input=request,
+                capture_output=True,
+                timeout=10,
+            )
+
+            self.assertEqual(0, completed.returncode, completed.stderr.decode())
+            self.assertEqual(str(root / "julie-home"), environment_file.read_text(encoding="utf-8"))
+
     def test_initialize_response_is_forwarded_byte_for_byte(self) -> None:
         request = b'{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{}}\n'
         response = b'{"jsonrpc":"2.0","id":"init-1","result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"},"instructions":"fake instructions"}}\n'

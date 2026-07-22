@@ -198,7 +198,11 @@ class AgentRunnerTests(unittest.TestCase):
 
             result = _runner(executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(
+                    product="miller",
+                    product_command=("miller", "serve"),
+                    product_environment=(("JULIE_HOME", "/private/bench/julie-home"),),
+                ),
                 snapshot,
                 output,
             )
@@ -233,9 +237,11 @@ class AgentRunnerTests(unittest.TestCase):
             configs = [argv[index + 1] for index, value in enumerate(argv[:-1]) if value == "-c"]
             self.assertIn('model_reasoning_effort="medium"', configs)
             self.assertIn('approval_policy="never"', configs)
+            self.assertIn('mcp_servers.benchmark.default_tools_approval_mode="approve"', configs)
             self.assertIn("mcp_servers.benchmark.required=true", configs)
             self.assertTrue(any(value.startswith("mcp_servers.benchmark.command=") for value in configs))
             self.assertTrue(any(value.startswith("mcp_servers.benchmark.args=") for value in configs))
+            self.assertTrue(any("--product-env" in value and "JULIE_HOME=" in value for value in configs))
             self.assertTrue(any(value.startswith("mcp_servers.benchmark.cwd=") for value in configs))
             self.assertIn("mcp_servers.benchmark.startup_timeout_sec=30", configs)
             self.assertIn("mcp_servers.benchmark.tool_timeout_sec=120", configs)
@@ -515,7 +521,7 @@ class AgentRunnerTests(unittest.TestCase):
             )
 
             self.assertEqual("timeout", result.outcome)
-            self.assertEqual("harness_failure", result.classification)
+            self.assertEqual("product_failure", result.classification)
             self.assertEqual(
                 ['{"type":"thread.started","thread_id":"partial"}'],
                 result.codex_events_path.read_text(encoding="utf-8").splitlines(),

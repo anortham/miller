@@ -125,6 +125,11 @@ class StructuredAnswer:
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> StructuredAnswer:
         _validate_value(value, "answer-schema.json")
+        for item in value["evidence"]:
+            path = item["path"]
+            relative = PurePosixPath(path)
+            if relative.is_absolute() or "\\" in path or ".." in relative.parts:
+                raise ValueError("answer-schema.json: evidence path does not match repo-relative path contract")
         return cls(
             status=value["status"],
             answer=value["answer"],
@@ -429,6 +434,8 @@ def _snapshot_facts(
                 ]
             )
         status = _run_git(resolved, *status_args)
+        if prepared and _has_ignored_untracked_source(resolved):
+            status = status or "ignored untracked source"
         if status:
             failures.append("snapshot: working tree is dirty")
         content_sha256 = _committed_content_sha256(resolved)
@@ -438,6 +445,17 @@ def _snapshot_facts(
         commit = ""
         content_sha256 = ""
     return commit, content_sha256, tuple(dict.fromkeys(failures))
+
+
+def _has_ignored_untracked_source(root: Path) -> bool:
+    ignored = _run_git_bytes(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+    for path_bytes in ignored.split(b"\0"):
+        if not path_bytes:
+            continue
+        path = PurePosixPath(os.fsdecode(path_bytes))
+        if not path.parts or path.parts[0] not in _PREPARED_ARTIFACT_DIRECTORIES:
+            return True
+    return False
 
 
 def _snapshot_structure_failures(

@@ -45,6 +45,14 @@ ALLOWED_FAILURE_REASONS = {
     "product_error",
     "invalid_answer",
 }
+ALLOWED_PRODUCT_ENVIRONMENT = frozenset(
+    {
+        "HOME",
+        "JULIE_EMBEDDING_CACHE_DIR",
+        "JULIE_HOME",
+        "MILLER_SEMANTIC",
+    }
+)
 
 
 class PairedExecution:
@@ -750,6 +758,7 @@ def preflight_run(
             "commit",
             "readiness_commands",
             "readiness",
+            "environment",
         }
         if set(spec) != expected_product_fields:
             raise ValueError(f"{product}: identity fields must be {sorted(expected_product_fields)}")
@@ -757,11 +766,23 @@ def preflight_run(
         if not isinstance(commit, str) or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None:
             raise ValueError(f"{product}: commit must be a full lowercase hexadecimal commit")
         command = _string_sequence(spec.get("command"), f"{product}.command")
+        environment_value = spec.get("environment")
+        if not isinstance(environment_value, dict) or any(
+            name not in ALLOWED_PRODUCT_ENVIRONMENT
+            or not isinstance(value, str)
+            or not value
+            or "\0" in value
+            for name, value in environment_value.items()
+        ):
+            raise ValueError(
+                f"{product}: environment must contain only {sorted(ALLOWED_PRODUCT_ENVIRONMENT)} with non-empty string values"
+            )
+        environment = tuple(sorted(environment_value.items()))
         executable = _resolve_executable(command[0])
         if _sha256(executable) != spec.get("binary_sha256"):
             raise ValueError(f"{product}: binary hash mismatch")
         version_command = _string_sequence(spec.get("version_command"), f"{product}.version_command")
-        version = _command_output(tuple(version_command)).strip()
+        version = _command_output(tuple(version_command), environment=environment_value).strip()
         if version != spec.get("version"):
             raise ValueError(f"{product}: version mismatch")
         readiness_commands = spec.get("readiness_commands")
@@ -780,7 +801,11 @@ def preflight_run(
                 readiness_commands[snapshot_id], f"{product}.readiness_commands.{snapshot_id}"
             )
             readiness = json.loads(
-                _command_output(tuple(readiness_command), cwd=agents[snapshot_id].root)
+                _command_output(
+                    tuple(readiness_command),
+                    cwd=agents[snapshot_id].root,
+                    environment=environment_value,
+                )
             )
             expected = expected_readiness[snapshot_id]
             if readiness != expected or not isinstance(readiness, dict) or readiness.get("ready") is not True:
@@ -791,7 +816,11 @@ def preflight_run(
             }
             if any(not isinstance(value, str) or not value for value in identity_values.values()):
                 raise ValueError(f"{product}: stale or incomplete readiness identity for {snapshot_id}")
-            mcp = _probe_mcp(tuple(command), agents[snapshot_id].root)
+            mcp = _probe_mcp(
+                tuple(command),
+                agents[snapshot_id].root,
+                environment=environment_value,
+            )
             safe_snapshot_identities[snapshot_id] = {
                 **{
                     f"{key}_sha256": hashlib.sha256(value.encode()).hexdigest()
@@ -800,12 +829,14 @@ def preflight_run(
                 "instructions_sha256": mcp["instructions_sha256"],
                 "tools_sha256": mcp["tools_sha256"],
             }
-        arms[product] = AgentArm(product, tuple(command))
+        arms[product] = AgentArm(product, tuple(command), environment)
         safe_products[product] = {
             "version": version,
             "binary_sha256": spec["binary_sha256"],
             "commit": commit,
             "command_sha256": _json_sha256(command),
+            "environment_keys": [name for name, _ in environment],
+            "environment_sha256": _json_sha256(environment_value),
             "snapshots": safe_snapshot_identities,
         }
 
@@ -844,7 +875,12 @@ def preflight_run(
     return safe, arms, agents
 
 
-def _probe_mcp(command: tuple[str, ...], cwd: Path, timeout: float = 10) -> dict[str, str]:
+def _probe_mcp(
+    command: tuple[str, ...],
+    cwd: Path,
+    timeout: float = 10,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     process_options: dict[str, Any] = {}
     if os.name == "nt":
         process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -853,6 +889,7 @@ def _probe_mcp(command: tuple[str, ...], cwd: Path, timeout: float = 10) -> dict
     process = subprocess.Popen(
         command,
         cwd=cwd,
+        env={**os.environ, **dict(environment or {})},
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -925,7 +962,12 @@ def _mcp_notify(process: subprocess.Popen[str], message: Mapping[str, Any]) -> N
     process.stdin.flush()
 
 
-def _command_output(command: tuple[str, ...], timeout: float = 10, cwd: Path | None = None) -> str:
+def _command_output(
+    command: tuple[str, ...],
+    timeout: float = 10,
+    cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> str:
     process_options: dict[str, Any] = {}
     if os.name == "nt":
         process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -934,6 +976,7 @@ def _command_output(command: tuple[str, ...], timeout: float = 10, cwd: Path | N
     process = subprocess.Popen(
         command,
         cwd=cwd,
+        env={**os.environ, **dict(environment or {})},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

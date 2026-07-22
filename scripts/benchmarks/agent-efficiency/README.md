@@ -16,6 +16,8 @@ Use dedicated prepared snapshot clones. Their committed source must remain immut
 uncommitted trees are ordinary top-level `.miller` and `.julie` directories containing the prepared product
 artifacts. Symlinks, nested Git metadata, any other dirty path, and any other product/benchmark artifact are
 rejected. Do not point the benchmark at an active Julie, `julie-semantic-sidecar`, or developer checkout.
+After preparing the artifacts, make each snapshot root non-writable while leaving its `.miller` and `.julie`
+directories writable. This prevents read-path refreshes from seeding `.julieignore` into the frozen source tree.
 
 ## Runtime identity file
 
@@ -35,6 +37,10 @@ not sit in the timed MCP path or alter either product's tools, instructions, or 
       "version": "miller 1.14.0",
       "binary_sha256": "<sha256>",
       "commit": "<commit>",
+      "environment": {
+        "HOME": "/opt/bench/product-home",
+        "MILLER_SEMANTIC": "on"
+      },
       "readiness_commands": {
         "snapshot-001": ["/opt/bench/miller-readiness-probe", "--json"]
       },
@@ -54,6 +60,11 @@ not sit in the timed MCP path or alter either product's tools, instructions, or 
       "version": "julie-server <version>",
       "binary_sha256": "<sha256>",
       "commit": "<commit>",
+      "environment": {
+        "HOME": "/opt/bench/product-home",
+        "JULIE_HOME": "/opt/bench/julie-home",
+        "JULIE_EMBEDDING_CACHE_DIR": "/opt/bench/julie-cache"
+      },
       "readiness_commands": {
         "snapshot-001": ["/opt/bench/julie-readiness-probe", "--json"]
       },
@@ -73,6 +84,8 @@ not sit in the timed MCP path or alter either product's tools, instructions, or 
 
 The exported identity manifest contains hashes of commands and workspace/index/vector/model identities, not
 their raw values or source roots.
+Product environments accept only `HOME`, `MILLER_SEMANTIC`, `JULIE_HOME`, and
+`JULIE_EMBEDDING_CACHE_DIR`; the safe manifest records their names and a hash of the exact values.
 Its top-level `environment_keys` comes directly from the concrete Codex runner's isolated child environment;
 the runtime identity file cannot supply or override that policy.
 

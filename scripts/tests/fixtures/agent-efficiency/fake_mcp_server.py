@@ -17,6 +17,7 @@ parser.add_argument("--received", type=Path)
 parser.add_argument("--mode", choices=["normal", "crash", "malformed", "hang"], default="normal")
 parser.add_argument("--pid-file", type=Path)
 parser.add_argument("--child-pid-file", type=Path)
+parser.add_argument("--env-file", type=Path)
 args = parser.parse_args()
 
 if args.pid_file:
@@ -24,6 +25,8 @@ if args.pid_file:
 if args.child_pid_file:
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     args.child_pid_file.write_text(str(child.pid), encoding="utf-8")
+if args.env_file:
+    args.env_file.write_text(os.environ.get("JULIE_HOME", "missing"), encoding="utf-8")
 if args.mode == "crash":
     sys.stderr.buffer.write(b"fake crash\n")
     sys.stderr.buffer.flush()

@@ -52,12 +52,18 @@ def isolated_environment_keys() -> tuple[str, ...]:
 class AgentArm:
     product: str
     product_command: tuple[str, ...]
+    product_environment: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.product not in {"miller", "julie"}:
             raise ValueError(f"unsupported product: {self.product}")
         if not self.product_command or any(not value for value in self.product_command):
             raise ValueError("product command must contain non-empty arguments")
+        names = [name for name, _ in self.product_environment]
+        if len(names) != len(set(names)) or any(not name or "=" in name for name in names):
+            raise ValueError("product environment names must be unique and non-empty")
+        if any("\0" in value for _, value in self.product_environment):
+            raise ValueError("product environment values cannot contain NUL")
 
 
 @dataclass(frozen=True)
@@ -274,15 +280,17 @@ class CodexAgentRunner:
             "12000",
             "--cwd",
             str(snapshot_root.resolve()),
-            "--",
-            *arm.product_command,
         ]
+        for name, value in arm.product_environment:
+            proxy_args.extend(("--product-env", f"{name}={value}"))
+        proxy_args.extend(("--", *arm.product_command))
         configs = [
             'model_reasoning_effort="medium"',
             'approval_policy="never"',
             f"mcp_servers.benchmark.command={_toml_value(self._proxy_command[0])}",
             f"mcp_servers.benchmark.args={_toml_value(proxy_args)}",
             f"mcp_servers.benchmark.cwd={_toml_value(str(working_dir))}",
+            'mcp_servers.benchmark.default_tools_approval_mode="approve"',
             "mcp_servers.benchmark.required=true",
             "mcp_servers.benchmark.startup_timeout_sec=30",
             "mcp_servers.benchmark.tool_timeout_sec=120",
@@ -532,6 +540,7 @@ def _classify_run(
     answer: StructuredAnswer | None = None
     if timed_out:
         outcome = "timeout"
+        classification = "product_failure"
     elif parsed.disallowed_item:
         outcome = "disallowed_tool"
         failure_reason = "disallowed_tool"
