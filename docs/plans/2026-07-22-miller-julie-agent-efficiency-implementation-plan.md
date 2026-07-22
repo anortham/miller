@@ -273,13 +273,13 @@ Commit mode for every task is `parallel-lead-commit`: workers hand verified diff
 **Approach:** Separate harness voids from product outcomes and rerun both arms only for voids. Never overwrite a completed run directory; resume only by recognizing complete hash-matching rows. Redact secrets and absolute source roots from aggregate/evidence manifests. Keep raw dev runs locally reviewable and raw sealed runs outside the repository.
 
 **Acceptance criteria:**
-- [ ] Preflight fails before Codex use on dirty/wrong snapshots, stale product indexes, hash/version mismatch, missing model/vector readiness, unavailable tokenizer, unsupported Codex version/model, or uninitializable product server.
-- [ ] Arm order is deterministic for a seed, balanced across tasks, and recorded without changing prompts.
-- [ ] Initial agreement emits one repetition per arm; initial disagreement emits exactly three per arm; harness voids rerun the whole pair and remain in the ledger.
-- [ ] Resume never duplicates or overwrites a complete hash-matching task/arm/repetition.
-- [ ] Scorer inputs contain only privacy-safe fields accepted by Task 3, and every artifact digest verifies.
-- [ ] The operator protocol requires 30 sealed tasks, five per class, five repo/language families, frozen identities, private raw data, automatic reruns, aggregate-only return, and spend-once handling.
-- [ ] Full Python integration tests and the full evaluator test project pass; the diff is handed to the lead without a worker commit.
+- [x] Preflight fails before Codex use on dirty/wrong snapshots, stale product indexes, hash/version mismatch, missing model/vector readiness, unavailable tokenizer, unsupported Codex version/model, or uninitializable product server.
+- [x] Arm order is deterministic for a seed, balanced across tasks, and recorded without changing prompts.
+- [x] Initial agreement emits one repetition per arm; initial disagreement emits exactly three per arm; harness voids rerun the whole pair and remain in the ledger.
+- [x] Resume never duplicates or overwrites a complete hash-matching task/arm/repetition.
+- [x] Scorer inputs contain only privacy-safe fields accepted by Task 3, and every artifact digest verifies.
+- [x] The operator protocol requires 30 sealed tasks, five per class, five repo/language families, frozen identities, private raw data, automatic reruns, aggregate-only return, and spend-once handling.
+- [x] Full Python integration tests and the full evaluator test project pass; the diff is handed to the lead without a worker commit.
 
 ### Task 6: Visible baseline and decision fork
 

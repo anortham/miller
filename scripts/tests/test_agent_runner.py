@@ -14,7 +14,7 @@ FIXTURES_ROOT = SCRIPTS_ROOT / "tests" / "fixtures" / "agent-efficiency"
 sys.path.insert(0, str(SCRIPTS_ROOT))
 
 from benchlib.agent_contract import SnapshotIdentity, load_task_manifest
-from benchlib.agent_runner import AgentArm, AgentSnapshot, CodexAgentRunner
+from benchlib.agent_runner import AgentArm, AgentSnapshot, CodexAgentRunner, isolated_environment_keys
 
 
 def _git(root: Path, *args: str) -> str:
@@ -246,6 +246,7 @@ class AgentRunnerTests(unittest.TestCase):
                 any(value.startswith("mcp_servers.benchmark.tool_timeout=") for value in configs)
             )
             manifest = json.loads(result.command_manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(list(isolated_environment_keys()), manifest["environment_keys"])
             self.assertNotIn("secret-auth-value", json.dumps(manifest))
             self.assertNotIn("config.toml", json.dumps(manifest))
             self.assertTrue(any(item["kind"] == "unknown_event" for item in result.diagnostics))

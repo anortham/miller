@@ -43,6 +43,11 @@ _ALLOWED_ENVIRONMENT = frozenset(
 _ALLOWED_ITEM_TYPES = frozenset({"agent_message", "reasoning", "plan", "plan_update"})
 
 
+def isolated_environment_keys() -> tuple[str, ...]:
+    inherited = {name for name in os.environ if name in _ALLOWED_ENVIRONMENT}
+    return tuple(sorted(inherited | {"CODEX_HOME", "HOME", "TMPDIR"}))
+
+
 @dataclass(frozen=True)
 class AgentArm:
     product: str
