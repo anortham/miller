@@ -1,0 +1,626 @@
+{
+  "k": 10,
+  "unit_policy": "cluster",
+  "query_count": 82,
+  "positive_query_count": 76,
+  "negative_query_count": 6,
+  "evaluation_unit_count": 48,
+  "search_mode_counts": {
+    "auto": 78,
+    "content": 4
+  },
+  "overall": {
+    "recall_at_k": 0.5364583333333331,
+    "ndcg_at_k": 0.5054243388365359,
+    "unit_count": 48,
+    "query_count": 76
+  },
+  "overall_per_query": {
+    "recall_at_k": 0.4440789473684211,
+    "ndcg_at_k": 0.39238668968734575,
+    "unit_count": 76,
+    "query_count": 76
+  },
+  "overall_cluster_max": {
+    "recall_at_k": 0.6197916666666666,
+    "ndcg_at_k": 0.5779734059748736,
+    "unit_count": 48,
+    "query_count": 76
+  },
+  "per_language": {
+    "csharp": {
+      "recall_at_k": 0.5606060606060607,
+      "ndcg_at_k": 0.53454627008976,
+      "unit_count": 22,
+      "query_count": 36
+    },
+    "rust": {
+      "recall_at_k": 0.5643939393939396,
+      "ndcg_at_k": 0.522743196462682,
+      "unit_count": 22,
+      "query_count": 36
+    },
+    "markdown": {
+      "recall_at_k": 0.25,
+      "ndcg_at_k": 0.25,
+      "unit_count": 4,
+      "query_count": 4
+    }
+  },
+  "per_language_per_query": {
+    "csharp": {
+      "recall_at_k": 0.4166666666666667,
+      "ndcg_at_k": 0.3706673405698819,
+      "unit_count": 36,
+      "query_count": 36
+    },
+    "rust": {
+      "recall_at_k": 0.4930555555555556,
+      "ndcg_at_k": 0.4299267821034036,
+      "unit_count": 36,
+      "query_count": 36
+    },
+    "markdown": {
+      "recall_at_k": 0.25,
+      "ndcg_at_k": 0.25,
+      "unit_count": 4,
+      "query_count": 4
+    }
+  },
+  "language_macro_average": {
+    "recall_at_k": 0.4583333333333334,
+    "ndcg_at_k": 0.4357631555174806,
+    "language_count": 3
+  },
+  "worst_language": {
+    "language": "markdown",
+    "recall_at_k": 0.25,
+    "ndcg_at_k": 0.25,
+    "unit_count": 4,
+    "query_count": 4
+  },
+  "per_query_class": {
+    "prose": {
+      "recall_at_k": 0.26595744680851063,
+      "ndcg_at_k": 0.18443161693210416,
+      "unit_count": 47,
+      "query_count": 47
+    },
+    "identifier": {
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "unit_count": 16,
+      "query_count": 16
+    },
+    "short_token": {
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.5,
+      "unit_count": 6,
+      "query_count": 6
+    },
+    "path": {
+      "recall_at_k": 0.375,
+      "ndcg_at_k": 0.3991174152453151,
+      "unit_count": 2,
+      "query_count": 2
+    },
+    "docs_like": {
+      "recall_at_k": 0.25,
+      "ndcg_at_k": 0.25,
+      "unit_count": 4,
+      "query_count": 4
+    },
+    "mixed": {
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.3548675899387485,
+      "unit_count": 1,
+      "query_count": 1
+    }
+  },
+  "per_intent_cluster": [
+    {
+      "intent_cluster": "julie/db-init-lock",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.20302997241929036
+    },
+    {
+      "intent_cluster": "julie/embedding-sidecar",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3748355252337961
+    },
+    {
+      "intent_cluster": "julie/file-watcher-queue",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 1,
+      "recall_at_k": 0.8333333333333334,
+      "ndcg_at_k": 0.656609404645863
+    },
+    {
+      "intent_cluster": "julie/root-safety",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.16666666666666666
+    },
+    {
+      "intent_cluster": "julie/search-scoring",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3333333333333333
+    },
+    {
+      "intent_cluster": "julie/search-tokenizer",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.21397628205130792
+    },
+    {
+      "intent_cluster": "julie/symbol-editing",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.040055732421506576
+    },
+    {
+      "intent_cluster": "miller/cli-vs-server-dispatch",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/full-rebuild-promotion",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/host-lifecycle-contract",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 1,
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.24308570484079695
+    },
+    {
+      "intent_cluster": "miller/search-ranking-parity",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/sensitive-root-guard",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.013780097881173813
+    },
+    {
+      "intent_cluster": "miller/single-writer-lock",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3935773014954859
+    },
+    {
+      "intent_cluster": "miller/version-aware-leadership",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.1415600550530561
+    }
+  ],
+  "units": [
+    {
+      "unit_id": "cluster:julie/db-init-lock",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.20302997241929036,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/embedding-sidecar",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3748355252337961,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/file-watcher-queue",
+      "language": "rust",
+      "recall_at_k": 0.8333333333333334,
+      "ndcg_at_k": 0.656609404645863,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/root-safety",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.16666666666666666,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/search-scoring",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3333333333333333,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/search-tokenizer",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.21397628205130792,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/symbol-editing",
+      "language": "rust",
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.040055732421506576,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/cli-vs-server-dispatch",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/full-rebuild-promotion",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/host-lifecycle-contract",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.24308570484079695,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/search-ranking-parity",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/sensitive-root-guard",
+      "language": "csharp",
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.013780097881173813,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/single-writer-lock",
+      "language": "csharp",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3935773014954859,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/version-aware-leadership",
+      "language": "csharp",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.1415600550530561,
+      "query_count": 3
+    },
+    {
+      "unit_id": "query:j-amb-1",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-amb-2",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-docs-1",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-docs-2",
+      "language": "markdown",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-1",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-2",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-3",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-4",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-5",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-6",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-7",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-8",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-neg-1",
+      "language": "rust",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.3267557676820653,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-path-1",
+      "language": "rust",
+      "recall_at_k": 0.25,
+      "ndcg_at_k": 0.18508763772517173,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-1",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-2",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-3",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-amb-1",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.3548675899387485,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-docs-1",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-docs-2",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-1",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-2",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-3",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-4",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-5",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-6",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-7",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-8",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-neg-1",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-neg-2",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-path-1",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.6131471927654584,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-1",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-2",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-3",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    }
+  ],
+  "intent_cluster_summary": {
+    "cluster_count": 14,
+    "cluster_hit_count": 11,
+    "cluster_hit_rate": 0.7857142857142857
+  },
+  "negatives": {
+    "count": 6,
+    "false_positive_count": 6,
+    "false_positive_rate": 1,
+    "pass_rate": 0
+  },
+  "missing_results": [],
+  "unknown_results": [],
+  "inputs": {
+    "queries": "/Users/murphy/source/miller/.worktrees/semantic-maturity-decision/eval/retrieval-eval/sets/dev/queries.jsonl",
+    "results": "/Users/murphy/source/miller/.worktrees/semantic-maturity-decision/eval/retrieval-eval/out/semantic-decision-baseline-2026-07-22/results-lexical.jsonl",
+    "corpus": {
+      "miller": "/tmp/miller-semantic-decision-OEatmG/miller",
+      "julie": "/tmp/miller-semantic-decision-OEatmG/julie"
+    }
+  },
+  "corpus_validation": {
+    "checked_doc_count": 38,
+    "missing_doc_count": 0,
+    "missing_docs": []
+  }
+}

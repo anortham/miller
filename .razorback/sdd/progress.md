@@ -207,3 +207,6 @@ Evaluator Task 2: complete (parallel-lead-commit, lead inline review clean — f
 Evaluator Task 3: complete (serial-worker-commit f0e346e0, lead inline privacy review found and closed path-like language subgroup leakage — aggregate-only task-score CLI, strict schema adapters, blinded protocol; worker evaluator 65/65, Python runner 4/4).
 Canary Task 2: complete (serial-worker-commit f5a818de, lead inline review clean — v2/v3 export and gate selection, strict source identity, warm bucket export, CLI decision shadow forwarding; worker owned tests 230/230, impacted 7/7, Release build 0W/0E).
 Canary Task 3: complete (serial-worker-commit 23e12a5c, lead inline review clean — fail-closed multi-export aggregation, exact-window dedupe, merge-before-statistics, screen-only bucket latency, privacy-safe CLI rendering; focused 207/207, Release build 0W/0E).
+
+Branch gate @ 26dc98d: Release build PASS 0W/0E; fast PASS 4551/0 (2 skip, 22s); live scale PASS 87/87 after pinned tool restore; evaluator PASS 66/66; Python runner PASS 4/4.
+Corrected visible replay: complete (clean pinned corpora, 82/82 each arm, zero missing/unknown, content modes 4; production recall 0.6892 vs lexical 0.5365, nDCG 0.6434 vs 0.5054, markdown 0.75 vs 0.25, zero rows 0 vs 3, identifier ranked lists exact; cold p95 782.215ms vs 195.558ms; negative FPR remains report-only 1.0).

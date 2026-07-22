@@ -57,6 +57,7 @@ One JSON object per line. Blank lines and `#` comment lines are skipped.
 | `query` | string | the literal text handed to the retrieval arm |
 | `intent_cluster` | string \| null | paraphrases of one intent share a cluster id; null for standalone queries |
 | `query_class` | enum | `identifier` \| `path` \| `short_token` \| `prose` \| `docs_like` \| `mixed` |
+| `search_mode` | enum | optional; `auto` by default, or `symbol` \| `file` \| `content` \| `source`; frozen identically across arms |
 | `repo` | string | selects the corpus root for doc resolution |
 | `language` | string | drives per-language macro-average and worst-language reporting |
 | `relevant` | array | `{"doc_id": string, "grade": 1..3}`; empty for negatives |
@@ -134,7 +135,7 @@ cluster unit to average over. Report labels must say so.
 ## Report shape
 
 `score` writes a JSON object with `k`, `unit_policy`, query counts, `evaluation_unit_count`, `overall`,
-`overall_per_query`, `overall_cluster_max`, `per_language`, `per_language_per_query`,
+`search_mode_counts`, `overall_per_query`, `overall_cluster_max`, `per_language`, `per_language_per_query`,
 `language_macro_average`, `worst_language`, `per_query_class`, `per_intent_cluster`,
 `intent_cluster_summary`, `negatives`, `missing_results`, `unknown_results`, `inputs`, and (when
 `--corpus` is given) `corpus_validation`.
@@ -151,7 +152,7 @@ The task manifest accepts exactly these fields:
 | --- | --- | --- |
 | `task_id` | string | unique opaque pairing key; never emitted |
 | `repo` | string | non-sensitive short repo label, never a path |
-| `language` | string | language-family label |
+| `language` | string | non-sensitive language-family label, never a path |
 | `query_profile` | enum | `identifier` \| `path` \| `short_token` \| `prose` \| `docs_like` \| `mixed` |
 
 Each baseline and candidate result file accepts exactly:

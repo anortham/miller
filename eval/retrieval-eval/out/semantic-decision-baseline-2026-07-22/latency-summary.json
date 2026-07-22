@@ -1,0 +1,9 @@
+{
+  "method": "one-shot CLI wall time; nearest-rank percentiles over 82 queries",
+  "authoritative_warm_gate": false,
+  "arms": [
+    { "arm": "lexical", "count": 82, "p50_ms": 160.991, "p95_ms": 195.558, "max_ms": 215.975 },
+    { "arm": "semantic", "count": 82, "p50_ms": 736.845, "p95_ms": 786.228, "max_ms": 805.562 },
+    { "arm": "production", "count": 82, "p50_ms": 742.583, "p95_ms": 782.215, "max_ms": 797.714 }
+  ]
+}

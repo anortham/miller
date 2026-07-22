@@ -188,10 +188,10 @@
 **Approach:** Reuse the production-readiness replay methodology and preserve raw machine-readable artifacts under the new output directory. Treat missing/unknown rows, identifier regression, or zero correct-mode markdown as hard failures. Record negative FPR and cold timing without using either to manufacture a semantic pass/fail.
 
 **Acceptance criteria:**
-- [ ] Corpus exclusions, commit SHAs, artifact identities, and zero missing reference checks are recorded.
-- [ ] All arms complete every query with no missing/unknown result rows and identical frozen modes.
-- [ ] Correct-mode markdown recall/nDCG is non-zero; otherwise broad promotion remains blocked and the escalation trigger is reported.
-- [ ] Identifier set/quality does not regress in production versus lexical.
-- [ ] Overall, per-language, cluster, semantic-contribution, cold timing, and negative diagnostics are recorded without being promoted to task-completion evidence.
-- [ ] No sealed file or aggregate is read, generated, or claimed.
-- [ ] Lead records the full verification ledger and commits the evidence with `serial-worker-commit`.
+- [x] Corpus exclusions, commit SHAs, artifact identities, and zero missing reference checks are recorded.
+- [x] All arms complete every query with no missing/unknown result rows and identical frozen modes.
+- [x] Correct-mode markdown recall/nDCG is non-zero; otherwise broad promotion remains blocked and the escalation trigger is reported.
+- [x] Identifier set/quality does not regress in production versus lexical.
+- [x] Overall, per-language, cluster, semantic-contribution, cold timing, and negative diagnostics are recorded without being promoted to task-completion evidence.
+- [x] No sealed file or aggregate is read, generated, or claimed.
+- [x] Lead records the full verification ledger and commits the evidence with `serial-worker-commit`.
