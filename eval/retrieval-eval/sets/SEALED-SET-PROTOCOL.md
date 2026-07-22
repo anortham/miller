@@ -1,4 +1,4 @@
-# Sealed acceptance set — protocol
+# Sealed retrieval acceptance set — protocol
 
 The dev set in `dev/` is visible: it is mined from known failure modes, read during development, and tuned
 against. That is exactly why it cannot certify anything. A retrieval configuration selected by repeatedly
@@ -7,6 +7,11 @@ optimized for.
 
 The **sealed acceptance set** exists to answer the one question the dev set no longer can: does this
 configuration work on queries the implementation lane never saw?
+
+This protocol is the secondary retrieval event. The primary offline semantic-value gate is the blinded paired
+task-completion event in [`SEALED-TASK-PROTOCOL.md`](SEALED-TASK-PROTOCOL.md). Keep their artifacts separate:
+retrieval queries and relevance labels never enter task-score inputs, and task prompts/checks never enter this
+retrieval harness.
 
 ## Ownership
 
@@ -49,8 +54,8 @@ Evaluation is an **event**, not a loop.
 2. **Request.** The lane asks the user to run an acceptance evaluation, supplying the frozen arm and the
    commit SHAs its dev results were produced at.
 3. **Run.** The user (or a process the user controls) runs the frozen arm over the sealed queries and scores
-   the results with this harness. The lane does not see the query file, the results file, or the per-query
-   rows of the report.
+   the results with this harness. Each query's `search_mode` is frozen before either arm runs and both arms use
+   that same mode. The lane does not see the query file, the results file, or the per-query rows of the report.
 4. **Return.** The user returns **aggregates only**: `overall`, `language_macro_average`, `worst_language`,
    `per_query_class` (including the identifier non-inferiority block), `intent_cluster_summary`, and
    `negatives`. Per-query rows, cluster names, and any query text stay sealed.

@@ -28,12 +28,22 @@ dotnet run --project eval/retrieval-eval -- validate \
   --queries eval/retrieval-eval/sets/dev/queries.jsonl \
   --corpus miller=/Users/murphy/source/miller \
   --corpus julie=/Users/murphy/source/julie
+
+# score a user-owned paired task-completion event
+dotnet run --project eval/retrieval-eval -- task-score \
+  --tasks /sealed/task-manifest.jsonl \
+  --baseline /sealed/baseline-results.jsonl \
+  --candidate /sealed/candidate-results.jsonl \
+  --out /sealed/task-aggregate.json
 ```
 
 `--k` defaults to 10. `--corpus` is optional for `score` (it adds a `corpus_validation` block) and takes
 either a bare directory (applies to every repo) or repeated `<repo>=<dir>` pairs for a multi-repo set.
 
 Exit codes: `0` ok, `1` usage/IO error, `2` validation failed.
+
+`task-score` exits `0` for every valid aggregate, including `fail` and `underpowered` verdicts. Missing
+arguments and file-system failures exit `1`; malformed, unsupported, duplicate, or mismatched rows exit `2`.
 
 Tests: `dotnet test eval/retrieval-eval/tests/RetrievalEval.Tests.csproj`.
 
@@ -129,6 +139,42 @@ cluster unit to average over. Report labels must say so.
 `intent_cluster_summary`, `negatives`, `missing_results`, `unknown_results`, `inputs`, and (when
 `--corpus` is given) `corpus_validation`.
 
+## Paired task-completion scoring
+
+Task completion is the primary offline value measure for the semantic maturity decision. It is separate from
+retrieval recall/nDCG: a user-controlled coordinator runs the same sealed task under both arms, then this pure
+scorer compares the paired outcomes without reading task prompts, acceptance checks, trajectories, or output.
+
+The task manifest accepts exactly these fields:
+
+| field | type | notes |
+| --- | --- | --- |
+| `task_id` | string | unique opaque pairing key; never emitted |
+| `repo` | string | non-sensitive short repo label, never a path |
+| `language` | string | language-family label |
+| `query_profile` | enum | `identifier` \| `path` \| `short_token` \| `prose` \| `docs_like` \| `mixed` |
+
+Each baseline and candidate result file accepts exactly:
+
+| field | type | notes |
+| --- | --- | --- |
+| `task_id` | string | must match the manifest exactly |
+| `completed` | bool | result of the pre-frozen acceptance check |
+| `duration_ms` | integer | nonnegative elapsed time |
+| `tool_calls` | integer | nonnegative total calls |
+| `search_calls` | integer | nonnegative and no greater than `tool_calls` |
+| `zero_result_search_calls` | integer | nonnegative and no greater than `search_calls` |
+
+The schema 1 output contains `inputs` (lowercase SHA-256 digests only), `pair_count`, the four completion
+cells, `primary_gate`, `identifier_path_safety`, aggregate arm diagnostics, and sufficiently populated
+repo/language/query-profile groups. It contains no task id, input path, prompt, check, trajectory, result text,
+or per-task row. Valid fail/underpowered reports are evidence, not process errors, so they still exit `0`.
+
+The primary gate requires at least 30 pairs and a two-sided 95% Wilson lower bound above 0.5 for candidate
+wins among discordant pairs. The identifier/path safety subset is underpowered below five pairs and fails on a
+baseline-only reversal. Groups below five pairs are suppressed. See
+[`sets/SEALED-TASK-PROTOCOL.md`](sets/SEALED-TASK-PROTOCOL.md) before creating or running a task event.
+
 ## Set-construction protocol
 
 1. **Pin the corpus first.** Record repo paths and full commit SHAs in `sets/dev/manifest.json` before
@@ -150,6 +196,8 @@ cluster unit to average over. Report labels must say so.
 - `sets/dev/` — the visible dev set (82 queries across miller + julie) and its manifest. Frozen for tuning.
 - `sets/SEALED-SET-PROTOCOL.md` — how the user-owned acceptance set is held and used. No sealed data lives in
   this repo.
+- `sets/SEALED-TASK-PROTOCOL.md` — how the user-owned blinded paired task event is frozen, run, and returned as
+  aggregates only.
 
 ## Consumers
 

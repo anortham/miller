@@ -157,12 +157,12 @@
 **Approach:** Reuse `Jsonl.ReadAll<T>` and the existing option parser. Hash inputs for reproducibility but omit their paths. The protocol names burn rules, arm-order randomization, safety subset, exact returned fields, and the rule that implementation agents may not diagnose from sealed rows.
 
 **Acceptance criteria:**
-- [ ] End-to-end fixtures produce the exact schema 1 aggregate and expected stdout/exit codes.
-- [ ] The JSON contains no task id, input path, prompt, check, trajectory, or per-task row.
-- [ ] Valid fail/underpowered verdicts still exit 0; malformed/mismatched inputs exit 2.
-- [ ] Protocol requires blinded order, clean snapshots, identical agent budgets/tools, at least 30 pairs, five repo/language families, aggregate-only return, and burn handling.
-- [ ] Existing `score` and `validate` commands retain their output and exit behavior.
-- [ ] Full evaluator and Python worker-scope verification pass and the change is committed with `serial-worker-commit` after lead integration of Batch A.
+- [x] End-to-end fixtures produce the exact schema 1 aggregate and expected stdout/exit codes.
+- [x] The JSON contains no task id, input path, prompt, check, trajectory, or per-task row.
+- [x] Valid fail/underpowered verdicts still exit 0; malformed/mismatched inputs exit 2.
+- [x] Protocol requires blinded order, clean snapshots, identical agent budgets/tools, at least 30 pairs, five repo/language families, aggregate-only return, and burn handling.
+- [x] Existing `score` and `validate` commands retain their output and exit behavior.
+- [x] Full evaluator and Python worker-scope verification pass and the change is committed with `serial-worker-commit` after lead integration of Batch A.
 
 ### Task 4: Corrected visible baseline replay
 

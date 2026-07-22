@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace RetrievalEval;
 
@@ -10,6 +12,8 @@ public static class Program
           score    --queries <queries.jsonl> --results <results.jsonl> --out <report.json>
                    [--corpus <dir> | --corpus <repo>=<dir> ...] [--k 10]
           validate --queries <queries.jsonl> [--corpus <dir> | --corpus <repo>=<dir> ...]
+          task-score --tasks <manifest.jsonl> --baseline <results.jsonl>
+                     --candidate <results.jsonl> --out <aggregate.json>
 
         --corpus with a bare directory applies to every repo; repeat `<repo>=<dir>` for a multi-repo set.
         Exit codes: 0 ok, 1 usage/IO error, 2 validation failed.
@@ -23,6 +27,7 @@ public static class Program
             {
                 "score" => RunScore(ParseOptions(args.Skip(1))),
                 "validate" => RunValidate(ParseOptions(args.Skip(1))),
+                "task-score" => RunTaskScore(ParseOptions(args.Skip(1))),
                 "--help" or "-h" or "help" => Ok(Usage),
                 _ => Fail($"unknown verb '{args[0]}'\n\n{Usage}"),
             };
@@ -94,9 +99,134 @@ public static class Program
         return 0;
     }
 
+    static int RunTaskScore(Options options)
+    {
+        var tasksPath = options.Require("tasks");
+        var baselinePath = options.Require("baseline");
+        var candidatePath = options.Require("candidate");
+        var outPath = options.Require("out");
+
+        try
+        {
+            var tasks = ReadTaskRows<TaskManifestRow>(tasksPath, "task manifest", TaskManifestFields);
+            var baseline = ReadTaskRows<TaskArmResult>(baselinePath, "baseline results", TaskResultFields);
+            var candidate = ReadTaskRows<TaskArmResult>(candidatePath, "candidate results", TaskResultFields);
+            if (tasks.Any(task => task.Repo.Contains('/') || task.Repo.Contains('\\')))
+                throw new InvalidOperationException("Task manifest repo must be a non-path label.");
+            var report = TaskCompletionScorer.Score(tasks, baseline, candidate);
+            var aggregate = TaskScoreAggregate.From(
+                report,
+                new TaskScoreInputs
+                {
+                    TasksSha256 = Sha256(tasksPath),
+                    BaselineSha256 = Sha256(baselinePath),
+                    CandidateSha256 = Sha256(candidatePath),
+                });
+
+            var directory = Path.GetDirectoryName(Path.GetFullPath(outPath));
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(outPath, JsonSerializer.Serialize(aggregate, Jsonl.Options));
+
+            Console.WriteLine($"pairs={report.PairCount}  primary={report.PrimaryGate.Verdict}  identifier/path={report.IdentifierPathSafety.Verdict}");
+            Console.WriteLine("aggregate written");
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+        {
+            return ValidationFail(ex.Message);
+        }
+    }
+
+    static List<T> ReadTaskRows<T>(string path, string label, IReadOnlySet<string> allowedFields)
+    {
+        var lineNumber = 0;
+        try
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                lineNumber++;
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('#')) continue;
+
+                using var document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException($"{label} row {lineNumber} must be a JSON object.");
+
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (!seen.Add(property.Name))
+                        throw new InvalidOperationException($"{label} row {lineNumber} contains duplicate field '{property.Name}'.");
+                    if (!allowedFields.Contains(property.Name))
+                        throw new InvalidOperationException($"{label} row {lineNumber} contains unsupported field '{property.Name}'.");
+                }
+            }
+
+            return Jsonl.ReadAll<T>(path);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidOperationException($"{label} input does not match its schema.", ex);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"{label} row {lineNumber} is not valid JSON.", ex);
+        }
+    }
+
+    static string Sha256(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
     static int Ok(string message) { Console.WriteLine(message); return 0; }
 
     static int Fail(string message) { Console.Error.WriteLine(message); return 1; }
+
+    static int ValidationFail(string message) { Console.Error.WriteLine($"validation failed: {message}"); return 2; }
+
+    static readonly IReadOnlySet<string> TaskManifestFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "task_id", "repo", "language", "query_profile",
+    };
+
+    static readonly IReadOnlySet<string> TaskResultFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "task_id", "completed", "duration_ms", "tool_calls", "search_calls", "zero_result_search_calls",
+    };
+
+    sealed record TaskScoreInputs
+    {
+        [JsonPropertyName("tasks_sha256")] public string TasksSha256 { get; init; } = "";
+        [JsonPropertyName("baseline_sha256")] public string BaselineSha256 { get; init; } = "";
+        [JsonPropertyName("candidate_sha256")] public string CandidateSha256 { get; init; } = "";
+    }
+
+    sealed record TaskScoreAggregate
+    {
+        [JsonPropertyName("schema")] public int Schema { get; init; }
+        [JsonPropertyName("inputs")] public TaskScoreInputs Inputs { get; init; } = new();
+        [JsonPropertyName("pair_count")] public int PairCount { get; init; }
+        [JsonPropertyName("completion")] public TaskCompletionCells Completion { get; init; } = new();
+        [JsonPropertyName("primary_gate")] public TaskCompletionGate PrimaryGate { get; init; } = new();
+        [JsonPropertyName("identifier_path_safety")] public TaskSafetyGate IdentifierPathSafety { get; init; } = new();
+        [JsonPropertyName("diagnostics")] public TaskArmDiagnostics Diagnostics { get; init; } = new();
+        [JsonPropertyName("by_repo")] public IReadOnlyDictionary<string, TaskSubgroupReport> ByRepo { get; init; } = new Dictionary<string, TaskSubgroupReport>();
+        [JsonPropertyName("by_language")] public IReadOnlyDictionary<string, TaskSubgroupReport> ByLanguage { get; init; } = new Dictionary<string, TaskSubgroupReport>();
+        [JsonPropertyName("by_query_profile")] public IReadOnlyDictionary<string, TaskSubgroupReport> ByQueryProfile { get; init; } = new Dictionary<string, TaskSubgroupReport>();
+
+        public static TaskScoreAggregate From(TaskCompletionReport report, TaskScoreInputs inputs) => new()
+        {
+            Schema = report.Schema,
+            Inputs = inputs,
+            PairCount = report.PairCount,
+            Completion = report.Completion,
+            PrimaryGate = report.PrimaryGate,
+            IdentifierPathSafety = report.IdentifierPathSafety,
+            Diagnostics = report.Diagnostics,
+            ByRepo = report.ByRepo,
+            ByLanguage = report.ByLanguage,
+            ByQueryProfile = report.ByQueryProfile,
+        };
+    }
 
     sealed class Options
     {
