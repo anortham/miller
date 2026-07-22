@@ -118,6 +118,10 @@ public static class Scorer
             PositiveQueryCount = positives.Count,
             NegativeQueryCount = negativeCount,
             EvaluationUnitCount = units.Count,
+            SearchModeCounts = queries
+                .GroupBy(q => q.SearchMode, StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal),
             Overall = AggregateUnits(units),
             OverallPerQuery = Aggregate(positives),
             OverallClusterMax = AggregateUnitsMax(units),

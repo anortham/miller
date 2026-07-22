@@ -99,6 +99,7 @@ public sealed record EvalReport
     [JsonPropertyName("positive_query_count")] public int PositiveQueryCount { get; init; }
     [JsonPropertyName("negative_query_count")] public int NegativeQueryCount { get; init; }
     [JsonPropertyName("evaluation_unit_count")] public int EvaluationUnitCount { get; init; }
+    [JsonPropertyName("search_mode_counts")] public IReadOnlyDictionary<string, int> SearchModeCounts { get; init; } = new Dictionary<string, int>();
     /// <summary>PRIMARY. Cluster-unit mean: each intent cluster is one unit scored as the mean over its members.</summary>
     [JsonPropertyName("overall")] public MetricBlock Overall { get; init; } = new();
     /// <summary>Secondary. Every positive query weighted equally, ignoring cluster membership.</summary>

@@ -58,6 +58,31 @@ public class ScorerTests
     }
 
     [Fact]
+    public void Search_mode_counts_record_all_frozen_query_routes_without_changing_metrics()
+    {
+        var auto = Positive("q1", "csharp", "identifier", ["a"]);
+        var content = Positive("q2", "markdown", "docs_like", ["b"]) with
+        {
+            SearchMode = SearchModes.Content,
+        };
+        var negative = Negative("n1") with { SearchMode = SearchModes.File };
+        var results = new[] { Ranked("q1", "a"), Ranked("q2", "b"), Ranked("n1") };
+
+        var report = Scorer.Score([auto, content, negative], results, k: 10);
+
+        Assert.Equal(1.0, report.Overall.RecallAtK, 1e-9);
+        Assert.Equal(1.0, report.Overall.NdcgAtK, 1e-9);
+        Assert.Equal(
+            new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                [SearchModes.Auto] = 1,
+                [SearchModes.Content] = 1,
+                [SearchModes.File] = 1,
+            },
+            report.SearchModeCounts);
+    }
+
+    [Fact]
     public void Per_language_macro_average_weights_languages_equally_not_queries()
     {
         var queries = new[]

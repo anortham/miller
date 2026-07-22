@@ -37,6 +37,8 @@ public static class QuerySetValidator
             if (string.IsNullOrWhiteSpace(query.Language)) problems.Add($"{id}: blank language");
             if (!QueryClasses.All.Contains(query.QueryClass))
                 problems.Add($"{id}: query_class '{query.QueryClass}' is not in the enum ({string.Join('|', QueryClasses.All)})");
+            if (!SearchModes.All.Contains(query.SearchMode, StringComparer.Ordinal))
+                problems.Add($"{id}: search_mode '{query.SearchMode}' is not in the enum ({string.Join('|', SearchModes.All)})");
 
             if (query.Negative)
             {

@@ -202,3 +202,5 @@ Task 6: complete (parallel-lead-commit, lead inline review clean, lead commit dd
 
 ## Semantic maturity decision execution
 Canary Task 1: complete (serial-worker-commit, lead inline review clean with CLI v3 shadow forwarding assigned to Task 2, commit bb26d4cd — decision activation, contract-3 stamping, 100% identifier shadow sampling; focused 117/117; Release server build 0W/0E).
+Evaluator Task 1: complete (parallel-lead-commit, lead inline review clean, commit 4e9cd3f — pure paired task scorer, Wilson lift gate, identifier/path safety, privacy-safe subgroup suppression; focused 23/23, worker evaluator suite 59/59, Release evaluator build 0W/0E).
+Evaluator Task 2: complete (parallel-lead-commit, lead inline review clean — frozen per-query search modes, correct content routing, report mode counts; evaluator 59/59, Python runner 4/4, prior production metrics unchanged).

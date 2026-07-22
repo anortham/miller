@@ -124,12 +124,12 @@
 **Approach:** Default in the model rather than in the runner, validate the enum before any arm executes, and pass `--mode <value>` unconditionally. The Python test mocks subprocess execution and asserts identical command routing across arms. Pin only the four known docs-like markdown rows to content; do not relabel relevance or alter other queries.
 
 **Acceptance criteria:**
-- [ ] Existing rows deserialize as `auto`; invalid modes fail validation.
-- [ ] The four docs-like markdown rows validate as `content` and the report records `content: 4`.
-- [ ] Every arm command contains the same query-row mode; randomized canary remains off and production remains unforced.
-- [ ] No public Miller JSON schema or production ranking behavior changes.
-- [ ] Existing retrieval metrics and identifier non-inferiority calculations remain unchanged for equivalent result files.
-- [ ] Worker-scope verification passes; hand the change to the lead with `parallel-lead-commit` (do not commit in the worker lane).
+- [x] Existing rows deserialize as `auto`; invalid modes fail validation.
+- [x] The four docs-like markdown rows validate as `content` and the report records `content: 4`.
+- [x] Every arm command contains the same query-row mode; randomized canary remains off and production remains unforced.
+- [x] No public Miller JSON schema or production ranking behavior changes.
+- [x] Existing retrieval metrics and identifier non-inferiority calculations remain unchanged for equivalent result files.
+- [x] Worker-scope verification passes; hand the change to the lead with `parallel-lead-commit` (do not commit in the worker lane).
 
 ### Task 3: Task-score CLI and sealed-task protocol
 

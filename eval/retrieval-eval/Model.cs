@@ -16,6 +16,7 @@ public sealed record EvalQuery
     [JsonPropertyName("query")] public string Query { get; init; } = "";
     [JsonPropertyName("intent_cluster")] public string? IntentCluster { get; init; }
     [JsonPropertyName("query_class")] public string QueryClass { get; init; } = "";
+    [JsonPropertyName("search_mode")] public string SearchMode { get; init; } = SearchModes.Auto;
     [JsonPropertyName("repo")] public string Repo { get; init; } = "";
     [JsonPropertyName("language")] public string Language { get; init; } = "";
     [JsonPropertyName("relevant")] public IReadOnlyList<RelevantDoc> Relevant { get; init; } = [];
@@ -35,4 +36,15 @@ public static class QueryClasses
 {
     public static readonly IReadOnlyList<string> All =
         ["identifier", "path", "short_token", "prose", "docs_like", "mixed"];
+}
+
+public static class SearchModes
+{
+    public const string Auto = "auto";
+    public const string Symbol = "symbol";
+    public const string File = "file";
+    public const string Content = "content";
+    public const string Source = "source";
+
+    public static readonly IReadOnlyList<string> All = [Auto, Symbol, File, Content, Source];
 }

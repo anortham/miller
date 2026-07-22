@@ -21,6 +21,57 @@ public class DevSetTests
     }
 
     [Fact]
+    public void Query_without_search_mode_deserializes_as_auto()
+    {
+        const string json = """
+            {"query_id":"q1","query":"find it","query_class":"prose","repo":"miller","language":"csharp","relevant":[{"doc_id":"a.cs","grade":3}],"negative":false}
+            """;
+
+        var query = JsonSerializer.Deserialize<EvalQuery>(json, Jsonl.Options);
+
+        Assert.Equal(SearchModes.Auto, query!.SearchMode);
+    }
+
+    [Fact]
+    public void Invalid_search_mode_fails_validation()
+    {
+        var query = new EvalQuery
+        {
+            QueryId = "q1",
+            Query = "find it",
+            QueryClass = "prose",
+            SearchMode = "docs",
+            Repo = "miller",
+            Language = "csharp",
+            Relevant = [new RelevantDoc { DocId = "a.cs", Grade = 3 }],
+        };
+        var minimums = new CompositionMinimums
+        {
+            TotalQueries = 0,
+            Repos = [],
+            IdentifierQueries = 0,
+            ShortTokenQueries = 0,
+            NegationOrAmbiguousQueries = 0,
+            Negatives = 0,
+        };
+
+        var problems = QuerySetValidator.Validate([query], minimums);
+
+        Assert.Contains("q1: search_mode 'docs' is not in the enum (auto|symbol|file|content|source)", problems);
+    }
+
+    [Fact]
+    public void Docs_like_rows_are_explicit_content_queries()
+    {
+        var queries = DevQueries();
+        var docsLike = queries.Where(query => query.QueryClass == "docs_like").ToList();
+
+        Assert.Equal(4, docsLike.Count);
+        Assert.All(docsLike, query => Assert.Equal(SearchModes.Content, query.SearchMode));
+        Assert.Equal(4, Scorer.Score(queries, [], k: 10).SearchModeCounts[SearchModes.Content]);
+    }
+
+    [Fact]
     public void Dev_set_covers_both_repos_and_more_than_one_language()
     {
         var queries = DevQueries();

@@ -3,8 +3,9 @@
 
 For every query, this invokes the real `miller search --json` against the query's repo root and
 writes retrieval-eval results JSONL. The default `production` arm uses normal routing, fusion, and
-encoder behavior with no forced arm. The explicit arms are intended for development evaluation.
-The sealed-acceptance protocol must use the default production arm.
+encoder behavior with no forced arm. The explicit arms are intended for development evaluation;
+semantic/hybrid labels use normal production routing for content and source because Miller exposes
+forced arms only for symbol routes. The sealed-acceptance protocol must use the production arm.
 
 Protocol hygiene: progress output names query_ids only. Query text goes to the miller subprocess
 argv and nowhere else; run this yourself for a sealed set — do not paste sealed queries anywhere.
@@ -39,6 +40,10 @@ import sys
 import time
 
 
+SEARCH_MODES = ("auto", "symbol", "file", "content", "source")
+FORCED_ARM_SEARCH_MODES = ("auto", "symbol", "file")
+
+
 def read_queries(path):
     queries = []
     with open(path, encoding="utf-8") as handle:
@@ -50,6 +55,12 @@ def read_queries(path):
             for field in ("query_id", "query", "repo"):
                 if field not in row:
                     sys.exit(f"{path}:{line_number}: query row missing '{field}'")
+            search_mode = row.setdefault("search_mode", "auto")
+            if search_mode not in SEARCH_MODES:
+                sys.exit(
+                    f"{path}:{line_number}: search_mode '{search_mode}' is not in the enum "
+                    f"({'|'.join(SEARCH_MODES)})"
+                )
             queries.append(row)
     ids = [q["query_id"] for q in queries]
     if len(ids) != len(set(ids)):
@@ -57,13 +68,24 @@ def read_queries(path):
     return queries
 
 
-def run_search(binary, root, query, limit, arm):
+def run_search(binary, root, query, search_mode, limit, arm):
     env = dict(os.environ)
     env["MILLER_SEMANTIC"] = "off" if arm == "lexical" else "on"
     env["MILLER_SEMANTIC_CANARY"] = "off"
     env.pop("MILLER_SEMANTIC_MODEL", None)
-    command = [binary, "search", query, "--json", "--workspace", root, "--limit", str(limit)]
-    if arm != "production":
+    command = [
+        binary,
+        "search",
+        query,
+        "--mode",
+        search_mode,
+        "--json",
+        "--workspace",
+        root,
+        "--limit",
+        str(limit),
+    ]
+    if arm != "production" and (arm == "lexical" or search_mode in FORCED_ARM_SEARCH_MODES):
         command.extend(["--arm", arm])
     started = time.perf_counter()
     completed = subprocess.run(
@@ -133,7 +155,13 @@ def main():
         for index, query in enumerate(queries, start=1):
             try:
                 rows, duration_ms = run_search(
-                    str(args.binary), roots[query["repo"]], query["query"], args.limit, args.arm)
+                    str(args.binary),
+                    roots[query["repo"]],
+                    query["query"],
+                    query["search_mode"],
+                    args.limit,
+                    args.arm,
+                )
             except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
                 sys.exit(f"[{index}/{len(queries)}] {query['query_id']}: {error}")
             out.write(json.dumps(
