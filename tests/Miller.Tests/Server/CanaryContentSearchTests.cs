@@ -1,7 +1,9 @@
 using System.Text.Json;
+using System.Reflection;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Xunit;
@@ -43,6 +45,47 @@ public sealed class CanaryContentSearchTests : IDisposable
     }
 
     [Fact]
+    public void NormalCliContentRoute_MatchesTheProductionContentArm()
+    {
+        MethodInfo? method = typeof(Miller.Server.Cli.CliDispatch).GetMethod(
+            "RunNormalContentRoute",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        ITextContentSearchIndex index = ContentIndex(
+            Docs("docs/a.md", 1, "alpha"),
+            Docs("docs/b.md", 2, "beta"),
+            Docs("docs/c.md", 3, "gamma"));
+        var cliArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)]);
+        var referenceArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)]);
+        SearchRoute route = SearchRoutePlanner.Plan("content", regions: null);
+        var request = new SearchRouteExecutionRequest(
+            ConceptualQuery,
+            Limit: 10,
+            Json: false,
+            ExcludeTests: null,
+            WorkspaceRoot: Root);
+
+        var outcome = Assert.IsType<SearchTool.ContentCanaryOutcome>(method.Invoke(null,
+        [
+            index, route, request, SemanticMode.On, CanaryMode.Off, TreatmentWorkspace, Root,
+            UtcDate, (Func<string>)(() => "ready"), cliArm,
+            (Func<ISemanticTextArm?>)(() => cliArm), null,
+        ]));
+        string expected = SearchTool.RunContentCorpus(
+            index,
+            ConceptualQuery,
+            10,
+            json: false,
+            out _,
+            out _,
+            rerank: SearchTool.BuildContentRerank(referenceArm, ConceptualQuery, Root));
+
+        Assert.Equal(expected, outcome.Result.Output);
+        Assert.Equal(SearchServingPolicy.Production, outcome.ServingPolicy);
+    }
+
+    [Fact]
     public void EligibleControlUnit_ServesLexicalByteIdenticalAndNeverConsultsTheArm()
     {
         ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"));
@@ -66,6 +109,26 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Equal(CanaryBackend.None, facts.Backend);
         Assert.Equal(CanaryEmbedWarmth.None, facts.EmbedWarmth);
         Assert.Equal(2, outcome.ResultPathHashes.Count);
+    }
+
+    [Fact]
+    public void EligibleSemanticShadow_ServesLexicalAndStampsNoHybridExperimentArm()
+    {
+        ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"));
+
+        SearchTool.ContentCanaryOutcome outcome = Run(
+            index,
+            ConceptualQuery,
+            TreatmentWorkspace,
+            treatmentArm: null,
+            semanticMode: SemanticMode.Shadow);
+
+        Assert.Equal(SearchServingPolicy.Shadow, outcome.ServingPolicy);
+        Assert.Equal(CanaryEligibility.Eligible, outcome.Facts!.Eligibility);
+        Assert.Equal(
+            SearchTool.RunContentCorpus(index, ConceptualQuery, 10, json: false, out _, out _),
+            outcome.Result.Output);
+        Assert.False(Stamp(outcome).TryGetProperty("canary_contract_version", out _));
     }
 
     [Fact]
@@ -116,6 +179,58 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Equal(0, outcome.Facts!.LexicalResultCount);
         Assert.Equal(1, outcome.Facts.SemanticResultCount);
         Assert.Equal(1, outcome.Facts.FusedResultCount);
+    }
+
+    [Fact]
+    public void SemanticOnlyServedPath_ReceivesContentReadFollowUpAttribution()
+    {
+        const string displayPath = "docs/semantic.md";
+        TextContentSearchHit semanticOnly = Docs(displayPath, 1, "semantic metadata snippet");
+        ITextContentSearchIndex index = new MaterializingContentIndex([], [semanticOnly]);
+        var arm = ContentArm(chunks: [Chunk(displayPath, 1, semanticOnly.ChunkId)], diagnostics: ServedDiagnostics());
+        SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
+        string telemetryDb = Path.Combine(_temp, "semantic-only-telemetry.db");
+        string symbolsDb = Path.Combine(_temp, ".miller", "symbols.db");
+        string sourcePath = Path.Combine(_temp, "semantic-source.md");
+        File.WriteAllText(sourcePath, "semantic metadata snippet");
+        var workspace = new WorkspaceContext(
+            _temp,
+            symbolsDb,
+            telemetryDb,
+            Path.Combine(_temp, "workspaces.db"),
+            Path.Combine(_temp, ".tools"),
+            TreatmentWorkspace);
+        var store = new ContentCorpusExternalStore();
+        ExternalContentImportResult imported = store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(symbolsDb), sourcePath, displayPath: displayPath);
+        var content = new ContentTool(workspace, store);
+
+        using (var ledger = TelemetryLedger.Open(telemetryDb, TreatmentWorkspace, _temp))
+        {
+            using (TelemetryScope search = ledger.Measure("search", "content"))
+            {
+                SearchTool.StampContentCanary(
+                    search,
+                    CanaryMode.On,
+                    outcome.Facts!,
+                    outcome.ResultPathHashes,
+                    outcome.ResultHashTruncated,
+                    outcome.ServingPolicy);
+                search.ResultCount = 1;
+                search.Outcome = TelemetryOutcome.Ok;
+            }
+
+            using TelemetryScope read = ledger.Measure("content", null);
+            string output = content.Content("read", source_id: imported.SourceId, line: 1, context_lines: 0);
+            Assert.Contains("semantic metadata snippet", output, StringComparison.Ordinal);
+        }
+
+        IReadOnlyList<CanaryRow> rows = CanaryLedgerReader.ReadCanaryRows(telemetryDb);
+        IReadOnlyList<CanaryFollowUp> followUps = CanaryLedgerReader.ReadFollowUps(telemetryDb);
+        IReadOnlySet<string> attributed = CanaryLedgerReader.AttributedRowIds(rows, followUps);
+
+        CanaryRow row = Assert.Single(rows);
+        Assert.Contains(row.Id, attributed);
     }
 
     [Fact]
@@ -179,6 +294,54 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Null(facts.SemanticResultCount);
         Assert.Null(facts.FusedResultCount);
         Assert.Null(facts.FusionProfile);
+    }
+
+    [Theory]
+    [InlineData(SemanticFallbackKind.VectorsMissing, "vectors_missing")]
+    [InlineData(SemanticFallbackKind.VectorsStale, "vectors_stale")]
+    [InlineData(SemanticFallbackKind.VectorsIncompatible, "vectors_incompatible")]
+    [InlineData(SemanticFallbackKind.VectorsBuilding, "vectors_building")]
+    [InlineData(SemanticFallbackKind.DiskBlocked, "disk_blocked")]
+    [InlineData(SemanticFallbackKind.EmbedTimeout, "embed_timeout")]
+    [InlineData(SemanticFallbackKind.CircuitOpen, "circuit_open")]
+    public void TypedVectorFallback_ReachesTheLedgerAndAggregateExportUnchanged(
+        SemanticFallbackKind fallbackKind,
+        string expectedReason)
+    {
+        ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"));
+        SearchTool.ContentCanaryOutcome outcome = Run(
+            index,
+            ConceptualQuery,
+            TreatmentWorkspace,
+            ContentArm(unavailable: "typed vector fallback", diagnostics: FallbackDiagnostics(fallbackKind)));
+        string telemetryDb = Path.Combine(_temp, $"fallback-{fallbackKind}.db");
+
+        using (var ledger = TelemetryLedger.Open(telemetryDb, TreatmentWorkspace, _temp))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                using TelemetryScope scope = ledger.Measure("search", "content");
+                SearchTool.StampContentCanary(
+                    scope,
+                    CanaryMode.On,
+                    outcome.Facts!,
+                    outcome.ResultPathHashes,
+                    outcome.ResultHashTruncated,
+                    outcome.ServingPolicy);
+                scope.ResultCount = 1;
+                scope.Outcome = TelemetryOutcome.Ok;
+            }
+        }
+
+        using JsonDocument export = JsonDocument.Parse(CanaryExport.BuildJson(
+            telemetryDb,
+            new DateOnly(2026, 1, 1),
+            new DateOnly(2026, 12, 31),
+            new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        JsonElement unit = Assert.Single(export.RootElement.GetProperty("units").EnumerateArray());
+
+        Assert.Equal(expectedReason, outcome.Facts!.FallbackReason);
+        Assert.Equal(5, unit.GetProperty("fallback_reason_counts").GetProperty(expectedReason).GetInt32());
     }
 
     [Fact]
@@ -268,13 +431,15 @@ public sealed class CanaryContentSearchTests : IDisposable
         CanaryMode mode = CanaryMode.On,
         bool semanticDisabled = false,
         string vectorState = "ready",
-        int limit = 10) =>
+        int limit = 10,
+        SemanticMode semanticMode = SemanticMode.On) =>
         SearchTool.RunContentWithCanary(
             index, query, limit, json: false, compactBanner: null, filePattern: null, language: null,
             suggestionLookup: null, productionRerank, mode, "content", semanticDisabled, workspaceId, Root, UtcDate,
             () => vectorState,
             crossWorkspaceNoGeneration: false,
-            treatmentArm is null ? null : () => treatmentArm);
+            treatmentArmFactory: treatmentArm is null ? null : () => treatmentArm,
+            semanticMode: semanticMode);
 
     private static int Bucket(string workspaceId) =>
         CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, UtcDate, CanaryQueryClass.DocsLike);
@@ -288,7 +453,12 @@ public sealed class CanaryContentSearchTests : IDisposable
             TelemetryLedger.Open(Path.Combine(_temp, "telemetry-" + Guid.NewGuid() + ".db"), "ws-content", _temp);
         using TelemetryScope scope = ledger.Measure("search", "content");
         SearchTool.StampContentCanary(
-            scope, CanaryMode.On, outcome.Facts!, outcome.ResultPathHashes, outcome.ResultHashTruncated);
+            scope,
+            CanaryMode.On,
+            outcome.Facts!,
+            outcome.ResultPathHashes,
+            outcome.ResultHashTruncated,
+            outcome.ServingPolicy);
         return JsonDocument.Parse(scope.MetadataJson).RootElement.Clone();
     }
 
@@ -323,8 +493,11 @@ public sealed class CanaryContentSearchTests : IDisposable
             FusionProfile: null);
 
     private static SemanticQueryDiagnostics BuildingDiagnostics() =>
+        FallbackDiagnostics(SemanticFallbackKind.VectorsBuilding);
+
+    private static SemanticQueryDiagnostics FallbackDiagnostics(SemanticFallbackKind fallbackKind) =>
         new(
-            SemanticFallbackKind.VectorsBuilding,
+            fallbackKind,
             CanaryBackend.None,
             ColdEmbed: false,
             EmbedMs: null,

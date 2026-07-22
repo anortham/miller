@@ -386,7 +386,12 @@ public sealed class SearchTool
                     scope.SetMetadata("search_backend", "content_disk");
                     if (canary.Facts is { } contentFacts)
                         StampContentCanary(
-                            scope, canaryMode, contentFacts, canary.ResultPathHashes, canary.ResultHashTruncated);
+                            scope,
+                            canaryMode,
+                            contentFacts,
+                            canary.ResultPathHashes,
+                            canary.ResultHashTruncated,
+                            canary.ServingPolicy);
                 }
             }
             else if (route.Kind == SearchRouteKind.TextContent)
@@ -510,7 +515,7 @@ public sealed class SearchTool
                         // rescue more often), so fold them into the served path hashes before stamping.
                         if (rescueServedPaths.Count > 0 && finalFacts.Eligibility == CanaryEligibility.Eligible)
                             finalFacts = finalFacts with { ResultCount = count, AdditionalServedPaths = rescueServedPaths };
-                        CanaryTelemetry.Stamp(scope, canaryMode, finalFacts);
+                        StampSymbolCanary(scope, canaryMode, finalFacts, canary.ServingPolicy);
                     }
                 }
             }
@@ -1952,14 +1957,28 @@ public sealed class SearchTool
         CanaryMode mode,
         CanaryCallFacts facts,
         IReadOnlyList<string> pathHashes,
-        bool truncated)
+        bool truncated,
+        SearchServingPolicy servingPolicy)
     {
+        if (servingPolicy == SearchServingPolicy.Shadow)
+            return;
+
         CanaryTelemetry.Stamp(scope, mode, facts);
         if (pathHashes.Count == 0)
             return;
 
         scope.SetMetadata("canary_result_path_hashes", pathHashes);
         scope.SetMetadata("canary_result_hash_truncated", truncated);
+    }
+
+    internal static void StampSymbolCanary(
+        TelemetryScope scope,
+        CanaryMode mode,
+        CanaryCallFacts facts,
+        SearchServingPolicy servingPolicy)
+    {
+        if (servingPolicy != SearchServingPolicy.Shadow)
+            CanaryTelemetry.Stamp(scope, mode, facts);
     }
 
     /// <summary>

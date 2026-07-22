@@ -122,6 +122,9 @@ public sealed class CanarySearchTests : IDisposable
         Assert.Equal(SearchServingPolicy.Shadow, outcome.ServingPolicy);
         Assert.False(treatmentConstructed);
         Assert.Equal(SearchRouteExecutor.RunSymbols(index, SymbolRoute, request).Output, outcome.Result.Output);
+
+        JsonElement metadata = Stamp(outcome.Facts, outcome.ServingPolicy);
+        Assert.False(metadata.TryGetProperty("canary_contract_version", out _));
     }
 
     [Fact]
@@ -406,12 +409,14 @@ public sealed class CanarySearchTests : IDisposable
         ServedResults = [new CanaryServedResult("Save", "src/Miller.Server/Telemetry/LedgerWriter.cs", "LedgerWriter.Save")],
     });
 
-    private JsonElement Stamp(CanaryCallFacts facts)
+    private JsonElement Stamp(
+        CanaryCallFacts facts,
+        SearchServingPolicy servingPolicy = SearchServingPolicy.Lexical)
     {
         using TelemetryLedger ledger =
             TelemetryLedger.Open(Path.Combine(_temp, "telemetry-" + Guid.NewGuid() + ".db"), "ws-canary", _temp);
         using TelemetryScope scope = ledger.Measure("search", "auto");
-        CanaryTelemetry.Stamp(scope, CanaryMode.On, facts);
+        SearchTool.StampSymbolCanary(scope, CanaryMode.On, facts, servingPolicy);
         return JsonDocument.Parse(scope.MetadataJson).RootElement.Clone();
     }
 

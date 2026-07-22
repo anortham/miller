@@ -16,7 +16,7 @@ namespace Miller.Server.Telemetry;
 /// </summary>
 public static class CanaryExport
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private static readonly IReadOnlyList<string> LatencyOrder =
         [.. CanaryGateMath.LatencyLadder, CanaryLatencyBucket.None];
@@ -43,7 +43,7 @@ public static class CanaryExport
         foreach (var group in windowed
             .Where(r => r.ExperimentId == CanaryAssignment.HybridExperimentId
                 && r.Arm is CanaryArm.Control or CanaryArm.Treatment)
-            .GroupBy(r => (r.WorkspaceId, r.UtcDate, r.QueryClass)))
+            .GroupBy(AnalysisUnitKey.From))
         {
             List<CanaryRow> rows = [.. group];
             if (rows.Count < 5)
@@ -51,13 +51,13 @@ public static class CanaryExport
                 suppressed++;
                 continue;
             }
-            units.Add(BuildExperimentUnit(rows, attributed));
+            units.Add(BuildExperimentUnit(rows, attributed, group.Key));
         }
 
         var shadowUnits = new List<ShadowUnit>();
         foreach (var group in windowed
             .Where(r => r.ExperimentId == CanaryAssignment.IdentifierExperimentId && r.Arm == CanaryArm.Shadow)
-            .GroupBy(r => (r.WorkspaceId, r.UtcDate, r.QueryClass)))
+            .GroupBy(AnalysisUnitKey.From))
         {
             List<CanaryRow> rows = [.. group];
             if (rows.Count < 5)
@@ -65,7 +65,7 @@ public static class CanaryExport
                 suppressed++;
                 continue;
             }
-            shadowUnits.Add(BuildShadowUnit(rows));
+            shadowUnits.Add(BuildShadowUnit(rows, group.Key));
         }
 
         units.Sort(static (x, y) => CompareUnitOrder(x.UtcDate, x.QueryClass, x.UnitId, y.UtcDate, y.QueryClass, y.UnitId));
@@ -74,10 +74,13 @@ public static class CanaryExport
         return Render(from, to, generatedAt, suppressed, units, shadowUnits);
     }
 
-    private static ExperimentUnit BuildExperimentUnit(List<CanaryRow> rows, IReadOnlySet<string> attributed)
+    private static ExperimentUnit BuildExperimentUnit(
+        List<CanaryRow> rows,
+        IReadOnlySet<string> attributed,
+        AnalysisUnitKey key)
     {
         CanaryRow first = rows[0];
-        string unitId = UnitId(first.ExperimentId!, first.WorkspaceId!, first.UtcDate, first.QueryClass!);
+        string unitId = UnitId(first.ExperimentId!, key);
 
         return new ExperimentUnit(
             UnitId: unitId,
@@ -91,12 +94,12 @@ public static class CanaryExport
             ErrorCalls: rows.Count(r => r.Outcome == "error"),
             AttributedSuccessCalls: rows.Count(r => r.Outcome == "ok" && r.ResultCount > 0 && attributed.Contains(r.Id)),
             SemanticContributionCalls: rows.Count(r => r.SemanticContributionCount.GetValueOrDefault() > 0),
-            EncoderFingerprint: FirstNonNull(rows, r => r.EncoderFingerprint),
-            StorageSchema: FirstNonNull(rows, r => r.StorageSchema),
-            CorpusGeneration: FirstNonNull(rows, r => r.CorpusGeneration),
-            FusionProfile: FirstNonNull(rows, r => r.FusionProfile),
-            PolicyVersion: first.PolicyVersion ?? 0,
-            MillerVersions: [.. rows.Select(r => r.MillerVersion).Where(v => v is not null).Distinct().OrderBy(v => v, StringComparer.Ordinal)!],
+            MillerVersion: key.MillerVersion,
+            EncoderFingerprint: key.EncoderFingerprint,
+            StorageSchema: key.StorageSchema,
+            CorpusGeneration: key.CorpusGeneration,
+            FusionProfile: key.FusionProfile,
+            PolicyVersion: key.PolicyVersion,
             FallbackReasonCounts: Counts(rows, r => r.FallbackReason),
             RescueKindCounts: Counts(rows, r => r.RescueKind),
             BackendCounts: Counts(rows, r => r.Backend),
@@ -106,15 +109,21 @@ public static class CanaryExport
             TotalLatencyBucketCounts: Counts(rows, r => CanaryLatencyBucket.For(r.DurationMs)));
     }
 
-    private static ShadowUnit BuildShadowUnit(List<CanaryRow> rows)
+    private static ShadowUnit BuildShadowUnit(List<CanaryRow> rows, AnalysisUnitKey key)
     {
         CanaryRow first = rows[0];
-        string unitId = UnitId(first.ExperimentId!, first.WorkspaceId!, first.UtcDate, first.QueryClass!);
+        string unitId = UnitId(first.ExperimentId!, key);
 
         return new ShadowUnit(
             UnitId: unitId,
             UtcDate: first.UtcDate,
             QueryClass: first.QueryClass!,
+            MillerVersion: key.MillerVersion,
+            EncoderFingerprint: key.EncoderFingerprint,
+            StorageSchema: key.StorageSchema,
+            CorpusGeneration: key.CorpusGeneration,
+            FusionProfile: key.FusionProfile,
+            PolicyVersion: key.PolicyVersion,
             Calls: rows.Count,
             ShadowStatusCounts: Counts(rows, r => r.ShadowStatus),
             Top1ChangedCalls: rows.Count(r => r.ShadowTop1Changed == true),
@@ -171,15 +180,12 @@ public static class CanaryExport
         w.WriteNumber("error_calls", unit.ErrorCalls);
         w.WriteNumber("attributed_success_calls", unit.AttributedSuccessCalls);
         w.WriteNumber("semantic_contribution_calls", unit.SemanticContributionCalls);
-        WriteOptionalString(w, "encoder_fingerprint", unit.EncoderFingerprint);
-        WriteOptionalString(w, "storage_schema", unit.StorageSchema);
-        WriteOptionalString(w, "corpus_generation", unit.CorpusGeneration);
-        WriteOptionalString(w, "fusion_profile", unit.FusionProfile);
-        w.WriteNumber("policy_version", unit.PolicyVersion);
-        w.WriteStartArray("miller_versions");
-        foreach (string version in unit.MillerVersions)
-            w.WriteStringValue(version);
-        w.WriteEndArray();
+        WriteNullableString(w, "miller_version", unit.MillerVersion);
+        WriteNullableString(w, "encoder_fingerprint", unit.EncoderFingerprint);
+        WriteNullableString(w, "storage_schema", unit.StorageSchema);
+        WriteNullableString(w, "corpus_generation", unit.CorpusGeneration);
+        WriteNullableString(w, "fusion_profile", unit.FusionProfile);
+        WriteNullableNumber(w, "policy_version", unit.PolicyVersion);
         WriteCountMap(w, "fallback_reason_counts", unit.FallbackReasonCounts, CanaryFallbackReason.All);
         WriteCountMap(w, "rescue_kind_counts", unit.RescueKindCounts, CanaryRescueKind.All);
         WriteCountMap(w, "backend_counts", unit.BackendCounts, CanaryBackend.All);
@@ -196,6 +202,12 @@ public static class CanaryExport
         w.WriteString("unit_id", unit.UnitId);
         w.WriteString("utc_date", unit.UtcDate);
         w.WriteString("query_class", unit.QueryClass);
+        WriteNullableString(w, "miller_version", unit.MillerVersion);
+        WriteNullableString(w, "encoder_fingerprint", unit.EncoderFingerprint);
+        WriteNullableString(w, "storage_schema", unit.StorageSchema);
+        WriteNullableString(w, "corpus_generation", unit.CorpusGeneration);
+        WriteNullableString(w, "fusion_profile", unit.FusionProfile);
+        WriteNullableNumber(w, "policy_version", unit.PolicyVersion);
         w.WriteNumber("calls", unit.Calls);
         WriteCountMap(w, "shadow_status_counts", unit.ShadowStatusCounts, CanaryShadowStatus.All);
         w.WriteNumber("top1_changed_calls", unit.Top1ChangedCalls);
@@ -228,10 +240,20 @@ public static class CanaryExport
         w.WriteEndObject();
     }
 
-    private static void WriteOptionalString(Utf8JsonWriter w, string name, string? value)
+    private static void WriteNullableString(Utf8JsonWriter w, string name, string? value)
     {
-        if (value is not null)
+        if (value is null)
+            w.WriteNull(name);
+        else
             w.WriteString(name, value);
+    }
+
+    private static void WriteNullableNumber(Utf8JsonWriter w, string name, int? value)
+    {
+        if (value is null)
+            w.WriteNull(name);
+        else
+            w.WriteNumber(name, value.Value);
     }
 
     private static Dictionary<string, int> Counts(IReadOnlyList<CanaryRow> rows, Func<CanaryRow, string?> selector)
@@ -256,16 +278,6 @@ public static class CanaryExport
         return histogram;
     }
 
-    private static string? FirstNonNull(IReadOnlyList<CanaryRow> rows, Func<CanaryRow, string?> selector)
-    {
-        foreach (CanaryRow row in rows)
-        {
-            if (selector(row) is { } value)
-                return value;
-        }
-        return null;
-    }
-
     private static int CompareUnitOrder(
         string dateX, string classX, string idX, string dateY, string classY, string idY)
     {
@@ -276,11 +288,53 @@ public static class CanaryExport
         return byClass != 0 ? byClass : string.CompareOrdinal(idX, idY);
     }
 
-    private static string UnitId(string experimentId, string workspaceId, string utcDate, string queryClass)
+    private static string UnitId(string experimentId, AnalysisUnitKey key)
     {
-        string key = $"{experimentId}|{CanaryAssignment.AssignmentVersion}|{workspaceId}|{utcDate}|{queryClass}";
-        string digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        string material = string.Concat(
+            Part(experimentId),
+            Part(CanaryAssignment.AssignmentVersion.ToString(CultureInfo.InvariantCulture)),
+            Part(key.WorkspaceId),
+            Part(key.UtcDate),
+            Part(key.QueryClass),
+            Part(key.Arm),
+            Part(key.Bucket?.ToString(CultureInfo.InvariantCulture)),
+            Part(key.MillerVersion),
+            Part(key.EncoderFingerprint),
+            Part(key.StorageSchema),
+            Part(key.CorpusGeneration),
+            Part(key.FusionProfile),
+            Part(key.PolicyVersion?.ToString(CultureInfo.InvariantCulture)));
+        string digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
         return digest[..12];
+    }
+
+    private static string Part(string? value) => value is null ? "-1:" : $"{value.Length}:{value}";
+
+    private sealed record AnalysisUnitKey(
+        string? WorkspaceId,
+        string UtcDate,
+        string? QueryClass,
+        string? Arm,
+        int? Bucket,
+        string? MillerVersion,
+        string? EncoderFingerprint,
+        string? StorageSchema,
+        string? CorpusGeneration,
+        string? FusionProfile,
+        int? PolicyVersion)
+    {
+        public static AnalysisUnitKey From(CanaryRow row) => new(
+            row.WorkspaceId,
+            row.UtcDate,
+            row.QueryClass,
+            row.Arm,
+            row.Bucket,
+            row.MillerVersion,
+            row.EncoderFingerprint,
+            row.StorageSchema,
+            row.CorpusGeneration,
+            row.FusionProfile,
+            row.PolicyVersion);
     }
 
     private sealed record ExperimentUnit(
@@ -295,12 +349,12 @@ public static class CanaryExport
         int ErrorCalls,
         int AttributedSuccessCalls,
         int SemanticContributionCalls,
+        string? MillerVersion,
         string? EncoderFingerprint,
         string? StorageSchema,
         string? CorpusGeneration,
         string? FusionProfile,
-        int PolicyVersion,
-        IReadOnlyList<string> MillerVersions,
+        int? PolicyVersion,
         IReadOnlyDictionary<string, int> FallbackReasonCounts,
         IReadOnlyDictionary<string, int> RescueKindCounts,
         IReadOnlyDictionary<string, int> BackendCounts,
@@ -313,6 +367,12 @@ public static class CanaryExport
         string UnitId,
         string UtcDate,
         string QueryClass,
+        string? MillerVersion,
+        string? EncoderFingerprint,
+        string? StorageSchema,
+        string? CorpusGeneration,
+        string? FusionProfile,
+        int? PolicyVersion,
         int Calls,
         IReadOnlyDictionary<string, int> ShadowStatusCounts,
         int Top1ChangedCalls,

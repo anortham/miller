@@ -59,9 +59,14 @@ Existing columns the canary **reads and reuses** (it writes none of them special
 
 - `off` — no assignment is computed, no `canary_*` key is written, no shadow arm executes, zero added
   latency. Absence of `canary_arm` in `metadata_json` is the definitive "not in the experiment" signal.
-- `on` — assignment runs for every call on an instrumented surface. `on` requires `MILLER_SEMANTIC` to be
-  `shadow` or `on`; with `MILLER_SEMANTIC=off` the canary flag is inert (design §3 makes `off` a permanent
-  zero-side-effect guarantee, and that outranks this flag).
+- `on` — under `MILLER_SEMANTIC=on`, assignment and hybrid row stamping run for every call on an instrumented
+  surface. Under `MILLER_SEMANTIC=shadow`, only the sampled identifier-shadow population is stamped. With
+  `MILLER_SEMANTIC=off` the canary flag is inert (design §3 makes `off` a permanent zero-side-effect guarantee,
+  and that outranks this flag).
+
+`MILLER_SEMANTIC=shadow` is non-serving. It may exercise vector readiness and the identifier shadow
+population, but it writes no hybrid control/treatment arm evidence because every served result remains
+lexical. Causal success-rate and warm-latency evidence is written only under `MILLER_SEMANTIC=on`.
 
 `0` aliases `off`; `1` aliases `on`. Any other value is treated as `off` and logged once at startup.
 
@@ -385,7 +390,9 @@ returned results nobody looked at is not a success.
 **The gate** (design §9.1, §11): per assignment unit, compute the success rate over that unit's eligible
 calls; compare the distribution of per-unit rates between `control` and `treatment` units; the gate
 passes on a positive treatment effect whose confidence interval excludes zero, with no >20% p95
-warm-latency regression on eligible queries (warm rows only, per `canary_embed_warmth`).
+warm-latency regression on eligible queries (warm rows only, per `canary_embed_warmth`), and with the
+identifier non-inferiority clause passing. Every clause must pass; underpowered and indeterminate are not
+passes.
 
 ### Where each clause is computed (load-bearing)
 
@@ -396,7 +403,7 @@ The gate has two computation surfaces and they are not interchangeable:
   `canary_*` metadata, and the served-result hashes needed for attribution. Every clause below is defined
   over these rows, and a clause's stated value is the local value.
 - **Export (approximation).** `miller telemetry canary --json` (§ Aggregate Export) carries per-unit
-  counters only. It can *approximate* both clauses — success rates exactly, latency only at bucket
+  counters only. It can *approximate* both causal clauses — success rates exactly, latency only at bucket
   resolution — and a pooled multi-operator read is by construction an approximation of the local gates it
   aggregates. Where the two disagree, the local computation is authoritative and the disagreement is
   reported, not silently resolved.
@@ -451,8 +458,9 @@ These are part of the frozen contract. An analysis that changes one of them is n
 | Identifier non-inferiority population | shadow rows with `canary_shadow_status = ok`, grouped into shadow units `(workspace_id, utc_date, identifier)`, same 5-call floor | Judgment call (population was previously unstated) |
 | Identifier non-inferiority margins | per-unit `top1_changed` rate: **95% t-interval upper bound ≤ 0.05**; per-unit mean `overlap_at_10`: 95% t-interval lower bound **≥ 8.0**; minimum **30** shadow units | Judgment call. These are the *field-telemetry* margins over shadow rows; the sealed-set retrieval bar remains the eval protocol's (§ Shadow Population) and the two are reported separately, never merged |
 
-Cohort rule: all of the above are computed within one exact `miller_version` set and one
-`canary_contract_version`. Rows outside the set are excluded before any statistic is computed.
+Cohort rule: all local clauses are computed within one exact `miller_version` set and one
+`canary_contract_version`. Rows outside the set are excluded before any statistic is computed. The aggregate
+export applies the stricter semantic-identity partition defined below before suppression or aggregation.
 
 ## Field Reference
 
@@ -464,11 +472,11 @@ condition does not hold is **absent**, never a fabricated zero or empty string.
 | `canary_contract_version` | int | `1` | Every row with any `canary_*` key | Constant. |
 | `canary_experiment_id` | enum string | see `experiment_id` | Every canary/shadow row | Fixed literal. |
 | `canary_assignment_version` | int | `1` | Every canary/shadow row | Constant. |
-| `canary_arm` | enum string | see `arm` | Every row while the canary is `on` | 4-value enum. |
+| `canary_arm` | enum string | see `arm` | Every instrumented row under semantic `on`; sampled identifier-shadow rows under semantic `shadow` | 4-value enum. |
 | `canary_bucket` | int | `0`–`99` | `arm` ∈ {`control`,`treatment`,`shadow`} | Integer derived from a digest of already-persisted, non-sensitive components. |
-| `canary_query_class` | enum string | see `query_class` | Every row while the canary is `on` | 6-value enum computed from the query; the query itself is discarded. Six buckets cannot reconstruct text. |
-| `canary_eligibility` | enum string | see `eligibility` | Every row while the canary is `on` | 9-value enum. |
-| `canary_policy_version` | int | `SemanticQueryPolicy` version | Every row while the canary is `on` | Version integer. |
+| `canary_query_class` | enum string | see `query_class` | Every stamped canary/shadow row | 6-value enum computed from the query; the query itself is discarded. Six buckets cannot reconstruct text. |
+| `canary_eligibility` | enum string | see `eligibility` | Every stamped canary/shadow row | 9-value enum. |
+| `canary_policy_version` | int | `SemanticQueryPolicy` version | Every stamped canary/shadow row | Version integer. |
 | `canary_fusion_profile` | string | Versioned profile id, e.g. `rrf-mixed-v1` | `arm=treatment` and the semantic arm ran | Build-time identifier; workspace-independent. |
 | `canary_encoder_fingerprint` | string | Opaque lowercase hex, ≤32 chars: the first 16 hex chars of `vectors_meta.encoder_fingerprint` (`vectors-v1.md`) with its `sha256:` tag stripped | `arm` ∈ {`treatment`,`shadow`} and vectors were opened | Digest of model+tokenizer identity. Contains no workspace data. |
 | `canary_storage_schema` | string | Opaque lane id, e.g. `vec0-int8-256-cosine-v1` | as above | Build/config identifier. |
@@ -558,16 +566,20 @@ canary data leaves a machine.
   eligible calls). A per-call millisecond value never leaves the machine; a bucket histogram over ≥5 calls
   is a counter like every other field here, and it is what makes the latency clause approximable off-box
   at all (§ Where each clause is computed).
-- Units are identified by `unit_id` = the first 12 hex characters of
-  `SHA256(experiment_id|assignment_version|workspace_id|utc_date|query_class)` — the same digest the
-  assignment already computes, truncated. It is a join key across exports from one operator, and it does
-  not identify a repository to a recipient.
-- A unit with fewer than **5** eligible calls is omitted (`suppressed_unit_count` reports how many),
+- Rows are partitioned into exact analysis strata by `(workspace_id, utc_date, query_class, arm, bucket,
+  miller_version, encoder_fingerprint, storage_schema, corpus_generation, fusion_profile, policy_version)`.
+  Null is a distinct, explicit identity value and is never filled from another row. This rule applies to
+  hybrid and shadow rows.
+- Units are identified by `unit_id` = the first 12 hex characters of SHA-256 over a canonical
+  length-prefixed encoding of `experiment_id`, `assignment_version`, and every field in that exact stratum.
+  Null is encoded distinctly from an empty string. The resulting value is a stable join key across exports
+  from one operator and does not identify a repository to a recipient.
+- A stratum with fewer than **5** eligible calls is omitted (`suppressed_unit_count` reports how many),
   so a single-call unit cannot be reasoned back to one action.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "canary_contract_version": 1,
   "experiment_id": "semantic_hybrid_search_v1",
   "generated_at_utc": "2026-08-01T12:00:00Z",
@@ -586,12 +598,12 @@ canary data leaves a machine.
       "error_calls": 0,
       "attributed_success_calls": 22,
       "semantic_contribution_calls": 29,
+      "miller_version": "1.14.0+abc1234",
       "encoder_fingerprint": "3f9a1c22b0e4d781",
       "storage_schema": "vec0-int8-256-cosine-v1",
       "corpus_generation": "cards-v1-chunks-v1",
       "fusion_profile": "rrf-mixed-v1",
       "policy_version": 1,
-      "miller_versions": ["1.14.0+abc1234"],
       "fallback_reason_counts": { "none": 38, "embed_timeout": 3 },
       "rescue_kind_counts": { "none": 30, "semantic_symbol": 8, "semantic_docs": 3 },
       "backend_counts": { "metal": 41 },
@@ -606,6 +618,12 @@ canary data leaves a machine.
       "unit_id": "c104ee9b2a55",
       "utc_date": "2026-07-14",
       "query_class": "identifier",
+      "miller_version": "1.14.0+abc1234",
+      "encoder_fingerprint": null,
+      "storage_schema": null,
+      "corpus_generation": null,
+      "fusion_profile": null,
+      "policy_version": 1,
       "calls": 18,
       "shadow_status_counts": { "ok": 17, "timeout": 1 },
       "top1_changed_calls": 2,
@@ -624,19 +642,22 @@ joint (warmth × total latency) distribution, which is exactly why the exported 
 approximation and the local raw-row clause is authoritative.
 
 Count maps omit zero-valued keys. `units` is ordered by `(utc_date, query_class, unit_id)` so an unchanged
-window re-exports byte-identically; `shadow_units` follows the same ordering rule.
+window re-exports byte-identically; `shadow_units` follows the same ordering rule. The six identity fields
+are always present in schema v2; unknown values serialize as JSON `null` rather than disappearing or borrowing
+the first non-null value in a group.
 
 ## Stability Rules
 
-- v1 is **frozen**. Adding, renaming, removing, or repurposing any key, enum value, bucket edge, window
+- The row-level canary contract v1 is **frozen**. Adding, renaming, removing, or repurposing any metadata key,
+  enum value, bucket edge, window
   length, sampling rate, or derivation step requires a v2 document and a `canary_contract_version` bump.
 - Rows of differing `canary_contract_version` are never pooled in an analysis.
 - The assignment derivation is a guarantee, not an implementation detail: any consumer may recompute the
   arm from `workspace_id`, `ts`, and `canary_query_class` and must get the same answer.
 - The success event is defined only here. No other document, dashboard, or query may redefine "conversion"
   for this gate.
-- The export envelope's field names and ordering are stable; additive, backward-compatible fields may
-  appear without a `schema_version` bump, and any removal or rename bumps it.
+- Aggregate export schema v2 is stable. Additive, backward-compatible fields may appear without another
+  `schema_version` bump; a removal, rename, or identity-grouping change requires one.
 - Absent-vs-zero is a guarantee: a field whose write condition did not hold is omitted, never zeroed.
 
 ## Boundary

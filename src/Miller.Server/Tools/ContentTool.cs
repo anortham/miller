@@ -23,6 +23,11 @@ public sealed class ContentTool
         string Reason,
         IReadOnlyList<KeyValuePair<string, string>> Args);
 
+    private sealed record ContentReadLocation(
+        string ContentDbPath,
+        string? WorkspaceId,
+        string WorkspaceRoot);
+
     public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -265,17 +270,23 @@ public sealed class ContentTool
             throw new InvalidOperationException("content read requires line.");
 
         int effectiveContextLines = contextLines ?? ContentCorpusExternalStore.DefaultContextLines;
-        string readContentDbPath = ResolveReadContentDbPath(contentDbPath, sourceId, workspaceId);
-        string resolvedSourceId = ResolveReadSourceId(readContentDbPath, sourceId);
-        readContentDbPath = ResolveReadContentDbPath(readContentDbPath, resolvedSourceId, workspaceId: null);
+        var currentLocation = new ContentReadLocation(
+            contentDbPath,
+            _workspace.WorkspaceId,
+            _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        ContentReadLocation readLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
+        string resolvedSourceId = ResolveReadSourceId(readLocation.ContentDbPath, sourceId);
+        readLocation = ResolveReadLocation(readLocation, resolvedSourceId, workspaceId: null);
         ExternalContentReadResult result = ReadWindowWithNearestPaths(
-            readContentDbPath,
+            readLocation.ContentDbPath,
             resolvedSourceId,
             line.Value,
             effectiveContextLines);
         if (telemetry is not null)
         {
-            telemetry.SetTarget(sourceId);
+            if (!string.IsNullOrWhiteSpace(readLocation.WorkspaceId))
+                telemetry.SetWorkspace(readLocation.WorkspaceId, readLocation.WorkspaceRoot);
+            telemetry.SetTarget(result.DisplayPath);
             telemetry.ResultCount = result.Lines.Count;
             telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
         }
@@ -366,18 +377,21 @@ public sealed class ContentTool
     private static string[] PathSegments(string value) =>
         value.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
 
-    private string ResolveReadContentDbPath(string defaultContentDbPath, string sourceId, string? workspaceId)
+    private ContentReadLocation ResolveReadLocation(
+        ContentReadLocation defaultLocation,
+        string sourceId,
+        string? workspaceId)
     {
-        if (TryResolveSourceIdWorkspaceContentDbPath(sourceId) is { } routedContentDbPath)
-            return routedContentDbPath;
+        if (TryResolveSourceIdWorkspace(sourceId) is { } routed)
+            return routed;
 
         if (!string.IsNullOrWhiteSpace(workspaceId))
-            return ResolveReadWorkspaceContentDbPath(defaultContentDbPath, workspaceId);
+            return ResolveReadWorkspace(defaultLocation, workspaceId);
 
-        return defaultContentDbPath;
+        return defaultLocation;
     }
 
-    private string? TryResolveSourceIdWorkspaceContentDbPath(string sourceId)
+    private ContentReadLocation? TryResolveSourceIdWorkspace(string sourceId)
     {
         int separator = sourceId.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0)
@@ -389,9 +403,7 @@ public sealed class ContentTool
             using WorkspaceRegistry registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
             WorkspaceRegistryRow? row = registry.List()
                 .FirstOrDefault(r => string.Equals(r.WorkspaceId, sourceWorkspaceId, StringComparison.Ordinal));
-            return row is null
-                ? null
-                : ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
+            return row is null ? null : Location(row);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
         {
@@ -399,7 +411,7 @@ public sealed class ContentTool
         }
     }
 
-    private string ResolveReadWorkspaceContentDbPath(string defaultContentDbPath, string workspaceId)
+    private ContentReadLocation ResolveReadWorkspace(ContentReadLocation defaultLocation, string workspaceId)
     {
         string selector = workspaceId.Trim();
         if (string.Equals(selector, "all", StringComparison.OrdinalIgnoreCase)
@@ -413,13 +425,18 @@ public sealed class ContentTool
         if (string.Equals(selector, "current", StringComparison.OrdinalIgnoreCase)
             || string.Equals(selector, "primary", StringComparison.OrdinalIgnoreCase))
         {
-            return defaultContentDbPath;
+            return defaultLocation;
         }
 
         using var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath);
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
-        return ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
+        return Location(row);
     }
+
+    private static ContentReadLocation Location(WorkspaceRegistryRow row) => new(
+        ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath),
+        row.WorkspaceId,
+        row.CanonicalRoot);
 
     private string List(string contentDbPath, string contentKind, bool json, TelemetryScope? telemetry)
     {

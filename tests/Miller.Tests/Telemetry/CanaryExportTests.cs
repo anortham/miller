@@ -34,7 +34,7 @@ public sealed class CanaryExportTests : IDisposable
 
         JsonElement root = ParseExport(from: "2026-07-02", to: "2026-08-01");
 
-        Assert.Equal(1, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
         Assert.Equal(1, root.GetProperty("canary_contract_version").GetInt32());
         Assert.Equal("semantic_hybrid_search_v1", root.GetProperty("experiment_id").GetString());
         Assert.Equal("2026-08-01T12:00:00Z", root.GetProperty("generated_at_utc").GetString());
@@ -71,13 +71,13 @@ public sealed class CanaryExportTests : IDisposable
         Assert.Equal(5, unit.GetProperty("semantic_contribution_calls").GetInt32());
         Assert.Equal("3f9a1c22b0e4d781", unit.GetProperty("encoder_fingerprint").GetString());
         Assert.Equal("rrf-mixed-v1", unit.GetProperty("fusion_profile").GetString());
-        Assert.Equal(["1.14.0+abc1234"], unit.GetProperty("miller_versions").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal("1.14.0+abc1234", unit.GetProperty("miller_version").GetString());
         Assert.Equal(5, unit.GetProperty("embed_warmth_counts").GetProperty("warm").GetInt32());
         Assert.Equal(5, unit.GetProperty("total_latency_bucket_counts").GetProperty("lt_250").GetInt32());
     }
 
     [Fact]
-    public void UnitId_IsTheFirstTwelveHexOfTheAssignmentDigest()
+    public void UnitId_IsTheFirstTwelveHexOfTheExactStratumDigest()
     {
         using (var seeder = new CanarySeeder(Db))
         {
@@ -85,11 +85,91 @@ public sealed class CanaryExportTests : IDisposable
                 seeder.InsertCanary("ws-hex-a", "2026-07-14", "prose", "treatment");
         }
 
-        string expected = Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes("semantic_hybrid_search_v1|1|ws-hex-a|2026-07-14|prose")))[..12];
+        string material = string.Concat(
+            UnitIdPart("semantic_hybrid_search_v1"),
+            UnitIdPart("1"),
+            UnitIdPart("ws-hex-a"),
+            UnitIdPart("2026-07-14"),
+            UnitIdPart("prose"),
+            UnitIdPart("treatment"),
+            UnitIdPart("0"),
+            UnitIdPart("1.14.0+abc1234"),
+            UnitIdPart(null),
+            UnitIdPart(null),
+            UnitIdPart(null),
+            UnitIdPart(null),
+            UnitIdPart("1"));
+        string expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..12];
 
         JsonElement unit = ParseExport("2026-07-02", "2026-08-01").GetProperty("units")[0];
         Assert.Equal(expected, unit.GetProperty("unit_id").GetString());
+    }
+
+    [Fact]
+    public void AnalysisUnits_NeverPoolExactVersionsOrSemanticIdentityStrata()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                seeder.InsertCanary(
+                    "ws-hex-a", "2026-07-14", "prose", "treatment",
+                    millerVersion: "1.14.0+aaa", encoderFingerprint: "encoder-a",
+                    storageSchema: "vec0-int8-384-cosine-v1", corpusGeneration: "cards-v1",
+                    fusionProfile: "rrf-a");
+                seeder.InsertCanary(
+                    "ws-hex-a", "2026-07-14", "prose", "treatment",
+                    millerVersion: "1.14.0+bbb", encoderFingerprint: "encoder-b",
+                    storageSchema: "vec0-f32-512-cosine-v1", corpusGeneration: "cards-v2",
+                    fusionProfile: "rrf-b", policyVersion: 2);
+            }
+        }
+
+        JsonElement[] units = ParseExport("2026-07-02", "2026-08-01")
+            .GetProperty("units").EnumerateArray().ToArray();
+
+        Assert.Equal(2, units.Length);
+        Assert.Equal(2, units.Select(unit => unit.GetProperty("unit_id").GetString()).Distinct().Count());
+        Assert.Contains(units, unit =>
+            unit.GetProperty("miller_version").GetString() == "1.14.0+aaa"
+            && unit.GetProperty("encoder_fingerprint").GetString() == "encoder-a"
+            && unit.GetProperty("storage_schema").GetString() == "vec0-int8-384-cosine-v1"
+            && unit.GetProperty("corpus_generation").GetString() == "cards-v1"
+            && unit.GetProperty("fusion_profile").GetString() == "rrf-a"
+            && unit.GetProperty("policy_version").GetInt32() == 1);
+        Assert.Contains(units, unit =>
+            unit.GetProperty("miller_version").GetString() == "1.14.0+bbb"
+            && unit.GetProperty("encoder_fingerprint").GetString() == "encoder-b"
+            && unit.GetProperty("storage_schema").GetString() == "vec0-f32-512-cosine-v1"
+            && unit.GetProperty("corpus_generation").GetString() == "cards-v2"
+            && unit.GetProperty("fusion_profile").GetString() == "rrf-b"
+            && unit.GetProperty("policy_version").GetInt32() == 2);
+    }
+
+    [Fact]
+    public void UnknownIdentity_IsAnExplicitNullStratumAndNeverBorrowsAnotherRowsIdentity()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+                seeder.InsertCanary("ws-hex-a", "2026-07-14", "prose", "control", millerVersion: null, policyVersion: null);
+            for (int i = 0; i < 5; i++)
+                seeder.InsertCanary(
+                    "ws-hex-a", "2026-07-14", "prose", "control",
+                    encoderFingerprint: "encoder-known", storageSchema: "vec0-int8-384-cosine-v1");
+        }
+
+        JsonElement[] units = ParseExport("2026-07-02", "2026-08-01")
+            .GetProperty("units").EnumerateArray().ToArray();
+
+        Assert.Equal(2, units.Length);
+        JsonElement unknown = Assert.Single(
+            units, unit => unit.GetProperty("miller_version").ValueKind == JsonValueKind.Null);
+        Assert.Equal(JsonValueKind.Null, unknown.GetProperty("encoder_fingerprint").ValueKind);
+        Assert.Equal(JsonValueKind.Null, unknown.GetProperty("storage_schema").ValueKind);
+        Assert.Equal(JsonValueKind.Null, unknown.GetProperty("corpus_generation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, unknown.GetProperty("fusion_profile").ValueKind);
+        Assert.Equal(JsonValueKind.Null, unknown.GetProperty("policy_version").ValueKind);
     }
 
     [Fact]
@@ -318,6 +398,8 @@ public sealed class CanaryExportTests : IDisposable
     private static DateTimeOffset DerivedGeneratedAt(DateOnly to) =>
         new(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
 
+    private static string UnitIdPart(string? value) => value is null ? "-1:" : $"{value.Length}:{value}";
+
     private JsonElement ParseExport(string from, string to)
     {
         string json = CanaryExport.BuildJson(Db, DateOnly.Parse(from), DateOnly.Parse(to), _generatedAt);
@@ -382,6 +464,7 @@ internal sealed class CanarySeeder : IDisposable
         IReadOnlyList<string>? pathHashes = null,
         IReadOnlyList<string>? qualifiedHashes = null,
         int contractVersion = 1,
+        int? policyVersion = 1,
         string? timeOfDay = null)
     {
         var meta = new JsonObject
@@ -392,8 +475,8 @@ internal sealed class CanarySeeder : IDisposable
             ["canary_arm"] = arm,
             ["canary_query_class"] = queryClass,
             ["canary_eligibility"] = eligibility,
-            ["canary_policy_version"] = 1,
         };
+        if (policyVersion is { } policy) meta["canary_policy_version"] = policy;
 
         if (arm is "control" or "treatment")
         {

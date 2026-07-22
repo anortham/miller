@@ -113,6 +113,20 @@ public sealed class CanaryGateReportTests : IDisposable
         Assert.False(cohort.GatePasses);
     }
 
+    [Theory]
+    [InlineData(CanaryClauseVerdict.Underpowered)]
+    [InlineData(CanaryClauseVerdict.Fail)]
+    public void OverallGate_NeverPassesWhenIdentifierShadowDoesNotPass(CanaryClauseVerdict shadowVerdict)
+    {
+        var cohort = new CanaryCohortGate(
+            "1.14.0+abc1234",
+            new CanarySuccessRateClause(CanaryClauseVerdict.Pass, 30, 30, 0.1, 0.01, 0.2),
+            new CanaryWarmLatencyClause(CanaryClauseVerdict.Pass, 100, 100, 100, 100, 1.0),
+            new CanaryShadowClause(shadowVerdict, 30, 0.01, 9.0));
+
+        Assert.False(cohort.GatePasses);
+    }
+
     [Fact]
     public void SuccessRate_SeparatedArmsWithEnoughUnitsPass()
     {

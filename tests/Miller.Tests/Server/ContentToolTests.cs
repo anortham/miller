@@ -1,4 +1,6 @@
 using System.IO.Pipelines;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,6 +56,25 @@ public sealed class ContentToolTests : IDisposable
         using var r = cmd.ExecuteReader();
         Assert.True(r.Read(), "expected one telemetry row");
         return (r.IsDBNull(0) ? null : r.GetString(0), r.GetString(1), r.GetString(2));
+    }
+
+    private static (string? WorkspaceId, string? WorkspaceRoot, string? TargetHash) ReadTelemetryAttribution(string dbPath)
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT workspace_id, workspace_root, target_hash FROM tool_telemetry WHERE tool = 'content' AND op = 'read' LIMIT 1;";
+        using var r = cmd.ExecuteReader();
+        Assert.True(r.Read(), "expected one content-read telemetry row");
+        return (
+            r.IsDBNull(0) ? null : r.GetString(0),
+            r.IsDBNull(1) ? null : r.GetString(1),
+            r.IsDBNull(2) ? null : r.GetString(2));
     }
 
     [Fact]
@@ -1131,6 +1152,41 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("alpha.log:1-1", read);
         Assert.Contains("1: CrossWorkspaceExternalReadMarker in alpha.", read);
         Assert.DoesNotContain("content failed:", read, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Content_ReadTelemetry_UsesTheResolvedPathAndCrossWorkspaceIdentity()
+    {
+        string alphaRoot = Path.Combine(_dir, "telemetry-read-alpha");
+        Directory.CreateDirectory(alphaRoot);
+        string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
+        string alphaLog = Path.Combine(alphaRoot, "opaque-input-name.log");
+        File.WriteAllText(alphaLog, "ResolvedPathTelemetryMarker");
+        var store = new ContentCorpusExternalStore();
+        ExternalContentImportResult imported = store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "docs/served.md");
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
+            registry.MarkScanned("ws-alpha", revision: 1);
+        }
+        var tool = new ContentTool(_workspace, store);
+
+        using (var ledger = TelemetryLedger.Open(
+            _workspace.TelemetryDbPath, _workspace.WorkspaceId, _workspace.WorkspaceRoot))
+        {
+            using TelemetryScope scope = ledger.Measure("content", op: null);
+            string output = tool.Content(
+                "read", source_id: imported.SourceId, workspace_id: "ws-alpha", line: 1, context_lines: 0);
+            Assert.Contains("ResolvedPathTelemetryMarker", output, StringComparison.Ordinal);
+        }
+
+        var row = ReadTelemetryAttribution(_workspace.TelemetryDbPath);
+        Assert.Equal("ws-alpha", row.WorkspaceId);
+        Assert.Equal(alphaRoot, row.WorkspaceRoot);
+        Assert.Equal(
+            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("docs/served.md"))),
+            row.TargetHash);
     }
 
     [Fact]

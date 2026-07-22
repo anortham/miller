@@ -44,7 +44,9 @@ public sealed record CanaryCohortGate(
     CanaryShadowClause Shadow)
 {
     public bool GatePasses =>
-        SuccessRate.Verdict == CanaryClauseVerdict.Pass && WarmLatency.Verdict == CanaryClauseVerdict.Pass;
+        SuccessRate.Verdict == CanaryClauseVerdict.Pass
+        && WarmLatency.Verdict == CanaryClauseVerdict.Pass
+        && Shadow.Verdict == CanaryClauseVerdict.Pass;
 }
 
 public sealed record CanaryGate(IReadOnlyList<CanaryCohortGate> Cohorts);

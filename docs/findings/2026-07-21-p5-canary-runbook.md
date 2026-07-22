@@ -10,8 +10,9 @@ operational only. Where the two ever differ, the contract wins.
 ## What the canary is
 
 A cluster-randomized holdout that measures whether hybrid (lexical + semantic) retrieval beats lexical-only
-on real agent traffic, per exact `miller_version` cohort, without changing what `MILLER_SEMANTIC=off` users
-see. It rides the existing machine-global telemetry ledger — no new store, no new MCP tool. Every canary row
+on real agent traffic without changing what `MILLER_SEMANTIC=off` users see. Causal treatment evidence is
+recorded only while `MILLER_SEMANTIC=on`. It rides the existing machine-global telemetry ledger — no new store,
+no new MCP tool. Every canary row
 **is** an ordinary `tool_telemetry` row with `canary_*` keys in `metadata_json`.
 
 ## Enable
@@ -20,8 +21,8 @@ Two switches, both required. The canary flag is inert unless semantic retrieval 
 
 | Variable | Values | Effect |
 | --- | --- | --- |
-| `MILLER_SEMANTIC` | `off` (default) · `shadow` · `on` | `off` is a permanent zero-work guarantee. `shadow` builds and evaluates vectors but never fuses them into served results. `on` fuses the semantic arm into served results. |
-| `MILLER_SEMANTIC_CANARY` | `off` (default) · `on` (aliases: `0`/`1`) | `on` computes an arm assignment for every call on an instrumented surface and writes `canary_*` metadata. Any unrecognized value is treated as `off` and logged once at startup. |
+| `MILLER_SEMANTIC` | `off` (default) · `shadow` · `on` | `off` is a permanent zero-work guarantee. `shadow` is a non-serving operational and identifier-shadow soak; it records no causal hybrid control/treatment evidence. `on` serves the assigned arm and supplies treatment-gate evidence. |
+| `MILLER_SEMANTIC_CANARY` | `off` (default) · `on` (aliases: `0`/`1`) | `on` enables causal hybrid rows when semantic mode is `on`, plus identifier-shadow sampling in `shadow` or `on`. Any unrecognized value is treated as `off` and logged once at startup. |
 
 Rules that hold regardless of what you set:
 
@@ -34,9 +35,9 @@ Rules that hold regardless of what you set:
 
 Typical operator setups:
 
-- **Measure without changing what agents see** — `MILLER_SEMANTIC=shadow` + `MILLER_SEMANTIC_CANARY=on`.
-  Hybrid runs off to the side and is discarded; all served output stays lexical. This is the safe default for
-  gathering gate evidence.
+- **Soak without changing what agents see** — `MILLER_SEMANTIC=shadow` + `MILLER_SEMANTIC_CANARY=on`.
+  All served output stays lexical. This validates operational readiness and accumulates identifier-shadow
+  non-inferiority evidence, but it does not accumulate causal hybrid treatment evidence.
 - **Serve hybrid to the treatment half and measure** — `MILLER_SEMANTIC=on` + `MILLER_SEMANTIC_CANARY=on`.
   The 50/50 split still holds out the control arm on lexical-only.
 
@@ -71,6 +72,10 @@ miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
   (`YYYY-MM-DD`, UTC) to narrow it; a malformed date is a usage error (exit 2).
 - Units with fewer than 5 eligible calls are suppressed and counted in `suppressed_unit_count`, so a
   single-call unit cannot be reasoned back to one action.
+- Schema v2 partitions each assignment unit into exact analysis strata by arm, bucket, full Miller build,
+  encoder fingerprint, storage schema, corpus generation, fusion profile, and policy version. A missing
+  identity is an explicit `null` stratum; it never borrows another row's identity. The 5-call suppression
+  floor is applied after this partition, so incompatible identities are never pooled to cross the floor.
 - Output is deterministic: an unchanged window re-exports byte-identically. `generated_at_utc` is derived
   from the window (00:00:00 UTC the day after `--to`), not the wall clock, so repeated exports of the same
   window match byte-for-byte.
@@ -103,8 +108,10 @@ The gate is computed **locally and authoritatively** from raw `tool_telemetry` r
 text). Exit code is 0 whenever the gate computes; usage/bad-flag errors exit 2. Add `--json` for machine
 output, omit it for the human render.
 
-Three clauses are reported. `gate_passes` for a cohort is **success-rate pass AND warm-latency pass**; the
-identifier-shadow clause is reported alongside but is **not** part of `gate_passes`.
+Three clauses are reported. `gate_passes` for a cohort is **success-rate pass AND warm-latency pass AND
+identifier-shadow pass**. A fail, underpowered, or indeterminate clause can never produce an overall pass.
+The causal success-rate and latency clauses require traffic served with `MILLER_SEMANTIC=on`; a `shadow`
+soak alone cannot satisfy them.
 
 | Clause | Passes when | Minimums (else not a pass) |
 | --- | --- | --- |
@@ -116,8 +123,8 @@ identifier-shadow clause is reported alongside but is **not** part of `gate_pass
 
 Each clause renders one of four verdicts:
 
-- **`pass`** — the clause met its bar with enough data. A cohort passes the gate only when both
-  `success-rate` and `warm-latency` are `pass`.
+- **`pass`** — the clause met its bar with enough data. A cohort passes the gate only when all three clauses
+  are `pass`.
 - **`fail`** — enough data, bar not met. For `success-rate` the CI lower bound was ≤ 0; for `warm-latency`
   the treatment p95 exceeded 1.20× control (a regression); for `identifier-shadow` a margin was breached.
 - **`underpowered`** — too few *units* to decide (below the 30-unit floor for `success-rate` or
@@ -138,9 +145,9 @@ The active embedding model is selected by one env var from a fixed registry:
 
 | Variable | Values |
 | --- | --- |
-| `MILLER_SEMANTIC_MODEL` | `bge-small-en-v1.5-f32` (default, 384-dim) · `qwen3-0.6b-f16` (512-dim) |
+| `MILLER_SEMANTIC_MODEL` | `bge-small-en-v1.5-f32` (pinned default, 384-dim) · `qwen3-0.6b-f16` (512-dim) |
 
-- Unset, empty, or whitespace → the default (`bge-small-en-v1.5-f32`). An **unknown** value → the default plus
+- Unset, empty, or whitespace selects the pinned default. An **unknown** value selects it plus
   one stderr warning naming the known encoders; it never fails the process.
 - Download the model before serving with it: `miller semantic prepare --model <id> [--json]`. Running the
   verb is the consent act; Miller never auto-downloads.
@@ -162,7 +169,7 @@ restart, not a rebuild.
 
 ### Model comparison — later phase
 
-The registry currently holds exactly two encoders (`qwen3-0.6b-f16` default, `bge-small-en-v1.5-f32`). A
+The registry currently holds exactly the two encoders listed above. A
 broader model comparison list and the head-to-head evaluation that would justify adding or switching the
 default are **out of scope for P5** and land in a later phase. Treat the two-entry registry as the shipped
 surface for now; do not read the presence of the fallback entry as a recommendation to switch.
@@ -170,7 +177,7 @@ surface for now; do not read the presence of the fallback entry as a recommendat
 ## Quick reference
 
 ```
-# gather evidence without changing served output
+# soak operational readiness and identifier shadow without changing served output
 MILLER_SEMANTIC=shadow MILLER_SEMANTIC_CANARY=on   miller serve
 
 # serve hybrid to the treatment half and measure
