@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Server.Resolution;
 using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -104,6 +105,37 @@ public sealed class SearchToolRescueTests
         Assert.Contains("semantic docs", output, StringComparison.Ordinal);
         Assert.Contains("docs/design.md", output, StringComparison.Ordinal);
         Assert.DoesNotContain("semantic symbol", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SemanticRescue_AppliesFileLanguageAndTestFiltersToChunkHits()
+    {
+        TextContentSearchHit blockedPath = DocsHit("notes/blocked.md", 2, "blocked path");
+        TextContentSearchHit blockedLanguage = CorpusHit(
+            "docs/allowed/blocked.yaml", TextContentKind.WorkspaceConfig, 3, "blocked language", "yaml", 2.0);
+        TextContentSearchHit blockedTest = DocsHit("docs/allowed/tests/blocked.md", 4, "blocked test");
+        TextContentSearchHit allowed = DocsHit("docs/allowed/result.md", 5, "allowed");
+        var content = new MaterializingTextContentIndex([blockedPath, blockedLanguage, blockedTest, allowed]);
+        StubSemanticTextArm arm = ArmWith(
+            chunks:
+            [
+                Hit(docId: blockedPath.ChunkId, path: blockedPath.DisplayPath, rank: 1),
+                Hit(docId: blockedLanguage.ChunkId, path: blockedLanguage.DisplayPath, rank: 2),
+                Hit(docId: blockedTest.ChunkId, path: blockedTest.DisplayPath, rank: 3),
+                Hit(docId: allowed.ChunkId, path: allowed.DisplayPath, rank: 4),
+            ]);
+
+        string output = ToolWith(arm, content).Search(
+            ConceptualQuery,
+            exclude_tests: true,
+            file_pattern: "docs/allowed/**",
+            language: "markdown");
+
+        Assert.Contains("docs/allowed/result.md", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("notes/blocked.md", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("blocked.yaml", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests/blocked.md", output, StringComparison.Ordinal);
+        Assert.True(content.LastMaterializeExcludeTests);
     }
 
     [Fact]
@@ -251,7 +283,7 @@ public sealed class SearchToolRescueTests
     public void ContentMode_HybridPromotesTheSemanticallyNearestChunk()
     {
         StubSemanticTextArm arm = ArmWith(
-            chunks: [Hit(docId: "docs/converge.md#1", path: "docs/converge.md", rank: 1)]);
+            chunks: [Hit(docId: "workspace_docs:docs/converge.md:7", path: "docs/converge.md", rank: 1)]);
         ITextContentSearchIndex content = TextContentIndex(
             DocsHit("docs/first.md", line: 3, snippet: "refresh", score: 9.0),
             DocsHit("docs/converge.md", line: 7, snippet: "converge", score: 1.0));
@@ -268,7 +300,7 @@ public sealed class SearchToolRescueTests
     public void ContentMode_KeepsMembership_WhenTheSemanticArmReordersIt()
     {
         StubSemanticTextArm arm = ArmWith(
-            chunks: [Hit(docId: "docs/converge.md#1", path: "docs/converge.md", rank: 1)]);
+            chunks: [Hit(docId: "workspace_docs:docs/converge.md:7", path: "docs/converge.md", rank: 1)]);
         ITextContentSearchIndex content = TextContentIndex(
             DocsHit("docs/first.md", line: 3, snippet: "refresh", score: 9.0),
             DocsHit("docs/converge.md", line: 7, snippet: "converge", score: 1.0));
@@ -538,6 +570,35 @@ public sealed class SearchToolRescueTests
         public IReadOnlyList<TextContentSearchHit> Search(
             string query, IReadOnlyCollection<string> contentKinds, int limit, bool excludeTests) =>
             [.. hits.Where(hit => contentKinds.Contains(hit.ContentKind)).Take(limit)];
+    }
+
+    private sealed class MaterializingTextContentIndex(IReadOnlyList<TextContentSearchHit> materialized)
+        : ITextContentSearchIndex, ISemanticContentLookup
+    {
+        public int DocumentCount => materialized.Count;
+
+        public bool LastMaterializeExcludeTests { get; private set; }
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query, string contentKind, int limit, bool excludeTests) => [];
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query, IReadOnlyCollection<string> contentKinds, int limit, bool excludeTests) => [];
+
+        public IReadOnlyList<TextContentSearchHit> Materialize(
+            IReadOnlyCollection<string> chunkIds,
+            IReadOnlyCollection<string> contentKinds,
+            bool excludeTests = false)
+        {
+            LastMaterializeExcludeTests = excludeTests;
+            return
+            [
+                .. materialized.Where(hit =>
+                    chunkIds.Contains(hit.ChunkId) &&
+                    contentKinds.Contains(hit.ContentKind) &&
+                    (!excludeTests || !IsTestPath.Check(hit.DisplayPath))),
+            ];
+        }
     }
 
     private sealed class RescueSearchProvider : IWorkspaceSearchProvider,

@@ -2810,7 +2810,8 @@ public sealed class SearchTool
                 filePattern,
                 language,
                 compactBanner,
-                symbolContext);
+                symbolContext,
+                textContent.Index);
             return semantic ?? sourceRescue;
         }
         catch (InvalidOperationException)
@@ -2919,7 +2920,8 @@ public sealed class SearchTool
         string? filePattern,
         string? language,
         string? compactBanner,
-        WorkspaceSymbolSearchContext symbolContext)
+        WorkspaceSymbolSearchContext symbolContext,
+        ITextContentSearchIndex contentIndex)
     {
         if (_semanticArm is not { } arm)
             return null;
@@ -2941,7 +2943,12 @@ public sealed class SearchTool
             query,
             SemanticRescueRecall,
             match => index.FindBySymbolId(match.UnitId) is { } symbol && visibility.Allows(symbol));
-        SemanticQueryResult chunks = arm.QueryChunks(root, query, SemanticRescueRecall);
+        SemanticQueryResult chunks = arm.QueryChunks(
+            root,
+            query,
+            visibility.HideTests || visibility.Filters.HasAny
+                ? SemanticSearchArm.MaxCandidates
+                : SemanticRescueRecall);
 
         List<IndexedSymbol> symbolHits =
         [
@@ -2953,13 +2960,20 @@ public sealed class SearchTool
         List<string> symbolRows =
             [.. symbolHits.Select(symbol => $"  semantic symbol  {symbol.Name}  {symbol.FilePath}:{symbol.StartLine}")];
         List<string> symbolPaths = [.. symbolHits.Select(symbol => symbol.FilePath)];
-        List<string> chunkPaths =
-        [
-            .. chunks.Hits
+        IEnumerable<string> visibleChunkPaths = contentIndex is ISemanticContentLookup
+            ? MaterializeSemanticContentHits(
+                    contentIndex,
+                    chunks.Hits,
+                    WorkspaceContentSearchKinds,
+                    visibility.HideTests,
+                    visibility.Filters)
+                .Select(static hit => hit.Path)
+            : chunks.Hits
                 .Where(hit => hit.DocId is not null)
-                .Select(hit => hit.FilePath)
-                .Distinct(StringComparer.Ordinal),
-        ];
+                .Where(hit => !visibility.HideTests || !IsTestPath.Check(hit.FilePath))
+                .Where(hit => visibility.Filters.Allows(hit.FilePath, string.Empty))
+                .Select(static hit => hit.FilePath);
+        List<string> chunkPaths = [.. visibleChunkPaths.Distinct(StringComparer.Ordinal)];
         List<string> chunkRows = [.. chunkPaths.Select(path => $"  semantic docs  {path}")];
 
         if (symbolRows.Count == 0 && chunkRows.Count == 0)
