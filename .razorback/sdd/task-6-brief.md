@@ -1,23 +1,20 @@
-### Task 6: Real-artifact cost (parallel with Task 4)
+## Task 6: Smoke the exact packaged semantic payload
 
-**Files:**
-- Modify: findings doc cost-table section only.
+**Depends on:** Task 2 session contract.
 
-**Interfaces:**
-- Consumes: Task 2 frozen-miller worktree (its own `.miller/`, own leader — no contention with the live session).
-- Produces: cost table: end-to-end clean initial vector build through BOTH cursors (symbol + chunk), download size, cold session load, warm embed latency, peak RSS, `vectors.db` size; ≥2 runs, median/range; qwen3 + bge-small.
+**Owns:**
 
-**Contract inputs:** `MILLER_SEMANTIC=shadow MILLER_SEMANTIC_MODEL=<id>` on a serve process rooted at the frozen worktree; converge throughput lines (commit 59c2c79) + wall-clock around the whole build; `/usr/bin/time -l` for peak RSS. Between runs delete `<frozen>/.miller/vectors.db*` and retained generations. Models already cached — record download sizes from `~/.cache/julie-semantic` file sizes, do not re-download.
+- `.github/workflows/release.yml`
+- a new cross-platform smoke script and its tests, if a script keeps YAML small
+- release-process/package documentation if the contract changes
 
-**File ownership:** Owns frozen-worktree `.miller/` state + findings cost-table section (distinct section from Task 5)
+**Red contract test:** packaged smoke fails when sqlite-vec is missing, sidecar identity is wrong, embedding dimension mismatches, or KNN cannot return the inserted vector.
 
-**Serialization required:** No
+**Implementation:**
 
-**Dependency reason:** None - safe parallel batch (Batch B, alongside Task 4; distinct findings sections prevent write conflicts — lead merges).
+- Run the smoke against the staged archive contents for every RID before archive upload.
+- Load the staged sqlite-vec extension, launch the staged semantic sidecar with Miller's active pin, embed one fixed input, insert/query one vector, and verify identity/dimension/result.
+- Keep download/network work outside the smoke; the package must already be self-contained.
 
-**What to build:** The adopter-cost evidence for the pin decision.
-
-**Acceptance criteria:**
-- [ ] Cost table with both cursors end-to-end, ≥2 runs each model, median/range, peak RSS, artifact sizes.
-- [ ] Bench-lane wall-clock for research arms labeled harness-not-engine.
+**Worker verification:** script contract tests plus local-host smoke for the current RID. Other RIDs are verified by workflow structure and the next package-only run; do not dispatch a workflow or publish.
 

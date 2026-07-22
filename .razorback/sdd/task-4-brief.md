@@ -1,31 +1,32 @@
-### Task 4: Converge follow-ups — starvation retry wake, incremental disk gate, deferred-source log, status hint
+## Task 4: Make telemetry attribution and promotion gates causal
 
-**Files:**
-- Modify: `src/Miller.Server/Hosting/VectorConvergeService.cs` (wake loop `ExecuteAsync` :284/:296, `DrainCursorAsync` incremental branch :596-631, deferral consume :563-576)
-- Modify: `src/Miller.Indexing/Semantic/VectorConvergePlanner.cs` (hold plan :201-210 — only if a hold flag needs surfacing; prefer no change)
-- Modify: `src/Miller.Core/Workspace/WorkspaceRender.cs` (`VectorsLabel` :321, `VectorsReadyLabel` :333)
-- Test: extend `tests/Miller.Tests/Server/VectorConvergeServiceTests.cs`, `tests/Miller.Tests/Core/WorkspaceRenderTests.cs` (or the render tests' actual home — locate with Miller before editing)
+**Depends on:** Tasks 1 and 2 contracts.
 
-**Interfaces:**
-- Consumes: existing `VectorConvergeSignal` (capacity-1 coalescing semaphore), `DiskGate` delegate (:181) + `ProductionDiskGate` (:361) + `RefuseForDisk`/`BlockedForDisk` (:848/:860), P4's `converge_pause_state` disk-blocked facts, `VectorSidecarFacts` (shadow-rebuild-in-progress indicator — verify exact field via `WriteVectorsJson` :521 before rendering).
-- Produces: (a) a bounded held-cursor retry: when a drain ends with a held cursor (`AdvanceTo=0`/hold reason), schedule exactly one delayed signal re-stamp (default 5 minutes, test-injectable delay/scheduler; coalesces — no stacking retries; canceled by a real wake). (b) The incremental branch consults `state.DiskGate` before `EmbedAsync`/`Commit`, mirroring shadow-path semantics: blocked ⟹ record disk-blocked pause state, hold the cursor, no partial write, no hard fail. (c) An INFO log naming the deferred workspace-relative paths at the deferral consume site (stored hold reason stays path-free). (d) Compact status renders `ready (rebuilding)` when state is ready and a shadow rebuild is in flight (JSON untouched — it already carries the state).
+**Owns:**
 
-**Contract inputs:** The stored hold reason string format must not change (status surfaces show it). Disk-blocked semantics must match the shadow path's pause facts so `workspace status`/health render it identically.
+- `src/Miller.Server/Telemetry/CanaryGateReport.cs`
+- `src/Miller.Server/Telemetry/CanaryExport.cs`
+- `src/Miller.Server/Telemetry/CanaryLedgerReader.cs` when required by the export shape
+- `src/Miller.Server/Telemetry/CanaryTelemetry.cs` when required by typed attribution
+- `src/Miller.Server/Tools/ContentTool.cs`
+- telemetry contract/runbook docs and focused tests
 
-**File ownership:** `src/Miller.Server/Hosting/VectorConvergeService.cs` (post-Task-1), `src/Miller.Indexing/Semantic/VectorConvergePlanner.cs`, `src/Miller.Core/Workspace/WorkspaceRender.cs`, the listed test files.
+**Red tests:**
 
-**Serialization required:** Yes (after Task 1)
+1. `gate_passes` is false or indeterminate when identifier shadow is underpowered or regresses.
+2. Export never pools different exact Miller versions, encoders, revisions, schemas, quantization, dimensions, or fusion profiles.
+3. Export does not select an arbitrary first identity.
+4. Content read hashes the resolved served path and records the resolved workspace, including cross-workspace reads.
+5. A served semantic-only content hit can receive follow-up attribution.
+6. Typed vector fallbacks reach ledger/export unchanged.
 
-**Dependency reason:** Task 1 edits two encoder-ref lines in `VectorConvergeService.cs`; serialized to avoid same-file conflict. Parallel-safe with Task 3 (disjoint files).
+**Implementation:**
 
-**What to build:** The three Miller-side pre-P5 reliability fixes plus the status polish, red-first (each fix starts from a failing test reproducing the P4 dogfood finding: quiet-workspace starvation, ungated incremental write under a blocked disk, plain `ready` during rebuild).
+- Include the identifier-shadow verdict in the overall promotion verdict.
+- Key analysis units by exact version plus complete semantic identity; emit explicit null/unknown strata instead of mixing.
+- Stamp the content-read scope after resolution, using the same canonical path hash as search telemetry.
+- Keep privacy properties unchanged.
+- Correct the runbook so shadow is non-serving and the pinned default encoder is named once and accurately.
 
-**Approach:** For the retry wake, follow the existing fake/injectable patterns in `VectorConvergeServiceTests` (no real `Task.Delay` in tests). Escalation trigger applies: run the scale suite for this batch.
-
-**Acceptance criteria:**
-- [ ] A held cursor on a quiet workspace re-drains after the retry delay without an index-convergence stamp; a real wake cancels/absorbs the pending retry; no retry storm (at most one pending).
-- [ ] Incremental drain under a blocked disk gate: no vectors.db write, cursor held, disk-blocked pause state recorded; unblocking resumes.
-- [ ] Deferral logs one INFO line naming the deferred paths; stored reason unchanged.
-- [ ] Compact status shows `ready (rebuilding)` during a shadow rebuild; plain `ready` otherwise; JSON output unchanged.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+**Worker verification:** focused canary gate/export/ledger/content telemetry tests.
 
