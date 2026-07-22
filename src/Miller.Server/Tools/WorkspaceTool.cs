@@ -43,6 +43,7 @@ public sealed class WorkspaceTool
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar = new();
+    private readonly VectorSidecar _vectors = VectorSidecar.FromEnvironment();
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
@@ -519,7 +520,10 @@ public sealed class WorkspaceTool
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: _sidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
-            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision));
+            ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
+            Vectors: WorkspaceFactsAssembler.WithPendingFiles(
+                _vectors.Inspect(_workspace.WorkspaceRoot),
+                _workspace.ExtractDbPath));
     }
 
     private string? CurrentArtifactId()

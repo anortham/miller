@@ -255,7 +255,7 @@ internal static class WorkspaceFactsAssembler
             : cursor;
     }
 
-    private static VectorSidecarFacts WithPendingFiles(VectorSidecarFacts facts, string indexDbPath) =>
+    internal static VectorSidecarFacts WithPendingFiles(VectorSidecarFacts facts, string indexDbPath) =>
         WithPendingFiles(facts, (from, artifactId) => RevisionDeltaReader.Read(indexDbPath, from, artifactId));
 
     private static bool? IndexFresh(WorkspaceRegistryRow row, WorkspaceRegisteredFactsProfile profile) =>

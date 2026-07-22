@@ -430,6 +430,41 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.True(rootEl.TryGetProperty("telemetry", out _));
     }
 
+    [Fact]
+    public void StatusAndHealth_CurrentWorkspaceReportUnavailableVectorsWhenSemanticIsOn()
+    {
+        string? previous = Environment.GetEnvironmentVariable(VectorSidecar.EnvVar);
+        Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, "on");
+        try
+        {
+            using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+            var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+            string status = tool.Workspace(operation: "status");
+            string health = tool.Workspace(operation: "health");
+            using var statusJson = JsonDocument.Parse(tool.Workspace(operation: "status", format: "json"));
+            using var healthJson = JsonDocument.Parse(tool.Workspace(operation: "health", format: "json"));
+
+            Assert.Contains("vectors: unavailable (", status, StringComparison.Ordinal);
+            Assert.Contains("vectors: unavailable (", health, StringComparison.Ordinal);
+            Assert.Equal("unavailable", statusJson.RootElement.GetProperty("index").GetProperty("vectors")
+                .GetProperty("state").GetString());
+            Assert.Equal("unavailable", healthJson.RootElement.GetProperty("index").GetProperty("vectors")
+                .GetProperty("state").GetString());
+            Assert.Contains(
+                healthJson.RootElement.GetProperty("warnings").EnumerateArray(),
+                warning => warning.GetProperty("code").GetString() == "vectors_unavailable" &&
+                    warning.GetProperty("message").GetString()!.Contains("vector retrieval is unavailable", StringComparison.Ordinal));
+            Assert.Contains(
+                healthJson.RootElement.GetProperty("recommended_actions").EnumerateArray(),
+                action => action.GetString()!.Contains("resident Miller leader", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, previous);
+        }
+    }
+
     // ---- list ----
 
     [Fact]

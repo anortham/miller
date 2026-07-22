@@ -451,10 +451,41 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 var contentSidecar = new ContentCorpusSidecar();
                 FtsTextContentSearchIndex contentIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
-                outw.WriteLine(SearchRouteExecutor.RunContent(
+                if (requestedArm is CliSearchArm.Lexical)
+                {
+                    outw.WriteLine(SearchRouteExecutor.RunContent(contentIndex, route, executionRequest).Output);
+                    return 0;
+                }
+
+                VectorSidecar vectors = VectorSidecar.FromEnvironment();
+                CanaryMode canaryMode = CanaryActivation.FromEnvironment();
+                using TelemetryLedger? ledger = TryOpenCliCanaryLedger(ctx, canaryMode, vectors.Mode);
+                using TelemetryScope? telemetry = ledger?.Measure("search", CliModeName(route.Mode));
+                using var semanticSession = new CliSemanticSession(ctx.ToolsRoot);
+                ISemanticTextArm? productionArm = vectors.Mode is SemanticMode.On
+                    ? new SemanticTextArm(
+                        SemanticMode.On,
+                        root => new SemanticSearchArm(root, vectors, semanticSession.Open))
+                    : null;
+                Func<ISemanticTextArm?>? treatmentArmFactory = vectors.Mode is SemanticMode.On
+                    ? () => new SemanticTextArm(
+                        SemanticMode.On,
+                        root => new SemanticSearchArm(root, vectors, semanticSession.Open))
+                    : null;
+                SearchTool.ContentCanaryOutcome outcome = RunNormalContentRoute(
                     contentIndex,
                     route,
-                    executionRequest).Output);
+                    executionRequest,
+                    vectors.Mode,
+                    canaryMode,
+                    ctx.WorkspaceId ?? string.Empty,
+                    ctx.WorkspaceRoot,
+                    CanaryUtcDate(telemetry),
+                    () => vectors.Inspect(ctx.WorkspaceRoot).State,
+                    productionArm,
+                    treatmentArmFactory,
+                    telemetry);
+                outw.WriteLine(outcome.Result.Output);
                 return 0;
             }
             catch (Exception ex) when (
@@ -532,18 +563,28 @@ public static class CliDispatch
         var sidecar = VectorSidecar.FromEnvironment();
         if (requestedArm is CliSearchArm.Policy)
         {
-            if (sidecar.Mode is not SemanticMode.On)
-            {
-                outw.WriteLine(SearchRouteExecutor.RunSymbols(index, route, request).Output);
-                return 0;
-            }
-
             using var policySession = new CliSemanticSession(ctx.ToolsRoot);
-            var policyArm = new SemanticSymbolFusionArm(
+            Func<SemanticSymbolFusionArm>? armFactory = sidecar.Mode is SemanticMode.Off
+                ? null
+                : () => new SemanticSymbolFusionArm(
+                    sidecar.Mode,
+                    root => new SemanticSearchArm(root, sidecar, policySession.Open));
+            CanaryMode canaryMode = CanaryActivation.FromEnvironment();
+            using TelemetryLedger? ledger = TryOpenCliCanaryLedger(ctx, canaryMode, sidecar.Mode);
+            using TelemetryScope? telemetry = ledger?.Measure("search", CliModeName(route.Mode));
+            SearchTool.SymbolCanaryOutcome outcome = RunNormalSymbolRoute(
+                index,
+                route,
+                request,
                 sidecar.Mode,
-                _ => new SemanticSearchArm(ctx.WorkspaceRoot, sidecar, policySession.Open));
-            outw.WriteLine(
-                SearchRouteExecutor.RunSymbols(index, route, request with { FusionArm = policyArm }).Output);
+                canaryMode,
+                ctx.WorkspaceId ?? string.Empty,
+                ctx.WorkspaceRoot,
+                CanaryUtcDate(telemetry),
+                () => sidecar.Inspect(ctx.WorkspaceRoot).State,
+                armFactory,
+                telemetry);
+            outw.WriteLine(outcome.Result.Output);
             return 0;
         }
 
@@ -583,6 +624,159 @@ public static class CliDispatch
             outw,
             err);
     }
+
+    internal static SearchTool.SymbolCanaryOutcome RunNormalSymbolRoute(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        SemanticMode semanticMode,
+        CanaryMode canaryMode,
+        string workspaceId,
+        string workspaceRoot,
+        string utcDate,
+        Func<string> vectorStateProbe,
+        Func<SemanticSymbolFusionArm>? armFactory,
+        TelemetryScope? telemetry)
+    {
+        SemanticSymbolFusionArm? productionArm = semanticMode is SemanticMode.On
+            ? armFactory?.Invoke()
+            : null;
+        SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
+            index,
+            route,
+            request with { FusionArm = productionArm, WorkspaceRoot = workspaceRoot },
+            canaryMode,
+            CliModeName(route.Mode),
+            semanticDisabled: semanticMode is SemanticMode.Off,
+            workspaceId,
+            utcDate,
+            vectorStateProbe,
+            crossWorkspaceNoGeneration: false,
+            armFactory,
+            shadowRunner: null,
+            semanticMode);
+
+        if (telemetry is not null)
+        {
+            if (outcome.ShadowFacts is { } shadowFacts)
+                CanaryTelemetry.StampShadow(telemetry, shadowFacts);
+            else if (outcome.Facts is { } facts)
+                SearchTool.StampSymbolCanary(
+                    telemetry,
+                    canaryMode,
+                    facts,
+                    outcome.ServingPolicy);
+            CompleteCliSearchTelemetry(telemetry, request.Query, outcome.Result);
+        }
+
+        return outcome;
+    }
+
+    internal static SearchTool.ContentCanaryOutcome RunNormalContentRoute(
+        ITextContentSearchIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        SemanticMode semanticMode,
+        CanaryMode canaryMode,
+        string workspaceId,
+        string workspaceRoot,
+        string utcDate,
+        Func<string> vectorStateProbe,
+        ISemanticTextArm? productionArm,
+        Func<ISemanticTextArm?>? treatmentArmFactory,
+        TelemetryScope? telemetry)
+    {
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? productionRerank =
+            productionArm is null
+                ? null
+                : SearchTool.BuildContentRerank(
+                    productionArm,
+                    request.Query,
+                    workspaceRoot,
+                    onConsult: null,
+                    index,
+                    contentKinds: null,
+                    excludeTests: false,
+                    request.FilePattern,
+                    request.Language);
+        SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanary(
+            index,
+            request.Query,
+            request.Limit,
+            request.Json,
+            request.CompactBanner,
+            request.FilePattern,
+            request.Language,
+            request.SuggestionLookup,
+            productionRerank,
+            canaryMode,
+            CliModeName(route.Mode),
+            semanticDisabled: semanticMode is SemanticMode.Off,
+            workspaceId,
+            workspaceRoot,
+            utcDate,
+            vectorStateProbe,
+            crossWorkspaceNoGeneration: false,
+            treatmentArmFactory,
+            semanticMode);
+
+        if (telemetry is not null)
+        {
+            if (outcome.Facts is { } facts)
+                SearchTool.StampContentCanary(
+                    telemetry,
+                    canaryMode,
+                    facts,
+                    outcome.ResultPathHashes,
+                    outcome.ResultHashTruncated,
+                    outcome.ServingPolicy);
+            CompleteCliSearchTelemetry(telemetry, request.Query, outcome.Result);
+        }
+
+        return outcome;
+    }
+
+    private static TelemetryLedger? TryOpenCliCanaryLedger(
+        WorkspaceContext ctx,
+        CanaryMode canaryMode,
+        SemanticMode semanticMode)
+    {
+        if (canaryMode is CanaryMode.Off || semanticMode is SemanticMode.Off ||
+            string.IsNullOrWhiteSpace(ctx.WorkspaceId))
+            return null;
+
+        try
+        {
+            return TelemetryLedger.Open(ctx.TelemetryDbPath, ctx.WorkspaceId, ctx.WorkspaceRoot);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or UnauthorizedAccessException
+                or InvalidOperationException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static void CompleteCliSearchTelemetry(
+        TelemetryScope telemetry,
+        string query,
+        SearchRouteExecutionResult result)
+    {
+        telemetry.SetTarget(query);
+        telemetry.ResultCount = result.Count;
+        telemetry.SourceBytes = result.SourceBytes;
+        telemetry.BytesReturned = Encoding.UTF8.GetByteCount(result.Output);
+        telemetry.Outcome = result.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+    }
+
+    private static string CanaryUtcDate(TelemetryScope? telemetry) =>
+        telemetry?.UtcDate ?? DateTimeOffset.UtcNow.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private static string CliModeName(SearchToolMode mode) => mode switch
+    {
+        SearchToolMode.AllText => "all-text",
+        _ => mode.ToString().ToLowerInvariant(),
+    };
 
     /// <summary>
     /// Runs <c>--arm semantic</c> or <c>--arm hybrid</c> against an already-opened arm.
@@ -2299,7 +2493,11 @@ public static class CliDispatch
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
         WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force);
 
-        var action = WorkspaceRefreshAction(result, force, sidecar, registry);
+        bool currentWorkspace = WorkspaceSafety.IsLiveWorkspace(
+            row.CanonicalRoot,
+            CurrentRootForRegistrySelection(ctx));
+        string? vectorNote = VectorRefreshNote(SemanticActivation.FromEnvironment(), currentWorkspace);
+        var action = WorkspaceRefreshAction(result, force, sidecar, registry, vectorNote);
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
     }
@@ -2339,7 +2537,8 @@ public static class CliDispatch
         WorkspaceRefreshResult result,
         bool force,
         SymbolSearchSidecar sidecar,
-        WorkspaceRegistry? registry = null)
+        WorkspaceRegistry? registry = null,
+        string? vectorNote = null)
     {
         long revision = result.Revision ?? 0;
         bool? indexFresh = result.Status switch
@@ -2358,7 +2557,7 @@ public static class CliDispatch
             Scanned: result.Scanned,
             Swapped: false,
             Revision: revision,
-            Note: result.Error ?? result.WarningText,
+            Note: JoinNotes(result.Error ?? result.WarningText, vectorNote),
             WorkspaceId: result.WorkspaceId,
             Root: result.WorkspaceRoot,
             Status: result.StatusText,
@@ -2368,6 +2567,25 @@ public static class CliDispatch
             ScanDurationMs: (long?)result.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)result.TotalDuration?.TotalMilliseconds,
             ArtifactId: ArtifactIdForAction(result, registry));
+    }
+
+    private static string? VectorRefreshNote(SemanticMode mode, bool currentWorkspace)
+    {
+        if (mode is SemanticMode.Off)
+            return null;
+
+        return currentWorkspace
+            ? "vector convergence requires a resident Miller leader; this one-shot CLI refresh does not generate embeddings"
+            : "foreign workspace refresh never generates embeddings; run a resident Miller leader in that workspace to converge vectors";
+    }
+
+    private static string? JoinNotes(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+            return second;
+        if (string.IsNullOrWhiteSpace(second))
+            return first;
+        return first + "; " + second;
     }
 
     private static string? ArtifactIdForAction(WorkspaceRefreshResult result, WorkspaceRegistry? registry)

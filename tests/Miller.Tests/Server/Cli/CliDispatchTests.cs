@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -2577,6 +2578,44 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("julie-extract", errText);
     }
 
+    [Fact]
+    public void Refresh_CurrentSemanticWorkspace_ReportsResidentLeaderRequirement()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "VectorRefreshNote",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        string? note = Assert.IsType<string>(method.Invoke(null, [SemanticMode.On, true]));
+        Assert.Contains("resident Miller leader", note, StringComparison.Ordinal);
+        Assert.Contains("does not generate embeddings", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refresh_ForeignSemanticWorkspace_ReportsThatGenerationWasSkipped()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "VectorRefreshNote",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        string? note = Assert.IsType<string>(method.Invoke(null, [SemanticMode.On, false]));
+        Assert.Contains("foreign workspace", note, StringComparison.Ordinal);
+        Assert.Contains("never generates embeddings", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refresh_SemanticOff_AddsNoVectorNote()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "VectorRefreshNote",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        Assert.Null(method.Invoke(null, [SemanticMode.Off, true]));
+        Assert.Null(method.Invoke(null, [SemanticMode.Off, false]));
+    }
+
     [Theory]
     [InlineData("help")]
     [InlineData("--help")]
@@ -3552,6 +3591,149 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Contains("Widget", output);
         Assert.DoesNotContain("tool.py", output);
+    }
+
+    [Fact]
+    public async Task NormalSymbolRoute_MatchesTheProductionFusionArm()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "RunNormalSymbolRoute",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        const string query = "how does the workspace refresh converge";
+        var port = new StubVectorPort
+        {
+            Matches = [new VectorMatch(1, 0.05, "gadget-symbol", "src/other/Gadget.cs")],
+        };
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        StubSymbolLookupIndex index = TwoSymbolIndex();
+        SearchRouteExecutionRequest request = ArmRequest(query);
+        Func<SemanticSymbolFusionArm> armFactory = () => new(
+            SemanticMode.On,
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session));
+
+        var outcome = Assert.IsType<SearchTool.SymbolCanaryOutcome>(method.Invoke(null,
+        [
+            index, SymbolRoute, request, SemanticMode.On, CanaryMode.Off, "ws-canary", ArmRoot,
+            "2026-07-20", (Func<string>)(() => "ready"), armFactory, null,
+        ]));
+        string expected = SearchRouteExecutor.RunSymbols(
+            index,
+            SymbolRoute,
+            request with { FusionArm = armFactory(), WorkspaceRoot = ArmRoot }).Output;
+
+        Assert.Equal(expected, outcome.Result.Output);
+        Assert.Equal(SearchServingPolicy.Production, outcome.ServingPolicy);
+    }
+
+    [Fact]
+    public async Task NormalEligibleSymbolRoute_WritesPrivacyPreservingCanaryTelemetry()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "RunNormalSymbolRoute",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        const string query = "how does the workspace refresh converge";
+        string telemetryDb = Path.Combine(_dir, "cli-canary.db");
+        var port = new StubVectorPort
+        {
+            Matches = [new VectorMatch(1, 0.05, "gadget-symbol", "src/other/Gadget.cs")],
+        };
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        Func<SemanticSymbolFusionArm> armFactory = () => new(
+            SemanticMode.On,
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session));
+
+        using (TelemetryLedger ledger = TelemetryLedger.Open(telemetryDb, "ws-canary", ArmRoot))
+        {
+            using TelemetryScope scope = ledger.Measure("search", "symbol");
+            var outcome = Assert.IsType<SearchTool.SymbolCanaryOutcome>(method.Invoke(null,
+            [
+                TwoSymbolIndex(), SymbolRoute, ArmRequest(query), SemanticMode.On, CanaryMode.On,
+                "ws-canary", ArmRoot, "2026-07-20", (Func<string>)(() => "ready"), armFactory, scope,
+            ]));
+            Assert.Equal(CanaryEligibility.Eligible, outcome.Facts!.Eligibility);
+        }
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryDb,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT target_hash, metadata_json FROM tool_telemetry LIMIT 1;";
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(Hash(query), reader.GetString(0));
+        string metadata = reader.GetString(1);
+        Assert.DoesNotContain(query, metadata, StringComparison.Ordinal);
+        using JsonDocument json = JsonDocument.Parse(metadata);
+        Assert.Equal(CanaryEligibility.Eligible, json.RootElement.GetProperty("canary_eligibility").GetString());
+        Assert.Equal(CanaryArm.Treatment, json.RootElement.GetProperty("canary_arm").GetString());
+    }
+
+    [Fact]
+    public void Search_SemanticOffWithCanaryOn_RemainsByteIdenticalAndWritesNoTelemetry()
+    {
+        string? previousSemantic = Environment.GetEnvironmentVariable(VectorSidecar.EnvVar);
+        string? previousCanary = Environment.GetEnvironmentVariable(CanaryActivation.EnvVar);
+        Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, "off");
+        Environment.SetEnvironmentVariable(CanaryActivation.EnvVar, "on");
+        try
+        {
+            using var fx = JulieDbFixture.CreateDefault();
+            WorkspaceContext context = Context(fx.DbPath, fx.WorkspaceRoot);
+            var normal = Run(new[] { "search", "UserService" }, context);
+            var lexical = Run(new[] { "search", "UserService", "--arm", "lexical" }, context);
+
+            Assert.Equal(lexical.Code, normal.Code);
+            Assert.Equal(lexical.Out, normal.Out);
+            Assert.Equal(lexical.Err, normal.Err);
+            Assert.False(File.Exists(context.TelemetryDbPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, previousSemantic);
+            Environment.SetEnvironmentVariable(CanaryActivation.EnvVar, previousCanary);
+        }
+    }
+
+    [Fact]
+    public void Search_ContentSemanticOffWithCanaryOn_RemainsByteIdenticalAndWritesNoTelemetry()
+    {
+        string? previousSemantic = Environment.GetEnvironmentVariable(VectorSidecar.EnvVar);
+        string? previousCanary = Environment.GetEnvironmentVariable(CanaryActivation.EnvVar);
+        Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, "off");
+        Environment.SetEnvironmentVariable(CanaryActivation.EnvVar, "on");
+        try
+        {
+            using var fx = DbWithContentDocs("KnownContentMarker", revision: 7);
+            ContentCorpusWriter.Write(
+                ContentCorpusSidecar.ContentDbPathFor(fx.DbPath),
+                fx.DbPath,
+                fx.WorkspaceRoot,
+                workspaceId: "current-ws",
+                revision: 7);
+            WorkspaceContext context = Context(fx.DbPath, fx.WorkspaceRoot);
+
+            var normal = Run(new[] { "search", "KnownContentMarker", "--mode", "content" }, context);
+            var lexical = Run(
+                new[] { "search", "KnownContentMarker", "--mode", "content", "--arm", "lexical" },
+                context);
+
+            Assert.Equal(lexical.Code, normal.Code);
+            Assert.Equal(lexical.Out, normal.Out);
+            Assert.Equal(lexical.Err, normal.Err);
+            Assert.False(File.Exists(context.TelemetryDbPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(VectorSidecar.EnvVar, previousSemantic);
+            Environment.SetEnvironmentVariable(CanaryActivation.EnvVar, previousCanary);
+        }
     }
 
     private const string ArmRoot = "/ws";

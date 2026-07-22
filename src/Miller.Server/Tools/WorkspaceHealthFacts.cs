@@ -123,6 +123,7 @@ public sealed record WorkspaceHealthFacts(
             warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
         AddSidecarWarning(warnings, "search_sidecar", statusFacts.SearchSidecar?.State, statusFacts.SearchSidecar?.Error);
         AddSidecarWarning(warnings, "content_corpus", statusFacts.ContentCorpus?.State, statusFacts.ContentCorpus?.Error);
+        AddVectorWarnings(warnings, recommended, statusFacts.Vectors);
 
         AddLeaderWarnings(warnings, recommended, statusFacts, leader);
 
@@ -276,6 +277,55 @@ public sealed record WorkspaceHealthFacts(
             ? "usable_with_warnings"
             : "degraded";
         warnings.Add(new HealthWarning(code, severity, message));
+    }
+
+    private static void AddVectorWarnings(
+        List<HealthWarning> warnings,
+        List<string> recommended,
+        VectorSidecarFacts? vectors)
+    {
+        if (vectors is null || string.Equals(vectors.State, "disabled", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (string.Equals(vectors.State, "ready", StringComparison.OrdinalIgnoreCase))
+        {
+            VectorCursorFacts? lagging = new[] { vectors.SymbolCursor, vectors.ChunkCursor }
+                .Where(static cursor => cursor is not null &&
+                    (cursor.CompletedRevision < cursor.TargetRevision || cursor.PendingFiles > 0))
+                .OrderByDescending(static cursor => cursor!.PendingFiles ?? 0)
+                .FirstOrDefault();
+            if (lagging is not null)
+            {
+                string pending = lagging.PendingFiles is { } count
+                    ? $"; {count} files pending"
+                    : string.Empty;
+                warnings.Add(new HealthWarning(
+                    "vectors_stale",
+                    "usable_with_warnings",
+                    $"vector convergence is behind revision {lagging.TargetRevision}{pending}"));
+                recommended.Add("keep a resident Miller leader running so vectors can converge");
+            }
+
+            string? failure = new[] { vectors.SymbolCursor?.LastError, vectors.ChunkCursor?.LastError }
+                .FirstOrDefault(static error => !string.IsNullOrWhiteSpace(error));
+            if (failure is not null)
+            {
+                warnings.Add(new HealthWarning(
+                    "vectors_failed",
+                    "usable_with_warnings",
+                    $"vector convergence reported a failure: {failure}"));
+                recommended.Add("keep a resident Miller leader running and inspect vector convergence diagnostics");
+            }
+
+            return;
+        }
+
+        string normalizedState = vectors.State.Replace('-', '_');
+        string message = string.IsNullOrWhiteSpace(vectors.Reason)
+            ? $"vector retrieval is {vectors.State}"
+            : $"vector retrieval is {vectors.State}: {vectors.Reason}";
+        warnings.Add(new HealthWarning($"vectors_{normalizedState}", "degraded", message));
+        recommended.Add("keep a resident Miller leader running so vectors can converge or rebuild");
     }
 
     private static HealthState StateFrom(WorkspaceFacts statusFacts, IReadOnlyList<HealthWarning> warnings)

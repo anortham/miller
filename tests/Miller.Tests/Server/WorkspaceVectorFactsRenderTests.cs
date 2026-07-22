@@ -256,6 +256,71 @@ public sealed class WorkspaceVectorFactsRenderTests
             WorkspaceRender.Health(Build(disabled), json: true));
     }
 
+    [Fact]
+    public void Health_ReadyButBehindVectorsWarnAndRecommendResidentLeader()
+    {
+        VectorSidecarFacts vectors = Ready() with
+        {
+            SymbolCursor = Cursor("symbol", 40, 42, pendingFiles: 3),
+        };
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        HealthWarning warning = Assert.Single(health.Warnings, item => item.Code == "vectors_stale");
+        Assert.Equal("usable_with_warnings", warning.Severity);
+        Assert.Contains("3 files pending", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(health.RecommendedActions, action => action.Contains("resident Miller leader", StringComparison.Ordinal));
+        Assert.Equal(HealthState.UsableWithWarnings, health.State);
+    }
+
+    [Fact]
+    public void Health_UnavailableVectorsDegradeSemanticReadinessAndRecommendResidentLeader()
+    {
+        var vectors = new VectorSidecarFacts(
+            "unavailable",
+            "/repo/.miller/vectors.db",
+            "no vector artifact exists");
+
+        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        HealthWarning warning = Assert.Single(health.Warnings, item => item.Code == "vectors_unavailable");
+        Assert.Equal("degraded", warning.Severity);
+        Assert.Contains("vector retrieval is unavailable", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(health.RecommendedActions, action => action.Contains("resident Miller leader", StringComparison.Ordinal));
+        Assert.Equal(HealthState.Degraded, health.State);
+    }
+
+    [Fact]
+    public void Health_SemanticOffIsHealthyAndByteIdenticalForLexicalUse()
+    {
+        WorkspaceHealthFacts Build(VectorSidecarFacts? vectors) => WorkspaceHealthFacts.Create(
+            Facts(vectors),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(OkCount: 1, EmptyCount: 0, ErrorCount: 0),
+            EmptyExtractionHealth());
+
+        WorkspaceHealthFacts withoutSemantic = Build(null);
+        WorkspaceHealthFacts disabled = Build(new VectorSidecarFacts(
+            "disabled", "/repo/.miller/vectors.db", null));
+
+        Assert.Equal(HealthState.Ready, disabled.State);
+        Assert.Empty(disabled.Warnings);
+        Assert.Equal(
+            WorkspaceRender.Health(withoutSemantic, json: false),
+            WorkspaceRender.Health(disabled, json: false));
+        Assert.Equal(
+            WorkspaceRender.Health(withoutSemantic, json: true),
+            WorkspaceRender.Health(disabled, json: true));
+    }
+
     private static WorkspaceExtractionHealthFacts EmptyExtractionHealth() => new(
         ParseDiagnostics: HealthFactSection<ParseDiagnosticGroup>.FromRows([]),
         CapabilityGaps: HealthFactSection<CapabilityGapGroup>.FromRows([]),
