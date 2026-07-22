@@ -87,12 +87,12 @@
 **Approach:** Keep validation and report construction in this module; do not reuse `CanaryGateMath` because the evaluator intentionally has no Miller project reference. Sort dictionary/group output ordinally for byte-stable JSON later. Include aggregate duration/tool/search/zero-result summaries but never per-task rows.
 
 **Acceptance criteria:**
-- [ ] Hand-computed paired fixtures match both completion cells and Wilson bounds.
-- [ ] Fewer than 30 pairs is underpowered; 30+ with no demonstrated lift fails; a powered lower bound above 0.5 passes.
-- [ ] Missing, extra, duplicate, invalid-profile, or invalid-count rows throw deterministic validation errors.
-- [ ] Identifier/path safety uses its five-pair floor and `baseline_only > candidate_only` failure rule.
-- [ ] Groups below five are suppressed and no task id appears anywhere in serialized aggregate output.
-- [ ] Worker-scope verification passes; hand the change to the lead with `parallel-lead-commit` (do not commit in the worker lane).
+- [x] Hand-computed paired fixtures match both completion cells and Wilson bounds.
+- [x] Fewer than 30 pairs is underpowered; 30+ with no demonstrated lift fails; a powered lower bound above 0.5 passes.
+- [x] Missing, extra, duplicate, invalid-profile, or invalid-count rows throw deterministic validation errors.
+- [x] Identifier/path safety uses its five-pair floor and `baseline_only > candidate_only` failure rule.
+- [x] Groups below five are suppressed and no task id appears anywhere in serialized aggregate output.
+- [x] Worker-scope verification passes; hand the change to the lead with `parallel-lead-commit` (do not commit in the worker lane).
 
 ### Task 2: Correct-mode retrieval evaluation
 

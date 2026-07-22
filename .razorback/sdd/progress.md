@@ -199,3 +199,6 @@ Task 6: complete (parallel-lead-commit, lead inline review clean, lead commit dd
 | affected-change (build) | Release clean, warnings-as-errors | `dotnet build Miller.slnx -c Release` | 34001ed | PASS 0W/0E | 2026-07-21 |
 | affected-change (focused) | Canary/export/gate/content/CLI/workspace/package/workflow contracts | focused `dotnet test ... -c Release --no-build` | 34001ed | PASS 506/0 | 2026-07-21 |
 | fast suite | All non-Scale assertions and timing tripwire | `scripts/test.sh` | pre-commit Batch B tree | PASS 4477/0, 2 skip, 26s | 2026-07-21 |
+
+## Semantic maturity decision execution
+Canary Task 1: complete (serial-worker-commit, lead inline review clean with CLI v3 shadow forwarding assigned to Task 2, commit bb26d4cd — decision activation, contract-3 stamping, 100% identifier shadow sampling; focused 117/117; Release server build 0W/0E).
