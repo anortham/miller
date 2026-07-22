@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-efficiency/task-manifest-v1.json",
+  "title": "Miller agent-efficiency task manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tasks"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "ordinalId": {
+      "type": "string",
+      "pattern": "^(dev|sealed)-[0-9]{3}$"
+    },
+    "localId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*-[0-9]{3}$"
+    },
+    "repoRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+    },
+    "anchorIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/localId" }
+    },
+    "terms": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "factPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_id", "source", "all_terms", "evidence_anchor_ids"],
+      "properties": {
+        "predicate_id": { "$ref": "#/$defs/localId" },
+        "source": { "enum": ["answer", "evidence_claim"] },
+        "all_terms": { "$ref": "#/$defs/terms" },
+        "any_terms": { "$ref": "#/$defs/terms" },
+        "evidence_anchor_ids": { "$ref": "#/$defs/anchorIds" }
+      }
+    },
+    "pathPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_id", "path", "evidence_anchor_ids"],
+      "properties": {
+        "predicate_id": { "$ref": "#/$defs/localId" },
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "evidence_anchor_ids": { "$ref": "#/$defs/anchorIds" }
+      }
+    },
+    "symbolPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["predicate_id", "symbol", "evidence_anchor_ids"],
+      "properties": {
+        "predicate_id": { "$ref": "#/$defs/localId" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "evidence_anchor_ids": { "$ref": "#/$defs/anchorIds" }
+      }
+    },
+    "evidenceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_id", "path"],
+      "properties": {
+        "anchor_id": { "$ref": "#/$defs/localId" },
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 }
+      },
+      "dependentRequired": {
+        "line_start": ["line_end"],
+        "line_end": ["line_start"]
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "repo_id",
+        "snapshot_id",
+        "language",
+        "workflow_class",
+        "evidence_critical",
+        "prompt",
+        "fact_predicates",
+        "path_cited",
+        "symbol_cited",
+        "evidence_anchors",
+        "forbidden_claims"
+      ],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/ordinalId" },
+        "repo_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
+        "language": { "type": "string", "pattern": "^[a-z][a-z0-9_+-]*$" },
+        "workflow_class": {
+          "enum": [
+            "exact_lookup",
+            "concept_search",
+            "docs_config",
+            "context_assembly",
+            "references_trace",
+            "impact_tests"
+          ]
+        },
+        "evidence_critical": { "type": "boolean" },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "fact_predicates": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/factPredicate" }
+        },
+        "path_cited": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pathPredicate" }
+        },
+        "symbol_cited": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/symbolPredicate" }
+        },
+        "evidence_anchors": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidenceAnchor" }
+        },
+        "forbidden_claims": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        }
+      }
+    }
+  }
+}

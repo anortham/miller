@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "snapshots": [
+    {
+      "snapshot_id": "snapshot-001",
+      "repo_id": "goldfish",
+      "commit": "11c327d1d5fb818744c86b7d94b74ec9d1d7468e",
+      "content_sha256": "38d3acdb83fe5f9e4a30b894076fa14d989f8bfe79a0d5e2b822baadeb62cc24",
+      "languages": ["typescript"]
+    },
+    {
+      "snapshot_id": "snapshot-002",
+      "repo_id": "eros",
+      "commit": "a1a15d634151a88a02063f44adecbd2bc93c172a",
+      "content_sha256": "841c5aee9e78af1b9da6c78d81370a1535a7be661168564555207f2b64cf6ce3",
+      "languages": ["csharp"]
+    },
+    {
+      "snapshot_id": "snapshot-003",
+      "repo_id": "razorback",
+      "commit": "ed391ab50dc4d1d7a73eddd95663c24aea50dec2",
+      "content_sha256": "7898d5688b3425db488ca8ec9b9d697fac6d1a10fd4a028bc59c0738acb5231e",
+      "languages": ["javascript", "json", "shell"]
+    },
+    {
+      "snapshot_id": "snapshot-004",
+      "repo_id": "tree-sitter-razor",
+      "commit": "9fdcfd755d5537e8285166c25c34d1617bdf0826",
+      "content_sha256": "957fc25de7956cef6dcaf0a9d021d9c5bfc7bf45a5e7e0f3579044bc08d81997",
+      "languages": ["c", "javascript"]
+    },
+    {
+      "snapshot_id": "snapshot-005",
+      "repo_id": "tree-sitter-c-sharp",
+      "commit": "688cf95ae4c984638557dab73253bd66719bdd5c",
+      "content_sha256": "8f6160c3c0b8c8cd70ff0b6ba32fcd5bb394a8ff14d13bf4c74d21923b48d445",
+      "languages": ["javascript", "rust"]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-efficiency/answer-v1.json",
+  "title": "Miller agent-efficiency structured answer",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "answer", "evidence"],
+  "properties": {
+    "status": { "enum": ["answered", "not_found", "blocked"] },
+    "answer": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "evidence": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "claim"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+          },
+          "symbol": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "line": { "type": "integer", "minimum": 1 },
+          "claim": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        }
+      }
+    }
+  }
+}

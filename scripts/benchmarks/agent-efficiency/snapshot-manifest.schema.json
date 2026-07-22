@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-efficiency/snapshot-manifest-v1.json",
+  "title": "Miller agent-efficiency snapshot manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "snapshots"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["snapshot_id", "repo_id", "commit", "content_sha256", "languages"],
+        "properties": {
+          "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
+          "repo_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "languages": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9_+-]*$" }
+          }
+        }
+      }
+    }
+  }
+}

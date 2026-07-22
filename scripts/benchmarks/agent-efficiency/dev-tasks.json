@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "tasks": [
+    {
+      "task_id": "dev-001",
+      "repo_id": "goldfish",
+      "snapshot_id": "snapshot-001",
+      "language": "typescript",
+      "workflow_class": "exact_lookup",
+      "evidence_critical": true,
+      "prompt": "Locate the path-key normalizer used for safety comparisons and explain how its Windows and POSIX branches differ.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["normalizePathKeyForSafetyCheck", "normalizeWindowsPathKey", "normalizePosixPathKey"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/workspace.ts",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "normalizePathKeyForSafetyCheck",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/workspace.ts",
+          "symbol": "normalizePathKeyForSafetyCheck",
+          "line_start": 165,
+          "line_end": 170
+        }
+      ],
+      "forbidden_claims": ["uses one case-sensitive normalization path on every platform"]
+    },
+    {
+      "task_id": "dev-002",
+      "repo_id": "eros",
+      "snapshot_id": "snapshot-002",
+      "language": "csharp",
+      "workflow_class": "exact_lookup",
+      "evidence_critical": true,
+      "prompt": "Find the factory that creates semantic Miller search candidates and name all candidate identifiers it accepts.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["SemanticMillerCandidateFactory", "token-baseline", "llamasharp-inmemory", "llamasharp-sqlite-vec"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "SemanticMillerCandidateFactory",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
+          "symbol": "SemanticMillerCandidateFactory",
+          "line_start": 50,
+          "line_end": 66
+        }
+      ],
+      "forbidden_claims": ["silently falls back for unknown candidate identifiers"]
+    },
+    {
+      "task_id": "dev-003",
+      "repo_id": "eros",
+      "snapshot_id": "snapshot-002",
+      "language": "csharp",
+      "workflow_class": "concept_search",
+      "evidence_critical": false,
+      "prompt": "Where is the semantic-search architecture that chooses between a lexical token baseline, in-memory embeddings, and SQLite vector ranking? Explain the choice point without relying on an exact symbol name from the question.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "evidence_claim",
+          "all_terms": ["token-baseline", "llamasharp-inmemory", "llamasharp-sqlite-vec"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
+          "line_start": 50,
+          "line_end": 66
+        }
+      ],
+      "forbidden_claims": ["the choice is implemented in Miller runtime code"]
+    },
+    {
+      "task_id": "dev-004",
+      "repo_id": "goldfish",
+      "snapshot_id": "snapshot-001",
+      "language": "typescript",
+      "workflow_class": "concept_search",
+      "evidence_critical": false,
+      "prompt": "How does the server recover the intended workspace when the current directory is unsafe or nested, and which candidates are compared?",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["registered ancestor", "parent walk", "recall"],
+          "any_terms": ["unsafe", "mutating"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/workspace-recovery.ts",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "recoverWorkspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/workspace-recovery.ts",
+          "symbol": "recoverWorkspace",
+          "line_start": 107,
+          "line_end": 145
+        }
+      ],
+      "forbidden_claims": ["mutating tools always accept the single registered project"]
+    },
+    {
+      "task_id": "dev-005",
+      "repo_id": "razorback",
+      "snapshot_id": "snapshot-003",
+      "language": "json",
+      "workflow_class": "docs_config",
+      "evidence_critical": false,
+      "prompt": "What is the current Razorback package version, and which configuration declares the files that must remain version-aligned?",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["0.24.0", ".version-bump.json", "five"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "package.json",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": ".version-bump.json",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "symbol_cited": [],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "package.json",
+          "line_start": 1,
+          "line_end": 5
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": ".version-bump.json",
+          "line_start": 1,
+          "line_end": 8
+        }
+      ],
+      "forbidden_claims": ["only package.json is version-bearing"]
+    },
+    {
+      "task_id": "dev-006",
+      "repo_id": "tree-sitter-c-sharp",
+      "snapshot_id": "snapshot-005",
+      "language": "javascript",
+      "workflow_class": "docs_config",
+      "evidence_critical": false,
+      "prompt": "Which package scripts build the WebAssembly grammar, open the playground, and run the Node binding tests for tree-sitter-c-sharp?",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["prestart", "start", "test", "tree-sitter", "playground", "bindings/node"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "package.json",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "package.json",
+          "line_start": 59,
+          "line_end": 65
+        }
+      ],
+      "forbidden_claims": ["the test script runs the full tree-sitter corpus suite"]
+    },
+    {
+      "task_id": "dev-007",
+      "repo_id": "tree-sitter-razor",
+      "snapshot_id": "snapshot-004",
+      "language": "c",
+      "workflow_class": "context_assembly",
+      "evidence_critical": false,
+      "prompt": "Assemble the minimal grammar and scanner context needed to change how Razor markup tag names are recognized and dispatched.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["externals", "tree_sitter_razor_external_scanner_scan", "scan_markup_tag"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "grammar.js",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "src/scanner.c",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "tree_sitter_razor_external_scanner_scan",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "grammar.js",
+          "line_start": 16,
+          "line_end": 31
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "src/scanner.c",
+          "symbol": "tree_sitter_razor_external_scanner_scan",
+          "line_start": 313,
+          "line_end": 358
+        }
+      ],
+      "forbidden_claims": ["markup tag recognition is implemented only in grammar.js"]
+    },
+    {
+      "task_id": "dev-008",
+      "repo_id": "tree-sitter-c-sharp",
+      "snapshot_id": "snapshot-005",
+      "language": "rust",
+      "workflow_class": "context_assembly",
+      "evidence_critical": false,
+      "prompt": "Assemble the grammar export, Rust language binding, and smoke-test context needed to change how the C# grammar is loaded.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["c_sharp", "LANGUAGE", "tree_sitter_c_sharp", "test_can_load_grammar"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "grammar.js",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "bindings/rust/lib.rs",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "symbol_cited": [],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "grammar.js",
+          "line_start": 43,
+          "line_end": 48
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "bindings/rust/lib.rs",
+          "line_start": 23,
+          "line_end": 59
+        }
+      ],
+      "forbidden_claims": ["the Rust binding has no grammar-load smoke test"]
+    },
+    {
+      "task_id": "dev-009",
+      "repo_id": "goldfish",
+      "snapshot_id": "snapshot-001",
+      "language": "typescript",
+      "workflow_class": "references_trace",
+      "evidence_critical": true,
+      "prompt": "Trace the production callers of normalizePathKeyForSafetyCheck and identify the purpose of each caller.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["registryPathKey", "comparablePathKey"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/registry.ts",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "src/workspace-recovery.ts",
+          "evidence_anchor_ids": ["anchor-003"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "normalizePathKeyForSafetyCheck",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/workspace.ts",
+          "symbol": "normalizePathKeyForSafetyCheck",
+          "line_start": 165,
+          "line_end": 170
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "src/registry.ts",
+          "symbol": "registryPathKey",
+          "line_start": 32,
+          "line_end": 34
+        },
+        {
+          "anchor_id": "anchor-003",
+          "path": "src/workspace-recovery.ts",
+          "symbol": "comparablePathKey",
+          "line_start": 59,
+          "line_end": 61
+        }
+      ],
+      "forbidden_claims": ["the normalizer has no production callers"]
+    },
+    {
+      "task_id": "dev-010",
+      "repo_id": "tree-sitter-razor",
+      "snapshot_id": "snapshot-004",
+      "language": "c",
+      "workflow_class": "references_trace",
+      "evidence_critical": true,
+      "prompt": "Trace the production caller of scan_markup_tag and identify the external token conditions that route into it.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["tree_sitter_razor_external_scanner_scan", "START_TAG_NAME", "VOID_TAG_NAME", "END_TAG_NAME"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "src/scanner.c",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "src/scanner.c",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "scan_markup_tag",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "src/scanner.c",
+          "symbol": "scan_markup_tag",
+          "line_start": 164,
+          "line_end": 198
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "src/scanner.c",
+          "symbol": "tree_sitter_razor_external_scanner_scan",
+          "line_start": 355,
+          "line_end": 358
+        }
+      ],
+      "forbidden_claims": ["scan_markup_tag has no production caller"]
+    },
+    {
+      "task_id": "dev-011",
+      "repo_id": "tree-sitter-c-sharp",
+      "snapshot_id": "snapshot-005",
+      "language": "javascript",
+      "workflow_class": "impact_tests",
+      "evidence_critical": true,
+      "prompt": "If the C# grammar export or generated language binding changes, which focused Node and Rust grammar-load tests should run?",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["bindings/node/binding_test.js", "bindings/rust/lib.rs", "test_can_load_grammar"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "bindings/node/binding_test.js",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "bindings/rust/lib.rs",
+          "evidence_anchor_ids": ["anchor-003"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "c_sharp",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "grammar.js",
+          "symbol": "c_sharp",
+          "line_start": 43,
+          "line_end": 48
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "bindings/node/binding_test.js",
+          "line_start": 5,
+          "line_end": 10
+        },
+        {
+          "anchor_id": "anchor-003",
+          "path": "bindings/rust/lib.rs",
+          "symbol": "test_can_load_grammar",
+          "line_start": 51,
+          "line_end": 59
+        }
+      ],
+      "forbidden_claims": ["grammar loading has no focused binding tests"]
+    },
+    {
+      "task_id": "dev-012",
+      "repo_id": "razorback",
+      "snapshot_id": "snapshot-003",
+      "language": "shell",
+      "workflow_class": "impact_tests",
+      "evidence_critical": true,
+      "prompt": "If the version bump and drift-audit workflow changes, which focused test files verify declared-manifest synchronization and audit failure behavior?",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["tests/version-audit.test.mjs", "tests/version-sync.test.mjs", "DRIFT DETECTED"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "tests/version-audit.test.mjs",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "predicate_id": "path-002",
+          "path": "tests/version-sync.test.mjs",
+          "evidence_anchor_ids": ["anchor-003"]
+        }
+      ],
+      "symbol_cited": [],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "scripts/bump-version.sh",
+          "symbol": "cmd_bump",
+          "line_start": 186,
+          "line_end": 214
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "tests/version-audit.test.mjs",
+          "line_start": 60,
+          "line_end": 73
+        },
+        {
+          "anchor_id": "anchor-003",
+          "path": "tests/version-sync.test.mjs",
+          "line_start": 14,
+          "line_end": 28
+        }
+      ],
+      "forbidden_claims": ["version drift is only checked manually"]
+    }
+  ]
+}

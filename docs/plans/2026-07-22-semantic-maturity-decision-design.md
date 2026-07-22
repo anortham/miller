@@ -5,6 +5,13 @@
 **Architecture risk:** High — this extends a frozen privacy/statistical contract and creates the evidence used
 to keep or remove a costly product subsystem.
 
+**Timing update:** The
+[Miller/Julie agent-efficiency decision](2026-07-22-miller-julie-agent-efficiency-decision-design.md) now owns
+the immediate product-direction verdict, due no later than 2026-07-25. This program continues as background
+evidence for Miller's semantic-runtime promotion or removal; its day-14/day-30 window no longer delays choosing
+Miller or Julie as the primary product. The agent-efficiency design's one visible-set Miller repair is the only
+exception to this program's tuning hold and must not alter the immutable canary binary or cohort identity.
+
 ## 1. Decision
 
 Do not promote semantic retrieval and do not remove it yet. Run one bounded, pre-registered decision program

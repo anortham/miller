@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-efficiency/run-result-v1.json",
+  "title": "Miller agent-efficiency run result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "task_id",
+    "snapshot_id",
+    "product",
+    "status",
+    "failure_reason",
+    "answer",
+    "tool_calls",
+    "tool_call_count",
+    "tool_output_bytes",
+    "tool_output_tokens",
+    "model_input_tokens",
+    "model_output_tokens",
+    "product_errors",
+    "duplicate_calls",
+    "uncited_tool_output_tokens",
+    "wall_clock_ms",
+    "verification"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "task_id": { "type": "string", "pattern": "^(dev|sealed)-[0-9]{3}$" },
+    "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
+    "product": { "enum": ["miller", "julie"] },
+    "status": { "enum": ["completed", "timeout", "failed", "invalid_answer"] },
+    "failure_reason": {
+      "oneOf": [
+        { "$ref": "#/$defs/failureReason" },
+        { "type": "null" }
+      ]
+    },
+    "answer": {
+      "oneOf": [
+        { "$ref": "#/$defs/answer" },
+        { "type": "null" }
+      ]
+    },
+    "tool_calls": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sequence", "tool", "arguments", "output", "duration_ms", "error"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1, "maximum": 8 },
+          "tool": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "arguments": { "type": "object" },
+          "output": { "type": "string" },
+          "duration_ms": { "type": "integer", "minimum": 0 },
+          "error": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "tool_call_count": { "type": "integer", "minimum": 0, "maximum": 8 },
+    "tool_output_bytes": { "type": "integer", "minimum": 0 },
+    "tool_output_tokens": { "type": "integer", "minimum": 0 },
+    "model_input_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "model_output_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "product_errors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "duplicate_calls": { "type": "integer", "minimum": 0 },
+    "uncited_tool_output_tokens": { "type": "integer", "minimum": 0 },
+    "wall_clock_ms": { "type": "integer", "minimum": 0 },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "failures", "matched_anchor_ids"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "failures": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "matched_anchor_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*-[0-9]{3}$" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "completed" } }
+      },
+      "then": {
+        "properties": { "answer": { "$ref": "#/$defs/answer" } }
+      },
+      "else": {
+        "properties": {
+          "answer": { "type": "null" },
+          "verification": {
+            "properties": { "passed": { "const": false } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["verification"],
+        "properties": {
+          "verification": {
+            "required": ["passed"],
+            "properties": { "passed": { "const": true } }
+          }
+        }
+      },
+      "then": {
+        "properties": { "failure_reason": { "type": "null" } }
+      },
+      "else": {
+        "properties": { "failure_reason": { "$ref": "#/$defs/failureReason" } }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "enum": ["timeout", "failed"] } }
+      },
+      "then": {
+        "properties": {
+          "answer": { "type": "null" },
+          "failure_reason": { "const": "product_error" },
+          "verification": {
+            "properties": { "passed": { "const": false } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "invalid_answer" } }
+      },
+      "then": {
+        "properties": {
+          "answer": { "type": "null" },
+          "failure_reason": { "const": "invalid_answer" },
+          "verification": {
+            "properties": { "passed": { "const": false } }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "failureReason": {
+      "enum": [
+        "incorrect",
+        "insufficient_evidence",
+        "budget_exceeded",
+        "disallowed_tool",
+        "product_error",
+        "invalid_answer"
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "answer", "evidence"],
+      "properties": {
+        "status": { "enum": ["answered", "not_found", "blocked"] },
+        "answer": { "type": "string", "minLength": 1, "maxLength": 8000 },
+        "evidence": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "claim"],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+              },
+              "symbol": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "line": { "type": "integer", "minimum": 1 },
+              "claim": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
