@@ -51,9 +51,16 @@ Every platform archive carries two pinned toolsets under `.tools/`:
 | `scripts/semantic-pins.json` | `julie-semantic-sidecar[.exe]`, `vec0.dylib`/`vec0.so`/`vec0.dll` | `scripts/restore-semantic-sidecar.sh` / `.ps1` |
 
 The release workflow restores both by pin — it never hardcodes URLs or checksums — and each runner's host
-platform equals its matrix target, so the scripts' host detection resolves the right asset. Both packaged
-binaries are smoke-run with `--version` before packaging, and the sqlite-vec member name is read from
-`scripts/semantic-pins.json` per RID rather than assumed.
+platform equals its matrix target, so the scripts' host detection resolves the right asset. Before either
+archive step, every RID runs `Miller.PackageSemanticSmoke` against that leg's exact
+`artifacts/publish/<target>` staging directory. The helper launches the staged sidecar with Miller's active
+encoder pin, embeds one fixed query, loads the staged sqlite-vec extension, inserts that emitted vector into
+`vec0`, and requires a KNN self-query to return the inserted row at near-zero distance.
+
+Model acquisition is a separate setup step before the smoke. The smoke itself never downloads and fails if
+the active model is not already prepared. Release packages remain self-contained for executable payloads;
+model weights keep the product's explicit, consented shared-cache lifecycle through `miller semantic prepare`.
+The sqlite-vec member name is read from `scripts/semantic-pins.json` per RID rather than assumed.
 
 Semantic restore failure fails the release job even though semantic retrieval is optional at runtime
 (ADR-0003): a local build with no restore is fine, but a published archive silently missing the sidecar is

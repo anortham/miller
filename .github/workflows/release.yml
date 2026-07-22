@@ -85,7 +85,10 @@ jobs:
           "RELEASE_PRERELEASE=$($isPrerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
 
       - name: Restore
-        run: dotnet restore Miller.slnx
+        shell: pwsh
+        run: |
+          dotnet restore Miller.slnx
+          dotnet restore scripts/Miller.PackageSemanticSmoke/Miller.PackageSemanticSmoke.csproj
 
       - name: Restore julie-extract (Unix)
         if: runner.os != 'Windows'
@@ -286,6 +289,29 @@ jobs:
               throw "AOT MCP serve smoke failed: $tool tool missing"
             }
           }
+
+      - name: Prepare packaged semantic smoke model
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          $sidecarName = if ($env:RUNNER_OS -eq "Windows") { "julie-semantic-sidecar.exe" } else { "julie-semantic-sidecar" }
+          $sidecar = Join-Path $publishDir ".tools/$sidecarName"
+          $modelId = dotnet run --project scripts/Miller.PackageSemanticSmoke/Miller.PackageSemanticSmoke.csproj `
+            -c Release --no-restore -- --print-model-id
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to resolve Miller's active semantic model"
+          }
+          & $sidecar prepare --model $modelId
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to prepare Miller's active semantic model $modelId"
+          }
+
+      - name: Smoke packaged semantic payload
+        shell: pwsh
+        run: |
+          $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
+          dotnet run --project scripts/Miller.PackageSemanticSmoke/Miller.PackageSemanticSmoke.csproj `
+            -c Release --no-restore -- --package-root $publishDir
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'
