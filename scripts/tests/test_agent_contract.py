@@ -465,6 +465,17 @@ class AgentContractTests(unittest.TestCase):
             "failure_reason": "product_error",
         }
         validator.validate(timed_out)
+        for outcome in ["disallowed_tool", "budget_exceeded"]:
+            with self.subTest(outcome=outcome):
+                validator.validate(
+                    {
+                        **value,
+                        "status": outcome,
+                        "answer": None,
+                        "verification": {**value["verification"], "passed": False},
+                        "failure_reason": outcome,
+                    }
+                )
 
         invalid = [
             ({**value, "answer": {**value["answer"], "unexpected": "not allowed"}}, "unexpected"),
@@ -515,6 +526,26 @@ class AgentContractTests(unittest.TestCase):
                     "failure_reason": "product_error",
                 },
                 "invalid_answer",
+            ),
+            (
+                {
+                    **value,
+                    "status": "disallowed_tool",
+                    "answer": None,
+                    "verification": {**value["verification"], "passed": False},
+                    "failure_reason": "budget_exceeded",
+                },
+                "disallowed_tool",
+            ),
+            (
+                {
+                    **value,
+                    "status": "budget_exceeded",
+                    "answer": None,
+                    "verification": {**value["verification"], "passed": False},
+                    "failure_reason": "disallowed_tool",
+                },
+                "budget_exceeded",
             ),
         ]
         for candidate, expected in invalid:

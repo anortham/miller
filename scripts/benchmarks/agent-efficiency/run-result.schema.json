@@ -31,7 +31,9 @@
     "task_id": { "type": "string", "pattern": "^(dev|sealed)-[0-9]{3}$" },
     "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
     "product": { "enum": ["miller", "julie"] },
-    "status": { "enum": ["completed", "timeout", "failed", "invalid_answer"] },
+    "status": {
+      "enum": ["completed", "timeout", "failed", "invalid_answer", "disallowed_tool", "budget_exceeded"]
+    },
     "failure_reason": {
       "oneOf": [
         { "$ref": "#/$defs/failureReason" },
@@ -153,6 +155,28 @@
           "verification": {
             "properties": { "passed": { "const": false } }
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "disallowed_tool" } }
+      },
+      "then": {
+        "properties": {
+          "failure_reason": { "const": "disallowed_tool" }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "budget_exceeded" } }
+      },
+      "then": {
+        "properties": {
+          "failure_reason": { "const": "budget_exceeded" }
         }
       }
     }
