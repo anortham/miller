@@ -624,6 +624,54 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(3, gate.RootElement.GetProperty("canary_contract_version").GetInt32());
     }
 
+    [Fact]
+    public void TelemetryCanaryCombine_AcceptsExportPathsAndKeepsPathsOutOfOutput()
+    {
+        var ctx = Context(Path.Combine(_dir, "symbols.db"));
+        string first = Path.Combine(_dir, "operator-a-secret.json");
+        string second = Path.Combine(_dir, "operator-b-secret.json");
+        File.WriteAllText(first, EmptyV3CanaryExport("00112233445566778899aabbccddeeff", "2026-07-01", "2026-07-07"));
+        File.WriteAllText(second, EmptyV3CanaryExport("ffeeddccbbaa99887766554433221100", "2026-07-01", "2026-07-07"));
+
+        var (code, outText, errText) = Run(
+            ["telemetry", "canary", "combine", first, second, "--json"],
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument output = JsonDocument.Parse(outText);
+        Assert.Equal("canary_v3_aggregate", output.RootElement.GetProperty("report_kind").GetString());
+        Assert.Equal(2, output.RootElement.GetProperty("source_count").GetInt32());
+        Assert.DoesNotContain(first, outText, StringComparison.Ordinal);
+        Assert.DoesNotContain(second, outText, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("telemetry", "canary", "combine")]
+    [InlineData("telemetry", "canary", "combine", "--unknown")]
+    public void TelemetryCanaryCombine_MissingPathsOrUnknownOptions_AreUsageErrors(params string[] args)
+    {
+        var (code, outText, errText) = Run(args, Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("telemetry canary combine", errText, StringComparison.Ordinal);
+    }
+
+    private static string EmptyV3CanaryExport(string sourceId, string from, string to) => $$"""
+        {
+          "schema_version": 3,
+          "canary_contract_version": 3,
+          "export_source_id": "{{sourceId}}",
+          "experiment_id": "semantic_hybrid_search_v1",
+          "generated_at_utc": "2026-08-01T00:00:00Z",
+          "window": { "from_utc": "{{from}}", "to_utc": "{{to}}" },
+          "suppressed_unit_count": 0,
+          "units": [],
+          "shadow_units": []
+        }
+        """;
+
     [Theory]
     [InlineData("--contract")]
     [InlineData("--contract 1")]
@@ -663,6 +711,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("patterns", outText);
         Assert.Contains("--pattern ID] [--query TEXT]", outText);
         Assert.Contains("--depth summary|overview|full", outText);
+        Assert.Contains("canary combine <export.json>... [--json]", outText);
         Assert.Contains("serve", outText);
     }
 

@@ -1296,7 +1296,8 @@ public static class CliDispatch
     private const string TelemetryUsage =
         "miller telemetry export [--jsonl] [--workspace-id ID|all] | " +
         "miller telemetry canary [--json] [--contract 2|3] [--source-id ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD] | " +
-        "miller telemetry canary --gate [--json] [--contract 2|3]";
+        "miller telemetry canary --gate [--json] [--contract 2|3] | " +
+        "miller telemetry canary combine <export.json>... [--json]";
 
     private static int Telemetry(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -1323,6 +1324,9 @@ public static class CliDispatch
 
     private static int Canary(IReadOnlyList<string> tail, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
+        if (tail.Count > 0 && tail[0].Equals("combine", StringComparison.OrdinalIgnoreCase))
+            return CanaryCombine(tail.Skip(1).ToArray(), outw, err);
+
         CliOptions o = CliOptions.Parse(tail, "json", "gate");
         if (o.Positionals.Count > 0 || o.FlagNames.Any(static name => !IsCanaryFlag(name)))
             return Usage(err, TelemetryUsage);
@@ -1366,6 +1370,34 @@ public static class CliDispatch
         outw.WriteLine(CanaryExport.BuildJson(
             ctx.TelemetryDbPath, from, to, generatedAt, contractVersion, sourceId));
         return 0;
+    }
+
+    private static int CanaryCombine(IReadOnlyList<string> tail, TextWriter outw, TextWriter err)
+    {
+        CliOptions options = CliOptions.Parse(tail, "json");
+        if (options.Positionals.Count == 0
+            || options.FlagNames.Any(static name => !name.Equals("json", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Usage(err, TelemetryUsage);
+        }
+
+        try
+        {
+            string[] documents = options.Positionals.Select(File.ReadAllText).ToArray();
+            CanaryAggregateReport report = CanaryAggregate.Combine(documents);
+            outw.WriteLine(CanaryAggregate.Render(report, options.Has("json")));
+            return 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            err.WriteLine("canary combine failed: an export document could not be read.");
+            return 3;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or JsonException)
+        {
+            err.WriteLine("canary combine failed: " + ex.Message);
+            return 3;
+        }
     }
 
     private static bool IsCanaryFlag(string name) =>
@@ -3035,6 +3067,7 @@ public static class CliDispatch
                              export [--jsonl] [--workspace-id ID|all]
                              canary [--json] [--contract 2|3] [--source-id ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
                              canary --gate [--json] [--contract 2|3]                 # local gate verdict per semantic-identity cohort
+                             canary combine <export.json>... [--json]               # privacy-safe v3 multi-source aggregate
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           references <op>    Bulk-export identifier/reference usage facts, or list dead-code candidates.

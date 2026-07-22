@@ -153,14 +153,14 @@
 **Approach:** Validate count-map vocabularies, nonnegative counts, count totals, arm/bucket consistency, identity completeness, 12-hex unit ids, date/window containment, and duplicate-unit consistency fail-closed. Keep file reads and usage errors in `CliDispatch`; the aggregate module consumes document strings so tests are pure.
 
 **Acceptance criteria:**
-- [ ] One valid v3 export reproduces its exact unit counts; several disjoint sources combine deterministically.
-- [ ] Exact duplicates deduplicate; conflicting duplicates and partially overlapping same-source windows fail.
-- [ ] Same randomized unit across sources merges before statistics and counts as one unit.
-- [ ] Incompatible identities never pool, and null/incomplete identities cannot produce a passing cohort.
-- [ ] Success and identifier-shadow math matches local gate fixtures; latency is labeled `screen`, never `gate_passes`.
-- [ ] JSON and human output contain no source paths, query/result content, workspace ids, or raw milliseconds.
-- [ ] CLI accepts one or more positional export paths, rejects missing/unknown options, and preserves other telemetry verbs.
-- [ ] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
+- [x] One valid v3 export reproduces its exact unit counts; several disjoint sources combine deterministically.
+- [x] Exact duplicates deduplicate; conflicting duplicates and partially overlapping same-source windows fail.
+- [x] Same randomized unit across sources merges before statistics and counts as one unit.
+- [x] Incompatible identities never pool, and null/incomplete identities cannot produce a passing cohort.
+- [x] Success and identifier-shadow math matches local gate fixtures; latency is labeled `screen`, never `gate_passes`.
+- [x] JSON and human output contain no source paths, query/result content, workspace ids, or raw milliseconds.
+- [x] CLI accepts one or more positional export paths, rejects missing/unknown options, and preserves other telemetry verbs.
+- [x] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
 
 ### Task 4: Runbook, frozen build, and local enrollment
 
