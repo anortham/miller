@@ -47,12 +47,12 @@ internal sealed class SemanticTextArm(SemanticMode mode, Func<string, SemanticSe
     /// Composes the arm from the two registered services that carry the whole activation decision, or returns
     /// null when either is absent — which is how a host without the semantic graph stays lexical-only.
     /// </summary>
-    public static ISemanticTextArm? For(VectorSidecar? sidecar, Lazy<SemanticEmbeddingSession?>? session) =>
-        sidecar is null || session is null
+    public static ISemanticTextArm? For(VectorSidecar? sidecar, SemanticEmbeddingSessionBroker? broker) =>
+        sidecar is null || broker is null
             ? null
             : new SemanticTextArm(
                 sidecar.Mode,
-                root => new SemanticSearchArm(root, sidecar, () => session.Value));
+                root => new SemanticSearchArm(root, sidecar, broker));
 
     public SemanticQueryResult QuerySymbols(
         string workspaceRoot, string query, int k, Func<VectorMatch, bool>? allow) =>
@@ -98,6 +98,14 @@ public enum SearchToolMode
 
     /// <summary>Audit TODO/FIXME/HACK/XXX markers in comments and doc comments.</summary>
     Markers,
+}
+
+internal enum SearchServingPolicy
+{
+    Lexical,
+    Production,
+    Treatment,
+    Shadow,
 }
 
 /// <summary>
@@ -167,7 +175,7 @@ public sealed class SearchTool
     private readonly ISymbolFusionArm? _fusionArm;
     private readonly ISemanticTextArm? _semanticArm;
     private readonly VectorSidecar? _semanticSidecar;
-    private readonly Lazy<SemanticEmbeddingSession?>? _embeddingSession;
+    private readonly SemanticEmbeddingSessionBroker? _embeddingBroker;
 
     /// <summary>
     /// Construct over the symbol-search and content-search providers (production / freshness-aware). In
@@ -218,16 +226,16 @@ public sealed class SearchTool
         IWorkspaceTextContentSearchProvider textContentProvider,
         ISymbolFusionArm? fusionArm = null,
         VectorSidecar? semanticSidecar = null,
-        Lazy<SemanticEmbeddingSession?>? embeddingSession = null)
+        SemanticEmbeddingSessionBroker? embeddingBroker = null)
         : this(
             workspaceProvider,
             contentProvider,
             regionProvider,
             textContentProvider,
             fusionArm,
-            SemanticTextArm.For(semanticSidecar, embeddingSession),
+            SemanticTextArm.For(semanticSidecar, embeddingBroker),
             semanticSidecar,
-            embeddingSession)
+            embeddingBroker)
     {
     }
 
@@ -239,7 +247,7 @@ public sealed class SearchTool
         ISymbolFusionArm? fusionArm,
         ISemanticTextArm? semanticArm,
         VectorSidecar? semanticSidecar = null,
-        Lazy<SemanticEmbeddingSession?>? embeddingSession = null)
+        SemanticEmbeddingSessionBroker? embeddingBroker = null)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
         ArgumentNullException.ThrowIfNull(contentProvider);
@@ -251,7 +259,7 @@ public sealed class SearchTool
         _fusionArm = fusionArm;
         _semanticArm = semanticArm;
         _semanticSidecar = semanticSidecar;
-        _embeddingSession = embeddingSession;
+        _embeddingBroker = embeddingBroker;
     }
 
     [McpServerTool(Name = "search")]
@@ -357,7 +365,8 @@ public sealed class SearchTool
                     file_pattern,
                     language,
                     identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
-                    SemanticContentRerank(query, content.WorkspaceRoot),
+                    SemanticContentRerank(
+                        content.Index, query, content.WorkspaceRoot, file_pattern, language),
                     canaryMode,
                     ModeName(route.Mode),
                     semanticDisabled: semanticMode is SemanticMode.Off,
@@ -366,7 +375,8 @@ public sealed class SearchTool
                     CanaryUtcDate(scope),
                     () => _semanticSidecar!.Inspect(content.WorkspaceRoot).State,
                     crossWorkspaceNoGeneration: false,
-                    BuildTreatmentContentArm(content.WorkspaceRoot));
+                    () => BuildTreatmentContentArm(content.WorkspaceRoot),
+                    semanticMode);
                 output = canary.Result.Output;
                 count = canary.Result.Count;
                 if (scope is not null)
@@ -442,7 +452,8 @@ public sealed class SearchTool
                     () => _semanticSidecar!.Inspect(context.WorkspaceRoot).State,
                     crossWorkspaceNoGeneration: false,
                     BuildTreatmentArmFactory(context.WorkspaceRoot),
-                    BuildShadowRunner(context.WorkspaceRoot));
+                    BuildShadowRunner(context.WorkspaceRoot),
+                    semanticMode);
                 output = canary.Result.Output;
                 count = canary.Result.Count;
 
@@ -461,7 +472,8 @@ public sealed class SearchTool
                         file_pattern,
                         language,
                         compactBanner,
-                        context);
+                        context,
+                        canary.ServingPolicy);
                     canaryRescueKind = MapCanaryRescueKind(rescue);
                     if (scope is not null)
                     {
@@ -1244,7 +1256,10 @@ public sealed class SearchTool
     /// <see cref="Facts"/> is null when the canary is off — the pre-program path, no stamping, byte-identical bytes.
     /// </summary>
     internal sealed record SymbolCanaryOutcome(
-        SearchRouteExecutionResult Result, CanaryCallFacts? Facts, CanaryShadowFacts? ShadowFacts = null);
+        SearchRouteExecutionResult Result,
+        CanaryCallFacts? Facts,
+        CanaryShadowFacts? ShadowFacts = null,
+        SearchServingPolicy ServingPolicy = SearchServingPolicy.Lexical);
 
     /// <summary>
     /// One forced-hybrid shadow pass: whether the semantic arm actually served, the fallback that stopped it
@@ -1261,10 +1276,9 @@ public sealed class SearchTool
 
     /// <summary>
     /// The symbol route under the canary (<c>canary-telemetry-v1</c>): classify the query, walk the eligibility
-    /// ladder, assign an arm, and serve the treatment fusion arm (bypassing the mode gate so treatment behaves
-    /// exactly like <c>MILLER_SEMANTIC=on</c>) or the lexical bytes for control and every ineligible call. Off is
-    /// the pre-program path — <paramref name="request"/>'s own <c>FusionArm</c>, no facts, no added work. The
-    /// single orchestration seam Tasks 6/7 reuse for the content route.
+    /// ladder, assign an arm, and serve the treatment fusion arm only when semantic mode permits serving. Control,
+    /// shadow, and every ineligible call serve lexical bytes. Off is the pre-program path with no facts or added
+    /// canary work.
     /// </summary>
     internal static SymbolCanaryOutcome RunSymbolsWithCanary(
         ISymbolLookupIndex index,
@@ -1278,7 +1292,8 @@ public sealed class SearchTool
         Func<string> vectorStateProbe,
         bool crossWorkspaceNoGeneration,
         Func<SemanticSymbolFusionArm>? treatmentArmFactory,
-        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? shadowRunner = null)
+        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? shadowRunner = null,
+        SemanticMode semanticMode = SemanticMode.On)
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
@@ -1287,8 +1302,17 @@ public sealed class SearchTool
         // lexical bytes — exactly the canary-off path. The IneligibleSemanticDisabled rung stays in the frozen
         // vocabulary but v1 never reaches it.
         if (mode == CanaryMode.Off || semanticDisabled || string.IsNullOrEmpty(workspaceId))
+        {
+            SearchServingPolicy offServingPolicy = NonCanaryServingPolicy(semanticMode, semanticDisabled);
             return new SymbolCanaryOutcome(
-                SearchRouteExecutor.RunSymbolsCore(index, route, request, request.FusionArm).Result, Facts: null);
+                SearchRouteExecutor.RunSymbolsCore(
+                    index,
+                    route,
+                    request,
+                    offServingPolicy == SearchServingPolicy.Production ? request.FusionArm : null).Result,
+                Facts: null,
+                ServingPolicy: offServingPolicy);
+        }
 
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
         string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
@@ -1299,12 +1323,14 @@ public sealed class SearchTool
             CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
 
         bool eligible = eligibility == CanaryEligibility.Eligible;
-        bool treatment = eligible &&
-            CanaryAssignment.ResolveArm(
-                CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
-                == CanaryArm.Treatment;
+        bool treatment = eligible && CanaryAssignment.ResolveArm(
+            CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
+            == CanaryArm.Treatment;
+        SearchServingPolicy servingPolicy = CanaryServingPolicy(semanticMode, eligible, treatment);
 
-        SemanticSymbolFusionArm? treatmentArm = treatment ? treatmentArmFactory?.Invoke() : null;
+        SemanticSymbolFusionArm? treatmentArm = servingPolicy == SearchServingPolicy.Treatment
+            ? treatmentArmFactory?.Invoke()
+            : null;
         SymbolExecution execution = SearchRouteExecutor.RunSymbolsCore(index, route, request, treatmentArm);
 
         if (ShadowSampled(eligibility, queryClass, workspaceId, utcDate))
@@ -1316,13 +1342,38 @@ public sealed class SearchTool
                 eligibility,
                 [.. execution.ServedPage.Select(static candidate => candidate.SymbolId)],
                 shadowRunner is null ? null : () => shadowRunner(index, route, request));
-            return new SymbolCanaryOutcome(execution.Result, Facts: null, ShadowFacts: shadowFacts);
+            return new SymbolCanaryOutcome(
+                execution.Result, Facts: null, ShadowFacts: shadowFacts, ServingPolicy: servingPolicy);
         }
 
         CanaryCallFacts facts = BuildCanaryFacts(
             workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index);
-        return new SymbolCanaryOutcome(execution.Result, facts);
+        return new SymbolCanaryOutcome(execution.Result, facts, ServingPolicy: servingPolicy);
     }
+
+    private static SearchServingPolicy NonCanaryServingPolicy(SemanticMode semanticMode, bool semanticDisabled) =>
+        semanticDisabled
+            ? SearchServingPolicy.Lexical
+            : semanticMode switch
+            {
+                SemanticMode.On => SearchServingPolicy.Production,
+                SemanticMode.Shadow => SearchServingPolicy.Shadow,
+                _ => SearchServingPolicy.Lexical,
+            };
+
+    private static SearchServingPolicy CanaryServingPolicy(
+        SemanticMode semanticMode,
+        bool eligible,
+        bool treatment) =>
+        semanticMode switch
+        {
+            SemanticMode.On when eligible && treatment => SearchServingPolicy.Treatment,
+            SemanticMode.Shadow => SearchServingPolicy.Shadow,
+            _ => SearchServingPolicy.Lexical,
+        };
+
+    private static bool AllowsSemanticServing(SearchServingPolicy policy) =>
+        policy is SearchServingPolicy.Production or SearchServingPolicy.Treatment;
 
     /// <summary>
     /// A call is a shadow sample when it is an identifier query the canary can never serve, and its bucket under
@@ -1561,18 +1612,17 @@ public sealed class SearchTool
     };
 
     /// <summary>
-    /// The treatment fusion arm: the production <see cref="SemanticSymbolFusionArm"/> with the mode gate forced to
-    /// <see cref="SemanticMode.On"/> so treatment fuses even under <c>MILLER_SEMANTIC=shadow</c>. Null when the
-    /// semantic graph is absent, which leaves an assigned treatment call serving lexical bytes.
+    /// The treatment fusion arm. The canary serving policy constructs it only for an eligible treatment request
+    /// while semantic serving is on. Null when the semantic graph is absent.
     /// </summary>
     private Func<SemanticSymbolFusionArm>? BuildTreatmentArmFactory(string workspaceRoot)
     {
-        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+        if (_semanticSidecar is not { } sidecar || _embeddingBroker is not { } broker)
             return null;
 
         return () => new SemanticSymbolFusionArm(
             SemanticMode.On,
-            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, broker));
     }
 
     /// <summary>
@@ -1583,12 +1633,12 @@ public sealed class SearchTool
     private Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? BuildShadowRunner(
         string workspaceRoot)
     {
-        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+        if (_semanticSidecar is not { } sidecar || _embeddingBroker is not { } broker)
             return null;
 
         return ShadowRunnerFor(
             root => new SemanticSearchArm(
-                string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+                string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, broker));
     }
 
     /// <summary>
@@ -1678,19 +1728,18 @@ public sealed class SearchTool
     }
 
     /// <summary>
-    /// The treatment content arm: a <see cref="SemanticTextArm"/> forced to <see cref="SemanticMode.On"/> so the
-    /// content-mode hybrid reranks even under <c>MILLER_SEMANTIC=shadow</c>, exactly as
-    /// <see cref="BuildTreatmentArmFactory"/> does for the symbol route. Null when the semantic graph is absent,
-    /// which leaves an assigned treatment call serving lexical content bytes.
+    /// The treatment content arm. Shadow mode never constructs this serving arm; an eligible treatment request
+    /// may construct it only while semantic serving is on. Null when the semantic graph is absent.
     /// </summary>
     private ISemanticTextArm? BuildTreatmentContentArm(string workspaceRoot)
     {
-        if (_semanticSidecar is not { } sidecar || _embeddingSession is not { } session)
+        if (_semanticSidecar is not { Mode: SemanticMode.On } sidecar ||
+            _embeddingBroker is not { } broker)
             return null;
 
         return new SemanticTextArm(
             SemanticMode.On,
-            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, () => session.Value));
+            root => new SemanticSearchArm(string.IsNullOrEmpty(root) ? workspaceRoot : root, sidecar, broker));
     }
 
     /// <summary>
@@ -1704,18 +1753,17 @@ public sealed class SearchTool
         SearchRouteExecutionResult Result,
         CanaryCallFacts? Facts,
         IReadOnlyList<string> ResultPathHashes,
-        bool ResultHashTruncated);
+        bool ResultHashTruncated,
+        SearchServingPolicy ServingPolicy = SearchServingPolicy.Lexical);
 
     /// <summary>≤10 served results per canary-telemetry-v1 §Served-result hashes; the path array shares that cap.</summary>
     private const int ContentResultHashCap = 10;
 
     /// <summary>
     /// The content route under the canary (<c>canary-telemetry-v1</c>, <c>op=content</c>): classify the query,
-    /// walk the eligibility ladder, assign an arm, and serve the treatment content-hybrid arm (forced past the
-    /// mode gate so it behaves exactly like <c>MILLER_SEMANTIC=on</c>) or byte-identical lexical content for
-    /// control and every ineligible call. Off is the pre-program path — the production rerank untouched, no facts.
-    /// Mirrors <see cref="RunSymbolsWithCanary"/> but renders path+snippet rows, so the served-result hashes are
-    /// path-only.
+    /// walk the eligibility ladder, and serve the treatment hybrid arm only when semantic mode permits serving.
+    /// Control, shadow, and every ineligible call serve lexical content. Off is the pre-program path with no
+    /// canary facts. Content served-result hashes are path-only.
     /// </summary>
     internal static ContentCanaryOutcome RunContentWithCanary(
         ITextContentSearchIndex index,
@@ -1735,7 +1783,8 @@ public sealed class SearchTool
         string utcDate,
         Func<string> vectorStateProbe,
         bool crossWorkspaceNoGeneration,
-        ISemanticTextArm? treatmentArm)
+        Func<ISemanticTextArm?>? treatmentArmFactory,
+        SemanticMode semanticMode = SemanticMode.On)
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
@@ -1743,11 +1792,17 @@ public sealed class SearchTool
         // untouched, no probe, no facts, no stamping — the semantic-off lexical bytes verbatim.
         if (mode == CanaryMode.Off || semanticDisabled || string.IsNullOrEmpty(workspaceId))
         {
+            SearchServingPolicy offServingPolicy = NonCanaryServingPolicy(semanticMode, semanticDisabled);
             string offOutput = RunContentCorpus(
                 index, query, limit, json, out int offCount, out long offBytes, out _, out _, out _,
-                compactBanner, filePattern, language, suggestionLookup, productionRerank);
+                compactBanner, filePattern, language, suggestionLookup,
+                offServingPolicy == SearchServingPolicy.Production ? productionRerank : null);
             return new ContentCanaryOutcome(
-                new SearchRouteExecutionResult(offOutput, offCount, offBytes), Facts: null, [], ResultHashTruncated: false);
+                new SearchRouteExecutionResult(offOutput, offCount, offBytes),
+                Facts: null,
+                [],
+                ResultHashTruncated: false,
+                offServingPolicy);
         }
 
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
@@ -1759,15 +1814,24 @@ public sealed class SearchTool
             CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
 
         bool eligible = eligibility == CanaryEligibility.Eligible;
-        bool treatment = eligible &&
-            CanaryAssignment.ResolveArm(
-                CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
-                == CanaryArm.Treatment;
+        bool treatment = eligible && CanaryAssignment.ResolveArm(
+            CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, utcDate, queryClass))
+            == CanaryArm.Treatment;
+        SearchServingPolicy servingPolicy = CanaryServingPolicy(semanticMode, eligible, treatment);
 
         SemanticQueryResult? consulted = null;
         Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank =
-            treatment && treatmentArm is { } arm
-                ? BuildContentRerank(arm, query, workspaceRoot, result => consulted = result)
+            servingPolicy == SearchServingPolicy.Treatment && treatmentArmFactory?.Invoke() is { } arm
+                ? BuildContentRerank(
+                    arm,
+                    query,
+                    workspaceRoot,
+                    result => consulted = result,
+                    index,
+                    WorkspaceContentSearchKinds,
+                    excludeTests: false,
+                    filePattern,
+                    language)
                 : null;
 
         string output = RunContentCorpus(
@@ -1788,7 +1852,11 @@ public sealed class SearchTool
         }
 
         return new ContentCanaryOutcome(
-            new SearchRouteExecutionResult(output, count, sourceBytes), facts, pathHashes, truncated);
+            new SearchRouteExecutionResult(output, count, sourceBytes),
+            facts,
+            pathHashes,
+            truncated,
+            servingPolicy);
     }
 
     private static CanaryCallFacts BuildContentCanaryFacts(
@@ -1833,7 +1901,7 @@ public sealed class SearchTool
             facts = facts with
             {
                 SemanticResultCount = served.Hits.Count,
-                FusedResultCount = lexicalResultCount,
+                FusedResultCount = resultCount,
                 SemanticContributionCount = CountContentSemanticContributions(servedPage, lexicalOrder, served.Hits),
                 FusionProfile = RrfFusion.FusionProfile,
             };
@@ -2051,17 +2119,14 @@ public sealed class SearchTool
             return (fetched.Count, hits.Count);
         });
 
-        // Reordering happens after escalation and before paging, so the hybrid arm sees the same candidate set
-        // the lexical arm settled on and cannot change which hits exist — only which of them make the page. The
-        // pre-rerank order is the lexical ranking the canary's contribution count compares each served row against.
         lexicalOrder = [.. hits];
-        if (rerank is not null && hits.Count > 1)
+        lexicalResultCount = lexicalOrder.Count;
+        if (rerank is not null)
             hits = [.. rerank(hits)];
 
         int total = hits.Count;
         int page = Math.Min(limit, total);
         renderedCount = page;
-        lexicalResultCount = total;
         servedPage = page > 0 ? [.. hits.Take(page)] : [];
 
         if (total == 0)
@@ -2350,32 +2415,43 @@ public sealed class SearchTool
         arm.QueryChunks(workspaceRoot, query, 1).Served;
 
     /// <summary>
-    /// The <c>mode=content</c> hybrid arm: a reordering of the chunk hits the lexical corpus already returned,
-    /// under the same gating as the symbol route. Returns null — meaning "run the untouched lexical path" — for
-    /// an absent arm or a query the policy routes lexical-only, so no gated state pays for a closure it will
-    /// never call.
+    /// The <c>mode=content</c> hybrid arm. It fuses lexical hits with semantic-only chunks when the content index
+    /// can materialize stored chunk metadata. Returns null for an absent arm or a lexical-only query.
     /// </summary>
-    /// <remarks>
-    /// Membership is never changed, only order: a semantic-only chunk has no lexical hit to render (no score,
-    /// no line, no snippet), and fabricating one would make a neighbour look like a match.
-    /// </remarks>
     private Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? SemanticContentRerank(
+        ITextContentSearchIndex index,
         string query,
-        string workspaceRoot) =>
-        _semanticArm is { } arm ? BuildContentRerank(arm, query, workspaceRoot) : null;
+        string workspaceRoot,
+        string? filePattern,
+        string? language) =>
+        _semanticArm is { } arm
+            ? BuildContentRerank(
+                arm,
+                query,
+                workspaceRoot,
+                onConsult: null,
+                index,
+                WorkspaceContentSearchKinds,
+                excludeTests: false,
+                filePattern,
+                language)
+            : null;
 
     /// <summary>
-    /// The content-mode rerank over one <see cref="ISemanticTextArm"/>: a reordering of the chunk hits the lexical
-    /// corpus already returned. Returns null — "run the untouched lexical path" — for a query the policy routes
-    /// lexical-only. <paramref name="onConsult"/> observes each arm consultation so the canary can read its
-    /// diagnostics without changing what is served. The production path passes the injected arm (its mode gates
-    /// serving); the treatment path passes an arm forced to <see cref="SemanticMode.On"/>.
+    /// The content-mode fusion over one <see cref="ISemanticTextArm"/>. Semantic-only chunks join the result when
+    /// <paramref name="index"/> supports <see cref="ISemanticContentLookup"/>; otherwise the lexical membership is
+    /// preserved. Returns null for a lexical-only query. <paramref name="onConsult"/> observes arm diagnostics.
     /// </summary>
     internal static Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? BuildContentRerank(
         ISemanticTextArm arm,
         string query,
         string workspaceRoot,
-        Action<SemanticQueryResult>? onConsult = null)
+        Action<SemanticQueryResult>? onConsult = null,
+        ITextContentSearchIndex? index = null,
+        IReadOnlyCollection<string>? contentKinds = null,
+        bool excludeTests = false,
+        string? filePattern = null,
+        string? language = null)
     {
         SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
         if (!route.IsHybrid)
@@ -2384,17 +2460,21 @@ public sealed class SearchTool
         FusionWeights weights = RrfFusion.WeightsFor(route.HybridClass);
         return lexical =>
         {
-            if (lexical.Count < 2)
-                return lexical;
-
             SemanticQueryResult semantic = arm.QueryChunks(
                 workspaceRoot,
                 query,
-                Math.Clamp(lexical.Count, 1, SemanticSearchArm.MaxCandidates));
+                Math.Clamp(Math.Max(lexical.Count, DefaultLimit), 1, SemanticSearchArm.MaxCandidates));
             onConsult?.Invoke(semantic);
-            return semantic.Served && semantic.Hits.Count > 0
-                ? FuseContentHits(lexical, semantic.Hits, weights)
-                : lexical;
+            if (!semantic.Served || semantic.Hits.Count == 0)
+                return lexical;
+
+            IReadOnlyList<ContentSearchHit> materialized = MaterializeSemanticContentHits(
+                index,
+                semantic.Hits,
+                contentKinds ?? WorkspaceContentSearchKinds,
+                excludeTests,
+                ToolSearchFilters.Parse(filePattern, language));
+            return FuseContentHits(lexical, materialized, semantic.Hits, weights);
         };
     }
 
@@ -2405,6 +2485,7 @@ public sealed class SearchTool
     /// </summary>
     private static IReadOnlyList<ContentSearchHit> FuseContentHits(
         IReadOnlyList<ContentSearchHit> lexical,
+        IReadOnlyList<ContentSearchHit> materialized,
         IReadOnlyList<SemanticHit> semantic,
         FusionWeights weights)
     {
@@ -2412,10 +2493,23 @@ public sealed class SearchTool
         foreach (SemanticHit hit in semantic)
             semanticRanks.TryAdd(hit.FilePath, hit.Rank);
 
+        var union = new List<(ContentSearchHit Hit, int? LexicalRank)>(lexical.Count + materialized.Count);
+        var seen = new HashSet<(string Path, int Line)>();
+        for (int index = 0; index < lexical.Count; index++)
+        {
+            ContentSearchHit hit = lexical[index];
+            if (seen.Add((hit.Path, hit.Line)))
+                union.Add((hit, index + 1));
+        }
+
+        foreach (ContentSearchHit hit in materialized)
+            if (seen.Add((hit.Path, hit.Line)))
+                union.Add((hit, LexicalRank: null));
+
         return
         [
-            .. lexical
-                .Select((hit, index) => (Hit: hit, Fused: FusedScore(index + 1, semanticRanks, hit.Path, weights)))
+            .. union
+                .Select(row => (row.Hit, Fused: FusedScore(row.LexicalRank, semanticRanks, row.Hit.Path, weights)))
                 .OrderByDescending(row => row.Fused)
                 .ThenByDescending(row => row.Hit.Score)
                 .ThenBy(row => row.Hit.Path, StringComparer.Ordinal)
@@ -2425,14 +2519,49 @@ public sealed class SearchTool
     }
 
     private static double FusedScore(
-        int lexicalRank,
+        int? lexicalRank,
         IReadOnlyDictionary<string, int> semanticRanks,
         string path,
         FusionWeights weights) =>
-        (weights.Lexical / (RrfFusion.RankConstant + lexicalRank)) +
+        (lexicalRank is { } rank ? weights.Lexical / (RrfFusion.RankConstant + rank) : 0d) +
         (semanticRanks.TryGetValue(path, out int semanticRank)
             ? weights.Semantic / (RrfFusion.RankConstant + semanticRank)
             : 0d);
+
+    private static IReadOnlyList<ContentSearchHit> MaterializeSemanticContentHits(
+        ITextContentSearchIndex? index,
+        IReadOnlyList<SemanticHit> semantic,
+        IReadOnlyCollection<string> contentKinds,
+        bool excludeTests,
+        ToolSearchFilters filters)
+    {
+        if (index is not ISemanticContentLookup lookup)
+            return [];
+
+        IReadOnlyList<string> chunkIds =
+        [
+            .. semantic
+                .Select(static hit => hit.DocId)
+                .Where(static chunkId => !string.IsNullOrEmpty(chunkId))
+                .Select(static chunkId => chunkId!)
+                .Distinct(StringComparer.Ordinal),
+        ];
+        if (chunkIds.Count == 0)
+            return [];
+
+        return
+        [
+            .. lookup.Materialize(chunkIds, contentKinds, excludeTests)
+                .Where(hit => filters.Allows(hit.DisplayPath, hit.Language))
+                .Select(static hit => new ContentSearchHit(
+                    hit.DisplayPath,
+                    hit.Score,
+                    hit.Line,
+                    hit.Snippet,
+                    hit.Language,
+                    hit.SourceBytes)),
+        ];
+    }
 
     private sealed record AutoTextRescueResult(
         string Output, int Count, long SourceBytes, string Kind, IReadOnlyList<string> ServedPaths)
@@ -2481,7 +2610,8 @@ public sealed class SearchTool
         string? filePattern,
         string? language,
         string? compactBanner,
-        WorkspaceSymbolSearchContext symbolContext)
+        WorkspaceSymbolSearchContext symbolContext,
+        SearchServingPolicy servingPolicy)
     {
         try
         {
@@ -2533,16 +2663,19 @@ public sealed class SearchTool
             // The final rung (design §6.3): every lexical corpus came back empty, so the only affordance left is
             // "something semantically near your question exists". It is last precisely because a lexical hit is
             // evidence the agent can verify by reading, and a neighbour is not.
-            return TryRunSemanticRescue(
-                       query,
-                       excludeTests,
-                       primaryOutput,
-                       primaryCount,
-                       filePattern,
-                       language,
-                       compactBanner,
-                       symbolContext)
-                   ?? sourceRescue;
+            if (servingPolicy == SearchServingPolicy.Lexical)
+                return sourceRescue;
+
+            AutoTextRescueResult? semantic = TryRunSemanticRescue(
+                query,
+                excludeTests,
+                primaryOutput,
+                primaryCount,
+                filePattern,
+                language,
+                compactBanner,
+                symbolContext);
+            return AllowsSemanticServing(servingPolicy) ? semantic ?? sourceRescue : sourceRescue;
         }
         catch (InvalidOperationException)
         {

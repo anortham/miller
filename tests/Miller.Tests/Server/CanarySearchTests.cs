@@ -94,6 +94,37 @@ public sealed class CanarySearchTests : IDisposable
     }
 
     [Fact]
+    public void EligibleShadowHybrid_ExposesShadowServingPolicyAndServesLexicalBytes()
+    {
+        RecordingSymbolLookupIndex index = TwoSymbolIndex();
+        SearchRouteExecutionRequest request = Request(ConceptualQuery, json: false);
+        bool treatmentConstructed = false;
+
+        SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
+            index,
+            SymbolRoute,
+            request,
+            CanaryMode.On,
+            "symbol",
+            semanticDisabled: false,
+            TreatmentWorkspace,
+            UtcDate,
+            () => "ready",
+            crossWorkspaceNoGeneration: false,
+            () =>
+            {
+                treatmentConstructed = true;
+                throw new InvalidOperationException("shadow must not construct a serving treatment arm");
+            },
+            semanticMode: SemanticMode.Shadow);
+
+        Assert.Equal(CanaryEligibility.Eligible, outcome.Facts!.Eligibility);
+        Assert.Equal(SearchServingPolicy.Shadow, outcome.ServingPolicy);
+        Assert.False(treatmentConstructed);
+        Assert.Equal(SearchRouteExecutor.RunSymbols(index, SymbolRoute, request).Output, outcome.Result.Output);
+    }
+
+    [Fact]
     public async Task EligibleTreatmentUnit_ServesFusedIdenticalToSemanticOnAndRecordsTreatment()
     {
         RecordingSymbolLookupIndex index = TwoSymbolIndex();

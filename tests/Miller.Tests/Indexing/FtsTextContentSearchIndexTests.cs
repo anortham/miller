@@ -132,6 +132,72 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void SemanticLookup_MaterializesChunkIdsThroughOwnedMetadata()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [],
+            extraFiles:
+            [
+                new JulieDbFixture.FileSpec("docs/semantic.md")
+                {
+                    Language = "markdown",
+                    DiskText = "A semantic-only chunk can still be rendered from content metadata.",
+                },
+            ]);
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+        TextContentSearchHit lexical = Assert.Single(index.Search(
+            "semantic-only chunk",
+            TextContentKind.WorkspaceDocs,
+            limit: 10,
+            excludeTests: false));
+
+        ISemanticContentLookup lookup = index;
+        TextContentSearchHit hit = Assert.Single(lookup.Materialize(
+            [lexical.ChunkId],
+            [TextContentKind.WorkspaceDocs],
+            excludeTests: false));
+
+        Assert.Equal(lexical.ChunkId, hit.ChunkId);
+        Assert.Equal("docs/semantic.md", hit.Path);
+        Assert.Contains("semantic-only chunk", hit.Snippet, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SemanticLookup_AppliesContentKindAndExcludeTestsFilters()
+    {
+        using var fx = BuildFixture(
+            ("src/Prod.cs", "csharp", false, "SharedSemanticMarker"),
+            ("tests/ProdTests.cs", "csharp", true, "SharedSemanticMarker"));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+        ISemanticContentLookup lookup = index;
+        string[] chunkIds =
+        [
+            .. index.Search(
+                "SharedSemanticMarker",
+                TextContentKind.WorkspaceSource,
+                limit: 10,
+                excludeTests: false)
+                .Select(static hit => hit.ChunkId),
+        ];
+
+        IReadOnlyList<TextContentSearchHit> filtered = lookup.Materialize(
+            chunkIds,
+            [TextContentKind.WorkspaceSource],
+            excludeTests: true);
+        IReadOnlyList<TextContentSearchHit> wrongKind = lookup.Materialize(
+            chunkIds,
+            [TextContentKind.WorkspaceDocs],
+            excludeTests: false);
+
+        Assert.Equal("src/Prod.cs", Assert.Single(filtered).Path);
+        Assert.Empty(wrongKind);
+    }
+
+    [Fact]
     public void Search_LongNaturalLanguageQueryAllowsHighCoveragePartialMatch()
     {
         const string query = "gateway health checks doctor command latency";

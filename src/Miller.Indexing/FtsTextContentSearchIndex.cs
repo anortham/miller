@@ -5,7 +5,7 @@ using Miller.Core.Tokenization;
 
 namespace Miller.Indexing;
 
-public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
+public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemanticContentLookup
 {
     private const int SnippetRadius = 2;
     private const int WidenedCandidateLimit = 5000;
@@ -241,6 +241,52 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
         }
     }
 
+    public IReadOnlyList<TextContentSearchHit> Materialize(
+        IReadOnlyCollection<string> chunkIds,
+        IReadOnlyCollection<string> contentKinds,
+        bool excludeTests = false)
+    {
+        if (chunkIds.Count == 0 || contentKinds.Count == 0 || _chunksById.Count == 0)
+            return Array.Empty<TextContentSearchHit>();
+
+        var allowedKinds = new HashSet<string>(contentKinds.Where(static kind => !string.IsNullOrWhiteSpace(kind)),
+            StringComparer.Ordinal);
+        if (allowedKinds.Count == 0)
+            return Array.Empty<TextContentSearchHit>();
+
+        var hits = new List<TextContentSearchHit>(chunkIds.Count);
+        var seenChunkIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string chunkId in chunkIds)
+        {
+            if (!seenChunkIds.Add(chunkId) || !_chunksById.TryGetValue(chunkId, out TextChunk? chunk))
+                continue;
+            if (!allowedKinds.Contains(chunk.ContentKind) || excludeTests && chunk.IsTest)
+                continue;
+
+            ContentSymbolSpan? symbol = BestContainingSymbol(chunk.SourceId, chunk.LineStart);
+            hits.Add(new TextContentSearchHit(
+                chunk.SourceId,
+                chunk.ChunkId,
+                chunk.ContentKind,
+                chunk.Path,
+                chunk.Url,
+                chunk.DisplayPath,
+                chunk.Language,
+                Score: 0.0,
+                chunk.LineStart,
+                chunk.LineStart,
+                chunk.LineEnd,
+                chunk.ByteStart,
+                chunk.ByteEnd,
+                SemanticSnippet(chunk.RawText),
+                chunk.SourceBytes,
+                symbol?.SymbolId ?? chunk.ContainingSymbolId,
+                symbol?.Name ?? chunk.ContainingSymbolName));
+        }
+
+        return hits;
+    }
+
     private static ContentMeta ReadMeta(SqliteConnection connection, string absPath)
     {
         try
@@ -472,6 +518,13 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex
 
     private static string[] SplitLines(string text) =>
         text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+
+    private static string SemanticSnippet(string text)
+    {
+        string[] lines = SplitLines(text);
+        int count = Math.Min(lines.Length, (SnippetRadius * 2) + 1);
+        return string.Join('\n', lines[..count]);
+    }
 
     private static string JoinFtsTerms(IReadOnlyList<string> terms, string separator)
     {

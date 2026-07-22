@@ -31,6 +31,67 @@ public sealed class SearchToolRescueTests
     }
 
     [Fact]
+    public void EligibleControlWeakPrimary_NeverInvokesSemanticRescueAndMatchesSemanticOffBytes()
+    {
+        string workspaceId = WorkspaceForArm(CanaryArm.Control);
+        var symbols = SymbolSearchProjection.Build(
+        [
+            Symbol(0, "refresh-helper", "WorkspaceRefreshConvergeHelper", "src/RefreshHelper.cs"),
+            Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs"),
+        ]);
+        StubSemanticTextArm arm = ArmWith(
+            symbols: [Hit(symbolId: "gadget-symbol", path: "src/Gadget.cs", rank: 1)]);
+        using var canary = new ScopedEnvironment(CanaryActivation.EnvVar, "on");
+
+        string semanticOff = ToolWith(arm: null, symbols: symbols, semanticMode: SemanticMode.Off, workspaceId: workspaceId)
+            .Search(ConceptualQuery);
+        string control = ToolWith(arm, symbols: symbols, semanticMode: SemanticMode.On, workspaceId: workspaceId)
+            .Search(ConceptualQuery);
+
+        Assert.Contains("WorkspaceRefreshConvergeHelper", semanticOff, StringComparison.Ordinal);
+        Assert.Equal(semanticOff, control);
+        Assert.Equal(0, arm.SymbolQueries);
+        Assert.Equal(0, arm.ChunkQueries);
+    }
+
+    [Fact]
+    public void EligibleShadow_MayMeasureButReturnsLexicalBytesWhenSemanticRanksDifferently()
+    {
+        string workspaceId = WorkspaceForArm(CanaryArm.Treatment);
+        var symbols = SymbolSearchProjection.Build(
+        [
+            Symbol(0, "refresh-helper", "WorkspaceRefreshConvergeHelper", "src/RefreshHelper.cs"),
+            Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs"),
+        ]);
+        StubSemanticTextArm arm = ArmWith(
+            symbols: [Hit(symbolId: "gadget-symbol", path: "src/Gadget.cs", rank: 1)]);
+        using var canary = new ScopedEnvironment(CanaryActivation.EnvVar, "on");
+
+        string semanticOff = ToolWith(arm: null, symbols: symbols, semanticMode: SemanticMode.Off, workspaceId: workspaceId)
+            .Search(ConceptualQuery);
+        string shadow = ToolWith(arm, symbols: symbols, semanticMode: SemanticMode.Shadow, workspaceId: workspaceId)
+            .Search(ConceptualQuery);
+
+        Assert.True(arm.SymbolQueries > 0 || arm.ChunkQueries > 0);
+        Assert.Equal(semanticOff, shadow);
+    }
+
+    [Fact]
+    public void TreatmentContentArm_UnderShadowModeIsNeverConstructed()
+    {
+        SearchTool tool = ToolWith(
+            arm: null,
+            semanticMode: SemanticMode.Shadow,
+            embeddingBroker: new SemanticEmbeddingSessionBroker(enabled: false, () => null));
+        System.Reflection.MethodInfo? factory = typeof(SearchTool).GetMethod(
+            "BuildTreatmentContentArm",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(factory);
+
+        Assert.Null(factory.Invoke(tool, [Root]));
+    }
+
+    [Fact]
     public void SemanticRescue_WithChunkHitsOnly_LabelsThemSemanticDocs()
     {
         StubSemanticTextArm arm = ArmWith(
@@ -326,7 +387,7 @@ public sealed class SearchToolRescueTests
         services.AddSingleton<IWorkspaceRegionSearchProvider>(provider);
         services.AddSingleton<IWorkspaceTextContentSearchProvider>(provider);
         services.AddSingleton(_ => VectorSidecar.FromEnvironment());
-        services.AddSingleton(_ => new Lazy<SemanticEmbeddingSession?>(() => null));
+        services.AddSingleton(_ => new SemanticEmbeddingSessionBroker(enabled: false, () => null));
         using ServiceProvider built = services.BuildServiceProvider();
 
         Assert.NotNull(ActivatorUtilities.CreateInstance<SearchTool>(built));
@@ -349,13 +410,41 @@ public sealed class SearchToolRescueTests
         string? docId = null) =>
         new(symbolId, docId, path, rank, Cosine: 0.9 - (rank * 0.01));
 
-    private static SearchTool ToolWith(ISemanticTextArm? arm, ITextContentSearchIndex? content = null)
+    private static SearchTool ToolWith(
+        ISemanticTextArm? arm,
+        ITextContentSearchIndex? content = null,
+        ISymbolLookupIndex? symbols = null,
+        SemanticMode semanticMode = SemanticMode.On,
+        string workspaceId = "current-ws",
+        SemanticEmbeddingSessionBroker? embeddingBroker = null)
     {
         var provider = new RescueSearchProvider(
-            SymbolSearchProjection.Build([Symbol(0, "widget-symbol", "Widget", "src/Widget.cs"),
+            symbols ?? SymbolSearchProjection.Build([Symbol(0, "widget-symbol", "Widget", "src/Widget.cs"),
                 Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs")]),
-            content ?? TextContentIndex());
-        return new SearchTool(provider, provider, provider, provider, fusionArm: null, semanticArm: arm);
+            content ?? TextContentIndex(),
+            workspaceId);
+        return new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm: arm,
+            semanticSidecar: new VectorSidecar(semanticMode),
+            embeddingBroker);
+    }
+
+    private static string WorkspaceForArm(string expectedArm)
+    {
+        string utcDate = DateTime.UtcNow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return Enumerable.Range(0, 1000)
+            .Select(static i => "ws-policy-" + i)
+            .First(workspaceId =>
+                CanaryAssignment.ResolveArm(CanaryAssignment.Bucket(
+                    CanaryAssignment.HybridExperimentId,
+                    workspaceId,
+                    utcDate,
+                    CanaryQueryClass.Prose)) == expectedArm);
     }
 
     private static IndexedSymbol Symbol(int docId, string symbolId, string name, string path) =>
@@ -450,25 +539,52 @@ public sealed class SearchToolRescueTests
             [.. hits.Where(hit => contentKinds.Contains(hit.ContentKind)).Take(limit)];
     }
 
-    private sealed class RescueSearchProvider(ISymbolLookupIndex symbols, ITextContentSearchIndex content)
-        : IWorkspaceSearchProvider,
+    private sealed class RescueSearchProvider : IWorkspaceSearchProvider,
             IWorkspaceContentSearchProvider,
             IWorkspaceTextContentSearchProvider,
             IWorkspaceRegionSearchProvider
     {
+        private readonly ISymbolLookupIndex _symbols;
+        private readonly ITextContentSearchIndex _content;
+        private readonly string _workspaceId;
+
+        public RescueSearchProvider(
+            ISymbolLookupIndex symbols,
+            ITextContentSearchIndex content,
+            string workspaceId = "current-ws")
+        {
+            _symbols = symbols;
+            _content = content;
+            _workspaceId = workspaceId;
+        }
+
         public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
             throw new NotSupportedException("RescueSearchProvider serves no region route.");
 
 
         public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) =>
-            new(symbols, "symbols.db", "current-ws", Root, Revision: 1, IndexFresh: true, "current",
-                WarningText: null, DisplayId: "current-ws");
+            new(_symbols, "symbols.db", _workspaceId, Root, Revision: 1, IndexFresh: true, "current",
+                WarningText: null, DisplayId: _workspaceId);
 
         public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
             throw new NotSupportedException("RescueSearchProvider serves the corpus, not the legacy projection.");
 
         public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh) =>
-            new(content, "content.db", "current-ws", Root, Revision: 1, IndexFresh: true, "current",
-                WarningText: null, DisplayId: "current-ws");
+            new(_content, "content.db", _workspaceId, Root, Revision: 1, IndexFresh: true, "current",
+                WarningText: null, DisplayId: _workspaceId);
+    }
+
+    private sealed class ScopedEnvironment(string name, string? value) : IDisposable
+    {
+        private readonly string? _previous = Set(name, value);
+
+        public void Dispose() => Environment.SetEnvironmentVariable(name, _previous);
+
+        private static string? Set(string name, string? value)
+        {
+            string? previous = Environment.GetEnvironmentVariable(name);
+            Environment.SetEnvironmentVariable(name, value);
+            return previous;
+        }
     }
 }

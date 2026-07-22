@@ -103,6 +103,49 @@ public sealed class CanaryContentSearchTests : IDisposable
     }
 
     [Fact]
+    public void TreatmentWithLexicalZero_MaterializesAndServesSemanticOnlyChunk()
+    {
+        TextContentSearchHit semanticOnly = Docs("docs/semantic.md", 7, "semantic metadata snippet");
+        ITextContentSearchIndex index = new MaterializingContentIndex([], [semanticOnly]);
+        var arm = ContentArm(chunks: [Chunk("docs/semantic.md", 1, semanticOnly.ChunkId)], diagnostics: ServedDiagnostics());
+
+        SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
+
+        Assert.Contains("docs/semantic.md", outcome.Result.Output, StringComparison.Ordinal);
+        Assert.Contains("semantic metadata snippet", outcome.Result.Output, StringComparison.Ordinal);
+        Assert.Equal(0, outcome.Facts!.LexicalResultCount);
+        Assert.Equal(1, outcome.Facts.SemanticResultCount);
+        Assert.Equal(1, outcome.Facts.FusedResultCount);
+    }
+
+    [Fact]
+    public void TreatmentWithoutMaterializer_AndSemanticFallbacksStayLexicalByteIdentical()
+    {
+        ITextContentSearchIndex index = ContentIndex(Docs("docs/lexical.md", 1, "lexical"));
+        string lexical = SearchTool.RunContentCorpus(index, ConceptualQuery, 10, json: false, out _, out _);
+
+        SearchTool.ContentCanaryOutcome noMaterializer = Run(
+            index,
+            ConceptualQuery,
+            TreatmentWorkspace,
+            ContentArm(chunks: [Chunk("docs/semantic.md", 1)], diagnostics: ServedDiagnostics()));
+        SearchTool.ContentCanaryOutcome unavailable = Run(
+            index,
+            ConceptualQuery,
+            TreatmentWorkspace,
+            ContentArm(unavailable: "building", diagnostics: BuildingDiagnostics()));
+        SearchTool.ContentCanaryOutcome empty = Run(
+            index,
+            ConceptualQuery,
+            TreatmentWorkspace,
+            ContentArm(diagnostics: ServedDiagnostics()));
+
+        Assert.Equal(lexical, noMaterializer.Result.Output);
+        Assert.Equal(lexical, unavailable.Result.Output);
+        Assert.Equal(lexical, empty.Result.Output);
+    }
+
+    [Fact]
     public void SemanticContributionCount_CountsOnlyRowsWhereSemanticOutranksLexical()
     {
         ITextContentSearchIndex index = ContentIndex(
@@ -198,7 +241,7 @@ public sealed class CanaryContentSearchTests : IDisposable
             suggestionLookup: null, productionRerank: null, CanaryMode.On, "content", semanticDisabled: true,
             ControlWorkspace, Root, UtcDate,
             () => throw new InvalidOperationException("the vector probe must not run when semantic is off"),
-            crossWorkspaceNoGeneration: false, treatmentArm: null);
+            crossWorkspaceNoGeneration: false, treatmentArmFactory: null);
 
         Assert.Null(outcome.Facts);
         Assert.Empty(outcome.ResultPathHashes);
@@ -229,7 +272,9 @@ public sealed class CanaryContentSearchTests : IDisposable
         SearchTool.RunContentWithCanary(
             index, query, limit, json: false, compactBanner: null, filePattern: null, language: null,
             suggestionLookup: null, productionRerank, mode, "content", semanticDisabled, workspaceId, Root, UtcDate,
-            () => vectorState, crossWorkspaceNoGeneration: false, treatmentArm);
+            () => vectorState,
+            crossWorkspaceNoGeneration: false,
+            treatmentArm is null ? null : () => treatmentArm);
 
     private static int Bucket(string workspaceId) =>
         CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, UtcDate, CanaryQueryClass.DocsLike);
@@ -264,8 +309,8 @@ public sealed class CanaryContentSearchTests : IDisposable
         SemanticQueryDiagnostics? diagnostics = null) =>
         new() { Chunks = chunks ?? [], Unavailable = unavailable, Diagnostics = diagnostics };
 
-    private static SemanticHit Chunk(string path, int rank) =>
-        new(SymbolId: null, DocId: path + "#" + rank, path, rank, Cosine: 0.9 - (rank * 0.01));
+    private static SemanticHit Chunk(string path, int rank, string? docId = null) =>
+        new(SymbolId: null, DocId: docId ?? path + "#" + rank, path, rank, Cosine: 0.9 - (rank * 0.01));
 
     private static SemanticQueryDiagnostics ServedDiagnostics() =>
         new(
@@ -348,5 +393,26 @@ public sealed class CanaryContentSearchTests : IDisposable
         public IReadOnlyList<TextContentSearchHit> Search(
             string query, IReadOnlyCollection<string> contentKinds, int limit, bool excludeTests) =>
             [.. hits.Where(hit => contentKinds.Contains(hit.ContentKind)).Take(limit)];
+    }
+
+    private sealed class MaterializingContentIndex(
+        IReadOnlyList<TextContentSearchHit> lexical,
+        IReadOnlyList<TextContentSearchHit> materialized) : ITextContentSearchIndex, ISemanticContentLookup
+    {
+        public int DocumentCount => lexical.Count + materialized.Count;
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query, string contentKind, int limit, bool excludeTests) =>
+            Search(query, [contentKind], limit, excludeTests);
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query, IReadOnlyCollection<string> contentKinds, int limit, bool excludeTests) =>
+            [.. lexical.Where(hit => contentKinds.Contains(hit.ContentKind)).Take(limit)];
+
+        public IReadOnlyList<TextContentSearchHit> Materialize(
+            IReadOnlyCollection<string> chunkIds,
+            IReadOnlyCollection<string> contentKinds,
+            bool excludeTests = false) =>
+            [.. materialized.Where(hit => chunkIds.Contains(hit.ChunkId) && contentKinds.Contains(hit.ContentKind))];
     }
 }
