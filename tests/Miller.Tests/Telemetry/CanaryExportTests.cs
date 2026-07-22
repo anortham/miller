@@ -286,6 +286,101 @@ public sealed class CanaryExportTests : IDisposable
     }
 
     [Fact]
+    public void ExplicitV2Export_IsByteIdenticalToTheFrozenOverload()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                seeder.InsertCanary("ws-v2", "2026-07-14", "prose", "treatment");
+                seeder.InsertCanary(
+                    "ws-v3", "2026-07-14", "prose", "treatment",
+                    contractVersion: CanaryContractProfile.V3ContractVersion);
+            }
+        }
+
+        var from = new DateOnly(2026, 7, 2);
+        var to = new DateOnly(2026, 8, 1);
+        string frozen = CanaryExport.BuildJson(Db, from, to, _generatedAt);
+        string selected = CanaryExport.BuildJson(
+            Db, from, to, _generatedAt, CanaryContractProfile.V2ContractVersion, sourceId: null);
+
+        Assert.Equal(frozen, selected);
+    }
+
+    [Fact]
+    public void V3Export_SelectsOnlyV3RowsAndCarriesWarmTreatmentLatencyBuckets()
+    {
+        const string sourceId = "00112233445566778899aabbccddeeff";
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+                seeder.InsertCanary("ws-v2", "2026-07-14", "prose", "treatment", embedWarmth: "warm");
+
+            seeder.InsertCanary(
+                "ws-v3", "2026-07-14", "prose", "treatment", durationMs: 5, embedWarmth: "warm",
+                contractVersion: CanaryContractProfile.V3ContractVersion);
+            seeder.InsertCanary(
+                "ws-v3", "2026-07-14", "prose", "treatment", durationMs: 60, embedWarmth: "warm",
+                contractVersion: CanaryContractProfile.V3ContractVersion);
+            seeder.InsertCanary(
+                "ws-v3", "2026-07-14", "prose", "treatment", durationMs: 60, embedWarmth: "warm",
+                contractVersion: CanaryContractProfile.V3ContractVersion);
+            seeder.InsertCanary(
+                "ws-v3", "2026-07-14", "prose", "treatment", durationMs: 120, embedWarmth: "cold",
+                contractVersion: CanaryContractProfile.V3ContractVersion);
+            seeder.InsertCanary(
+                "ws-v3", "2026-07-14", "prose", "treatment", eligibility: "ineligible_surface",
+                durationMs: 120, embedWarmth: "warm", contractVersion: CanaryContractProfile.V3ContractVersion);
+        }
+
+        string json = CanaryExport.BuildJson(
+            Db,
+            new DateOnly(2026, 7, 2),
+            new DateOnly(2026, 8, 1),
+            _generatedAt,
+            CanaryContractProfile.V3ContractVersion,
+            sourceId);
+        string repeated = CanaryExport.BuildJson(
+            Db,
+            new DateOnly(2026, 7, 2),
+            new DateOnly(2026, 8, 1),
+            _generatedAt,
+            CanaryContractProfile.V3ContractVersion,
+            sourceId);
+        JsonElement root = JsonDocument.Parse(json).RootElement;
+
+        Assert.Equal(json, repeated);
+        Assert.Equal(3, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(3, root.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(sourceId, root.GetProperty("export_source_id").GetString());
+        JsonElement unit = Assert.Single(root.GetProperty("units").EnumerateArray());
+        Assert.Equal(5, unit.GetProperty("calls").GetInt32());
+        JsonElement warm = unit.GetProperty("warm_total_latency_bucket_counts");
+        Assert.Equal(3, warm.EnumerateObject().Sum(pair => pair.Value.GetInt32()));
+        Assert.Equal(1, warm.GetProperty("lt_10").GetInt32());
+        Assert.Equal(2, warm.GetProperty("lt_100").GetInt32());
+    }
+
+    [Theory]
+    [InlineData(1, null)]
+    [InlineData(4, null)]
+    [InlineData(2, "00112233445566778899aabbccddeeff")]
+    [InlineData(3, null)]
+    [InlineData(3, "00112233445566778899AABBCCDDEEFF")]
+    [InlineData(3, "00112233")]
+    public void ContractAndSourceIdCombinations_FailClosed(int contractVersion, string? sourceId)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CanaryExport.BuildJson(
+            Db,
+            new DateOnly(2026, 7, 2),
+            new DateOnly(2026, 8, 1),
+            _generatedAt,
+            contractVersion,
+            sourceId));
+    }
+
+    [Fact]
     public void Units_AreOrderedByDateThenClassThenUnitId()
     {
         using (var seeder = new CanarySeeder(Db))
@@ -508,11 +603,12 @@ internal sealed class CanarySeeder : IDisposable
         bool top1Changed,
         int lexicalTop1Rank,
         string? millerVersion = "1.14.0+abc1234",
-        string? timeOfDay = null)
+        string? timeOfDay = null,
+        int contractVersion = CanaryTelemetry.ContractVersion)
     {
         var meta = new JsonObject
         {
-            ["canary_contract_version"] = CanaryTelemetry.ContractVersion,
+            ["canary_contract_version"] = contractVersion,
             ["canary_experiment_id"] = Identifier,
             ["canary_assignment_version"] = 1,
             ["canary_arm"] = "shadow",

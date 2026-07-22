@@ -351,6 +351,58 @@ public sealed class CanaryGateReportTests : IDisposable
     }
 
     [Fact]
+    public void ContractSelectedGate_NeverPoolsV2AndV3Rows()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                seeder.InsertCanary(
+                    "ws-v2", "2026-07-14", "prose", "control",
+                    millerVersion: "2.0.0+v2");
+                seeder.InsertCanary(
+                    "ws-v3", "2026-07-14", "prose", "treatment",
+                    millerVersion: "2.0.0+v3", contractVersion: CanaryContractProfile.V3ContractVersion);
+                seeder.InsertShadow(
+                    "ws-v3-shadow", "2026-07-14", "ok", overlapAt10: 10, top1Changed: false,
+                    lexicalTop1Rank: 1, millerVersion: "2.0.0+v3",
+                    contractVersion: CanaryContractProfile.V3ContractVersion);
+            }
+        }
+
+        CanaryCohortGate v2 = Assert.Single(CanaryGateReport.Compute(Db).Cohorts);
+        CanaryCohortGate v3 = Assert.Single(CanaryGateReport.Compute(
+            Db, CanaryContractProfile.V3ContractVersion).Cohorts);
+
+        Assert.Equal("2.0.0+v2", v2.MillerVersion);
+        Assert.Equal(1, v2.SuccessRate.ControlUnits);
+        Assert.Equal(0, v2.SuccessRate.TreatmentUnits);
+        Assert.Equal(0, v2.Shadow.ShadowUnits);
+        Assert.Equal("2.0.0+v3", v3.MillerVersion);
+        Assert.Equal(0, v3.SuccessRate.ControlUnits);
+        Assert.Equal(1, v3.SuccessRate.TreatmentUnits);
+        Assert.Equal(1, v3.Shadow.ShadowUnits);
+
+        using JsonDocument rendered = JsonDocument.Parse(CanaryGateReport.Render(
+            Db, json: true, contractVersion: CanaryContractProfile.V3ContractVersion));
+        Assert.Equal(3, rendered.RootElement.GetProperty("canary_contract_version").GetInt32());
+        JsonElement cohort = Assert.Single(rendered.RootElement.GetProperty("cohorts").EnumerateArray());
+        Assert.True(cohort.TryGetProperty("success_rate", out _));
+        Assert.True(cohort.TryGetProperty("warm_latency", out _));
+        Assert.True(cohort.TryGetProperty("identifier_shadow", out _));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    public void UnknownContract_FailsClosed(int contractVersion)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanaryGateReport.Compute(Db, contractVersion));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CanaryGateReport.Render(
+            Db, json: true, contractVersion: contractVersion));
+    }
+
+    [Fact]
     public void RenderJson_CarriesTheThreeClauseVerdicts()
     {
         using (var seeder = new CanarySeeder(Db))

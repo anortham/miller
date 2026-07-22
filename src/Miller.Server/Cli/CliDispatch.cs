@@ -667,7 +667,7 @@ public static class CliDispatch
         if (telemetry is not null)
         {
             if (outcome.ShadowFacts is { } shadowFacts)
-                CanaryTelemetry.StampShadow(telemetry, shadowFacts);
+                CanaryTelemetry.StampShadow(telemetry, canaryMode, shadowFacts);
             else if (outcome.Facts is { } facts)
                 SearchTool.StampSymbolCanary(
                     telemetry,
@@ -1295,8 +1295,8 @@ public static class CliDispatch
 
     private const string TelemetryUsage =
         "miller telemetry export [--jsonl] [--workspace-id ID|all] | " +
-        "miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD] | " +
-        "miller telemetry canary --gate [--json]";
+        "miller telemetry canary [--json] [--contract 2|3] [--source-id ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD] | " +
+        "miller telemetry canary --gate [--json] [--contract 2|3]";
 
     private static int Telemetry(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
@@ -1324,14 +1324,32 @@ public static class CliDispatch
     private static int Canary(IReadOnlyList<string> tail, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         CliOptions o = CliOptions.Parse(tail, "json", "gate");
-        if (o.Positionals.Count > 0)
+        if (o.Positionals.Count > 0 || o.FlagNames.Any(static name => !IsCanaryFlag(name)))
+            return Usage(err, TelemetryUsage);
+
+        int contractVersion = o.Value("contract") switch
+        {
+            null when !o.Has("contract") => CanaryContractProfile.V2ContractVersion,
+            "2" => CanaryContractProfile.V2ContractVersion,
+            "3" => CanaryContractProfile.V3ContractVersion,
+            _ => 0,
+        };
+        if (contractVersion == 0)
             return Usage(err, TelemetryUsage);
 
         if (o.Has("gate"))
         {
-            outw.WriteLine(CanaryGateReport.Render(ctx.TelemetryDbPath, o.Has("json")));
+            if (o.Has("from") || o.Has("to") || o.Has("source-id"))
+                return Usage(err, TelemetryUsage);
+            outw.WriteLine(CanaryGateReport.Render(ctx.TelemetryDbPath, o.Has("json"), contractVersion));
             return 0;
         }
+
+        string? sourceId = o.Value("source-id");
+        if (contractVersion == CanaryContractProfile.V2ContractVersion && o.Has("source-id"))
+            return Usage(err, TelemetryUsage);
+        if (contractVersion == CanaryContractProfile.V3ContractVersion && !CanaryExport.IsValidSourceId(sourceId))
+            return Usage(err, TelemetryUsage);
 
         DateOnly to = DateOnly.FromDateTime(DateTime.UtcNow);
         DateOnly from = to.AddDays(-30);
@@ -1341,11 +1359,22 @@ public static class CliDispatch
             return Usage(err, TelemetryUsage);
         if (!o.Has("from") && o.Has("to"))
             from = to.AddDays(-30);
+        if (from > to)
+            return Usage(err, TelemetryUsage);
 
         var generatedAt = new DateTimeOffset(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-        outw.WriteLine(CanaryExport.BuildJson(ctx.TelemetryDbPath, from, to, generatedAt));
+        outw.WriteLine(CanaryExport.BuildJson(
+            ctx.TelemetryDbPath, from, to, generatedAt, contractVersion, sourceId));
         return 0;
     }
+
+    private static bool IsCanaryFlag(string name) =>
+        name.Equals("json", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("gate", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("contract", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("source-id", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("from", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("to", StringComparison.OrdinalIgnoreCase);
 
     private static bool TryParseIsoDate(string value, out DateOnly date) =>
         DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
@@ -3004,8 +3033,8 @@ public static class CliDispatch
                              [--json] [--workspace-id SELECTOR] [--workspace DIR] [--range REV..REV] [--limit N] [--include-tests|--exclude-tests]
           telemetry <op>     Export machine-global Miller telemetry, or the semantic-canary aggregate/gate.
                              export [--jsonl] [--workspace-id ID|all]
-                             canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]   # frozen aggregate envelope (default last 30 days)
-                             canary --gate [--json]                                  # local gate verdict per miller_version cohort
+                             canary [--json] [--contract 2|3] [--source-id ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+                             canary --gate [--json] [--contract 2|3]                 # local gate verdict per semantic-identity cohort
           symbols <op>       Bulk-export every symbol row for fleet rollups.   # JSONL
                              export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]
           references <op>    Bulk-export identifier/reference usage facts, or list dead-code candidates.

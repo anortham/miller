@@ -9,21 +9,38 @@ using Miller.Core.Telemetry;
 namespace Miller.Server.Telemetry;
 
 /// <summary>
-/// Builds the frozen aggregate envelope of <c>canary-telemetry-v2</c> §Aggregate Export — the only sanctioned way
-/// canary data leaves a machine. Counters and enums only: no hashes, no <c>workspace_id</c>, no paths, no raw
-/// <c>duration_ms</c> (bucketed <c>total_latency_bucket_counts</c> instead). Units are ordered by
-/// <c>(utc_date, query_class, unit_id)</c> so an unchanged window re-exports byte-identically.
+/// Builds a contract-selected aggregate envelope — the only sanctioned way canary data leaves a machine.
+/// Counters and enums only: no hashes, no <c>workspace_id</c>, no paths, and no raw <c>duration_ms</c>. Units are
+/// ordered by <c>(utc_date, query_class, unit_id)</c> so an unchanged window re-exports byte-identically.
 /// </summary>
 public static class CanaryExport
 {
     public const int SchemaVersion = 2;
 
+    public const int V3SchemaVersion = 3;
+
     private static readonly IReadOnlyList<string> LatencyOrder =
         [.. CanaryGateMath.LatencyLadder, CanaryLatencyBucket.None];
 
-    public static string BuildJson(string dbPath, DateOnly from, DateOnly to, DateTimeOffset generatedAt)
+    public static string BuildJson(string dbPath, DateOnly from, DateOnly to, DateTimeOffset generatedAt) =>
+        BuildJson(
+            dbPath,
+            from,
+            to,
+            generatedAt,
+            CanaryContractProfile.V2ContractVersion,
+            sourceId: null);
+
+    public static string BuildJson(
+        string dbPath,
+        DateOnly from,
+        DateOnly to,
+        DateTimeOffset generatedAt,
+        int contractVersion,
+        string? sourceId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ValidateContractSelection(contractVersion, sourceId);
 
         IReadOnlyList<CanaryRow> allRows = CanaryLedgerReader.ReadCanaryRows(dbPath);
         IReadOnlyList<CanaryFollowUp> followUps = CanaryLedgerReader.ReadFollowUps(dbPath);
@@ -32,7 +49,7 @@ public static class CanaryExport
         string fromText = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         string toText = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         List<CanaryRow> windowed = allRows
-            .Where(r => r.ContractVersion == CanaryTelemetry.ContractVersion
+            .Where(r => r.ContractVersion == contractVersion
                 && string.CompareOrdinal(r.UtcDate, fromText) >= 0
                 && string.CompareOrdinal(r.UtcDate, toText) <= 0)
             .ToList();
@@ -71,7 +88,26 @@ public static class CanaryExport
         units.Sort(static (x, y) => CompareUnitOrder(x.UtcDate, x.QueryClass, x.UnitId, y.UtcDate, y.QueryClass, y.UnitId));
         shadowUnits.Sort(static (x, y) => CompareUnitOrder(x.UtcDate, x.QueryClass, x.UnitId, y.UtcDate, y.QueryClass, y.UnitId));
 
-        return Render(from, to, generatedAt, suppressed, units, shadowUnits);
+        return Render(from, to, generatedAt, contractVersion, sourceId, suppressed, units, shadowUnits);
+    }
+
+    internal static bool IsValidSourceId(string? sourceId) =>
+        sourceId is { Length: 32 }
+        && sourceId.All(static c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static void ValidateContractSelection(int contractVersion, string? sourceId)
+    {
+        if (contractVersion == CanaryContractProfile.V2ContractVersion)
+        {
+            if (sourceId is not null)
+                throw new ArgumentException("Canary contract v2 does not accept an export source id.", nameof(sourceId));
+            return;
+        }
+
+        if (contractVersion != CanaryContractProfile.V3ContractVersion)
+            throw new ArgumentOutOfRangeException(nameof(contractVersion), contractVersion, "Canary contract must be 2 or 3.");
+        if (!IsValidSourceId(sourceId))
+            throw new ArgumentException("Canary contract v3 requires a 32-character lowercase hexadecimal source id.", nameof(sourceId));
     }
 
     private static ExperimentUnit BuildExperimentUnit(
@@ -106,7 +142,12 @@ public static class CanaryExport
             EmbedWarmthCounts: Counts(rows, r => r.EmbedWarmth),
             EmbedLatencyBucketCounts: Counts(rows, r => r.EmbedLatencyBucket),
             KnnLatencyBucketCounts: Counts(rows, r => r.KnnLatencyBucket),
-            TotalLatencyBucketCounts: Counts(rows, r => CanaryLatencyBucket.For(r.DurationMs)));
+            TotalLatencyBucketCounts: Counts(rows, r => CanaryLatencyBucket.For(r.DurationMs)),
+            WarmTotalLatencyBucketCounts: Counts(
+                rows.Where(r => r.Eligibility == CanaryEligibility.Eligible
+                    && r.Arm == CanaryArm.Treatment
+                    && r.EmbedWarmth == "warm").ToList(),
+                r => CanaryLatencyBucket.For(r.DurationMs)));
     }
 
     private static ShadowUnit BuildShadowUnit(List<CanaryRow> rows, AnalysisUnitKey key)
@@ -132,7 +173,7 @@ public static class CanaryExport
     }
 
     private static string Render(
-        DateOnly from, DateOnly to, DateTimeOffset generatedAt, int suppressed,
+        DateOnly from, DateOnly to, DateTimeOffset generatedAt, int contractVersion, string? sourceId, int suppressed,
         List<ExperimentUnit> units, List<ShadowUnit> shadowUnits)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -140,8 +181,12 @@ public static class CanaryExport
             new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
             w.WriteStartObject();
-            w.WriteNumber("schema_version", SchemaVersion);
-            w.WriteNumber("canary_contract_version", CanaryTelemetry.ContractVersion);
+            w.WriteNumber("schema_version", contractVersion == CanaryContractProfile.V3ContractVersion
+                ? V3SchemaVersion
+                : SchemaVersion);
+            w.WriteNumber("canary_contract_version", contractVersion);
+            if (contractVersion == CanaryContractProfile.V3ContractVersion)
+                w.WriteString("export_source_id", sourceId);
             w.WriteString("experiment_id", CanaryAssignment.HybridExperimentId);
             w.WriteString("generated_at_utc", generatedAt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
             w.WriteStartObject("window");
@@ -152,7 +197,7 @@ public static class CanaryExport
 
             w.WriteStartArray("units");
             foreach (ExperimentUnit unit in units)
-                WriteExperimentUnit(w, unit);
+                WriteExperimentUnit(w, unit, contractVersion);
             w.WriteEndArray();
 
             w.WriteStartArray("shadow_units");
@@ -166,7 +211,7 @@ public static class CanaryExport
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static void WriteExperimentUnit(Utf8JsonWriter w, ExperimentUnit unit)
+    private static void WriteExperimentUnit(Utf8JsonWriter w, ExperimentUnit unit, int contractVersion)
     {
         w.WriteStartObject();
         w.WriteString("unit_id", unit.UnitId);
@@ -193,6 +238,8 @@ public static class CanaryExport
         WriteCountMap(w, "embed_latency_bucket_counts", unit.EmbedLatencyBucketCounts, LatencyOrder);
         WriteCountMap(w, "knn_latency_bucket_counts", unit.KnnLatencyBucketCounts, LatencyOrder);
         WriteCountMap(w, "total_latency_bucket_counts", unit.TotalLatencyBucketCounts, LatencyOrder);
+        if (contractVersion == CanaryContractProfile.V3ContractVersion && unit.Arm == CanaryArm.Treatment)
+            WriteCountMap(w, "warm_total_latency_bucket_counts", unit.WarmTotalLatencyBucketCounts, LatencyOrder);
         w.WriteEndObject();
     }
 
@@ -361,7 +408,8 @@ public static class CanaryExport
         IReadOnlyDictionary<string, int> EmbedWarmthCounts,
         IReadOnlyDictionary<string, int> EmbedLatencyBucketCounts,
         IReadOnlyDictionary<string, int> KnnLatencyBucketCounts,
-        IReadOnlyDictionary<string, int> TotalLatencyBucketCounts);
+        IReadOnlyDictionary<string, int> TotalLatencyBucketCounts,
+        IReadOnlyDictionary<string, int> WarmTotalLatencyBucketCounts);
 
     private sealed record ShadowUnit(
         string UnitId,

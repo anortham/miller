@@ -120,12 +120,12 @@
 **Approach:** Retain the current overloads as v2 delegates so source and output compatibility are testable. Validate contract/source combinations before reading the ledger. Filter rows before attribution and grouping, retain exact identity strata, and make v3 deterministic for a fixed window/source just like v2.
 
 **Acceptance criteria:**
-- [ ] Existing v2 fixture output is byte-identical and existing no-flag CLI behavior still selects v2.
-- [ ] V3 export includes source identity and warm treatment latency buckets whose counts equal warm treatment rows.
-- [ ] `--gate --contract 3` reads only v3 rows and reports the unchanged three clauses within exact cohorts.
-- [ ] Unknown contracts, malformed/missing v3 source ids, v2 source ids, malformed dates, and conflicting CLI flags exit with usage code 2.
-- [ ] V2 and v3 rows cannot contribute to the same export or gate cohort.
-- [ ] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
+- [x] Existing v2 fixture output is byte-identical and existing no-flag CLI behavior still selects v2.
+- [x] V3 export includes source identity and warm treatment latency buckets whose counts equal warm treatment rows.
+- [x] `--gate --contract 3` reads only v3 rows and reports the unchanged three clauses within exact cohorts.
+- [x] Unknown contracts, malformed/missing v3 source ids, v2 source ids, malformed dates, and conflicting CLI flags exit with usage code 2.
+- [x] V2 and v3 rows cannot contribute to the same export or gate cohort.
+- [x] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
 
 ### Task 3: Privacy-safe export combiner
 

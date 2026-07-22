@@ -582,6 +582,77 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void TelemetryCanary_DefaultsToV2AndExplicitV3RequiresAndCarriesSourceId()
+    {
+        var ctx = Context(Path.Combine(_dir, "symbols.db"));
+        using (TelemetryLedger.Open(ctx.TelemetryDbPath, workspaceId: null))
+        {
+        }
+
+        var (v2Code, v2Out, v2Err) = Run(
+            ["telemetry", "canary", "--from", "2026-07-01", "--to", "2026-07-07"],
+            ctx);
+        var (v3Code, v3Out, v3Err) = Run(
+            [
+                "telemetry", "canary", "--contract", "3", "--source-id",
+                "00112233445566778899aabbccddeeff", "--from", "2026-07-01", "--to", "2026-07-07",
+            ],
+            ctx);
+        var (gateCode, gateOut, gateErr) = Run(
+            ["telemetry", "canary", "--gate", "--json", "--contract", "3"],
+            ctx);
+
+        Assert.Equal(0, v2Code);
+        Assert.Empty(v2Err);
+        using JsonDocument v2 = JsonDocument.Parse(v2Out);
+        Assert.Equal(2, v2.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(2, v2.RootElement.GetProperty("canary_contract_version").GetInt32());
+        Assert.False(v2.RootElement.TryGetProperty("export_source_id", out _));
+
+        Assert.Equal(0, v3Code);
+        Assert.Empty(v3Err);
+        using JsonDocument v3 = JsonDocument.Parse(v3Out);
+        Assert.Equal(3, v3.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(3, v3.RootElement.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(
+            "00112233445566778899aabbccddeeff",
+            v3.RootElement.GetProperty("export_source_id").GetString());
+
+        Assert.Equal(0, gateCode);
+        Assert.Empty(gateErr);
+        using JsonDocument gate = JsonDocument.Parse(gateOut);
+        Assert.Equal(3, gate.RootElement.GetProperty("canary_contract_version").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("--contract")]
+    [InlineData("--contract 1")]
+    [InlineData("--contract 4")]
+    [InlineData("--contract 3")]
+    [InlineData("--contract 2 --source-id 00112233445566778899aabbccddeeff")]
+    [InlineData("--contract 3 --source-id 00112233445566778899AABBCCDDEEFF")]
+    [InlineData("--contract 3 --source-id 00112233")]
+    [InlineData("--gate --source-id 00112233445566778899aabbccddeeff")]
+    [InlineData("--gate --from 2026-07-01")]
+    [InlineData("--from not-a-date")]
+    [InlineData("--to 2026-07-01 --from 2026-07-02")]
+    [InlineData("--unknown value")]
+    public void TelemetryCanary_InvalidContractSourceDateAndFlagCombinationsReturnUsage(string arguments)
+    {
+        var ctx = Context(Path.Combine(_dir, "symbols.db"));
+        using (TelemetryLedger.Open(ctx.TelemetryDbPath, workspaceId: null))
+        {
+        }
+        string[] tail = arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        var (code, outText, errText) = Run(["telemetry", "canary", .. tail], ctx);
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("usage:", errText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Help_ListsCommands()
     {
         var (code, outText, _) = Run(new[] { "help" }, Context(Path.Combine(_dir, "symbols.db")));
@@ -3674,6 +3745,51 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument json = JsonDocument.Parse(metadata);
         Assert.Equal(CanaryEligibility.Eligible, json.RootElement.GetProperty("canary_eligibility").GetString());
         Assert.Equal(CanaryArm.Treatment, json.RootElement.GetProperty("canary_arm").GetString());
+    }
+
+    [Fact]
+    public async Task NormalIdentifierRoute_DecisionModeStampsV3ShadowTelemetry()
+    {
+        MethodInfo? method = typeof(CliDispatch).GetMethod(
+            "RunNormalSymbolRoute",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        const string query = "GadgetWidget";
+        string telemetryDb = Path.Combine(_dir, "cli-decision-shadow.db");
+        var port = new StubVectorPort
+        {
+            Matches = [new VectorMatch(1, 0.05, "gadget-symbol", "src/other/Gadget.cs")],
+        };
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        Func<SemanticSymbolFusionArm> armFactory = () => new(
+            SemanticMode.On,
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session));
+
+        using (TelemetryLedger ledger = TelemetryLedger.Open(telemetryDb, "ws-000", ArmRoot))
+        {
+            using TelemetryScope scope = ledger.Measure("search", "symbol");
+            var outcome = Assert.IsType<SearchTool.SymbolCanaryOutcome>(method.Invoke(null,
+            [
+                TwoSymbolIndex(), SymbolRoute, ArmRequest(query), SemanticMode.On, CanaryMode.Decision,
+                "ws-000", ArmRoot, "2026-07-20",
+                (Func<CanaryVectorProbe>)(() => new CanaryVectorProbe("ready", Identity: null)), armFactory, false, scope,
+            ]));
+            Assert.NotNull(outcome.ShadowFacts);
+        }
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryDb,
+            Mode = SqliteOpenMode.ReadOnly,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT metadata_json FROM tool_telemetry LIMIT 1;";
+        string metadata = Assert.IsType<string>(command.ExecuteScalar());
+        using JsonDocument json = JsonDocument.Parse(metadata);
+        Assert.Equal(3, json.RootElement.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(CanaryArm.Shadow, json.RootElement.GetProperty("canary_arm").GetString());
     }
 
     [Fact]

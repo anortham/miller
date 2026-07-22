@@ -58,10 +58,9 @@ public sealed record CanaryCohortGate(
 public sealed record CanaryGate(IReadOnlyList<CanaryCohortGate> Cohorts);
 
 /// <summary>
-/// The local-authoritative gate of <c>canary-telemetry-v2</c> §Replaced cohort rule and inherited frozen analysis
-/// parameters. Reads raw <c>tool_telemetry</c> rows, computes attribution, per-unit success rates, and the warm
-/// latency and identifier-shadow clauses — each within one complete semantic-identity cohort. Renders a per-clause
-/// human verdict (value, threshold, pass/fail/underpowered/indeterminate) or JSON.
+/// The contract-selected local-authoritative canary gate. Reads raw <c>tool_telemetry</c> rows, computes
+/// attribution, per-unit success rates, and the warm latency and identifier-shadow clauses — each within one
+/// complete semantic-identity cohort. Renders a per-clause human verdict or JSON.
 /// </summary>
 public static class CanaryGateReport
 {
@@ -73,22 +72,29 @@ public static class CanaryGateReport
     private const double Top1ChangedMargin = 0.05;
     private const double OverlapFloor = 8.0;
 
-    public static string Render(string dbPath, bool json)
+    public static string Render(string dbPath, bool json) =>
+        Render(dbPath, json, CanaryContractProfile.V2ContractVersion);
+
+    public static string Render(string dbPath, bool json, int contractVersion)
     {
-        CanaryGate gate = Compute(dbPath);
-        return json ? RenderJson(gate) : RenderHuman(gate);
+        CanaryGate gate = Compute(dbPath, contractVersion);
+        return json ? RenderJson(gate, contractVersion) : RenderHuman(gate);
     }
 
-    public static CanaryGate Compute(string dbPath)
+    public static CanaryGate Compute(string dbPath) =>
+        Compute(dbPath, CanaryContractProfile.V2ContractVersion);
+
+    public static CanaryGate Compute(string dbPath, int contractVersion)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ValidateContractVersion(contractVersion);
 
         IReadOnlyList<CanaryRow> allRows = CanaryLedgerReader.ReadCanaryRows(dbPath);
         IReadOnlyList<CanaryFollowUp> followUps = CanaryLedgerReader.ReadFollowUps(dbPath);
         IReadOnlySet<string> attributed = CanaryLedgerReader.AttributedRowIds(allRows, followUps);
 
         List<CanaryRow> contractRows = allRows
-            .Where(r => r.ContractVersion == CanaryTelemetry.ContractVersion && r.MillerVersion is not null)
+            .Where(r => r.ContractVersion == contractVersion && r.MillerVersion is not null)
             .ToList();
 
         var cohorts = new List<CanaryCohortGate>();
@@ -118,6 +124,12 @@ public static class CanaryGateReport
         }
 
         return new CanaryGate(cohorts);
+    }
+
+    private static void ValidateContractVersion(int contractVersion)
+    {
+        if (contractVersion is not (CanaryContractProfile.V2ContractVersion or CanaryContractProfile.V3ContractVersion))
+            throw new ArgumentOutOfRangeException(nameof(contractVersion), contractVersion, "Canary contract must be 2 or 3.");
     }
 
     private static CanarySuccessRateClause SuccessRateClause(IReadOnlyList<CanaryRow> cohortRows, IReadOnlySet<string> attributed)
@@ -211,7 +223,7 @@ public static class CanaryGateReport
         return new CanaryShadowClause(verdict, top1ChangedRates.Count, top1Upper, overlapLower);
     }
 
-    private static string RenderJson(CanaryGate gate)
+    private static string RenderJson(CanaryGate gate, int contractVersion)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer,
@@ -219,7 +231,7 @@ public static class CanaryGateReport
         {
             w.WriteStartObject();
             w.WriteString("experiment_id", CanaryAssignment.HybridExperimentId);
-            w.WriteNumber("canary_contract_version", CanaryTelemetry.ContractVersion);
+            w.WriteNumber("canary_contract_version", contractVersion);
             w.WriteStartArray("cohorts");
             foreach (CanaryCohortGate cohort in gate.Cohorts)
             {
