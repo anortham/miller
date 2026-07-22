@@ -1,0 +1,12 @@
+{"evidence_critical":true,"language":"typescript","repo":"goldfish","task_id":"dev-001","workflow_class":"exact_lookup"}
+{"evidence_critical":true,"language":"csharp","repo":"eros","task_id":"dev-002","workflow_class":"exact_lookup"}
+{"evidence_critical":false,"language":"csharp","repo":"eros","task_id":"dev-003","workflow_class":"concept_search"}
+{"evidence_critical":false,"language":"typescript","repo":"goldfish","task_id":"dev-004","workflow_class":"concept_search"}
+{"evidence_critical":false,"language":"json","repo":"razorback","task_id":"dev-005","workflow_class":"docs_config"}
+{"evidence_critical":false,"language":"javascript","repo":"tree-sitter-c-sharp","task_id":"dev-006","workflow_class":"docs_config"}
+{"evidence_critical":false,"language":"c","repo":"tree-sitter-razor","task_id":"dev-007","workflow_class":"context_assembly"}
+{"evidence_critical":false,"language":"rust","repo":"tree-sitter-c-sharp","task_id":"dev-008","workflow_class":"context_assembly"}
+{"evidence_critical":true,"language":"typescript","repo":"goldfish","task_id":"dev-009","workflow_class":"references_trace"}
+{"evidence_critical":true,"language":"c","repo":"tree-sitter-razor","task_id":"dev-010","workflow_class":"references_trace"}
+{"evidence_critical":true,"language":"javascript","repo":"tree-sitter-c-sharp","task_id":"dev-011","workflow_class":"impact_tests"}
+{"evidence_critical":true,"language":"shell","repo":"razorback","task_id":"dev-012","workflow_class":"impact_tests"}

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "estimator": "Miller TokenEstimator UTF-8 bytes divided by four",
+  "replays": [
+    {
+      "task_id": "dev-001",
+      "requested_budget": 3000,
+      "rendered_characters": 11882,
+      "estimated_tokens": 2973
+    },
+    {
+      "task_id": "dev-004",
+      "requested_budget": 4000,
+      "rendered_characters": 15926,
+      "estimated_tokens": 3987
+    },
+    {
+      "task_id": "dev-007",
+      "requested_budget": 4000,
+      "rendered_characters": 15882,
+      "estimated_tokens": 3972
+    },
+    {
+      "task_id": "dev-008",
+      "requested_budget": 4000,
+      "rendered_characters": 15963,
+      "estimated_tokens": 3991
+    }
+  ],
+  "result": "pass"
+}

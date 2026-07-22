@@ -1,0 +1,195 @@
+{
+  "codex": {
+    "binary_sha256": "1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590",
+    "version": "codex-cli 0.145.0"
+  },
+  "environment_keys": [
+    "CODEX_HOME",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PATH",
+    "TMPDIR"
+  ],
+  "inputs": {
+    "snapshot_manifest_sha256": "921a32c349a3f53c0bbb16a4aa98b9d521a8cb4fbada8cfdd20a4d46463e6572",
+    "task_manifest_sha256": "2dbdfd271e47b9a94f41ff306ebab0c657d0922fee6b441cc65f9f0b3107bf73"
+  },
+  "model": "gpt-5.6-sol",
+  "products": {
+    "julie": {
+      "binary_sha256": "320a5a3e2fbb33f3ebc2ecb09545ab89784c89f672ea037970a4497664a73d99",
+      "command_sha256": "a68c42c2aebaff50dd0ba36e04e6ed6dc24c940a69f25ddbf352790dc342303b",
+      "commit": "27d39714339778b18f412c6a5f1110de1257dcd3",
+      "environment_keys": [
+        "HOME",
+        "JULIE_EMBEDDING_CACHE_DIR",
+        "JULIE_HOME"
+      ],
+      "environment_sha256": "f90ee84ba0283f1aa2113c179f04b81d44a4845b6b7b1dc0f84b23c13ec03dae",
+      "snapshots": {
+        "snapshot-001": {
+          "index_identity_sha256": "a406e8b3f0bdd24df81bba6d96ccde2b3b4a9db32f045ccc93e0662176943608",
+          "instructions_sha256": "fb73cdf32251962b45b7b8b69879bc8e716f48ffa17f015d49d3907ade9b25f0",
+          "model_identity_sha256": "cb85f734ba6b8c7fda26bc693036bb393a6726185c872b8f0a40a5b4e7bc05b7",
+          "tools_sha256": "b3a21c5d10aa43ab28c49dd16fa7a272550698043bb0f24ab86a0dd7b7580555",
+          "vector_identity_sha256": "441e9ccd6d01b9998a4270562bb936d59450f1bcde703c1929ca6acb0462e078",
+          "workspace_identity_sha256": "8d0226d9b4757064d1cf89332a6eccaf4a4dd3d443672ff3a9c088217ae4db41"
+        },
+        "snapshot-002": {
+          "index_identity_sha256": "3bdf9002f25e02d5cde799849f72cd9cc4f3e3ec89e71d9b0ff9b7906cef8f19",
+          "instructions_sha256": "fb73cdf32251962b45b7b8b69879bc8e716f48ffa17f015d49d3907ade9b25f0",
+          "model_identity_sha256": "cb85f734ba6b8c7fda26bc693036bb393a6726185c872b8f0a40a5b4e7bc05b7",
+          "tools_sha256": "b3a21c5d10aa43ab28c49dd16fa7a272550698043bb0f24ab86a0dd7b7580555",
+          "vector_identity_sha256": "7722f619994c825c645cee874a64f10666bc73821aa2d41b8d30183249e00f50",
+          "workspace_identity_sha256": "cd2dcd7be76ec4dd3e6faac8f237f7aef3d11e909b426c839c791f2c79832fce"
+        },
+        "snapshot-003": {
+          "index_identity_sha256": "5a08d59a12d6344850b67e5f40fb2f568f0a2f97205a0c9e6b735297cf0e0592",
+          "instructions_sha256": "fb73cdf32251962b45b7b8b69879bc8e716f48ffa17f015d49d3907ade9b25f0",
+          "model_identity_sha256": "cb85f734ba6b8c7fda26bc693036bb393a6726185c872b8f0a40a5b4e7bc05b7",
+          "tools_sha256": "b3a21c5d10aa43ab28c49dd16fa7a272550698043bb0f24ab86a0dd7b7580555",
+          "vector_identity_sha256": "d8e2fc520219f72d5c934a53de3c14e9cd2a508e43881eb7df8b3fbc9fcc7c8a",
+          "workspace_identity_sha256": "f66c38af5a60f5d219a5a1d01e530dee09718f83b36dbf3f1b8b790f3a2c54a2"
+        },
+        "snapshot-004": {
+          "index_identity_sha256": "40fa5aef9e11899da48ce9bb8826fb0138552397ab439483e71a9b839c4c53f8",
+          "instructions_sha256": "fb73cdf32251962b45b7b8b69879bc8e716f48ffa17f015d49d3907ade9b25f0",
+          "model_identity_sha256": "cb85f734ba6b8c7fda26bc693036bb393a6726185c872b8f0a40a5b4e7bc05b7",
+          "tools_sha256": "b3a21c5d10aa43ab28c49dd16fa7a272550698043bb0f24ab86a0dd7b7580555",
+          "vector_identity_sha256": "3f9096cf2c50df9646a3fa0e6b4615bd3a3a1c5aadd4b6e0ceb3650bebecd7a6",
+          "workspace_identity_sha256": "3a531e0df876ebc21c79c2d00645122dbe6a0e3ecde644174639cb294885bcf2"
+        },
+        "snapshot-005": {
+          "index_identity_sha256": "6001f1246256efe8f28523a8bd747f2540fefd839120106ee2df694d77087646",
+          "instructions_sha256": "fb73cdf32251962b45b7b8b69879bc8e716f48ffa17f015d49d3907ade9b25f0",
+          "model_identity_sha256": "cb85f734ba6b8c7fda26bc693036bb393a6726185c872b8f0a40a5b4e7bc05b7",
+          "tools_sha256": "b3a21c5d10aa43ab28c49dd16fa7a272550698043bb0f24ab86a0dd7b7580555",
+          "vector_identity_sha256": "a490d5e9eb62be16aa9583a54c4290f80d2fe18bcb409b10617ca2901acf661a",
+          "workspace_identity_sha256": "c6d1b98fb9697214746e54217b82c63b321ffa1e970e30f7799dbbdbfe483a4e"
+        }
+      },
+      "version": "julie-server 7.16.0"
+    },
+    "miller": {
+      "binary_sha256": "7a75751f8264eab64d79a1f8d275e0900145ae4648ea81a3214717994560c065",
+      "command_sha256": "c76a99a81189966d607a05196fe9c805626b57a7ad9fe2203ce2baa1713e99a4",
+      "commit": "1f4724f11ca97aa46388702fd4782c23738d7682",
+      "environment_keys": [
+        "HOME",
+        "MILLER_SEMANTIC"
+      ],
+      "environment_sha256": "30af4f5db764fef1bbae596de49e07fca0f5a4e88c4722bbe3fe9434f3e8246a",
+      "snapshots": {
+        "snapshot-001": {
+          "index_identity_sha256": "0d90b458a4388645e319b95b549859ee1cd8e7df7b09622dc63f93797aa983e7",
+          "instructions_sha256": "cfe7b271178783369538e526e1d09f453e6ec7bf6776ab5d533e2c61c1c5568b",
+          "model_identity_sha256": "7bd2709a9cff59856d607957c48c0095593c04cebc4bafa5e8459a8109a911ba",
+          "tools_sha256": "126854bce11148838eb8babc716df18640f883d4f422ba5a2f47d2eefcc5a590",
+          "vector_identity_sha256": "ba6d8dc796eb8b690cb4b534e573f0a68f4ecf3c4cb444698546b90910503f5b",
+          "workspace_identity_sha256": "bf828e709b3bc04f66e4723e499de66c48e583fc97b7ba78069239c1e483cb0d"
+        },
+        "snapshot-002": {
+          "index_identity_sha256": "d23ffd66f7ee383653eea13aa180008c2084bda731730229346d89b5525067c9",
+          "instructions_sha256": "cfe7b271178783369538e526e1d09f453e6ec7bf6776ab5d533e2c61c1c5568b",
+          "model_identity_sha256": "7bd2709a9cff59856d607957c48c0095593c04cebc4bafa5e8459a8109a911ba",
+          "tools_sha256": "126854bce11148838eb8babc716df18640f883d4f422ba5a2f47d2eefcc5a590",
+          "vector_identity_sha256": "f2e713ac3e4f7da6bd4c8f948eb7feebcc26d9ef2ffaaa49582bd9e80c440127",
+          "workspace_identity_sha256": "0b647075dc314feba676c98716f57aa2ce2debf2753b9ba9a5cfce5464bface7"
+        },
+        "snapshot-003": {
+          "index_identity_sha256": "46136cd1a6e3ab647dd4d161d7610b7b77a5423413d5b2e142e6521987ffe9f0",
+          "instructions_sha256": "cfe7b271178783369538e526e1d09f453e6ec7bf6776ab5d533e2c61c1c5568b",
+          "model_identity_sha256": "7bd2709a9cff59856d607957c48c0095593c04cebc4bafa5e8459a8109a911ba",
+          "tools_sha256": "126854bce11148838eb8babc716df18640f883d4f422ba5a2f47d2eefcc5a590",
+          "vector_identity_sha256": "79de6de23eaa7915fc9f21a93da9d1ff9a705cba6a2a205b40121019f65a7fb5",
+          "workspace_identity_sha256": "9e452a28672e4d9a2b79eb1effd3371726bd9cea504d2412854bc03dc98ab116"
+        },
+        "snapshot-004": {
+          "index_identity_sha256": "e2ec2fa8ba0138e3b8ae91b7f3e0347dae6336e32af065fbad429dac289da526",
+          "instructions_sha256": "cfe7b271178783369538e526e1d09f453e6ec7bf6776ab5d533e2c61c1c5568b",
+          "model_identity_sha256": "7bd2709a9cff59856d607957c48c0095593c04cebc4bafa5e8459a8109a911ba",
+          "tools_sha256": "126854bce11148838eb8babc716df18640f883d4f422ba5a2f47d2eefcc5a590",
+          "vector_identity_sha256": "3bebdea5a681d7f53128c88b0d312045b303af450138027c443e2ca3288a1c52",
+          "workspace_identity_sha256": "8a8d40463c9de70afd93578989f99574a001cd4614e7ec1be22b3eb3372d9594"
+        },
+        "snapshot-005": {
+          "index_identity_sha256": "3839de132c795f939d375d69d61daa647720190941333cbf0abea68f8f583989",
+          "instructions_sha256": "cfe7b271178783369538e526e1d09f453e6ec7bf6776ab5d533e2c61c1c5568b",
+          "model_identity_sha256": "7bd2709a9cff59856d607957c48c0095593c04cebc4bafa5e8459a8109a911ba",
+          "tools_sha256": "126854bce11148838eb8babc716df18640f883d4f422ba5a2f47d2eefcc5a590",
+          "vector_identity_sha256": "c8b328b8bd466c96d5645f79aeb704670e48d1af8e1aee5aa4e2125d7977d5df",
+          "workspace_identity_sha256": "6aa751d223b45a1a0d9205785a703b59db1ca13fc32112b4849dd24072d21976"
+        }
+      },
+      "version": "1.13.0+1f4724f11ca9"
+    }
+  },
+  "reasoning": "medium",
+  "run_identity_sha256": "7e725de39ea844aa1b456f2f654fb42e13390d18492acafc53d1d320445aaac3",
+  "schema_version": 1,
+  "schemas": {
+    "answer-schema.json": "14f88aca28295577d94fa4f655bd7bfcddafd081d1eead401a3d54c272b2ddc0",
+    "run-result.schema.json": "a5ee637942e8a9c98b76db3a1612006fca27d1ccd9219844330e02fc7f5149b7",
+    "snapshot-manifest.schema.json": "ec4e07c9f1d36b54bb78f0868c4f2b3d32ceac1375e2bf4d6aac50c636422c2b",
+    "task-manifest.schema.json": "027ae86c9450df30a43f018835e3ad94a0b4582ef47d75011ac42ec972219880"
+  },
+  "seed": 731,
+  "snapshots": [
+    {
+      "commit": "11c327d1d5fb818744c86b7d94b74ec9d1d7468e",
+      "content_sha256": "38d3acdb83fe5f9e4a30b894076fa14d989f8bfe79a0d5e2b822baadeb62cc24",
+      "languages": [
+        "typescript"
+      ],
+      "repo_id": "goldfish",
+      "snapshot_id": "snapshot-001"
+    },
+    {
+      "commit": "a1a15d634151a88a02063f44adecbd2bc93c172a",
+      "content_sha256": "841c5aee9e78af1b9da6c78d81370a1535a7be661168564555207f2b64cf6ce3",
+      "languages": [
+        "csharp"
+      ],
+      "repo_id": "eros",
+      "snapshot_id": "snapshot-002"
+    },
+    {
+      "commit": "ed391ab50dc4d1d7a73eddd95663c24aea50dec2",
+      "content_sha256": "7898d5688b3425db488ca8ec9b9d697fac6d1a10fd4a028bc59c0738acb5231e",
+      "languages": [
+        "javascript",
+        "json",
+        "shell"
+      ],
+      "repo_id": "razorback",
+      "snapshot_id": "snapshot-003"
+    },
+    {
+      "commit": "9fdcfd755d5537e8285166c25c34d1617bdf0826",
+      "content_sha256": "957fc25de7956cef6dcaf0a9d021d9c5bfc7bf45a5e7e0f3579044bc08d81997",
+      "languages": [
+        "c",
+        "javascript"
+      ],
+      "repo_id": "tree-sitter-razor",
+      "snapshot_id": "snapshot-004"
+    },
+    {
+      "commit": "688cf95ae4c984638557dab73253bd66719bdd5c",
+      "content_sha256": "8f6160c3c0b8c8cd70ff0b6ba32fcd5bb394a8ff14d13bf4c74d21923b48d445",
+      "languages": [
+        "javascript",
+        "rust"
+      ],
+      "repo_id": "tree-sitter-c-sharp",
+      "snapshot_id": "snapshot-005"
+    }
+  ],
+  "tokenizer": {
+    "encoding": "o200k_base",
+    "package": "tiktoken",
+    "version": "0.13.0"
+  }
+}

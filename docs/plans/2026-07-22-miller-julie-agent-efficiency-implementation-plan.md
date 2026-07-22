@@ -305,12 +305,12 @@ Commit mode for every task is `parallel-lead-commit`: workers hand verified diff
 **Approach:** Rank repair candidates first by Miller correctness losses, then expected token/call savings. If Miller already clears visible correctness and efficiency, freeze it without a repair. Otherwise invoke `razorback:systematic-debugging`, then `razorback:writing-plans`, for exactly one focused repair with named live files/tests; execute it, rerun all 12 visible pairs, and freeze. Do not guess that repair in this plan or alter the immutable semantic canary.
 
 **Acceptance criteria:**
-- [ ] All 12 pairs complete with zero unresolved harness voids and all frozen identity hashes recorded.
-- [ ] The finding reports correctness cells/floor, both efficiency routes, p75 wall guard, task classes, failure reasons, and report-only diagnostics.
-- [ ] Every Miller loss has one evidence-backed class and direct trajectory/tool evidence.
-- [ ] Every semantic/concept failure includes both product-realistic replay and an identical-corpus BGE-small/CodeRankEmbed result. Inability to run the model-only comparison is a real blocker and prevents candidate freeze.
-- [ ] The output is either `freeze` or `one-repair-plan-required`; no second repair or sealed tuning is permitted.
-- [ ] The branch gate and verification ledger pass before the candidate is frozen and committed by the lead.
+- [x] All 12 pairs complete with zero unresolved harness voids and all frozen identity hashes recorded.
+- [x] The finding reports correctness cells/floor, both efficiency routes, p75 wall guard, task classes, failure reasons, and report-only diagnostics.
+- [x] Every Miller loss has one evidence-backed class and direct trajectory/tool evidence.
+- [x] Every semantic/concept failure includes both product-realistic replay and an identical-corpus BGE-small/CodeRankEmbed result. Inability to run the model-only comparison is a real blocker and prevents candidate freeze.
+- [x] The output is either `freeze` or `one-repair-plan-required`; no second repair or sealed tuning is permitted.
+- [x] The branch gate and verification ledger pass before the candidate is frozen and committed by the lead.
 
 ### Task 7: Sealed aggregate and product verdict
 

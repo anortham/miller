@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "baseline": [
+    { "task_id": "dev-001", "class": "guidance", "evidence": "incorrect after six calls; the answer cited helper claims outside the task's accepted anchor" },
+    { "task_id": "dev-002", "class": "routing", "evidence": "six broad source searches preceded the two exact factory inspections; 10573 output tokens ended incorrect" },
+    { "task_id": "dev-003", "class": "output_size", "evidence": "the context plus full inspections produced 12146 tokens; both embedding models ranked the target first" },
+    { "task_id": "dev-004", "class": "output_size", "evidence": "the context response exceeded its requested render budget and the run reached 12168 tokens; both models ranked the target first" },
+    { "task_id": "dev-005", "class": "routing", "evidence": "six text searches never opened the authoritative .version-bump.json and the answer was incorrect" },
+    { "task_id": "dev-007", "class": "output_size", "evidence": "three calls produced 13990 tokens after an over-budget context response" },
+    { "task_id": "dev-008", "class": "guidance", "evidence": "the agent exhausted eight calls after receiving the requested context and attempted further exploration" },
+    { "task_id": "dev-009", "class": "ambiguity", "evidence": "eight inspections followed competing path-key helpers without converging on the required call references" },
+    { "task_id": "dev-010", "class": "guidance", "evidence": "the answer was materially correct but supplied claims beyond the accepted evidence anchor and failed strict verification" },
+    { "task_id": "dev-011", "class": "routing", "evidence": "broad source searches consumed the call budget before a bounded grammar-and-binding answer" },
+    { "task_id": "dev-012", "class": "routing", "evidence": "eight broad searches exhausted the call budget without opening the two focused version tests" }
+  ],
+  "candidate": [
+    { "task_id": "dev-001", "class": "guidance", "evidence": "bounded context was followed by five full inspections and extra evidence claims; 5245 tokens ended incorrect" },
+    { "task_id": "dev-002", "class": "guidance", "evidence": "two calls found the exact factory but extra evidence claims outside the accepted anchor failed strict verification" },
+    { "task_id": "dev-003", "class": "guidance", "evidence": "the target ranked first, but seven follow-up calls exhausted the eight-call budget" },
+    { "task_id": "dev-004", "class": "guidance", "evidence": "the target ranked first, but seven follow-up inspections exhausted the eight-call budget" },
+    { "task_id": "dev-005", "class": "routing", "evidence": "seven broad searches preceded the authoritative config inspection and crossed the token ceiling" },
+    { "task_id": "dev-006", "class": "routing", "evidence": "two of three repetitions exhausted eight calls on empty or noisy text routes; only one repetition completed" },
+    { "task_id": "dev-007", "class": "guidance", "evidence": "bounded context was followed by seven searches and inspections, exhausting the call budget" },
+    { "task_id": "dev-008", "class": "output_size", "evidence": "full-file grammar and Rust inspections raised cumulative tool output to 26334 tokens" },
+    { "task_id": "dev-009", "class": "ambiguity", "evidence": "eight inspections and a reference trace did not converge on accepted evidence" },
+    { "task_id": "dev-010", "class": "guidance", "evidence": "the exact caller and guard were found in four calls, but extra evidence claims failed strict verification" },
+    { "task_id": "dev-011", "class": "output_size", "evidence": "two broad searches alone produced 18140 tokens" },
+    { "task_id": "dev-012", "class": "guidance", "evidence": "three calls found both focused tests, but extra evidence claims failed strict verification" }
+  ]
+}

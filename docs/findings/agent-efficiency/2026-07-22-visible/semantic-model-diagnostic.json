@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "purpose": "identical-corpus isolation for visible concept-search losses",
+  "corpus": {
+    "excerpt_count": 22,
+    "normalization": "LF-normalized repository-relative path plus optional symbol prefix",
+    "candidate_count_equal": true,
+    "boundaries_equal": true
+  },
+  "queries": [
+    {
+      "task_id": "dev-003",
+      "bge_small_target_rank": 1,
+      "coderankembed_target_rank": 1
+    },
+    {
+      "task_id": "dev-004",
+      "bge_small_target_rank": 1,
+      "coderankembed_target_rank": 1
+    }
+  ],
+  "timings_ms": {
+    "bge_small": {
+      "startup": 498,
+      "cold_batch": 174,
+      "warm_batch": 109,
+      "queries": [8, 7]
+    },
+    "coderankembed": {
+      "startup": 10335,
+      "cold_batch": 711,
+      "warm_batch": 635,
+      "queries": [106, 100]
+    }
+  },
+  "disposition": "retain BGE-small; the visible concept losses were not embedding-rank failures"
+}

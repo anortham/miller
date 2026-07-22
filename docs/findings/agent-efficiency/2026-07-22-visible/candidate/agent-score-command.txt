@@ -1,0 +1,1 @@
+dotnet run --project eval/retrieval-eval/RetrievalEval.csproj -- agent-score --tasks "$AGENT_EFFICIENCY_EXPORT/agent-tasks.jsonl" --miller "$AGENT_EFFICIENCY_EXPORT/miller-results.jsonl" --julie "$AGENT_EFFICIENCY_EXPORT/julie-results.jsonl" --out "$AGENT_EFFICIENCY_EXPORT/aggregate.json"

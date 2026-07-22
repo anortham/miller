@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "verdict": "fail",
+  "task_count": 12,
+  "completion": {
+    "both_completed": 0,
+    "miller_only": 0,
+    "julie_only": 1,
+    "neither_completed": 11
+  },
+  "correctness": {
+    "verdict": "fail",
+    "miller_completed_count": 0,
+    "julie_completed_count": 1,
+    "critical_loss_count": 0
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": false,
+    "both_pass_task_count": 0,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": false
+  },
+  "miller": {
+    "median_tool_output_tokens": null,
+    "median_tool_calls": null,
+    "p75_duration_ms": null
+  },
+  "julie": {
+    "median_tool_output_tokens": null,
+    "median_tool_calls": null,
+    "p75_duration_ms": null
+  },
+  "failure_counts": {
+    "miller": {
+      "budget_exceeded": 9,
+      "incorrect": 4
+    },
+    "julie": {
+      "budget_exceeded": 4,
+      "incorrect": 4,
+      "product_error": 3
+    }
+  },
+  "by_workflow": {},
+  "by_repo": {},
+  "by_language": {}
+}
