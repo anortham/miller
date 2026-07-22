@@ -188,3 +188,14 @@ Task 1: complete (parallel-lead-commit, lead inline review clean, lead commit 6a
 |-------|-----------|---------|--------|--------|------|
 | affected-change (build) | Release clean, warnings-as-errors | `dotnet build Miller.slnx -c Release` | 6a19fe1 | PASS 0W/0E | 2026-07-21 |
 | affected-change (focused) | Search/canary/content/vector/session/converge/DI/watcher | focused `dotnet test ... -c Release --no-build` | 6a19fe1 | PASS 294/0, 1 skip | 2026-07-21 |
+
+Task 4: complete (parallel-lead-commit, lead inline review clean, lead commit 34001ed — exact identity export strata, identifier clause gates promotion, shadow hybrid stamping suppressed, resolved content-read attribution, typed fallback preservation).
+Task 5: complete (parallel-lead-commit, lead inline review clean + lead content semantic-off parity test, lead commit a1d3c2d — current vector facts/health, truthful CLI refresh guidance, normal CLI symbol/content production and canary parity).
+Task 6: complete (parallel-lead-commit, lead inline review clean, lead commit ddd2ce7 — exact staged sidecar/encoder/embed/sqlite-vec/KNN smoke before every archive leg; Darwin arm64 local staged smoke passed).
+
+## Verification ledger — semantic repair Batch B @ 34001ed
+| Scope | Invariant | Command | Commit | Result | Time |
+|-------|-----------|---------|--------|--------|------|
+| affected-change (build) | Release clean, warnings-as-errors | `dotnet build Miller.slnx -c Release` | 34001ed | PASS 0W/0E | 2026-07-21 |
+| affected-change (focused) | Canary/export/gate/content/CLI/workspace/package/workflow contracts | focused `dotnet test ... -c Release --no-build` | 34001ed | PASS 506/0 | 2026-07-21 |
+| fast suite | All non-Scale assertions and timing tripwire | `scripts/test.sh` | pre-commit Batch B tree | PASS 4477/0, 2 skip, 26s | 2026-07-21 |
