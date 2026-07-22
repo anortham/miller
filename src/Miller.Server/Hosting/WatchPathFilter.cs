@@ -17,7 +17,8 @@ namespace Miller.Server.Hosting;
 /// version-control internals (<c>.git</c> — the dedicated <c>.git/HEAD</c> watch handles branch switches —
 /// plus <c>.hg</c>/<c>.svn</c>), Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must
 /// not re-enter as events), julie's <c>.julie</c> home, IDE/tool caches (<c>.vs</c>, <c>.cache</c>), agent
-/// memory checkpoints (<c>.memories</c>), and the usual build-output trees (<c>node_modules</c>,
+/// memory checkpoints (<c>.memories</c>), nested agent worktrees (<c>.claude/worktrees</c>), and the usual
+/// build-output trees (<c>node_modules</c>,
 /// <c>target</c>, <c>bin</c>, <c>obj</c>) — parity with julie-extract's own hard-excluded directories, so
 /// the watcher never spawns a subprocess for a file julie would refuse anyway. Matching is on whole path
 /// SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring. It also
@@ -76,10 +77,16 @@ public static class WatchPathFilter
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
 
-        foreach (var segment in absolutePath.Split(
-                     new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries))
+        string[] segments = absolutePath.Split(
+            new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < segments.Length; i++)
         {
+            string segment = segments[i];
             if (SkipSegments.Contains(segment))
+                return false;
+            if (i > 0
+                && SegmentComparer.Equals(segments[i - 1], ".claude")
+                && SegmentComparer.Equals(segment, "worktrees"))
                 return false;
         }
         if (HasUnsupportedExtension(absolutePath, supportedExtensions))

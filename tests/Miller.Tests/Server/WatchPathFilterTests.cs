@@ -89,6 +89,34 @@ public sealed class WatchPathFilterTests
         Assert.True(WatchPathFilter.ShouldProcess(Root, "/repo/memories/notes.md"));  // not ".memories"
     }
 
+    [Theory]
+    [InlineData("/repo/.claude/worktrees/example/src/A.cs")]
+    [InlineData(@"/repo\.claude\worktrees\example\src\A.cs")]
+    [InlineData(@"/repo\.claude/worktrees\example/src/A.cs")]
+    public void Skips_ClaudeNestedWorktrees_WithEitherSlashStyle(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/.claude/prompts/example.md")]
+    [InlineData("/repo/.claude/worktree/example/src/A.cs")]
+    [InlineData("/repo/claude/worktrees/example/src/A.cs")]
+    public void Accepts_ClaudePaths_OutsideTheNestedWorktreeDirectory(string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Fact]
+    public void ClaudeNestedWorktrees_MixedCaseFollowsPlatformSegmentComparison()
+    {
+        bool expected = !OperatingSystem.IsWindows();
+
+        Assert.Equal(
+            expected,
+            WatchPathFilter.ShouldProcess(Root, "/repo/.CLAUDE/WORKTREES/example/src/A.cs"));
+    }
+
     // ---------- supported-extension gate (julie's claimed set, injected — pure, no process) ----------
 
     // A miniature stand-in for the `languages --json` catalog: lowercase, dot-less, case-insensitive —

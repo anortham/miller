@@ -7,8 +7,8 @@ using Xunit;
 namespace Miller.Tests.Search;
 
 /// <summary>
-/// The Phase-5 recall eval against a REAL corpus: Miller's local <c>.miller/symbols.db</c> when available,
-/// otherwise a fresh temp extract of this repo using the pinned <c>julie-extract</c> binary. It builds the
+/// The Phase-5 recall eval against a fresh extract of Miller's REAL corpus using the pinned
+/// <c>julie-extract</c> binary. It builds the
 /// in-memory baseline and the on-disk FTS5 candidate from one shared snapshot, then asserts the candidate is a
 /// strict recall SUPERSET (interior substring recall rises by a real margin) with ZERO word-arm ranking
 /// regression, and that the routing gate actually TAKES the disk path for a revision-fresh artifact (a silent
@@ -16,8 +16,8 @@ namespace Miller.Tests.Search;
 /// build time, artifact size and first-search latency are logged as the eval evidence.
 ///
 /// <para><c>[Trait("Category","Scale")]</c>: it reads/builds a full repo extract and builds a full FTS index, so
-/// it stays out of the &lt;10s fast suite. It uses the Scale launch signal only when a fresh temp extract is needed;
-/// it SKIPS (never fails) only when no usable local DB exists and the pinned binary has not been restored.</para>
+/// it stays out of the &lt;10s fast suite. It uses the Scale launch signal and SKIPS (never fails) when the pinned
+/// binary has not been restored.</para>
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class SymbolSearchEvalScaleTests : IDisposable
@@ -49,21 +49,26 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
     [Fact]
     public void RecallEval_OnMillerCorpus_IsSupersetWithParity_AndDiskPathIsTaken()
     {
-        string symbolsDb = ResolveMillerCorpusDb();
-        IReadOnlyList<IndexedSymbol> corpus;
+        string repoRoot = ScaleTestSupport.RepoRoot();
+        string worktreesRoot = Path.Combine(repoRoot, ".claude", "worktrees");
+        string nestedWorktree = Path.Combine(worktreesRoot, "miller-scale-" + Guid.NewGuid().ToString("N"));
+        bool worktreesRootExisted = Directory.Exists(worktreesRoot);
+        Directory.CreateDirectory(Path.Combine(nestedWorktree, "src"));
+        File.WriteAllText(Path.Combine(nestedWorktree, "src", "A.cs"), "public sealed class NestedWorktreeSentinel;");
+
+        string symbolsDb;
         try
         {
-            corpus = SqliteSymbolReader.Read(symbolsDb);
+            symbolsDb = BuildFreshMillerCorpusDb("evaluating the current repository ignore policy");
         }
-        // A pre-schema-2 / partially-written / locked local index surfaces as IncompatibleExtractException OR a
-        // raw Sqlite/InvalidOperation read failure. Fall back to a fresh temp extract so a restored scale run
-        // still produces evidence instead of silently opting out.
-        catch (Exception ex) when (ex is IncompatibleExtractException or InvalidOperationException or SqliteException)
+        finally
         {
-            symbolsDb = BuildFreshMillerCorpusDb(
-                $"local eval DB was not readable ({ex.GetType().Name}: {ex.Message})");
-            corpus = SqliteSymbolReader.Read(symbolsDb);
+            Directory.Delete(nestedWorktree, recursive: true);
+            if (!worktreesRootExisted && !Directory.EnumerateFileSystemEntries(worktreesRoot).Any())
+                Directory.Delete(worktreesRoot);
         }
+        AssertNoNestedWorktreeRows(symbolsDb);
+        IReadOnlyList<IndexedSymbol> corpus = SqliteSymbolReader.Read(symbolsDb);
         Assert.SkipUnless(corpus.Count >= 500, $"corpus has only {corpus.Count} symbols — too small for a meaningful eval.");
 
         // Baseline (in-memory BM25) and candidate (on-disk FTS5) from the SAME snapshot.
@@ -132,14 +137,6 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
             $"(baseline {interior.BaselineRecall:F3} -> candidate {interior.CandidateRecall:F3}).");
     }
 
-    private string ResolveMillerCorpusDb()
-    {
-        string localDb = Path.Combine(ScaleTestSupport.RepoRoot(), ".miller", "symbols.db");
-        return File.Exists(localDb)
-            ? localDb
-            : BuildFreshMillerCorpusDb($"no local eval DB at {localDb}");
-    }
-
     private string BuildFreshMillerCorpusDb(string reason)
     {
         _output.WriteLine($"{reason}; building a fresh temp Miller corpus extract.");
@@ -149,6 +146,24 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
         ExtractReport report = runner.Scan(ScaleTestSupport.RepoRoot(), db, force: true);
         Assert.NotEqual("failed", report.Status);
         return db;
+    }
+
+    private static void AssertNoNestedWorktreeRows(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT path FROM files WHERE path GLOB '.claude/worktrees/*' ORDER BY path;";
+        using SqliteDataReader reader = command.ExecuteReader();
+        var paths = new List<string>();
+        while (reader.Read())
+            paths.Add(reader.GetString(0));
+        Assert.Empty(paths);
     }
 
     private void LogReport(
