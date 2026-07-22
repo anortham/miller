@@ -38,14 +38,15 @@ public sealed record CanaryRow(
     string? ShadowStatus,
     int? ShadowOverlapAt10,
     bool? ShadowTop1Changed,
-    int? ShadowLexicalTop1Rank)
+    int? ShadowLexicalTop1Rank,
+    long Sequence)
 {
     /// <summary>The <c>YYYY-MM-DD</c> UTC prefix of <see cref="Ts"/> — the assignment unit's date component.</summary>
     public string UtcDate => Ts.Length >= 10 ? Ts[..10] : Ts;
 }
 
 /// <summary>A follow-up candidate row for attribution: an <c>inspect</c> or <c>content read</c> that succeeded.</summary>
-public sealed record CanaryFollowUp(string Ts, string? WorkspaceId, string TargetHash);
+public sealed record CanaryFollowUp(string Ts, string? WorkspaceId, string TargetHash, long Sequence);
 
 /// <summary>
 /// Reads the machine-global ledger for the canary export and gate. Yields the canary/shadow rows (columns plus
@@ -70,8 +71,8 @@ public static class CanaryLedgerReader
 
         using SqliteCommand cmd = connection.CreateCommand();
         cmd.CommandText =
-            $"SELECT {CanaryColumns} FROM tool_telemetry " +
-            "WHERE metadata_json LIKE '%canary_contract_version%' ORDER BY ts ASC, id ASC;";
+            $"SELECT {CanaryColumns}, rowid FROM tool_telemetry " +
+            "WHERE metadata_json LIKE '%canary_contract_version%' ORDER BY ts ASC, rowid ASC;";
 
         var rows = new List<CanaryRow>();
         using SqliteDataReader reader = cmd.ExecuteReader();
@@ -96,9 +97,9 @@ public static class CanaryLedgerReader
 
         using SqliteCommand cmd = connection.CreateCommand();
         cmd.CommandText =
-            "SELECT ts, workspace_id, target_hash FROM tool_telemetry " +
+            "SELECT ts, workspace_id, target_hash, rowid FROM tool_telemetry " +
             "WHERE outcome = 'ok' AND target_hash IS NOT NULL " +
-            "AND (tool = 'inspect' OR (tool = 'content' AND op = 'read')) ORDER BY ts ASC, id ASC;";
+            "AND (tool = 'inspect' OR (tool = 'content' AND op = 'read')) ORDER BY ts ASC, rowid ASC;";
 
         var rows = new List<CanaryFollowUp>();
         using SqliteDataReader reader = cmd.ExecuteReader();
@@ -107,7 +108,8 @@ public static class CanaryLedgerReader
             rows.Add(new CanaryFollowUp(
                 Ts: reader.GetString(0),
                 WorkspaceId: reader.IsDBNull(1) ? null : reader.GetString(1),
-                TargetHash: reader.GetString(2)));
+                TargetHash: reader.GetString(2),
+                Sequence: reader.GetInt64(3)));
         }
         return rows;
     }
@@ -124,7 +126,9 @@ public static class CanaryLedgerReader
         ArgumentNullException.ThrowIfNull(canaryRows);
         ArgumentNullException.ThrowIfNull(followUps);
 
-        var byWorkspaceHash = new Dictionary<(string Workspace, string Hash), List<(DateTimeOffset Ts, string Id)>>();
+        var byWorkspaceHash = new Dictionary<
+            (string Workspace, string Hash),
+            List<(DateTimeOffset Ts, long Sequence, string Id)>>();
         foreach (CanaryRow row in canaryRows)
         {
             if (row.WorkspaceId is null || !TryParseTs(row.Ts, out DateTimeOffset ts))
@@ -134,9 +138,11 @@ public static class CanaryLedgerReader
                 .Concat(row.ResultPathHashes).Concat(row.ResultQualifiedHashes).Distinct(StringComparer.Ordinal))
             {
                 var key = (row.WorkspaceId, hash);
-                if (!byWorkspaceHash.TryGetValue(key, out List<(DateTimeOffset, string)>? bucket))
+                if (!byWorkspaceHash.TryGetValue(
+                    key,
+                    out List<(DateTimeOffset Ts, long Sequence, string Id)>? bucket))
                     byWorkspaceHash[key] = bucket = [];
-                bucket.Add((ts, row.Id));
+                bucket.Add((ts, row.Sequence, row.Id));
             }
         }
 
@@ -145,19 +151,24 @@ public static class CanaryLedgerReader
         {
             if (followUp.WorkspaceId is null || !TryParseTs(followUp.Ts, out DateTimeOffset followUpTs))
                 continue;
-            if (!byWorkspaceHash.TryGetValue((followUp.WorkspaceId, followUp.TargetHash), out List<(DateTimeOffset Ts, string Id)>? candidates))
+            if (!byWorkspaceHash.TryGetValue(
+                (followUp.WorkspaceId, followUp.TargetHash),
+                out List<(DateTimeOffset Ts, long Sequence, string Id)>? candidates))
                 continue;
 
             string? latestId = null;
             DateTimeOffset latestTs = DateTimeOffset.MinValue;
-            foreach ((DateTimeOffset ts, string id) in candidates)
+            long latestSequence = long.MinValue;
+            foreach ((DateTimeOffset ts, long sequence, string id) in candidates)
             {
                 double seconds = (followUpTs - ts).TotalSeconds;
-                if (seconds <= 0.0 || seconds > 600.0)
+                if (seconds < 0.0 || seconds > 600.0 ||
+                    (seconds == 0.0 && followUp.Sequence <= sequence))
                     continue;
-                if (latestId is null || ts > latestTs)
+                if (latestId is null || ts > latestTs || (ts == latestTs && sequence > latestSequence))
                 {
                     latestTs = ts;
+                    latestSequence = sequence;
                     latestId = id;
                 }
             }
@@ -228,7 +239,8 @@ public static class CanaryLedgerReader
             ShadowStatus: Str(meta, "canary_shadow_status"),
             ShadowOverlapAt10: Int(meta, "canary_shadow_overlap_at_10"),
             ShadowTop1Changed: Bool(meta, "canary_shadow_top1_changed"),
-            ShadowLexicalTop1Rank: Int(meta, "canary_shadow_lexical_top1_rank"));
+            ShadowLexicalTop1Rank: Int(meta, "canary_shadow_lexical_top1_rank"),
+            Sequence: reader.GetInt64(9));
     }
 
     private static string? Str(JsonElement o, string key) =>

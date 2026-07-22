@@ -55,7 +55,7 @@ public sealed class SearchToolRescueTests
     }
 
     [Fact]
-    public void EligibleShadow_MayMeasureButReturnsLexicalBytesWhenSemanticRanksDifferently()
+    public void EligibleShadow_NeverRunsUnmeasuredSemanticRescueAndReturnsLexicalBytes()
     {
         string workspaceId = WorkspaceForArm(CanaryArm.Treatment);
         var symbols = SymbolSearchProjection.Build(
@@ -72,7 +72,8 @@ public sealed class SearchToolRescueTests
         string shadow = ToolWith(arm, symbols: symbols, semanticMode: SemanticMode.Shadow, workspaceId: workspaceId)
             .Search(ConceptualQuery);
 
-        Assert.True(arm.SymbolQueries > 0 || arm.ChunkQueries > 0);
+        Assert.Equal(0, arm.SymbolQueries);
+        Assert.Equal(0, arm.ChunkQueries);
         Assert.Equal(semanticOff, shadow);
     }
 

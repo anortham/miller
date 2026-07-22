@@ -345,7 +345,9 @@ A canary row `C` is **attributed** a follow-up if there exists a `tool_telemetry
 4. `F.target_hash` is non-null and present in `C.canary_result_name_hashes` ∪
    `C.canary_result_path_hashes` ∪ `C.canary_result_qualified_hashes` (membership in **any** of the three
    arrays counts; a hash present in more than one array is still one match)
-5. `F.ts > C.ts` and `F.ts − C.ts ≤ 600 s`
+5. `F` follows `C` in ledger order and `F.ts − C.ts ≤ 600 s`. Normally this is `F.ts > C.ts`; when both
+   timestamps fall in the same stored millisecond, SQLite insertion order is the tie-breaker so an immediate
+   next call is not lost to timestamp truncation.
 6. `C` is the **latest** canary row satisfying 1–5 for `F` (a follow-up is credited to the most recent
    preceding canary row that served that hash, never to several)
 

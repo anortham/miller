@@ -100,6 +100,19 @@ public sealed class CanaryGateReportTests : IDisposable
     }
 
     [Fact]
+    public void Attribution_SameTimestampUsesLedgerOrderToCreditTheLaterFollowUp()
+    {
+        using var seeder = new CanarySeeder(Db);
+        string canaryId = seeder.InsertCanary(
+            "ws-a", "2026-07-14", "prose", "treatment", timeOfDay: "10:00:00.000",
+            nameHashes: [Digest("Save")]);
+        seeder.InsertFollowUp(
+            "ws-a", "2026-07-14", Digest("Save"), timeOfDay: "10:00:00.000");
+
+        Assert.Contains(canaryId, Attributed());
+    }
+
+    [Fact]
     public void SuccessRate_UnderThirtyUnitsPerArmReportsUnderpoweredAndNeverPasses()
     {
         using (var seeder = new CanarySeeder(Db))

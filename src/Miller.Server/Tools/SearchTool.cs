@@ -2682,7 +2682,7 @@ public sealed class SearchTool
             // The final rung (design §6.3): every lexical corpus came back empty, so the only affordance left is
             // "something semantically near your question exists". It is last precisely because a lexical hit is
             // evidence the agent can verify by reading, and a neighbour is not.
-            if (servingPolicy == SearchServingPolicy.Lexical)
+            if (!AllowsSemanticServing(servingPolicy))
                 return sourceRescue;
 
             AutoTextRescueResult? semantic = TryRunSemanticRescue(
@@ -2694,7 +2694,7 @@ public sealed class SearchTool
                 language,
                 compactBanner,
                 symbolContext);
-            return AllowsSemanticServing(servingPolicy) ? semantic ?? sourceRescue : sourceRescue;
+            return semantic ?? sourceRescue;
         }
         catch (InvalidOperationException)
         {
