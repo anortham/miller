@@ -578,9 +578,15 @@ public sealed class SemanticSearchArmScaleTests : IDisposable
                     Entry("far", "src/Far.cs", FakeSemanticSidecar.ExpectedVector("document", "something else entirely", pin.Dims)),
                 ],
                 [],
-                new Dictionary<string, string> { ["build_state"] = "ready" },
+                new Dictionary<string, string>
+                {
+                    ["build_state"] = "ready",
+                    ["symbol_completed_revision"] = "1",
+                    ["symbol_target_revision"] = "1",
+                },
                 1);
         }
+        ScaleTestSupport.WriteFreshnessArtifact(_root, "artifact-1", 1);
 
         await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
         var arm = new SemanticSearchArm(_root, new VectorSidecar(SemanticMode.On), () => session);
@@ -624,9 +630,15 @@ public sealed class SemanticSearchArmScaleTests : IDisposable
                 VectorUnitKind.Symbol,
                 [Entry("near", "src/Near.cs", FakeSemanticSidecar.ExpectedVector("query", "workspace refresh", pin.Dims))],
                 [],
-                new Dictionary<string, string> { ["build_state"] = "ready" },
+                new Dictionary<string, string>
+                {
+                    ["build_state"] = "ready",
+                    ["symbol_completed_revision"] = "1",
+                    ["symbol_target_revision"] = "1",
+                },
                 1);
         }
+        ScaleTestSupport.WriteFreshnessArtifact(_root, "artifact-1", 1);
 
         DropSymbolVectors(path, extension);
 

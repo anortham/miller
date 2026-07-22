@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Miller.Tests;
@@ -110,6 +111,25 @@ public static class ScaleTestSupport
             "julie-semantic-sidecar not found in .tools/. Run scripts/restore-semantic-sidecar.sh, then " +
             "`.tools/julie-semantic-sidecar prepare` once to populate the model cache, to enable the Scale test.");
         return binary!;
+    }
+
+    internal static void WriteFreshnessArtifact(string workspaceRoot, string artifactId, long revision)
+    {
+        string millerDir = Path.Combine(workspaceRoot, ".miller");
+        Directory.CreateDirectory(millerDir);
+        using var connection = new SqliteConnection(
+            $"Data Source={Path.Combine(millerDir, "symbols.db")};Pooling=False");
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE extraction_revisions (revision_id INTEGER PRIMARY KEY);
+            INSERT INTO artifact_metadata(key, value) VALUES ('artifact_id', $artifact);
+            INSERT INTO extraction_revisions(revision_id) VALUES ($revision);
+            """;
+        command.Parameters.AddWithValue("$artifact", artifactId);
+        command.Parameters.AddWithValue("$revision", revision);
+        command.ExecuteNonQuery();
     }
 
     /// <summary>

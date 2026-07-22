@@ -125,9 +125,15 @@ public sealed class SemanticSidecarScaleTests : IDisposable
                     SemanticVectorQuantizer.ToInt8(embedded.Vectors[i]),
                     SymbolCardBuilder.EmbedTextHash(cards[i])))],
                 [],
-                new Dictionary<string, string>(StringComparer.Ordinal) { ["build_state"] = "ready" },
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["build_state"] = "ready",
+                    ["symbol_completed_revision"] = "1",
+                    ["symbol_target_revision"] = "1",
+                },
                 revision: 1);
         }
+        ScaleTestSupport.WriteFreshnessArtifact(workspaceRoot, ArtifactId, 1);
 
         var sidecar = new VectorSidecar(SemanticMode.On, SystemVectorFileProbe.Instance, new RealOpener(extension));
         var arm = new SemanticSearchArm(workspaceRoot, sidecar, () => session);
