@@ -38,6 +38,10 @@ def _create_snapshot(root: Path) -> AgentSnapshot:
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "fixture")
     identity = SnapshotIdentity.capture("snapshot-001", "fixture", ("python",), root)
+    (root / ".miller").mkdir()
+    (root / ".miller" / "vectors.db").write_text("vectors", encoding="utf-8")
+    (root / ".julie").mkdir()
+    (root / ".julie" / "symbols.db").write_text("symbols", encoding="utf-8")
     return AgentSnapshot(identity=identity, root=root)
 
 

@@ -15,6 +15,7 @@ from typing import Any
 _BENCHMARK_ROOT = Path(__file__).resolve().parents[1] / "benchmarks" / "agent-efficiency"
 _CRITICAL_WORKFLOWS = frozenset({"exact_lookup", "references_trace", "impact_tests"})
 _ARTIFACT_DIRECTORIES = frozenset({".miller", ".julie", ".eros", ".razorback"})
+_PREPARED_ARTIFACT_DIRECTORIES = frozenset({".miller", ".julie"})
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,16 @@ class SnapshotIdentity:
 
     def verify_root(self, root: str | Path) -> VerificationResult:
         commit, content_sha256, failures = _snapshot_facts(Path(root))
+        collected = list(failures)
+        if commit and commit != self.commit:
+            collected.append("snapshot: commit mismatch")
+        if content_sha256 and content_sha256 != self.content_sha256:
+            collected.append("snapshot: content SHA-256 mismatch")
+        ordered = tuple(dict.fromkeys(collected))
+        return VerificationResult(not ordered, ordered, ())
+
+    def verify_prepared_root(self, root: str | Path) -> VerificationResult:
+        commit, content_sha256, failures = _snapshot_facts(Path(root), prepared=True)
         collected = list(failures)
         if commit and commit != self.commit:
             collected.append("snapshot: commit mismatch")
@@ -392,15 +403,32 @@ def _evidence_path_failure(root: Path, relative: str) -> str | None:
     return None
 
 
-def _snapshot_facts(root: Path) -> tuple[str, str, tuple[str, ...]]:
+def _snapshot_facts(
+    root: Path,
+    *,
+    prepared: bool = False,
+) -> tuple[str, str, tuple[str, ...]]:
     resolved = root.resolve()
-    failures = list(_snapshot_structure_failures(resolved))
+    allowed_artifacts = _PREPARED_ARTIFACT_DIRECTORIES if prepared else frozenset()
+    failures = list(_snapshot_structure_failures(resolved, allowed_artifacts))
+    if prepared:
+        failures.extend(_prepared_artifact_failures(resolved))
     try:
         top_level = Path(_run_git(resolved, "rev-parse", "--show-toplevel")).resolve()
         if top_level != resolved:
             failures.append("snapshot: root is not the repository top level")
         commit = _run_git(resolved, "rev-parse", "HEAD")
-        status = _run_git(resolved, "status", "--porcelain=v1", "--untracked-files=all")
+        status_args = ["status", "--porcelain=v1", "--untracked-files=all"]
+        if prepared:
+            status_args.extend(
+                [
+                    "--",
+                    ".",
+                    ":(top,exclude,glob).miller/**",
+                    ":(top,exclude,glob).julie/**",
+                ]
+            )
+        status = _run_git(resolved, *status_args)
         if status:
             failures.append("snapshot: working tree is dirty")
         content_sha256 = _committed_content_sha256(resolved)
@@ -412,14 +440,20 @@ def _snapshot_facts(root: Path) -> tuple[str, str, tuple[str, ...]]:
     return commit, content_sha256, tuple(dict.fromkeys(failures))
 
 
-def _snapshot_structure_failures(root: Path) -> tuple[str, ...]:
+def _snapshot_structure_failures(
+    root: Path,
+    allowed_top_level_artifacts: frozenset[str] = frozenset(),
+) -> tuple[str, ...]:
     failures: list[str] = []
     for current, directories, files in os.walk(root):
         current_path = Path(current)
         relative = current_path.relative_to(root)
         if relative != Path(".") and ".git" in directories + files:
             failures.append(f"snapshot: nested Git worktree content at {relative.as_posix()}/.git")
-        artifact_names = sorted(_ARTIFACT_DIRECTORIES.intersection(directories))
+        artifact_names = _ARTIFACT_DIRECTORIES.intersection(directories)
+        if relative == Path("."):
+            artifact_names -= allowed_top_level_artifacts
+        artifact_names = sorted(artifact_names)
         for artifact in artifact_names:
             artifact_path = (relative / artifact).as_posix()
             failures.append(f"snapshot: product or benchmark artifact at {artifact_path}")
@@ -428,6 +462,35 @@ def _snapshot_structure_failures(root: Path) -> tuple[str, ...]:
             for name in directories
             if name != ".git" and name not in _ARTIFACT_DIRECTORIES
         ]
+    return tuple(failures)
+
+
+def _prepared_artifact_failures(root: Path) -> tuple[str, ...]:
+    failures: list[str] = []
+    for artifact in sorted(_PREPARED_ARTIFACT_DIRECTORIES):
+        artifact_root = root / artifact
+        if artifact_root.is_symlink():
+            failures.append(f"snapshot: prepared artifact path is a symbolic link: {artifact}")
+            continue
+        if not artifact_root.is_dir():
+            failures.append(f"snapshot: required prepared directory is missing: {artifact}")
+            continue
+        for current, directories, files in os.walk(artifact_root):
+            directories.sort()
+            files.sort()
+            current_path = Path(current)
+            for name in directories + files:
+                candidate = current_path / name
+                relative = candidate.relative_to(root).as_posix()
+                if name == ".git":
+                    failures.append(f"snapshot: nested Git worktree content at {relative}")
+                if candidate.is_symlink():
+                    failures.append(f"snapshot: prepared artifact path is a symbolic link: {relative}")
+            directories[:] = [
+                name
+                for name in directories
+                if name != ".git" and not (current_path / name).is_symlink()
+            ]
     return tuple(failures)
 
 

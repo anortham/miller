@@ -283,6 +283,128 @@ class AgentContractTests(unittest.TestCase):
                 self.assertFalse(result.passed)
                 self.assertTrue(any(expected in failure for failure in result.failures))
 
+    def test_prepared_snapshot_accepts_only_top_level_miller_and_julie_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = _create_snapshot(root)
+            (root / ".miller").mkdir()
+            (root / ".miller" / "vectors.db").write_text("vectors", encoding="utf-8")
+            (root / ".julie").mkdir()
+            (root / ".julie" / "symbols.db").write_text("symbols", encoding="utf-8")
+
+            self.assertEqual(
+                VerificationResult(True, (), ()),
+                identity.verify_prepared_root(root),
+            )
+            self.assertFalse(identity.verify_root(root).passed)
+
+    def test_prepared_snapshot_requires_both_artifact_directories(self) -> None:
+        for present, missing in [(".miller", ".julie"), (".julie", ".miller")]:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                identity = _create_snapshot(root)
+                (root / present).mkdir()
+
+                result = identity.verify_prepared_root(root)
+
+                self.assertFalse(result.passed)
+                self.assertIn(f"snapshot: required prepared directory is missing: {missing}", result.failures)
+
+    def test_prepared_snapshot_rejects_dirt_outside_permitted_artifact_directories(self) -> None:
+        cases = [
+            ("src/factory.py", "changed\n", "working tree is dirty"),
+            ("untracked.txt", "untracked\n", "working tree is dirty"),
+            ("nested/.git", "gitdir: elsewhere\n", "nested Git worktree"),
+            ("nested/.miller/vectors.db", "vectors", "product or benchmark artifact"),
+            (".eros/cache.db", "cache", "product or benchmark artifact"),
+            (".razorback/progress.md", "progress", "product or benchmark artifact"),
+        ]
+        for relative, content, expected in cases:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                identity = _create_snapshot(root)
+                (root / ".miller").mkdir()
+                (root / ".julie").mkdir()
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+
+                result = identity.verify_prepared_root(root)
+
+                self.assertFalse(result.passed)
+                self.assertTrue(any(expected in failure for failure in result.failures))
+
+    def test_prepared_snapshot_still_verifies_repository_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = _create_snapshot(root)
+            (root / ".miller").mkdir()
+            (root / ".julie").mkdir()
+
+            wrong_commit = replace(identity, commit="0" * 40).verify_prepared_root(root)
+            wrong_hash = replace(identity, content_sha256="0" * 64).verify_prepared_root(root)
+
+            self.assertIn("snapshot: commit mismatch", wrong_commit.failures)
+            self.assertIn("snapshot: content SHA-256 mismatch", wrong_hash.failures)
+
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "repo"
+            root.mkdir()
+            identity = _create_snapshot(root)
+            (root / ".miller").mkdir()
+            (root / ".julie").mkdir()
+
+            result = identity.verify_prepared_root(root / "src")
+
+            self.assertFalse(result.passed)
+            self.assertIn("snapshot: root is not the repository top level", result.failures)
+
+    def test_prepared_snapshot_rejects_symlinks_in_artifact_trees(self) -> None:
+        cases = [
+            (".miller", True),
+            (".miller/vectors.db", False),
+            (".julie/cache", True),
+        ]
+        for relative, target_is_directory in cases:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                parent = Path(directory)
+                root = parent / "repo"
+                root.mkdir()
+                identity = _create_snapshot(root)
+                external = parent / "external"
+                if target_is_directory:
+                    external.mkdir()
+                else:
+                    external.write_text("external", encoding="utf-8")
+                for artifact in [".miller", ".julie"]:
+                    if relative != artifact:
+                        (root / artifact).mkdir()
+                link = root / relative
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.symlink_to(external, target_is_directory=target_is_directory)
+
+                result = identity.verify_prepared_root(root)
+
+                self.assertFalse(result.passed)
+                self.assertTrue(any("symbolic link" in failure for failure in result.failures))
+
+    def test_prepared_snapshot_rejects_git_markers_in_artifact_trees(self) -> None:
+        for relative in [".miller/nested/.git", ".julie/nested/.git/config"]:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                identity = _create_snapshot(root)
+                (root / ".miller").mkdir()
+                (root / ".julie").mkdir()
+                marker = root / relative
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text("gitdir: elsewhere\n", encoding="utf-8")
+
+                result = identity.verify_prepared_root(root)
+
+                self.assertFalse(result.passed)
+                self.assertTrue(any("nested Git worktree" in failure for failure in result.failures))
+
     def test_verify_answer_enforces_facts_anchors_paths_symbols_and_forbidden_claims(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

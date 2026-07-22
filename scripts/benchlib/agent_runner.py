@@ -237,7 +237,7 @@ class CodexAgentRunner:
             failures.append("runner: task and snapshot ids differ")
         if task.repo_id != snapshot.identity.repo_id:
             failures.append("runner: task and snapshot repositories differ")
-        failures.extend(snapshot.identity.verify_root(snapshot.root).failures)
+        failures.extend(snapshot.identity.verify_prepared_root(snapshot.root).failures)
         ordered = tuple(dict.fromkeys(failures))
         return VerificationResult(not ordered, ordered, ())
 
