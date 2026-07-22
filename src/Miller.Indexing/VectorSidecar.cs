@@ -5,6 +5,27 @@ using Miller.Indexing.Semantic;
 
 namespace Miller.Indexing;
 
+/// <summary>The typed outcome of opening a vector generation for query serving.</summary>
+public enum VectorOpenKind
+{
+    Ready,
+    Disabled,
+    Missing,
+    Unavailable,
+    Incompatible,
+    Building,
+    CircuitOpen,
+    DiskBlocked,
+    Downloading,
+}
+
+/// <summary>One classified vector open. The caller owns <see cref="Store"/> when <see cref="Kind"/> is
+/// <see cref="VectorOpenKind.Ready"/>.</summary>
+public sealed record VectorOpenResult(VectorOpenKind Kind, VectorStore? Store, VectorSidecarFacts Facts)
+{
+    public string? Reason => Facts.Reason;
+}
+
 /// <summary>
 /// Every filesystem question the vector sidecar is allowed to ask, behind one seam. The off-guarantee is a
 /// testable invariant only because there is no other way for <see cref="VectorSidecar"/> to reach the disk.
@@ -249,18 +270,24 @@ public sealed class VectorSidecar
     /// <remarks>The caller owns the returned store and must dispose it.</remarks>
     public VectorStore? TryOpen(string workspaceRoot, out string? unavailableReason)
     {
+        VectorOpenResult result = Open(workspaceRoot);
+        unavailableReason = result.Reason;
+        return result.Store;
+    }
+
+    /// <summary>Classifies and opens the serving generation without collapsing non-ready states to a null.</summary>
+    public VectorOpenResult Open(string workspaceRoot)
+    {
         if (!Enabled)
         {
-            unavailableReason = $"Semantic retrieval is disabled ({EnvVar}=off).";
-            return null;
+            var disabled = new VectorSidecarFacts(
+                "disabled", PathFor(workspaceRoot), $"Semantic retrieval is disabled ({EnvVar}=off).");
+            return new VectorOpenResult(VectorOpenKind.Disabled, null, disabled);
         }
 
         VectorSidecarFacts facts = Classify(workspaceRoot);
         if (facts.State != ReadyState)
-        {
-            unavailableReason = facts.Reason;
-            return null;
-        }
+            return new VectorOpenResult(OpenKind(facts), null, facts);
 
         // Classification resolves WHICH generation serves — it may be a retained one — so the open must follow
         // it rather than assuming the active artifact.
@@ -268,9 +295,12 @@ public sealed class VectorSidecar
         VectorStore? store = _opener.OpenStore(servingPath, out string failureReason);
         if (store is null)
         {
-            unavailableReason =
-                $"Vector artifact at '{servingPath}' classified ready but could not be opened: {failureReason}.";
-            return null;
+            VectorSidecarFacts unavailable = facts with
+            {
+                State = UnavailableState,
+                Reason = $"Vector artifact at '{servingPath}' classified ready but could not be opened: {failureReason}.",
+            };
+            return new VectorOpenResult(VectorOpenKind.Unavailable, null, unavailable);
         }
 
         // A promote can replace the file between the classify read and this open. Serving vectors from an
@@ -280,14 +310,17 @@ public sealed class VectorSidecar
         {
             string opened = store.Identity.EncoderFingerprint;
             store.Dispose();
-            unavailableReason =
+            VectorSidecarFacts incompatible = facts with
+            {
+                State = IncompatibleState,
+                Reason =
                 $"Vector artifact at '{servingPath}' changed between classification and open: it was classified " +
-                $"with encoder {classified.EncoderFingerprint} but opened with {opened}. Degrading to lexical.";
-            return null;
+                $"with encoder {classified.EncoderFingerprint} but opened with {opened}. Degrading to lexical.",
+            };
+            return new VectorOpenResult(VectorOpenKind.Incompatible, null, incompatible);
         }
 
-        unavailableReason = null;
-        return store;
+        return new VectorOpenResult(VectorOpenKind.Ready, store, facts);
     }
 
     /// <summary>
@@ -300,9 +333,20 @@ public sealed class VectorSidecar
         if (!Enabled)
             throw new InvalidOperationException($"Vector sidecar is disabled ({EnvVar}=off).");
 
-        return TryOpen(workspaceRoot, out string? unavailableReason)
-            ?? throw new InvalidOperationException(unavailableReason);
+        VectorOpenResult result = Open(workspaceRoot);
+        return result.Store ?? throw new InvalidOperationException(result.Reason);
     }
+
+    private VectorOpenKind OpenKind(VectorSidecarFacts facts) => facts.State switch
+    {
+        BuildingState => VectorOpenKind.Building,
+        IncompatibleState => VectorOpenKind.Incompatible,
+        CircuitOpenState => VectorOpenKind.CircuitOpen,
+        DiskBlockedState => VectorOpenKind.DiskBlocked,
+        DownloadingState => VectorOpenKind.Downloading,
+        UnavailableState when !_probe.FileExists(facts.Path!) => VectorOpenKind.Missing,
+        _ => VectorOpenKind.Unavailable,
+    };
 
     /// <summary>
     /// The retained superseded generations beside the active artifact. Under <see cref="SemanticMode.Off"/> this

@@ -83,12 +83,25 @@ public interface IVectorSearchPort : IDisposable
     /// double.</summary>
     SemanticGenerationIdentity? Identity => null;
 
+    /// <summary>The source artifact and completed cursor this open generation can serve for one corpus. Null is
+    /// reserved for synthetic ports that do not model artifact freshness.</summary>
+    (string? ArtifactId, long CompletedRevision)? ReadFreshness(VectorUnitKind kind) => null;
+
     IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k);
 }
 
 /// <summary>Opens the serving generation, or returns null with a stated reason — the shape of
 /// <see cref="VectorSidecar.TryOpen"/>, which is the only artifact gate.</summary>
 public delegate IVectorSearchPort? VectorSearchPortFactory(string workspaceRoot, out string? unavailableReason);
+
+/// <summary>A query port paired with the vector gate's typed classification.</summary>
+public sealed record VectorSearchPortOpenResult(
+    IVectorSearchPort? Port,
+    VectorOpenKind Kind,
+    string? UnavailableReason);
+
+/// <summary>Opens the serving generation while preserving every non-ready classification.</summary>
+public delegate VectorSearchPortOpenResult ClassifiedVectorSearchPortFactory(string workspaceRoot);
 
 /// <summary>
 /// L2-normalized floats to the pinned int8 lane. Slice and renormalize already happened inside the sidecar;
@@ -140,8 +153,9 @@ public sealed class SemanticSearchArm
 
     private readonly string _workspaceRoot;
     private readonly bool _enabled;
-    private readonly VectorSearchPortFactory _openPort;
+    private readonly ClassifiedVectorSearchPortFactory _openPort;
     private readonly Func<SemanticEmbeddingSession?> _openSession;
+    private readonly SemanticEmbeddingSessionBroker? _broker;
     private readonly VectorLiveReaderRegistry _readerRegistry;
 
     public SemanticSearchArm(
@@ -151,15 +165,51 @@ public sealed class SemanticSearchArm
         : this(
             workspaceRoot,
             (sidecar ?? throw new ArgumentNullException(nameof(sidecar))).Enabled,
-            (string root, out string? reason) => VectorStoreSearchPort.TryOpen(sidecar, root, out reason),
+            root => VectorStoreSearchPort.Open(sidecar, root),
             openSession)
     {
+    }
+
+    public SemanticSearchArm(
+        string workspaceRoot,
+        VectorSidecar sidecar,
+        SemanticEmbeddingSessionBroker broker)
+        : this(
+            workspaceRoot,
+            (sidecar ?? throw new ArgumentNullException(nameof(sidecar))).Enabled,
+            root => VectorStoreSearchPort.Open(sidecar, root),
+            static () => null)
+    {
+        ArgumentNullException.ThrowIfNull(broker);
+        _broker = broker;
     }
 
     internal SemanticSearchArm(
         string workspaceRoot,
         bool enabled,
         VectorSearchPortFactory openPort,
+        Func<SemanticEmbeddingSession?> openSession,
+        VectorLiveReaderRegistry? readerRegistry = null)
+        : this(
+            workspaceRoot,
+            enabled,
+            root =>
+            {
+                IVectorSearchPort? port = openPort(root, out string? reason);
+                return new VectorSearchPortOpenResult(
+                    port,
+                    port is null ? VectorOpenKind.Missing : VectorOpenKind.Ready,
+                    reason);
+            },
+            openSession,
+            readerRegistry)
+    {
+    }
+
+    internal SemanticSearchArm(
+        string workspaceRoot,
+        bool enabled,
+        ClassifiedVectorSearchPortFactory openPort,
         Func<SemanticEmbeddingSession?> openSession,
         VectorLiveReaderRegistry? readerRegistry = null)
     {
@@ -171,6 +221,7 @@ public sealed class SemanticSearchArm
         _enabled = enabled;
         _openPort = openPort;
         _openSession = openSession;
+        _broker = null;
         _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
     }
 
@@ -223,9 +274,13 @@ public sealed class SemanticSearchArm
 
         // The artifact gate runs before the sidecar: a workspace with no vectors must never pay for a child
         // process, and a generation this reader cannot interpret is a reason, not an embed.
-        IVectorSearchPort? port = _openPort(_workspaceRoot, out string? unavailableReason);
-        if (port is null)
-            return Abstain(SemanticFallbackKind.VectorsMissing, unavailableReason ?? "The vector artifact is unavailable.");
+        VectorSearchPortOpenResult opened = _openPort(_workspaceRoot);
+        if (opened.Port is not { } port)
+        {
+            return Abstain(
+                OpenFallback(opened.Kind),
+                opened.UnavailableReason ?? "The vector artifact is unavailable.");
+        }
 
         // The generation this query reads is off-limits to the leader's GC for as long as the port is open. The
         // arm opens and disposes per query, so this window is one query long — cross-query protection is the soak
@@ -235,7 +290,16 @@ public sealed class SemanticSearchArm
 
         try
         {
-            if (_openSession() is not { } session)
+            if (!TryReadPortFreshness(port, kind, out var openedFreshness, out string? vectorFreshnessFailure))
+                return Abstain(SemanticFallbackKind.VectorsStale, vectorFreshnessFailure!, identity);
+
+            if (FreshnessFailure(port, kind, openedFreshness) is { } staleBeforeEmbed)
+                return Abstain(SemanticFallbackKind.VectorsStale, staleBeforeEmbed, identity);
+
+            SemanticEmbeddingSession? session = null;
+            if (_broker is null)
+                session = _openSession();
+            if ((_broker is null && session is null) || (_broker is not null && !_broker.Available))
             {
                 return Abstain(
                     SemanticFallbackKind.ModelNotPrepared,
@@ -245,16 +309,21 @@ public sealed class SemanticSearchArm
 
             // Warmth is the session's state BEFORE this embed: anything but Ready with an accepted handshake means
             // this call pays sidecar start and/or model load.
-            bool coldEmbed = session.State != SemanticSessionState.Ready || session.Handshake is null;
+            bool coldEmbed = _broker is not null
+                ? _broker.State != SemanticSessionState.Ready || _broker.Handshake is null
+                : session!.State != SemanticSessionState.Ready || session.Handshake is null;
 
             var embedClock = Stopwatch.StartNew();
-            SemanticEmbedOutcome outcome = await session.EmbedQueryAsync(query, cancellationToken).ConfigureAwait(false);
+            SemanticEmbedOutcome outcome = _broker is not null
+                ? await _broker.EmbedQueryAsync(query, cancellationToken).ConfigureAwait(false)
+                : await session!.EmbedQueryAsync(query, cancellationToken).ConfigureAwait(false);
             embedClock.Stop();
             long embedMs = (long)embedClock.Elapsed.TotalMilliseconds;
 
             if (!outcome.Succeeded || outcome.Vectors.Count == 0)
             {
-                SemanticFallbackKind fallback = session.State switch
+                SemanticSessionState sessionState = _broker?.State ?? session!.State;
+                SemanticFallbackKind fallback = sessionState switch
                 {
                     SemanticSessionState.CircuitOpen => SemanticFallbackKind.CircuitOpen,
                     _ when outcome.TimedOut => SemanticFallbackKind.EmbedTimeout,
@@ -269,7 +338,20 @@ public sealed class SemanticSearchArm
                     embedMs);
             }
 
-            string backend = session.Handshake?.ResolvedBackend is { Length: > 0 } resolved ? resolved : NoBackend;
+            SemanticEncoderHandshake? handshake =
+                _broker is not null ? _broker.Handshake : session!.Handshake;
+            string backend = handshake?.ResolvedBackend is { Length: > 0 } resolved ? resolved : NoBackend;
+            if (FreshnessFailure(port, kind, openedFreshness, requireUnchanged: true) is { } staleAfterEmbed)
+            {
+                return Abstain(
+                    SemanticFallbackKind.VectorsStale,
+                    staleAfterEmbed,
+                    identity,
+                    backend,
+                    coldEmbed,
+                    embedMs);
+            }
+
             return Retrieve(
                 port, kind, outcome.Vectors[0], k, allow, new EmbedContext(identity, backend, coldEmbed, embedMs));
         }
@@ -281,6 +363,85 @@ public sealed class SemanticSearchArm
         {
             port.Dispose();
             registration?.Dispose();
+        }
+    }
+
+    private string? FreshnessFailure(
+        IVectorSearchPort port,
+        VectorUnitKind kind,
+        (string? ArtifactId, long CompletedRevision)? opened,
+        bool requireUnchanged = false)
+    {
+        if (opened is null)
+            return null;
+
+        try
+        {
+            (string? ArtifactId, long CompletedRevision)? current = opened;
+            if (requireUnchanged
+                && !TryReadPortFreshness(port, kind, out current, out string? vectorFreshnessFailure))
+            {
+                return vectorFreshnessFailure;
+            }
+
+            if (current is null)
+                return "The vector generation no longer exposes freshness metadata. Degrading to lexical.";
+
+            if (requireUnchanged && current != opened)
+            {
+                return $"The vector generation changed while the query was embedding " +
+                       $"({opened.Value.ArtifactId ?? "<unknown>"}@{opened.Value.CompletedRevision} to " +
+                       $"{current.Value.ArtifactId ?? "<unknown>"}@{current.Value.CompletedRevision}). " +
+                       "Degrading to lexical.";
+            }
+
+            string dbPath = Path.Combine(_workspaceRoot, ".miller", "symbols.db");
+            using var live = new FreshnessReader(dbPath);
+            string? liveArtifact = live.ArtifactId();
+            long liveRevision = live.LatestRevision();
+            if (string.IsNullOrEmpty(liveArtifact)
+                || !string.Equals(current.Value.ArtifactId, liveArtifact, StringComparison.Ordinal))
+            {
+                return $"The vector generation belongs to artifact " +
+                       $"'{current.Value.ArtifactId ?? "<unknown>"}', but the live workspace is " +
+                       $"'{liveArtifact ?? "<unknown>"}'. Degrading to lexical.";
+            }
+
+            if (current.Value.CompletedRevision != liveRevision)
+            {
+                return $"The {kind.ToString().ToLowerInvariant()} vector cursor is at revision " +
+                       $"{current.Value.CompletedRevision}, but the live workspace is at {liveRevision}. " +
+                       "Degrading to lexical.";
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException
+            or Microsoft.Data.Sqlite.SqliteException or UnauthorizedAccessException)
+        {
+            return $"The live workspace freshness could not be verified: {ex.Message}. Degrading to lexical.";
+        }
+
+    }
+
+    private static bool TryReadPortFreshness(
+        IVectorSearchPort port,
+        VectorUnitKind kind,
+        out (string? ArtifactId, long CompletedRevision)? freshness,
+        out string? failure)
+    {
+        try
+        {
+            freshness = port.ReadFreshness(kind);
+            failure = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is VectorStoreException or InvalidOperationException or IOException
+            or Microsoft.Data.Sqlite.SqliteException)
+        {
+            freshness = null;
+            failure = $"The vector generation freshness could not be verified: {ex.Message}. Degrading to lexical.";
+            return false;
         }
     }
 
@@ -360,6 +521,18 @@ public sealed class SemanticSearchArm
             Diagnostics = new SemanticQueryDiagnostics(fallback, backend, coldEmbed, embedMs, null, identity, null),
         };
 
+    private static SemanticFallbackKind OpenFallback(VectorOpenKind kind) => kind switch
+    {
+        VectorOpenKind.Disabled => SemanticFallbackKind.Disabled,
+        VectorOpenKind.Missing => SemanticFallbackKind.VectorsMissing,
+        VectorOpenKind.Incompatible => SemanticFallbackKind.VectorsIncompatible,
+        VectorOpenKind.Building => SemanticFallbackKind.VectorsBuilding,
+        VectorOpenKind.CircuitOpen => SemanticFallbackKind.CircuitOpen,
+        VectorOpenKind.DiskBlocked => SemanticFallbackKind.DiskBlocked,
+        VectorOpenKind.Downloading => SemanticFallbackKind.ModelNotPrepared,
+        _ => SemanticFallbackKind.Unknown,
+    };
+
     private readonly record struct EmbedContext(
         SemanticGenerationIdentity? Identity,
         string Backend,
@@ -418,10 +591,20 @@ public sealed class SemanticSearchArm
 /// <summary>The production port: the opened serving generation, behind the read surface the arm needs.</summary>
 internal sealed class VectorStoreSearchPort(VectorStore store) : IVectorSearchPort
 {
+    public static VectorSearchPortOpenResult Open(VectorSidecar sidecar, string workspaceRoot)
+    {
+        VectorOpenResult opened = sidecar.Open(workspaceRoot);
+        return opened.Store is null
+            ? new VectorSearchPortOpenResult(null, opened.Kind, opened.Reason)
+            : new VectorSearchPortOpenResult(
+                new VectorStoreSearchPort(opened.Store), VectorOpenKind.Ready, null);
+    }
+
     public static IVectorSearchPort? TryOpen(VectorSidecar sidecar, string workspaceRoot, out string? unavailableReason)
     {
-        VectorStore? store = sidecar.TryOpen(workspaceRoot, out unavailableReason);
-        return store is null ? null : new VectorStoreSearchPort(store);
+        VectorSearchPortOpenResult opened = Open(sidecar, workspaceRoot);
+        unavailableReason = opened.UnavailableReason;
+        return opened.Port;
     }
 
     public SemanticStorageLane Lane => store.Lane;
@@ -429,6 +612,16 @@ internal sealed class VectorStoreSearchPort(VectorStore store) : IVectorSearchPo
     public SemanticGenerationIdentity? Identity => store.Identity;
 
     public string Tag => MillerSemanticContract.GenerationTag(store.Identity);
+
+    public (string? ArtifactId, long CompletedRevision)? ReadFreshness(VectorUnitKind kind)
+    {
+        IReadOnlyDictionary<string, string> meta = store.AllMeta();
+        string cursor = kind is VectorUnitKind.Symbol
+            ? "symbol_completed_revision"
+            : "chunk_completed_revision";
+        long completed = long.TryParse(meta.GetValueOrDefault(cursor), out long parsed) ? parsed : 0;
+        return (meta.GetValueOrDefault("artifact_id"), completed);
+    }
 
     public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k) =>
         store.Search(kind, query, k);

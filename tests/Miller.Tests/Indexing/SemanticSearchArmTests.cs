@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Tests.Support;
@@ -51,6 +52,26 @@ public sealed class SemanticSearchArmTests
         Assert.Equal(0, sessions.OpenCount);
     }
 
+    [Theory]
+    [InlineData("building", SemanticFallbackKind.VectorsBuilding)]
+    [InlineData("incompatible", SemanticFallbackKind.VectorsIncompatible)]
+    [InlineData("disk-blocked", SemanticFallbackKind.DiskBlocked)]
+    [InlineData("circuit-open", SemanticFallbackKind.CircuitOpen)]
+    public async Task NonReadyVectorClassifications_KeepTheirTypedFallback(
+        string state,
+        SemanticFallbackKind expected)
+    {
+        var arm = new SemanticSearchArm(
+            Root,
+            ClassifiedSidecar(state),
+            static () => throw new InvalidOperationException("non-ready vectors must not ask for a session"));
+
+        SemanticQueryResult result = await arm.QuerySymbolsAsync(
+            "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, result.Diagnostics!.Fallback);
+    }
+
     [Fact]
     public async Task MissingSidecarBinary_IsAnEmptyResultWithAReasonAndTheStoreIsDisposed()
     {
@@ -63,6 +84,78 @@ public sealed class SemanticSearchArmTests
         Assert.False(string.IsNullOrWhiteSpace(result.UnavailableReason));
         Assert.Empty(port.RequestedK);
         Assert.Equal(1, port.DisposeCount);
+    }
+
+    [Fact]
+    public async Task ReadyGenerationForADifferentLiveArtifact_IsStaleBeforeTheSessionOpens()
+    {
+        string root = FreshWorkspace("live-artifact", 7);
+        try
+        {
+            var port = new RecordingPort();
+            port.Freshness.Enqueue(("old-artifact", 7));
+            var sessions = new RecordingSessionFactory();
+            var arm = new SemanticSearchArm(root, enabled: true, port.Factory, sessions.Open);
+
+            SemanticQueryResult result = await arm.QuerySymbolsAsync(
+                "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(SemanticFallbackKind.VectorsStale, result.Diagnostics!.Fallback);
+            Assert.Equal(0, sessions.OpenCount);
+            Assert.Empty(port.RequestedK);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RelevantCursorBehindTheLiveRevision_IsStaleBeforeTheSessionOpens()
+    {
+        string root = FreshWorkspace("artifact-1", 8);
+        try
+        {
+            var port = new RecordingPort();
+            port.Freshness.Enqueue(("artifact-1", 7));
+            var sessions = new RecordingSessionFactory();
+            var arm = new SemanticSearchArm(root, enabled: true, port.Factory, sessions.Open);
+
+            SemanticQueryResult result = await arm.QuerySymbolsAsync(
+                "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(SemanticFallbackKind.VectorsStale, result.Diagnostics!.Fallback);
+            Assert.Equal(0, sessions.OpenCount);
+            Assert.Empty(port.RequestedK);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GenerationChangeDuringEmbedding_IsStaleBeforeKnnServes()
+    {
+        string root = FreshWorkspace("artifact-1", 7);
+        try
+        {
+            var port = new RecordingPort { Matches = [Match(1, 0.1, "sym-1", "src/A.cs")] };
+            port.Freshness.Enqueue(("artifact-1", 7));
+            port.Freshness.Enqueue(("promoted-artifact", 0));
+            await using SemanticEmbeddingSession session = NewSession();
+            var arm = new SemanticSearchArm(root, enabled: true, port.Factory, () => session);
+
+            SemanticQueryResult result = await arm.QuerySymbolsAsync(
+                "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+            Assert.Equal(SemanticFallbackKind.VectorsStale, result.Diagnostics!.Fallback);
+            Assert.Empty(port.RequestedK);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -300,6 +393,58 @@ public sealed class SemanticSearchArmTests
     private static VectorMatch Match(long rowId, double distance, string unitId, string path) =>
         new(rowId, distance, unitId, path);
 
+    private static string FreshWorkspace(string artifactId, long revision)
+    {
+        string root = Directory.CreateTempSubdirectory("miller-semantic-fresh-").FullName;
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(millerDir, "symbols.db")};Pooling=False");
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE extraction_revisions (revision_id INTEGER PRIMARY KEY);
+            INSERT INTO artifact_metadata(key, value) VALUES ('artifact_id', $artifact);
+            INSERT INTO extraction_revisions(revision_id) VALUES ($revision);
+            """;
+        command.Parameters.AddWithValue("$artifact", artifactId);
+        command.Parameters.AddWithValue("$revision", revision);
+        command.ExecuteNonQuery();
+        return root;
+    }
+
+    private static VectorSidecar ClassifiedSidecar(string state)
+    {
+        SemanticGenerationIdentity identity = MillerSemanticContract.PinnedIdentity(Pin);
+        var meta = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["contract_version"] = MillerSemanticContract.ContractVersion,
+            ["encoder_fingerprint"] = state == "incompatible"
+                ? "sha256:" + new string('e', 64)
+                : identity.EncoderFingerprint,
+            ["storage_schema"] = identity.StorageSchema,
+            ["corpus_generation"] = identity.CorpusGeneration,
+            ["writer_version"] = identity.WriterVersion,
+            ["min_reader_version"] = identity.MinReaderVersion,
+            ["fusion_profile"] = identity.FusionProfile,
+            ["artifact_id"] = "artifact-1",
+            ["build_state"] = state == "building" ? "building" : "ready",
+            ["symbol_completed_revision"] = "7",
+            ["symbol_target_revision"] = "7",
+            ["chunk_completed_revision"] = "7",
+            ["chunk_target_revision"] = "7",
+        };
+        if (state is "disk-blocked" or "circuit-open")
+            meta["converge_pause_state"] = state;
+
+        return new VectorSidecar(
+            SemanticMode.On,
+            new SingleVectorProbe(),
+            new SingleVectorOpener(meta),
+            new SemanticReaderIdentity(identity.EncoderFingerprint, MillerSemanticContract.MinReaderVersion));
+    }
+
     private sealed class RecordingSessionFactory
     {
         public int OpenCount { get; private set; }
@@ -307,6 +452,32 @@ public sealed class SemanticSearchArmTests
         public SemanticEmbeddingSession? Open()
         {
             OpenCount++;
+            return null;
+        }
+    }
+
+    private sealed class SingleVectorProbe : IVectorFileProbe
+    {
+        public bool FileExists(string path) => true;
+
+        public IReadOnlyList<string> EnumerateRetainedGenerations(string millerDir) => [];
+    }
+
+    private sealed class SingleVectorOpener(IReadOnlyDictionary<string, string> meta) : IVectorStoreOpener
+    {
+        public bool TryReadMeta(
+            string path,
+            out IReadOnlyDictionary<string, string> opened,
+            out string failureReason)
+        {
+            opened = meta;
+            failureReason = string.Empty;
+            return true;
+        }
+
+        public VectorStore? OpenStore(string path, out string failureReason)
+        {
+            failureReason = "non-ready test never opens";
             return null;
         }
     }
@@ -330,6 +501,8 @@ public sealed class SemanticSearchArmTests
 
         public List<VectorUnitKind> RequestedKinds { get; } = [];
 
+        public Queue<(string? ArtifactId, long CompletedRevision)> Freshness { get; } = new();
+
         public sbyte[] LastQuery { get; private set; } = [];
 
         public IVectorSearchPort? Factory(string workspaceRoot, out string? unavailableReason)
@@ -348,6 +521,9 @@ public sealed class SemanticSearchArmTests
         private sealed class Port(RecordingPort owner) : IVectorSearchPort
         {
             public SemanticStorageLane Lane => owner.Lane;
+
+            public (string? ArtifactId, long CompletedRevision)? ReadFreshness(VectorUnitKind kind) =>
+                owner.Freshness.Count == 0 ? null : owner.Freshness.Dequeue();
 
             public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k)
             {

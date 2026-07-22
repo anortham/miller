@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Xunit;
@@ -57,6 +58,24 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.Contains(hosted, h => h is Miller.Server.IndexBootstrapService);
         Assert.Contains(hosted, h => h is FreshnessService);
         Assert.Contains(hosted, h => h is IndexerService);
+    }
+
+    [Fact]
+    public void SemanticSessionBroker_IsOneProcessSingletonInTheProductionGraph()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices();
+
+        using var provider = services.BuildServiceProvider();
+
+        SemanticEmbeddingSessionBroker first =
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>();
+        SemanticEmbeddingSessionBroker second =
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>();
+
+        Assert.Same(first, second);
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is VectorConvergeService);
     }
 
     [Fact]

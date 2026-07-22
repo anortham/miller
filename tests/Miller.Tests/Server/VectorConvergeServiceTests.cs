@@ -818,6 +818,51 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_AfterWorkspaceRebind_RecreatesTheRootBoundGenerationGc()
+    {
+        string rootA = Directory.CreateTempSubdirectory("miller-vec-gc-a-").FullName;
+        string rootB = Directory.CreateTempSubdirectory("miller-vec-gc-b-").FullName;
+        try
+        {
+            string symbolsA = SeedSymbolsDb(rootA);
+            string symbolsB = SeedSymbolsDb(rootB);
+            var portA = new FakePort();
+            var portB = new FakePort();
+            var openedGcRoots = new List<string>();
+            IndexBootstrapService bootstrap = IsolatedBootstrap();
+            bootstrap.SeedForTest(
+                WorkspaceAt(rootA, symbolsA), new IndexHolder(MillerRepositoryIndex.Build([]), 1));
+            await using SemanticEmbeddingSession session = new(
+                FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            var service = new VectorConvergeService(
+                bootstrap,
+                new VectorSidecar(SemanticMode.On),
+                new VectorConvergeSignal(enabled: true),
+                NullLogger.Instance,
+                workspace => workspace.WorkspaceRoot == rootA ? portA : portB,
+                _ => session,
+                () => DateTimeOffset.UnixEpoch,
+                openGc: workspace =>
+                {
+                    openedGcRoots.Add(workspace.WorkspaceRoot);
+                    return new RecordingGc();
+                });
+
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+            bootstrap.SeedForTest(
+                WorkspaceAt(rootB, symbolsB), new IndexHolder(MillerRepositoryIndex.Build([]), 2));
+            await service.DrainOnceAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal([rootA, rootB], openedGcRoots);
+        }
+        finally
+        {
+            Directory.Delete(rootA, recursive: true);
+            Directory.Delete(rootB, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Gc_NeverRunsWithoutAConvergeWake_SoAReaderInstanceNeverCollects()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-gc-reader-").FullName;

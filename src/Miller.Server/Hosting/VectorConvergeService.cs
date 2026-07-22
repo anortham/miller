@@ -227,6 +227,7 @@ public sealed class VectorConvergeService : BackgroundService
     private readonly ILogger _logger;
     private readonly Func<WorkspaceContext, IVectorConvergePort?> _openPort;
     private readonly Func<WorkspaceContext, SemanticEmbeddingSession?> _openSession;
+    private readonly SemanticEmbeddingSessionBroker? _broker;
     private readonly Func<WorkspaceContext, IVectorShadowRebuilder?> _openShadow;
     private readonly Func<Exception, string, Action, bool> _recoverCorrupt;
     private readonly Func<WorkspaceContext, IVectorConvergePort, DiskGate> _diskGateFactory;
@@ -238,15 +239,19 @@ public sealed class VectorConvergeService : BackgroundService
 
     private SemanticEmbeddingSession? _session;
     private IVectorGenerationGc? _gc;
+    private string? _gcWorkspaceIdentity;
     private CancellationTokenSource? _pendingRetry;
 
     public VectorConvergeService(
         IndexBootstrapService bootstrap,
         VectorSidecar sidecar,
         VectorConvergeSignal signal,
+        SemanticEmbeddingSessionBroker broker,
         ILogger<VectorConvergeService> logger)
-        : this(bootstrap, sidecar, signal, logger, SqliteVectorConvergePort.TryOpen, ProcessSession, null)
+        : this(bootstrap, sidecar, signal, logger, SqliteVectorConvergePort.TryOpen, static _ => null, null)
     {
+        ArgumentNullException.ThrowIfNull(broker);
+        _broker = broker;
     }
 
     internal VectorConvergeService(
@@ -278,6 +283,7 @@ public sealed class VectorConvergeService : BackgroundService
         _logger = logger;
         _openPort = openPort;
         _openSession = openSession;
+        _broker = null;
         _openShadow = openShadow ?? SqliteVectorShadowRebuilder.TryOpen;
         _recoverCorrupt = recoverCorrupt ?? ((failure, path, rebuild) =>
             SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(failure, path, rebuild, logger));
@@ -347,20 +353,31 @@ public sealed class VectorConvergeService : BackgroundService
         if (port is null)
             return false;
 
-        // ONE session for the life of the service: the resident child process, its restart count, and an open
-        // circuit are exactly the state a per-wake session would silently reset. A circuit-open session is kept
-        // and keeps stating its reason rather than being replaced by a fresh one that has forgotten why.
-        _session ??= _openSession(workspace);
-        if (_session is null)
-            return false;
+        EmbeddingClient embedding;
+        if (_broker is not null)
+        {
+            if (!_broker.Available)
+                return false;
+            embedding = EmbeddingClient.For(_broker);
+        }
+        else
+        {
+            _session ??= _openSession(workspace);
+            if (_session is null)
+                return false;
+            embedding = EmbeddingClient.For(_session);
+        }
 
-        // The GC arm is bound the first time a real workspace drains. Direct DrainAsync callers (the fast-suite
-        // entry points) leave it null, so a drain over a FakePort never reaches a real disk.
-        _gc ??= _openGc(workspace);
+        string workspaceIdentity = workspace.WorkspaceId ?? workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        if (!string.Equals(_gcWorkspaceIdentity, workspaceIdentity, StringComparison.Ordinal))
+        {
+            _gc = _openGc(workspace);
+            _gcWorkspaceIdentity = workspaceIdentity;
+        }
 
         IReadOnlyList<VectorCursorOutcome> outcomes = await DrainAsync(
                 port,
-                _session,
+                embedding,
                 _openShadow(workspace),
                 () => OpenPortWithRecovery(workspace),
                 _diskGateFactory(workspace, port),
@@ -486,14 +503,16 @@ public sealed class VectorConvergeService : BackgroundService
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
         CancellationToken cancellationToken) =>
-        await DrainAsync(port, session, null, cancellationToken).ConfigureAwait(false);
+        await DrainAsync(
+            port, EmbeddingClient.For(session), null, null, AlwaysAvailable, cancellationToken).ConfigureAwait(false);
 
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         IVectorConvergePort port,
         SemanticEmbeddingSession session,
         IVectorShadowRebuilder? rebuilder,
         CancellationToken cancellationToken) =>
-        await DrainAsync(port, session, rebuilder, null, AlwaysAvailable, cancellationToken).ConfigureAwait(false);
+        await DrainAsync(
+            port, EmbeddingClient.For(session), rebuilder, null, AlwaysAvailable, cancellationToken).ConfigureAwait(false);
 
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
         IVectorConvergePort port,
@@ -501,7 +520,8 @@ public sealed class VectorConvergeService : BackgroundService
         IVectorShadowRebuilder? rebuilder,
         Func<IVectorConvergePort?>? reopenAfterPromote,
         CancellationToken cancellationToken) =>
-        await DrainAsync(port, session, rebuilder, reopenAfterPromote, AlwaysAvailable, cancellationToken)
+        await DrainAsync(
+                port, EmbeddingClient.For(session), rebuilder, reopenAfterPromote, AlwaysAvailable, cancellationToken)
             .ConfigureAwait(false);
 
     internal async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
@@ -511,14 +531,28 @@ public sealed class VectorConvergeService : BackgroundService
         Func<IVectorConvergePort?>? reopenAfterPromote,
         DiskGate diskGate,
         CancellationToken cancellationToken)
+        => await DrainAsync(
+            port,
+            EmbeddingClient.For(session),
+            rebuilder,
+            reopenAfterPromote,
+            diskGate,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<IReadOnlyList<VectorCursorOutcome>> DrainAsync(
+        IVectorConvergePort port,
+        EmbeddingClient embedding,
+        IVectorShadowRebuilder? rebuilder,
+        Func<IVectorConvergePort?>? reopenAfterPromote,
+        DiskGate diskGate,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(port);
-        ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(diskGate);
 
         var state = new DrainState(rebuilder, diskGate);
         VectorCursorOutcome symbols = await DrainCursorAsync(
-            port, session, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
+            port, embedding, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
 
         // A promote disposed the live port and replaced the file underneath it. The only production stamp comes
         // from index convergence, so on a quiet workspace there is no next wake: the chunk cursor must converge
@@ -533,17 +567,17 @@ public sealed class VectorConvergeService : BackgroundService
             using (reopened)
             {
                 VectorCursorOutcome promotedChunks = await DrainChunkToCompletionAsync(
-                    reopened, session, state, cancellationToken).ConfigureAwait(false);
-                ResolvePause(reopened, session, state);
+                    reopened, embedding, state, cancellationToken).ConfigureAwait(false);
+                ResolvePause(reopened, embedding, state);
                 CollectGarbage(reopened);
                 return [symbols, promotedChunks];
             }
         }
 
         VectorCursorOutcome chunks = await DrainChunkToCompletionAsync(
-            port, session, state, cancellationToken).ConfigureAwait(false);
+            port, embedding, state, cancellationToken).ConfigureAwait(false);
 
-        ResolvePause(port, session, state);
+        ResolvePause(port, embedding, state);
         CollectGarbage(port);
         return [symbols, chunks];
     }
@@ -579,14 +613,14 @@ public sealed class VectorConvergeService : BackgroundService
     /// </summary>
     private async Task<VectorCursorOutcome> DrainChunkToCompletionAsync(
         IVectorConvergePort port,
-        SemanticEmbeddingSession session,
+        EmbeddingClient embedding,
         DrainState state,
         CancellationToken cancellationToken)
     {
         const int maxBoundedBatches = 10_000;
 
         VectorCursorOutcome chunks = await DrainCursorAsync(
-            port, session, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
+            port, embedding, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
 
         for (int batch = 0;
             batch < maxBoundedBatches
@@ -596,7 +630,7 @@ public sealed class VectorConvergeService : BackgroundService
         {
             cancellationToken.ThrowIfCancellationRequested();
             chunks = await DrainCursorAsync(
-                port, session, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
+                port, embedding, VectorUnitKind.Chunk, state, cancellationToken).ConfigureAwait(false);
         }
 
         return chunks;
@@ -604,7 +638,7 @@ public sealed class VectorConvergeService : BackgroundService
 
     private async Task<VectorCursorOutcome> DrainCursorAsync(
         IVectorConvergePort port,
-        SemanticEmbeddingSession session,
+        EmbeddingClient embedding,
         VectorUnitKind kind,
         DrainState state,
         CancellationToken cancellationToken)
@@ -666,7 +700,7 @@ public sealed class VectorConvergeService : BackgroundService
             if (plan.Decision is VectorConvergeDecision.ShadowRebuild)
             {
                 return await RunShadowRebuildAsync(
-                        port, session, kind, plan, completed, state, errorKey, errorAtKey, cancellationToken)
+                        port, embedding, kind, plan, completed, state, errorKey, errorAtKey, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -693,7 +727,7 @@ public sealed class VectorConvergeService : BackgroundService
 
             var embedClock = Stopwatch.StartNew();
             (List<VectorCommit> embedded, _, string? embedFailure) =
-                await EmbedAsync(session, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
+                await EmbedAsync(embedding, plan.ReEmbed, cancellationToken).ConfigureAwait(false);
             embedClock.Stop();
             if (embedFailure is not null)
                 return Failed(kind, completed, RecordError(port, errorKey, errorAtKey, embedFailure));
@@ -747,7 +781,7 @@ public sealed class VectorConvergeService : BackgroundService
     /// </summary>
     private async Task<VectorCursorOutcome> RunShadowRebuildAsync(
         IVectorConvergePort live,
-        SemanticEmbeddingSession session,
+        EmbeddingClient embedding,
         VectorUnitKind kind,
         VectorConvergePlan plan,
         long completed,
@@ -788,7 +822,7 @@ public sealed class VectorConvergeService : BackgroundService
 
             var buildClock = Stopwatch.StartNew();
             (int embedded, int flagged, string? failure) =
-                await BuildShadowAsync(shadow, session, state, cancellationToken).ConfigureAwait(false);
+                await BuildShadowAsync(shadow, embedding, state, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
                 return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey, failure));
 
@@ -839,7 +873,7 @@ public sealed class VectorConvergeService : BackgroundService
     /// </summary>
     private async Task<(int Embedded, int Flagged, string? Failure)> BuildShadowAsync(
         IVectorConvergePort shadow,
-        SemanticEmbeddingSession session,
+        EmbeddingClient embedding,
         DrainState state,
         CancellationToken cancellationToken)
     {
@@ -870,7 +904,7 @@ public sealed class VectorConvergeService : BackgroundService
             IReadOnlyList<VectorWorkUnit> slice =
                 [.. work.Skip(offset).Take(VectorConvergePlanner.MaxUnitsPerTransaction)];
             (List<VectorCommit> embedded, int flagged, string? failure) =
-                await EmbedAsync(session, slice, cancellationToken).ConfigureAwait(false);
+                await EmbedAsync(embedding, slice, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
                 return (0, 0, failure);
 
@@ -891,7 +925,7 @@ public sealed class VectorConvergeService : BackgroundService
 
     /// <summary>Inference, OUTSIDE any gate, in bounded batches.</summary>
     private static async Task<(List<VectorCommit> Embedded, int Flagged, string? Failure)> EmbedAsync(
-        SemanticEmbeddingSession session,
+        EmbeddingClient embedding,
         IReadOnlyList<VectorWorkUnit> units,
         CancellationToken cancellationToken)
     {
@@ -900,7 +934,7 @@ public sealed class VectorConvergeService : BackgroundService
         for (int offset = 0; offset < units.Count; offset += EmbedBatchSize)
         {
             IReadOnlyList<VectorWorkUnit> batch = [.. units.Skip(offset).Take(EmbedBatchSize)];
-            SemanticEmbedOutcome outcome = await session
+            SemanticEmbedOutcome outcome = await embedding
                 .EmbedBatchAsync([.. batch.Select(static u => u.Text)], cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1048,10 +1082,10 @@ public sealed class VectorConvergeService : BackgroundService
     /// stamp⟶ and ⟶clear edges write, keeping the hot drain loop off <c>vectors_meta</c>. A cleared pause is an
     /// empty value, which the consumer's <c>VectorSidecar.PauseState</c> treats as absent.
     /// </summary>
-    private static void ResolvePause(IVectorConvergePort port, SemanticEmbeddingSession session, DrainState state)
+    private static void ResolvePause(IVectorConvergePort port, EmbeddingClient embedding, DrainState state)
     {
-        (string desiredState, string desiredReason) = session.State is SemanticSessionState.CircuitOpen
-            ? (CircuitOpenPauseValue, Scrub(session.UnavailableReason))
+        (string desiredState, string desiredReason) = embedding.State is SemanticSessionState.CircuitOpen
+            ? (CircuitOpenPauseValue, Scrub(embedding.UnavailableReason))
             : state.DiskBlocked
                 ? (DiskBlockedPauseValue, Scrub(state.DiskBlockedReason))
                 : (string.Empty, string.Empty);
@@ -1091,22 +1125,32 @@ public sealed class VectorConvergeService : BackgroundService
         ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
             or ArgumentException or NotSupportedException or FormatException or VectorStoreException;
 
-    /// <summary>
-    /// The production sidecar session. The pinned <c>julie-semantic-sidecar</c> ships beside
-    /// <c>julie-extract</c> under the tools root; when it is absent the drain simply does not run, which is the
-    /// stated-reason degradation the ownership posture requires (Miller never generates embeddings itself).
-    /// </summary>
-    private static SemanticEmbeddingSession? ProcessSession(WorkspaceContext workspace)
+    private sealed class EmbeddingClient(
+        Func<IReadOnlyList<string>, CancellationToken, Task<SemanticEmbedOutcome>> embedBatch,
+        Func<SemanticSessionState> state,
+        Func<string?> unavailableReason)
     {
-        string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
-        string executable = Path.Combine(workspace.ToolsRoot, name);
-        SemanticEncoderPin active = SemanticEncoderSelection.Active;
-        return File.Exists(executable)
-            ? new SemanticEmbeddingSession(
-                ProcessSemanticSidecarLauncher.ForServe(executable, active),
-                expectedEncoder: active)
-            : null;
+        public SemanticSessionState State => state();
+
+        public string? UnavailableReason => unavailableReason();
+
+        public Task<SemanticEmbedOutcome> EmbedBatchAsync(
+            IReadOnlyList<string> texts,
+            CancellationToken cancellationToken) => embedBatch(texts, cancellationToken);
+
+        public static EmbeddingClient For(SemanticEmbeddingSession session)
+        {
+            ArgumentNullException.ThrowIfNull(session);
+            return new EmbeddingClient(session.EmbedBatchAsync, () => session.State, () => session.UnavailableReason);
+        }
+
+        public static EmbeddingClient For(SemanticEmbeddingSessionBroker broker)
+        {
+            ArgumentNullException.ThrowIfNull(broker);
+            return new EmbeddingClient(broker.EmbedBatchAsync, () => broker.State, () => broker.UnavailableReason);
+        }
     }
+
 }
 
 /// <summary>
