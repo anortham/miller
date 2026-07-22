@@ -35,7 +35,7 @@ public sealed class CanaryExportTests : IDisposable
         JsonElement root = ParseExport(from: "2026-07-02", to: "2026-08-01");
 
         Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
-        Assert.Equal(1, root.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(CanaryTelemetry.ContractVersion, root.GetProperty("canary_contract_version").GetInt32());
         Assert.Equal("semantic_hybrid_search_v1", root.GetProperty("experiment_id").GetString());
         Assert.Equal("2026-08-01T12:00:00Z", root.GetProperty("generated_at_utc").GetString());
         Assert.Equal("2026-07-02", root.GetProperty("window").GetProperty("from_utc").GetString());
@@ -463,7 +463,7 @@ internal sealed class CanarySeeder : IDisposable
         IReadOnlyList<string>? nameHashes = null,
         IReadOnlyList<string>? pathHashes = null,
         IReadOnlyList<string>? qualifiedHashes = null,
-        int contractVersion = 1,
+        int contractVersion = CanaryTelemetry.ContractVersion,
         int? policyVersion = 1,
         string? timeOfDay = null)
     {
@@ -512,7 +512,7 @@ internal sealed class CanarySeeder : IDisposable
     {
         var meta = new JsonObject
         {
-            ["canary_contract_version"] = 1,
+            ["canary_contract_version"] = CanaryTelemetry.ContractVersion,
             ["canary_experiment_id"] = Identifier,
             ["canary_assignment_version"] = 1,
             ["canary_arm"] = "shadow",

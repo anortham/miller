@@ -100,6 +100,8 @@ public static class CanaryEligibility
             return IneligibleSemanticDisabled;
         if (!CanaryEligibleClasses.Contains(queryClass))
             return IneligibleQueryClass;
+        if (crossWorkspaceNoGeneration)
+            return IneligibleCrossWorkspaceNoGeneration;
 
         switch (vectorState)
         {
@@ -113,7 +115,7 @@ public static class CanaryEligibility
                 return IneligibleVectorsUnavailable;
         }
 
-        return crossWorkspaceNoGeneration ? IneligibleCrossWorkspaceNoGeneration : Eligible;
+        return Eligible;
     }
 
     /// <summary>
@@ -270,7 +272,8 @@ public sealed record CanaryCallFacts
 
     public string? RescueKind { get; init; }
 
-    /// <summary>Identity of the generation queried, written only once vectors were actually opened.</summary>
+    /// <summary>Identity of the ready generation assigned to this eligible unit. On control this comes from the
+    /// metadata-only eligibility probe and does not imply model or KNN work.</summary>
     public string? EncoderFingerprint { get; init; }
 
     public string? StorageSchema { get; init; }
@@ -327,16 +330,18 @@ public sealed record CanaryShadowFacts
     public string? StorageSchema { get; init; }
 
     public string? CorpusGeneration { get; init; }
+
+    public string? FusionProfile { get; init; }
 }
 
 /// <summary>
-/// Writes the <c>canary-telemetry-v1</c> metadata keys onto the ordinary tool-call row. The canary never writes
+/// Writes the <c>canary-telemetry-v2</c> metadata keys onto the ordinary tool-call row. The canary never writes
 /// rows of its own and adds no column: every field lands in <c>metadata_json</c> under the <c>canary_</c> prefix.
 /// Persisted values are enums, counters, opaque build identifiers and digests — never query text and never a path.
 /// </summary>
 public static class CanaryTelemetry
 {
-    public const int ContractVersion = 1;
+    public const int ContractVersion = 2;
 
     private const int ResultHashCap = 10;
 
@@ -424,6 +429,8 @@ public static class CanaryTelemetry
             scope.SetMetadata("canary_storage_schema", lane);
         if (facts.CorpusGeneration is { } corpus)
             scope.SetMetadata("canary_corpus_generation", corpus);
+        if (facts.FusionProfile is { } profile)
+            scope.SetMetadata("canary_fusion_profile", profile);
 
         if (facts.Status != CanaryShadowStatus.Ok)
             return;

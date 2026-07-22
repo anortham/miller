@@ -43,6 +43,12 @@ public sealed record CanaryCohortGate(
     CanaryWarmLatencyClause WarmLatency,
     CanaryShadowClause Shadow)
 {
+    public string? EncoderFingerprint { get; init; }
+    public string? StorageSchema { get; init; }
+    public string? CorpusGeneration { get; init; }
+    public string? FusionProfile { get; init; }
+    public int? PolicyVersion { get; init; }
+
     public bool GatePasses =>
         SuccessRate.Verdict == CanaryClauseVerdict.Pass
         && WarmLatency.Verdict == CanaryClauseVerdict.Pass
@@ -52,10 +58,10 @@ public sealed record CanaryCohortGate(
 public sealed record CanaryGate(IReadOnlyList<CanaryCohortGate> Cohorts);
 
 /// <summary>
-/// The local-authoritative gate of <c>canary-telemetry-v1</c> §Where each clause is computed / §Frozen analysis
+/// The local-authoritative gate of <c>canary-telemetry-v2</c> §Replaced cohort rule and inherited frozen analysis
 /// parameters. Reads raw <c>tool_telemetry</c> rows, computes attribution, per-unit success rates, and the warm
-/// latency and identifier-shadow clauses — each within one exact <c>miller_version</c> cohort (never a string
-/// <c>≥</c>). Renders a per-clause human verdict (value, threshold, pass/fail/underpowered/indeterminate) or JSON.
+/// latency and identifier-shadow clauses — each within one complete semantic-identity cohort. Renders a per-clause
+/// human verdict (value, threshold, pass/fail/underpowered/indeterminate) or JSON.
 /// </summary>
 public static class CanaryGateReport
 {
@@ -82,18 +88,33 @@ public static class CanaryGateReport
         IReadOnlySet<string> attributed = CanaryLedgerReader.AttributedRowIds(allRows, followUps);
 
         List<CanaryRow> contractRows = allRows
-            .Where(r => r.ContractVersion == 1 && r.MillerVersion is not null)
+            .Where(r => r.ContractVersion == CanaryTelemetry.ContractVersion && r.MillerVersion is not null)
             .ToList();
 
         var cohorts = new List<CanaryCohortGate>();
-        foreach (string version in contractRows.Select(r => r.MillerVersion!).Distinct().OrderBy(v => v, StringComparer.Ordinal))
+        foreach (IGrouping<CanaryCohortIdentity, CanaryRow> group in contractRows
+            .GroupBy(CanaryCohortIdentity.From)
+            .OrderBy(g => g.Key.MillerVersion, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.EncoderFingerprint, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.StorageSchema, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.CorpusGeneration, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.FusionProfile, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.PolicyVersion))
         {
-            List<CanaryRow> cohortRows = contractRows.Where(r => r.MillerVersion == version).ToList();
+            CanaryCohortIdentity identity = group.Key;
+            List<CanaryRow> cohortRows = [.. group];
             cohorts.Add(new CanaryCohortGate(
-                version,
+                identity.MillerVersion,
                 SuccessRateClause(cohortRows, attributed),
                 WarmLatencyClause(cohortRows),
-                ShadowClause(cohortRows)));
+                ShadowClause(cohortRows))
+            {
+                EncoderFingerprint = identity.EncoderFingerprint,
+                StorageSchema = identity.StorageSchema,
+                CorpusGeneration = identity.CorpusGeneration,
+                FusionProfile = identity.FusionProfile,
+                PolicyVersion = identity.PolicyVersion,
+            });
         }
 
         return new CanaryGate(cohorts);
@@ -204,6 +225,11 @@ public static class CanaryGateReport
             {
                 w.WriteStartObject();
                 w.WriteString("miller_version", cohort.MillerVersion);
+                WriteNullableString(w, "encoder_fingerprint", cohort.EncoderFingerprint);
+                WriteNullableString(w, "storage_schema", cohort.StorageSchema);
+                WriteNullableString(w, "corpus_generation", cohort.CorpusGeneration);
+                WriteNullableString(w, "fusion_profile", cohort.FusionProfile);
+                WriteNullableNumber(w, "policy_version", cohort.PolicyVersion);
                 w.WriteBoolean("gate_passes", cohort.GatePasses);
 
                 w.WriteStartObject("success_rate");
@@ -252,11 +278,17 @@ public static class CanaryGateReport
 
         var sb = new StringBuilder();
         sb.Append("canary gate (").Append(CanaryAssignment.HybridExperimentId)
-            .Append(") — local, authoritative. Reported per exact miller_version cohort.");
+            .Append(") — local, authoritative. Reported per complete semantic-identity cohort.");
 
         foreach (CanaryCohortGate cohort in gate.Cohorts)
         {
             sb.Append('\n').Append("cohort ").Append(cohort.MillerVersion)
+                .Append(" [encoder=").Append(CohortValue(cohort.EncoderFingerprint))
+                .Append(" schema=").Append(CohortValue(cohort.StorageSchema))
+                .Append(" corpus=").Append(CohortValue(cohort.CorpusGeneration))
+                .Append(" fusion=").Append(CohortValue(cohort.FusionProfile))
+                .Append(" policy=").Append(cohort.PolicyVersion?.ToString(CultureInfo.InvariantCulture) ?? "null")
+                .Append(']')
                 .Append(": ").Append(cohort.GatePasses ? "PASS" : "not a pass");
 
             CanarySuccessRateClause s = cohort.SuccessRate;
@@ -288,6 +320,22 @@ public static class CanaryGateReport
         return sb.ToString();
     }
 
+    private static void WriteNullableString(Utf8JsonWriter w, string name, string? value)
+    {
+        if (value is null)
+            w.WriteNull(name);
+        else
+            w.WriteString(name, value);
+    }
+
+    private static void WriteNullableNumber(Utf8JsonWriter w, string name, int? value)
+    {
+        if (value is null)
+            w.WriteNull(name);
+        else
+            w.WriteNumber(name, value.Value);
+    }
+
     private static void WriteOptionalNumber(Utf8JsonWriter w, string name, double? value)
     {
         if (value is { } v && !double.IsNaN(v) && !double.IsInfinity(v))
@@ -310,4 +358,23 @@ public static class CanaryGateReport
 
     private static string Fmt(double? value) =>
         value is { } v ? v.ToString("0.###", CultureInfo.InvariantCulture) : "n/a";
+
+    private static string CohortValue(string? value) => value ?? "null";
+
+    private sealed record CanaryCohortIdentity(
+        string MillerVersion,
+        string? EncoderFingerprint,
+        string? StorageSchema,
+        string? CorpusGeneration,
+        string? FusionProfile,
+        int? PolicyVersion)
+    {
+        public static CanaryCohortIdentity From(CanaryRow row) => new(
+            row.MillerVersion!,
+            row.EncoderFingerprint,
+            row.StorageSchema,
+            row.CorpusGeneration,
+            row.FusionProfile,
+            row.PolicyVersion);
+    }
 }

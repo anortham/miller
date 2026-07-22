@@ -5,7 +5,7 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// Pins the canary-telemetry-v1 write path: verbatim field names, complete enums, the frozen assignment
+/// Pins the canary-telemetry-v2 write path: verbatim field names, complete enums, the frozen assignment
 /// derivation, the served-result hash arrays, and the privacy rule that persisted telemetry carries no query
 /// text. P2 ships the plumbing only — the arm is the constant <c>control</c> until P5 activates the experiment.
 /// </summary>
@@ -42,7 +42,7 @@ public sealed class CanaryTelemetryTests : IDisposable
     {
         JsonElement metadata = Stamp(Call());
 
-        Assert.Equal(1, metadata.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(CanaryTelemetry.ContractVersion, metadata.GetProperty("canary_contract_version").GetInt32());
         Assert.Equal("semantic_hybrid_search_v1", metadata.GetProperty("canary_experiment_id").GetString());
         Assert.Equal(1, metadata.GetProperty("canary_assignment_version").GetInt32());
         Assert.Equal("control", metadata.GetProperty("canary_arm").GetString());

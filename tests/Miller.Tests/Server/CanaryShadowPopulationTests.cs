@@ -94,7 +94,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
 
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, Request(IdentifierQuery), CanaryMode.Off, "symbol", semanticDisabled: false,
-            SampledWorkspace, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, treatmentArmFactory: null,
+            SampledWorkspace, UtcDate, () => "ready", foreignWorkspace: false, treatmentArmFactory: null,
             probe.Wrap(ServedHybrid("sym-a")));
 
         Assert.Null(outcome.Facts);
@@ -111,7 +111,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, Request(IdentifierQuery), CanaryMode.On, "symbol", semanticDisabled: true,
             SampledWorkspace, UtcDate, () => throw new InvalidOperationException("probe must not run when semantic is off"),
-            crossWorkspaceNoGeneration: false, treatmentArmFactory: null, probe.Wrap(ServedHybrid("sym-a")));
+            foreignWorkspace: false, treatmentArmFactory: null, probe.Wrap(ServedHybrid("sym-a")));
 
         Assert.Null(outcome.Facts);
         Assert.Null(outcome.ShadowFacts);
@@ -138,6 +138,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         Assert.Equal(3, facts.OverlapAt10);
         Assert.True(facts.Top1Changed);
         Assert.Equal(2, facts.LexicalTop1Rank);
+        Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).FusionProfile, facts.FusionProfile);
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).EncoderFingerprint, facts.EncoderFingerprint);
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).StorageSchema, facts.StorageSchema);
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).CorpusGeneration, facts.CorpusGeneration);
@@ -308,7 +309,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
             "canary_eligibility", "canary_policy_version", "canary_arm", "canary_bucket", "canary_shadow_status",
             "canary_semantic_result_count", "canary_shadow_overlap_at_10", "canary_shadow_top1_changed",
             "canary_shadow_lexical_top1_rank", "canary_encoder_fingerprint", "canary_storage_schema",
-            "canary_corpus_generation",
+            "canary_corpus_generation", "canary_fusion_profile",
         })
         {
             Assert.True(metadata.TryGetProperty(present, out _), present);
@@ -319,7 +320,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
             "canary_backend", "canary_embed_warmth", "canary_embed_latency_bucket", "canary_knn_latency_bucket",
             "canary_lexical_result_count", "canary_fused_result_count",
             "canary_semantic_contribution_count", "canary_fallback_reason", "canary_rescue_kind",
-            "canary_fusion_profile", "canary_result_name_hashes", "canary_result_path_hashes",
+            "canary_result_name_hashes", "canary_result_path_hashes",
             "canary_result_qualified_hashes", "canary_result_hash_truncated",
         })
         {
@@ -399,7 +400,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, SearchTool.ShadowExecution>? runner) =>
         SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, Request(IdentifierQuery), CanaryMode.On, "symbol", semanticDisabled: false,
-            workspaceId, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, treatmentArmFactory: null, runner);
+            workspaceId, UtcDate, () => "ready", foreignWorkspace: false, treatmentArmFactory: null, runner);
 
     private static Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, SearchTool.ShadowExecution> RealShadow(
         RecordingPort port, SemanticEmbeddingSession session) =>
@@ -431,6 +432,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         EncoderFingerprint = MillerSemanticContract.PinnedIdentity(Pin).EncoderFingerprint,
         StorageSchema = MillerSemanticContract.PinnedIdentity(Pin).StorageSchema,
         CorpusGeneration = MillerSemanticContract.PinnedIdentity(Pin).CorpusGeneration,
+        FusionProfile = MillerSemanticContract.PinnedIdentity(Pin).FusionProfile,
     };
 
     private JsonElement Stamp(CanaryShadowFacts facts)

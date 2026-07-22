@@ -3,7 +3,8 @@ namespace Miller.Core.Search;
 /// <summary>
 /// A scored content search result: the matched file <see cref="Path"/>, its accumulated BM25
 /// <see cref="Score"/>, the 1-based <see cref="Line"/> that best matches the query, and a
-/// <see cref="Snippet"/> window of context lines around it (newline-joined, raw file text).
+/// <see cref="Snippet"/> window of context lines around it (newline-joined, raw file text). <see cref="ChunkId"/>
+/// identifies corpus-backed hits when an additional retrieval arm needs an exact join.
 /// </summary>
 public sealed record ContentSearchHit(
     string Path,
@@ -11,4 +12,5 @@ public sealed record ContentSearchHit(
     int Line,
     string Snippet,
     string Language = "",
-    long SourceBytes = 0);
+    long SourceBytes = 0,
+    string? ChunkId = null);

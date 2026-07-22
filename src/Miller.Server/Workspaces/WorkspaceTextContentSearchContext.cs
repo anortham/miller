@@ -15,4 +15,5 @@ public sealed record WorkspaceTextContentSearchContext(
     bool? IndexFresh,
     string FreshnessStatus,
     string? WarningText,
-    string? DisplayId = null);
+    string? DisplayId = null,
+    bool IsCurrent = true);

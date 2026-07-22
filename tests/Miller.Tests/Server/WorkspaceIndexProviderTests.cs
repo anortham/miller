@@ -205,6 +205,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal(1, context.Revision);
+        Assert.False(context.IsCurrent);
         Assert.Equal(1, searchLoadCount);
         Assert.Equal(0, fullLoadCount);
         var hit = Assert.Single(context.Index.Search("TargetType", limit: 10));
@@ -841,6 +842,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal("target-ws", first.WorkspaceId);
         Assert.Equal(1, first.Revision);
+        Assert.False(first.IsCurrent);
         Assert.Same(first.Index, second.Index);
         Assert.Equal(1, textLoadCount);
         TextContentSearchHit hit = Assert.Single(first.Index.Search(
@@ -879,6 +881,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal(7, byNull.Revision);
         Assert.Equal("current", byNull.FreshnessStatus);
+        Assert.True(byNull.IsCurrent);
+        Assert.True(byId.IsCurrent);
         Assert.Same(byNull.Index, byId.Index);
         Assert.Equal(1, textLoadCount);
         Assert.Single(byNull.Index.Search("KnownSourceError", TextContentKind.WorkspaceSource, 10));

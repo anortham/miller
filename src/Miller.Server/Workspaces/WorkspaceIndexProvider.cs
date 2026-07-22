@@ -258,7 +258,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+            row.DisplayId,
+            IsCurrent: false);
     }
 
     private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, bool ensureFresh)
@@ -357,7 +358,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+            row.DisplayId,
+            IsCurrent: false);
     }
 
     private WorkspaceRegionSearchContext ResolveCurrentRegionSearch()

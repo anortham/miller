@@ -12,7 +12,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`adr/ADR-0001-guidance-delivery-channels.md`](adr/ADR-0001-guidance-delivery-channels.md) - accepted decision record for the three guidance channels (ServerInstructions discovery core, tool-description usage contracts, NextStepHint nudges) and their budgets.
 - [`adr/ADR-0003-semantic-retrieval-ownership.md`](adr/ADR-0003-semantic-retrieval-ownership.md) - accepted decision record moving optional local semantic retrieval to Miller and reserving fleet-level semantics for Eros.
 - [`contracts/cli-eros-v1.md`](contracts/cli-eros-v1.md) - active Eros-facing CLI/export contract.
-- [`contracts/canary-telemetry-v1.md`](contracts/canary-telemetry-v1.md) - Canary telemetry contract v1 — randomized holdout experiment fields for the semantic rollout.
+- [`contracts/canary-telemetry-v2.md`](contracts/canary-telemetry-v2.md) - Active semantic-canary contract — exact generation identity on both arms and fail-closed promotion cohorts.
+- [`contracts/canary-telemetry-v1.md`](contracts/canary-telemetry-v1.md) - Historical first semantic-canary contract; v1 rows are excluded from the active gate.
 - [`findings/2026-07-21-p5-canary-runbook.md`](findings/2026-07-21-p5-canary-runbook.md) - P5 canary operator runbook: enable → observe → export → gate → interpret, the 30-day retention squeeze, and the `MILLER_SEMANTIC_MODEL` swap/rollback.
 - [`contracts/semantic-sidecar-protocol-v1.md`](contracts/semantic-sidecar-protocol-v1.md) - frozen `julie.embedding.sidecar` v1 wire protocol, model knob table, `prepare` subcommand, backend selection, and conformance bars for `julie-semantic-sidecar`.
 - [`contracts/vectors-v1.md`](contracts/vectors-v1.md) - frozen `<workspace>/.miller/vectors.db` artifact contract: five-field generation identity, invalidation matrix, dual cursors, vec0 storage schema, shadow/rollback lifecycle, status vocabulary.

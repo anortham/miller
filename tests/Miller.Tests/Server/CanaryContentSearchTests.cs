@@ -56,8 +56,16 @@ public sealed class CanaryContentSearchTests : IDisposable
             Docs("docs/a.md", 1, "alpha"),
             Docs("docs/b.md", 2, "beta"),
             Docs("docs/c.md", 3, "gamma"));
-        var cliArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)]);
-        var referenceArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)]);
+        var cliArm = ContentArm(chunks:
+        [
+            Chunk("docs/c.md", 1, DocsChunkId("docs/c.md", 3)),
+            Chunk("docs/b.md", 2, DocsChunkId("docs/b.md", 2)),
+        ]);
+        var referenceArm = ContentArm(chunks:
+        [
+            Chunk("docs/c.md", 1, DocsChunkId("docs/c.md", 3)),
+            Chunk("docs/b.md", 2, DocsChunkId("docs/b.md", 2)),
+        ]);
         SearchRoute route = SearchRoutePlanner.Plan("content", regions: null);
         var request = new SearchRouteExecutionRequest(
             ConceptualQuery,
@@ -69,8 +77,8 @@ public sealed class CanaryContentSearchTests : IDisposable
         var outcome = Assert.IsType<SearchTool.ContentCanaryOutcome>(method.Invoke(null,
         [
             index, route, request, SemanticMode.On, CanaryMode.Off, TreatmentWorkspace, Root,
-            UtcDate, (Func<string>)(() => "ready"), cliArm,
-            (Func<ISemanticTextArm?>)(() => cliArm), null,
+            UtcDate, (Func<CanaryVectorProbe>)(() => new CanaryVectorProbe("ready", Identity: null)), cliArm,
+            (Func<ISemanticTextArm?>)(() => cliArm), false, null,
         ]));
         string expected = SearchTool.RunContentCorpus(
             index,
@@ -83,6 +91,36 @@ public sealed class CanaryContentSearchTests : IDisposable
 
         Assert.Equal(expected, outcome.Result.Output);
         Assert.Equal(SearchServingPolicy.Production, outcome.ServingPolicy);
+    }
+
+    [Fact]
+    public void NormalCliContentRoute_CarriesExplicitTestExclusionIntoSemanticMaterialization()
+    {
+        MethodInfo? method = typeof(Miller.Server.Cli.CliDispatch).GetMethod(
+            "RunNormalContentRoute",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        TextContentSearchHit semanticOnly = Docs("docs/semantic.md", 7, "semantic metadata snippet");
+        var index = new MaterializingContentIndex([], [semanticOnly]);
+        var arm = ContentArm(chunks: [Chunk(semanticOnly.DisplayPath, 1, semanticOnly.ChunkId)]);
+        SearchRoute route = SearchRoutePlanner.Plan("content", regions: null);
+        var request = new SearchRouteExecutionRequest(
+            ConceptualQuery,
+            Limit: 10,
+            Json: false,
+            ExcludeTests: true,
+            WorkspaceRoot: Root);
+
+        var outcome = Assert.IsType<SearchTool.ContentCanaryOutcome>(method.Invoke(null,
+        [
+            index, route, request, SemanticMode.On, CanaryMode.Off, TreatmentWorkspace, Root,
+            UtcDate, (Func<CanaryVectorProbe>)(() => new CanaryVectorProbe("ready", Identity: null)), arm,
+            (Func<ISemanticTextArm?>)(() => arm), false, null,
+        ]));
+
+        Assert.Contains("docs/semantic.md", outcome.Result.Output, StringComparison.Ordinal);
+        Assert.True(index.LastMaterializeExcludeTests);
     }
 
     [Fact]
@@ -137,8 +175,16 @@ public sealed class CanaryContentSearchTests : IDisposable
         ITextContentSearchIndex index = ContentIndex(
             Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"), Docs("docs/c.md", 3, "gamma"));
         SemanticQueryDiagnostics diagnostics = ServedDiagnostics();
-        var treatmentArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)], diagnostics: diagnostics);
-        var referenceArm = ContentArm(chunks: [Chunk("docs/c.md", 1), Chunk("docs/b.md", 2)], diagnostics: diagnostics);
+        var treatmentArm = ContentArm(chunks:
+        [
+            Chunk("docs/c.md", 1, DocsChunkId("docs/c.md", 3)),
+            Chunk("docs/b.md", 2, DocsChunkId("docs/b.md", 2)),
+        ], diagnostics: diagnostics);
+        var referenceArm = ContentArm(chunks:
+        [
+            Chunk("docs/c.md", 1, DocsChunkId("docs/c.md", 3)),
+            Chunk("docs/b.md", 2, DocsChunkId("docs/b.md", 2)),
+        ], diagnostics: diagnostics);
 
         SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, treatmentArm);
 
@@ -179,6 +225,50 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.Equal(0, outcome.Facts!.LexicalResultCount);
         Assert.Equal(1, outcome.Facts.SemanticResultCount);
         Assert.Equal(1, outcome.Facts.FusedResultCount);
+    }
+
+    [Fact]
+    public void TreatmentWithTwoChunksInOneFile_CreditsOnlyTheSemanticChunk()
+    {
+        TextContentSearchHit lexical = Docs("docs/shared.md", 2, "lexical section");
+        TextContentSearchHit semantic = Docs("docs/shared.md", 80, "semantic section");
+        ITextContentSearchIndex index = new MaterializingContentIndex([lexical], [semantic]);
+        var arm = ContentArm(chunks: [Chunk(semantic.DisplayPath, 1, semantic.ChunkId)], diagnostics: ServedDiagnostics());
+
+        SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
+
+        Assert.True(
+            outcome.Result.Output.IndexOf("semantic section", StringComparison.Ordinal) <
+            outcome.Result.Output.IndexOf("lexical section", StringComparison.Ordinal));
+        Assert.Equal(1, outcome.Facts!.SemanticContributionCount);
+    }
+
+    [Fact]
+    public void TreatmentWithFilteredLeadingSemanticHits_RefillsToAnAllowedChunk()
+    {
+        TextContentSearchHit[] blocked = Enumerable.Range(1, 6)
+            .Select(i => Docs($"docs/blocked/{i}.md", i, $"blocked {i}"))
+            .ToArray();
+        TextContentSearchHit allowed = Docs("docs/allowed/hit.md", 20, "allowed semantic result");
+        var index = new MaterializingContentIndex([], [.. blocked, allowed]);
+        var arm = ContentArm(
+            chunks:
+            [
+                .. blocked.Select((hit, i) => Chunk(hit.DisplayPath, i + 1, hit.ChunkId)),
+                Chunk(allowed.DisplayPath, 7, allowed.ChunkId),
+            ],
+            diagnostics: ServedDiagnostics());
+
+        SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanary(
+            index, ConceptualQuery, 6, json: false, compactBanner: null,
+            filePattern: "docs/allowed/**", language: null,
+            suggestionLookup: null, productionRerank: null, CanaryMode.On, "content", semanticDisabled: false,
+            TreatmentWorkspace, Root, UtcDate, () => "ready", foreignWorkspace: false,
+            treatmentArmFactory: () => arm, excludeTests: true);
+
+        Assert.Contains("docs/allowed/hit.md", outcome.Result.Output, StringComparison.Ordinal);
+        Assert.True(index.LastMaterializeExcludeTests);
+        Assert.True(arm.LastChunkLimit >= 7);
     }
 
     [Fact]
@@ -265,7 +355,11 @@ public sealed class CanaryContentSearchTests : IDisposable
     {
         ITextContentSearchIndex index = ContentIndex(
             Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"), Docs("docs/c.md", 3, "gamma"));
-        var arm = ContentArm(chunks: [Chunk("docs/b.md", 1), Chunk("docs/a.md", 3)], diagnostics: ServedDiagnostics());
+        var arm = ContentArm(chunks:
+        [
+            Chunk("docs/b.md", 1, DocsChunkId("docs/b.md", 2)),
+            Chunk("docs/a.md", 3, DocsChunkId("docs/a.md", 1)),
+        ], diagnostics: ServedDiagnostics());
 
         SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
 
@@ -404,7 +498,7 @@ public sealed class CanaryContentSearchTests : IDisposable
             suggestionLookup: null, productionRerank: null, CanaryMode.On, "content", semanticDisabled: true,
             ControlWorkspace, Root, UtcDate,
             () => throw new InvalidOperationException("the vector probe must not run when semantic is off"),
-            crossWorkspaceNoGeneration: false, treatmentArmFactory: null);
+            foreignWorkspace: false, treatmentArmFactory: null);
 
         Assert.Null(outcome.Facts);
         Assert.Empty(outcome.ResultPathHashes);
@@ -437,7 +531,7 @@ public sealed class CanaryContentSearchTests : IDisposable
             index, query, limit, json: false, compactBanner: null, filePattern: null, language: null,
             suggestionLookup: null, productionRerank, mode, "content", semanticDisabled, workspaceId, Root, UtcDate,
             () => vectorState,
-            crossWorkspaceNoGeneration: false,
+            foreignWorkspace: false,
             treatmentArmFactory: treatmentArm is null ? null : () => treatmentArm,
             semanticMode: semanticMode);
 
@@ -481,6 +575,9 @@ public sealed class CanaryContentSearchTests : IDisposable
 
     private static SemanticHit Chunk(string path, int rank, string? docId = null) =>
         new(SymbolId: null, DocId: docId ?? path + "#" + rank, path, rank, Cosine: 0.9 - (rank * 0.01));
+
+    private static string DocsChunkId(string path, int line) =>
+        TextContentKind.WorkspaceDocs + ":" + path + ":" + line;
 
     private static SemanticQueryDiagnostics ServedDiagnostics() =>
         new(
@@ -543,12 +640,15 @@ public sealed class CanaryContentSearchTests : IDisposable
 
         public int ChunkQueries { get; private set; }
 
+        public int LastChunkLimit { get; private set; }
+
         public SemanticQueryResult QuerySymbols(string workspaceRoot, string query, int k, Func<VectorMatch, bool>? allow) =>
             throw new NotSupportedException("The content arm serves chunk hits only.");
 
         public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k)
         {
             ChunkQueries++;
+            LastChunkLimit = k;
             SemanticQueryResult result = Unavailable is { } reason
                 ? SemanticQueryResult.Unavailable(reason)
                 : new SemanticQueryResult([.. Chunks.Take(k)], null);
@@ -574,6 +674,8 @@ public sealed class CanaryContentSearchTests : IDisposable
     {
         public int DocumentCount => lexical.Count + materialized.Count;
 
+        public bool LastMaterializeExcludeTests { get; private set; }
+
         public IReadOnlyList<TextContentSearchHit> Search(
             string query, string contentKind, int limit, bool excludeTests) =>
             Search(query, [contentKind], limit, excludeTests);
@@ -585,7 +687,10 @@ public sealed class CanaryContentSearchTests : IDisposable
         public IReadOnlyList<TextContentSearchHit> Materialize(
             IReadOnlyCollection<string> chunkIds,
             IReadOnlyCollection<string> contentKinds,
-            bool excludeTests = false) =>
-            [.. materialized.Where(hit => chunkIds.Contains(hit.ChunkId) && contentKinds.Contains(hit.ContentKind))];
+            bool excludeTests = false)
+        {
+            LastMaterializeExcludeTests = excludeTests;
+            return [.. materialized.Where(hit => chunkIds.Contains(hit.ChunkId) && contentKinds.Contains(hit.ContentKind))];
+        }
     }
 }

@@ -61,7 +61,7 @@ public sealed class CanarySearchTests : IDisposable
 
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, request, CanaryMode.Off, "auto", semanticDisabled: false,
-            TreatmentWorkspace, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, Treatment(port, session));
+            TreatmentWorkspace, UtcDate, () => "ready", foreignWorkspace: false, Treatment(port, session));
 
         Assert.Null(outcome.Facts);
         Assert.Equal(SearchRouteExecutor.RunSymbols(index, SymbolRoute, request).Output, outcome.Result.Output);
@@ -94,6 +94,44 @@ public sealed class CanarySearchTests : IDisposable
     }
 
     [Fact]
+    public void EligibleControlUnit_RecordsTheConfiguredGenerationWithoutOpeningTheArm()
+    {
+        RecordingSymbolLookupIndex index = TwoSymbolIndex();
+        SemanticGenerationIdentity identity = MillerSemanticContract.PinnedIdentity(Pin);
+        bool armConstructed = false;
+
+        SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanaryProbe(
+            index,
+            SymbolRoute,
+            Request(ConceptualQuery, json: false),
+            CanaryMode.On,
+            "symbol",
+            semanticDisabled: false,
+            ControlWorkspace,
+            UtcDate,
+            () => new CanaryVectorProbe("ready", identity),
+            foreignWorkspace: false,
+            () =>
+            {
+                armConstructed = true;
+                throw new InvalidOperationException("control must not construct the semantic arm");
+            });
+
+        Assert.False(armConstructed);
+        Assert.Equal(identity.EncoderFingerprint, outcome.Facts!.EncoderFingerprint);
+        Assert.Equal(identity.StorageSchema, outcome.Facts.StorageSchema);
+        Assert.Equal(identity.CorpusGeneration, outcome.Facts.CorpusGeneration);
+        Assert.Equal(identity.FusionProfile, outcome.Facts.FusionProfile);
+
+        JsonElement metadata = Stamp(outcome.Facts);
+        Assert.Equal(identity.EncoderFingerprint["sha256:".Length..][..16],
+            metadata.GetProperty("canary_encoder_fingerprint").GetString());
+        Assert.Equal(identity.StorageSchema, metadata.GetProperty("canary_storage_schema").GetString());
+        Assert.Equal(identity.CorpusGeneration, metadata.GetProperty("canary_corpus_generation").GetString());
+        Assert.Equal(identity.FusionProfile, metadata.GetProperty("canary_fusion_profile").GetString());
+    }
+
+    [Fact]
     public void EligibleShadowHybrid_ExposesShadowServingPolicyAndServesLexicalBytes()
     {
         RecordingSymbolLookupIndex index = TwoSymbolIndex();
@@ -110,7 +148,7 @@ public sealed class CanarySearchTests : IDisposable
             TreatmentWorkspace,
             UtcDate,
             () => "ready",
-            crossWorkspaceNoGeneration: false,
+            foreignWorkspace: false,
             () =>
             {
                 treatmentConstructed = true;
@@ -204,7 +242,7 @@ public sealed class CanarySearchTests : IDisposable
 
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
             index, FileRoute, Request("Widget", json: false), CanaryMode.On, "file", semanticDisabled: false,
-            TreatmentWorkspace, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, Treatment(port, session));
+            TreatmentWorkspace, UtcDate, () => "ready", foreignWorkspace: false, Treatment(port, session));
 
         Assert.Equal(0, port.OpenCount);
         JsonElement metadata = Stamp(outcome.Facts!);
@@ -227,6 +265,7 @@ public sealed class CanarySearchTests : IDisposable
     [InlineData("auto", false, CanaryQueryClass.Prose, "disk-blocked", false, CanaryEligibility.IneligibleVectorsUnavailable)]
     [InlineData("auto", false, CanaryQueryClass.Prose, "incompatible", false, CanaryEligibility.IneligibleVectorsIncompatible)]
     [InlineData("auto", false, CanaryQueryClass.Prose, "circuit-open", false, CanaryEligibility.IneligibleCircuitOpen)]
+    [InlineData("auto", false, CanaryQueryClass.Prose, "unavailable", true, CanaryEligibility.IneligibleCrossWorkspaceNoGeneration)]
     [InlineData("auto", false, CanaryQueryClass.Prose, "ready", true, CanaryEligibility.IneligibleCrossWorkspaceNoGeneration)]
     [InlineData("auto", false, CanaryQueryClass.Prose, "ready", false, CanaryEligibility.Eligible)]
     public void EligibilityLadder_FirstMatchWins(
@@ -387,7 +426,7 @@ public sealed class CanarySearchTests : IDisposable
         ISymbolLookupIndex index, string query, string workspaceId, Func<SemanticSymbolFusionArm> treatment) =>
         SearchTool.RunSymbolsWithCanary(
             index, SymbolRoute, Request(query, json: false), CanaryMode.On, "symbol", semanticDisabled: false,
-            workspaceId, UtcDate, () => "ready", crossWorkspaceNoGeneration: false, treatment);
+            workspaceId, UtcDate, () => "ready", foreignWorkspace: false, treatment);
 
     private static int Bucket(string workspaceId, string queryClass) =>
         CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, workspaceId, UtcDate, queryClass);

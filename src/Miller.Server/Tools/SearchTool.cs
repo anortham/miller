@@ -108,6 +108,11 @@ internal enum SearchServingPolicy
     Shadow,
 }
 
+internal sealed record CanaryVectorProbe(string State, SemanticGenerationIdentity? Identity)
+{
+    public static CanaryVectorProbe From(VectorSidecarFacts facts) => new(facts.State, facts.Identity);
+}
+
 /// <summary>
 /// The output of symbol candidate generation: the ordered candidates plus the miss-path facts rendering needs
 /// when there are none. <see cref="OutsideScope"/> holds the bounded sample of hits a file/language filter
@@ -356,7 +361,7 @@ public sealed class SearchTool
 
                 CanaryMode canaryMode = CanaryActivation.FromEnvironment();
                 SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
-                ContentCanaryOutcome canary = RunContentWithCanary(
+                ContentCanaryOutcome canary = RunContentWithCanaryProbe(
                     content.Index,
                     query,
                     limit,
@@ -366,17 +371,18 @@ public sealed class SearchTool
                     language,
                     identifier => SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
                     SemanticContentRerank(
-                        content.Index, query, content.WorkspaceRoot, file_pattern, language),
+                        content.Index, query, content.WorkspaceRoot, exclude_tests is true, file_pattern, language),
                     canaryMode,
                     ModeName(route.Mode),
                     semanticDisabled: semanticMode is SemanticMode.Off,
                     content.WorkspaceId ?? string.Empty,
                     content.WorkspaceRoot,
                     CanaryUtcDate(scope),
-                    () => _semanticSidecar!.Inspect(content.WorkspaceRoot).State,
-                    crossWorkspaceNoGeneration: false,
-                    () => BuildTreatmentContentArm(content.WorkspaceRoot),
-                    semanticMode);
+                    () => CanaryVectorProbe.From(_semanticSidecar!.Inspect(content.WorkspaceRoot)),
+                    foreignWorkspace: !content.IsCurrent,
+                    treatmentArmFactory: () => BuildTreatmentContentArm(content.WorkspaceRoot),
+                    excludeTests: exclude_tests is true,
+                    semanticMode: semanticMode);
                 output = canary.Result.Output;
                 count = canary.Result.Count;
                 if (scope is not null)
@@ -445,7 +451,7 @@ public sealed class SearchTool
                 CanaryMode canaryMode = CanaryActivation.FromEnvironment();
                 SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
                 string canaryOp = ModeName(route.Mode);
-                SymbolCanaryOutcome canary = RunSymbolsWithCanary(
+                SymbolCanaryOutcome canary = RunSymbolsWithCanaryProbe(
                     context.Index,
                     route,
                     request,
@@ -454,8 +460,8 @@ public sealed class SearchTool
                     semanticDisabled: semanticMode is SemanticMode.Off,
                     context.WorkspaceId ?? string.Empty,
                     CanaryUtcDate(scope),
-                    () => _semanticSidecar!.Inspect(context.WorkspaceRoot).State,
-                    crossWorkspaceNoGeneration: false,
+                    () => CanaryVectorProbe.From(_semanticSidecar!.Inspect(context.WorkspaceRoot)),
+                    foreignWorkspace: !context.IsCurrent,
                     BuildTreatmentArmFactory(context.WorkspaceRoot),
                     BuildShadowRunner(context.WorkspaceRoot),
                     semanticMode);
@@ -1295,7 +1301,36 @@ public sealed class SearchTool
         string workspaceId,
         string utcDate,
         Func<string> vectorStateProbe,
-        bool crossWorkspaceNoGeneration,
+        bool foreignWorkspace,
+        Func<SemanticSymbolFusionArm>? treatmentArmFactory,
+        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? shadowRunner = null,
+        SemanticMode semanticMode = SemanticMode.On) =>
+        RunSymbolsWithCanaryProbe(
+            index,
+            route,
+            request,
+            mode,
+            op,
+            semanticDisabled,
+            workspaceId,
+            utcDate,
+            () => new CanaryVectorProbe(vectorStateProbe(), Identity: null),
+            foreignWorkspace,
+            treatmentArmFactory,
+            shadowRunner,
+            semanticMode);
+
+    internal static SymbolCanaryOutcome RunSymbolsWithCanaryProbe(
+        ISymbolLookupIndex index,
+        SearchRoute route,
+        SearchRouteExecutionRequest request,
+        CanaryMode mode,
+        string op,
+        bool semanticDisabled,
+        string workspaceId,
+        string utcDate,
+        Func<CanaryVectorProbe> vectorStateProbe,
+        bool foreignWorkspace,
         Func<SemanticSymbolFusionArm>? treatmentArmFactory,
         Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, ShadowExecution>? shadowRunner = null,
         SemanticMode semanticMode = SemanticMode.On)
@@ -1321,9 +1356,11 @@ public sealed class SearchTool
 
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
         string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
-        string vectorState = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
+        CanaryVectorProbe vectorProbe = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
             ? vectorStateProbe()
-            : "none";
+            : new CanaryVectorProbe("none", Identity: null);
+        string vectorState = vectorProbe.State;
+        bool crossWorkspaceNoGeneration = foreignWorkspace && vectorState != "ready";
         string eligibility =
             CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
 
@@ -1351,8 +1388,10 @@ public sealed class SearchTool
                 execution.Result, Facts: null, ShadowFacts: shadowFacts, ServingPolicy: servingPolicy);
         }
 
-        CanaryCallFacts facts = BuildCanaryFacts(
-            workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index);
+        CanaryCallFacts facts = WithCohortIdentity(
+            BuildCanaryFacts(
+                workspaceId, utcDate, queryClass, eligibility, execution, treatmentArm?.LastDiagnostics, index),
+            vectorProbe.Identity);
         return new SymbolCanaryOutcome(execution.Result, facts, ServingPolicy: servingPolicy);
     }
 
@@ -1433,6 +1472,7 @@ public sealed class SearchTool
                 EncoderFingerprint = identity.EncoderFingerprint,
                 StorageSchema = identity.StorageSchema,
                 CorpusGeneration = identity.CorpusGeneration,
+                FusionProfile = identity.FusionProfile,
             };
         }
 
@@ -1572,6 +1612,19 @@ public sealed class SearchTool
 
     private static bool SemanticIsTop(FusedCandidate row) =>
         row.SemanticRank is { } semantic && (row.LexicalRank is not { } lexical || semantic < lexical);
+
+    private static CanaryCallFacts WithCohortIdentity(
+        CanaryCallFacts facts,
+        SemanticGenerationIdentity? configuredIdentity) =>
+        facts.Eligibility == CanaryEligibility.Eligible && configuredIdentity is { } identity
+            ? facts with
+            {
+                EncoderFingerprint = identity.EncoderFingerprint,
+                StorageSchema = identity.StorageSchema,
+                CorpusGeneration = identity.CorpusGeneration,
+                FusionProfile = identity.FusionProfile,
+            }
+            : facts;
 
     private static string ResolveWarmth(SemanticQueryDiagnostics? diagnostics) => diagnostics switch
     {
@@ -1787,8 +1840,52 @@ public sealed class SearchTool
         string workspaceRoot,
         string utcDate,
         Func<string> vectorStateProbe,
-        bool crossWorkspaceNoGeneration,
+        bool foreignWorkspace,
         Func<ISemanticTextArm?>? treatmentArmFactory,
+        bool excludeTests = false,
+        SemanticMode semanticMode = SemanticMode.On) =>
+        RunContentWithCanaryProbe(
+            index,
+            query,
+            limit,
+            json,
+            compactBanner,
+            filePattern,
+            language,
+            suggestionLookup,
+            productionRerank,
+            mode,
+            op,
+            semanticDisabled,
+            workspaceId,
+            workspaceRoot,
+            utcDate,
+            () => new CanaryVectorProbe(vectorStateProbe(), Identity: null),
+            foreignWorkspace,
+            treatmentArmFactory,
+            excludeTests,
+            semanticMode);
+
+    internal static ContentCanaryOutcome RunContentWithCanaryProbe(
+        ITextContentSearchIndex index,
+        string query,
+        int limit,
+        bool json,
+        string? compactBanner,
+        string? filePattern,
+        string? language,
+        Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup,
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? productionRerank,
+        CanaryMode mode,
+        string op,
+        bool semanticDisabled,
+        string workspaceId,
+        string workspaceRoot,
+        string utcDate,
+        Func<CanaryVectorProbe> vectorStateProbe,
+        bool foreignWorkspace,
+        Func<ISemanticTextArm?>? treatmentArmFactory,
+        bool excludeTests = false,
         SemanticMode semanticMode = SemanticMode.On)
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
@@ -1812,9 +1909,11 @@ public sealed class SearchTool
 
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
         string queryClass = CanaryQueryClassifier.Classify(op, query, policyRoute);
-        string vectorState = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
+        CanaryVectorProbe vectorProbe = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
             ? vectorStateProbe()
-            : "none";
+            : new CanaryVectorProbe("none", Identity: null);
+        string vectorState = vectorProbe.State;
+        bool crossWorkspaceNoGeneration = foreignWorkspace && vectorState != "ready";
         string eligibility =
             CanaryEligibility.Resolve(op, semanticDisabled, queryClass, vectorState, crossWorkspaceNoGeneration);
 
@@ -1834,9 +1933,10 @@ public sealed class SearchTool
                     result => consulted = result,
                     index,
                     WorkspaceContentSearchKinds,
-                    excludeTests: false,
+                    excludeTests,
                     filePattern,
-                    language)
+                    language,
+                    limit)
                 : null;
 
         string output = RunContentCorpus(
@@ -1845,8 +1945,10 @@ public sealed class SearchTool
             out IReadOnlyList<ContentSearchHit> lexicalOrder,
             compactBanner, filePattern, language, suggestionLookup, rerank);
 
-        CanaryCallFacts facts = BuildContentCanaryFacts(
-            workspaceId, utcDate, queryClass, eligibility, count, lexicalResultCount, consulted, servedPage, lexicalOrder);
+        CanaryCallFacts facts = WithCohortIdentity(
+            BuildContentCanaryFacts(
+                workspaceId, utcDate, queryClass, eligibility, count, lexicalResultCount, consulted, servedPage, lexicalOrder),
+            vectorProbe.Identity);
 
         IReadOnlyList<string> pathHashes = [];
         bool truncated = false;
@@ -1918,28 +2020,31 @@ public sealed class SearchTool
     /// <summary>
     /// Rank-aware content <c>canary_semantic_contribution_count</c> (contract field table): a served row counts
     /// only when its semantic rank is strictly better than its lexical rank (a row absent from lexical but present
-    /// in semantic counts; a row absent from semantic never counts). Ranks join on file path, mirroring the
-    /// content fusion; the lexical rank is the row's 1-based position in the pre-rerank order.
+    /// in semantic counts; a row absent from semantic never counts). Ranks join on the stable chunk id;
+    /// the lexical rank is the row's 1-based position in the pre-rerank order.
     /// </summary>
     private static int CountContentSemanticContributions(
         IReadOnlyList<ContentSearchHit> servedPage,
         IReadOnlyList<ContentSearchHit> lexicalOrder,
         IReadOnlyList<SemanticHit> semanticHits)
     {
-        var semanticRankByPath = new Dictionary<string, int>(semanticHits.Count, StringComparer.Ordinal);
+        var semanticRankByChunk = new Dictionary<string, int>(semanticHits.Count, StringComparer.Ordinal);
         foreach (SemanticHit hit in semanticHits)
-            semanticRankByPath.TryAdd(hit.FilePath, hit.Rank);
+            if (!string.IsNullOrEmpty(hit.DocId))
+                semanticRankByChunk.TryAdd(hit.DocId, hit.Rank);
 
-        var lexicalRankByPath = new Dictionary<string, int>(lexicalOrder.Count, StringComparer.Ordinal);
+        var lexicalRankByChunk = new Dictionary<string, int>(lexicalOrder.Count, StringComparer.Ordinal);
         for (int i = 0; i < lexicalOrder.Count; i++)
-            lexicalRankByPath.TryAdd(lexicalOrder[i].Path, i + 1);
+            if (!string.IsNullOrEmpty(lexicalOrder[i].ChunkId))
+                lexicalRankByChunk.TryAdd(lexicalOrder[i].ChunkId!, i + 1);
 
         int count = 0;
         foreach (ContentSearchHit hit in servedPage)
         {
-            if (!semanticRankByPath.TryGetValue(hit.Path, out int semanticRank))
+            if (string.IsNullOrEmpty(hit.ChunkId) ||
+                !semanticRankByChunk.TryGetValue(hit.ChunkId, out int semanticRank))
                 continue;
-            if (!lexicalRankByPath.TryGetValue(hit.Path, out int lexicalRank) || semanticRank < lexicalRank)
+            if (!lexicalRankByChunk.TryGetValue(hit.ChunkId, out int lexicalRank) || semanticRank < lexicalRank)
                 count++;
         }
 
@@ -2129,7 +2234,8 @@ public sealed class SearchTool
                     hit.Line,
                     hit.Snippet,
                     hit.Language,
-                    hit.SourceBytes);
+                    hit.SourceBytes,
+                    hit.ChunkId);
                 if (filters.Allows(contentHit.Path, contentHit.Language))
                     hits.Add(contentHit);
                 else if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
@@ -2441,6 +2547,7 @@ public sealed class SearchTool
         ITextContentSearchIndex index,
         string query,
         string workspaceRoot,
+        bool excludeTests,
         string? filePattern,
         string? language) =>
         _semanticArm is { } arm
@@ -2451,9 +2558,10 @@ public sealed class SearchTool
                 onConsult: null,
                 index,
                 WorkspaceContentSearchKinds,
-                excludeTests: false,
+                excludeTests,
                 filePattern,
-                language)
+                language,
+                DefaultLimit)
             : null;
 
     /// <summary>
@@ -2470,19 +2578,27 @@ public sealed class SearchTool
         IReadOnlyCollection<string>? contentKinds = null,
         bool excludeTests = false,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        int candidateLimit = DefaultLimit)
     {
         SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
         if (!route.IsHybrid)
             return null;
 
         FusionWeights weights = RrfFusion.WeightsFor(route.HybridClass);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         return lexical =>
         {
+            int semanticDepth = excludeTests || filters.HasAny
+                ? SemanticSearchArm.MaxCandidates
+                : Math.Clamp(
+                    Math.Max(lexical.Count, candidateLimit * 4 + 10),
+                    1,
+                    SemanticSearchArm.MaxCandidates);
             SemanticQueryResult semantic = arm.QueryChunks(
                 workspaceRoot,
                 query,
-                Math.Clamp(Math.Max(lexical.Count, DefaultLimit), 1, SemanticSearchArm.MaxCandidates));
+                semanticDepth);
             onConsult?.Invoke(semantic);
             if (!semantic.Served || semantic.Hits.Count == 0)
                 return lexical;
@@ -2492,15 +2608,14 @@ public sealed class SearchTool
                 semantic.Hits,
                 contentKinds ?? WorkspaceContentSearchKinds,
                 excludeTests,
-                ToolSearchFilters.Parse(filePattern, language));
+                filters);
             return FuseContentHits(lexical, materialized, semantic.Hits, weights);
         };
     }
 
     /// <summary>
     /// Weighted reciprocal-rank fusion over chunk hits, matching the frozen <c>fusion-v1</c> constants the
-    /// symbol route uses. Hits join on file path because the chunk corpus and the content corpus chunk the same
-    /// files under different identifiers, and a path is the fact both sides agree on.
+    /// symbol route uses. Hits join on the stable chunk id shared by the vector map and content corpus.
     /// </summary>
     private static IReadOnlyList<ContentSearchHit> FuseContentHits(
         IReadOnlyList<ContentSearchHit> lexical,
@@ -2510,7 +2625,8 @@ public sealed class SearchTool
     {
         var semanticRanks = new Dictionary<string, int>(semantic.Count, StringComparer.Ordinal);
         foreach (SemanticHit hit in semantic)
-            semanticRanks.TryAdd(hit.FilePath, hit.Rank);
+            if (!string.IsNullOrEmpty(hit.DocId))
+                semanticRanks.TryAdd(hit.DocId, hit.Rank);
 
         var union = new List<(ContentSearchHit Hit, int? LexicalRank)>(lexical.Count + materialized.Count);
         var seen = new HashSet<(string Path, int Line)>();
@@ -2528,7 +2644,7 @@ public sealed class SearchTool
         return
         [
             .. union
-                .Select(row => (row.Hit, Fused: FusedScore(row.LexicalRank, semanticRanks, row.Hit.Path, weights)))
+                .Select(row => (row.Hit, Fused: FusedScore(row.LexicalRank, semanticRanks, row.Hit.ChunkId, weights)))
                 .OrderByDescending(row => row.Fused)
                 .ThenByDescending(row => row.Hit.Score)
                 .ThenBy(row => row.Hit.Path, StringComparer.Ordinal)
@@ -2540,10 +2656,10 @@ public sealed class SearchTool
     private static double FusedScore(
         int? lexicalRank,
         IReadOnlyDictionary<string, int> semanticRanks,
-        string path,
+        string? chunkId,
         FusionWeights weights) =>
         (lexicalRank is { } rank ? weights.Lexical / (RrfFusion.RankConstant + rank) : 0d) +
-        (semanticRanks.TryGetValue(path, out int semanticRank)
+        (chunkId is not null && semanticRanks.TryGetValue(chunkId, out int semanticRank)
             ? weights.Semantic / (RrfFusion.RankConstant + semanticRank)
             : 0d);
 
@@ -2578,7 +2694,8 @@ public sealed class SearchTool
                     hit.Line,
                     hit.Snippet,
                     hit.Language,
-                    hit.SourceBytes)),
+                    hit.SourceBytes,
+                    hit.ChunkId)),
         ];
     }
 

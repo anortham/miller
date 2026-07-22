@@ -247,12 +247,104 @@ public sealed class CanaryGateReportTests : IDisposable
     }
 
     [Fact]
+    public void Cohorts_AreSplitByCompleteSemanticIdentityWithinExactVersion()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            seeder.InsertCanary(
+                "ws-a", "2026-07-14", "prose", "treatment",
+                millerVersion: "1.14.0+aaa", encoderFingerprint: "encoder-a",
+                storageSchema: "schema-a", corpusGeneration: "corpus-a",
+                fusionProfile: "fusion-a", policyVersion: 1);
+            seeder.InsertCanary(
+                "ws-a", "2026-07-14", "prose", "treatment",
+                millerVersion: "1.14.0+aaa", encoderFingerprint: "encoder-b",
+                storageSchema: "schema-b", corpusGeneration: "corpus-b",
+                fusionProfile: "fusion-b", policyVersion: 2);
+        }
+
+        using JsonDocument doc = JsonDocument.Parse(CanaryGateReport.Render(Db, json: true));
+        JsonElement[] cohorts = doc.RootElement.GetProperty("cohorts").EnumerateArray().ToArray();
+
+        Assert.Equal(2, cohorts.Length);
+        Assert.Contains(cohorts, cohort =>
+            cohort.GetProperty("miller_version").GetString() == "1.14.0+aaa"
+            && cohort.GetProperty("encoder_fingerprint").GetString() == "encoder-a"
+            && cohort.GetProperty("storage_schema").GetString() == "schema-a"
+            && cohort.GetProperty("corpus_generation").GetString() == "corpus-a"
+            && cohort.GetProperty("fusion_profile").GetString() == "fusion-a"
+            && cohort.GetProperty("policy_version").GetInt32() == 1);
+        Assert.Contains(cohorts, cohort =>
+            cohort.GetProperty("miller_version").GetString() == "1.14.0+aaa"
+            && cohort.GetProperty("encoder_fingerprint").GetString() == "encoder-b"
+            && cohort.GetProperty("storage_schema").GetString() == "schema-b"
+            && cohort.GetProperty("corpus_generation").GetString() == "corpus-b"
+            && cohort.GetProperty("fusion_profile").GetString() == "fusion-b"
+            && cohort.GetProperty("policy_version").GetInt32() == 2);
+    }
+
+    [Fact]
+    public void Cohort_ComparesControlAndTreatmentTaggedWithTheSameConfiguredGeneration()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                seeder.InsertCanary(
+                    "ws-control", "2026-07-14", "prose", "control",
+                    encoderFingerprint: "encoder-a", storageSchema: "schema-a",
+                    corpusGeneration: "corpus-a", fusionProfile: "fusion-a", policyVersion: 1);
+                seeder.InsertCanary(
+                    "ws-treatment", "2026-07-14", "prose", "treatment",
+                    encoderFingerprint: "encoder-a", storageSchema: "schema-a",
+                    corpusGeneration: "corpus-a", fusionProfile: "fusion-a", policyVersion: 1);
+            }
+        }
+
+        CanaryCohortGate cohort = Assert.Single(CanaryGateReport.Compute(Db).Cohorts);
+
+        Assert.Equal(1, cohort.SuccessRate.ControlUnits);
+        Assert.Equal(1, cohort.SuccessRate.TreatmentUnits);
+        Assert.Equal("encoder-a", cohort.EncoderFingerprint);
+        Assert.Equal("fusion-a", cohort.FusionProfile);
+    }
+
+    [Fact]
+    public void RenderHuman_IdentifiesCompleteSemanticIdentityCohorts()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            seeder.InsertCanary(
+                "ws-a", "2026-07-14", "prose", "treatment",
+                millerVersion: "1.14.0+aaa", encoderFingerprint: "encoder-a",
+                storageSchema: "schema-a", corpusGeneration: "corpus-a",
+                fusionProfile: "fusion-a", policyVersion: 1);
+            seeder.InsertCanary(
+                "ws-a", "2026-07-14", "prose", "treatment",
+                millerVersion: "1.14.0+aaa", encoderFingerprint: "encoder-b",
+                storageSchema: "schema-b", corpusGeneration: "corpus-b",
+                fusionProfile: "fusion-b", policyVersion: 2);
+        }
+
+        string text = CanaryGateReport.Render(Db, json: false);
+
+        Assert.Contains(
+            "cohort 1.14.0+aaa [encoder=encoder-a schema=schema-a corpus=corpus-a fusion=fusion-a policy=1]",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cohort 1.14.0+aaa [encoder=encoder-b schema=schema-b corpus=corpus-b fusion=fusion-b policy=2]",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RowsWithoutMillerVersionOrWrongContractVersionAreExcludedFromEveryCohort()
     {
         using (var seeder = new CanarySeeder(Db))
         {
             seeder.InsertCanary("ws-a", "2026-07-14", "prose", "treatment", millerVersion: null);
-            seeder.InsertCanary("ws-a", "2026-07-14", "prose", "treatment", contractVersion: 2);
+            seeder.InsertCanary("ws-a", "2026-07-14", "prose", "treatment", contractVersion: 1);
         }
 
         Assert.Empty(CanaryGateReport.Compute(Db).Cohorts);

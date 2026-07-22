@@ -9,7 +9,7 @@ using Miller.Core.Telemetry;
 namespace Miller.Server.Telemetry;
 
 /// <summary>
-/// Builds the frozen aggregate envelope of <c>canary-telemetry-v1</c> §Aggregate Export — the only sanctioned way
+/// Builds the frozen aggregate envelope of <c>canary-telemetry-v2</c> §Aggregate Export — the only sanctioned way
 /// canary data leaves a machine. Counters and enums only: no hashes, no <c>workspace_id</c>, no paths, no raw
 /// <c>duration_ms</c> (bucketed <c>total_latency_bucket_counts</c> instead). Units are ordered by
 /// <c>(utc_date, query_class, unit_id)</c> so an unchanged window re-exports byte-identically.
@@ -32,7 +32,7 @@ public static class CanaryExport
         string fromText = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         string toText = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         List<CanaryRow> windowed = allRows
-            .Where(r => r.ContractVersion == 1
+            .Where(r => r.ContractVersion == CanaryTelemetry.ContractVersion
                 && string.CompareOrdinal(r.UtcDate, fromText) >= 0
                 && string.CompareOrdinal(r.UtcDate, toText) <= 0)
             .ToList();

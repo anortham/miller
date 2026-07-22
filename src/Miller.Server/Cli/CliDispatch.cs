@@ -367,8 +367,12 @@ public static class CliDispatch
         CliOptions o = CliOptions.Parse(args, "json", "include-tests", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
             return Usage(err, SearchUsage);
+        string invocationRoot = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
+        bool foreignWorkspace = !WorkspaceSafety.IsLiveWorkspace(
+            invocationRoot,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
         if (!TryParseSearchArm(o.Value("arm"), out CliSearchArm requestedArm))
         {
             err.WriteLine("--arm must be lexical, semantic, or hybrid.");
@@ -481,9 +485,10 @@ public static class CliDispatch
                     ctx.WorkspaceId ?? string.Empty,
                     ctx.WorkspaceRoot,
                     CanaryUtcDate(telemetry),
-                    () => vectors.Inspect(ctx.WorkspaceRoot).State,
+                    () => CanaryVectorProbe.From(vectors.Inspect(ctx.WorkspaceRoot)),
                     productionArm,
                     treatmentArmFactory,
+                    foreignWorkspace,
                     telemetry);
                 outw.WriteLine(outcome.Result.Output);
                 return 0;
@@ -526,7 +531,7 @@ public static class CliDispatch
         if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
             return 3;
 
-        return RunSymbolRoute(index, route, executionRequest, requestedArm, ctx, outw, err);
+        return RunSymbolRoute(index, route, executionRequest, requestedArm, foreignWorkspace, ctx, outw, err);
     }
 
     private const string SearchUsage =
@@ -550,6 +555,7 @@ public static class CliDispatch
         SearchRoute route,
         SearchRouteExecutionRequest request,
         CliSearchArm requestedArm,
+        bool foreignWorkspace,
         WorkspaceContext ctx,
         TextWriter outw,
         TextWriter err)
@@ -581,8 +587,9 @@ public static class CliDispatch
                 ctx.WorkspaceId ?? string.Empty,
                 ctx.WorkspaceRoot,
                 CanaryUtcDate(telemetry),
-                () => sidecar.Inspect(ctx.WorkspaceRoot).State,
+                () => CanaryVectorProbe.From(sidecar.Inspect(ctx.WorkspaceRoot)),
                 armFactory,
+                foreignWorkspace,
                 telemetry);
             outw.WriteLine(outcome.Result.Output);
             return 0;
@@ -634,14 +641,15 @@ public static class CliDispatch
         string workspaceId,
         string workspaceRoot,
         string utcDate,
-        Func<string> vectorStateProbe,
+        Func<CanaryVectorProbe> vectorStateProbe,
         Func<SemanticSymbolFusionArm>? armFactory,
+        bool foreignWorkspace,
         TelemetryScope? telemetry)
     {
         SemanticSymbolFusionArm? productionArm = semanticMode is SemanticMode.On
             ? armFactory?.Invoke()
             : null;
-        SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
+        SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanaryProbe(
             index,
             route,
             request with { FusionArm = productionArm, WorkspaceRoot = workspaceRoot },
@@ -651,7 +659,7 @@ public static class CliDispatch
             workspaceId,
             utcDate,
             vectorStateProbe,
-            crossWorkspaceNoGeneration: false,
+            foreignWorkspace,
             armFactory,
             shadowRunner: null,
             semanticMode);
@@ -681,9 +689,10 @@ public static class CliDispatch
         string workspaceId,
         string workspaceRoot,
         string utcDate,
-        Func<string> vectorStateProbe,
+        Func<CanaryVectorProbe> vectorStateProbe,
         ISemanticTextArm? productionArm,
         Func<ISemanticTextArm?>? treatmentArmFactory,
+        bool foreignWorkspace,
         TelemetryScope? telemetry)
     {
         Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? productionRerank =
@@ -696,10 +705,11 @@ public static class CliDispatch
                     onConsult: null,
                     index,
                     contentKinds: null,
-                    excludeTests: false,
+                    excludeTests: request.ExcludeTests is true,
                     request.FilePattern,
-                    request.Language);
-        SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanary(
+                    request.Language,
+                    request.Limit);
+        SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanaryProbe(
             index,
             request.Query,
             request.Limit,
@@ -716,9 +726,10 @@ public static class CliDispatch
             workspaceRoot,
             utcDate,
             vectorStateProbe,
-            crossWorkspaceNoGeneration: false,
+            foreignWorkspace,
             treatmentArmFactory,
-            semanticMode);
+            excludeTests: request.ExcludeTests is true,
+            semanticMode: semanticMode);
 
         if (telemetry is not null)
         {

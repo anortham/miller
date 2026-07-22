@@ -3616,7 +3616,7 @@ public sealed class CliDispatchTests : IDisposable
         var outcome = Assert.IsType<SearchTool.SymbolCanaryOutcome>(method.Invoke(null,
         [
             index, SymbolRoute, request, SemanticMode.On, CanaryMode.Off, "ws-canary", ArmRoot,
-            "2026-07-20", (Func<string>)(() => "ready"), armFactory, null,
+            "2026-07-20", (Func<CanaryVectorProbe>)(() => new CanaryVectorProbe("ready", Identity: null)), armFactory, false, null,
         ]));
         string expected = SearchRouteExecutor.RunSymbols(
             index,
@@ -3652,7 +3652,8 @@ public sealed class CliDispatchTests : IDisposable
             var outcome = Assert.IsType<SearchTool.SymbolCanaryOutcome>(method.Invoke(null,
             [
                 TwoSymbolIndex(), SymbolRoute, ArmRequest(query), SemanticMode.On, CanaryMode.On,
-                "ws-canary", ArmRoot, "2026-07-20", (Func<string>)(() => "ready"), armFactory, scope,
+                "ws-canary", ArmRoot, "2026-07-20",
+                (Func<CanaryVectorProbe>)(() => new CanaryVectorProbe("ready", Identity: null)), armFactory, false, scope,
             ]));
             Assert.Equal(CanaryEligibility.Eligible, outcome.Facts!.Eligibility);
         }

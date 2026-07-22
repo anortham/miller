@@ -11,4 +11,5 @@ public sealed record WorkspaceSymbolSearchContext(
     bool? IndexFresh,
     string FreshnessStatus,
     string? WarningText,
-    string? DisplayId = null);
+    string? DisplayId = null,
+    bool IsCurrent = true);

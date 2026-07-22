@@ -4,7 +4,7 @@
 **Scope:** how to run the randomized-holdout semantic canary end to end — enable, observe, export, gate,
 interpret — plus swapping the embedding model and rolling back.
 **Field definitions are not repeated here.** The normative field, enum, window, and derivation spec is the
-frozen contract [`contracts/canary-telemetry-v1.md`](../contracts/canary-telemetry-v1.md); this document is
+active contract [`contracts/canary-telemetry-v2.md`](../contracts/canary-telemetry-v2.md); this document is
 operational only. Where the two ever differ, the contract wins.
 
 ## What the canary is
