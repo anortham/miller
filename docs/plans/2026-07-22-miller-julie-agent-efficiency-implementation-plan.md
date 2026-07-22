@@ -166,13 +166,13 @@ Commit mode for every task is `parallel-lead-commit`: workers hand verified diff
 **Approach:** Use a select/threaded pump appropriate to the platform, a request-id timing map, atomic JSONL event writes, and process-group cleanup. Parse copies for measurement while forwarding the original line bytes. Hash initialize instructions and tool schemas in the summarized event, but keep raw visible-run events in the run directory.
 
 **Acceptance criteria:**
-- [ ] Initialize instructions, tool schemas, arguments, results, errors, notifications, and request ids arrive unchanged at the opposite endpoint.
-- [ ] stdout contains only forwarded JSON-RPC; stderr and measurement events are separated.
-- [ ] Exact byte/token totals and monotonic durations match hand-computed fake-server exchanges.
-- [ ] Call 9 never reaches the fake server; a token-crossing response arrives whole and closes later calls.
-- [ ] Product crash, malformed JSON, timeout, controller EOF, and interrupt terminate children without an orphan.
-- [ ] Existing `scripts/benchlib/mcp_client.py` and its 14 references remain unchanged.
-- [ ] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
+- [x] Initialize instructions, tool schemas, arguments, results, errors, notifications, and request ids arrive unchanged at the opposite endpoint.
+- [x] stdout contains only forwarded JSON-RPC; stderr and measurement events are separated.
+- [x] Exact byte/token totals and monotonic durations match hand-computed fake-server exchanges.
+- [x] Call 9 never reaches the fake server; a token-crossing response arrives whole and closes later calls.
+- [x] Product crash, malformed JSON, timeout, controller EOF, and interrupt terminate children without an orphan.
+- [x] Existing `scripts/benchlib/mcp_client.py` and its 14 references remain unchanged.
+- [x] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
 
 ### Task 3: Additive agent-efficiency scorer
 
@@ -204,14 +204,14 @@ Commit mode for every task is `parallel-lead-commit`: workers hand verified diff
 **Approach:** Keep the new scorer independent; do not modify `TaskCompletionScorer`, `TaskModel`, or `TaskReport`. Stabilize discordant pairs before computing completion cells. For a stabilized both-pass task, take the median of that arm's passing repetitions, then calculate arm medians and nearest-rank p75 over paired tasks.
 
 **Acceptance criteria:**
-- [ ] Validation rejects missing/extra/duplicate task ids, bad run shapes, invalid critical flags, unsupported enums, negative counts, and privacy-unsafe fields.
-- [ ] Hand-computed fixtures cover initial agreement, both discordant majorities, critical loss, completion tie, Miller completion loss/win, and no both-pass tasks.
-- [ ] The 20% token route, one-call route, token non-regression, and 20% p75 wall guard match exact boundary fixtures.
-- [ ] Aggregate JSON contains no task id, input path, prompt, answer, evidence, trajectory, arm-order seed, or per-task row.
-- [ ] `agent-score` uses exit `0` for every valid verdict, `1` for usage/IO, and `2` for validation failure.
-- [ ] Existing `task-score` stdout, JSON, tests, and exit behavior remain unchanged.
-- [ ] `RetrievalEval.csproj` retains only `System.Text.Json` from the framework and no Miller/product project reference.
-- [ ] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
+- [x] Validation rejects missing/extra/duplicate task ids, bad run shapes, invalid critical flags, unsupported enums, negative counts, and privacy-unsafe fields.
+- [x] Hand-computed fixtures cover initial agreement, both discordant majorities, critical loss, completion tie, Miller completion loss/win, and no both-pass tasks.
+- [x] The 20% token route, one-call route, token non-regression, and 20% p75 wall guard match exact boundary fixtures.
+- [x] Aggregate JSON contains no task id, input path, prompt, answer, evidence, trajectory, arm-order seed, or per-task row.
+- [x] `agent-score` uses exit `0` for every valid verdict, `1` for usage/IO, and `2` for validation failure.
+- [x] Existing `task-score` stdout, JSON, tests, and exit behavior remain unchanged.
+- [x] `RetrievalEval.csproj` retains only `System.Text.Json` from the framework and no Miller/product project reference.
+- [x] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
 
 ### Task 4: Concrete Codex agent runner
 
@@ -239,14 +239,14 @@ Commit mode for every task is `parallel-lead-commit`: workers hand verified diff
 **Approach:** Build argument arrays without shell interpolation. Pass MCP configuration as strict TOML `-c` values, set `approval_policy="never"`, and require the proxy server. Copy only file-based auth when required, preserve restrictive permissions, never parse or log its contents, and otherwise use the platform credential store from the isolated child home. Start a process group/job, stream stdout/stderr without deadlock, terminate the entire group on timeout, and distinguish a valid agent insufficiency response from CLI/transport failure.
 
 **Acceptance criteria:**
-- [ ] Command fixtures pin every required isolation, model, reasoning, schema, sandbox, MCP, and ephemeral option with no global config/plugin server.
-- [ ] A prompt-input/preflight fixture proves no machine-global `AGENTS.md`, skill, plugin, hook, history, or MCP server reaches the agent; temporary auth material is permission-restricted and absent from every artifact.
-- [ ] JSONL parsing accepts documented `thread.*`, `turn.*`, `item.*`, and `error` events and preserves unknown events for diagnostics.
-- [ ] Any command/file/web/non-arm tool event produces `disallowed_tool`; no final answer can override it.
-- [ ] Valid final JSON is schema-checked and handed to Task 1 verification; missing/malformed output is `invalid_answer`.
-- [ ] Timeout, nonzero exit, MCP startup failure, truncated JSONL, and signal cleanup are classified deterministically with no orphan.
-- [ ] Model usage from `turn.completed` is diagnostic and never substituted for proxy-measured tool-output tokens.
-- [ ] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
+- [x] Command fixtures pin every required isolation, model, reasoning, schema, sandbox, MCP, and ephemeral option with no global config/plugin server.
+- [x] A prompt-input/preflight fixture proves no machine-global `AGENTS.md`, skill, plugin, hook, history, or MCP server reaches the agent; temporary auth material is permission-restricted and absent from every artifact.
+- [x] JSONL parsing accepts documented `thread.*`, `turn.*`, `item.*`, and `error` events and preserves unknown events for diagnostics.
+- [x] Any command/file/web/non-arm tool event produces `disallowed_tool`; no final answer can override it.
+- [x] Valid final JSON is schema-checked and handed to Task 1 verification; missing/malformed output is `invalid_answer`.
+- [x] Timeout, nonzero exit, MCP startup failure, truncated JSONL, and signal cleanup are classified deterministically with no orphan.
+- [x] Model usage from `turn.completed` is diagnostic and never substituted for proxy-measured tool-output tokens.
+- [x] Worker-scope verification passes and the diff is handed to the lead without a worker commit.
 
 ### Task 5: Paired orchestration and operator protocol
 

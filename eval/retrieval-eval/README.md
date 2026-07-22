@@ -35,6 +35,13 @@ dotnet run --project eval/retrieval-eval -- task-score \
   --baseline /sealed/baseline-results.jsonl \
   --candidate /sealed/candidate-results.jsonl \
   --out /sealed/task-aggregate.json
+
+# score stabilized Miller-vs-Julie agent-efficiency runs
+dotnet run --project eval/retrieval-eval -- agent-score \
+  --tasks /sealed/agent-tasks.jsonl \
+  --miller /sealed/miller-runs.jsonl \
+  --julie /sealed/julie-runs.jsonl \
+  --out /sealed/agent-aggregate.json
 ```
 
 `--k` defaults to 10. `--corpus` is optional for `score` (it adds a `corpus_validation` block) and takes
@@ -44,6 +51,11 @@ Exit codes: `0` ok, `1` usage/IO error, `2` validation failed.
 
 `task-score` exits `0` for every valid aggregate, including `fail` and `underpowered` verdicts. Missing
 arguments and file-system failures exit `1`; malformed, unsupported, duplicate, or mismatched rows exit `2`.
+
+`agent-score` also exits `0` for every valid verdict. It stabilizes initial completion disagreements with
+exactly three repetitions per arm, requires Miller completion non-regression with no critical losses, and
+then evaluates output-token or tool-call savings under the p75 wall-time guard. Its report contains aggregate
+cells and sufficiently populated groups only; it never emits task ids, prompts, answers, evidence, or paths.
 
 Tests: `dotnet test eval/retrieval-eval/tests/RetrievalEval.Tests.csproj`.
 

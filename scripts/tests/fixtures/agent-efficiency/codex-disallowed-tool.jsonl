@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thread-fixture"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item-1","type":"command_execution","command":"pwd","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"{\"status\":\"answered\",\"answer\":\"The factory selects token-baseline as its default fallback.\",\"evidence\":[{\"path\":\"src/factory.py\",\"symbol\":\"create_candidate\",\"line\":2,\"claim\":\"The factory returns token-baseline.\"}]}"}}
+{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":0,"output_tokens":8,"reasoning_output_tokens":0}}

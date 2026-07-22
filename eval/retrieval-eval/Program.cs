@@ -14,6 +14,8 @@ public static class Program
           validate --queries <queries.jsonl> [--corpus <dir> | --corpus <repo>=<dir> ...]
           task-score --tasks <manifest.jsonl> --baseline <results.jsonl>
                      --candidate <results.jsonl> --out <aggregate.json>
+          agent-score --tasks <manifest.jsonl> --miller <results.jsonl>
+                      --julie <results.jsonl> --out <aggregate.json>
 
         --corpus with a bare directory applies to every repo; repeat `<repo>=<dir>` for a multi-repo set.
         Exit codes: 0 ok, 1 usage/IO error, 2 validation failed.
@@ -28,6 +30,7 @@ public static class Program
                 "score" => RunScore(ParseOptions(args.Skip(1))),
                 "validate" => RunValidate(ParseOptions(args.Skip(1))),
                 "task-score" => RunTaskScore(ParseOptions(args.Skip(1))),
+                "agent-score" => RunAgentScore(ParseOptions(args.Skip(1))),
                 "--help" or "-h" or "help" => Ok(Usage),
                 _ => Fail($"unknown verb '{args[0]}'\n\n{Usage}"),
             };
@@ -139,6 +142,34 @@ public static class Program
         }
     }
 
+    static int RunAgentScore(Options options)
+    {
+        var tasksPath = options.Require("tasks");
+        var millerPath = options.Require("miller");
+        var juliePath = options.Require("julie");
+        var outPath = options.Require("out");
+
+        try
+        {
+            var tasks = ReadAgentRows<AgentTaskManifestRow>(tasksPath, "task manifest", AgentTaskManifestFields);
+            var miller = ReadAgentRows<AgentRunResult>(millerPath, "Miller results", AgentRunResultFields);
+            var julie = ReadAgentRows<AgentRunResult>(juliePath, "Julie results", AgentRunResultFields);
+            var report = AgentEfficiencyScorer.Score(tasks, miller, julie);
+
+            var directory = Path.GetDirectoryName(Path.GetFullPath(outPath));
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(outPath, JsonSerializer.Serialize(report, Jsonl.Options));
+
+            Console.WriteLine($"tasks={report.TaskCount}  correctness={report.Correctness.Verdict}  efficiency={report.Efficiency.Verdict}  verdict={report.Verdict}");
+            Console.WriteLine("aggregate written");
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+        {
+            return ValidationFail(ex.Message);
+        }
+    }
+
     static List<T> ReadTaskRows<T>(string path, string label, IReadOnlySet<string> allowedFields)
     {
         var lineNumber = 0;
@@ -176,6 +207,46 @@ public static class Program
         }
     }
 
+    static List<T> ReadAgentRows<T>(string path, string label, IReadOnlySet<string> requiredFields)
+    {
+        var lineNumber = 0;
+        try
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                lineNumber++;
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('#')) continue;
+
+                using var document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException($"{label} row {lineNumber} must be a JSON object.");
+
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (!seen.Add(property.Name))
+                        throw new InvalidOperationException($"{label} row {lineNumber} contains duplicate field '{property.Name}'.");
+                    if (!requiredFields.Contains(property.Name))
+                        throw new InvalidOperationException($"{label} row {lineNumber} contains unsupported field '{property.Name}'.");
+                }
+                foreach (var field in requiredFields)
+                    if (!seen.Contains(field))
+                        throw new InvalidOperationException($"{label} row {lineNumber} is missing required field '{field}'.");
+            }
+
+            return Jsonl.ReadAll<T>(path);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidOperationException($"{label} input does not match its schema.", ex);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"{label} row {lineNumber} is not valid JSON.", ex);
+        }
+    }
+
     static string Sha256(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
@@ -195,6 +266,18 @@ public static class Program
     static readonly IReadOnlySet<string> TaskResultFields = new HashSet<string>(StringComparer.Ordinal)
     {
         "task_id", "completed", "duration_ms", "tool_calls", "search_calls", "zero_result_search_calls",
+    };
+
+    static readonly IReadOnlySet<string> AgentTaskManifestFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "task_id", "repo", "language", "workflow_class", "evidence_critical",
+    };
+
+    static readonly IReadOnlySet<string> AgentRunResultFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "task_id", "repetition", "completed", "failure_reason", "duration_ms", "tool_calls",
+        "tool_output_bytes", "tool_output_tokens", "model_input_tokens", "model_output_tokens",
+        "product_errors", "duplicate_calls", "uncited_tool_output_tokens",
     };
 
     sealed record TaskScoreInputs

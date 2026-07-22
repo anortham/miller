@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"thread-fixture"}
+{"type":"turn.started"}
+{"type":"error","message":"required MCP server failed to initialize"}
+{"type":"turn.failed","error":{"message":"required MCP server failed to initialize"}}
