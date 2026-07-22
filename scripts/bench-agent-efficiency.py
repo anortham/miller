@@ -754,6 +754,7 @@ def preflight_run(
             "command",
             "version_command",
             "version",
+            "binary_path",
             "binary_sha256",
             "commit",
             "readiness_commands",
@@ -778,8 +779,11 @@ def preflight_run(
                 f"{product}: environment must contain only {sorted(ALLOWED_PRODUCT_ENVIRONMENT)} with non-empty string values"
             )
         environment = tuple(sorted(environment_value.items()))
-        executable = _resolve_executable(command[0])
-        if _sha256(executable) != spec.get("binary_sha256"):
+        _resolve_executable(command[0])
+        binary_path = Path(spec.get("binary_path", "")).expanduser().resolve()
+        if not binary_path.is_file():
+            raise ValueError(f"{product}: binary_path must name a file")
+        if _sha256(binary_path) != spec.get("binary_sha256"):
             raise ValueError(f"{product}: binary hash mismatch")
         version_command = _string_sequence(spec.get("version_command"), f"{product}.version_command")
         version = _command_output(tuple(version_command), environment=environment_value).strip()

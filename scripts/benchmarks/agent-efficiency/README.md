@@ -35,6 +35,7 @@ not sit in the timed MCP path or alter either product's tools, instructions, or 
       "command": ["/opt/bench/miller", "serve"],
       "version_command": ["/opt/bench/miller", "version"],
       "version": "miller 1.14.0",
+      "binary_path": "/opt/bench/miller.dll",
       "binary_sha256": "<sha256>",
       "commit": "<commit>",
       "environment": {
@@ -58,6 +59,7 @@ not sit in the timed MCP path or alter either product's tools, instructions, or 
       "command": ["/opt/bench/julie-server"],
       "version_command": ["/opt/bench/julie-server", "--version"],
       "version": "julie-server <version>",
+      "binary_path": "/opt/bench/julie-server",
       "binary_sha256": "<sha256>",
       "commit": "<commit>",
       "environment": {

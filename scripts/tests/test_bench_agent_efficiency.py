@@ -121,6 +121,7 @@ def _runtime_identity(product: Path, snapshot_roots=None):
                 for snapshot_id in snapshot_roots
             },
             "readiness": readiness,
+            "binary_path": str(product),
             "binary_sha256": digest,
             "commit": "c" * 40,
             "environment": {
@@ -618,6 +619,12 @@ for line in sys.stdin:
                 product,
                 {"snapshot-001": snapshot_root.name, "snapshot-002": second_root.name},
             )
+            product_artifact = root / "product.dll"
+            product_artifact.write_bytes(b"framework-dependent product code")
+            artifact_digest = hashlib.sha256(product_artifact.read_bytes()).hexdigest()
+            for product_spec in runtime["products"].values():
+                product_spec["binary_path"] = str(product_artifact)
+                product_spec["binary_sha256"] = artifact_digest
             task = _task("dev-001")
             second_task = replace(
                 _task("dev-002"),
@@ -652,6 +659,7 @@ for line in sys.stdin:
                 {"snapshot-001", "snapshot-002"},
             )
             self.assertIn("command_sha256", identity["products"]["miller"])
+            self.assertEqual(artifact_digest, identity["products"]["miller"]["binary_sha256"])
             self.assertEqual(["JULIE_HOME"], identity["products"]["miller"]["environment_keys"])
             self.assertIn("environment_sha256", identity["products"]["miller"])
             self.assertNotIn(str(root / "isolated-julie-home"), json.dumps(identity))
@@ -723,6 +731,7 @@ for line in sys.stdin:
             _write_executable(dead_server, "raise SystemExit(3)\n")
             uninitializable = json.loads(json.dumps(runtime))
             uninitializable["products"]["miller"]["command"] = [str(dead_server)]
+            uninitializable["products"]["miller"]["binary_path"] = str(dead_server)
             uninitializable["products"]["miller"]["binary_sha256"] = hashlib.sha256(dead_server.read_bytes()).hexdigest()
             with self.assertRaisesRegex(ValueError, "MCP"):
                 module.preflight_run(
