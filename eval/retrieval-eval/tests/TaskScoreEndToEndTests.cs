@@ -121,6 +121,20 @@ public sealed class TaskScoreEndToEndTests : IDisposable
     }
 
     [Fact]
+    public void Task_score_rejects_path_like_language_labels_before_they_can_reach_group_output()
+    {
+        var tasks = Write("tasks.jsonl", """{"task_id":"t1","repo":"repo-a","language":"private/csharp","query_profile":"mixed"}""");
+        var result = Write("result.jsonl", """{"task_id":"t1","completed":true,"duration_ms":1,"tool_calls":1,"search_calls":1,"zero_result_search_calls":0}""");
+        var output = Path.Combine(_dir, "aggregate.json");
+
+        var invocation = Invoke(["task-score", "--tasks", tasks, "--baseline", result, "--candidate", result, "--out", output]);
+
+        Assert.Equal(2, invocation.ExitCode);
+        Assert.Equal($"validation failed: Task manifest language must be a non-path label.{Environment.NewLine}", invocation.Stderr);
+        Assert.False(File.Exists(output));
+    }
+
+    [Fact]
     public void Task_score_returns_one_for_usage_or_io_errors()
     {
         Assert.Equal(1, Invoke(["task-score", "--tasks", "missing.jsonl"]).ExitCode);

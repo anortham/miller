@@ -111,8 +111,10 @@ public static class Program
             var tasks = ReadTaskRows<TaskManifestRow>(tasksPath, "task manifest", TaskManifestFields);
             var baseline = ReadTaskRows<TaskArmResult>(baselinePath, "baseline results", TaskResultFields);
             var candidate = ReadTaskRows<TaskArmResult>(candidatePath, "candidate results", TaskResultFields);
-            if (tasks.Any(task => task.Repo.Contains('/') || task.Repo.Contains('\\')))
+            if (tasks.Any(task => IsPathLikeGroupLabel(task.Repo)))
                 throw new InvalidOperationException("Task manifest repo must be a non-path label.");
+            if (tasks.Any(task => IsPathLikeGroupLabel(task.Language)))
+                throw new InvalidOperationException("Task manifest language must be a non-path label.");
             var report = TaskCompletionScorer.Score(tasks, baseline, candidate);
             var aggregate = TaskScoreAggregate.From(
                 report,
@@ -176,6 +178,8 @@ public static class Program
 
     static string Sha256(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    static bool IsPathLikeGroupLabel(string value) => value.Contains('/') || value.Contains('\\');
 
     static int Ok(string message) { Console.WriteLine(message); return 0; }
 
