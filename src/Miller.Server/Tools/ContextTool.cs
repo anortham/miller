@@ -233,9 +233,9 @@ public sealed partial class ContextTool
         }
 
         IReadOnlyList<Candidate> selected = ContextPacker.Pack(packCandidates, tokenBudget);
-        selectedCount = selected.Count;
-
-        return json ? RenderJson(selected) : RenderCompact(selected);
+        Func<IReadOnlyList<Candidate>, string> renderer = json ? RenderJson : RenderCompact;
+        Func<IReadOnlyList<Candidate>, string> boundedRenderer = json ? RenderBoundedJson : RenderCompact;
+        return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
     internal static string RunReferenceAware(
@@ -276,8 +276,42 @@ public sealed partial class ContextTool
             packCandidates.Add(new PackCandidate<ReferenceContextItem>(item, (int)TokenEstimator.Count(ReferenceCostLine(item))));
 
         IReadOnlyList<ReferenceContextItem> selected = ContextPacker.Pack(packCandidates, tokenBudget);
-        selectedCount = selected.Count;
-        return json ? RenderReferenceJson(selected) : RenderReferenceCompact(selected);
+        Func<IReadOnlyList<ReferenceContextItem>, string> renderer = json ? RenderReferenceJson : RenderReferenceCompact;
+        Func<IReadOnlyList<ReferenceContextItem>, string> boundedRenderer = json ? RenderBoundedReferenceJson : RenderReferenceCompact;
+        return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
+    }
+
+    private static string RenderWithinBudget<T>(
+        IReadOnlyList<T> initiallySelected,
+        int tokenBudget,
+        Func<IReadOnlyList<T>, string> renderer,
+        Func<IReadOnlyList<T>, string> boundedRenderer,
+        out int selectedCount)
+    {
+        if (tokenBudget <= 0)
+        {
+            selectedCount = 0;
+            return renderer(Array.Empty<T>());
+        }
+
+        string fullOutput = renderer(initiallySelected);
+        if (TokenEstimator.Count(fullOutput) <= tokenBudget)
+        {
+            selectedCount = initiallySelected.Count;
+            return fullOutput;
+        }
+
+        var retained = new List<T>(initiallySelected);
+        while (true)
+        {
+            string output = boundedRenderer(retained);
+            if (TokenEstimator.Count(output) <= tokenBudget || retained.Count == 0)
+            {
+                selectedCount = retained.Count;
+                return output;
+            }
+            retained.RemoveAt(retained.Count - 1);
+        }
     }
 
     /// <summary>One member of the context bundle: a symbol and its hop distance from the nearest seed (0 = seed).</summary>
@@ -709,7 +743,13 @@ public sealed partial class ContextTool
         return sb.ToString();
     }
 
-    private static string RenderJson(IReadOnlyList<Candidate> selected)
+    private static string RenderJson(IReadOnlyList<Candidate> selected) =>
+        RenderJson(selected, boundOptionalFields: false);
+
+    private static string RenderBoundedJson(IReadOnlyList<Candidate> selected) =>
+        RenderJson(selected, boundOptionalFields: true);
+
+    private static string RenderJson(IReadOnlyList<Candidate> selected, bool boundOptionalFields)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer,
@@ -728,7 +768,9 @@ public sealed partial class ContextTool
                 w.WriteNumber("line", s.StartLine);
                 w.WriteNumber("hop", c.Hop);
                 if (s.Signature is null) w.WriteNull("signature");
-                else w.WriteString("signature", s.Signature);
+                else w.WriteString("signature", boundOptionalFields
+                    ? Truncate(s.Signature, ToolRenderLimits.SignatureMaxLength)
+                    : s.Signature);
                 w.WriteString("symbol_id", s.SymbolId);
                 w.WriteEndObject();
             }
@@ -800,7 +842,15 @@ public sealed partial class ContextTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string RenderReferenceJson(IReadOnlyList<ReferenceContextItem> selected)
+    private static string RenderReferenceJson(IReadOnlyList<ReferenceContextItem> selected) =>
+        RenderReferenceJson(selected, boundOptionalFields: false);
+
+    private static string RenderBoundedReferenceJson(IReadOnlyList<ReferenceContextItem> selected) =>
+        RenderReferenceJson(selected, boundOptionalFields: true);
+
+    private static string RenderReferenceJson(
+        IReadOnlyList<ReferenceContextItem> selected,
+        bool boundOptionalFields)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = new Utf8JsonWriter(buffer,
@@ -822,7 +872,9 @@ public sealed partial class ContextTool
                 if (item.Hop is int hop)
                     w.WriteNumber("hop", hop);
                 if (item.Signature is null) w.WriteNull("signature");
-                else w.WriteString("signature", item.Signature);
+                else w.WriteString("signature", boundOptionalFields
+                    ? Truncate(item.Signature, ToolRenderLimits.SignatureMaxLength)
+                    : item.Signature);
                 if (item.SymbolId is not null)
                     w.WriteString("symbol_id", item.SymbolId);
                 if (item.ContainingSymbolId is not null)
@@ -836,7 +888,9 @@ public sealed partial class ContextTool
                 if (item.LineEnd is int lineEnd)
                     w.WriteNumber("line_end", lineEnd);
                 if (item.Snippet is not null)
-                    w.WriteString("snippet", item.Snippet);
+                    w.WriteString("snippet", boundOptionalFields
+                        ? Truncate(item.Snippet, ToolRenderLimits.SignatureMaxLength)
+                        : item.Snippet);
                 w.WriteEndObject();
             }
             w.WriteEndArray();

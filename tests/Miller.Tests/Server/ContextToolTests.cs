@@ -4,6 +4,7 @@ using Miller.Core.Graph;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Tests;
 using Miller.Tests.Indexing;
@@ -164,6 +165,43 @@ public sealed class ContextToolTests
         return (index, new SmartTargetResolver(index));
     }
 
+    private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildRenderBudgetFixture()
+    {
+        const string rootId = "00000000000000000000000000000001";
+        string signature = "method BudgetRoot(" + new string('x', 5000) + ")";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, rootId, "BudgetRoot", signature, "method", "csharp", "src/BudgetRoot.cs", 1, 10, null, false),
+        };
+        var edges = new List<GraphEdge>();
+        for (int i = 1; i <= 8; i++)
+        {
+            string id = (i + 1).ToString("D32");
+            symbols.Add(new IndexedSymbol(i, id, "BudgetNeighbour" + i, signature, "method", "csharp",
+                "src/BudgetNeighbour" + i + ".cs", i + 1, i + 1, null, false));
+            edges.Add(new GraphEdge(rootId, id, "uses"));
+        }
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+        return (index, new SmartTargetResolver(index));
+    }
+
+    private static void AssertRenderedCount(string output, bool json, int selectedCount)
+    {
+        if (json)
+        {
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal(selectedCount, document.RootElement.GetProperty("bundle").GetArrayLength());
+        }
+        else if (selectedCount == 0)
+        {
+            Assert.Equal("Bundle empty — raise token_budget.", output);
+        }
+        else
+        {
+            Assert.Contains($"# context bundle ({selectedCount})", output, StringComparison.Ordinal);
+        }
+    }
+
     // ---- seeds + expansion ----
 
     [Fact]
@@ -255,21 +293,25 @@ public sealed class ContextToolTests
     {
         var (index, resolver) = BuildFixture();
 
-        // A budget large enough for one or two lines but not the whole cluster. The pack honours priority order
-        // (the search seed first), so the bundle is non-empty but strictly smaller than the unbounded one.
         string full = ContextTool.Run(index, resolver,
-            query: "OrderService", tokenBudget: 100000, maxHops: 1,
-            entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int fullCount, out _);
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int fullCount, out _);
 
-        // Each candidate render line costs ~16–20 tokens (chars/4). A budget of 25 admits the top-priority seed
-        // (one line) but not the whole cluster — a deterministic truncation independent of the exact estimate.
+        string seedOnly = ContextTool.Run(index, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int seedCount, out _);
+        int tinyBudget = checked((int)TokenEstimator.Count(seedOnly));
+
         string tiny = ContextTool.Run(index, resolver,
-            query: "OrderService", tokenBudget: 25, maxHops: 1,
-            entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int tinyCount, out _);
+            query: "zzz no lexical match zzz", tokenBudget: tinyBudget, maxHops: 1,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out int tinyCount, out _);
 
-        Assert.True(tinyCount >= 1, "a tiny but non-zero budget should still admit the highest-priority seed.");
-        Assert.True(tinyCount < fullCount, "a tiny budget must truncate the bundle below the unbounded count.");
-        Assert.Contains("OrderService", tiny); // the top-priority seed (exact-name BM25 boost) survives
+        Assert.Equal(1, seedCount);
+        Assert.Equal(seedOnly, tiny);
+        Assert.Equal(seedCount, tinyCount);
+        Assert.True(tinyCount < fullCount);
+        Assert.True(TokenEstimator.Count(tiny) <= tinyBudget);
+        Assert.Contains("OrderService", tiny, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -282,6 +324,47 @@ public sealed class ContextToolTests
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
         Assert.Equal(0, count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_RenderedOutputFitsPositiveTokenBudget(bool json)
+    {
+        var (index, resolver) = BuildRenderBudgetFixture();
+
+        foreach (int tokenBudget in new[] { 16, 32, 64, 128, 256, 512 })
+        {
+            string output = ContextTool.Run(index, resolver,
+                query: "BudgetRoot", tokenBudget, maxHops: 1,
+                entrySymbols: null, failingTest: null, stackTrace: null, json, out int selectedCount, out _);
+
+            Assert.True(TokenEstimator.Count(output) <= tokenBudget);
+            AssertRenderedCount(output, json, selectedCount);
+            if (selectedCount > 0)
+                Assert.Contains("BudgetRoot", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Run_Json_PreservesFullSignatureWhenItFitsAndBoundsItWhenNeeded()
+    {
+        var (index, resolver) = BuildRenderBudgetFixture();
+
+        string full = ContextTool.Run(index, resolver,
+            query: "BudgetRoot", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: null, failingTest: null, stackTrace: null, json: true, out _, out _);
+        string bounded = ContextTool.Run(index, resolver,
+            query: "BudgetRoot", tokenBudget: 512, maxHops: 0,
+            entrySymbols: null, failingTest: null, stackTrace: null, json: true, out int boundedCount, out _);
+
+        using var fullDocument = JsonDocument.Parse(full);
+        using var boundedDocument = JsonDocument.Parse(bounded);
+        Assert.Equal(5019, fullDocument.RootElement.GetProperty("bundle")[0].GetProperty("signature").GetString()!.Length);
+        Assert.Equal(ToolRenderLimits.SignatureMaxLength,
+            boundedDocument.RootElement.GetProperty("bundle")[0].GetProperty("signature").GetString()!.Length);
+        Assert.Equal(boundedCount, boundedDocument.RootElement.GetProperty("bundle").GetArrayLength());
+        Assert.True(TokenEstimator.Count(bounded) <= 512);
     }
 
     // ---- max_hops clamp ----
@@ -736,6 +819,84 @@ public sealed class ContextToolTests
 
         Assert.Equal(0, count);
         Assert.Equal("Bundle empty — raise token_budget.", output);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunReferenceAware_RenderedOutputFitsPositiveTokenBudget(bool json)
+    {
+        var (index, resolver) = BuildFixture();
+        string longSnippet = new('x', 5000);
+
+        foreach (int tokenBudget in new[] { 16, 32, 64, 128, 256, 512 })
+        {
+            string output = ContextTool.RunReferenceAware(
+                index, index.Graph, resolver,
+                query: "zzz no lexical match zzz", tokenBudget, maxHops: 0,
+                entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+                referenceDepth: 1, excludeTests: false, json,
+                readReferences: _ => Enumerable.Range(1, 8)
+                    .Select(i => new SymbolRef("Reference" + i, "type_usage", "src/Reference" + i + ".cs", i, ServiceId))
+                    .ToArray(),
+                readCallees: _ => Array.Empty<SymbolRef>(),
+                readContentChunks: (_, _) => new[]
+                {
+                    SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,
+                        containingSymbolName: "OrderService"),
+                },
+                out int selectedCount, out _);
+
+            Assert.True(TokenEstimator.Count(output) <= tokenBudget);
+            AssertRenderedCount(output, json, selectedCount);
+            if (selectedCount > 0)
+                Assert.Contains("OrderService", output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void RunReferenceAware_Json_PreservesFullSnippetWhenItFitsAndBoundsItWhenNeeded()
+    {
+        var (index, resolver) = BuildFixture();
+        string longSnippet = new('x', 5000);
+
+        string full = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 0, excludeTests: false, json: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => new[]
+            {
+                SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,
+                    containingSymbolName: "OrderService"),
+            },
+            out _, out _);
+        string bounded = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 512, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 0, excludeTests: false, json: true,
+            readReferences: _ => Array.Empty<SymbolRef>(),
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => new[]
+            {
+                SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,
+                    containingSymbolName: "OrderService"),
+            },
+            out int boundedCount, out _);
+
+        using var fullDocument = JsonDocument.Parse(full);
+        using var boundedDocument = JsonDocument.Parse(bounded);
+        JsonElement fullChunk = fullDocument.RootElement.GetProperty("bundle").EnumerateArray()
+            .Single(item => item.GetProperty("item_type").GetString() == "content_chunk");
+        JsonElement boundedChunk = boundedDocument.RootElement.GetProperty("bundle").EnumerateArray()
+            .Single(item => item.GetProperty("item_type").GetString() == "content_chunk");
+        Assert.Equal(5000, fullChunk.GetProperty("snippet").GetString()!.Length);
+        Assert.Equal(ToolRenderLimits.SignatureMaxLength, boundedChunk.GetProperty("snippet").GetString()!.Length);
+        Assert.Equal(boundedCount, boundedDocument.RootElement.GetProperty("bundle").GetArrayLength());
+        Assert.True(TokenEstimator.Count(bounded) <= 512);
     }
 
     // ---- routed wrapper / ctor shape ----
