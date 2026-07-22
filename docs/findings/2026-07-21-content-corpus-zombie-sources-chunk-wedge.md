@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-21 (found during first-night bge dogfooding on the primary miller workspace)
 **Status:** FIXED — root cause corrected below (the original three-part analysis over-attributed);
-`ContentCorpusSidecar.EnsureBuilt` is now hash-aware (same-day fix, TDD)
+the corpus freshness check and chunk-cursor source scope are now hash-safe (same-day fixes, TDD)
 **Severity:** high for the semantic docs lane (chunk vectors never converge); invisible otherwise
 
 ## Symptom
@@ -60,7 +60,9 @@ check: every active workspace-kind corpus source must exist in symbols.db `files
 normalized hash, else the corpus rebuilds. External/web imports are exempt (no symbols.db
 counterpart by contract). Both wedge directions (hash moved in place; row dropped) are covered by
 tests in `ContentCorpusSidecarTests`, plus a guard that external sources never force rebuilds. The
-chunk gate is intentionally unchanged — its deferral is now transient by construction.
+chunk gate's hash comparison now reads only workspace docs/config, matching the kinds it actually
+embeds; external/web imports are preserved in the corpus without being compared to symbols.db.
+`VectorConvergePortScaleTests` covers the imported-source regression.
 
 Remaining follow-up (julie-extractors side): consider excluding build-artifact directories
 (`TestResults/`, `bin/`, `obj/`) from scan scope — churn there still causes corpus rebuild work,

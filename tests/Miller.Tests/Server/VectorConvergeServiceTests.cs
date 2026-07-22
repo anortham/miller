@@ -105,6 +105,30 @@ public sealed class VectorConvergePortScaleTests : IDisposable
     }
 
     [Fact]
+    public void ChunkFacts_ImportedExternalAndWebSources_AreExcludedFromTheSymbolsHashGate()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(workspace.CanonicalExtractDbPath!);
+        Assert.True(new ContentCorpusSidecar().EnsureBuilt(
+            workspace.CanonicalExtractDbPath!, workspace.WorkspaceRoot, "workspace-scale", revision: 3));
+
+        string logPath = Path.Combine(_root, "build.log");
+        File.WriteAllText(logPath, "external build output");
+        string pagePath = Path.Combine(_root, "page.md");
+        File.WriteAllText(pagePath, "external web page");
+        var store = new ContentCorpusExternalStore();
+        store.Import(contentDbPath, logPath);
+        store.ImportMarkdown(contentDbPath, pagePath, "https://example.test/page");
+
+        using IVectorConvergePort port = SqliteVectorConvergePort.TryOpen(workspace)!;
+
+        Assert.Empty(port.ChunkFacts(targetRevision: 3).Sources);
+    }
+
+    [Fact]
     public void TryOpen_WithoutThePinnedExtension_ReturnsNullRatherThanThrowing()
     {
         Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, null);

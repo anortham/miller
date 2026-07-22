@@ -1371,7 +1371,8 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             using SqliteCommand rows = content.CreateCommand();
             rows.CommandText =
                 "SELECT path, content_hash FROM content_sources " +
-                "WHERE status = 'active' AND path IS NOT NULL AND path != ''";
+                "WHERE status = 'active' AND path IS NOT NULL AND path != '' " +
+                $"AND content_kind IN ({DocsKindPlaceholders(rows)})";
             using SqliteDataReader sourceReader = rows.ExecuteReader();
             while (sourceReader.Read())
                 sources.Add(new ChunkSourceHash(sourceReader.GetString(0), sourceReader.GetString(1), null));
