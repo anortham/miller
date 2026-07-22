@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Miller.Indexing.Semantic;
 using Xunit;
 
@@ -47,6 +48,26 @@ public sealed class MillerSemanticContractTests
             "Instruct: Given a code search query, retrieve the code or documentation that answers it\nQuery: ",
             pin.QueryInstruction);
         Assert.Equal("", pin.DocumentInstruction);
+    }
+
+    [Fact]
+    public void BenchPinTiers_MatchDefaultAndFallbackEncoders()
+    {
+        string pinsPath = Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "eval",
+            "model-bench",
+            "bench-pins.json");
+        using JsonDocument pins = JsonDocument.Parse(File.ReadAllText(pinsPath));
+        Dictionary<string, string> tiers = pins.RootElement.GetProperty("candidates")
+            .EnumerateArray()
+            .ToDictionary(
+                candidate => candidate.GetProperty("id").GetString()!,
+                candidate => candidate.GetProperty("tier").GetString()!,
+                StringComparer.Ordinal);
+
+        Assert.Equal("default", tiers[MillerSemanticContract.DefaultEncoder.ModelId]);
+        Assert.Equal("fallback", tiers[MillerSemanticContract.FallbackEncoder.ModelId]);
     }
 
     [Fact]

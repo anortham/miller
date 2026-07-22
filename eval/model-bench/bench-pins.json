@@ -21,7 +21,7 @@
   "candidates": [
     {
       "id": "qwen3-0.6b-f16",
-      "tier": "default",
+      "tier": "fallback",
       "model": "Qwen3-Embedding-0.6B",
       "hf_repo": "Qwen/Qwen3-Embedding-0.6B-GGUF",
       "hf_repo_owner": "Qwen (official model org)",
@@ -43,7 +43,7 @@
     },
     {
       "id": "bge-small-en-v1.5-f32",
-      "tier": "fallback",
+      "tier": "default",
       "model": "bge-small-en-v1.5",
       "hf_repo": "CompendiumLabs/bge-small-en-v1.5-gguf",
       "hf_repo_owner": "CompendiumLabs (community conversion of BAAI/bge-small-en-v1.5)",
