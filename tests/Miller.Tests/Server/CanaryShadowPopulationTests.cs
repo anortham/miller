@@ -87,6 +87,33 @@ public sealed class CanaryShadowPopulationTests : IDisposable
     }
 
     [Fact]
+    public void Decision_SamplesIdentifierBucketsAtOrAboveTenAndServesLexicalBytes()
+    {
+        RecordingSymbolLookupIndex index = ThreeSymbolIndex();
+        var probe = new InvocationCounter();
+
+        SearchTool.SymbolCanaryOutcome outcome = RunShadow(
+            index,
+            UnsampledWorkspace,
+            probe.Wrap(ServedHybrid("sym-c", "sym-b", "sym-a")),
+            CanaryMode.Decision);
+
+        Assert.Equal(51, CanaryAssignment.Bucket(
+            CanaryAssignment.IdentifierExperimentId,
+            UnsampledWorkspace,
+            UtcDate,
+            CanaryQueryClass.Identifier));
+        Assert.Null(outcome.Facts);
+        Assert.NotNull(outcome.ShadowFacts);
+        Assert.Equal(1, probe.Count);
+        Assert.Equal(LexicalOutput(index), outcome.Result.Output);
+
+        JsonElement metadata = Stamp(outcome.ShadowFacts!, CanaryMode.Decision);
+        Assert.Equal(3, metadata.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(51, metadata.GetProperty("canary_bucket").GetInt32());
+    }
+
+    [Fact]
     public void CanaryOff_RunsNoShadowWorkAndRecordsNothing()
     {
         RecordingSymbolLookupIndex index = ThreeSymbolIndex();
@@ -102,14 +129,16 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         Assert.Equal(0, probe.Count);
     }
 
-    [Fact]
-    public void SemanticDisabled_IsInertLikeCanaryOff_RunsNoShadowWorkAndRecordsNothing()
+    [Theory]
+    [InlineData(CanaryMode.On)]
+    [InlineData(CanaryMode.Decision)]
+    public void SemanticDisabled_IsInertLikeCanaryOff_RunsNoShadowWorkAndRecordsNothing(CanaryMode mode)
     {
         RecordingSymbolLookupIndex index = ThreeSymbolIndex();
         var probe = new InvocationCounter();
 
         SearchTool.SymbolCanaryOutcome outcome = SearchTool.RunSymbolsWithCanary(
-            index, SymbolRoute, Request(IdentifierQuery), CanaryMode.On, "symbol", semanticDisabled: true,
+            index, SymbolRoute, Request(IdentifierQuery), mode, "symbol", semanticDisabled: true,
             SampledWorkspace, UtcDate, () => throw new InvalidOperationException("probe must not run when semantic is off"),
             foreignWorkspace: false, treatmentArmFactory: null, probe.Wrap(ServedHybrid("sym-a")));
 
@@ -397,9 +426,10 @@ public sealed class CanaryShadowPopulationTests : IDisposable
     private static SearchTool.SymbolCanaryOutcome RunShadow(
         ISymbolLookupIndex index,
         string workspaceId,
-        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, SearchTool.ShadowExecution>? runner) =>
+        Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, SearchTool.ShadowExecution>? runner,
+        CanaryMode mode = CanaryMode.On) =>
         SearchTool.RunSymbolsWithCanary(
-            index, SymbolRoute, Request(IdentifierQuery), CanaryMode.On, "symbol", semanticDisabled: false,
+            index, SymbolRoute, Request(IdentifierQuery), mode, "symbol", semanticDisabled: false,
             workspaceId, UtcDate, () => "ready", foreignWorkspace: false, treatmentArmFactory: null, runner);
 
     private static Func<ISymbolLookupIndex, SearchRoute, SearchRouteExecutionRequest, SearchTool.ShadowExecution> RealShadow(
@@ -435,12 +465,12 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         FusionProfile = MillerSemanticContract.PinnedIdentity(Pin).FusionProfile,
     };
 
-    private JsonElement Stamp(CanaryShadowFacts facts)
+    private JsonElement Stamp(CanaryShadowFacts facts, CanaryMode mode = CanaryMode.On)
     {
         using TelemetryLedger ledger =
             TelemetryLedger.Open(Path.Combine(_temp, "telemetry-" + Guid.NewGuid() + ".db"), "ws-shadow", _temp);
         using TelemetryScope scope = ledger.Measure("search", "symbol");
-        CanaryTelemetry.StampShadow(scope, facts);
+        CanaryTelemetry.StampShadow(scope, mode, facts);
         return JsonDocument.Parse(scope.MetadataJson).RootElement.Clone();
     }
 

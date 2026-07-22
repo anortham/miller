@@ -150,6 +150,23 @@ public sealed class CanaryContentSearchTests : IDisposable
     }
 
     [Fact]
+    public void Decision_PreservesContentAssignmentAndServedBytesWhileStampingV3()
+    {
+        ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"));
+
+        SearchTool.ContentCanaryOutcome v2 = Run(index, ConceptualQuery, ControlWorkspace, treatmentArm: null);
+        SearchTool.ContentCanaryOutcome v3 = Run(
+            index, ConceptualQuery, ControlWorkspace, treatmentArm: null, mode: CanaryMode.Decision);
+
+        Assert.Equal(CanaryArm.Control, Arm(v2.Facts!));
+        Assert.Equal(CanaryArm.Control, Arm(v3.Facts!));
+        Assert.Equal(v2.Result.Output, v3.Result.Output);
+
+        JsonElement metadata = Stamp(v3, CanaryMode.Decision);
+        Assert.Equal(3, metadata.GetProperty("canary_contract_version").GetInt32());
+    }
+
+    [Fact]
     public void EligibleSemanticShadow_ServesLexicalAndStampsNoHybridExperimentArm()
     {
         ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"));
@@ -488,14 +505,16 @@ public sealed class CanaryContentSearchTests : IDisposable
         Assert.False(metadata.TryGetProperty("canary_result_path_hashes", out _));
     }
 
-    [Fact]
-    public void SemanticDisabled_IsInertLikeCanaryOff_NoProbeNoFactsByteIdentical()
+    [Theory]
+    [InlineData(CanaryMode.On)]
+    [InlineData(CanaryMode.Decision)]
+    public void SemanticDisabled_IsInertLikeCanaryOff_NoProbeNoFactsByteIdentical(CanaryMode mode)
     {
         ITextContentSearchIndex index = ContentIndex(Docs("docs/a.md", 1, "alpha"), Docs("docs/b.md", 2, "beta"));
 
         SearchTool.ContentCanaryOutcome outcome = SearchTool.RunContentWithCanary(
             index, ConceptualQuery, 10, json: false, compactBanner: null, filePattern: null, language: null,
-            suggestionLookup: null, productionRerank: null, CanaryMode.On, "content", semanticDisabled: true,
+            suggestionLookup: null, productionRerank: null, mode, "content", semanticDisabled: true,
             ControlWorkspace, Root, UtcDate,
             () => throw new InvalidOperationException("the vector probe must not run when semantic is off"),
             foreignWorkspace: false, treatmentArmFactory: null);
@@ -541,14 +560,14 @@ public sealed class CanaryContentSearchTests : IDisposable
     private static string Arm(CanaryCallFacts facts) => CanaryAssignment.ResolveArm(
         CanaryAssignment.Bucket(CanaryAssignment.HybridExperimentId, facts.WorkspaceId, facts.UtcDate, facts.QueryClass));
 
-    private JsonElement Stamp(SearchTool.ContentCanaryOutcome outcome)
+    private JsonElement Stamp(SearchTool.ContentCanaryOutcome outcome, CanaryMode mode = CanaryMode.On)
     {
         using TelemetryLedger ledger =
             TelemetryLedger.Open(Path.Combine(_temp, "telemetry-" + Guid.NewGuid() + ".db"), "ws-content", _temp);
         using TelemetryScope scope = ledger.Measure("search", "content");
         SearchTool.StampContentCanary(
             scope,
-            CanaryMode.On,
+            mode,
             outcome.Facts!,
             outcome.ResultPathHashes,
             outcome.ResultHashTruncated,

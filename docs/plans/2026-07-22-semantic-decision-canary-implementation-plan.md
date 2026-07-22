@@ -87,11 +87,11 @@
 **Approach:** Keep the profile a small immutable policy object beside telemetry, not conditionals scattered through `SearchTool`. Preserve existing v2 tests as golden behavior and add v3 tests proving every identifier unit is sampled while identifiers still serve lexical bytes. The v3 contract inherits v2 and lists only replacements/additions.
 
 **Acceptance criteria:**
-- [ ] `CanaryActivation.Parse("decision")` selects `CanaryMode.Decision`; all existing values retain current results.
-- [ ] V2 stamps contract 2 and samples exactly bucket `<10`; v3 stamps contract 3 and samples every identifier unit.
-- [ ] V3 does not change hybrid arm assignment, identifier served results, or semantic-off side effects.
-- [ ] Privacy tests prove no query/path text appears in either v2 or v3 metadata.
-- [ ] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
+- [x] `CanaryActivation.Parse("decision")` selects `CanaryMode.Decision`; all existing values retain current results.
+- [x] V2 stamps contract 2 and samples exactly bucket `<10`; v3 stamps contract 3 and samples every identifier unit.
+- [x] V3 does not change hybrid arm assignment, identifier served results, or semantic-off side effects.
+- [x] Privacy tests prove no query/path text appears in either v2 or v3 metadata.
+- [x] Worker-scope verification passes and the change is committed with `serial-worker-commit`.
 
 ### Task 2: Version-selected local export and gate
 

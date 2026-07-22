@@ -208,6 +208,29 @@ public sealed class CanarySearchTests : IDisposable
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).CorpusGeneration, facts.CorpusGeneration);
     }
 
+    [Theory]
+    [InlineData(ControlWorkspace, CanaryArm.Control)]
+    [InlineData(TreatmentWorkspace, CanaryArm.Treatment)]
+    public void Decision_PreservesHybridAssignmentAndLexicalResultWithoutAnArm(string workspaceId, string expectedArm)
+    {
+        RecordingSymbolLookupIndex index = TwoSymbolIndex();
+        SearchRouteExecutionRequest request = Request(ConceptualQuery, json: false);
+
+        SearchTool.SymbolCanaryOutcome v2 = SearchTool.RunSymbolsWithCanary(
+            index, SymbolRoute, request, CanaryMode.On, "symbol", semanticDisabled: false,
+            workspaceId, UtcDate, () => "ready", foreignWorkspace: false, treatmentArmFactory: null);
+        SearchTool.SymbolCanaryOutcome v3 = SearchTool.RunSymbolsWithCanary(
+            index, SymbolRoute, request, CanaryMode.Decision, "symbol", semanticDisabled: false,
+            workspaceId, UtcDate, () => "ready", foreignWorkspace: false, treatmentArmFactory: null);
+
+        Assert.Equal(expectedArm, Arm(v2.Facts!));
+        Assert.Equal(expectedArm, Arm(v3.Facts!));
+        Assert.Equal(v2.Result.Output, v3.Result.Output);
+
+        JsonElement metadata = Stamp(v3.Facts!, mode: CanaryMode.Decision);
+        Assert.Equal(3, metadata.GetProperty("canary_contract_version").GetInt32());
+    }
+
     [Fact]
     public async Task TreatmentUnit_WhenTheArtifactVanishesMidQuery_ServesLexicalAndRecordsTheFallback()
     {
@@ -450,12 +473,13 @@ public sealed class CanarySearchTests : IDisposable
 
     private JsonElement Stamp(
         CanaryCallFacts facts,
-        SearchServingPolicy servingPolicy = SearchServingPolicy.Lexical)
+        SearchServingPolicy servingPolicy = SearchServingPolicy.Lexical,
+        CanaryMode mode = CanaryMode.On)
     {
         using TelemetryLedger ledger =
             TelemetryLedger.Open(Path.Combine(_temp, "telemetry-" + Guid.NewGuid() + ".db"), "ws-canary", _temp);
         using TelemetryScope scope = ledger.Measure("search", "auto");
-        SearchTool.StampSymbolCanary(scope, CanaryMode.On, facts, servingPolicy);
+        SearchTool.StampSymbolCanary(scope, mode, facts, servingPolicy);
         return JsonDocument.Parse(scope.MetadataJson).RootElement.Clone();
     }
 

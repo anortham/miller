@@ -4,17 +4,17 @@ using System.Text;
 
 namespace Miller.Server.Telemetry;
 
-/// <summary>Two-state activation of the canary write path (<c>canary-telemetry-v1</c> §Activation).</summary>
+/// <summary>Activation profile for the semantic canary write path.</summary>
 public enum CanaryMode
 {
     Off,
     On,
+    Decision,
 }
 
 /// <summary>
-/// <c>MILLER_SEMANTIC_CANARY</c>: <c>off | on</c>, default off, with <c>0</c>/<c>1</c> aliases. Off means no
-/// assignment is computed and no <c>canary_*</c> key is written — the absence of <c>canary_arm</c> is the
-/// definitive "not in the experiment" signal.
+/// <c>MILLER_SEMANTIC_CANARY</c>: <c>off | on | decision</c>, default off, with <c>0</c>/<c>1</c> aliases.
+/// Off means no assignment is computed and no <c>canary_*</c> key is written.
 /// </summary>
 public static class CanaryActivation
 {
@@ -25,6 +25,7 @@ public static class CanaryActivation
     public static CanaryMode Parse(string? value) => value?.Trim().ToLowerInvariant() switch
     {
         "on" or "1" => CanaryMode.On,
+        "decision" => CanaryMode.Decision,
         _ => CanaryMode.Off,
     };
 }
@@ -335,13 +336,13 @@ public sealed record CanaryShadowFacts
 }
 
 /// <summary>
-/// Writes the <c>canary-telemetry-v2</c> metadata keys onto the ordinary tool-call row. The canary never writes
+/// Writes metadata for the selected canary contract onto the ordinary tool-call row. The canary never writes
 /// rows of its own and adds no column: every field lands in <c>metadata_json</c> under the <c>canary_</c> prefix.
 /// Persisted values are enums, counters, opaque build identifiers and digests — never query text and never a path.
 /// </summary>
 public static class CanaryTelemetry
 {
-    public const int ContractVersion = 2;
+    public const int ContractVersion = CanaryContractProfile.V2ContractVersion;
 
     private const int ResultHashCap = 10;
 
@@ -353,7 +354,8 @@ public static class CanaryTelemetry
         if (mode == CanaryMode.Off)
             return;
 
-        scope.SetMetadata("canary_contract_version", ContractVersion);
+        CanaryContractProfile contractProfile = CanaryContractProfile.For(mode);
+        scope.SetMetadata("canary_contract_version", contractProfile.ContractVersion);
         scope.SetMetadata("canary_experiment_id", facts.ExperimentId);
         scope.SetMetadata("canary_assignment_version", CanaryAssignment.AssignmentVersion);
         scope.SetMetadata("canary_query_class", facts.QueryClass);
@@ -399,18 +401,25 @@ public static class CanaryTelemetry
     }
 
     /// <summary>
-    /// Writes the shadow row of a sampled identifier call (<c>canary-telemetry-v1</c> §Shadow Population): the
+    /// Writes the shadow row of a sampled identifier call: the
     /// standard version/class keys under the non-inferiority experiment id, <c>arm=shadow</c>, the bucket, the
     /// status, the generation identity when vectors were opened, and — only on the <c>ok</c> path — the three
     /// comparison counters. Backend/warmth/latency and lexical/semantic counters are deliberately absent: a
     /// shadow row is not an eligible row, and the field table scopes those to eligible rows.
     /// </summary>
-    public static void StampShadow(TelemetryScope scope, CanaryShadowFacts facts)
+    public static void StampShadow(TelemetryScope scope, CanaryShadowFacts facts) =>
+        StampShadow(scope, CanaryMode.On, facts);
+
+    public static void StampShadow(TelemetryScope scope, CanaryMode mode, CanaryShadowFacts facts)
     {
         ArgumentNullException.ThrowIfNull(scope);
         ArgumentNullException.ThrowIfNull(facts);
 
-        scope.SetMetadata("canary_contract_version", ContractVersion);
+        if (mode == CanaryMode.Off)
+            return;
+
+        CanaryContractProfile contractProfile = CanaryContractProfile.For(mode);
+        scope.SetMetadata("canary_contract_version", contractProfile.ContractVersion);
         scope.SetMetadata("canary_experiment_id", CanaryAssignment.IdentifierExperimentId);
         scope.SetMetadata("canary_assignment_version", CanaryAssignment.AssignmentVersion);
         scope.SetMetadata("canary_query_class", facts.QueryClass);

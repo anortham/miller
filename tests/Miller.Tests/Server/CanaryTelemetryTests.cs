@@ -5,9 +5,8 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// Pins the canary-telemetry-v2 write path: verbatim field names, complete enums, the frozen assignment
-/// derivation, the served-result hash arrays, and the privacy rule that persisted telemetry carries no query
-/// text. P2 ships the plumbing only — the arm is the constant <c>control</c> until P5 activates the experiment.
+/// Pins the v2 write path and v3 decision profile: field names, enums, assignment, served-result digests, and
+/// the privacy rule that persisted telemetry carries no query or path text.
 /// </summary>
 public sealed class CanaryTelemetryTests : IDisposable
 {
@@ -23,7 +22,35 @@ public sealed class CanaryTelemetryTests : IDisposable
         Assert.Equal(CanaryMode.Off, CanaryActivation.Parse("0"));
         Assert.Equal(CanaryMode.On, CanaryActivation.Parse("on"));
         Assert.Equal(CanaryMode.On, CanaryActivation.Parse("1"));
+        Assert.Equal(CanaryMode.Decision, CanaryActivation.Parse("decision"));
         Assert.Equal(CanaryMode.Off, CanaryActivation.Parse("wat"));
+    }
+
+    [Fact]
+    public void ContractProfile_PreservesV2AndSelectsDecisionV3()
+    {
+        CanaryContractProfile v2 = CanaryContractProfile.For(CanaryMode.On);
+        CanaryContractProfile v3 = CanaryContractProfile.For(CanaryMode.Decision);
+
+        Assert.Equal(2, v2.ContractVersion);
+        Assert.Equal(10, v2.IdentifierShadowPercent);
+        Assert.Equal(3, v3.ContractVersion);
+        Assert.Equal(100, v3.IdentifierShadowPercent);
+    }
+
+    [Fact]
+    public void Decision_StampsContractThreeWithoutChangingTheHybridAssignment()
+    {
+        CanaryCallFacts call = Call();
+
+        JsonElement v2 = Stamp(call, CanaryMode.On);
+        JsonElement v3 = Stamp(call, CanaryMode.Decision);
+
+        Assert.Equal(2, v2.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(3, v3.GetProperty("canary_contract_version").GetInt32());
+        Assert.Equal(v2.GetProperty("canary_experiment_id").GetString(), v3.GetProperty("canary_experiment_id").GetString());
+        Assert.Equal(v2.GetProperty("canary_bucket").GetInt32(), v3.GetProperty("canary_bucket").GetInt32());
+        Assert.Equal(v2.GetProperty("canary_arm").GetString(), v3.GetProperty("canary_arm").GetString());
     }
 
     [Fact]
@@ -150,14 +177,16 @@ public sealed class CanaryTelemetryTests : IDisposable
         Assert.False(metadata.TryGetProperty("canary_result_hash_truncated", out _));
     }
 
-    [Fact]
-    public void PersistedMetadataNeverContainsQueryOrPathText()
+    [Theory]
+    [InlineData(CanaryMode.On)]
+    [InlineData(CanaryMode.Decision)]
+    public void PersistedMetadataNeverContainsQueryOrPathText(CanaryMode mode)
     {
         using TelemetryLedger ledger = OpenLedger();
         using TelemetryScope scope = ledger.Measure("search", "auto");
         scope.SetTarget("where do we validate the refresh token");
 
-        CanaryTelemetry.Stamp(scope, CanaryMode.On, Call() with
+        CanaryTelemetry.Stamp(scope, mode, Call() with
         {
             ResultCount = 1,
             ServedResults = [new CanaryServedResult("ValidateRefreshToken", "src/Auth/TokenService.cs", "TokenService.ValidateRefreshToken")],
@@ -324,11 +353,11 @@ public sealed class CanaryTelemetryTests : IDisposable
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    private JsonElement Stamp(CanaryCallFacts call)
+    private JsonElement Stamp(CanaryCallFacts call, CanaryMode mode = CanaryMode.On)
     {
         using TelemetryLedger ledger = OpenLedger();
         using TelemetryScope scope = ledger.Measure("search", "auto");
-        CanaryTelemetry.Stamp(scope, CanaryMode.On, call);
+        CanaryTelemetry.Stamp(scope, mode, call);
         return JsonDocument.Parse(scope.MetadataJson).RootElement.Clone();
     }
 

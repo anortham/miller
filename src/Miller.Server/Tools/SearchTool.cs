@@ -509,7 +509,7 @@ public sealed class SearchTool
                     scope.SetMetadata("search_backend", SearchBackendName(context.Index));
                     if (canary.ShadowFacts is { } shadowFacts)
                     {
-                        CanaryTelemetry.StampShadow(scope, shadowFacts);
+                        CanaryTelemetry.StampShadow(scope, canaryMode, shadowFacts);
                     }
                     else if (canary.Facts is { } canaryFacts)
                     {
@@ -1354,6 +1354,8 @@ public sealed class SearchTool
                 ServingPolicy: offServingPolicy);
         }
 
+        CanaryContractProfile contractProfile = CanaryContractProfile.For(mode);
+
         SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
         string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
         CanaryVectorProbe vectorProbe = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
@@ -1375,7 +1377,7 @@ public sealed class SearchTool
             : null;
         SymbolExecution execution = SearchRouteExecutor.RunSymbolsCore(index, route, request, treatmentArm);
 
-        if (ShadowSampled(eligibility, queryClass, workspaceId, utcDate))
+        if (ShadowSampled(contractProfile, eligibility, queryClass, workspaceId, utcDate))
         {
             CanaryShadowFacts shadowFacts = RunIdentifierShadow(
                 workspaceId,
@@ -1421,14 +1423,20 @@ public sealed class SearchTool
 
     /// <summary>
     /// A call is a shadow sample when it is an identifier query the canary can never serve, and its bucket under
-    /// the non-inferiority experiment id falls in the frozen 10% (<c>canary-telemetry-v1</c> §Shadow Population
-    /// step 1). The eligibility rung already encodes "canary on and semantic not disabled": under
+    /// the non-inferiority experiment id falls below the active contract profile's sampling percentage. The
+    /// eligibility rung already encodes "canary active and semantic not disabled": under
     /// <c>MILLER_SEMANTIC=off</c> the class rung is never reached, so <c>off</c> does zero shadow work.
     /// </summary>
-    private static bool ShadowSampled(string eligibility, string queryClass, string workspaceId, string utcDate) =>
+    private static bool ShadowSampled(
+        CanaryContractProfile contractProfile,
+        string eligibility,
+        string queryClass,
+        string workspaceId,
+        string utcDate) =>
         eligibility == CanaryEligibility.IneligibleQueryClass &&
         queryClass == CanaryQueryClass.Identifier &&
-        CanaryAssignment.Bucket(CanaryAssignment.IdentifierExperimentId, workspaceId, utcDate, queryClass) < 10;
+        CanaryAssignment.Bucket(CanaryAssignment.IdentifierExperimentId, workspaceId, utcDate, queryClass) <
+        contractProfile.IdentifierShadowPercent;
 
     /// <summary>
     /// The identifier non-inferiority measurement (<c>canary-telemetry-v1</c> §Shadow Population steps 3–5), run
