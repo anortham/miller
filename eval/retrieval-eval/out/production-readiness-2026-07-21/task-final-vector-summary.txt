@@ -1,0 +1,15 @@
+artifact_id=artifact-1784685541720059000
+converged=1
+elapsed_seconds=53
+host_peak_rss_kb=751120
+sidecar_peak_rss_kb=488432
+artifact_id=artifact-1784685541720059000
+build_state=ready
+chunk_completed_revision=2
+chunk_target_revision=2
+encoder_fingerprint=sha256:3e8b7e8a0890dc84f702db1d13c47e312501905ee9d1aafb772bdc803616d7f4
+storage_schema=vec0-int8-384-cosine-v1
+symbol_completed_revision=2
+symbol_target_revision=2
+writer_version=1.13.0+a5474758072b
+vectors_bytes=9965568

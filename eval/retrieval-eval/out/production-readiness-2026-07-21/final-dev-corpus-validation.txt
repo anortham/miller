@@ -1,0 +1,3 @@
+corpus: 38 distinct doc references checked, 0 missing
+queries: 82
+OK: schema valid and composition minimums met

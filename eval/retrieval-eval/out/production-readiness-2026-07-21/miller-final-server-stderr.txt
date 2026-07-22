@@ -1,0 +1,17 @@
+20:45:25.093 [INF] (role:reader pid:49356 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) transport reading messages.
+20:45:25.135 [INF] (role:reader pid:49356 cid:) Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+20:45:25.135 [INF] (role:reader pid:49356 cid:) Microsoft.Hosting.Lifetime: Hosting environment: Production
+20:45:25.135 [INF] (role:reader pid:49356 cid:) Microsoft.Hosting.Lifetime: Content root path: /private/tmp/miller-task7-final-miller.9ggVhs/corpus
+20:45:25.182 [INF] (role:reader pid:49356 cid:) Miller.Server.IndexBootstrapService: Reusing existing extract DB at /private/tmp/miller-task7-final-miller.9ggVhs/corpus/.miller/symbols.db.
+20:45:26.264 [INF] (role:reader pid:49356 cid:) Miller.Server.IndexBootstrapService: Bootstrap ready: 44919 symbols indexed at revision 1, workspace_id=d1fde3b5c0f052a1332b3c17948c2fbdc4cc25076f5316073ecee9a1b7d4fc43, 0 telemetry rows pruned, in 1118ms.
+20:45:26.325 [INF] (role:reader pid:49356 cid:) Miller.Server.Hosting.IndexerService: Watcher extension gate active: 64 extensions claimed by julie-extract.
+20:45:26.469 [INF] (role:leader pid:49356 cid:) Miller.Server.Hosting.IndexerService: Indexer leader: watching /private/tmp/miller-task7-final-miller.9ggVhs/corpus (recursive files + directories) + .git/HEAD.
+20:45:27.362 [INF] (role:leader pid:49356 cid:) Miller.Server.Hosting.IndexerService: Startup delta scan complete: revision 1, 0 files updated, 0 files deleted.
+20:45:27.474 [INF] (role:leader pid:49356 cid:) Miller.Server.Hosting.VectorConvergeService: Vector Symbol convergence escalates to a shadow rebuild (BatchTooLarge).
+20:45:46.941 [INF] (role:leader pid:49356 cid:) Miller.Server.Hosting.VectorConvergeService: Promoted a shadow vector generation with 10095 embedded symbol cards (0 flagged) in 19386 ms (521 cards/s).
+20:45:56.117 [INF] (role:leader pid:49356 cid:) Miller.Server.Hosting.VectorConvergeService: Vector Chunk convergence embedded 793 unit(s) in 9120 ms.
+20:45:58.123 [INF] (role:leader pid:49356 cid:) Microsoft.Hosting.Lifetime: Application is shutting down...
+20:45:58.128 [INF] (role:leader pid:49356 cid:) ModelContextProtocol.Server.McpServer: Server (miller 1.13.0+a5474758072b) message processing canceled.
+20:45:58.135 [INF] (role:reader pid:49356 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) shutting down.
+20:45:58.135 [INF] (role:reader pid:49356 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) transport message reading canceled.
+20:45:58.135 [INF] (role:reader pid:49356 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) shut down.

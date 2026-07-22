@@ -1,0 +1,2 @@
+a5474758072b4a5d497c179cd605556b318b6e4e
+excluded_roots=eval/,.razorback/,.claude/

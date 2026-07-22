@@ -162,8 +162,8 @@ Two contract notes that any future arm producer should inherit from it:
 
 - **Exclude the golden set from your corpus.** `sets/**` lives inside the miller workspace and contains both
   query text and answer paths. An arm that indexes `eval/`, `.razorback/`, or `.claude/` retrieves its own
-  answer key and scores meaninglessly high. This bites lexical arms too — the live miller index covers
-  `.claude/worktrees/**`.
+  answer key and scores meaninglessly high. Miller now excludes the exact nested `.claude/worktrees/**`
+  path, but other `.claude/` material remains in scope; benchmark corpora must still exclude all three roots.
 - **Honor the post-threshold rule literally.** `ranked` must contain only docs the arm would actually show.
   An arm that emits its raw top-k scores a false positive on every negative query, which is correct
   behavior for the metric but makes negatives incomparable across arms unless the threshold policy is

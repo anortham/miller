@@ -1,0 +1,18 @@
+{
+  "measurement": "one-shot CLI wall time; nearest-rank percentiles",
+  "lexical": {
+    "count": 82,
+    "p50_ms": 168.498,
+    "p95_ms": 202.944
+  },
+  "semantic": {
+    "count": 82,
+    "p50_ms": 775.92,
+    "p95_ms": 840.55
+  },
+  "production": {
+    "count": 82,
+    "p50_ms": 796.711,
+    "p95_ms": 1097.725
+  }
+}

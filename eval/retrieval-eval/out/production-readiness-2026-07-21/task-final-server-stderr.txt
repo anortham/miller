@@ -1,0 +1,20 @@
+20:59:49.080 [INF] (role:reader pid:83808 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) transport reading messages.
+20:59:49.118 [INF] (role:reader pid:83808 cid:) Microsoft.Hosting.Lifetime: Application started. Press Ctrl+C to shut down.
+20:59:49.119 [INF] (role:reader pid:83808 cid:) Microsoft.Hosting.Lifetime: Hosting environment: Production
+20:59:49.119 [INF] (role:reader pid:83808 cid:) Microsoft.Hosting.Lifetime: Content root path: /Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval
+20:59:49.150 [INF] (role:reader pid:83808 cid:) Miller.Server.IndexBootstrapService: Reusing existing extract DB at /Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval/.miller/symbols.db.
+20:59:50.205 [INF] (role:reader pid:83808 cid:) Miller.Server.IndexBootstrapService: Bootstrap ready: 54385 symbols indexed at revision 1, workspace_id=a4bc768da62392485ed07bd7ef32a19d15b619602e6eba013c900dc223e8edfb, 0 telemetry rows pruned, in 1076ms.
+20:59:50.242 [INF] (role:reader pid:83808 cid:) Miller.Server.Hosting.IndexerService: Watcher extension gate active: 64 extensions claimed by julie-extract.
+20:59:50.351 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.IndexerService: Indexer leader: watching /Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval (recursive files + directories) + .git/HEAD.
+20:59:55.350 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.FreshnessService: Freshness: rebuilt + swapped index to revision 2.
+20:59:55.622 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.IndexerService: Converged content corpus sidecar at revision 2.
+21:00:01.963 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.IndexerService: Converged search sidecar at revision 2.
+21:00:02.397 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.IndexerService: Startup delta scan complete: revision 2, 1 files updated, 0 files deleted.
+21:00:02.493 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.VectorConvergeService: Vector Symbol convergence escalates to a shadow rebuild (BatchTooLarge).
+21:00:27.023 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.VectorConvergeService: Promoted a shadow vector generation with 10338 embedded symbol cards (0 flagged) in 24458 ms (423 cards/s).
+21:00:39.046 [INF] (role:leader pid:83808 cid:) Miller.Server.Hosting.VectorConvergeService: Vector Chunk convergence embedded 861 unit(s) in 11938 ms.
+21:00:41.259 [INF] (role:leader pid:83808 cid:) Microsoft.Hosting.Lifetime: Application is shutting down...
+21:00:41.263 [INF] (role:leader pid:83808 cid:) ModelContextProtocol.Server.McpServer: Server (miller 1.13.0+a5474758072b) message processing canceled.
+21:00:41.269 [INF] (role:reader pid:83808 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) shutting down.
+21:00:41.269 [INF] (role:reader pid:83808 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) transport message reading canceled.
+21:00:41.270 [INF] (role:reader pid:83808 cid:) ModelContextProtocol.Server.StdioServerTransport: Server (stream) (miller) shut down.

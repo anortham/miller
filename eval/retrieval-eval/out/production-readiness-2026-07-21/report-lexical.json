@@ -1,0 +1,615 @@
+{
+  "k": 10,
+  "unit_policy": "cluster",
+  "query_count": 82,
+  "positive_query_count": 76,
+  "negative_query_count": 6,
+  "evaluation_unit_count": 48,
+  "overall": {
+    "recall_at_k": 0.5121527777777776,
+    "ndcg_at_k": 0.4747731566572487,
+    "unit_count": 48,
+    "query_count": 76
+  },
+  "overall_per_query": {
+    "recall_at_k": 0.4243421052631579,
+    "ndcg_at_k": 0.37212242680481217,
+    "unit_count": 76,
+    "query_count": 76
+  },
+  "overall_cluster_max": {
+    "recall_at_k": 0.5885416666666666,
+    "ndcg_at_k": 0.5460139055580627,
+    "unit_count": 48,
+    "query_count": 76
+  },
+  "per_language": {
+    "csharp": {
+      "recall_at_k": 0.5530303030303031,
+      "ndcg_at_k": 0.5154261957372516,
+      "unit_count": 22,
+      "query_count": 36
+    },
+    "rust": {
+      "recall_at_k": 0.5643939393939396,
+      "ndcg_at_k": 0.5204425096967457,
+      "unit_count": 22,
+      "query_count": 36
+    },
+    "markdown": {
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "unit_count": 4,
+      "query_count": 4
+    }
+  },
+  "per_language_per_query": {
+    "csharp": {
+      "recall_at_k": 0.4027777777777778,
+      "ndcg_at_k": 0.35707098306371665,
+      "unit_count": 36,
+      "query_count": 36
+    },
+    "rust": {
+      "recall_at_k": 0.4930555555555556,
+      "ndcg_at_k": 0.42852080685755367,
+      "unit_count": 36,
+      "query_count": 36
+    },
+    "markdown": {
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "unit_count": 4,
+      "query_count": 4
+    }
+  },
+  "language_macro_average": {
+    "recall_at_k": 0.37247474747474757,
+    "ndcg_at_k": 0.3452895684779991,
+    "language_count": 3
+  },
+  "worst_language": {
+    "language": "markdown",
+    "recall_at_k": 0,
+    "ndcg_at_k": 0,
+    "unit_count": 4,
+    "query_count": 4
+  },
+  "per_query_class": {
+    "prose": {
+      "recall_at_k": 0.2553191489361702,
+      "ndcg_at_k": 0.1811580858565565,
+      "unit_count": 47,
+      "query_count": 47
+    },
+    "identifier": {
+      "recall_at_k": 1,
+      "ndcg_at_k": 0.9989276392441713,
+      "unit_count": 16,
+      "query_count": 16
+    },
+    "short_token": {
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.4384882922619096,
+      "unit_count": 6,
+      "query_count": 6
+    },
+    "path": {
+      "recall_at_k": 0.375,
+      "ndcg_at_k": 0.3991174152453151,
+      "unit_count": 2,
+      "query_count": 2
+    },
+    "docs_like": {
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "unit_count": 4,
+      "query_count": 4
+    },
+    "mixed": {
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.3548675899387485,
+      "unit_count": 1,
+      "query_count": 1
+    }
+  },
+  "per_intent_cluster": [
+    {
+      "intent_cluster": "julie/db-init-lock",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.20302997241929036
+    },
+    {
+      "intent_cluster": "julie/embedding-sidecar",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3748355252337961
+    },
+    {
+      "intent_cluster": "julie/file-watcher-queue",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 1,
+      "recall_at_k": 0.8333333333333334,
+      "ndcg_at_k": 0.656609404645863
+    },
+    {
+      "intent_cluster": "julie/root-safety",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.16666666666666666
+    },
+    {
+      "intent_cluster": "julie/search-scoring",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3333333333333333
+    },
+    {
+      "intent_cluster": "julie/search-tokenizer",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.21397628205130792
+    },
+    {
+      "intent_cluster": "julie/symbol-editing",
+      "repo": "julie",
+      "language": "rust",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.040055732421506576
+    },
+    {
+      "intent_cluster": "miller/cli-vs-server-dispatch",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/full-rebuild-promotion",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/host-lifecycle-contract",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 1,
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.24107638515225535
+    },
+    {
+      "intent_cluster": "miller/search-ranking-parity",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/sensitive-root-guard",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": false,
+      "member_hit_rate": 0,
+      "recall_at_k": 0,
+      "ndcg_at_k": 0
+    },
+    {
+      "intent_cluster": "miller/single-writer-lock",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.6666666666666666,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3935773014954859
+    },
+    {
+      "intent_cluster": "miller/version-aware-leadership",
+      "repo": "miller",
+      "language": "csharp",
+      "member_count": 3,
+      "cluster_hit": true,
+      "member_hit_rate": 0.3333333333333333,
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.12293585538939045
+    }
+  ],
+  "units": [
+    {
+      "unit_id": "cluster:julie/db-init-lock",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.20302997241929036,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/embedding-sidecar",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3748355252337961,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/file-watcher-queue",
+      "language": "rust",
+      "recall_at_k": 0.8333333333333334,
+      "ndcg_at_k": 0.656609404645863,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/root-safety",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.16666666666666666,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/search-scoring",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3333333333333333,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/search-tokenizer",
+      "language": "rust",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.21397628205130792,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:julie/symbol-editing",
+      "language": "rust",
+      "recall_at_k": 0.16666666666666666,
+      "ndcg_at_k": 0.040055732421506576,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/cli-vs-server-dispatch",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/full-rebuild-promotion",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/host-lifecycle-contract",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.24107638515225535,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/search-ranking-parity",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/sensitive-root-guard",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/single-writer-lock",
+      "language": "csharp",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.3935773014954859,
+      "query_count": 3
+    },
+    {
+      "unit_id": "cluster:miller/version-aware-leadership",
+      "language": "csharp",
+      "recall_at_k": 0.3333333333333333,
+      "ndcg_at_k": 0.12293585538939045,
+      "query_count": 3
+    },
+    {
+      "unit_id": "query:j-amb-1",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-amb-2",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-docs-1",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-docs-2",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-1",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-2",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-3",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-4",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-5",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-6",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-7",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-id-8",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-neg-1",
+      "language": "rust",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.27614065883146727,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-path-1",
+      "language": "rust",
+      "recall_at_k": 0.25,
+      "ndcg_at_k": 0.18508763772517173,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-1",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-2",
+      "language": "rust",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:j-short-3",
+      "language": "rust",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-amb-1",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.3548675899387485,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-docs-1",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-docs-2",
+      "language": "markdown",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-1",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-2",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-3",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-4",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-5",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-6",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-7",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-id-8",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 0.9828422279067397,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-neg-1",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-neg-2",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-path-1",
+      "language": "csharp",
+      "recall_at_k": 0.5,
+      "ndcg_at_k": 0.6131471927654584,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-1",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 1,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-2",
+      "language": "csharp",
+      "recall_at_k": 1,
+      "ndcg_at_k": 0.6309297535714575,
+      "query_count": 1
+    },
+    {
+      "unit_id": "query:m-short-3",
+      "language": "csharp",
+      "recall_at_k": 0,
+      "ndcg_at_k": 0,
+      "query_count": 1
+    }
+  ],
+  "intent_cluster_summary": {
+    "cluster_count": 14,
+    "cluster_hit_count": 10,
+    "cluster_hit_rate": 0.7142857142857143
+  },
+  "negatives": {
+    "count": 6,
+    "false_positive_count": 6,
+    "false_positive_rate": 1,
+    "pass_rate": 0
+  },
+  "missing_results": [],
+  "unknown_results": [],
+  "inputs": {
+    "queries": "/Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval/eval/retrieval-eval/sets/dev/queries.jsonl",
+    "results": "/Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval/eval/retrieval-eval/out/production-readiness-2026-07-21/results-lexical.jsonl",
+    "corpus": {}
+  },
+  "corpus_validation": null
+}

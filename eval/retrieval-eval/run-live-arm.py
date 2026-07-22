@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run the LIVE production search arm over a retrieval-eval query set.
+"""Run a live Miller search arm over a retrieval-eval query set.
 
-This is the sealed-acceptance runner (SEALED-SET-PROTOCOL.md handoff step 3): for every query it
-invokes the real `miller search --json` — production routing, fusion, and encoder, no forced arm —
-against the query's repo root and writes the retrieval-eval results JSONL. It works identically on
-the dev set; nothing here knows which set it is running.
+For every query, this invokes the real `miller search --json` against the query's repo root and
+writes retrieval-eval results JSONL. The default `production` arm uses normal routing, fusion, and
+encoder behavior with no forced arm. The explicit arms are intended for development evaluation.
+The sealed-acceptance protocol must use the default production arm.
 
 Protocol hygiene: progress output names query_ids only. Query text goes to the miller subprocess
 argv and nowhere else; run this yourself for a sealed set — do not paste sealed queries anywhere.
@@ -14,13 +14,16 @@ Usage:
     --queries <set>/queries.jsonl \
     --binary src/Miller.Server/bin/Release/net10.0/miller \
     --corpus miller=/path/to/frozen-miller --corpus julie=/path/to/frozen-julie \
-    --out /path/to/results.jsonl [--limit 10]
+    --out /path/to/results.jsonl [--limit 10] [--arm production|lexical|semantic|hybrid] \
+    [--latency-out /path/to/latency.jsonl]
 
-Every corpus root must already be indexed (`miller workspace open --path <root> --full`) with a
-converged vector artifact (run a `MILLER_SEMANTIC=on miller serve` round in the root until
-`vectors.db` reports completed==target for both lanes). The runner sets MILLER_SEMANTIC=on for
-each search; a query whose repo has no serving vector artifact still answers lexically through
-production routing, exactly as the live server would.
+Every corpus root must already be indexed (`miller workspace open --path <root> --full`). Semantic,
+hybrid, and production evaluation also require a converged vector artifact (run a
+`MILLER_SEMANTIC=on miller serve` round in the root until `vectors.db` reports completed==target
+for both lanes). Lexical evaluation sets `MILLER_SEMANTIC=off`; all other arms set it on. A
+production query whose repo has no serving vector artifact still answers lexically, exactly as the
+live server would. The runner disables randomized canary assignment and clears any model override,
+so the production arm uses the binary's pinned default deterministically.
 
 One results row is written per query — an empty `ranked` list is the arm's honest "nothing shown"
 (what the negatives metric needs), never a silently missing row. A miller invocation that FAILS
@@ -33,6 +36,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 
 def read_queries(path):
@@ -53,27 +57,34 @@ def read_queries(path):
     return queries
 
 
-def run_search(binary, root, query, limit):
+def run_search(binary, root, query, limit, arm):
     env = dict(os.environ)
-    env["MILLER_SEMANTIC"] = "on"
+    env["MILLER_SEMANTIC"] = "off" if arm == "lexical" else "on"
+    env["MILLER_SEMANTIC_CANARY"] = "off"
+    env.pop("MILLER_SEMANTIC_MODEL", None)
+    command = [binary, "search", query, "--json", "--workspace", root, "--limit", str(limit)]
+    if arm != "production":
+        command.extend(["--arm", arm])
+    started = time.perf_counter()
     completed = subprocess.run(
-        [binary, "search", query, "--json", "--workspace", root, "--limit", str(limit)],
+        command,
         capture_output=True,
         text=True,
         env=env,
         timeout=300,
     )
+    duration_ms = round((time.perf_counter() - started) * 1000, 3)
     if completed.returncode != 0:
         raise RuntimeError(
             f"miller search exited {completed.returncode}: {completed.stderr.strip()[:500]}")
-    return json.loads(completed.stdout)
+    return json.loads(completed.stdout), duration_ms
 
 
 def ranked_docs(rows, limit):
     ranked = []
     seen = set()
     for row in rows:
-        doc = row.get("file")
+        doc = row.get("file") or row.get("path")
         if not doc or doc in seen:
             continue
         seen.add(doc)
@@ -91,6 +102,11 @@ def main():
                     metavar="REPO=ROOT", help="repeatable; maps a query-set repo to its indexed root")
     ap.add_argument("--out", type=pathlib.Path, required=True)
     ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--arm", choices=("production", "lexical", "semantic", "hybrid"),
+                    default="production")
+    ap.add_argument("--repo", help="run only query rows for this repo; useful for staged corpus replay")
+    ap.add_argument("--latency-out", type=pathlib.Path,
+                    help="optional JSONL of per-query CLI wall time; contains query_id, arm, duration_ms")
     args = ap.parse_args()
 
     roots = {}
@@ -103,21 +119,38 @@ def main():
         roots[repo] = root
 
     queries = read_queries(args.queries)
+    if args.repo:
+        queries = [query for query in queries if query["repo"] == args.repo]
+        if not queries:
+            sys.exit(f"query set contains no rows for repo '{args.repo}'")
     missing_repos = sorted({q["repo"] for q in queries} - roots.keys())
     if missing_repos:
         sys.exit(f"query set references repos with no --corpus mapping: {', '.join(missing_repos)}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    latency_rows = []
     with open(args.out, "w", encoding="utf-8") as out:
         for index, query in enumerate(queries, start=1):
             try:
-                rows = run_search(str(args.binary), roots[query["repo"]], query["query"], args.limit)
+                rows, duration_ms = run_search(
+                    str(args.binary), roots[query["repo"]], query["query"], args.limit, args.arm)
             except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
                 sys.exit(f"[{index}/{len(queries)}] {query['query_id']}: {error}")
             out.write(json.dumps(
                 {"query_id": query["query_id"], "ranked": ranked_docs(rows, args.limit)},
                 separators=(",", ":")) + "\n")
+            latency_rows.append({
+                "query_id": query["query_id"],
+                "arm": args.arm,
+                "duration_ms": duration_ms,
+            })
             print(f"[{index}/{len(queries)}] {query['query_id']}: {len(rows)} rows", file=sys.stderr)
+
+    if args.latency_out:
+        args.latency_out.parent.mkdir(parents=True, exist_ok=True)
+        with open(args.latency_out, "w", encoding="utf-8") as latency_out:
+            for row in latency_rows:
+                latency_out.write(json.dumps(row, separators=(",", ":")) + "\n")
 
     print(f"wrote {len(queries)} results rows to {args.out}", file=sys.stderr)
     return 0
