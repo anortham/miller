@@ -3,9 +3,9 @@
 **Date:** 2026-07-21
 **Scope:** how to run the randomized-holdout semantic canary end to end — enable, observe, export, gate,
 interpret — plus swapping the embedding model and rolling back.
-**Field definitions are not repeated here.** The normative field, enum, window, and derivation spec is the
-active contract [`contracts/canary-telemetry-v2.md`](../contracts/canary-telemetry-v2.md); this document is
-operational only. Where the two ever differ, the contract wins.
+**Field definitions are not repeated here.** The decision cohort uses
+[`contracts/canary-telemetry-v3.md`](../contracts/canary-telemetry-v3.md). Contract v2 remains readable for
+older `on|1` rows but is never pooled with v3. This document is operational only; the selected contract wins.
 
 ## What the canary is
 
@@ -22,7 +22,7 @@ Two switches, both required. The canary flag is inert unless semantic retrieval 
 | Variable | Values | Effect |
 | --- | --- | --- |
 | `MILLER_SEMANTIC` | `off` (default) · `shadow` · `on` | `off` is a permanent zero-work guarantee. `shadow` is a non-serving operational and identifier-shadow soak; it records no causal hybrid control/treatment evidence. `on` serves the assigned arm and supplies treatment-gate evidence. |
-| `MILLER_SEMANTIC_CANARY` | `off` (default) · `on` (aliases: `0`/`1`) | `on` enables causal hybrid rows when semantic mode is `on`, plus identifier-shadow sampling in `shadow` or `on`. Any unrecognized value is treated as `off` and logged once at startup. |
+| `MILLER_SEMANTIC_CANARY` | `off` (default) · `on`/`1` · `decision` | `on|1` keeps contract v2 and 10% identifier-shadow sampling. `decision` selects contract v3 and 100% identifier-shadow sampling. Hybrid assignment and served results are identical. Unknown values are treated as `off`. |
 
 Rules that hold regardless of what you set:
 
@@ -40,6 +40,9 @@ Typical operator setups:
   non-inferiority evidence, but it does not accumulate causal hybrid treatment evidence.
 - **Serve hybrid to the treatment half and measure** — `MILLER_SEMANTIC=on` + `MILLER_SEMANTIC_CANARY=on`.
   The 50/50 split still holds out the control arm on lexical-only.
+- **Run the bounded maturity decision** — `MILLER_SEMANTIC=on` + `MILLER_SEMANTIC_CANARY=decision`.
+  The same 50/50 holdout runs under contract v3, while every identifier assignment unit receives a discarded
+  semantic shadow comparison so the safety clause can become powered inside the 30-day limit.
 
 Set both in the MCP server env block (or the shell that launches `miller serve`) and restart the server so
 the process re-reads them.
@@ -53,8 +56,8 @@ the process re-reads them.
 - **Assignment unit:** the triple `(workspace_id, utc_date, query_class)` — one arm per unit for the whole UTC
   day. Eligible classes are `prose`, `docs_like`, `mixed`; the split is 50/50 control/treatment.
 - **Identifier shadow population:** identifier-class calls are lexical-only by policy, so they can never be
-  canary-eligible. When the canary is on and `MILLER_SEMANTIC` is `shadow` or `on`, ~10% of identifier
-  assignment units (bucket `< 10` under `semantic_identifier_noninferiority_v1`) are sampled: the lexical
+  canary-eligible. With contract v2, 10% of identifier assignment units are sampled; with contract v3, 100%
+  are sampled. In either profile, the lexical
   result is served first, then a hybrid ranking is computed off to the side, compared, and discarded —
   recording overlap/top-1-changed/rank counters only. A shadow failure can never change the served result.
 
@@ -65,17 +68,21 @@ canary data leaves a machine — counters and enums only, never hashes, workspac
 millisecond latencies.
 
 ```
-miller telemetry canary [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+miller telemetry canary --contract 3 --source-id <32-lowercase-hex> [--json] [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+miller telemetry canary combine <export.json>... [--json]
 ```
 
 - Default window is the **last 30 days** (`--to` today, `--from` 30 days earlier). Pass `--from`/`--to`
   (`YYYY-MM-DD`, UTC) to narrow it; a malformed date is a usage error (exit 2).
 - Units with fewer than 5 eligible calls are suppressed and counted in `suppressed_unit_count`, so a
   single-call unit cannot be reasoned back to one action.
-- Schema v2 partitions each assignment unit into exact analysis strata by arm, bucket, full Miller build,
+- Schema v3 partitions each assignment unit into exact analysis strata by arm, bucket, full Miller build,
   encoder fingerprint, storage schema, corpus generation, fusion profile, and policy version. A missing
-  identity is an explicit `null` stratum; it never borrows another row's identity. The 5-call suppression
-  floor is applied after this partition, so incompatible identities are never pooled to cross the floor.
+  identity fails closed. The 5-call suppression floor is applied after this partition, so incompatible
+  identities are never pooled to cross the floor. Warm total-latency buckets are exported separately.
+- `--source-id` is a random per-install 128-bit id, not a path, hostname, workspace id, or derived machine id.
+  The combiner validates and merges privacy-safe v3 exports, rejects ambiguous overlap, deduplicates exact
+  repeats, and reports latency only as a non-authoritative bucket screen. Local raw-ledger latency is the gate.
 - Output is deterministic: an unchanged window re-exports byte-identically. `generated_at_utc` is derived
   from the window (00:00:00 UTC the day after `--to`), not the wall clock, so repeated exports of the same
   window match byte-for-byte.
@@ -97,10 +104,27 @@ store. Consequences you must plan around:
 Operational rule: export on a cadence shorter than 30 days (weekly is comfortable) and archive the JSON off
 the machine. Do not rely on being able to reconstruct an old window later.
 
+### Decision-cohort schedule
+
+Use non-overlapping UTC windows and wait at least 600 seconds after each window closes so the last search still
+has its full follow-up-attribution horizon. For the cohort started 2026-07-22:
+
+| Export | Closed UTC window | Earliest export |
+| --- | --- | --- |
+| week 1 | 2026-07-22 through 2026-07-28 | 2026-07-29 00:10 UTC |
+| week 2 | 2026-07-29 through 2026-08-04 | 2026-08-05 00:10 UTC |
+| week 3 | 2026-08-05 through 2026-08-11 | 2026-08-12 00:10 UTC |
+| week 4 | 2026-08-12 through 2026-08-18 | 2026-08-19 00:10 UTC |
+| final | 2026-08-19 through 2026-08-21 | 2026-08-22 00:10 UTC |
+
+Archive each v3 JSON outside the telemetry ledger, then combine them. Review power and reliability on day 14
+(2026-08-05). Day 30 (2026-08-21) is a hard stop: the final verdict is promote or remove, never indefinitely
+underpowered.
+
 ## Gate
 
 ```
-miller telemetry canary --gate [--json]
+miller telemetry canary --gate --contract 3 [--json]
 ```
 
 The gate is computed **locally and authoritatively** from raw `tool_telemetry` rows, one verdict per exact
@@ -139,6 +163,20 @@ changes one is a different gate.
 The `--json` export can *approximate* these clauses off-box (success rates exactly, latency only at bucket
 resolution). Where the export and the local `--gate` disagree, the local computation is authoritative.
 
+### Day-14 and day-30 decision
+
+Promotion requires all powered online clauses to pass, the sealed paired task-completion and identifier/path
+safety gates to pass, fallback and reliability limits to pass, and the frozen cost limits to pass: ready-state
+sidecar RSS at most 256 MiB, converge peak at most 600 MiB, three active hosts at most 768 MiB aggregate sidecar
+RSS, five-minute idle CPU below 1% per sidecar, and at most 60 seconds to converge a corpus of at most 15,000
+vector units. Retrieval recall/nDCG and cold one-shot latency remain supporting diagnostics, not substitutes.
+
+Remove semantic search completely if any powered value, safety, warm-latency, reliability, or cost gate fails;
+if the sealed event still fails after its one pre-approved bug-fix rerun; or if day 30 arrives without enough
+eligible demand to meet the frozen populations. Removal includes vector convergence/storage, sidecar/model,
+canary telemetry, semantic CLI/config/docs, and semantic-only tests while keeping lexical output and generic
+telemetry intact.
+
 ## Model swap
 
 The active embedding model is selected by one env var from a fixed registry:
@@ -167,6 +205,11 @@ previous value (or unset it for the default) and restart the server. The previou
 that encoder is still on disk and serves immediately — no re-embedding needed. Rollback is therefore a
 restart, not a rebuild.
 
+For the 2026-07-22 decision cohort, operational rollback is one config edit plus a client restart: restore
+`/Users/murphy/source/miller/src/Miller.Server/bin/Release/net10.0/miller` and
+`MILLER_SEMANTIC_CANARY=on`. Emergency semantic shutdown is `MILLER_SEMANTIC=off`, which guarantees zero
+semantic work, but it ends the decision cohort and is not a substitute for the day-30 remove decision.
+
 ### Model comparison — later phase
 
 The registry currently holds exactly the two encoders listed above. A
@@ -183,12 +226,19 @@ MILLER_SEMANTIC=shadow MILLER_SEMANTIC_CANARY=on   miller serve
 # serve hybrid to the treatment half and measure
 MILLER_SEMANTIC=on     MILLER_SEMANTIC_CANARY=on   miller serve
 
-# export (do this before rows age out at 30 days)
-miller telemetry canary --json --from 2026-07-01 --to 2026-07-21 > canary-2026-07.json
+# run the bounded v3 decision profile
+MILLER_SEMANTIC=on     MILLER_SEMANTIC_CANARY=decision miller serve
+
+# export one closed UTC window after its 600-second attribution horizon
+miller telemetry canary --contract 3 --source-id 87e21b3bfc0a9e3e720b51abffaa1b00 \
+  --from 2026-07-22 --to 2026-07-28 --json > canary-week-1.json
 
 # read the local gate
-miller telemetry canary --gate
-miller telemetry canary --gate --json
+miller telemetry canary --gate --contract 3
+miller telemetry canary --gate --contract 3 --json
+
+# combine archived v3 exports; latency remains a screen
+miller telemetry canary combine canary-week-1.json canary-week-2.json --json
 
 # swap the embedding model
 miller semantic prepare --model bge-small-en-v1.5-f32

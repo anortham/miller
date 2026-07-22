@@ -734,9 +734,10 @@ Warnings are errors (`Directory.Build.props`).
   fuse) or `MILLER_SEMANTIC=on` (fuse the semantic arm into results); `MILLER_SEMANTIC_MODEL` selects the
   embedding encoder (`bge-small-en-v1.5-f32` default — 134 MB, 384-dim; `qwen3-0.6b-f16` optional — 1.2 GB,
   512-dim, marginally stronger raw-semantic quality at ~8× the build time), downloaded with
-  `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on is enabled with
-  `MILLER_SEMANTIC_CANARY=on` (requires semantic on/shadow) and read with `miller telemetry canary`
-  / `--gate`; see the operator runbook
+  `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on uses
+  `MILLER_SEMANTIC_CANARY=on` for the legacy v2 profile or `decision` for the bounded v3 decision profile
+  (requires semantic on/shadow), and is read with `miller telemetry canary --contract 2|3` / `--gate`; see the
+  operator runbook
   [`docs/findings/2026-07-21-p5-canary-runbook.md`](docs/findings/2026-07-21-p5-canary-runbook.md). The
   boundary decision is
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md) and the

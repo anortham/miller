@@ -169,7 +169,8 @@
 - Modify: `docs/README.md`
 - Create: `docs/findings/2026-07-22-semantic-decision-readiness.md`
 - Create: versioned install directory and manifest under `/Users/murphy/.local/share/miller/canary/semantic-decision-<short-sha>/`
-- Modify: existing Miller MCP entries only in `/Users/murphy/.codex/config.toml`, `/Users/murphy/.claude.json`, `/Users/murphy/.claude/settings.json`, `/Users/murphy/.cursor/mcp.json`
+- Modify: existing global Miller MCP entries only in `/Users/murphy/.codex/config.toml`, `/Users/murphy/.claude.json`, `/Users/murphy/.cursor/mcp.json`
+- Inspect only: `/Users/murphy/.claude/settings.json` (it has no MCP registry and must remain unchanged)
 
 **Interfaces:**
 - Consumes: completed Tasks 1–3, completed companion sealed-evaluation plan, clean branch gate, pinned restore scripts, current client config entries.
@@ -177,7 +178,7 @@
 
 **Contract inputs:** Target day 14, hard-stop day 30; `MILLER_SEMANTIC=on`; `MILLER_SEMANTIC_CANARY=decision`; no machine service; no normal-default change; no release/push.
 
-**File ownership:** Modify `docs/findings/2026-07-21-p5-canary-runbook.md`, `docs/README.md`, `/Users/murphy/.codex/config.toml`, `/Users/murphy/.claude.json`, `/Users/murphy/.claude/settings.json`, `/Users/murphy/.cursor/mcp.json`; create `docs/findings/2026-07-22-semantic-decision-readiness.md` and the versioned local install/manifest under `/Users/murphy/.local/share/miller/canary/`
+**File ownership:** Modify `docs/findings/2026-07-21-p5-canary-runbook.md`, `docs/README.md`, `/Users/murphy/.codex/config.toml`, `/Users/murphy/.claude.json`, `/Users/murphy/.cursor/mcp.json`; inspect but do not modify `/Users/murphy/.claude/settings.json`; create `docs/findings/2026-07-22-semantic-decision-readiness.md` and the versioned local install/manifest under `/Users/murphy/.local/share/miller/canary/`
 
 **Serialization required:** Yes.
 
@@ -188,10 +189,10 @@
 **Approach:** Run all worktree/branch checks before and after external config edits. Verify `miller version`, semantic prepare/status, vector cursor convergence, one lexical identifier query, one prose treatment-capable query, v3 export, and v3 local gate. Record RSS, idle CPU, process count, vector sizes, start/day-14/day-30 dates, source id, exact config files changed, and all verification commands in the readiness finding.
 
 **Acceptance criteria:**
-- [ ] Branch gate and companion evaluator gate pass at the exact frozen commit.
-- [ ] Installed binary/tool payload hashes and semantic cohort identity are recorded and match live status.
-- [ ] All four client configs resolve the same immutable binary with semantic on and canary decision; unrelated entries are byte-preserved.
-- [ ] Identifier output stays lexical; v3 rows/export/gate appear; v2 history remains readable but separate.
-- [ ] Runbook defines non-overlapping weekly exports taken at least 600 seconds after window close, day-14 review, day-30 forced verdict, rollback, promotion gates, and full-removal triggers.
-- [ ] Baseline cost/reliability evidence and verification ledger are recorded without claiming an underpowered gate passed.
-- [ ] Lead verifies all involved worktrees and the original unrelated machine-service draft remain intact, then commits only repo-owned documentation with `serial-worker-commit`.
+- [x] Branch gate and companion evaluator gate pass at the exact frozen commit.
+- [x] Installed binary/tool payload hashes and semantic cohort identity are recorded and match live status.
+- [x] All three actual client registries resolve the same immutable binary with semantic on and canary decision; Claude settings and unrelated entries are byte-preserved.
+- [x] Identifier output stays lexical; v3 rows/export/gate appear; v2 history remains readable but separate.
+- [x] Runbook defines non-overlapping weekly exports taken at least 600 seconds after window close, day-14 review, day-30 forced verdict, rollback, promotion gates, and full-removal triggers.
+- [x] Baseline cost/reliability evidence and verification ledger are recorded without claiming an underpowered gate passed.
+- [x] Lead verifies all involved worktrees and the original unrelated machine-service draft remain intact, then commits only repo-owned documentation with `serial-worker-commit`.
