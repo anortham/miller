@@ -346,6 +346,47 @@ public sealed class ContextToolTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Run_PositiveBudgetBelowEmptyEnvelope_ReturnsCanonicalEmptyBundle(
+        bool referenceAware,
+        bool json)
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output;
+        int selectedCount;
+        if (referenceAware)
+        {
+            output = ContextTool.RunReferenceAware(
+                index, index.Graph, resolver,
+                query: "zzz no lexical match zzz", tokenBudget: 1, maxHops: 0,
+                entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+                referenceDepth: 1, excludeTests: false, json,
+                readReferences: _ => new[]
+                {
+                    new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId),
+                },
+                readCallees: _ => Array.Empty<SymbolRef>(),
+                readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+                out selectedCount, out _);
+        }
+        else
+        {
+            output = ContextTool.Run(index, resolver,
+                query: "OrderService", tokenBudget: 1, maxHops: 0,
+                entrySymbols: null, failingTest: null, stackTrace: null, json,
+                out selectedCount, out _);
+        }
+
+        Assert.Equal(0, selectedCount);
+        Assert.Equal(json ? "{\"bundle\":[]}" : "Bundle empty — raise token_budget.", output);
+        Assert.True(TokenEstimator.Count(output) > 1);
+    }
+
     [Fact]
     public void Run_Json_PreservesFullSignatureWhenItFitsAndBoundsItWhenNeeded()
     {
@@ -852,6 +893,54 @@ public sealed class ContextToolTests
             if (selectedCount > 0)
                 Assert.Contains("OrderService", output, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void RunReferenceAware_Json_TrimmingKeepsLargestPriorityPrefixWithBoundedAllocations()
+    {
+        var (index, resolver) = BuildFixture();
+        SymbolRef[] references = Enumerable.Range(1, 2000)
+            .Select(i => new SymbolRef(
+                "Reference" + i,
+                "type_usage",
+                "src/Reference" + i + ".cs",
+                i,
+                ServiceId))
+            .ToArray();
+
+        string full = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: int.MaxValue, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: true,
+            readReferences: _ => references,
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+            out _, out _);
+
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        string bounded = ContextTool.RunReferenceAware(
+            index, index.Graph, resolver,
+            query: "zzz no lexical match zzz", tokenBudget: 40000, maxHops: 0,
+            entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
+            referenceDepth: 1, excludeTests: false, json: true,
+            readReferences: _ => references,
+            readCallees: _ => Array.Empty<SymbolRef>(),
+            readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
+            out int selectedCount, out _);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        using var fullDocument = JsonDocument.Parse(full);
+        using var boundedDocument = JsonDocument.Parse(bounded);
+        JsonElement.ArrayEnumerator fullItems = fullDocument.RootElement.GetProperty("bundle").EnumerateArray();
+        JsonElement.ArrayEnumerator boundedItems = boundedDocument.RootElement.GetProperty("bundle").EnumerateArray();
+        string[] expectedPrefix = fullItems.Take(selectedCount).Select(static item => item.GetRawText()).ToArray();
+        string[] actualItems = boundedItems.Select(static item => item.GetRawText()).ToArray();
+
+        Assert.Equal(668, selectedCount);
+        Assert.Equal(expectedPrefix, actualItems);
+        Assert.True(TokenEstimator.Count(bounded) <= 40000);
+        Assert.True(allocated < 32_000_000, $"Context rendering allocated {allocated:N0} bytes.");
     }
 
     [Fact]

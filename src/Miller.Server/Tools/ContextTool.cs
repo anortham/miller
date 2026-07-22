@@ -53,7 +53,7 @@ public sealed partial class ContextTool
         "refresh converge the search sidecar\". Compact by default; format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
-        [Description("Hard bound on the returned bundle size, in estimated tokens. Default 2000.")]
+        [Description("Hard bound on the returned bundle size, in estimated tokens. Default 2000. If it cannot hold the empty response envelope, that canonical envelope is returned.")]
         int token_budget = 2000,
         [Description("Neighbour expansion radius in hops (0–2). Default 1.")] int max_hops = 1,
         [Description("Seed symbol names/ids to fold into the bundle. Optional.")] string[]? entry_symbols = null,
@@ -288,10 +288,12 @@ public sealed partial class ContextTool
         Func<IReadOnlyList<T>, string> boundedRenderer,
         out int selectedCount)
     {
-        if (tokenBudget <= 0)
+        IReadOnlyList<T> empty = Array.Empty<T>();
+        string emptyOutput = renderer(empty);
+        if (tokenBudget <= 0 || TokenEstimator.Count(emptyOutput) > tokenBudget)
         {
             selectedCount = 0;
-            return renderer(Array.Empty<T>());
+            return emptyOutput;
         }
 
         string fullOutput = renderer(initiallySelected);
@@ -301,17 +303,30 @@ public sealed partial class ContextTool
             return fullOutput;
         }
 
-        var retained = new List<T>(initiallySelected);
-        while (true)
+        T[] retained = initiallySelected.ToArray();
+        int lowestCandidateCount = 1;
+        int highestCandidateCount = retained.Length;
+        int bestCount = 0;
+        string bestOutput = emptyOutput;
+        while (lowestCandidateCount <= highestCandidateCount)
         {
-            string output = boundedRenderer(retained);
-            if (TokenEstimator.Count(output) <= tokenBudget || retained.Count == 0)
+            int candidateCount = lowestCandidateCount + ((highestCandidateCount - lowestCandidateCount) / 2);
+            var prefix = new ArraySegment<T>(retained, 0, candidateCount);
+            string output = boundedRenderer(prefix);
+            if (TokenEstimator.Count(output) <= tokenBudget)
             {
-                selectedCount = retained.Count;
-                return output;
+                bestCount = candidateCount;
+                bestOutput = output;
+                lowestCandidateCount = candidateCount + 1;
             }
-            retained.RemoveAt(retained.Count - 1);
+            else
+            {
+                highestCandidateCount = candidateCount - 1;
+            }
         }
+
+        selectedCount = bestCount;
+        return bestOutput;
     }
 
     /// <summary>One member of the context bundle: a symbol and its hop distance from the nearest seed (0 = seed).</summary>
