@@ -890,8 +890,10 @@ def export_scorer_artifacts(
         _pretty_json({"unresolved_void_count": 0}),
         encoding="utf-8",
     )
-    controller = shlex.quote(str(Path(__file__).resolve()))
-    python = shlex.quote(sys.executable)
+    finalizer = (
+        '"${AGENT_EFFICIENCY_PYTHON:-.venv-agent-efficiency/bin/python}" '
+        "scripts/bench-agent-efficiency.py"
+    )
     if takeover_v1:
         command = (
             'dotnet run --project eval/retrieval-eval/RetrievalEval.csproj -- decision-score '
@@ -900,7 +902,7 @@ def export_scorer_artifacts(
             '--candidate "$AGENT_EFFICIENCY_EXPORT/candidate-results.jsonl" '
             f'--decision-scope {identity_manifest["decision_scope"]} '
             '--out "$AGENT_EFFICIENCY_EXPORT/aggregate.json" && '
-            f"{python} {controller} finalize-safe "
+            f"{finalizer} finalize-safe "
             '--exports "$AGENT_EFFICIENCY_EXPORT" '
             '--safe-output "$AGENT_EFFICIENCY_EXPORT/safe-aggregate.json"\n'
         )

@@ -1,5 +1,8 @@
 # Miller/Julie visible agent-efficiency baseline — 2026-07-22
 
+> Historical evidence. The current 15-task takeover-v1 calibration is
+> [`2026-07-23-miller-julie-takeover-v1-visible-calibration.md`](2026-07-23-miller-julie-takeover-v1-visible-calibration.md).
+
 **Decision: freeze the Miller candidate after the one permitted repair.** The repair corrected Miller's rendered-context budget defect, but the full paired rerun failed correctness and made efficiency unmeasurable. The semantic model was not the cause of either visible concept-search loss, so BGE-small remains the production model.
 
 ## Frozen execution

@@ -1,0 +1,88 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 1,
+    "baseline_only": 2,
+    "candidate_only": 1,
+    "neither_correct": 11
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 2,
+      "empty": 1,
+      "refusal": 0,
+      "hard_error": 8,
+      "wrong_answer": 4
+    },
+    "candidate": {
+      "success": 1,
+      "empty": 1,
+      "refusal": 0,
+      "hard_error": 8,
+      "wrong_answer": 5
+    }
+  },
+  "relevance": {
+    "verdict": "fail",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.15384615384615385,
+      "ndcg_at_6": 0.15384615384615385,
+      "mrr": 0.15384615384615385,
+      "top_1": 0.15384615384615385
+    },
+    "candidate": {
+      "recall_at_6": 0.07692307692307693,
+      "ndcg_at_6": 0.07692307692307693,
+      "mrr": 0.07692307692307693,
+      "top_1": 0.07692307692307693
+    }
+  },
+  "correctness": {
+    "verdict": "fail",
+    "baseline_correct_count": 3,
+    "candidate_correct_count": 2,
+    "critical_loss_count": 0,
+    "baseline_wrong_action_task_count": 3,
+    "candidate_wrong_action_task_count": 4,
+    "baseline_wrong_action_rate": 0.2,
+    "candidate_wrong_action_rate": 0.26666666666666666
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": true,
+    "both_correct_task_count": 1,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": false
+  },
+  "baseline": {
+    "median_tool_output_tokens": 1117,
+    "median_tool_calls": 1,
+    "p75_duration_ms": 14289
+  },
+  "candidate": {
+    "median_tool_output_tokens": 1749,
+    "median_tool_calls": 3,
+    "p75_duration_ms": 30949
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 8,
+      "incorrect": 6
+    },
+    "candidate": {
+      "budget_exceeded": 9,
+      "incorrect": 8
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}

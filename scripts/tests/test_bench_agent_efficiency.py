@@ -1044,6 +1044,8 @@ for line in sys.stdin:
 
         self.assertNotIn(source_root, combined)
         self.assertNotIn(task.prompt, combined)
+        self.assertNotIn(str(Path(module.__file__).resolve()), combined)
+        self.assertNotIn(sys.executable, combined)
         self.assertIn("evidence_anchors", combined)
         self.assertIn("ordered_evidence_matches", combined)
         self.assertIn("retrieval-eval", combined)

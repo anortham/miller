@@ -152,8 +152,10 @@ export AGENT_EFFICIENCY_EXPORT=/opt/bench/runs/visible-001/exports
 sh "$AGENT_EFFICIENCY_EXPORT/agent-score-command.txt"
 ```
 
-The command runs the neutral C# scorer and then invokes `finalize-safe`. The finalizer verifies every retained
-private artifact digest, binds the private aggregate digest, rejects private fields and path-like values,
+The command runs the neutral C# scorer and then invokes `finalize-safe` using
+`.venv-agent-efficiency/bin/python` by default; set `AGENT_EFFICIENCY_PYTHON` when the environment uses a
+different Python executable. The finalizer verifies every retained private artifact digest, binds the private
+aggregate digest, rejects private fields and path-like values,
 enforces the five-task subgroup floor, preserves only closed public workflow/capability subgroup labels, strips
 dynamic repository/language labels from decision output, and writes `safe-aggregate.json`. Only that allowlisted
 file may cross the sealed-run boundary. Follow `SEALED-AGENT-PROTOCOL.md` for the one-time decision run.
