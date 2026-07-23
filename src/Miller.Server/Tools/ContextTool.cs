@@ -73,9 +73,9 @@ public sealed partial class ContextTool
         bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -107,6 +107,14 @@ public sealed partial class ContextTool
                     throw new ArgumentOutOfRangeException(nameof(reference_mode));
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
+            ToolDiagnostic? diagnostic = selectedCount == 0
+                ? ToolDiagnostic.ExpectedEmpty(
+                    "no_context_symbols",
+                    "No context symbols matched the supplied evidence.",
+                    [new ToolDiagnosticAction(
+                        $"search(query=\"{EscapeDiagnosticQuery(query)}\")",
+                        "find a concrete entry symbol")])
+                : null;
 
             if (telemetry is not null)
             {
@@ -117,7 +125,7 @@ public sealed partial class ContextTool
                 // D10 work proxy (bytes_examined ≈ nodes visited): the candidate set (seeds + reached) the packer
                 // considered, before the budget truncated it.
                 telemetry.BytesExamined = candidatesExamined;
-                telemetry.Outcome = selectedCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("token_budget_bucket", TokenBudgetBucket(token_budget));
                 telemetry.SetMetadata("max_hops_bucket", HopsBucket(max_hops));
@@ -126,19 +134,28 @@ public sealed partial class ContextTool
                 telemetry.SetMetadata("has_stack_trace", !string.IsNullOrWhiteSpace(stack_trace));
                 telemetry.SetMetadata("reference_depth_bucket", HopsBucket(reference_depth));
                 telemetry.SetMetadata("exclude_tests", exclude_tests);
-                if (selectedCount == 0)
-                    telemetry.SetEmptyReason("no_context_symbols");
+            }
+            if (diagnostic is not null)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "context",
+                    output,
+                    diagnostic,
+                    json,
+                    telemetry);
             }
             return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"context failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            return ToolDiagnosticRenderer.Render(
+                "context",
+                diagnostic,
+                json,
+                telemetry);
         }
     }
 
@@ -744,6 +761,11 @@ public sealed partial class ContextTool
     private static string EscapeCallString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private static string EscapeDiagnosticQuery(string value)
+    {
+        return ToolDiagnosticText.EscapeCallArgument(value);
+    }
 
     // A hop-0 seed gets one line with its reason ("seed") and full provenance — it is the anchor the bundle is built
     // around, so it earns the file:line inline (neighbours are grouped by file and only carry a hop label).

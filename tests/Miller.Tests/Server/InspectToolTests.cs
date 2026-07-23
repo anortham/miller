@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
@@ -63,6 +64,42 @@ public sealed class InspectToolTests
             new JulieDbFixture.SymbolRow("b0000000000000000000000000000002", "Duplicate", "method", "csharp",
                 "src/Two.cs", "public void Duplicate()", 20, null),
         });
+
+    private static (JulieDbFixture Fixture, string Body) LongBodyFixture()
+    {
+        string body = string.Join('\n', Enumerable.Range(0, 1400).Select(i => $"line {i:D4} 😀 value"));
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow(
+                "c0000000000000000000000000000def",
+                "LongBody",
+                "method",
+                "csharp",
+                "src/LongBody.cs",
+                "public void LongBody()",
+                1,
+                null)
+            {
+                BodyStartByte = 0,
+                BodyEndByte = Encoding.UTF8.GetByteCount(body),
+                BodyStartLine = 1,
+                BodyEndLine = 1400,
+                BodyHash = "long-body-hash",
+            },
+        };
+        var content = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/LongBody.cs"] = body,
+        };
+        return (
+            JulieDbFixture.Create(
+                JulieDbFixture.PinnedSchema,
+                JulieDbFixture.PinnedContract,
+                rows,
+                fileContent: content,
+                workspaceId: "ws-long-body"),
+            body);
+    }
 
     // ---- File listing ----
 
@@ -954,6 +991,220 @@ public sealed class InspectToolTests
         Assert.Equal(JsonValueKind.Array, examples.ValueKind);
         Assert.Equal("inspect target=\"Handle\" scope=\"a/First.cs\"", examples[0].GetString());
         Assert.Equal("inspect target=\"Handle\" scope=\"b/Second.cs\"", examples[1].GetString());
+    }
+
+    [Fact]
+    public void Inspect_AmbiguousName_Json_AttachesTypedAmbiguityDiagnostic()
+    {
+        using var fx = FixtureWithAmbiguousSymbols();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-ambiguous",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        string output = tool.Inspect("Duplicate", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement root = document.RootElement;
+        Assert.Equal(2, root.GetProperty("candidates").GetArrayLength());
+        Assert.Equal("ambiguous_target", root.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Equal("ambiguity", root.GetProperty("diagnostic").GetProperty("class").GetString());
+        Assert.Equal("empty", root.GetProperty("diagnostic").GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public void Inspect_FullBody_Json_UsesBoundedStatelessContinuation()
+    {
+        var fixture = LongBodyFixture();
+        using var fx = fixture.Fixture;
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-body",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        string firstOutput = tool.Inspect("LongBody", depth: "full", format: "json");
+        using var firstDocument = JsonDocument.Parse(firstOutput);
+        JsonElement first = firstDocument.RootElement;
+        string firstBody = first.GetProperty("body").GetString()!;
+        string continuation = first.GetProperty("body_continuation").GetString()!;
+        Assert.True(first.GetProperty("body_truncated").GetBoolean());
+        Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(firstBody));
+
+        string secondOutput = tool.Inspect(
+            "LongBody",
+            depth: "full",
+            format: "json",
+            continuation: continuation);
+        using var secondDocument = JsonDocument.Parse(secondOutput);
+        JsonElement second = secondDocument.RootElement;
+        string secondBody = second.GetProperty("body").GetString()!;
+        Assert.False(second.GetProperty("body_truncated").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, second.GetProperty("body_continuation").ValueKind);
+        Assert.Equal(fixture.Body, firstBody + secondBody);
+    }
+
+    [Fact]
+    public void Inspect_FullBody_Compact_UsesBoundedStatelessContinuation()
+    {
+        var fixture = LongBodyFixture();
+        using var fx = fixture.Fixture;
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-body",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        string firstOutput = tool.Inspect("LongBody", depth: "full");
+        int bodyStart = firstOutput.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
+        int nextStart = firstOutput.IndexOf("\nnext:", bodyStart, StringComparison.Ordinal);
+        string firstBody = firstOutput[bodyStart..nextStart];
+        const string tokenPrefix = "continuation=\"";
+        int tokenStart = firstOutput.IndexOf(tokenPrefix, nextStart, StringComparison.Ordinal) + tokenPrefix.Length;
+        int tokenEnd = firstOutput.IndexOf('"', tokenStart);
+        string continuation = firstOutput[tokenStart..tokenEnd];
+        Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(firstBody));
+
+        string secondOutput = tool.Inspect("LongBody", depth: "full", continuation: continuation);
+        int secondBodyStart = secondOutput.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
+        string secondBody = secondOutput[secondBodyStart..];
+        Assert.DoesNotContain("\nnext:", secondBody, StringComparison.Ordinal);
+        Assert.Equal(fixture.Body, firstBody + secondBody);
+    }
+
+    [Fact]
+    public void Inspect_ContinuationOnFileTarget_IsTypedRefusal()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-file-target",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        string output = tool.Inspect(
+            "auth/UserService.cs",
+            depth: "full",
+            format: "json",
+            continuation: "not-used-for-file-resolution");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("continuation_target_mismatch", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+    }
+
+    [Fact]
+    public void Inspect_FullBody_ContinuationRejectsChangedExtractorHash()
+    {
+        var fixture = LongBodyFixture();
+        using var fx = fixture.Fixture;
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-body",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        string firstOutput = tool.Inspect("LongBody", depth: "full", format: "json");
+        using var firstDocument = JsonDocument.Parse(firstOutput);
+        string continuation = firstDocument.RootElement.GetProperty("body_continuation").GetString()!;
+
+        using (var connection = new SqliteConnection(
+                   new SqliteConnectionStringBuilder
+                   {
+                       DataSource = fx.DbPath,
+                       Mode = SqliteOpenMode.ReadWrite,
+                       Pooling = false,
+                   }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE symbols SET body_hash = 'changed-body-hash' WHERE symbol_id = $id;";
+            command.Parameters.AddWithValue("$id", "c0000000000000000000000000000def");
+            command.ExecuteNonQuery();
+        }
+
+        string output = tool.Inspect(
+            "LongBody",
+            depth: "full",
+            format: "json",
+            continuation: continuation);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("continuation_hash_mismatch", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+    }
+
+    [Fact]
+    public void Inspect_FullBody_JsonContinuationRejectsUnavailableChangedSource()
+    {
+        var fixture = LongBodyFixture();
+        using var fx = fixture.Fixture;
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-body",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+
+        using var firstDocument = JsonDocument.Parse(
+            tool.Inspect("LongBody", depth: "full", format: "json"));
+        string continuation = firstDocument.RootElement.GetProperty("body_continuation").GetString()!;
+        File.WriteAllText(Path.Combine(fx.WorkspaceRoot, "src", "LongBody.cs"), "changed source");
+
+        using var document = JsonDocument.Parse(tool.Inspect(
+            "LongBody",
+            depth: "full",
+            format: "json",
+            continuation: continuation));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("continuation_body_unavailable", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+    }
+
+    [Fact]
+    public void Inspect_NotFoundDiagnosticAction_BoundsLongTarget()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-target",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider, provider);
+        string target = new('x', 500);
+
+        using var document = JsonDocument.Parse(tool.Inspect(target, format: "json"));
+        string call = document.RootElement
+            .GetProperty("diagnostic")
+            .GetProperty("next_actions")[0]
+            .GetProperty("call")
+            .GetString()!;
+
+        Assert.DoesNotContain(new string('x', 161), call, StringComparison.Ordinal);
+        Assert.Contains(new string('x', 160), call, StringComparison.Ordinal);
     }
 
     [Fact]

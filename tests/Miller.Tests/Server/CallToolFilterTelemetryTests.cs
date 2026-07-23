@@ -74,6 +74,26 @@ public static class PinProbeTool
     [McpServerTool(Name = "pin_unhandled"), Description("Throws an unhandled exception (rethrow-path probe).")]
     public static string Unhandled(string who) => throw new InvalidOperationException($"kaboom for {who}");
 
+    [McpServerTool(Name = "pin_typed_hard"), Description("Returns one typed hard diagnostic.")]
+    public static string TypedHard(string format = "compact") =>
+        ToolDiagnosticRenderer.Render(
+            "pin_typed_hard",
+            ToolDiagnostic.Corruption("artifact_corrupt", "artifact is corrupt"),
+            string.Equals(format, "json", StringComparison.OrdinalIgnoreCase),
+            TelemetryContext.Current);
+
+    [McpServerTool(Name = "pin_typed_empty"), Description("Returns one typed expected-empty diagnostic.")]
+    public static string TypedEmpty(string format = "compact") =>
+        ToolDiagnosticRenderer.Render(
+            "pin_typed_empty",
+            ToolDiagnostic.ExpectedEmpty("no_matches", "no matches"),
+            string.Equals(format, "json", StringComparison.OrdinalIgnoreCase),
+            TelemetryContext.Current);
+
+    [McpServerTool(Name = "pin_diagnostic_text"), Description("Returns diagnostic-like source text.")]
+    public static string DiagnosticText() =>
+        "example source:\ndiagnostic_class=corruption\nnot a tool diagnostic";
+
     [McpServerTool(Name = "pin_workspace_override"), Description("Sets target workspace telemetry fields.")]
     public static string WorkspaceOverride(string workspaceId, string workspaceRoot)
     {
@@ -218,6 +238,32 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
             Assert.IsType<TextContentBlock>(Assert.Single(boom.Content)).Text);
         Assert.NotEqual(true, boom.IsError); // NOT an MCP error result — the tool returned a clean string
 
+        var typedHard = await client.CallToolAsync(
+            "pin_typed_hard",
+            new Dictionary<string, object?> { ["format"] = "json" }!,
+            cancellationToken: ct);
+        Assert.True(typedHard.IsError);
+        using (JsonDocument typedJson = JsonDocument.Parse(
+            Assert.IsType<TextContentBlock>(Assert.Single(typedHard.Content)).Text))
+        {
+            Assert.Equal(
+                "artifact_corrupt",
+                typedJson.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        }
+
+        var typedEmpty = await client.CallToolAsync(
+            "pin_typed_empty",
+            new Dictionary<string, object?> { ["format"] = "json" }!,
+            cancellationToken: ct);
+        Assert.NotEqual(true, typedEmpty.IsError);
+        using (JsonDocument typedEmptyJson = JsonDocument.Parse(
+            Assert.IsType<TextContentBlock>(Assert.Single(typedEmpty.Content)).Text))
+        {
+            Assert.Equal(
+                "no_matches",
+                typedEmptyJson.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        }
+
         // pin_empty: zero results → scope Outcome=Empty.
         await client.CallToolAsync("pin_empty", new Dictionary<string, object?>()!, cancellationToken: ct);
 
@@ -233,7 +279,7 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            "SELECT tool, outcome, error_kind, error_message, error_detail, index_fresh " +
+            "SELECT tool, outcome, error_kind, error_message, error_detail, index_fresh, metadata_json " +
             "FROM tool_telemetry ORDER BY tool;";
         var rows = new List<(
             string tool,
@@ -241,7 +287,8 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
             string? errorKind,
             string? errorMessage,
             string? errorDetail,
-            bool indexFreshIsNull)>();
+            bool indexFreshIsNull,
+            string metadataJson)>();
         using (var r = cmd.ExecuteReader())
             while (r.Read())
                 rows.Add((
@@ -250,7 +297,8 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
                     r.IsDBNull(2) ? null : r.GetString(2),
                     r.IsDBNull(3) ? null : r.GetString(3),
                     r.IsDBNull(4) ? null : r.GetString(4),
-                    r.IsDBNull(5)));
+                    r.IsDBNull(5),
+                    r.GetString(6)));
 
         var boomRow = Assert.Single(rows, x => x.tool == "pin_boom");
         Assert.Equal("error", boomRow.outcome);                       // NOT 'ok' — the fix
@@ -262,6 +310,65 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
 
         var emptyRow = Assert.Single(rows, x => x.tool == "pin_empty");
         Assert.Equal("empty", emptyRow.outcome);
+        var typedHardRow = Assert.Single(rows, x => x.tool == "pin_typed_hard");
+        Assert.Equal("error", typedHardRow.outcome);
+        using (JsonDocument metadata = JsonDocument.Parse(typedHardRow.metadataJson))
+        {
+            Assert.Equal("artifact_corrupt", metadata.RootElement.GetProperty("diagnostic_code").GetString());
+            Assert.Equal("corruption", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+        }
+        var typedEmptyRow = Assert.Single(rows, x => x.tool == "pin_typed_empty");
+        Assert.Equal("empty", typedEmptyRow.outcome);
+        using (JsonDocument metadata = JsonDocument.Parse(typedEmptyRow.metadataJson))
+        {
+            Assert.Equal("no_matches", metadata.RootElement.GetProperty("diagnostic_code").GetString());
+            Assert.Equal("expected_empty", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task CentralFilter_TypedHardDiagnostic_UsesErrorChannelWithoutTelemetryLedger()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clientToServer = new Pipe();
+        var serverToClient = new Pipe();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services
+            .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
+            .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
+            .WithToolsFromAssembly(typeof(PinProbeTool).Assembly)
+            .WithRequestFilters(f => f.AddCallToolFilter(TelemetryCallToolFilter.Create()));
+
+        await using var provider = services.BuildServiceProvider();
+        var server = provider.GetRequiredService<McpServer>();
+        var serverTask = server.RunAsync(ct);
+        var transport = new StreamClientTransport(
+            clientToServer.Writer.AsStream(),
+            serverToClient.Reader.AsStream(),
+            NullLoggerFactory.Instance);
+        await using var client = await McpClient.CreateAsync(transport, cancellationToken: ct);
+
+        var hard = await client.CallToolAsync(
+            "pin_typed_hard",
+            new Dictionary<string, object?> { ["format"] = "json" }!,
+            cancellationToken: ct);
+        var empty = await client.CallToolAsync(
+            "pin_typed_empty",
+            new Dictionary<string, object?> { ["format"] = "json" }!,
+            cancellationToken: ct);
+        var sourceText = await client.CallToolAsync(
+            "pin_diagnostic_text",
+            cancellationToken: ct);
+
+        Assert.True(hard.IsError);
+        Assert.NotEqual(true, empty.IsError);
+        Assert.NotEqual(true, sourceText.IsError);
+
+        await client.DisposeAsync();
+        await clientToServer.Writer.CompleteAsync();
+        await serverToClient.Writer.CompleteAsync();
+        try { await serverTask.WaitAsync(TimeSpan.FromSeconds(5), ct); } catch (Exception) { }
     }
 
     [Fact]

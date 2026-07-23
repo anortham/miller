@@ -35,7 +35,7 @@ public sealed class ExtractReader
         // so it is no longer selected (reconciliation #11). By-name reads (D6) decouple value from SELECT order.
         command.CommandText = """
             SELECT doc_comment, visibility,
-                   body_start_byte, body_end_byte, body_start_line, body_end_line
+                   body_start_byte, body_end_byte, body_start_line, body_end_line, body_hash
             FROM symbols WHERE symbol_id = $id;
             """;
         command.Parameters.AddWithValue("$id", symbolId);
@@ -50,6 +50,7 @@ public sealed class ExtractReader
         int oBodyEndByte = reader.GetOrdinal("body_end_byte");
         int oBodyStartLine = reader.GetOrdinal("body_start_line");
         int oBodyEndLine = reader.GetOrdinal("body_end_line");
+        int oBodyHash = reader.GetOrdinal("body_hash");
 
         return new SymbolDetail(
             DocComment: reader.IsDBNull(oDocComment) ? null : reader.GetString(oDocComment),
@@ -57,7 +58,8 @@ public sealed class ExtractReader
             BodyStartByte: reader.IsDBNull(oBodyStartByte) ? null : reader.GetInt32(oBodyStartByte),
             BodyEndByte: reader.IsDBNull(oBodyEndByte) ? null : reader.GetInt32(oBodyEndByte),
             BodyStartLine: reader.IsDBNull(oBodyStartLine) ? null : reader.GetInt32(oBodyStartLine),
-            BodyEndLine: reader.IsDBNull(oBodyEndLine) ? null : reader.GetInt32(oBodyEndLine));
+            BodyEndLine: reader.IsDBNull(oBodyEndLine) ? null : reader.GetInt32(oBodyEndLine),
+            BodyHash: reader.IsDBNull(oBodyHash) ? null : reader.GetString(oBodyHash));
     }
 
     /// <summary>

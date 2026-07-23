@@ -14,7 +14,8 @@ public sealed record SymbolDetail(
     int? BodyStartByte,
     int? BodyEndByte,
     int? BodyStartLine,
-    int? BodyEndLine);
+    int? BodyEndLine,
+    string? BodyHash);
 
 /// <summary>
 /// One symbol-scoped <c>complexity_metrics</c> row (schema v3; emitted broadly since julie-extract 2.3.0).

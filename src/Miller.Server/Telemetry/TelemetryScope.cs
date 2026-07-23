@@ -107,6 +107,9 @@ public sealed class TelemetryScope : IDisposable
     /// </summary>
     public bool OutcomeExplicitlySet { get; private set; }
 
+    /// <summary>True when a typed hard diagnostic must be returned through MCP's error channel.</summary>
+    public bool UseMcpErrorChannel { get; set; }
+
     /// <summary>An optional error-kind tag (e.g. the exception type) when <see cref="Outcome"/> is error.</summary>
     public string? ErrorKind { get; set; }
 
@@ -182,7 +185,7 @@ public sealed class TelemetryScope : IDisposable
         JsonObject metadata = MetadataObject();
         var array = new JsonArray();
         foreach (string value in values)
-            array.Add(value);
+            array.Add((JsonNode?)JsonValue.Create(value));
         metadata[key] = array;
         MetadataJson = metadata.ToJsonString();
     }

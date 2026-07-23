@@ -354,6 +354,28 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Trace_TargetNotFoundDiagnosticAction_BoundsLongTarget()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new TraceTool(provider);
+        string target = new('x', 500);
+
+        using var document = JsonDocument.Parse(tool.Trace(target, format: "json"));
+        string call = document.RootElement
+            .GetProperty("diagnostic")
+            .GetProperty("next_actions")[0]
+            .GetProperty("call")
+            .GetString()!;
+
+        Assert.DoesNotContain(new string('x', 161), call, StringComparison.Ordinal);
+        Assert.Contains(new string('x', 160), call, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Auto_MisspelledTarget_SuggestsNearMissesInNote()
     {
         var index = BuildSymbolIndex(

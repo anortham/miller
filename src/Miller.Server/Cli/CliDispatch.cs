@@ -988,9 +988,10 @@ public static class CliDispatch
             {
                 _ = PatternsTool.ParseWhereFilters(where);
             }
-            catch (InvalidOperationException ex)
+            catch (ToolDiagnosticException ex) when (
+                ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
             {
-                err.WriteLine(ex.Message);
+                err.WriteLine(ex.Diagnostic.Message);
                 return 2;
             }
 
@@ -1029,6 +1030,12 @@ public static class CliDispatch
                 o.Has("json"));
             WriteOutput(outw, result.Output);
             return 0;
+        }
+        catch (ToolDiagnosticException ex) when (
+            ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
+        {
+            err.WriteLine(ex.Diagnostic.Message);
+            return 2;
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or InvalidOperationException or IOException
@@ -1782,32 +1789,49 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller inspect <file-or-symbol> [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|overview|full] [--kind K] [--scope FILE] [--limit N] [--json]");
+            return Usage(err, "miller inspect <file-or-symbol> [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|overview|full] [--kind K] [--scope FILE] [--limit N] [--continuation TOKEN] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
         string depth = o.Value("depth", "summary")!;
-        string output;
-        if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase))
+        string? continuation = o.Value("continuation");
+        if (o.Has("continuation") &&
+            (string.IsNullOrWhiteSpace(continuation) ||
+             !string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase)))
         {
-            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
-                return 3;
-
-            output = InspectTool.RunLookup(
-                index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
-                limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            return Usage(err, "--continuation requires a token and --depth full.");
         }
-        else
+        string output;
+        try
         {
-            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
-                return 3;
+            if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+                    return 3;
 
-            output = InspectTool.RunSummary(
-                index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
-                limit: o.Int("limit", 50), json: o.Has("json"), out _);
+                output = InspectTool.RunLookup(
+                    index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                    target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _,
+                    continuation: continuation);
+            }
+            else
+            {
+                if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+                    return 3;
+
+                output = InspectTool.RunSummary(
+                    index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
+                    target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
+            }
+        }
+        catch (ToolDiagnosticException ex) when (
+            ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
+        {
+            err.WriteLine(ex.Diagnostic.Message);
+            return 2;
         }
         outw.WriteLine(output);
         return 0;

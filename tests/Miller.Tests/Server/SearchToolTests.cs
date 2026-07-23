@@ -2946,7 +2946,11 @@ public sealed class SearchToolTests
 
         string output = tool.Search("KnownSourceError", format: "json"); // mode defaults to auto
 
-        Assert.Equal("[]", output);
+        using var document = JsonDocument.Parse(output);
+        Assert.Empty(document.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(
+            "expected_empty",
+            document.RootElement.GetProperty("diagnostic").GetProperty("class").GetString());
         Assert.Equal(1, provider.SymbolSearchResolveCount);
         Assert.Equal(0, provider.TextContentSearchResolveCount);
     }
@@ -3127,6 +3131,30 @@ public sealed class SearchToolTests
         Assert.Equal("HACK", item.GetProperty("marker").GetString());
         Assert.Equal("src/B.cs", item.GetProperty("file").GetString());
         Assert.Equal("B", item.GetProperty("containing_symbol_name").GetString());
+    }
+
+    [Fact]
+    public void Search_ModeMarkers_EmptyJson_DoesNotRecommendUnrelatedAutoSearch()
+    {
+        using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
+            ReadToolRoutingTestSupport.RegionContextFor(
+                new StubRegionSearchIndex(),
+                current.DbPath,
+                "current-ws",
+                root),
+            regionTargets: Array.Empty<(string, WorkspaceRegionSearchContext)>());
+        var tool = new SearchTool(provider, provider, provider);
+
+        using JsonDocument document = JsonDocument.Parse(
+            tool.Search("TODO", mode: "markers", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("no_todo_markers", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("No requested source markers were found.", diagnostic.GetProperty("message").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]

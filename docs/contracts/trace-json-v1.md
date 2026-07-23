@@ -11,6 +11,10 @@ trace modes as compact output:
 Compact trace output remains the human reading surface. JSON is the stable machine surface for Eros and other
 local integrations.
 
+Overall outcome classification follows the
+[Tool Diagnostics Contract v1](tool-diagnostics-v1.md). When present, top-level `diagnostic` and
+`diagnostic_schema_version` are authoritative for empty/refusal/error outcome and MCP error-channel behavior.
+
 ## Top-level shape
 
 ```json
@@ -46,6 +50,10 @@ local integrations.
 - `diagnostics`: objects with `code` and `message` when a note should be machine-classified.
 - `next_actions`: bounded recovery suggestions for empty/diagnostic results. Each action has `tool`, `reason`,
   and `args`; the field is always present and is empty when no recovery guidance applies.
+
+`diagnostics[]` is retained as mode-specific algorithm evidence. It may coexist with top-level `diagnostic`;
+the array explains the trace result while the top-level object classifies the call outcome. Consumers must
+use top-level `diagnostic` for outcome and error handling.
 
 Example `next_actions` row:
 

@@ -26,8 +26,8 @@ namespace Miller.Server.Tools;
 /// orchestrates the live singletons (the holder, the indexer leader, the freshness poller, the extract runner)
 /// and the telemetry shell. Every operation reports HONESTLY what happened — a non-leader that cannot force a
 /// scan, a scan failure, a refused remove — never a faked success. Mirrors the other tools' shape:
-/// ctor-injected singletons, a thin <see cref="Workspace"/> dispatch wrapped in try/catch returning
-/// <c>"workspace failed: {msg}"</c>, telemetry via <see cref="TelemetryContext.Current"/>.</para>
+/// ctor-injected singletons, a thin <see cref="Workspace"/> dispatch with typed diagnostics, and telemetry via
+/// <see cref="TelemetryContext.Current"/>.</para>
 /// </summary>
 [McpServerToolType]
 public sealed class WorkspaceTool
@@ -166,10 +166,9 @@ public sealed class WorkspaceTool
         // tool-breakdown WITH its per-operation axis. Normalised to lowercase to match the dispatch keys.
         if (telemetry is not null)
             telemetry.Op = (operation ?? "status").ToLowerInvariant();
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-
             (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
                 operation, workspace_id, path, port, json, handoff, wait, filter, limit, dry_run);
 
@@ -178,18 +177,63 @@ public sealed class WorkspaceTool
                 telemetry.ResultCount = resultCount;
                 telemetry.Outcome = outcome;
             }
+            if (outcome is TelemetryOutcome.Empty or TelemetryOutcome.Error)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "workspace",
+                    output,
+                    WorkspaceDiagnostic(operation, outcome, output),
+                    json,
+                    telemetry);
+            }
             return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
             _logger.LogError(ex, "workspace {Operation} failed.", operation);
-            return $"workspace failed: {ex.Message}";
+            return ToolDiagnosticRenderer.Render(
+                "workspace",
+                diagnostic,
+                json,
+                telemetry);
         }
+    }
+
+    private static ToolDiagnostic WorkspaceDiagnostic(
+        string? operation,
+        TelemetryOutcome outcome,
+        string output)
+    {
+        string op = string.IsNullOrWhiteSpace(operation) ? "status" : operation.Trim().ToLowerInvariant();
+        if (outcome == TelemetryOutcome.Error)
+            return ToolDiagnostic.Unavailable(
+                $"workspace_{op}_failed",
+                $"Workspace operation '{op}' could not complete.");
+
+        bool supported = op is "status" or "health" or "onboarding" or "leader" or "list" or
+            "refresh" or "full" or "open" or "remove" or "prune" or "dashboard";
+        bool refused = output.Contains("refus", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains(" requires ", StringComparison.OrdinalIgnoreCase) ||
+            (op == "open" &&
+             (output.Contains("does not prime", StringComparison.OrdinalIgnoreCase) ||
+              output.Contains("not priming", StringComparison.OrdinalIgnoreCase)));
+        if (supported && refused)
+        {
+            return ToolDiagnostic.Refusal(
+                $"workspace_{op}_refused",
+                $"Workspace operation '{op}' was refused by a safety or input constraint.");
+        }
+        return supported
+            ? ToolDiagnostic.ExpectedEmpty(
+                $"workspace_{op}_empty",
+                $"Workspace operation '{op}' returned no result.")
+            : ToolDiagnostic.Unsupported(
+                "unsupported_operation",
+                $"Workspace operation '{op}' is not supported.",
+                [new ToolDiagnosticAction("workspace(operation=\"status\")", "show current workspace status")]);
     }
 
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
@@ -637,9 +681,8 @@ public sealed class WorkspaceTool
         if (string.IsNullOrWhiteSpace(path))
             return (UsageNote("open", json), 0, TelemetryOutcome.Empty);
 
-        // A non-null but non-existent target is a clean not-found, NOT a tool failure (symmetric with remove's
-        // not-found). Guard here so PathCanonicalizer.CanonicalizeRoot's DirectoryNotFoundException never leaks to
-        // the outer catch as a generic "workspace failed"; give clear "cannot prime" guidance instead (Empty).
+        // A non-null but non-existent target is a clean not-found, not a tool failure. Guard here so
+        // PathCanonicalizer.CanonicalizeRoot's DirectoryNotFoundException cannot become a hard diagnostic.
         if (!Directory.Exists(path))
         {
             string note = $"cannot prime: no directory at '{path}'.";

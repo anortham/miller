@@ -499,6 +499,40 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Impact_TargetNotFound_Json_UsesExactDiagnosticMessage()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Impact(target: "NoSuchSymbol", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("unresolved_target", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("Impact could not resolve an exact target.", diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Impact_NoDependents_Json_UsesExactDiagnosticMessage()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Impact(target: "Lonely", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("no_dependents", diagnostic.GetProperty("code").GetString());
+        Assert.Equal(
+            "The resolved symbols have no indexed downstream dependents.",
+            diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Run_AmbiguousTarget_CompactCapsCandidatesWithRemainderNote()
     {
         var symbols = Enumerable.Range(1, 25)
@@ -948,6 +982,24 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Impact_GitFlag_EmptyDiffJson_UsesExactDiagnosticMessage()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var git = new RecordingGitDiffReader(GitDiffResult.Ok(""));
+        var tool = new ImpactTool(provider, git);
+
+        using var document = JsonDocument.Parse(tool.Impact(git: true, format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("empty_git_diff", diagnostic.GetProperty("code").GetString());
+        Assert.Equal(
+            "The selected git diff contains no changes.",
+            diagnostic.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public void Impact_GitFlag_FailedDiffReturnsFailure()
     {
         var (index, _) = BuildFixture();
@@ -959,8 +1011,10 @@ public sealed class ImpactToolTests
         string output = tool.Impact(git: true);
 
         Assert.Single(git.Requests);
-        Assert.Contains("impact failed: git diff failed", output);
+        Assert.Contains("git diff failed", output);
         Assert.Contains("fatal: not a git repository", output);
+        Assert.Contains("diagnostic_code=git_diff_failed", output);
+        Assert.Contains("diagnostic_class=unavailable", output);
     }
 
     [Fact]

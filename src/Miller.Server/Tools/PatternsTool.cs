@@ -68,9 +68,9 @@ public sealed class PatternsTool
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool refresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
 
@@ -87,6 +87,14 @@ public sealed class PatternsTool
                 facet,
                 limit,
                 json);
+            ToolDiagnostic? diagnostic = result.ResultCount == 0
+                ? ToolDiagnostic.ExpectedEmpty(
+                    result.EmptyReason ?? "no_facts",
+                    "No structural facts matched the request.",
+                    [new ToolDiagnosticAction(
+                        "patterns(operation=\"list\")",
+                        "list pattern ids observed in this workspace")])
+                : null;
 
             if (telemetry is not null)
             {
@@ -94,28 +102,34 @@ public sealed class PatternsTool
                 telemetry.Op = NormalizeOperation(operation);
                 telemetry.SetTarget(TargetForTelemetry(operation, pattern_id, query));
                 telemetry.ResultCount = result.ResultCount;
-                telemetry.Outcome = result.ResultCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("has_pattern_id", !string.IsNullOrWhiteSpace(pattern_id));
                 telemetry.SetMetadata("has_query", !string.IsNullOrWhiteSpace(query));
                 telemetry.SetMetadata("has_language", !string.IsNullOrWhiteSpace(language));
                 telemetry.SetMetadata("has_path", !string.IsNullOrWhiteSpace(path));
                 telemetry.SetMetadata("has_where", !string.IsNullOrWhiteSpace(where));
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
-                if (result.ResultCount == 0)
-                    telemetry.SetEmptyReason(result.EmptyReason ?? "no_facts");
             }
 
             string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            return ReadToolWorkspaceRouting.PrefixCompact(result.Output, banner);
+            string output = ReadToolWorkspaceRouting.PrefixCompact(result.Output, banner);
+            if (diagnostic is not null)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "patterns",
+                    output,
+                    diagnostic,
+                    json,
+                    telemetry);
+            }
+            return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"patterns failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            return ToolDiagnosticRenderer.Render("patterns", diagnostic, json, telemetry);
         }
     }
 
@@ -138,11 +152,11 @@ public sealed class PatternsTool
 
         string op = NormalizeOperation(operation);
         if ((op is "list" or "summary") && !string.IsNullOrWhiteSpace(query))
-            throw new InvalidOperationException("patterns query is only supported for search.");
+            throw InvalidRequest("patterns query is only supported for search.");
 
         IReadOnlyList<PatternMetadataFilter> metadataFilters = ParseWhereFilters(where);
         if (metadataFilters.Count > 0 && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
-            throw new InvalidOperationException("patterns where requires pattern_id or query.");
+            throw InvalidRequest("patterns where requires pattern_id or query.");
 
         PatternSummaryGroupBy summaryGroupBy = ParseSummaryGroupBy(groupBy);
 
@@ -151,7 +165,7 @@ public sealed class PatternsTool
             "list" => List(reader, dbPath, patternId, language, path, metadataFilters, json),
             "summary" => Summary(reader, dbPath, patternId, language, path, metadataFilters, summaryGroupBy, facet, json),
             "search" => SearchDispatch(reader, dbPath, patternId, query, language, path, metadataFilters, limit, json),
-            _ => throw new InvalidOperationException("patterns operation must be list, summary, or search."),
+            _ => throw InvalidRequest("patterns operation must be list, summary, or search."),
         };
     }
 
@@ -172,7 +186,7 @@ public sealed class PatternsTool
         if (!string.IsNullOrWhiteSpace(query))
             return SearchByQuery(reader, dbPath, query.Trim(), language, path, metadataFilters, limit, json);
 
-        throw new InvalidOperationException("patterns search requires pattern_id or query.");
+        throw InvalidRequest("patterns search requires pattern_id or query.");
     }
 
     internal static IReadOnlyList<PatternMetadataFilter> ParseWhereFilters(string? where)
@@ -190,15 +204,22 @@ public sealed class PatternsTool
     {
         int equals = where.IndexOf('=');
         if (equals <= 0)
-            throw new InvalidOperationException("patterns where must be key=value.");
+            throw InvalidRequest("patterns where must be key=value.");
 
         string key = where[..equals].Trim();
         string value = where[(equals + 1)..].Trim();
         if (key.Length == 0)
-            throw new InvalidOperationException("patterns where must include a key.");
+            throw InvalidRequest("patterns where must include a key.");
 
         var filter = new PatternMetadataFilter(key, value);
-        filter.Validate();
+        try
+        {
+            filter.Validate();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw InvalidRequest(ex.Message);
+        }
         return filter;
     }
 
@@ -212,7 +233,8 @@ public sealed class PatternsTool
             "language_pattern_capture" or "default" => PatternSummaryGroupBy.LanguagePatternCapture,
             "file" => PatternSummaryGroupBy.File,
             "directory" or "dir" => PatternSummaryGroupBy.Directory,
-            _ => throw new InvalidOperationException("patterns group_by must be language_pattern_capture, file, or directory."),
+            _ => throw InvalidRequest(
+                "patterns group_by must be language_pattern_capture, file, or directory."),
         };
     }
 
@@ -1049,10 +1071,13 @@ public sealed class PatternsTool
     private static string RequiredPatternId(string? patternId)
     {
         if (string.IsNullOrWhiteSpace(patternId))
-            throw new InvalidOperationException("patterns search requires pattern_id.");
+            throw InvalidRequest("patterns search requires pattern_id.");
 
         return patternId.Trim();
     }
+
+    private static ToolDiagnosticException InvalidRequest(string message) =>
+        new(ToolDiagnostic.Refusal("invalid_request", message));
 
     private static string TargetForTelemetry(string? operation, string? patternId, string? query)
     {

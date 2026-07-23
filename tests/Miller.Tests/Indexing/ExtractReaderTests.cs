@@ -30,6 +30,7 @@ public sealed class ExtractReaderTests
         Assert.NotNull(detail.BodyEndByte);
         Assert.Equal(2, detail.BodyStartLine);
         Assert.Equal(4, detail.BodyEndLine);
+        Assert.Equal("get-user-body-hash", detail.BodyHash);
     }
 
     [Fact]

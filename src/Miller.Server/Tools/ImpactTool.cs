@@ -88,9 +88,9 @@ public sealed class ImpactTool
         bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -109,7 +109,14 @@ public sealed class ImpactTool
             if (useGitDiff && provided > 1)
             {
                 string usage = Usage(json);
-                return ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner);
+                return ToolDiagnosticRenderer.Attach(
+                    "impact",
+                    ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner),
+                    ToolDiagnostic.Refusal(
+                        "invalid_input_selection",
+                        "Impact accepts exactly one input source."),
+                    json,
+                    telemetry);
             }
 
             bool emptyGitDiff = false;
@@ -123,9 +130,18 @@ public sealed class ImpactTool
                         // No-arg in a non-git (or broken-git) workspace: fall back to the usage note rather than
                         // erroring -- `impact` with no args must never fail just because there is no git diff to read.
                         string usage = Usage(json);
-                        return ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner);
+                        return ToolDiagnosticRenderer.Attach(
+                            "impact",
+                            ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner),
+                            ToolDiagnostic.Refusal(
+                                "git_diff_unavailable",
+                                "No working-tree git diff is available; provide target, changed_paths, or diff."),
+                            json,
+                            telemetry);
                     }
-                    throw new InvalidOperationException($"git diff failed in {context.WorkspaceRoot}: {gitResult.Error ?? "unknown error"}");
+                    throw new ToolDiagnosticException(ToolDiagnostic.Unavailable(
+                        "git_diff_failed",
+                        $"git diff failed in {context.WorkspaceRoot}: {gitResult.Error ?? "unknown error"}"));
                 }
 
                 if (string.IsNullOrWhiteSpace(gitResult.Diff))
@@ -154,6 +170,8 @@ public sealed class ImpactTool
                     out impactedCount, out nodesVisited);
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
+            ToolDiagnostic? diagnostic =
+                impactedCount == 0 ? ImpactEmptyDiagnostic(output, target) : null;
 
             if (telemetry is not null)
             {
@@ -165,23 +183,32 @@ public sealed class ImpactTool
                 telemetry.ResultCount = impactedCount;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the reverse-reachability set the BFS produced.
                 telemetry.BytesExamined = nodesVisited;
-                telemetry.Outcome = impactedCount == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
                 telemetry.SetMetadata("max_depth_bucket", DepthBucket(max_depth));
-                if (impactedCount == 0)
-                    telemetry.SetEmptyReason(ImpactEmptyReason(output));
+            }
+            if (diagnostic is not null)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "impact",
+                    output,
+                    diagnostic,
+                    json,
+                    telemetry);
             }
             return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"impact failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            return ToolDiagnosticRenderer.Render(
+                "impact",
+                diagnostic,
+                json,
+                telemetry);
         }
     }
 
@@ -213,18 +240,41 @@ public sealed class ImpactTool
         return string.IsNullOrWhiteSpace(diff) ? "missing_input" : "diff";
     }
 
-    private static string ImpactEmptyReason(string output)
+    private static ToolDiagnostic ImpactEmptyDiagnostic(string output, string? target)
     {
+        string code;
         if (output.Contains("git diff is empty", StringComparison.Ordinal))
-            return "empty_git_diff";
-        if (output.Contains("No indexed symbols matched", StringComparison.Ordinal))
-            return "no_seed_symbols";
-        if (output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-            output.StartsWith("Multiple candidates", StringComparison.Ordinal))
-            return "unresolved_target";
-        if (output.Contains("Resolved seed symbols:", StringComparison.Ordinal))
-            return "no_dependents";
-        return "no_impacted_symbols";
+            code = "empty_git_diff";
+        else if (output.Contains("No indexed symbols matched", StringComparison.Ordinal))
+            code = "no_seed_symbols";
+        else if (output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                 output.Contains("Multiple candidates", StringComparison.Ordinal))
+            code = "unresolved_target";
+        else if (output.Contains("Resolved seed symbols:", StringComparison.Ordinal))
+            code = "no_dependents";
+        else
+            code = "no_impacted_symbols";
+
+        IReadOnlyList<ToolDiagnosticAction> actions = string.IsNullOrWhiteSpace(target)
+            ? Array.Empty<ToolDiagnosticAction>()
+            : [new ToolDiagnosticAction(
+                $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
+                "resolve an exact impact seed")];
+        return output.Contains("Multiple candidates", StringComparison.Ordinal)
+            ? ToolDiagnostic.Ambiguity(code, "Impact target is ambiguous.", actions)
+            : ToolDiagnostic.ExpectedEmpty(code, code switch
+            {
+                "empty_git_diff" => "The selected git diff contains no changes.",
+                "no_seed_symbols" => "No indexed symbols intersected the supplied changes.",
+                "unresolved_target" => "Impact could not resolve an exact target.",
+                "no_dependents" => "The resolved symbols have no indexed downstream dependents.",
+                _ => "Impact produced no affected symbols.",
+            }, actions);
+    }
+
+    private static string EscapeDiagnosticTarget(string target)
+    {
+        return ToolDiagnosticText.EscapeCallArgument(target);
     }
 
     private static string LimitBucket(int limit) => limit switch
@@ -301,9 +351,9 @@ public sealed class ImpactTool
         {
             if (!SeedFromTarget(index, resolver, target, seedIds, out string? targetNote))
             {
-                // A hard target failure (not-found / ambiguous candidates) renders its own message and stops.
                 impactedCount = 0;
-                return targetNote ?? Note(json, "impact: unresolved target.");
+                string message = targetNote ?? "impact: unresolved target.";
+                return json ? Note(json: true, message) : message;
             }
             note = targetNote;
         }

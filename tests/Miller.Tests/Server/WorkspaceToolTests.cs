@@ -364,6 +364,11 @@ public sealed class WorkspaceToolTests : IDisposable
         }
     }
 
+    private sealed class ThrowingDashboardLauncher(Exception exception) : IDashboardLauncher
+    {
+        public DashboardLaunchResult EnsureRunning(DashboardLaunchRequest request) => throw exception;
+    }
+
     // ---- status ----
 
     [Fact]
@@ -987,6 +992,20 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Open_LiveWorkspace_Json_IsTypedRefusal()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var document = JsonDocument.Parse(tool.Workspace(operation: "open", path: root, format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("workspace_open_refused", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
     public void Open_SymlinkToSensitiveRoot_IsRefused_NotPrimed()
     {
         // The sensitive-root guard must run on the CANONICAL (symlink-resolved) root, not the raw argument —
@@ -1176,6 +1195,26 @@ public sealed class WorkspaceToolTests : IDisposable
         DashboardLaunchRequest request = launcher.Requests.Single();
         Assert.Equal(4977, request.Port);
         Assert.Equal(harness.Workspace, request.Context);
+    }
+
+    [Fact]
+    public void Dashboard_CorruptSidecarFailure_Json_IsTypedCorruption()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            dashboardLauncher: new ThrowingDashboardLauncher(
+                new InvalidDataException("dashboard sidecar is corrupt")));
+
+        using var document = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "dashboard", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("artifact_corrupt", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("corruption", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("error", diagnostic.GetProperty("outcome").GetString());
     }
 
     // ---- remove safety ----
@@ -1604,6 +1643,21 @@ public sealed class WorkspaceToolTests : IDisposable
         string output = tool.Workspace(operation: "frobnicate");
         Assert.Contains("unknown workspace operation", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(output.StartsWith("workspace failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void UnknownOperation_Json_AttachesTypedUnsupportedDiagnostic()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        string output = tool.Workspace(operation: "frobnicate", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("unsupported_operation", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("unsupported", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
     }
 
     [Fact]

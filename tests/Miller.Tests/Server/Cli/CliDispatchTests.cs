@@ -1188,6 +1188,25 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("miller patterns search", errText);
     }
 
+    [Theory]
+    [InlineData("search", "--where", "invalid-filter")]
+    [InlineData("summary", "--group-by", "invalid")]
+    public void Patterns_InvalidFilter_IsUsageErrorExitTwo(
+        string operation,
+        string option,
+        string value)
+    {
+        using var fx = DbWithPatterns();
+        string[] args = operation == "search"
+            ? ["patterns", operation, "--pattern", "htmx.attribute.v1", option, value, "--json"]
+            : ["patterns", operation, option, value, "--json"];
+
+        var (code, _, errText) = Run(args, Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Contains("must be", errText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Symbols_Export_EmitsOneJsonlRowPerSymbol()
     {
@@ -2022,6 +2041,74 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("return _repo.Find(id);", outText);
         Assert.Contains("web/Controller.cs:4", outText);
         Assert.Contains("Find", outText);
+    }
+
+    [Fact]
+    public void Inspect_Full_ContinuationFlag_ResumesTheBody()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        SymbolDetail detail = Assert.IsType<SymbolDetail>(
+            ExtractReader.ReadDetail(fx.DbPath, JulieDbFixture.GetUserId));
+        string body = Assert.IsType<string>(ExtractReader.ReadBody(
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "auth/UserService.cs",
+            detail.BodyStartByte,
+            detail.BodyEndByte,
+            detail.BodyStartLine,
+            detail.BodyEndLine).Text);
+        var identity = new ToolContinuationIdentity(
+            WorkspaceId.FromCanonicalRoot(fx.WorkspaceRoot),
+            JulieDbFixture.GetUserId,
+            Assert.IsType<string>(detail.BodyHash),
+            detail.BodyStartByte!.Value,
+            detail.BodyEndByte!.Value);
+        ToolOutputPage first = ToolOutputBudget.PageBody(body, 8, identity, continuation: null);
+        ToolOutputPage expected = ToolOutputBudget.PageBody(
+            body,
+            ToolOutputBudget.InspectFullBodyMaxBytes,
+            identity,
+            first.Continuation);
+
+        var (code, outText, errText) = Run(
+            [
+                "inspect",
+                JulieDbFixture.GetUserId,
+                "--depth",
+                "full",
+                "--continuation",
+                first.Continuation!,
+                "--json",
+            ],
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var document = JsonDocument.Parse(outText);
+        Assert.Equal(expected.Text, document.RootElement.GetProperty("body").GetString());
+        Assert.Equal(expected.StartOffset, document.RootElement.GetProperty("body_start_offset").GetInt64());
+    }
+
+    [Fact]
+    public void Inspect_Full_InvalidContinuation_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            [
+                "inspect",
+                JulieDbFixture.GetUserId,
+                "--depth",
+                "full",
+                "--continuation",
+                "not-a-valid-token",
+                "--json",
+            ],
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("base64url", errText, StringComparison.Ordinal);
     }
 
     [Fact]

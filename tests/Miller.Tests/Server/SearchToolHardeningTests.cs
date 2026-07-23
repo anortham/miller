@@ -10,8 +10,7 @@ namespace Miller.Tests.Server;
 /// bare separator must not pull <c>src/utils#helper</c> or <c>Foo::Bar</c>-style symbol syntax onto the file
 /// arm, while <c>package.json</c> / <c>src/foo/bar.ts</c> / <c>scripts/test.sh</c> keep routing to file mode;
 /// (2) a pasted-blob query longer than <see cref="SearchTool.MaxQueryLength"/> is rejected with a clear
-/// message BEFORE tokenization (same throw-pattern as the null/whitespace guard, rendered as a clean
-/// <c>search failed:</c> line at the MCP boundary).
+/// refusal before tokenization.
 /// </summary>
 public sealed class SearchToolHardeningTests
 {

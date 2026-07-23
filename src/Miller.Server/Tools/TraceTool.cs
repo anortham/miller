@@ -88,9 +88,9 @@ public sealed class TraceTool
         bool? ensure_fresh = null)
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
@@ -101,17 +101,19 @@ public sealed class TraceTool
                 symbol => ExtractReader.ReadReferences(context.IndexDbPath, symbol.Name),
                 out int emitted, out int nodesVisited);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
+            string normalizedMode = NormalizeMode(mode);
+            ToolDiagnostic? diagnostic =
+                emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target) : null;
 
             if (telemetry is not null)
             {
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-                string normalizedMode = NormalizeMode(mode);
                 telemetry.Op = normalizedMode;
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = emitted;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the edges/neighbours the walk produced.
                 telemetry.BytesExamined = nodesVisited;
-                telemetry.Outcome = emitted == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("format", full ? "full" : json ? "json" : "compact");
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
                 telemetry.SetMetadata("has_to", !string.IsNullOrWhiteSpace(to));
@@ -119,19 +121,28 @@ public sealed class TraceTool
                 telemetry.SetMetadata("include_definition", include_definition);
                 telemetry.SetMetadata("depth_bucket", DepthBucket(depth));
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
-                if (emitted == 0)
-                    telemetry.SetEmptyReason(TraceEmptyReason(normalizedMode, output));
+            }
+            if (diagnostic is not null)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "trace",
+                    output,
+                    diagnostic,
+                    json,
+                    telemetry);
             }
             return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"trace failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            return ToolDiagnosticRenderer.Render(
+                "trace",
+                diagnostic,
+                json,
+                telemetry);
         }
     }
 
@@ -183,16 +194,31 @@ public sealed class TraceTool
     private static string NormalizeMode(string? mode) =>
         string.IsNullOrWhiteSpace(mode) ? ModeAuto : mode.Trim().ToLowerInvariant();
 
-    private static string TraceEmptyReason(string mode, string output) => mode switch
+    private static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target)
     {
-        ModePath => "no_path",
-        ModeRefs => "no_references",
-        ModeBridge => "no_bridge_path",
-        _ when output.StartsWith("No neighbours", StringComparison.Ordinal) => "no_neighbours",
-        _ when output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-               output.StartsWith("Multiple candidates", StringComparison.Ordinal) => "unresolved_target",
-        _ => "no_trace_edges",
-    };
+        if (mode is not (ModeAuto or ModePath or ModeRefs or ModeBridge))
+            return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
+
+        string code = mode switch
+        {
+            ModePath => "no_path",
+            ModeRefs => "no_references",
+            ModeBridge => "no_bridge_path",
+            _ when output.Contains("No neighbours", StringComparison.Ordinal) => "no_neighbours",
+            _ when output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+                   output.Contains("Multiple candidates", StringComparison.Ordinal) => "unresolved_target",
+            _ => "no_trace_edges",
+        };
+        var actions = new[]
+        {
+            new ToolDiagnosticAction(
+                $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\")",
+                "resolve a concrete trace target"),
+        };
+        return output.Contains("Multiple candidates", StringComparison.Ordinal)
+            ? ToolDiagnostic.Ambiguity(code, "Trace target is ambiguous.", actions)
+            : ToolDiagnostic.ExpectedEmpty(code, "Trace produced no edges.", actions);
+    }
 
     private static string LimitBucket(int limit) => limit switch
     {

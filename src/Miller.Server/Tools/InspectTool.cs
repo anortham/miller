@@ -40,7 +40,7 @@ public sealed class InspectTool
     [Description(
         "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
         "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
-        "(the right first symbol read); depth=full adds the complete body and relation lists. Use before reading " +
+        "(the right first symbol read); depth=full adds relation lists and a bounded body page. Use before reading " +
         "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
         "reference lists across the repo (use trace mode=refs). Example: inspect target=FullRebuildPromotion " +
         "depth=overview.")]
@@ -54,62 +54,70 @@ public sealed class InspectTool
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
-        bool? ensure_fresh = null)
+        bool? ensure_fresh = null,
+        [Description("Opaque token from a truncated depth=full body. Bound to workspace, symbol, extractor hash, and source span.")]
+        string? continuation = null)
     {
         var telemetry = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
 
-            string output;
-            int count;
-            if (parsedDepth != InspectDepth.Summary)
-            {
-                WorkspaceSymbolSearchContext context = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
-                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                output = RunLookup(context.Index, context.IndexDbPath, context.WorkspaceRoot,
-                    target, depth, kind, scope, limit, json, out count, compactBanner);
+            WorkspaceSymbolSearchContext context =
+                _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+            string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            string output = RunLookupWithDiagnostics(
+                context.Index,
+                context.IndexDbPath,
+                context.WorkspaceRoot,
+                context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot),
+                target,
+                depth,
+                kind,
+                scope,
+                limit,
+                json,
+                continuation,
+                out int count,
+                out ToolDiagnostic? diagnostic,
+                compactBanner);
 
-                if (telemetry is not null)
-                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-            }
-            else
-            {
-                WorkspaceSymbolSearchContext context = _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
-                string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-                output = RunSummary(context.Index, context.IndexDbPath, context.WorkspaceRoot,
-                    target, kind, scope, limit, json, out count, compactBanner);
-
-                if (telemetry is not null)
-                    ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
-            }
+            if (telemetry is not null)
+                ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
 
             if (telemetry is not null)
             {
                 telemetry.Op = DepthName(parsedDepth);
                 telemetry.SetTarget(target);
                 telemetry.ResultCount = count;
-                telemetry.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+                telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("depth", DepthName(parsedDepth));
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("has_kind", !string.IsNullOrWhiteSpace(kind));
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
-                if (count == 0)
-                    telemetry.SetEmptyReason("not_found");
             }
+            if (diagnostic is not null)
+                output = ToolDiagnosticRenderer.Attach(
+                    "inspect",
+                    output,
+                    diagnostic,
+                    json,
+                    telemetry);
             return output;
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-            }
-            return $"inspect failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            return ToolDiagnosticRenderer.Render(
+                "inspect",
+                diagnostic,
+                json,
+                telemetry);
         }
     }
 
@@ -171,14 +179,16 @@ public sealed class InspectTool
         InspectDepth parsedDepth = ParseDepth(depth);
 
         return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
-            json, out resultCount, compactBanner);
+            json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
+            continuation: null);
     }
 
     public static string RunLookup(
         ISymbolLookupIndex index, string dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
-        string? compactBanner = null)
+        string? compactBanner = null,
+        string? continuation = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
@@ -187,7 +197,8 @@ public sealed class InspectTool
 
         var resolver = new SmartTargetResolver(index);
         return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
-            json, out resultCount, compactBanner);
+            json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
+            continuation);
     }
 
     public static string RunSummary(
@@ -205,29 +216,67 @@ public sealed class InspectTool
         string dbPath, string workspaceRoot, string target, InspectDepth depth,
         string? kind, string? scope, int limit, bool json,
         out int resultCount,
-        string? compactBanner)
+        out ToolDiagnostic? diagnostic,
+        string? compactBanner,
+        string workspaceId,
+        string? continuation)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        diagnostic = null;
+        if (!string.IsNullOrWhiteSpace(continuation) && depth != InspectDepth.Full)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_not_applicable",
+                "Inspect continuations are valid only with depth=full.",
+                [new ToolDiagnosticAction(
+                    $"inspect(target=\"{EscapeDiagnosticTarget(target)}\", depth=\"full\")",
+                    "restart the full-body read")]));
+        }
 
         var resolution = resolver.Resolve(target, scope);
+        if (!string.IsNullOrWhiteSpace(continuation) && resolution is not TargetResolution.Symbol)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_target_mismatch",
+                "Inspect continuations can resume only the exact symbol body that created them.",
+                [new ToolDiagnosticAction(
+                    $"inspect(target=\"{EscapeDiagnosticTarget(target)}\", depth=\"full\")",
+                    "restart inspection without the continuation")]));
+        }
+
         switch (resolution)
         {
             case TargetResolution.File file:
+                string fileOutput = RenderFile(index, file.Path, kind, limit, json, out resultCount);
+                if (resultCount == 0)
+                {
+                    diagnostic = ToolDiagnostic.ExpectedEmpty(
+                        "no_file_symbols",
+                        $"No indexed symbols matched '{file.Path}' and the requested filters.");
+                }
                 return ReadToolWorkspaceRouting.PrefixCompact(
-                    RenderFile(index, file.Path, kind, limit, json, out resultCount),
+                    fileOutput,
                     json ? null : compactBanner);
 
             case TargetResolution.Symbol sym:
                 resultCount = 1;
                 string symbolOutput = json
-                    ? RenderSymbolJson(index, dbPath, workspaceRoot, sym.Value, depth)
-                    : RenderSymbolCompact(index, dbPath, workspaceRoot, sym.Value, depth);
+                    ? RenderSymbolJson(
+                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation)
+                    : RenderSymbolCompact(
+                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
                 resultCount = cands.Matches.Count;
+                diagnostic = ToolDiagnostic.Ambiguity(
+                    "ambiguous_target",
+                    $"'{target}' matched {cands.Matches.Count} symbols.",
+                    CandidateOutput.RerunExamples(target, cands.Matches, supportsScope: true)
+                        .Select(example => new ToolDiagnosticAction(example, "select one exact symbol"))
+                        .ToArray());
                 string candidatesOutput = json
                     ? RenderCandidatesJson(target, cands.Matches)
                     : RenderCandidatesCompact(target, cands.Matches);
@@ -235,17 +284,62 @@ public sealed class InspectTool
 
             case TargetResolution.NotFound nf:
                 resultCount = 0;
+                diagnostic = ToolDiagnostic.ExpectedEmpty(
+                    "not_found",
+                    $"No indexed file or symbol matched '{target}'.",
+                    [new ToolDiagnosticAction(
+                        $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
+                        "find the canonical file or symbol identity")]);
                 string notFoundOutput = json
                     ? RenderNotFoundJson(nf)
                     : nf.RenderMessage();
                 return ReadToolWorkspaceRouting.PrefixCompact(notFoundOutput, json ? null : compactBanner);
 
             default:
-                resultCount = 0;
-                return ReadToolWorkspaceRouting.PrefixCompact(
-                    "inspect: unrecognized resolution.",
-                    json ? null : compactBanner);
+                throw new ToolDiagnosticException(ToolDiagnostic.InternalFailure(
+                    "unrecognized_resolution",
+                    "Inspect received an unrecognized target resolution."));
         }
+    }
+
+    private static string RunLookupWithDiagnostics(
+        ISymbolLookupIndex index,
+        string dbPath,
+        string workspaceRoot,
+        string workspaceId,
+        string target,
+        string depth,
+        string? kind,
+        string? scope,
+        int limit,
+        bool json,
+        string? continuation,
+        out int resultCount,
+        out ToolDiagnostic? diagnostic,
+        string? compactBanner)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        if (limit < 1)
+            limit = 1;
+
+        var resolver = new SmartTargetResolver(index);
+        return RunCore(
+            index,
+            resolver,
+            dbPath,
+            workspaceRoot,
+            target,
+            ParseDepth(depth),
+            kind,
+            scope,
+            limit,
+            json,
+            out resultCount,
+            out diagnostic,
+            compactBanner,
+            workspaceId,
+            continuation);
     }
 
     // ---------- file listing ----------
@@ -378,7 +472,13 @@ public sealed class InspectTool
     // ---------- symbol ----------
 
     private static string RenderSymbolCompact(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, InspectDepth depth)
+        ISymbolLookupIndex index,
+        string dbPath,
+        string workspaceRoot,
+        string workspaceId,
+        IndexedSymbol sym,
+        InspectDepth depth,
+        string? continuation)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -460,6 +560,7 @@ public sealed class InspectTool
             ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
             : ExtractReader.ReadBody(dbPath, workspaceRoot, sym.FilePath,
                 detail.BodyStartByte, detail.BodyEndByte, detail.BodyStartLine, detail.BodyEndLine);
+        ToolOutputPage? bodyPage = null;
         if (depth == InspectDepth.Overview)
         {
             var preview = BodyPreview(body);
@@ -469,7 +570,8 @@ public sealed class InspectTool
         }
         else
         {
-            sb.Append(body.Text ?? RenderBodyUnavailableNote(body.UnavailableReason));
+            bodyPage = PageFullBody(body, detail, workspaceId, sym, continuation);
+            sb.Append(bodyPage.Text);
         }
 
         // Delivery-time nudge (compact only; this path is overview/full — summary returned early). Rendered
@@ -481,7 +583,13 @@ public sealed class InspectTool
         // than the render that prompted it.
         bool refsTruncatedAtRefLimit = relationLimit == RefLimit && refs.Count > relationLimit;
         string callName = EscapeCallString(sym.Name);
-        if (refsTruncatedAtRefLimit)
+        if (bodyPage is { Truncated: true, Continuation: not null })
+        {
+            sb.Append('\n').Append(NextStepHint.Render(
+                $"inspect target=\"{sym.SymbolId}\" depth=full continuation=\"{bodyPage.Continuation}\"",
+                $"continue body at byte {bodyPage.EndOffset}"));
+        }
+        else if (refsTruncatedAtRefLimit)
             sb.Append('\n').Append(NextStepHint.Render(
                 $"trace target=\"{callName}\" mode=refs limit={refs.Count}", "full reference list"));
         else if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
@@ -492,7 +600,13 @@ public sealed class InspectTool
     }
 
     private static string RenderSymbolJson(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot, IndexedSymbol sym, InspectDepth depth)
+        ISymbolLookupIndex index,
+        string dbPath,
+        string workspaceRoot,
+        string workspaceId,
+        IndexedSymbol sym,
+        InspectDepth depth,
+        string? continuation)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -581,14 +695,23 @@ public sealed class InspectTool
                     }
                     w.WriteBoolean("body_preview_truncated", preview.Truncated);
                 }
-                else if (body.Text is null)
+                else if (body.Text is null && string.IsNullOrWhiteSpace(continuation))
                 {
                     w.WriteNull("body");
                     w.WriteString("body_unavailable_reason", BodyUnavailableReasonJson(body.UnavailableReason));
                 }
                 else
                 {
-                    w.WriteString("body", body.Text);
+                    ToolOutputPage bodyPage =
+                        PageFullBody(body, detail, workspaceId, sym, continuation);
+                    w.WriteString("body", bodyPage.Text);
+                    w.WriteNumber("body_start_offset", bodyPage.StartOffset);
+                    w.WriteNumber("body_end_offset", bodyPage.EndOffset);
+                    w.WriteBoolean("body_truncated", bodyPage.Truncated);
+                    if (bodyPage.Continuation is null)
+                        w.WriteNull("body_continuation");
+                    else
+                        w.WriteString("body_continuation", bodyPage.Continuation);
                 }
             }
 
@@ -597,11 +720,72 @@ public sealed class InspectTool
         return Utf8(buffer);
     }
 
+    private static ToolOutputPage PageFullBody(
+        ExtractReader.BodyReadResult body,
+        SymbolDetail? detail,
+        string workspaceId,
+        IndexedSymbol symbol,
+        string? continuation)
+    {
+        if (body.Text is null)
+        {
+            if (!string.IsNullOrWhiteSpace(continuation))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "continuation_body_unavailable",
+                    "The symbol body is no longer available for continuation."));
+            }
+
+            return new ToolOutputPage(
+                RenderBodyUnavailableNote(body.UnavailableReason),
+                0,
+                0,
+                Truncated: false,
+                Continuation: null);
+        }
+
+        int bodyBytes = Encoding.UTF8.GetByteCount(body.Text);
+        if (bodyBytes <= ToolOutputBudget.InspectFullBodyMaxBytes &&
+            string.IsNullOrWhiteSpace(continuation))
+        {
+            return new ToolOutputPage(body.Text, 0, bodyBytes, Truncated: false, Continuation: null);
+        }
+
+        if (detail is null ||
+            string.IsNullOrWhiteSpace(detail.BodyHash) ||
+            detail.BodyStartByte is not { } startByte ||
+            detail.BodyEndByte is not { } endByte ||
+            startByte < 0 ||
+            endByte <= startByte)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Unavailable(
+                "continuation_identity_unavailable",
+                "The extracted body lacks the hash or source span required for a safe continuation.",
+                [new ToolDiagnosticAction(
+                    "workspace(operation=\"refresh\")",
+                    "refresh extraction identity before retrying")]));
+        }
+
+        return ToolOutputBudget.PageBody(
+            body.Text,
+            ToolOutputBudget.InspectFullBodyMaxBytes,
+            new ToolContinuationIdentity(
+                workspaceId,
+                symbol.SymbolId,
+                detail.BodyHash,
+                startByte,
+                endByte),
+            continuation);
+    }
+
     // Escape a symbol name for embedding inside a quoted tool-call argument, matching context's NextInspectLine
     // precedent: backslash first, then quote, so a name containing either stays a single well-formed hint line.
     private static string EscapeCallString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private static string EscapeDiagnosticTarget(string value) =>
+        ToolDiagnosticText.EscapeCallArgument(value);
 
     private static void AppendOmittedLine(StringBuilder sb, int total, int visible, string label)
     {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Miller.Server.Tools;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Serilog;
@@ -35,16 +36,22 @@ public static class TelemetryCallToolFilter
 
     /// <summary>
     /// Build the filter delegate. The <see cref="TelemetryLedger"/> is resolved per-call from the request's
-    /// service provider, so the filter works regardless of registration order. If no ledger is registered
-    /// (it always is in production) the call passes through untouched.
+    /// service provider, so the filter works regardless of registration order. Typed hard diagnostics still
+    /// use the MCP error channel when no ledger is registered.
     /// </summary>
     public static McpRequestFilter<CallToolRequestParams, CallToolResult> Create()
     {
         return next => async (request, cancellationToken) =>
         {
+            using var diagnosticContext = ToolDiagnosticContext.BeginScope();
             var ledger = request.Services?.GetService<TelemetryLedger>();
             if (ledger is null)
-                return await next(request, cancellationToken);
+            {
+                CallToolResult unmeasured = await next(request, cancellationToken);
+                if (ToolDiagnosticContext.Outcome == ToolDiagnosticOutcome.Error)
+                    unmeasured.IsError = true;
+                return unmeasured;
+            }
 
             string tool = request.Params?.Name ?? "(unknown)";
 
@@ -76,6 +83,8 @@ public static class TelemetryCallToolFilter
             {
                 CallToolResult result = await next(request, cancellationToken);
 
+                if (scope.UseMcpErrorChannel || ToolDiagnosticContext.Outcome == ToolDiagnosticOutcome.Error)
+                    result.IsError = true;
                 bool isError = result.IsError == true;
                 // The tool body may already have set ResultCount via TelemetryContext.Current; fall back to
                 // the content-block count when it did not (e.g. a non-Miller discovered tool in the pin test).
@@ -282,4 +291,5 @@ public static class TelemetryCallToolFilter
                 total += TokenEstimator.ByteLength(text.Text);
         return total;
     }
+
 }

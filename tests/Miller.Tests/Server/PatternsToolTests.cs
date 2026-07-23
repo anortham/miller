@@ -190,8 +190,33 @@ public sealed class PatternsToolTests
 
         string output = tool.Patterns(operation: "search", format: "json");
 
-        Assert.StartsWith("patterns failed:", output, StringComparison.Ordinal);
-        Assert.Contains("pattern_id", output, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("invalid_request", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Contains("pattern_id", diagnostic.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_InvalidRequest_DoesNotRecordErrorTelemetry()
+    {
+        using var fx = CreatePatternFixture();
+        string telemetryDb = Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "telemetry-invalid.db");
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        using var ledger = TelemetryLedger.Open(
+            telemetryDb,
+            "workspace-1",
+            Path.GetDirectoryName(Path.GetDirectoryName(fx.DbPath))!);
+        using var scope = ledger.Measure("patterns", op: null);
+
+        tool.Patterns(operation: "search", format: "json");
+
+        Assert.Equal(TelemetryOutcome.Empty, scope.Outcome);
+        Assert.Null(scope.ErrorKind);
+        Assert.Null(scope.ErrorMessage);
+        Assert.Null(scope.ErrorDetail);
+        Assert.DoesNotContain("error_category", scope.MetadataJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -502,8 +527,9 @@ public sealed class PatternsToolTests
 
         string output = tool.Patterns(operation: "list", query: "route");
 
-        Assert.StartsWith("patterns failed:", output, StringComparison.Ordinal);
         Assert.Contains("query is only supported for search", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=invalid_request", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=refusal", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -538,6 +564,30 @@ public sealed class PatternsToolTests
         Assert.Equal("file", doc.RootElement.GetProperty("group_by").GetString());
         JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
         Assert.Equal("Views/Orders.cshtml", group.GetProperty("path").GetString());
+    }
+
+    [Theory]
+    [InlineData("search", "not-key-value", null)]
+    [InlineData("summary", null, "invalid")]
+    public void Patterns_InvalidFilters_JsonAreTypedRefusals(
+        string operation,
+        string? where,
+        string? groupBy)
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        using var document = JsonDocument.Parse(tool.Patterns(
+            operation: operation,
+            pattern_id: "htmx.attribute.v1",
+            where: where,
+            group_by: groupBy,
+            format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("invalid_request", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
     }
 
     private static void Exec(string dbPath, string sql)

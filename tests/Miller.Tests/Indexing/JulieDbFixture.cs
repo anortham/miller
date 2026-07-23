@@ -370,6 +370,7 @@ internal sealed class JulieDbFixture : IDisposable
         public int? BodyEndByte { get; init; }
         public int? BodyStartLine { get; init; }
         public int? BodyEndLine { get; init; }
+        public string? BodyHash { get; init; }
 
         /// <summary>
         /// Raw <c>symbols.metadata_json</c> (julie's per-language extractor output). NULL by default. Kept
@@ -650,11 +651,11 @@ internal sealed class JulieDbFixture : IDisposable
                     "INSERT INTO symbols (symbol_id, file_id, path, language, name, kind, signature, " +
                     "start_line, start_column, end_line, end_column, start_byte, end_byte, parent_symbol_id, " +
                     "doc_comment, visibility, " +
-                    "body_start_byte, body_end_byte, body_start_line, body_end_line, " +
+                    "body_start_byte, body_end_byte, body_start_line, body_end_line, body_hash, " +
                     "is_test, test_container, test_lifecycle, metadata_json) " +
                     "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sig, " +
                     "$sl, 0, $el, 0, $sb, $eb, $pid, " +
-                    "$doc, $vis, $bsb, $beb, $bsl, $bel, " +
+                    "$doc, $vis, $bsb, $beb, $bsl, $bel, $bhash, " +
                     "$istest, $tcont, $tlife, $meta);";
                 cmd.Parameters.AddWithValue("$id", r.Id);
                 cmd.Parameters.AddWithValue("$fid", FileId(r.FilePath));
@@ -674,6 +675,7 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.Parameters.AddWithValue("$beb", (object?)r.BodyEndByte ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bsl", (object?)r.BodyStartLine ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bel", (object?)r.BodyEndLine ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$bhash", (object?)r.BodyHash ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$istest", r.IsTest ? 1 : 0);
                 cmd.Parameters.AddWithValue("$tcont", r.TestContainer ? 1 : 0);
                 cmd.Parameters.AddWithValue("$tlife", r.TestLifecycle ? 1 : 0);
@@ -913,6 +915,7 @@ internal sealed class JulieDbFixture : IDisposable
                 DocComment = "Gets a user by id.",
                 BodyStartByte = bodyStart, BodyEndByte = bodyEnd,
                 BodyStartLine = 2, BodyEndLine = 4,
+                BodyHash = "get-user-body-hash",
             },
 
             // DeleteUser: NULL body spans (graceful body degradation) + a NULL body line range.

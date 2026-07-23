@@ -296,10 +296,10 @@ public sealed class SearchTool
         string? language = null)
     {
         var scope = TelemetryContext.Current;
+        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
             SearchRoute route = SearchRoutePlanner.Plan(mode, regions);
-            bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             if (scope is not null)
                 ApplyTelemetryShape(scope, route, json, limit, regions, file_pattern, language, exclude_tests);
@@ -526,26 +526,57 @@ public sealed class SearchTool
                 }
             }
 
+            ToolDiagnostic? diagnostic =
+                count == 0 ? SearchEmptyDiagnostic(route, query) : null;
             if (scope is not null)
             {
                 scope.SetTarget(query);
                 scope.ResultCount = count;
-                scope.Outcome = count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
-                if (count == 0)
+                scope.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
+                if (diagnostic is not null)
                     ApplyEmptyTelemetry(scope, route, query);
+            }
+            if (diagnostic is not null)
+            {
+                output = ToolDiagnosticRenderer.Attach(
+                    "search",
+                    output,
+                    diagnostic,
+                    json,
+                    scope);
             }
             return output;
         }
         catch (Exception ex)
         {
-            if (scope is not null)
-            {
-                scope.Outcome = TelemetryOutcome.Error;
-                scope.SetError(ex);
-            }
-            // Return a clean compact error rather than throwing raw (which the SDK redacts to the client).
-            return $"search failed: {ex.Message}";
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                scope?.SetError(ex);
+            return ToolDiagnosticRenderer.Render(
+                "search",
+                diagnostic,
+                json,
+                scope);
         }
+    }
+
+    private static ToolDiagnostic SearchEmptyDiagnostic(SearchRoute route, string query)
+    {
+        string mode = ModeName(route.Mode);
+        if (route.Kind == SearchRouteKind.Markers)
+        {
+            return ToolDiagnostic.ExpectedEmpty(
+                EmptyReasonFor(route),
+                "No requested source markers were found.");
+        }
+
+        string recoveryMode = route.Kind == SearchRouteKind.Symbols ? "source" : "auto";
+        return ToolDiagnostic.ExpectedEmpty(
+            EmptyReasonFor(route),
+            $"No results matched the {mode} search route.",
+            [new ToolDiagnosticAction(
+                SearchCall(query, recoveryMode),
+                recoveryMode == "source" ? "search source-body text" : "retry automatic routing")]);
     }
 
     /// <summary>
@@ -688,7 +719,6 @@ public sealed class SearchTool
     private static void ApplyEmptyTelemetry(TelemetryScope scope, SearchRoute route, string query)
     {
         string queryShape = QueryShapeFor(query);
-        scope.SetEmptyReason(EmptyReasonFor(route));
         scope.SetMetadata("query_shape", queryShape);
         scope.SetMetadata("empty_diagnosis", EmptyDiagnosisFor(route, queryShape));
     }
@@ -779,8 +809,8 @@ public sealed class SearchTool
     }
 
     /// <summary>
-    /// Render one diagnosis sentence followed by a primary <c>Next:</c> action, and an <c>or:</c> alternative only
-    /// where the diagnosis is genuinely ambiguous between two modes. Compact output only — JSON is frozen.
+    /// Render one compact diagnosis sentence followed by a primary <c>Next:</c> action, and an <c>or:</c>
+    /// alternative only where the diagnosis is genuinely ambiguous between two modes.
     /// </summary>
     private static string RenderEmptyHint(string sentence, params SearchNextAction[] actions)
     {
@@ -1015,8 +1045,6 @@ public sealed class SearchTool
     /// BEFORE tokenization/CollapseName so it cannot heap-thrash the tokenizers.</summary>
     internal const int MaxQueryLength = 1000;
 
-    // Same throw-pattern as the ThrowIfNullOrWhiteSpace guard: the MCP boundary catches and renders it as a
-    // clean `search failed:` line instead of a raw stack.
     private static void ThrowIfQueryTooLong(string query)
     {
         if (query.Length > MaxQueryLength)

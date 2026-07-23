@@ -159,6 +159,12 @@ No-match search JSON includes the same recovery context as compact output:
 If a requested `pattern_id` exists but `language`, `path`, or `where` filters remove every row, the empty result
 is still successful and output names the active filters so callers can loosen them deliberately.
 
+Overall outcome classification follows the
+[Tool Diagnostics Contract v1](tool-diagnostics-v1.md). Empty results retain `empty_reason`, `near_matches`,
+`active_filters`, and `next_actions` and also add top-level `diagnostic`. Invalid requests use
+`refusal/invalid_request`; incompatible, corrupt, unavailable, and unexpected failures use the diagnostic
+envelope and the MCP error channel.
+
 ## Export (CLI only)
 
 `miller patterns export --jsonl` emits one JSON line per `structural_facts` row, ordered
