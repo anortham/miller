@@ -1488,7 +1488,13 @@ for line in sys.stdin:
                 classification="valid",
                 failure_reason=None,
                 answer=StructuredAnswer(status="answered", answer="answer", evidence=()),
-                verification=VerificationResult(True, (), ()),
+                verification=VerificationResult(
+                    True,
+                    (),
+                    (),
+                    observed_outcome="wrong_answer",
+                    wrong_action_count=2,
+                ),
                 command_manifest_path=root / "manifest.json",
                 codex_events_path=root / "codex.jsonl",
                 proxy_events_path=proxy,
@@ -1518,7 +1524,16 @@ for line in sys.stdin:
                 ),
             )
 
-        self.assertEqual((budget["status"], budget["failure_reason"], budget["answer"]), ("budget_exceeded", "budget_exceeded", None))
+        self.assertEqual(
+            (
+                budget["status"],
+                budget["failure_reason"],
+                budget["answer"],
+                budget["observed_outcome"],
+                budget["wrong_action_count"],
+            ),
+            ("budget_exceeded", "budget_exceeded", None, "hard_error", 0),
+        )
         self.assertEqual((disallowed["status"], disallowed["failure_reason"], disallowed["answer"]), ("disallowed_tool", "disallowed_tool", None))
 
     def test_v1_raw_and_scorer_rows_preserve_canonical_outcomes(self):

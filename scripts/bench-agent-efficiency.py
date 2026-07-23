@@ -571,6 +571,7 @@ def _raw_result(
         failure_reason = "budget_exceeded"
         answer = None
         observed_outcome = "hard_error"
+        wrong_action_count = 0
     elif run.failure_reason == "disallowed_tool" or run.outcome == "disallowed_tool":
         status = "disallowed_tool"
         failure_reason = "disallowed_tool"
