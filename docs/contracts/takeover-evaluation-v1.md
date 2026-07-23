@@ -346,6 +346,8 @@ The report may additionally aggregate output bytes, model tokens, duplicate call
 
 All reports keep relevance, correctness, outcomes, and efficiency in separate blocks. Aggregate outcome counts include all five canonical outcomes by neutral role. Failure-reason counts remain diagnostic and cannot replace outcome counts.
 
+The pure agent-action scorer emits `action_verdict=pass|fail` from its correctness and efficiency blocks, but always emits `decision_verdict=not_decisional`. It does not receive relevance results, full capability/selection identity, corpus role, privacy validation, or unresolved-void state. Only the later combined full-decision aggregate may emit `decision_verdict=pass|fail` after validating every final-gate input below.
+
 Workflow, capability, repository, and language subgroups are aggregate-only, ordinally ordered, and suppressed when they contain fewer than five selected tasks. Suppression never removes a task from global gates.
 
 ### Subset report

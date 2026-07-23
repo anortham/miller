@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": ["status", "answer", "evidence"],
   "properties": {
+    "contract_id": { "const": "takeover-evaluation-v1" },
     "status": { "enum": ["answered", "not_found", "blocked"] },
     "answer": { "type": "string", "minLength": 1, "maxLength": 8000 },
     "evidence": {
@@ -25,6 +26,118 @@
           "line": { "type": ["integer", "null"], "minimum": 1 },
           "claim": { "type": "string", "minLength": 1, "maxLength": 1000 }
         }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "$ref": "#/$defs/submittedAction" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["contract_id"]
+      },
+      "then": {
+        "required": ["actions"]
+      },
+      "else": {
+        "not": {
+          "required": ["actions"]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "repoRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+    },
+    "actionKind": {
+      "enum": [
+        "inspect_symbol",
+        "inspect_file",
+        "assemble_context",
+        "trace_callers",
+        "trace_callees",
+        "trace_call_path",
+        "cite_reference_site",
+        "select_tests",
+        "propose_edit",
+        "propose_rename",
+        "read_log",
+        "query_pattern",
+        "recover_workspace",
+        "report_empty",
+        "refuse_unsafe"
+      ]
+    },
+    "canonicalSymbolId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+    },
+    "nullableCanonicalSymbolId": {
+      "oneOf": [
+        { "$ref": "#/$defs/canonicalSymbolId" },
+        { "type": "null" }
+      ]
+    },
+    "referenceSiteIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "line_start",
+        "line_end",
+        "reference_kind",
+        "containing_symbol_id",
+        "source_symbol_id",
+        "target_symbol_id",
+        "resolution"
+      ],
+      "properties": {
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "column_start": { "type": "integer", "minimum": 0 },
+        "column_end": { "type": "integer", "minimum": 0 },
+        "reference_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "containing_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "source_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "target_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "resolution": { "enum": ["exact", "fallback", "unresolved"] }
+      },
+      "dependentRequired": {
+        "column_start": ["column_end"],
+        "column_end": ["column_start"]
+      }
+    },
+    "actionTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "symbol_id": { "$ref": "#/$defs/canonicalSymbolId" },
+        "target_symbol_id": { "$ref": "#/$defs/canonicalSymbolId" },
+        "reference_site": { "$ref": "#/$defs/referenceSiteIdentity" },
+        "test_path": { "$ref": "#/$defs/repoRelativePath" },
+        "pattern_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "workspace_selector": { "$ref": "#/$defs/repoRelativePath" }
+      }
+    },
+    "submittedAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "target"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/actionKind" },
+        "target": { "$ref": "#/$defs/actionTarget" }
       }
     }
   }

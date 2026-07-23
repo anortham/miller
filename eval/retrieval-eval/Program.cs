@@ -14,8 +14,12 @@ public static class Program
           validate --queries <queries.jsonl> [--corpus <dir> | --corpus <repo>=<dir> ...]
           task-score --tasks <manifest.jsonl> --baseline <results.jsonl>
                      --candidate <results.jsonl> --out <aggregate.json>
-          agent-score --tasks <manifest.jsonl> --miller <results.jsonl>
-                      --julie <results.jsonl> --out <aggregate.json>
+          agent-score --tasks <manifest.jsonl> --baseline <results.jsonl>
+                      --candidate <results.jsonl> --decision-scope <subset|full>
+                      --out <aggregate.json>
+
+        Legacy agent-score input adapter: --miller <results.jsonl> --julie <results.jsonl>.
+        Legacy inputs always produce decision_scope=subset and decision_verdict=not_decisional.
 
         --corpus with a bare directory applies to every repo; repeat `<repo>=<dir>` for a multi-repo set.
         Exit codes: 0 ok, 1 usage/IO error, 2 validation failed.
@@ -145,22 +149,61 @@ public static class Program
     static int RunAgentScore(Options options)
     {
         var tasksPath = options.Require("tasks");
-        var millerPath = options.Require("miller");
-        var juliePath = options.Require("julie");
         var outPath = options.Require("out");
+        var hasNeutralOptions = options.Has("baseline") || options.Has("candidate") || options.Has("decision-scope");
+        var hasLegacyOptions = options.Has("miller") || options.Has("julie");
+        if (hasNeutralOptions && hasLegacyOptions)
+            throw new ArgumentException($"agent-score cannot mix baseline/candidate and Miller/Julie inputs\n\n{Usage}");
 
         try
         {
-            var tasks = ReadAgentRows<AgentTaskManifestRow>(tasksPath, "task manifest", AgentTaskManifestFields);
-            var miller = ReadAgentRows<AgentRunResult>(millerPath, "Miller results", AgentRunResultFields);
-            var julie = ReadAgentRows<AgentRunResult>(juliePath, "Julie results", AgentRunResultFields);
-            var report = AgentEfficiencyScorer.Score(tasks, miller, julie);
+            AgentEfficiencyReport report;
+            if (hasLegacyOptions)
+            {
+                var millerPath = options.Require("miller");
+                var juliePath = options.Require("julie");
+                var tasks = ReadAgentRows<LegacyAgentTaskManifestRow>(
+                    tasksPath,
+                    "legacy task manifest",
+                    LegacyAgentTaskManifestFields);
+                var miller = ReadAgentRows<LegacyAgentRunResult>(
+                    millerPath,
+                    "legacy Miller results",
+                    LegacyAgentRunResultFields);
+                var julie = ReadAgentRows<LegacyAgentRunResult>(
+                    juliePath,
+                    "legacy Julie results",
+                    LegacyAgentRunResultFields);
+                report = AgentEfficiencyScorer.ScoreLegacy(
+                    tasks.Select(AdaptLegacyTask).ToList(),
+                    miller.Select(AdaptLegacyRun).ToList(),
+                    julie.Select(AdaptLegacyRun).ToList());
+            }
+            else
+            {
+                var baselinePath = options.Require("baseline");
+                var candidatePath = options.Require("candidate");
+                var decisionScope = options.Require("decision-scope");
+                var tasks = ReadAgentRows<AgentTaskManifestRow>(
+                    tasksPath,
+                    "task manifest",
+                    AgentTaskManifestFields);
+                var baseline = ReadAgentRows<AgentRunResult>(
+                    baselinePath,
+                    "baseline results",
+                    AgentRunResultFields);
+                var candidate = ReadAgentRows<AgentRunResult>(
+                    candidatePath,
+                    "candidate results",
+                    AgentRunResultFields);
+                report = AgentEfficiencyScorer.Score(tasks, baseline, candidate, decisionScope);
+            }
 
             var directory = Path.GetDirectoryName(Path.GetFullPath(outPath));
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
             File.WriteAllText(outPath, JsonSerializer.Serialize(report, Jsonl.Options));
 
-            Console.WriteLine($"tasks={report.TaskCount}  correctness={report.Correctness.Verdict}  efficiency={report.Efficiency.Verdict}  verdict={report.Verdict}");
+            Console.WriteLine($"tasks={report.TaskCount}  correctness={report.Correctness.Verdict}  efficiency={report.Efficiency.Verdict}  action={report.ActionVerdict}  decision={report.DecisionVerdict}");
             Console.WriteLine("aggregate written");
             return 0;
         }
@@ -168,6 +211,54 @@ public static class Program
         {
             return ValidationFail(ex.Message);
         }
+    }
+
+    static AgentTaskManifestRow AdaptLegacyTask(LegacyAgentTaskManifestRow task) => new()
+    {
+        ContractId = AgentEvaluationContract.LegacyAdapterId,
+        SchemaVersion = AgentEvaluationContract.LegacyAdapterVersion,
+        TaskId = task.TaskId,
+        Repo = task.Repo,
+        Language = task.Language,
+        WorkflowClass = task.WorkflowClass,
+        EvidenceCritical = task.EvidenceCritical,
+        ExpectedOutcome = AgentExpectedOutcomes.Success,
+        Capabilities = [AgentCapabilities.LegacyCompatibility],
+    };
+
+    static AgentRunResult AdaptLegacyRun(LegacyAgentRunResult run)
+    {
+        if (run.Completed && run.FailureReason is not null)
+            throw new InvalidOperationException("Legacy completed result failure_reason must be null.");
+        if (!run.Completed && string.IsNullOrWhiteSpace(run.FailureReason))
+            throw new InvalidOperationException("Legacy incomplete result failure_reason is required.");
+        if (run.FailureReason is not null && !AgentFailureReasons.All.Contains(run.FailureReason))
+            throw new InvalidOperationException("Legacy result failure_reason is unsupported.");
+
+        var observedOutcome = run.Completed
+            ? AgentObservedOutcomes.Success
+            : run.FailureReason is "budget_exceeded" or "product_error" or "invalid_answer"
+                ? AgentObservedOutcomes.HardError
+                : AgentObservedOutcomes.WrongAnswer;
+        return new AgentRunResult
+        {
+            ContractId = AgentEvaluationContract.LegacyAdapterId,
+            SchemaVersion = AgentEvaluationContract.LegacyAdapterVersion,
+            TaskId = run.TaskId,
+            Repetition = run.Repetition,
+            ObservedOutcome = observedOutcome,
+            WrongActionCount = 0,
+            FailureReason = run.Completed ? null : run.FailureReason ?? "incorrect",
+            DurationMs = run.DurationMs,
+            ToolCalls = run.ToolCalls,
+            ToolOutputBytes = run.ToolOutputBytes,
+            ToolOutputTokens = run.ToolOutputTokens,
+            ModelInputTokens = run.ModelInputTokens,
+            ModelOutputTokens = run.ModelOutputTokens,
+            ProductErrors = run.ProductErrors,
+            DuplicateCalls = run.DuplicateCalls,
+            UncitedToolOutputTokens = run.UncitedToolOutputTokens,
+        };
     }
 
     static List<T> ReadTaskRows<T>(string path, string label, IReadOnlySet<string> allowedFields)
@@ -270,10 +361,24 @@ public static class Program
 
     static readonly IReadOnlySet<string> AgentTaskManifestFields = new HashSet<string>(StringComparer.Ordinal)
     {
-        "task_id", "repo", "language", "workflow_class", "evidence_critical",
+        "contract_id", "schema_version", "task_id", "repo", "language", "workflow_class",
+        "evidence_critical", "expected_outcome", "capabilities",
     };
 
     static readonly IReadOnlySet<string> AgentRunResultFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "contract_id", "schema_version", "task_id", "repetition", "observed_outcome",
+        "wrong_action_count", "failure_reason", "duration_ms", "tool_calls", "tool_output_bytes",
+        "tool_output_tokens", "model_input_tokens", "model_output_tokens", "product_errors",
+        "duplicate_calls", "uncited_tool_output_tokens",
+    };
+
+    static readonly IReadOnlySet<string> LegacyAgentTaskManifestFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "task_id", "repo", "language", "workflow_class", "evidence_critical",
+    };
+
+    static readonly IReadOnlySet<string> LegacyAgentRunResultFields = new HashSet<string>(StringComparer.Ordinal)
     {
         "task_id", "repetition", "completed", "failure_reason", "duration_ms", "tool_calls",
         "tool_output_bytes", "tool_output_tokens", "model_input_tokens", "model_output_tokens",
@@ -315,6 +420,32 @@ public static class Program
         };
     }
 
+    sealed record LegacyAgentTaskManifestRow
+    {
+        [JsonPropertyName("task_id")] public string TaskId { get; init; } = "";
+        [JsonPropertyName("repo")] public string Repo { get; init; } = "";
+        [JsonPropertyName("language")] public string Language { get; init; } = "";
+        [JsonPropertyName("workflow_class")] public string WorkflowClass { get; init; } = "";
+        [JsonPropertyName("evidence_critical")] public bool EvidenceCritical { get; init; }
+    }
+
+    sealed record LegacyAgentRunResult
+    {
+        [JsonPropertyName("task_id")] public string TaskId { get; init; } = "";
+        [JsonPropertyName("repetition")] public int Repetition { get; init; }
+        [JsonPropertyName("completed")] public bool Completed { get; init; }
+        [JsonPropertyName("failure_reason")] public string? FailureReason { get; init; }
+        [JsonPropertyName("duration_ms")] public long DurationMs { get; init; }
+        [JsonPropertyName("tool_calls")] public long ToolCalls { get; init; }
+        [JsonPropertyName("tool_output_bytes")] public long ToolOutputBytes { get; init; }
+        [JsonPropertyName("tool_output_tokens")] public long ToolOutputTokens { get; init; }
+        [JsonPropertyName("model_input_tokens")] public long ModelInputTokens { get; init; }
+        [JsonPropertyName("model_output_tokens")] public long ModelOutputTokens { get; init; }
+        [JsonPropertyName("product_errors")] public long ProductErrors { get; init; }
+        [JsonPropertyName("duplicate_calls")] public long DuplicateCalls { get; init; }
+        [JsonPropertyName("uncited_tool_output_tokens")] public long UncitedToolOutputTokens { get; init; }
+    }
+
     sealed class Options
     {
         readonly Dictionary<string, string> _single = new(StringComparer.Ordinal);
@@ -347,6 +478,8 @@ public static class Program
             _single.TryGetValue(name, out var value)
                 ? value
                 : throw new ArgumentException($"--{name} is required\n\n{Usage}");
+
+        public bool Has(string name) => _single.ContainsKey(name);
 
         public int Int(string name, int fallback) =>
             _single.TryGetValue(name, out var value)

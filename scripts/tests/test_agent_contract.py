@@ -78,6 +78,113 @@ def _valid_task() -> dict:
     }
 
 
+def _reference_site(
+    *,
+    path: str = "src/factory.py",
+    target_symbol_id: str | None = "python:src/factory.py:create_candidate",
+    resolution: str = "exact",
+) -> dict:
+    return {
+        "path": path,
+        "line_start": 2,
+        "line_end": 2,
+        "column_start": 4,
+        "column_end": 27,
+        "reference_kind": "call",
+        "containing_symbol_id": "python:src/app.py:build",
+        "source_symbol_id": "python:src/app.py:build",
+        "target_symbol_id": target_symbol_id,
+        "resolution": resolution,
+    }
+
+
+def _valid_v1_task() -> dict:
+    task = _valid_task()
+    task["capabilities"] = ["exact_symbol_lookup", "homonym_disambiguation"]
+    task["expected_outcome"] = "success"
+    task["evidence_anchors"][0]["relevance_grade"] = 3
+    task["reference_sites"] = [{"site_id": "site-001", **_reference_site()}]
+    task["acceptable_actions"] = [
+        {
+            "action_id": "action-001",
+            "kind": "inspect_symbol",
+            "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+            "requirement_group": "identify-target",
+            "evidence_anchor_ids": ["anchor-001"],
+        },
+        {
+            "action_id": "action-002",
+            "kind": "cite_reference_site",
+            "target": {"reference_site": _reference_site()},
+            "requirement_group": "cite-call-site",
+            "reference_site_ids": ["site-001"],
+        },
+    ]
+    task["forbidden_actions"] = [
+        {
+            "action_id": "action-003",
+            "kind": "inspect_symbol",
+            "target": {"symbol_id": "python:src/other.py:create_candidate"},
+            "reason": "wrong homonym",
+        }
+    ]
+    task["uncertainty_expectation"] = "must_resolve"
+    return task
+
+
+def _valid_v1_manifest(task: dict | None = None) -> dict:
+    return {
+        "contract_id": "takeover-evaluation-v1",
+        "schema_version": 1,
+        "tasks": [task or _valid_v1_task()],
+    }
+
+
+def _valid_v1_answer() -> dict:
+    return {
+        "contract_id": "takeover-evaluation-v1",
+        "status": "answered",
+        "answer": "The factory selects the token-baseline fallback.",
+        "evidence": [
+            {
+                "path": "src/factory.py",
+                "symbol": "create_candidate",
+                "line": 2,
+                "claim": "The factory returns the token-baseline fallback.",
+            }
+        ],
+        "actions": [
+            {
+                "kind": "inspect_symbol",
+                "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+            },
+            {
+                "kind": "cite_reference_site",
+                "target": {"reference_site": _reference_site()},
+            },
+        ],
+    }
+
+
+def _load_v1_task(task: dict | None = None) -> BenchmarkTask:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "tasks.json"
+        _write_json(path, _valid_v1_manifest(task))
+        return load_task_manifest(path)[0]
+
+
+def _create_answer_snapshot(root: Path) -> None:
+    (root / "src").mkdir()
+    (root / "src" / "factory.py").write_text(
+        "def create_candidate():\n    return 'token-baseline'\n",
+        encoding="utf-8",
+    )
+    (root / "src" / "other.py").write_text(
+        "def create_candidate():\n    return 'other'\n",
+        encoding="utf-8",
+    )
+
+
 def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
@@ -166,6 +273,471 @@ class AgentContractTests(unittest.TestCase):
         self.assertEqual(("anchor-001",), tasks[0].fact_predicates[0].evidence_anchor_ids)
         with self.assertRaises((AttributeError, TypeError)):
             tasks[0].task_id = "changed"
+
+    def test_takeover_v1_loader_exposes_typed_semantics_and_keeps_legacy_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            v1_path = root / "v1-tasks.json"
+            legacy_path = root / "legacy-tasks.json"
+            _write_json(v1_path, _valid_v1_manifest())
+            _write_json(legacy_path, {"schema_version": 1, "tasks": [_valid_task()]})
+
+            v1_task = load_task_manifest(v1_path)[0]
+            legacy_task = load_task_manifest(legacy_path)[0]
+            v1_answer = StructuredAnswer.from_mapping(_valid_v1_answer())
+            legacy_answer = StructuredAnswer.from_mapping(
+                {"status": "answered", "answer": "Legacy answer.", "evidence": []}
+            )
+
+        self.assertTrue(hasattr(v1_task, "contract_id"))
+        self.assertEqual("takeover-evaluation-v1", v1_task.contract_id)
+        self.assertEqual(
+            ("exact_symbol_lookup", "homonym_disambiguation"),
+            v1_task.capabilities,
+        )
+        self.assertEqual("success", v1_task.expected_outcome)
+        self.assertEqual(3, v1_task.evidence_anchors[0].relevance_grade)
+        self.assertEqual("site-001", v1_task.reference_sites[0].site_id)
+        self.assertEqual("identify-target", v1_task.acceptable_actions[0].requirement_group)
+        self.assertEqual("wrong homonym", v1_task.forbidden_actions[0].reason)
+        self.assertEqual("must_resolve", v1_task.uncertainty_expectation)
+        self.assertEqual("takeover-evaluation-v1", v1_answer.contract_id)
+        self.assertEqual("inspect_symbol", v1_answer.actions[0].kind)
+
+        self.assertIsNone(legacy_task.contract_id)
+        self.assertEqual((), legacy_task.capabilities)
+        self.assertIsNone(legacy_task.expected_outcome)
+        self.assertIsNone(legacy_answer.contract_id)
+        self.assertEqual((), legacy_answer.actions)
+
+    def test_takeover_v1_loader_rejects_semantically_invalid_labels(self) -> None:
+        mutations = [
+            (
+                "missing v1 field",
+                lambda value: value["tasks"][0].pop("capabilities"),
+                "capabilities",
+            ),
+            (
+                "duplicate capability",
+                lambda value: value["tasks"][0]["capabilities"].append("exact_symbol_lookup"),
+                "unique",
+            ),
+            (
+                "empty capabilities",
+                lambda value: value["tasks"][0].update({"capabilities": []}),
+                "non-empty",
+            ),
+            (
+                "invalid expected outcome",
+                lambda value: value["tasks"][0].update({"expected_outcome": "hard_error"}),
+                "hard_error",
+            ),
+            (
+                "bad relevance grade",
+                lambda value: value["tasks"][0]["evidence_anchors"][0].update(
+                    {"relevance_grade": 0}
+                ),
+                "minimum",
+            ),
+            (
+                "overlapping evidence anchors",
+                lambda value: value["tasks"][0]["evidence_anchors"].append(
+                    {
+                        "anchor_id": "anchor-002",
+                        "path": "src/factory.py",
+                        "line_start": 2,
+                        "line_end": 4,
+                        "relevance_grade": 2,
+                    }
+                ),
+                "overlapping",
+            ),
+            (
+                "empty action target",
+                lambda value: value["tasks"][0]["acceptable_actions"][0].update({"target": {}}),
+                "non-empty",
+            ),
+            (
+                "wrong typed action target",
+                lambda value: value["tasks"][0]["acceptable_actions"][0].update(
+                    {"target": {"pattern_id": "python.call"}}
+                ),
+                "typed target",
+            ),
+            (
+                "executable grader",
+                lambda value: value["tasks"][0]["acceptable_actions"][0].update(
+                    {"callback": "grader.verify"}
+                ),
+                "callback",
+            ),
+            (
+                "duplicate action id",
+                lambda value: value["tasks"][0]["forbidden_actions"][0].update(
+                    {"action_id": "action-001"}
+                ),
+                "duplicate",
+            ),
+            (
+                "missing action anchor",
+                lambda value: value["tasks"][0]["acceptable_actions"][0].update(
+                    {"evidence_anchor_ids": ["anchor-999"]}
+                ),
+                "anchor-999",
+            ),
+            (
+                "missing action reference site",
+                lambda value: value["tasks"][0]["acceptable_actions"][1].update(
+                    {"reference_site_ids": ["site-999"]}
+                ),
+                "site-999",
+            ),
+            (
+                "reversed reference lines",
+                lambda value: value["tasks"][0]["reference_sites"][0].update(
+                    {"line_start": 3, "line_end": 2}
+                ),
+                "line_end",
+            ),
+            (
+                "reversed reference columns",
+                lambda value: value["tasks"][0]["reference_sites"][0].update(
+                    {"column_start": 28, "column_end": 27}
+                ),
+                "column_end",
+            ),
+            (
+                "exact reference without target",
+                lambda value: value["tasks"][0]["reference_sites"][0].update(
+                    {"target_symbol_id": None}
+                ),
+                "target_symbol_id",
+            ),
+            (
+                "refusal mismatch",
+                lambda value: value["tasks"][0].update(
+                    {"uncertainty_expectation": "must_refuse"}
+                ),
+                "must_refuse",
+            ),
+        ]
+
+        for label, mutate, expected in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                value = _valid_v1_manifest()
+                mutate(value)
+                path = Path(directory) / "tasks.json"
+                _write_json(path, value)
+
+                with self.assertRaisesRegex(ValueError, expected):
+                    load_task_manifest(path)
+
+    def test_takeover_v1_verifier_returns_ordered_matches_and_success_outcome(self) -> None:
+        task = _load_v1_task()
+        answer = _valid_v1_answer()
+        answer["evidence"].extend(
+            [
+                dict(answer["evidence"][0]),
+                {
+                    "path": "src/other.py",
+                    "symbol": "create_candidate",
+                    "line": 2,
+                    "claim": "This unrelated homonym returns another value.",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            result = verify_answer(task, answer, root)
+
+        self.assertEqual(
+            VerificationResult(
+                passed=True,
+                failures=(),
+                matched_anchor_ids=("anchor-001",),
+                ordered_evidence_matches=("anchor-001", None, None),
+                observed_outcome="success",
+                wrong_action_count=0,
+            ),
+            result,
+        )
+
+    def test_takeover_v1_verifier_rejects_wrong_homonym_site_and_forbidden_actions(self) -> None:
+        task = _load_v1_task()
+        cases: list[tuple[str, dict, str]] = []
+
+        wrong_homonym = _valid_v1_answer()
+        wrong_homonym["actions"][0]["target"]["symbol_id"] = (
+            "python:src/other.py:create_candidate"
+        )
+        wrong_homonym["actions"].append(dict(wrong_homonym["actions"][0]))
+        cases.append(("wrong homonym", wrong_homonym, "forbidden"))
+
+        wrong_site = _valid_v1_answer()
+        wrong_site["actions"][1]["target"]["reference_site"]["line_start"] = 1
+        wrong_site["actions"][1]["target"]["reference_site"]["line_end"] = 1
+        cases.append(("wrong site", wrong_site, "unrecognized"))
+
+        unexpected_empty = _valid_v1_answer()
+        unexpected_empty["status"] = "not_found"
+        cases.append(("unexpected empty", unexpected_empty, "expected success"))
+
+        unexpected_refusal = _valid_v1_answer()
+        unexpected_refusal["status"] = "blocked"
+        cases.append(("unexpected refusal", unexpected_refusal, "expected success"))
+
+        missing_actions = _valid_v1_answer()
+        missing_actions["actions"] = []
+        cases.append(("missing actions", missing_actions, "missing requirement group"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            for label, answer, expected_failure in cases:
+                with self.subTest(label=label):
+                    result = verify_answer(task, answer, root)
+                    self.assertFalse(result.passed)
+                    self.assertEqual("wrong_answer", result.observed_outcome)
+                    self.assertIn(expected_failure, "\n".join(result.failures))
+                    if label == "wrong homonym":
+                        self.assertEqual(1, result.wrong_action_count)
+
+    def test_takeover_v1_verifier_accepts_only_expected_empty_and_refusal(self) -> None:
+        empty_task_value = _valid_v1_task()
+        empty_task_value.update(
+            {
+                "expected_outcome": "empty",
+                "fact_predicates": [],
+                "path_cited": [],
+                "symbol_cited": [],
+                "evidence_anchors": [],
+                "reference_sites": [],
+                "acceptable_actions": [
+                    {
+                        "action_id": "action-001",
+                        "kind": "report_empty",
+                        "target": {"workspace_selector": "current"},
+                        "requirement_group": "outcome",
+                    }
+                ],
+                "forbidden_actions": [],
+                "uncertainty_expectation": "must_resolve",
+            }
+        )
+        refusal_task_value = _valid_v1_task()
+        refusal_task_value.update(
+            {
+                "expected_outcome": "refusal",
+                "fact_predicates": [],
+                "path_cited": [],
+                "symbol_cited": [],
+                "evidence_anchors": [],
+                "reference_sites": [],
+                "acceptable_actions": [
+                    {
+                        "action_id": "action-001",
+                        "kind": "refuse_unsafe",
+                        "target": {
+                            "symbol_id": "python:src/factory.py:create_candidate"
+                        },
+                        "requirement_group": "outcome",
+                    }
+                ],
+                "forbidden_actions": [],
+                "uncertainty_expectation": "must_refuse",
+            }
+        )
+        empty_task = _load_v1_task(empty_task_value)
+        refusal_task = _load_v1_task(refusal_task_value)
+        empty_answer = {
+            "contract_id": "takeover-evaluation-v1",
+            "status": "not_found",
+            "answer": "No qualifying result exists.",
+            "evidence": [],
+            "actions": [
+                {"kind": "report_empty", "target": {"workspace_selector": "current"}}
+            ],
+        }
+        refusal_answer = {
+            "contract_id": "takeover-evaluation-v1",
+            "status": "blocked",
+            "answer": "The exact action is unsafe.",
+            "evidence": [],
+            "actions": [
+                {
+                    "kind": "refuse_unsafe",
+                    "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual("empty", verify_answer(empty_task, empty_answer, root).observed_outcome)
+            self.assertTrue(verify_answer(empty_task, empty_answer, root).passed)
+            self.assertEqual(
+                "refusal",
+                verify_answer(refusal_task, refusal_answer, root).observed_outcome,
+            )
+            self.assertTrue(verify_answer(refusal_task, refusal_answer, root).passed)
+
+            wrong_empty = verify_answer(empty_task, {**empty_answer, "status": "answered"}, root)
+            wrong_refusal = verify_answer(
+                refusal_task,
+                {**refusal_answer, "status": "not_found"},
+                root,
+            )
+            conflicting_refusal_answer = {
+                **refusal_answer,
+                "actions": [
+                    *refusal_answer["actions"],
+                    {
+                        "kind": "inspect_symbol",
+                        "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+                    },
+                ],
+            }
+            conflicting_refusal = verify_answer(
+                refusal_task,
+                conflicting_refusal_answer,
+                root,
+            )
+        self.assertEqual("wrong_answer", wrong_empty.observed_outcome)
+        self.assertEqual("wrong_answer", wrong_refusal.observed_outcome)
+        self.assertEqual("wrong_answer", conflicting_refusal.observed_outcome)
+        self.assertEqual(1, conflicting_refusal.wrong_action_count)
+        self.assertIn("conflicting", "\n".join(conflicting_refusal.failures))
+
+    def test_takeover_v1_refusal_uses_one_exact_symbol_target(self) -> None:
+        task_value = _valid_v1_task()
+        task_value.update(
+            {
+                "expected_outcome": "refusal",
+                "fact_predicates": [],
+                "path_cited": [],
+                "symbol_cited": [],
+                "evidence_anchors": [],
+                "reference_sites": [],
+                "acceptable_actions": [
+                    {
+                        "action_id": "action-001",
+                        "kind": "refuse_unsafe",
+                        "target": {
+                            "symbol_id": "python:src/factory.py:create_candidate"
+                        },
+                        "requirement_group": "outcome",
+                    }
+                ],
+                "forbidden_actions": [],
+                "uncertainty_expectation": "must_refuse",
+            }
+        )
+        answer = {
+            "contract_id": "takeover-evaluation-v1",
+            "status": "blocked",
+            "answer": "The homonym cannot be changed safely.",
+            "evidence": [],
+            "actions": [
+                {
+                    "kind": "refuse_unsafe",
+                    "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = verify_answer(_load_v1_task(task_value), answer, directory)
+
+        self.assertTrue(result.passed)
+        self.assertEqual("refusal", result.observed_outcome)
+
+        answer["actions"][0]["target"]["path"] = "src/factory.py"
+        with self.assertRaisesRegex(ValueError, "typed target"):
+            StructuredAnswer.from_mapping(answer)
+
+    def test_takeover_v1_verifier_rejects_wrong_edit_and_rename_targets(self) -> None:
+        task_value = _valid_v1_task()
+        task_value["capabilities"] = ["edit", "rename"]
+        task_value["acceptable_actions"] = [
+            {
+                "action_id": "action-001",
+                "kind": "propose_edit",
+                "target": {
+                    "path": "src/factory.py",
+                    "symbol_id": "python:src/factory.py:create_candidate",
+                },
+                "requirement_group": "edit-target",
+                "evidence_anchor_ids": ["anchor-001"],
+            },
+            {
+                "action_id": "action-002",
+                "kind": "propose_rename",
+                "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+                "requirement_group": "rename-target",
+            },
+        ]
+        task_value["forbidden_actions"] = []
+        answer = _valid_v1_answer()
+        answer["actions"] = [
+            {
+                "kind": "propose_edit",
+                "target": {
+                    "path": "src/other.py",
+                    "symbol_id": "python:src/other.py:create_candidate",
+                },
+            },
+            {
+                "kind": "propose_rename",
+                "target": {"symbol_id": "python:src/other.py:create_candidate"},
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            result = verify_answer(_load_v1_task(task_value), answer, root)
+
+        self.assertFalse(result.passed)
+        self.assertEqual("wrong_answer", result.observed_outcome)
+        self.assertEqual(2, result.wrong_action_count)
+        self.assertIn("edit-target", "\n".join(result.failures))
+        self.assertIn("rename-target", "\n".join(result.failures))
+
+    def test_takeover_v1_verifier_enforces_all_uncertainty_expectations(self) -> None:
+        resolved_task = _load_v1_task()
+        fallback_task_value = _valid_v1_task()
+        fallback_site = _reference_site(resolution="fallback")
+        fallback_task_value["reference_sites"] = [{"site_id": "site-001", **fallback_site}]
+        fallback_task_value["acceptable_actions"][1]["target"] = {
+            "reference_site": fallback_site
+        }
+        fallback_task_value["uncertainty_expectation"] = "must_disclose"
+        fallback_task = _load_v1_task(fallback_task_value)
+        fallback_answer = _valid_v1_answer()
+        fallback_answer["actions"][1]["target"] = {"reference_site": fallback_site}
+
+        unresolved_answer = _valid_v1_answer()
+        unresolved_answer["actions"][1]["target"]["reference_site"].update(
+            {"resolution": "unresolved", "target_symbol_id": None}
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            resolved_failure = verify_answer(resolved_task, unresolved_answer, root)
+            disclosed = verify_answer(fallback_task, fallback_answer, root)
+            undisclosed_answer = _valid_v1_answer()
+            undisclosed_answer["actions"] = [undisclosed_answer["actions"][0]]
+            undisclosed = verify_answer(fallback_task, undisclosed_answer, root)
+
+        self.assertEqual("wrong_answer", resolved_failure.observed_outcome)
+        self.assertIn("must_resolve", "\n".join(resolved_failure.failures))
+        self.assertTrue(disclosed.passed)
+        self.assertEqual("success", disclosed.observed_outcome)
+        self.assertEqual("wrong_answer", undisclosed.observed_outcome)
+        self.assertIn("must_disclose", "\n".join(undisclosed.failures))
 
     def test_task_loader_rejects_extra_executable_fields_and_invalid_criticality(self) -> None:
         mutations = [
@@ -733,6 +1305,95 @@ class AgentContractTests(unittest.TestCase):
         ]:
             self.assertEqual(0, run["properties"][field]["minimum"])
         self.assertNotIn("maximum", run["properties"]["tool_output_tokens"])
+
+    def test_takeover_v1_schemas_freeze_semantics_without_exposing_labels(self) -> None:
+        task = json.loads((BENCHMARK_ROOT / "task-manifest.schema.json").read_text(encoding="utf-8"))
+        answer = json.loads((BENCHMARK_ROOT / "answer-schema.json").read_text(encoding="utf-8"))
+        capabilities = [
+            "discovery",
+            "exact_symbol_lookup",
+            "homonym_disambiguation",
+            "context_orientation",
+            "callers",
+            "callees",
+            "call_path",
+            "impact_tests",
+            "edit",
+            "rename",
+            "logs",
+            "patterns",
+            "workspace_recovery",
+        ]
+        action_kinds = [
+            "inspect_symbol",
+            "inspect_file",
+            "assemble_context",
+            "trace_callers",
+            "trace_callees",
+            "trace_call_path",
+            "cite_reference_site",
+            "select_tests",
+            "propose_edit",
+            "propose_rename",
+            "read_log",
+            "query_pattern",
+            "recover_workspace",
+            "report_empty",
+            "refuse_unsafe",
+        ]
+
+        self.assertIn("contract_id", task["properties"])
+        self.assertIn("v1Task", task["$defs"])
+        v1_task = task["$defs"]["v1Task"]
+        self.assertTrue(
+            {
+                "capabilities",
+                "expected_outcome",
+                "acceptable_actions",
+                "forbidden_actions",
+                "reference_sites",
+                "uncertainty_expectation",
+            }.issubset(v1_task["required"])
+        )
+        self.assertEqual(
+            "#/$defs/capability",
+            v1_task["properties"]["capabilities"]["items"]["$ref"],
+        )
+        self.assertEqual(capabilities, task["$defs"]["capability"]["enum"])
+        self.assertTrue(v1_task["properties"]["capabilities"]["uniqueItems"])
+        self.assertEqual(
+            ["success", "empty", "refusal"],
+            v1_task["properties"]["expected_outcome"]["enum"],
+        )
+        self.assertEqual(
+            ["must_resolve", "must_disclose", "must_refuse"],
+            v1_task["properties"]["uncertainty_expectation"]["enum"],
+        )
+        self.assertEqual(action_kinds, task["$defs"]["actionKind"]["enum"])
+        self.assertEqual(1, task["$defs"]["v1EvidenceAnchor"]["properties"]["relevance_grade"]["minimum"])
+        self.assertEqual(3, task["$defs"]["v1EvidenceAnchor"]["properties"]["relevance_grade"]["maximum"])
+        self.assertFalse(task["$defs"]["referenceSite"]["additionalProperties"])
+        self.assertIn("target_symbol_id", task["$defs"]["referenceSite"]["properties"])
+        self.assertFalse(task["$defs"]["acceptableAction"]["additionalProperties"])
+        self.assertFalse(task["$defs"]["forbiddenAction"]["additionalProperties"])
+        self.assertNotIn("regex", task["$defs"]["acceptableAction"]["properties"])
+        self.assertNotIn("callback", task["$defs"]["acceptableAction"]["properties"])
+
+        self.assertIn("contract_id", answer["properties"])
+        self.assertIn("actions", answer["properties"])
+        self.assertEqual(action_kinds, answer["$defs"]["actionKind"]["enum"])
+        submitted_action = answer["$defs"]["submittedAction"]
+        self.assertEqual({"kind", "target"}, set(submitted_action["properties"]))
+        self.assertEqual({"kind", "target"}, set(submitted_action["required"]))
+        self.assertFalse(submitted_action["additionalProperties"])
+        for private_label_field in [
+            "action_id",
+            "requirement_group",
+            "evidence_anchor_ids",
+            "reference_site_ids",
+            "reason",
+        ]:
+            self.assertNotIn(private_label_field, submitted_action["properties"])
 
     def test_visible_corpus_is_balanced_and_uses_five_repo_language_families(self) -> None:
         tasks = load_task_manifest(BENCHMARK_ROOT / "dev-tasks.json")

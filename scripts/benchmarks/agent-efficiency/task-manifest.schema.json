@@ -6,13 +6,34 @@
   "additionalProperties": false,
   "required": ["schema_version", "tasks"],
   "properties": {
+    "contract_id": { "const": "takeover-evaluation-v1" },
     "schema_version": { "const": 1 },
     "tasks": {
       "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/task" }
+      "minItems": 1
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "required": ["contract_id"]
+      },
+      "then": {
+        "properties": {
+          "tasks": {
+            "items": { "$ref": "#/$defs/v1Task" }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "tasks": {
+            "items": { "$ref": "#/$defs/task" }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "ordinalId": {
       "type": "string",
@@ -88,6 +109,176 @@
         "line_end": ["line_start"]
       }
     },
+    "capability": {
+      "enum": [
+        "discovery",
+        "exact_symbol_lookup",
+        "homonym_disambiguation",
+        "context_orientation",
+        "callers",
+        "callees",
+        "call_path",
+        "impact_tests",
+        "edit",
+        "rename",
+        "logs",
+        "patterns",
+        "workspace_recovery"
+      ]
+    },
+    "actionKind": {
+      "enum": [
+        "inspect_symbol",
+        "inspect_file",
+        "assemble_context",
+        "trace_callers",
+        "trace_callees",
+        "trace_call_path",
+        "cite_reference_site",
+        "select_tests",
+        "propose_edit",
+        "propose_rename",
+        "read_log",
+        "query_pattern",
+        "recover_workspace",
+        "report_empty",
+        "refuse_unsafe"
+      ]
+    },
+    "canonicalSymbolId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+"
+    },
+    "nullableCanonicalSymbolId": {
+      "oneOf": [
+        { "$ref": "#/$defs/canonicalSymbolId" },
+        { "type": "null" }
+      ]
+    },
+    "referenceSiteIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "line_start",
+        "line_end",
+        "reference_kind",
+        "containing_symbol_id",
+        "source_symbol_id",
+        "target_symbol_id",
+        "resolution"
+      ],
+      "properties": {
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "column_start": { "type": "integer", "minimum": 0 },
+        "column_end": { "type": "integer", "minimum": 0 },
+        "reference_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "containing_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "source_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "target_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "resolution": { "enum": ["exact", "fallback", "unresolved"] }
+      },
+      "dependentRequired": {
+        "column_start": ["column_end"],
+        "column_end": ["column_start"]
+      }
+    },
+    "referenceSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site_id",
+        "path",
+        "line_start",
+        "line_end",
+        "reference_kind",
+        "containing_symbol_id",
+        "source_symbol_id",
+        "target_symbol_id",
+        "resolution"
+      ],
+      "properties": {
+        "site_id": { "$ref": "#/$defs/localId" },
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "column_start": { "type": "integer", "minimum": 0 },
+        "column_end": { "type": "integer", "minimum": 0 },
+        "reference_kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "containing_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "source_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "target_symbol_id": { "$ref": "#/$defs/nullableCanonicalSymbolId" },
+        "resolution": { "enum": ["exact", "fallback", "unresolved"] }
+      },
+      "dependentRequired": {
+        "column_start": ["column_end"],
+        "column_end": ["column_start"]
+      }
+    },
+    "actionTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "symbol_id": { "$ref": "#/$defs/canonicalSymbolId" },
+        "target_symbol_id": { "$ref": "#/$defs/canonicalSymbolId" },
+        "reference_site": { "$ref": "#/$defs/referenceSiteIdentity" },
+        "test_path": { "$ref": "#/$defs/repoRelativePath" },
+        "pattern_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "workspace_selector": { "$ref": "#/$defs/repoRelativePath" }
+      }
+    },
+    "acceptableAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "kind", "target", "requirement_group"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/localId" },
+        "kind": { "$ref": "#/$defs/actionKind" },
+        "target": { "$ref": "#/$defs/actionTarget" },
+        "requirement_group": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "evidence_anchor_ids": { "$ref": "#/$defs/anchorIds" },
+        "reference_site_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/localId" }
+        }
+      }
+    },
+    "forbiddenAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "kind", "target", "reason"],
+      "properties": {
+        "action_id": { "$ref": "#/$defs/localId" },
+        "kind": { "$ref": "#/$defs/actionKind" },
+        "target": { "$ref": "#/$defs/actionTarget" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "v1EvidenceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_id", "path", "relevance_grade"],
+      "properties": {
+        "anchor_id": { "$ref": "#/$defs/localId" },
+        "path": { "$ref": "#/$defs/repoRelativePath" },
+        "symbol": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "relevance_grade": { "type": "integer", "minimum": 1, "maximum": 3 }
+      },
+      "dependentRequired": {
+        "line_start": ["line_end"],
+        "line_end": ["line_start"]
+      }
+    },
     "task": {
       "type": "object",
       "additionalProperties": false,
@@ -144,6 +335,92 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        }
+      }
+    },
+    "v1Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "repo_id",
+        "snapshot_id",
+        "language",
+        "workflow_class",
+        "evidence_critical",
+        "prompt",
+        "fact_predicates",
+        "path_cited",
+        "symbol_cited",
+        "evidence_anchors",
+        "forbidden_claims",
+        "capabilities",
+        "expected_outcome",
+        "acceptable_actions",
+        "forbidden_actions",
+        "reference_sites",
+        "uncertainty_expectation"
+      ],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/ordinalId" },
+        "repo_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
+        "language": { "type": "string", "pattern": "^[a-z][a-z0-9_+-]*$" },
+        "workflow_class": {
+          "enum": [
+            "exact_lookup",
+            "concept_search",
+            "docs_config",
+            "context_assembly",
+            "references_trace",
+            "impact_tests"
+          ]
+        },
+        "evidence_critical": { "type": "boolean" },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "fact_predicates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/factPredicate" }
+        },
+        "path_cited": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pathPredicate" }
+        },
+        "symbol_cited": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/symbolPredicate" }
+        },
+        "evidence_anchors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/v1EvidenceAnchor" }
+        },
+        "forbidden_claims": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/capability" }
+        },
+        "expected_outcome": { "enum": ["success", "empty", "refusal"] },
+        "acceptable_actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/acceptableAction" }
+        },
+        "forbidden_actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/forbiddenAction" }
+        },
+        "reference_sites": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/referenceSite" }
+        },
+        "uncertainty_expectation": {
+          "enum": ["must_resolve", "must_disclose", "must_refuse"]
         }
       }
     }

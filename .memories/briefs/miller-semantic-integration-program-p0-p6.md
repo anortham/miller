@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-23T02:15:18.224Z
+updated: 2026-07-23T02:49:45.246Z
 tags:
   - miller
   - julie
@@ -46,6 +46,10 @@ The semantic integration program established the local vector foundation, but th
 - Use TDD, architecture-quality review, per-phase verification gates, and fresh Claude review for every affected tool. The final gate repeats all nine tool reviews plus a broad review.
 - No push, release, or Julie retirement without explicit user approval.
 
+## RC3 evidence
+
+`julie-semantic-sidecar` v0.1.0-rc.3 was published on 2026-07-23 at commit `24ce625` with eight release assets. BGE Small remains the default and Qwen is opt-in. The release advertises Apple arm64 Metal, Linux x64 Vulkan, and Windows x64 Vulkan packages, accelerated backend/device discovery with CPU fallback, size-aware download timeouts, and physical Linux/Windows validation. Treat these as release claims to verify in Miller's Phase 9 preflight; the release does not choose BGE Small over CodeRankEmbed for Miller.
+
 ## Success criteria
 
 Miller meets or beats Julie on sealed correctness, nDCG/MRR/top-1, calls, tokens, wall time, and wrong-action rate; reference and rename truth are homonym-safe; failures are machine-readable; outputs are bounded and recoverable; semantic integration passes supported-platform gates; no Julie-only workflow is lost.
@@ -56,7 +60,8 @@ Miller meets or beats Julie on sealed correctness, nDCG/MRR/top-1, calls, tokens
 - `docs/plans/2026-07-22-miller-julie-takeover-remediation-plan.md`
 - `docs/plans/2026-07-22-miller-julie-takeover-audit-plan.md`
 - `docs/plans/2026-07-19-miller-semantic-integration-design.md`
+- `https://github.com/anortham/julie-semantic-sidecar/releases/tag/v0.1.0-rc.3`
 
 ## Status
 
-Audit and planning are complete. Local main is clean at `289fde31`. Begin implementation in a fresh isolated worktree with evaluator reconciliation; do not recreate evaluator capabilities that already landed.
+The isolated implementation worktree is `/Users/murphy/source/miller/.worktrees/miller-julie-takeover` on `codex/miller-julie-takeover`. Phase 0's v1 contract, MRR/top-1 metrics, and disallowed-tool void fix are committed locally at `87bf18a`; Python semantic-contract and pure C# action-scorer work is active. RC3 is released and queued for the early protocol/platform preflight after Phase 0. Do not inspect sealed labels or interfere with the active Julie session.
