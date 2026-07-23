@@ -169,6 +169,8 @@ Final answer actions use this closed `kind` catalog:
 - `report_empty`
 - `refuse_unsafe`
 
+These kinds are semantic result categories, not product tool names or a transcript. The shared prompt defines every purpose: symbol/file/context grounding, caller/callee/path tracing, exact reference citation, test selection, edit/rename proposals, captured-output reading, pattern queries, workspace recovery, empty reporting, and unsafe-action refusal.
+
 An action contains `kind` and a typed target composed only from repository-relative path, canonical symbol identity, canonical reference-site fields, test path, pattern ID, or workspace selector as applicable. Empty target fields are rejected. Edit and rename actions are proposals only; the evaluation runner remains read-only.
 
 The shared agent prompt states that actions are the minimum typed evidence needed to ground the answer, not a transcript of every tool call. This exposes the scoring rule equally to both roles without revealing task-specific accepted targets.

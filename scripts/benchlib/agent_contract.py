@@ -60,6 +60,23 @@ _ACTION_TARGET_FIELDS = {
         ),
     ),
 }
+_ACTION_KIND_PURPOSES = {
+    "inspect_symbol": "an exact code-symbol identity",
+    "inspect_file": "a file, document, or config fact",
+    "assemble_context": "a context bundle rooted at a path or symbol",
+    "trace_callers": "the required callers of one exact symbol",
+    "trace_callees": "the required callees of one exact symbol",
+    "trace_call_path": "a required source-to-target path",
+    "cite_reference_site": "one exact or explicitly unresolved reference site",
+    "select_tests": "tests selected for the task",
+    "propose_edit": "a proposed edit target",
+    "propose_rename": "a proposed exact-symbol rename target",
+    "read_log": "evidence from captured logs or command output",
+    "query_pattern": "one structural pattern identity",
+    "recover_workspace": "the workspace that must be recovered",
+    "report_empty": "the workspace in which the requested result is absent",
+    "refuse_unsafe": "the exact target or workspace that makes the action unsafe",
+}
 _EXACT_ACTION_TARGET_ALTERNATIVES = frozenset({"refuse_unsafe"})
 
 
@@ -73,6 +90,7 @@ def action_target_guidance() -> str:
         "Set both reference_site column_start and column_end, or set both null.",
     ]
     for kind, (allowed, required_alternatives) in _ACTION_TARGET_FIELDS.items():
+        lines.append(f"{kind} means {_ACTION_KIND_PURPOSES[kind]}.")
         alternatives = " or ".join(
             "+".join(sorted(required))
             for required in required_alternatives

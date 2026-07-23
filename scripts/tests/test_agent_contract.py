@@ -251,6 +251,10 @@ class AgentContractTests(unittest.TestCase):
             "Actions are the minimum typed evidence needed to ground the answer, not a transcript",
             guidance,
         )
+        self.assertIn("inspect_file means a file, document, or config fact", guidance)
+        self.assertIn("select_tests means tests selected for the task", guidance)
+        self.assertIn("read_log means evidence from captured logs or command output", guidance)
+        self.assertIn("trace_call_path means a required source-to-target path", guidance)
 
     def test_count_tool_output_tokens_uses_frozen_o200k_encoding(self) -> None:
         self.assertEqual(0, count_tool_output_tokens(""))
