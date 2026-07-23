@@ -39,30 +39,43 @@ The completed audit used one broad Claude review and nine fresh tool-specific Cl
 | Product | A sealed paired agent run supports retiring Julie without losing a Julie-only workflow. |
 | Independent review | All nine tool-specific Claude implementation reviews and the broad final Claude review are recorded and locally validated. |
 
+## Dependency Order
+
+Execute the numbered phases in order: evaluator gap-close, exact symbol-ID reference evidence, typed diagnostics plus deterministic output-budget/continuation contracts, reference consumer and rename migration, shared search ranking/routing, bounded one-call context, risk-ranked impact, remaining-surface cleanup, all-language extractor coverage, RC3 completion, then the sealed paired decision and reviews.
+
+Search remains before context because context consumes the shared ranking signals. RC3 protocol, package, and platform preflight may begin after Phase 0, but that early lane does not complete Phase 9 or choose the default model. Final BGE-small versus CodeRankEmbed selection remains after the Phase 4 search and Phase 5 context behavior gates pass.
+
 ## Phase 0: Freeze The Takeover Evaluator
 
 **Files:**
 
-- Modify: `eval/retrieval-eval/`
-- Modify: `eval/agent-efficiency-scorer/`
+- Modify: `eval/retrieval-eval/` and its focused tests
+- Modify: `scripts/bench-agent-efficiency.py`
+- Modify: `scripts/benchlib/agent_contract.py`, `agent_runner.py`, and `reporting.py`
+- Modify: `scripts/benchmarks/agent-efficiency/` schemas, visible calibration corpus, and operating protocols
+- Modify: `scripts/tests/test_agent_contract.py`, `test_agent_runner.py`, `test_bench_agent_efficiency.py`, and proxy tests only when the event contract changes
 - Modify: `docs/search-quality-runner.md`
 - Create: `eval/takeover/fixtures/`
 - Create: `docs/contracts/takeover-evaluation-v1.md`
 
 ### Work
 
-1. Build a sealed task manifest covering discovery, exact symbol lookup, homonyms, context orientation, callers/callees, call paths, impact/tests, edits/renames, logs, patterns, and workspace recovery.
-2. Record ground-truth symbols, files, reference sites, acceptable actions, forbidden false positives, and uncertainty expectations.
-3. Score relevance and action efficiency separately: nDCG/MRR/top-1 plus calls/tokens/wall time/wrong action.
-4. Distinguish success, empty, correct refusal, hard error, and wrong answer.
-5. Add identical Miller and Julie adapters without product-specific scoring favors.
-6. Keep visible calibration tasks separate from sealed decision tasks.
+1. Freeze a capability catalog covering discovery, exact symbol lookup, homonyms, context orientation, callers, callees, call paths, impact/tests, edits, renames, logs, patterns, and workspace recovery; extend the visible calibration corpus and require the operator-owned sealed manifest to satisfy the same coverage contract.
+2. Record ground-truth symbols, files, canonical reference sites, acceptable and forbidden typed actions, forbidden false positives, and uncertainty expectations.
+3. Score relevance and action efficiency separately: recall/nDCG/MRR/top-1 plus correctness/wrong action/calls/tokens/wall time.
+4. Carry canonical success, empty, correct-refusal, hard-error, and wrong-answer outcomes from the verifier through run artifacts into the pure scorer; keep harness voids outside product outcomes.
+5. Replace product-named execution and scoring branches with neutral baseline/candidate roles backed by identical adapters; product labels remain metadata only.
+6. Add immutable capability-derived subset identity, a non-decisional subset report, and an enforced full-suite final mode.
+7. Keep visible calibration tasks mechanically separate from external, spend-once, aggregate-only sealed decision tasks; never expose sealed prompts, labels, answers, or task rows to the implementation session.
+8. Fix disallowed-tool classification so it is a scored outcome rather than a harness void.
 
 ### Gate
 
 - Evaluator contract tests pass.
-- A baseline run records both products without changing the sealed labels.
-- Every later phase can replay only its affected task subset plus the full final gate.
+- Relevance and action reports remain separate and expose every required metric and canonical outcome without private task data.
+- Product labels do not affect verification or scoring, and disallowed-tool/product failures cannot be mistaken for harness voids or correct empty/refusal outcomes.
+- Every later phase can replay an identity-bound visible affected subset; only an identity-complete full run can produce a decision verdict, and the sealed lane refuses subset mode.
+- A full visible baseline records both role adapters under frozen identities. The operator-controlled sealed baseline runs without changing or revealing sealed labels and returns only permitted aggregate evidence.
 
 ## Phase 1: Introduce Exact Reference Evidence
 
@@ -100,7 +113,41 @@ The caller supplies a resolved symbol ID plus explicit bounds. The module return
 - Existing graph/path behavior remains deterministic.
 - Fast tests pass under the default suite budget.
 
-## Phase 2: Migrate Reference Consumers And Fix Rename Truth
+## Phase 2: Establish Typed Diagnostics And Deterministic Output Budgets
+
+**Files:**
+
+- Create: `src/Miller.Server/Tools/ToolDiagnostic.cs`
+- Create: `src/Miller.Server/Tools/ToolDiagnosticRenderer.cs`
+- Modify: `SearchTool.cs`, `InspectTool.cs`, `ContextTool.cs`, `TraceTool.cs`, `ImpactTool.cs`, `PatternsTool.cs`, `WorkspaceTool.cs`
+- Modify: shared rendering and continuation contracts used by inspect bodies and reference lists
+- Modify: central telemetry/tool-call filter
+- Modify or version affected JSON contracts
+- Tests: shared diagnostic contract tests and one integration test per tool
+- Tests: output-budget and continuation contract tests
+
+Add a shared deterministic output-budget and continuation contract to `inspect` full bodies and any migrated reference lists that can exceed the compact/JSON budget. Bind body continuations to workspace, symbol ID, extractor hash, and source span; do not add a stateful spillover service or MCP tool.
+
+### Work
+
+1. Define typed expected-empty, ambiguity, refusal, unsupported, corruption, unavailable, and internal-failure states.
+2. Use MCP errors or versioned JSON diagnostics for hard failures.
+3. Guarantee valid JSON whenever a tool accepts `format=json` and returns content.
+4. Generate compact messages, JSON codes, next actions, and telemetry classification from the same typed value.
+5. Define one deterministic compact/JSON output-budget and continuation foundation before reference consumers migrate.
+6. Bind body continuations to workspace, symbol ID, extractor hash, and source span, and reject stale or mismatched continuations without a stateful spillover service.
+7. Remove duplicated broad catch-and-string behavior.
+
+### Gate
+
+- Schema, sidecar, permission, and corruption fault injection never returns success text.
+- Empty and ambiguity cases remain useful typed results.
+- Telemetry outcome matches the caller-visible classification.
+- Compact and JSON budget fixtures prove deterministic truncation and continuation behavior.
+- Continuation fixtures reject workspace, identity, hash, or span mismatches without adding an MCP tool.
+- The Phase 3 consumer migration can adopt the shared diagnostic and continuation contracts without defining per-tool variants.
+
+## Phase 3: Migrate Reference Consumers And Fix Rename Truth
 
 **Files:**
 
@@ -118,8 +165,6 @@ The caller supplies a resolved symbol ID plus explicit bounds. The module return
 - Tests: `tests/Miller.Tests/Server/ContextToolTests.cs`
 - Tests: `tests/Miller.Tests/Editing/RenamePlannerTests.cs`
 - Tests: `tests/Miller.Tests/Server/EditToolTests.cs`
-
-Add a shared deterministic output-budget and continuation contract to `inspect` full bodies and any migrated reference lists that can exceed the compact/JSON budget. Bind body continuations to workspace, symbol ID, extractor hash, and source span; do not add a stateful spillover service or MCP tool.
 
 ### Work
 
@@ -142,7 +187,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - Atomic rollback and freshness recovery tests remain green.
 - Focused sealed tasks show no wrong-target action.
 
-## Phase 3: Create A Shared Retrieval Reranker And Improve `search`
+## Phase 4: Create A Shared Retrieval Reranker And Improve `search`
 
 **Files:**
 
@@ -178,7 +223,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - Per-call lexical mode performs zero vector work; hybrid/semantic requests are deterministic when enabled and typed-unavailable when the global off switch forbids them.
 - Search nDCG/MRR/top-1 and true-no-hit recovery meet the phase threshold without higher p95 or token cost beyond the contract.
 
-## Phase 4: Redesign `context` For One-Call Actionability
+## Phase 5: Redesign `context` For One-Call Actionability
 
 **Files:**
 
@@ -213,7 +258,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - No selected candidate is silently omitted.
 - Sealed trajectories reduce redundant follow-up calls without increasing wrong actions.
 
-## Phase 5: Make `impact` Risk-Ranked And Test-Aware
+## Phase 6: Make `impact` Risk-Ranked And Test-Aware
 
 **Files:**
 
@@ -247,31 +292,6 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - Test recall improves on labeled fixtures without hiding confidence tier.
 - MCP and CLI revision results are identical.
 - Changed-path compact output stays within budget instead of repeating the current 14.5 KB average.
-
-## Phase 6: Introduce Typed Failure Semantics
-
-**Files:**
-
-- Create: `src/Miller.Server/Tools/ToolDiagnostic.cs`
-- Create: `src/Miller.Server/Tools/ToolDiagnosticRenderer.cs`
-- Modify: `SearchTool.cs`, `InspectTool.cs`, `ContextTool.cs`, `TraceTool.cs`, `ImpactTool.cs`, `PatternsTool.cs`, `WorkspaceTool.cs`
-- Modify: central telemetry/tool-call filter
-- Modify or version affected JSON contracts
-- Tests: shared diagnostic contract tests and one integration test per tool
-
-### Work
-
-1. Define typed expected-empty, ambiguity, refusal, unsupported, corruption, unavailable, and internal-failure states.
-2. Use MCP errors or versioned JSON diagnostics for hard failures.
-3. Guarantee valid JSON whenever a tool accepts `format=json` and returns content.
-4. Generate compact messages, JSON codes, next actions, and telemetry classification from the same typed value.
-5. Remove duplicated broad catch-and-string behavior.
-
-### Gate
-
-- Schema, sidecar, permission, and corruption fault injection never returns success text.
-- Empty and ambiguity cases remain useful typed results.
-- Telemetry outcome matches the caller-visible classification.
 
 ## Phase 7: Bound And Simplify The Remaining Surfaces
 
@@ -335,19 +355,34 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 
 **Repository:** `/Users/murphy/source/julie-semantic-sidecar` for RC3 evidence; Miller remains the integration owner.
 
-### Work
+### Early Protocol And Platform Preflight
+
+This lane may begin after Phase 0 while Phases 1–8 continue. It validates RC3 packaging, protocol, provider selection, and resource behavior without choosing the final model or claiming Phase 9 complete.
 
 1. Run the committed sidecar conformance suite on the released RC3 artifacts.
 2. Verify acceleration/provider selection on Apple MPS, Windows DirectML-equivalent, Linux CUDA/ROCm, and documented Intel fallback/support.
-3. Compare BGE-small and CodeRankEmbed on the exact same sealed search/context tasks.
-4. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
-5. Choose the default model by agent action efficiency, not embedding benchmark prestige.
-6. Preserve automatic fallback and an explicit zero-work off state.
+3. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
+4. Preserve automatic fallback and an explicit zero-work off state.
 
-### Gate
+#### Early Preflight Gate
 
 - All platform packages pass protocol and hardware-selection tests.
+- Cold/warm latency, memory, concurrency, determinism, and multi-client evidence is recorded for every required platform lane.
+- Passing this gate only clears the platform/protocol dependency; it does not select a model or complete Phase 9.
+
+### Final Model Decision
+
+Begin this lane only after the Phase 4 search and Phase 5 context behavior gates pass, so both models are judged through the retrieval and context behavior they will actually serve.
+
+1. Compare BGE-small and CodeRankEmbed on the exact same sealed search/context tasks.
+2. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
+3. Choose the default model by agent action efficiency, not embedding benchmark prestige.
+4. Preserve automatic fallback and an explicit zero-work off state.
+
+#### Final Gate
+
 - Chosen model wins or ties on action efficiency within resource budgets.
+- The selected model passes the applicable protocol, platform, acceleration, fallback, and zero-work checks from early preflight under final search/context behavior.
 - No calendar waiting period is required after the evidence is complete.
 
 ## Phase 10: Final Paired Decision And Julie Retirement
