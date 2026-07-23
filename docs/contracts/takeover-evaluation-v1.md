@@ -109,7 +109,7 @@ Each v1 task carries at least:
 - `uncertainty_expectation`;
 - canonical `reference_sites` when reference identity is part of correctness.
 
-Only the natural-language task prompt crosses into the agent prompt. Label IDs, expected outcomes, predicates, relevance grades, action rules, reference sites, uncertainty rules, and scores remain verifier-side.
+The natural-language task and the product-neutral structured-answer contract cross into the agent prompt. Label IDs, expected outcomes, predicates, relevance grades, task-specific acceptable or forbidden actions, reference sites, uncertainty rules, and scores remain verifier-side.
 
 ### Expected outcomes
 
@@ -128,6 +128,8 @@ Each ground-truth evidence anchor has a stable `anchor_id`, repository-relative 
 The structured answer contains an ordered evidence array. The verifier maps each submitted row to at most one canonical anchor by exact path plus the label's required symbol/span constraints. It records the matched anchor ID in submitted order. The agent never sees anchor IDs.
 
 An unmatched row has grade `0`. Repeated matches to the same anchor gain `0` after the first occurrence. Product-specific raw tool-result order is not scored; both roles are scored from the common structured answer.
+
+The shared agent prompt states that `evidence.path` is repository-relative, `evidence.symbol` is a human-readable symbol name rather than a symbol ID, and `evidence.line` must fall inside the cited fact. This public shape rule is part of the prompt identity; it does not reveal private anchors.
 
 ### Canonical reference sites
 
@@ -168,6 +170,8 @@ Final answer actions use this closed `kind` catalog:
 - `refuse_unsafe`
 
 An action contains `kind` and a typed target composed only from repository-relative path, canonical symbol identity, canonical reference-site fields, test path, pattern ID, or workspace selector as applicable. Empty target fields are rejected. Edit and rename actions are proposals only; the evaluation runner remains read-only.
+
+The shared agent prompt states that actions are the minimum typed evidence needed to ground the answer, not a transcript of every tool call. This exposes the scoring rule equally to both roles without revealing task-specific accepted targets.
 
 Each acceptable action label has a stable label-side `action_id`, exact `kind` and target, a non-empty `requirement_group`, and optional evidence-anchor/site requirements. Each requirement group must be satisfied by at least one submitted action. Multiple labels in one group express valid alternatives.
 

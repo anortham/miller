@@ -65,6 +65,8 @@ _EXACT_ACTION_TARGET_ALTERNATIVES = frozenset({"refuse_unsafe"})
 def action_target_guidance() -> str:
     lines = [
         "Use exact symbol IDs returned by product tools; never invent an ID from a path or name.",
+        "For citations, evidence.path is the exact repo-relative product path, evidence.symbol is the human-readable symbol name, never a symbol ID, and evidence.line must fall inside that cited symbol or file fact.",
+        "Actions are the minimum typed evidence needed to ground the answer, not a transcript of every tool call; related but unnecessary actions are wrong actions.",
         "For every action target, leave every unlisted field null.",
         "For a reference_site, resolution exact or fallback requires a non-null target_symbol_id returned by the product; otherwise use unresolved with target_symbol_id null.",
         "Set both reference_site column_start and column_end, or set both null.",

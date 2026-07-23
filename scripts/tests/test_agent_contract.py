@@ -18,6 +18,7 @@ from benchlib.agent_contract import (
     SnapshotIdentity,
     StructuredAnswer,
     VerificationResult,
+    action_target_guidance,
     count_tool_output_tokens,
     load_snapshot_manifest,
     load_task_manifest,
@@ -238,6 +239,18 @@ def _create_snapshot(root: Path) -> SnapshotIdentity:
 
 
 class AgentContractTests(unittest.TestCase):
+    def test_model_guidance_exposes_evidence_and_minimal_action_contract(self) -> None:
+        guidance = action_target_guidance()
+
+        self.assertIn(
+            "evidence.symbol is the human-readable symbol name, never a symbol ID",
+            guidance,
+        )
+        self.assertIn(
+            "Actions are the minimum typed evidence needed to ground the answer, not a transcript",
+            guidance,
+        )
+
     def test_count_tool_output_tokens_uses_frozen_o200k_encoding(self) -> None:
         self.assertEqual(0, count_tool_output_tokens(""))
         self.assertEqual(1, count_tool_output_tokens("hello"))
