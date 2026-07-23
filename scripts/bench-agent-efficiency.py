@@ -1478,7 +1478,7 @@ def _mcp_notify(process: subprocess.Popen[str], message: Mapping[str, Any]) -> N
 
 def _command_output(
     command: tuple[str, ...],
-    timeout: float = 10,
+    timeout: float = 30,
     cwd: Path | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> str:

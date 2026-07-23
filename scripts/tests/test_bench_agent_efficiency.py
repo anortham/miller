@@ -614,6 +614,19 @@ for line in sys.stdin:
             self.assertTrue(_wait_for_process_exit(timeout_child))
             self.assertTrue(_wait_for_process_exit(probe_child))
 
+    def test_identity_command_default_timeout_covers_cold_product_start(self):
+        module = _load_module()
+        process = SimpleNamespace(returncode=0)
+        process.communicate = mock.Mock(return_value=("ready", ""))
+
+        with (
+            mock.patch.object(module.subprocess, "Popen", return_value=process),
+            mock.patch.object(module, "_terminate_process_tree"),
+        ):
+            self.assertEqual("ready", module._command_output(("probe",)))
+
+        process.communicate.assert_called_once_with(timeout=30)
+
     def test_balanced_orders_are_seeded_repeatable_and_nearly_even(self):
         module = _load_module()
         task_ids = [f"dev-{index:03d}" for index in range(1, 13)]
