@@ -285,6 +285,14 @@ class AgentRunnerTests(unittest.TestCase):
                 "For every action target, leave every unlisted field null.",
                 captured["stdin"],
             )
+            self.assertIn(
+                "For a reference_site, resolution exact or fallback requires a non-null target_symbol_id returned by the product; otherwise use unresolved with target_symbol_id null.",
+                captured["stdin"],
+            )
+            self.assertIn(
+                "Set both reference_site column_start and column_end, or set both null.",
+                captured["stdin"],
+            )
             for action_kind in (
                 "inspect_symbol",
                 "inspect_file",
