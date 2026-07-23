@@ -82,4 +82,20 @@ public class MetricsTests
 
         Assert.Equal(expected, Metrics.NdcgAtK(["low", "high"], relevant, 10), 1e-12);
     }
+
+    [Fact]
+    public void ReciprocalRank_uses_the_first_positive_grade_hit()
+    {
+        var relevant = new Dictionary<string, int> { ["zero"] = 0, ["target"] = 2 };
+
+        Assert.Equal(1.0 / 3.0, Metrics.ReciprocalRank(["zero", "other", "target"], relevant), 1e-12);
+    }
+
+    [Fact]
+    public void ReciprocalRank_is_zero_without_a_positive_grade_hit()
+    {
+        var relevant = new Dictionary<string, int> { ["zero"] = 0, ["missing"] = 2 };
+
+        Assert.Equal(0.0, Metrics.ReciprocalRank(["zero", "other"], relevant), 1e-12);
+    }
 }

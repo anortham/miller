@@ -543,6 +543,7 @@ def _classify_run(
         classification = "product_failure"
     elif parsed.disallowed_item:
         outcome = "disallowed_tool"
+        classification = "agent_insufficiency"
         failure_reason = "disallowed_tool"
         verification = VerificationResult(False, (parsed.disallowed_item,), ())
     elif parsed.malformed:

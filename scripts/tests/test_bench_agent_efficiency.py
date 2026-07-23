@@ -201,6 +201,39 @@ class ScriptedCodexAgentRunner(CodexAgentRunner):
         )
 
 
+class DisallowedToolCodexAgentRunner(CodexAgentRunner):
+    def __init__(self):
+        self.calls = []
+
+    def run(self, task, arm, snapshot, output_dir):
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=False)
+        self.calls.append((task.task_id, arm.product))
+        proxy = output / "proxy-events.jsonl"
+        _proxy_events(proxy)
+        return AgentRun(
+            outcome="disallowed_tool",
+            classification="agent_insufficiency",
+            failure_reason="disallowed_tool",
+            answer=None,
+            verification=VerificationResult(
+                False,
+                ("runner: disallowed item type function_call",),
+                (),
+            ),
+            command_manifest_path=output / "command-manifest.json",
+            codex_events_path=output / "codex-events.jsonl",
+            proxy_events_path=proxy,
+            stderr_path=output / "stderr.txt",
+            diagnostics=(),
+            model_input_tokens=20,
+            model_output_tokens=5,
+            wall_clock_ms=50,
+            exit_code=0,
+            child_home_removed=True,
+        )
+
+
 class BenchAgentEfficiencyTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX process-group orphan assertion")
     def test_preflight_process_cleanup_terminates_real_descendants_on_timeout_and_forced_shutdown(self):
@@ -393,6 +426,35 @@ for line in sys.stdin:
             (result.julie_rows[0]["completed"], result.julie_rows[0]["failure_reason"]),
             (False, "product_error"),
         )
+
+    def test_disallowed_tool_is_scored_without_voiding_the_pair(self):
+        module = _load_module()
+        task = _task("dev-001")
+        runner = DisallowedToolCodexAgentRunner()
+        arms = {
+            "miller": AgentArm("miller", ("miller", "serve")),
+            "julie": AgentArm("julie", ("julie",)),
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = module.execute_paired_tasks(
+                tasks=(task,),
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=runner,
+                output_root=root / "raw",
+                seed=9,
+                identity_sha256="4" * 64,
+                void_ledger_path=root / "void-ledger.jsonl",
+                max_void_attempts=1,
+            )
+
+            self.assertFalse((root / "void-ledger.jsonl").exists())
+
+        self.assertCountEqual(runner.calls, [("dev-001", "miller"), ("dev-001", "julie")])
+        self.assertEqual(result.miller_rows[0]["failure_reason"], "disallowed_tool")
+        self.assertEqual(result.julie_rows[0]["failure_reason"], "disallowed_tool")
 
     def test_discordant_rerun_stops_after_a_pair_void(self):
         module = _load_module()

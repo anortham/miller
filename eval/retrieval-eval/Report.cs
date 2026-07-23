@@ -11,6 +11,8 @@ public sealed record MetricBlock
 {
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("mrr")] public double Mrr { get; init; }
+    [JsonPropertyName("top_1")] public double Top1 { get; init; }
     [JsonPropertyName("unit_count")] public int UnitCount { get; init; }
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
 }
@@ -29,6 +31,8 @@ public sealed record MacroAverage
 {
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("mrr")] public double Mrr { get; init; }
+    [JsonPropertyName("top_1")] public double Top1 { get; init; }
     [JsonPropertyName("language_count")] public int LanguageCount { get; init; }
 }
 
@@ -37,6 +41,8 @@ public sealed record WorstLanguage
     [JsonPropertyName("language")] public string Language { get; init; } = "";
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("mrr")] public double Mrr { get; init; }
+    [JsonPropertyName("top_1")] public double Top1 { get; init; }
     [JsonPropertyName("unit_count")] public int UnitCount { get; init; }
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
 }
@@ -55,6 +61,8 @@ public sealed record ClusterRollup
     [JsonPropertyName("member_hit_rate")] public double MemberHitRate { get; init; }
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("mrr")] public double Mrr { get; init; }
+    [JsonPropertyName("top_1")] public double Top1 { get; init; }
 }
 
 /// <summary>
@@ -68,6 +76,8 @@ public sealed record UnitRow
     [JsonPropertyName("language")] public string Language { get; init; } = "";
     [JsonPropertyName("recall_at_k")] public double RecallAtK { get; init; }
     [JsonPropertyName("ndcg_at_k")] public double NdcgAtK { get; init; }
+    [JsonPropertyName("mrr")] public double Mrr { get; init; }
+    [JsonPropertyName("top_1")] public double Top1 { get; init; }
     [JsonPropertyName("query_count")] public int QueryCount { get; init; }
 }
 

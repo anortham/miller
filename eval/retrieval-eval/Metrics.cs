@@ -45,6 +45,20 @@ public static class Metrics
         return dcg / idcg;
     }
 
+    /// <summary>Reciprocal rank of the first ranked document whose graded relevance is greater than zero.</summary>
+    public static double ReciprocalRank(
+        IReadOnlyList<string> ranked,
+        IReadOnlyDictionary<string, int> relevant)
+    {
+        for (var i = 0; i < ranked.Count; i++)
+        {
+            if (relevant.TryGetValue(ranked[i], out var grade) && grade > 0)
+                return 1.0 / (i + 1);
+        }
+
+        return 0.0;
+    }
+
     static IEnumerable<string> Cutoff(IReadOnlyList<string> ranked, int k) => ranked.Take(Math.Max(0, k));
 
     static double Gain(int grade) => Math.Pow(2, grade) - 1;

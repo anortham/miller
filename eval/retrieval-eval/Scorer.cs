@@ -1,19 +1,23 @@
 namespace RetrievalEval;
 
-sealed record ScoredQuery(EvalQuery Query, double Recall, double Ndcg, bool Hit);
+sealed record ScoredQuery(EvalQuery Query, double Recall, double Ndcg, double Mrr, double Top1, bool Hit);
 
 /// <summary>
 /// One evaluation unit under the cluster unit policy: an intent cluster scored as the mean over its member
-/// paraphrases, or a single standalone query. <see cref="MaxRecall"/>/<see cref="MaxNdcg"/> carry the
-/// best-member view used by the secondary cluster-max metrics.
+/// paraphrases, or a single standalone query. The <c>Max*</c> values carry the best-member view used by the
+/// secondary cluster-max metrics.
 /// </summary>
 sealed record EvalUnit(
     string UnitId,
     string Language,
     double Recall,
     double Ndcg,
+    double Mrr,
+    double Top1,
     double MaxRecall,
     double MaxNdcg,
+    double MaxMrr,
+    double MaxTop1,
     int QueryCount);
 
 /// <summary>Rolls per-query metrics up into the report shape the semantic program's gates read.</summary>
@@ -62,7 +66,9 @@ public static class Scorer
             var relevant = ToGradeMap(query);
             var recall = Metrics.RecallAtK(docs, relevant, k);
             var ndcg = Metrics.NdcgAtK(docs, relevant, k);
-            positives.Add(new ScoredQuery(query, recall, ndcg, recall > 0.0));
+            var mrr = Metrics.ReciprocalRank(docs, relevant);
+            var top1 = mrr == 1.0 ? 1.0 : 0.0;
+            positives.Add(new ScoredQuery(query, recall, ndcg, mrr, top1, mrr > 0.0));
         }
 
         var units = BuildUnits(positives);
@@ -93,6 +99,8 @@ public static class Scorer
                 MemberHitRate = (double)g.Count(s => s.Hit) / g.Count(),
                 RecallAtK = g.Average(s => s.Recall),
                 NdcgAtK = g.Average(s => s.Ndcg),
+                Mrr = g.Average(s => s.Mrr),
+                Top1 = g.Average(s => s.Top1),
             })
             .ToList();
 
@@ -105,6 +113,8 @@ public static class Scorer
                 Language = kv.Key,
                 RecallAtK = kv.Value.RecallAtK,
                 NdcgAtK = kv.Value.NdcgAtK,
+                Mrr = kv.Value.Mrr,
+                Top1 = kv.Value.Top1,
                 UnitCount = kv.Value.UnitCount,
                 QueryCount = kv.Value.QueryCount,
             })
@@ -131,6 +141,8 @@ public static class Scorer
             {
                 RecallAtK = Mean(perLanguage.Values.Select(v => v.RecallAtK)),
                 NdcgAtK = Mean(perLanguage.Values.Select(v => v.NdcgAtK)),
+                Mrr = Mean(perLanguage.Values.Select(v => v.Mrr)),
+                Top1 = Mean(perLanguage.Values.Select(v => v.Top1)),
                 LanguageCount = perLanguage.Count,
             },
             WorstLanguage = worst,
@@ -144,6 +156,8 @@ public static class Scorer
                     Language = u.Language,
                     RecallAtK = u.Recall,
                     NdcgAtK = u.Ndcg,
+                    Mrr = u.Mrr,
+                    Top1 = u.Top1,
                     QueryCount = u.QueryCount,
                 })
                 .ToList(),
@@ -178,7 +192,18 @@ public static class Scorer
         var units = new List<EvalUnit>();
 
         foreach (var solo in positives.Where(s => string.IsNullOrWhiteSpace(s.Query.IntentCluster)))
-            units.Add(new EvalUnit($"query:{solo.Query.QueryId}", solo.Query.Language, solo.Recall, solo.Ndcg, solo.Recall, solo.Ndcg, 1));
+            units.Add(new EvalUnit(
+                $"query:{solo.Query.QueryId}",
+                solo.Query.Language,
+                solo.Recall,
+                solo.Ndcg,
+                solo.Mrr,
+                solo.Top1,
+                solo.Recall,
+                solo.Ndcg,
+                solo.Mrr,
+                solo.Top1,
+                1));
 
         var clustered = positives
             .Where(s => !string.IsNullOrWhiteSpace(s.Query.IntentCluster))
@@ -192,8 +217,12 @@ public static class Scorer
                 DominantLanguage(cluster),
                 cluster.Average(s => s.Recall),
                 cluster.Average(s => s.Ndcg),
+                cluster.Average(s => s.Mrr),
+                cluster.Average(s => s.Top1),
                 cluster.Max(s => s.Recall),
                 cluster.Max(s => s.Ndcg),
+                cluster.Max(s => s.Mrr),
+                cluster.Max(s => s.Top1),
                 cluster.Count()));
         }
 
@@ -222,6 +251,8 @@ public static class Scorer
         {
             RecallAtK = Mean(items.Select(s => s.Recall)),
             NdcgAtK = Mean(items.Select(s => s.Ndcg)),
+            Mrr = Mean(items.Select(s => s.Mrr)),
+            Top1 = Mean(items.Select(s => s.Top1)),
             UnitCount = items.Count,
             QueryCount = items.Count,
         };
@@ -234,6 +265,8 @@ public static class Scorer
         {
             RecallAtK = Mean(items.Select(u => u.Recall)),
             NdcgAtK = Mean(items.Select(u => u.Ndcg)),
+            Mrr = Mean(items.Select(u => u.Mrr)),
+            Top1 = Mean(items.Select(u => u.Top1)),
             UnitCount = items.Count,
             QueryCount = items.Sum(u => u.QueryCount),
         };
@@ -246,6 +279,8 @@ public static class Scorer
         {
             RecallAtK = Mean(items.Select(u => u.MaxRecall)),
             NdcgAtK = Mean(items.Select(u => u.MaxNdcg)),
+            Mrr = Mean(items.Select(u => u.MaxMrr)),
+            Top1 = Mean(items.Select(u => u.MaxTop1)),
             UnitCount = items.Count,
             QueryCount = items.Sum(u => u.QueryCount),
         };

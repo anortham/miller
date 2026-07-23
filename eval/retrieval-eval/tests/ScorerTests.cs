@@ -58,6 +58,31 @@ public class ScorerTests
     }
 
     [Fact]
+    public void Overall_reports_mrr_and_top_1_over_positive_queries_only()
+    {
+        var queries = new[]
+        {
+            Positive("q1", "csharp", "identifier", ["a"]),
+            Positive("q2", "csharp", "identifier", ["b"]),
+            Positive("q3", "csharp", "identifier", ["c"]),
+            Negative("n1"),
+        };
+        var results = new[]
+        {
+            Ranked("q1", "a"),
+            Ranked("q2", "other", "b"),
+            Ranked("q3", "other"),
+            Ranked("n1"),
+        };
+
+        var report = Scorer.Score(queries, results, k: 10);
+
+        Assert.Equal(0.5, report.Overall.Mrr, 1e-12);
+        Assert.Equal(1.0 / 3.0, report.Overall.Top1, 1e-12);
+        Assert.Equal(3, report.Overall.QueryCount);
+    }
+
+    [Fact]
     public void Search_mode_counts_record_all_frozen_query_routes_without_changing_metrics()
     {
         var auto = Positive("q1", "csharp", "identifier", ["a"]);
@@ -216,8 +241,12 @@ public class ScorerTests
 
         Assert.Equal(2, report.EvaluationUnitCount);
         Assert.Equal(0.5, report.Overall.RecallAtK, 1e-9);
+        Assert.Equal(0.5, report.Overall.Mrr, 1e-9);
+        Assert.Equal(0.5, report.Overall.Top1, 1e-9);
         Assert.Equal(4, report.Overall.QueryCount);
         Assert.Equal(0.25, report.OverallPerQuery.RecallAtK, 1e-9);
+        Assert.Equal(0.25, report.OverallPerQuery.Mrr, 1e-9);
+        Assert.Equal(0.25, report.OverallPerQuery.Top1, 1e-9);
     }
 
     [Fact]

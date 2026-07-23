@@ -285,7 +285,7 @@ class AgentRunnerTests(unittest.TestCase):
             )
 
             self.assertEqual("disallowed_tool", result.outcome)
-            self.assertEqual("harness_failure", result.classification)
+            self.assertEqual("agent_insufficiency", result.classification)
             self.assertEqual("disallowed_tool", result.failure_reason)
             self.assertIsNone(result.answer)
             self.assertFalse(result.verification.passed)
@@ -339,7 +339,7 @@ class AgentRunnerTests(unittest.TestCase):
                         root / f"output-disallowed-{index}",
                     )
                     self.assertEqual("disallowed_tool", result.outcome)
-                    self.assertEqual("harness_failure", result.classification)
+                    self.assertEqual("agent_insufficiency", result.classification)
 
     def test_malformed_missing_and_incorrect_answers_are_distinct(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
