@@ -27,7 +27,14 @@ from benchlib.agent_contract import (
     load_task_manifest,
     validate_run_result,
 )
-from benchlib.agent_runner import AgentArm, AgentRun, AgentSnapshot, CodexAgentRunner, isolated_environment_keys
+from benchlib.agent_runner import (
+    AgentArm,
+    AgentRun,
+    AgentSnapshot,
+    CodexAgentRunner,
+    isolated_environment_keys,
+    prompt_contract_sha256,
+)
 from benchlib.reporting import project_safe_aggregate
 
 
@@ -1360,6 +1367,7 @@ def preflight_run(
         "seed": seed,
         "model": model,
         "reasoning": reasoning,
+        "prompt_contract_sha256": prompt_contract_sha256(),
         "codex": {"version": codex_version, "binary_sha256": _sha256(codex_path)},
         "tokenizer": {"package": "tiktoken", "version": tokenizer_version, "encoding": PINNED_TOKENIZER},
         "environment_keys": list(isolated_environment_keys()),

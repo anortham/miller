@@ -1395,6 +1395,10 @@ for line in sys.stdin:
             self.assertEqual(set(identity["inputs"]), {"task_manifest_sha256", "snapshot_manifest_sha256"})
             self.assertIn("environment_keys", identity)
             self.assertEqual(identity["tokenizer"]["version"], "0.13.0")
+            self.assertEqual(
+                module.prompt_contract_sha256(),
+                identity["prompt_contract_sha256"],
+            )
             probe = module._probe_mcp(
                 (str(product), "serve", "miller"),
                 snapshot_root,

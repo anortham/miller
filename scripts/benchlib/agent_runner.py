@@ -343,14 +343,23 @@ def _clear_previous_artifacts(paths: Iterable[Path]) -> None:
             path.unlink()
 
 
-def _prompt(task: BenchmarkTask) -> str:
+def _prompt_prefix() -> str:
     return (
         "Use only the benchmark MCP server to answer this task. Do not execute commands, read files "
         "or the filesystem directly, modify files, access the web, or use any other tool or MCP server. "
         "Return only the requested structured JSON answer.\n\n"
         f"{action_target_guidance()}\n\n"
-        f"Task: {task.prompt}\n"
+        "Task: "
     )
+
+
+def prompt_contract_sha256() -> str:
+    contract = f"{_prompt_prefix()}{{task.prompt}}\n"
+    return hashlib.sha256(contract.encode("utf-8")).hexdigest()
+
+
+def _prompt(task: BenchmarkTask) -> str:
+    return f"{_prompt_prefix()}{task.prompt}\n"
 
 
 def _isolated_environment(child_home: Path, execution_root: Path) -> dict[str, str]:
