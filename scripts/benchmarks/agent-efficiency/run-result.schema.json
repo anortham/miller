@@ -9,7 +9,6 @@
     "run_id",
     "task_id",
     "snapshot_id",
-    "product",
     "status",
     "failure_reason",
     "answer",
@@ -26,11 +25,18 @@
     "verification"
   ],
   "properties": {
+    "contract_id": { "const": "takeover-evaluation-v1" },
     "schema_version": { "const": 1 },
     "run_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
     "task_id": { "type": "string", "pattern": "^(dev|sealed)-[0-9]{3}$" },
     "snapshot_id": { "type": "string", "pattern": "^snapshot-[0-9]{3}$" },
     "product": { "enum": ["miller", "julie"] },
+    "role": { "enum": ["baseline", "candidate"] },
+    "expected_outcome": { "enum": ["success", "empty", "refusal"] },
+    "observed_outcome": {
+      "enum": ["success", "empty", "refusal", "hard_error", "wrong_answer"]
+    },
+    "wrong_action_count": { "type": "integer", "minimum": 0 },
     "status": {
       "enum": ["completed", "timeout", "failed", "invalid_answer", "disallowed_tool", "budget_exceeded"]
     },
@@ -89,11 +95,60 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*-[0-9]{3}$" }
-        }
+        },
+        "ordered_evidence_matches": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "pattern": "^[a-z][a-z0-9-]*-[0-9]{3}$" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "observed_outcome": {
+          "enum": ["success", "empty", "refusal", "hard_error", "wrong_answer"]
+        },
+        "wrong_action_count": { "type": "integer", "minimum": 0 }
       }
     }
   },
   "allOf": [
+    {
+      "if": { "required": ["contract_id"] },
+      "then": {
+        "required": [
+          "contract_id",
+          "role",
+          "expected_outcome",
+          "observed_outcome",
+          "wrong_action_count"
+        ],
+        "not": { "required": ["product"] },
+        "properties": {
+          "verification": {
+            "required": [
+              "passed",
+              "failures",
+              "matched_anchor_ids",
+              "ordered_evidence_matches",
+              "observed_outcome",
+              "wrong_action_count"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": ["product"],
+        "not": {
+          "anyOf": [
+            { "required": ["role"] },
+            { "required": ["expected_outcome"] },
+            { "required": ["observed_outcome"] },
+            { "required": ["wrong_action_count"] }
+          ]
+        }
+      }
+    },
     {
       "if": {
         "required": ["status"],
@@ -137,6 +192,7 @@
         "properties": {
           "answer": { "type": "null" },
           "failure_reason": { "const": "product_error" },
+          "observed_outcome": { "const": "hard_error" },
           "verification": {
             "properties": { "passed": { "const": false } }
           }
@@ -152,6 +208,7 @@
         "properties": {
           "answer": { "type": "null" },
           "failure_reason": { "const": "invalid_answer" },
+          "observed_outcome": { "const": "hard_error" },
           "verification": {
             "properties": { "passed": { "const": false } }
           }
@@ -165,7 +222,8 @@
       },
       "then": {
         "properties": {
-          "failure_reason": { "const": "disallowed_tool" }
+          "failure_reason": { "const": "disallowed_tool" },
+          "observed_outcome": { "const": "wrong_answer" }
         }
       }
     },
@@ -176,7 +234,8 @@
       },
       "then": {
         "properties": {
-          "failure_reason": { "const": "budget_exceeded" }
+          "failure_reason": { "const": "budget_exceeded" },
+          "observed_outcome": { "const": "hard_error" }
         }
       }
     }
@@ -197,6 +256,7 @@
       "additionalProperties": false,
       "required": ["status", "answer", "evidence"],
       "properties": {
+        "contract_id": { "const": "takeover-evaluation-v1" },
         "status": { "enum": ["answered", "not_found", "blocked"] },
         "answer": { "type": "string", "minLength": 1, "maxLength": 8000 },
         "evidence": {
@@ -218,8 +278,73 @@
               "claim": { "type": "string", "minLength": 1, "maxLength": 1000 }
             }
           }
+        },
+        "actions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "target"],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "inspect_symbol", "inspect_file", "assemble_context", "trace_callers",
+                  "trace_callees", "trace_call_path", "cite_reference_site", "select_tests",
+                  "propose_edit", "propose_rename", "read_log", "query_pattern",
+                  "recover_workspace", "report_empty", "refuse_unsafe"
+                ]
+              },
+              "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "minProperties": 1,
+                "properties": {
+                  "path": { "type": ["string", "null"] },
+                  "symbol_id": { "type": ["string", "null"] },
+                  "target_symbol_id": { "type": ["string", "null"] },
+                  "reference_site": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path", "line_start", "line_end", "column_start", "column_end",
+                          "reference_kind", "containing_symbol_id", "source_symbol_id",
+                          "target_symbol_id", "resolution"
+                        ],
+                        "properties": {
+                          "path": { "type": "string" },
+                          "line_start": { "type": "integer", "minimum": 1 },
+                          "line_end": { "type": "integer", "minimum": 1 },
+                          "column_start": { "type": ["integer", "null"], "minimum": 0 },
+                          "column_end": { "type": ["integer", "null"], "minimum": 0 },
+                          "reference_kind": { "type": "string" },
+                          "containing_symbol_id": { "type": ["string", "null"] },
+                          "source_symbol_id": { "type": ["string", "null"] },
+                          "target_symbol_id": { "type": ["string", "null"] },
+                          "resolution": { "enum": ["exact", "fallback", "unresolved"] }
+                        }
+                      },
+                      { "type": "null" }
+                    ]
+                  },
+                  "test_path": { "type": ["string", "null"] },
+                  "pattern_id": { "type": ["string", "null"] },
+                  "workspace_selector": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["contract_id"] },
+          "then": { "required": ["actions"] },
+          "else": { "not": { "required": ["actions"] } }
+        }
+      ]
     }
   }
 }

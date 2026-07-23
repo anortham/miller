@@ -525,6 +525,13 @@ def _verify_takeover_answer(
         failures.append(f"action: missing requirement group {group}")
 
     if task.uncertainty_expectation == "must_resolve":
+        if (
+            task.expected_outcome == "success"
+            and not _grounded_exact_requirement_groups(task).intersection(satisfied_groups)
+        ):
+            failures.append(
+                "uncertainty: must_resolve requires a grounded exact identity action"
+            )
         if any(
             action.target.reference_site is not None
             and action.target.reference_site.resolution != "exact"
@@ -770,6 +777,12 @@ def _submitted_action(value: Mapping[str, Any]) -> _SubmittedAction:
 
 def _validate_takeover_task(task: BenchmarkTask) -> None:
     anchor_ids = {anchor.anchor_id for anchor in task.evidence_anchors}
+    if task.expected_outcome == "success" and not any(
+        anchor.relevance_grade is not None for anchor in task.evidence_anchors
+    ):
+        raise ValueError(
+            f"task {task.task_id}: success requires at least one graded evidence anchor"
+        )
     _require_unique(
         (
             f"{anchor.path}\0{anchor.symbol}\0{anchor.line_start}\0{anchor.line_end}"
@@ -819,6 +832,16 @@ def _validate_takeover_task(task: BenchmarkTask) -> None:
     for action in task.forbidden_actions:
         _validate_action_target(task.task_id, action.action_id, action.kind, action.target)
 
+    if (
+        task.expected_outcome == "success"
+        and task.uncertainty_expectation == "must_resolve"
+        and not _grounded_exact_requirement_groups(task)
+    ):
+        raise ValueError(
+            f"task {task.task_id}: must_resolve requires a mandatory exact identity "
+            "requirement group"
+        )
+
     acceptable_kinds = {action.kind for action in task.acceptable_actions}
     if task.expected_outcome == "empty" and "report_empty" not in acceptable_kinds:
         raise ValueError(f"task {task.task_id}: empty outcome requires report_empty")
@@ -833,6 +856,61 @@ def _validate_takeover_task(task: BenchmarkTask) -> None:
         raise ValueError(
             f"task {task.task_id}: must_refuse requires expected_outcome refusal"
         )
+
+
+def _grounded_exact_requirement_groups(task: BenchmarkTask) -> frozenset[str]:
+    anchors = {anchor.anchor_id: anchor for anchor in task.evidence_anchors}
+    reference_sites = {
+        site.site_id: site.identity
+        for site in task.reference_sites
+    }
+    actions_by_group: dict[str, list[_AcceptableAction]] = {}
+    for action in task.acceptable_actions:
+        actions_by_group.setdefault(action.requirement_group, []).append(action)
+    return frozenset(
+        group
+        for group, actions in actions_by_group.items()
+        if all(
+            _action_has_grounded_exact_identity(action, anchors, reference_sites)
+            for action in actions
+        )
+    )
+
+
+def _action_has_grounded_exact_identity(
+    action: _AcceptableAction,
+    anchors: Mapping[str, _EvidenceAnchor],
+    reference_sites: Mapping[str, _ReferenceSiteIdentity],
+) -> bool:
+    target = action.target
+    if target.symbol_id is not None:
+        return True
+    if (
+        target.reference_site is not None
+        and target.reference_site.resolution == "exact"
+        and target.reference_site.target_symbol_id is not None
+    ):
+        return True
+    if any(
+        site_id in reference_sites
+        and reference_sites[site_id].resolution == "exact"
+        and reference_sites[site_id].target_symbol_id is not None
+        for site_id in action.reference_site_ids
+    ):
+        return True
+
+    required_anchors = tuple(
+        anchors[anchor_id]
+        for anchor_id in action.evidence_anchor_ids
+        if anchor_id in anchors and anchors[anchor_id].relevance_grade is not None
+    )
+    if target.path is not None:
+        return any(anchor.path == target.path for anchor in required_anchors)
+    if target.test_path is not None:
+        return any(anchor.path == target.test_path for anchor in required_anchors)
+    if target.pattern_id is not None or target.workspace_selector is not None:
+        return bool(required_anchors)
+    return False
 
 
 def _validate_action_target(
@@ -961,9 +1039,21 @@ def _action_identity_key(kind: str, target: _ActionTarget) -> str:
     )
 
 
+def _unique_json_object(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = item
+    return value
+
+
 def _load_json(path: str | Path) -> Any:
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        return json.loads(
+            Path(path).read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"manifest: {exc}") from exc
 

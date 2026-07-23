@@ -94,6 +94,13 @@ public sealed record AgentTaskManifestRow
     [JsonPropertyName("evidence_critical")] public bool EvidenceCritical { get; init; }
     [JsonPropertyName("expected_outcome")] public string ExpectedOutcome { get; init; } = "";
     [JsonPropertyName("capabilities")] public IReadOnlyList<string> Capabilities { get; init; } = [];
+    [JsonPropertyName("evidence_anchors")] public IReadOnlyList<AgentEvidenceAnchor> EvidenceAnchors { get; init; } = [];
+}
+
+public sealed record AgentEvidenceAnchor
+{
+    [JsonPropertyName("anchor_id")] public string AnchorId { get; init; } = "";
+    [JsonPropertyName("relevance_grade")] public int RelevanceGrade { get; init; }
 }
 
 public sealed record AgentRunResult
@@ -114,6 +121,7 @@ public sealed record AgentRunResult
     [JsonPropertyName("product_errors")] public long ProductErrors { get; init; }
     [JsonPropertyName("duplicate_calls")] public long DuplicateCalls { get; init; }
     [JsonPropertyName("uncited_tool_output_tokens")] public long UncitedToolOutputTokens { get; init; }
+    [JsonPropertyName("ordered_evidence_matches")] public IReadOnlyList<string?> OrderedEvidenceMatches { get; init; } = [];
 }
 
 public static class AgentWorkflowClasses

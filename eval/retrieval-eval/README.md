@@ -36,12 +36,21 @@ dotnet run --project eval/retrieval-eval -- task-score \
   --candidate /sealed/candidate-results.jsonl \
   --out /sealed/task-aggregate.json
 
-# score stabilized Miller-vs-Julie agent-efficiency runs
+# score stabilized neutral-role action/efficiency runs
 dotnet run --project eval/retrieval-eval -- agent-score \
   --tasks /sealed/agent-tasks.jsonl \
-  --miller /sealed/miller-runs.jsonl \
-  --julie /sealed/julie-runs.jsonl \
+  --baseline /sealed/baseline-runs.jsonl \
+  --candidate /sealed/candidate-runs.jsonl \
+  --decision-scope subset \
   --out /sealed/agent-aggregate.json
+
+# combine ordered-evidence relevance with action/efficiency scoring
+dotnet run --project eval/retrieval-eval -- decision-score \
+  --tasks /sealed/agent-tasks.jsonl \
+  --baseline /sealed/baseline-runs.jsonl \
+  --candidate /sealed/candidate-runs.jsonl \
+  --decision-scope full \
+  --out /sealed/private-combined-aggregate.json
 ```
 
 `--k` defaults to 10. `--corpus` is optional for `score` (it adds a `corpus_validation` block) and takes
@@ -52,10 +61,21 @@ Exit codes: `0` ok, `1` usage/IO error, `2` validation failed.
 `task-score` exits `0` for every valid aggregate, including `fail` and `underpowered` verdicts. Missing
 arguments and file-system failures exit `1`; malformed, unsupported, duplicate, or mismatched rows exit `2`.
 
-`agent-score` also exits `0` for every valid verdict. It stabilizes initial completion disagreements with
-exactly three repetitions per arm, requires Miller completion non-regression with no critical losses, and
-then evaluates output-token or tool-call savings under the p75 wall-time guard. Its report contains aggregate
-cells and sufficiently populated groups only; it never emits task ids, prompts, answers, evidence, or paths.
+`agent-score` also exits `0` for every valid verdict. It stabilizes initial correctness disagreements with
+exactly three repetitions per neutral role, requires candidate correctness non-regression with no critical
+losses or wrong-action-rate regression, and then evaluates output-token or tool-call savings under the p75
+wall-time guard. Its report contains aggregate cells and sufficiently populated groups only; it never emits
+task ids, prompts, answers, evidence, or paths. The legacy `--miller/--julie` flags are a calibration-only
+input adapter and always remain non-decisional.
+
+`decision-score` accepts takeover-v1 task rows with graded `evidence_anchors` and run rows with
+`ordered_evidence_matches`. It macro-averages per-task recall@6, nDCG@6, MRR, and top-1 after the frozen
+one-or-three repetition rule, then combines that relevance block with the action report. Incorrect repetitions
+contribute relevance zeros; empty and refusal tasks are excluded from relevance rather than assigned fabricated
+zeros. A set with no success task is rejected because v1 defines no relevance aggregate for it; use
+`agent-score` for action-only diagnostics. The combined private report still emits
+`decision_verdict=not_decisional`: the external controller's safe finalizer owns full identity, capability,
+void, evidence-retention, and privacy validation.
 
 Tests: `dotnet test eval/retrieval-eval/tests/RetrievalEval.Tests.csproj`.
 

@@ -1,4 +1,5 @@
 {
+  "contract_id": "takeover-evaluation-v1",
   "schema_version": 1,
   "tasks": [
     {
@@ -8,7 +9,7 @@
       "language": "typescript",
       "workflow_class": "exact_lookup",
       "evidence_critical": true,
-      "prompt": "Locate the path-key normalizer used for safety comparisons and explain how its Windows and POSIX branches differ.",
+      "prompt": "Locate the path-key normalizer used for safety comparisons, explain how its Windows and POSIX branches differ, and propose renaming that function definition without selecting an import homonym.",
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
@@ -37,10 +38,39 @@
           "path": "src/workspace.ts",
           "symbol": "normalizePathKeyForSafetyCheck",
           "line_start": 165,
-          "line_end": 170
+          "line_end": 170,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["uses one case-sensitive normalization path on every platform"]
+      "forbidden_claims": ["uses one case-sensitive normalization path on every platform"],
+      "capabilities": ["exact_symbol_lookup", "homonym_disambiguation", "rename"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "9adead9002cc2e904093605dc305367c"},
+          "requirement_group": "resolve-normalizer",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "propose_rename",
+          "target": {"symbol_id": "9adead9002cc2e904093605dc305367c"},
+          "requirement_group": "rename-normalizer",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-003",
+          "kind": "propose_rename",
+          "target": {"symbol_id": "e056de002bcbbe2e02a68d0a580d7458"},
+          "reason": "This is the imported homonym in src/registry.ts, not the function definition."
+        }
+      ],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-002",
@@ -78,10 +108,25 @@
           "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
           "symbol": "SemanticMillerCandidateFactory",
           "line_start": 50,
-          "line_end": 66
+          "line_end": 66,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["silently falls back for unknown candidate identifiers"]
+      "forbidden_claims": ["silently falls back for unknown candidate identifiers"],
+      "capabilities": ["exact_symbol_lookup"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "ebee49b5754d52e765c08aea33c0fd49"},
+          "requirement_group": "resolve-factory",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-003",
@@ -106,16 +151,38 @@
           "evidence_anchor_ids": ["anchor-001"]
         }
       ],
-      "symbol_cited": [],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "SemanticMillerCandidateFactory",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
       "evidence_anchors": [
         {
           "anchor_id": "anchor-001",
           "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
+          "symbol": "SemanticMillerCandidateFactory",
           "line_start": 50,
-          "line_end": 66
+          "line_end": 66,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["the choice is implemented in Miller runtime code"]
+      "forbidden_claims": ["the choice is implemented in Miller runtime code"],
+      "capabilities": ["discovery"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "ebee49b5754d52e765c08aea33c0fd49"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-004",
@@ -154,10 +221,25 @@
           "path": "src/workspace-recovery.ts",
           "symbol": "recoverWorkspace",
           "line_start": 107,
-          "line_end": 145
+          "line_end": 145,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["mutating tools always accept the single registered project"]
+      "forbidden_claims": ["mutating tools always accept the single registered project"],
+      "capabilities": ["workspace_recovery"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "recover_workspace",
+          "target": {"workspace_selector": "goldfish"},
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-005",
@@ -166,7 +248,7 @@
       "language": "json",
       "workflow_class": "docs_config",
       "evidence_critical": false,
-      "prompt": "What is the current Razorback package version, and which configuration declares the files that must remain version-aligned?",
+      "prompt": "Using the JSON property structure, find the current Razorback package version and the configuration that declares the files which must remain version-aligned.",
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
@@ -193,16 +275,39 @@
           "anchor_id": "anchor-001",
           "path": "package.json",
           "line_start": 1,
-          "line_end": 5
+          "line_end": 5,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": ".version-bump.json",
           "line_start": 1,
-          "line_end": 8
+          "line_end": 8,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["only package.json is version-bearing"]
+      "forbidden_claims": ["only package.json is version-bearing"],
+      "capabilities": ["patterns"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "query_pattern",
+          "target": {"pattern_id": "json.property.v1"},
+          "requirement_group": "find-version-properties",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "inspect_file",
+          "target": {"path": ".version-bump.json"},
+          "requirement_group": "inspect-version-manifest",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-006",
@@ -233,10 +338,25 @@
           "anchor_id": "anchor-001",
           "path": "package.json",
           "line_start": 59,
-          "line_end": 65
+          "line_end": 65,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["the test script runs the full tree-sitter corpus suite"]
+      "forbidden_claims": ["the test script runs the full tree-sitter corpus suite"],
+      "capabilities": ["discovery"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "inspect_file",
+          "target": {"path": "package.json"},
+          "requirement_group": "inspect-package-scripts",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-007",
@@ -245,7 +365,7 @@
       "language": "c",
       "workflow_class": "context_assembly",
       "evidence_critical": false,
-      "prompt": "Assemble the minimal grammar and scanner context needed to change how Razor markup tag names are recognized and dispatched.",
+      "prompt": "Assemble the minimal grammar and scanner context needed to change how Razor markup tag names are recognized and dispatched, then propose the scanner implementation as the edit target.",
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
@@ -278,17 +398,54 @@
           "anchor_id": "anchor-001",
           "path": "grammar.js",
           "line_start": 16,
-          "line_end": 31
+          "line_end": 31,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "src/scanner.c",
           "symbol": "tree_sitter_razor_external_scanner_scan",
           "line_start": 313,
-          "line_end": 358
+          "line_end": 358,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["markup tag recognition is implemented only in grammar.js"]
+      "forbidden_claims": ["markup tag recognition is implemented only in grammar.js"],
+      "capabilities": ["context_orientation", "edit"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "assemble_context",
+          "target": {"path": "grammar.js"},
+          "requirement_group": "grammar-context",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "assemble_context",
+          "target": {"path": "src/scanner.c"},
+          "requirement_group": "scanner-context",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "propose_edit",
+          "target": {"path": "src/scanner.c"},
+          "requirement_group": "edit-target",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-004",
+          "kind": "propose_edit",
+          "target": {"path": "grammar.js"},
+          "reason": "A grammar-only edit omits the scanner dispatch that implements tag-name recognition."
+        }
+      ],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-008",
@@ -324,16 +481,39 @@
           "anchor_id": "anchor-001",
           "path": "grammar.js",
           "line_start": 43,
-          "line_end": 48
+          "line_end": 48,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "bindings/rust/lib.rs",
           "line_start": 23,
-          "line_end": 59
+          "line_end": 59,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["the Rust binding has no grammar-load smoke test"]
+      "forbidden_claims": ["the Rust binding has no grammar-load smoke test"],
+      "capabilities": ["context_orientation"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "assemble_context",
+          "target": {"path": "grammar.js"},
+          "requirement_group": "grammar-export",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "assemble_context",
+          "target": {"path": "bindings/rust/lib.rs"},
+          "requirement_group": "rust-binding",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-009",
@@ -376,24 +556,118 @@
           "path": "src/workspace.ts",
           "symbol": "normalizePathKeyForSafetyCheck",
           "line_start": 165,
-          "line_end": 170
+          "line_end": 170,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "src/registry.ts",
           "symbol": "registryPathKey",
           "line_start": 32,
-          "line_end": 34
+          "line_end": 34,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-003",
           "path": "src/workspace-recovery.ts",
           "symbol": "comparablePathKey",
           "line_start": 59,
-          "line_end": 61
+          "line_end": 61,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["the normalizer has no production callers"]
+      "forbidden_claims": ["the normalizer has no production callers"],
+      "capabilities": ["callers", "homonym_disambiguation"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "trace_callers",
+          "target": {"symbol_id": "9adead9002cc2e904093605dc305367c"},
+          "requirement_group": "trace-normalizer",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/registry.ts",
+              "line_start": 33,
+              "line_end": 33,
+              "reference_kind": "call",
+              "containing_symbol_id": "54550753cb9428458163838a7319e831",
+              "source_symbol_id": "54550753cb9428458163838a7319e831",
+              "target_symbol_id": "9adead9002cc2e904093605dc305367c",
+              "resolution": "exact"
+            }
+          },
+          "requirement_group": "cite-registry-caller",
+          "reference_site_ids": ["site-001"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/workspace-recovery.ts",
+              "line_start": 60,
+              "line_end": 60,
+              "reference_kind": "call",
+              "containing_symbol_id": "f0228ffa1f8cc6d93563042e072b669d",
+              "source_symbol_id": "f0228ffa1f8cc6d93563042e072b669d",
+              "target_symbol_id": "9adead9002cc2e904093605dc305367c",
+              "resolution": "exact"
+            }
+          },
+          "requirement_group": "cite-recovery-caller",
+          "reference_site_ids": ["site-002"]
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-004",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/registry.ts",
+              "line_start": 33,
+              "line_end": 33,
+              "reference_kind": "call",
+              "containing_symbol_id": "54550753cb9428458163838a7319e831",
+              "source_symbol_id": "54550753cb9428458163838a7319e831",
+              "target_symbol_id": "0aac71e047f575f2260ad296930678af",
+              "resolution": "exact"
+            }
+          },
+          "reason": "The call resolves to the function definition, not the export-declaration homonym."
+        }
+      ],
+      "reference_sites": [
+        {
+          "site_id": "site-001",
+          "path": "src/registry.ts",
+          "line_start": 33,
+          "line_end": 33,
+          "reference_kind": "call",
+          "containing_symbol_id": "54550753cb9428458163838a7319e831",
+          "source_symbol_id": "54550753cb9428458163838a7319e831",
+          "target_symbol_id": "9adead9002cc2e904093605dc305367c",
+          "resolution": "exact"
+        },
+        {
+          "site_id": "site-002",
+          "path": "src/workspace-recovery.ts",
+          "line_start": 60,
+          "line_end": 60,
+          "reference_kind": "call",
+          "containing_symbol_id": "f0228ffa1f8cc6d93563042e072b669d",
+          "source_symbol_id": "f0228ffa1f8cc6d93563042e072b669d",
+          "target_symbol_id": "9adead9002cc2e904093605dc305367c",
+          "resolution": "exact"
+        }
+      ],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-010",
@@ -436,17 +710,80 @@
           "path": "src/scanner.c",
           "symbol": "scan_markup_tag",
           "line_start": 164,
-          "line_end": 198
+          "line_end": 198,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "src/scanner.c",
           "symbol": "tree_sitter_razor_external_scanner_scan",
           "line_start": 355,
-          "line_end": 358
+          "line_end": 358,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["scan_markup_tag has no production caller"]
+      "forbidden_claims": ["scan_markup_tag has no production caller"],
+      "capabilities": ["callers", "callees", "call_path"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "trace_callers",
+          "target": {"symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"},
+          "requirement_group": "trace-caller",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "trace_callees",
+          "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "requirement_group": "trace-dispatch",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "trace_call_path",
+          "target": {
+            "symbol_id": "80cc58e7c48d034967766f777a754058",
+            "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"
+          },
+          "requirement_group": "trace-call-path",
+          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/scanner.c",
+              "line_start": 357,
+              "line_end": 357,
+              "reference_kind": "call",
+              "containing_symbol_id": "80cc58e7c48d034967766f777a754058",
+              "source_symbol_id": "80cc58e7c48d034967766f777a754058",
+              "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+              "resolution": "exact"
+            }
+          },
+          "requirement_group": "cite-dispatch-site",
+          "reference_site_ids": ["site-001"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [
+        {
+          "site_id": "site-001",
+          "path": "src/scanner.c",
+          "line_start": 357,
+          "line_end": 357,
+          "reference_kind": "call",
+          "containing_symbol_id": "80cc58e7c48d034967766f777a754058",
+          "source_symbol_id": "80cc58e7c48d034967766f777a754058",
+          "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+          "resolution": "exact"
+        }
+      ],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-011",
@@ -489,23 +826,47 @@
           "path": "grammar.js",
           "symbol": "c_sharp",
           "line_start": 43,
-          "line_end": 48
+          "line_end": 48,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "bindings/node/binding_test.js",
           "line_start": 5,
-          "line_end": 10
+          "line_end": 10,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-003",
           "path": "bindings/rust/lib.rs",
           "symbol": "test_can_load_grammar",
           "line_start": 51,
-          "line_end": 59
+          "line_end": 59,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["grammar loading has no focused binding tests"]
+      "forbidden_claims": ["grammar loading has no focused binding tests"],
+      "capabilities": ["impact_tests"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "select_tests",
+          "target": {"test_path": "bindings/node/binding_test.js"},
+          "requirement_group": "node-test",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "select_tests",
+          "target": {"test_path": "bindings/rust/lib.rs"},
+          "requirement_group": "rust-test",
+          "evidence_anchor_ids": ["anchor-003"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
     },
     {
       "task_id": "dev-012",
@@ -542,22 +903,177 @@
           "path": "scripts/bump-version.sh",
           "symbol": "cmd_bump",
           "line_start": 186,
-          "line_end": 214
+          "line_end": 214,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "tests/version-audit.test.mjs",
           "line_start": 60,
-          "line_end": 73
+          "line_end": 73,
+          "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-003",
           "path": "tests/version-sync.test.mjs",
           "line_start": 14,
-          "line_end": 28
+          "line_end": 28,
+          "relevance_grade": 3
         }
       ],
-      "forbidden_claims": ["version drift is only checked manually"]
+      "forbidden_claims": ["version drift is only checked manually"],
+      "capabilities": ["impact_tests"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "select_tests",
+          "target": {"test_path": "tests/version-audit.test.mjs"},
+          "requirement_group": "audit-test",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "select_tests",
+          "target": {"test_path": "tests/version-sync.test.mjs"},
+          "requirement_group": "sync-test",
+          "evidence_anchor_ids": ["anchor-003"]
+        }
+      ],
+      "forbidden_actions": [],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
+    },
+    {
+      "task_id": "dev-013",
+      "repo_id": "eros",
+      "snapshot_id": "snapshot-002",
+      "language": "csharp",
+      "workflow_class": "docs_config",
+      "evidence_critical": false,
+      "prompt": "Read the captured failing Cargo test stdout fixture and report the two failed test names plus the passed, failed, and ignored totals.",
+      "fact_predicates": [
+        {
+          "predicate_id": "fact-001",
+          "source": "answer",
+          "all_terms": ["tests::bad_math", "tests::explicit_boom", "1 passed", "2 failed", "1 ignored"],
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "path_cited": [
+        {
+          "predicate_id": "path-001",
+          "path": "tests/Eros.ContinuousTesting.Tests/CargoTestOutputTests.cs",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "FailingStdout",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "evidence_anchors": [
+        {
+          "anchor_id": "anchor-001",
+          "path": "tests/Eros.ContinuousTesting.Tests/CargoTestOutputTests.cs",
+          "symbol": "FailingStdout",
+          "line_start": 40,
+          "line_end": 69,
+          "relevance_grade": 3
+        }
+      ],
+      "forbidden_claims": ["the fixture reports only one failed test"],
+      "capabilities": ["logs"],
+      "expected_outcome": "success",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "read_log",
+          "target": {"path": "tests/Eros.ContinuousTesting.Tests/CargoTestOutputTests.cs"},
+          "requirement_group": "read-captured-output",
+          "evidence_anchor_ids": ["anchor-001"]
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-002",
+          "kind": "read_log",
+          "target": {"path": "src/Eros.ContinuousTesting/CargoTestOutput.cs"},
+          "reason": "The parser implementation is not the captured failing output requested by the task."
+        }
+      ],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
+    },
+    {
+      "task_id": "dev-014",
+      "repo_id": "goldfish",
+      "snapshot_id": "snapshot-001",
+      "language": "typescript",
+      "workflow_class": "exact_lookup",
+      "evidence_critical": true,
+      "prompt": "Find a function named normalizePathKeyForUnsafeMutation in the frozen Goldfish snapshot; report an empty result if no such symbol exists.",
+      "fact_predicates": [],
+      "path_cited": [],
+      "symbol_cited": [],
+      "evidence_anchors": [],
+      "forbidden_claims": [],
+      "capabilities": ["discovery", "exact_symbol_lookup"],
+      "expected_outcome": "empty",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "report_empty",
+          "target": {"workspace_selector": "goldfish"},
+          "requirement_group": "empty-outcome"
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-002",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "typescript:src/workspace.ts:normalizePathKeyForUnsafeMutation"},
+          "reason": "The requested symbol does not exist in the frozen snapshot."
+        }
+      ],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_resolve"
+    },
+    {
+      "task_id": "dev-015",
+      "repo_id": "tree-sitter-razor",
+      "snapshot_id": "snapshot-004",
+      "language": "c",
+      "workflow_class": "exact_lookup",
+      "evidence_critical": true,
+      "prompt": "Rename only the exported tree_sitter_razor_external_scanner_scan C entry point without changing generated parser or runtime consumers; refuse the exact rename if that isolated ABI change is unsafe.",
+      "fact_predicates": [],
+      "path_cited": [],
+      "symbol_cited": [],
+      "evidence_anchors": [],
+      "forbidden_claims": [],
+      "capabilities": ["rename"],
+      "expected_outcome": "refusal",
+      "acceptable_actions": [
+        {
+          "action_id": "action-001",
+          "kind": "refuse_unsafe",
+          "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "requirement_group": "refuse-isolated-abi-rename"
+        }
+      ],
+      "forbidden_actions": [
+        {
+          "action_id": "action-002",
+          "kind": "propose_rename",
+          "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "reason": "Renaming only the exported scanner entry point breaks its generated-parser ABI contract."
+        }
+      ],
+      "reference_sites": [],
+      "uncertainty_expectation": "must_refuse"
     }
   ]
 }

@@ -794,6 +794,25 @@ class AgentContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected):
                     load_task_manifest(path)
 
+    def test_manifest_loaders_reject_duplicate_json_object_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task_path = root / "tasks.json"
+            task_path.write_text(
+                '{"schema_version":1,"schema_version":1,"tasks":[]}',
+                encoding="utf-8",
+            )
+            snapshot_path = root / "snapshots.json"
+            snapshot_path.write_text(
+                '{"schema_version":1,"snapshots":[],"snapshots":[]}',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate.*schema_version"):
+                load_task_manifest(task_path)
+            with self.assertRaisesRegex(ValueError, "duplicate.*snapshots"):
+                load_snapshot_manifest(snapshot_path)
+
     def test_snapshot_loader_rejects_absolute_roots_and_extra_fields(self) -> None:
         valid = {
             "schema_version": 1,
@@ -1395,7 +1414,7 @@ class AgentContractTests(unittest.TestCase):
         ]:
             self.assertNotIn(private_label_field, submitted_action["properties"])
 
-    def test_visible_corpus_is_balanced_and_uses_five_repo_language_families(self) -> None:
+    def test_visible_corpus_preserves_workflow_and_repo_language_breadth(self) -> None:
         tasks = load_task_manifest(BENCHMARK_ROOT / "dev-tasks.json")
         snapshots = load_snapshot_manifest(BENCHMARK_ROOT / "dev-snapshots.json")
         expected_classes = {
@@ -1416,9 +1435,9 @@ class AgentContractTests(unittest.TestCase):
             }
             self.assertEqual(expected_critical, task.evidence_critical)
 
-        self.assertEqual(12, len(tasks))
-        self.assertEqual({workflow: 2 for workflow in expected_classes}, class_counts)
-        self.assertEqual(12, len({task.task_id for task in tasks}))
+        self.assertEqual(15, len(tasks))
+        self.assertTrue(all(count >= 2 for count in class_counts.values()))
+        self.assertEqual(15, len({task.task_id for task in tasks}))
         self.assertGreaterEqual(len({(task.repo_id, task.language) for task in tasks}), 5)
         self.assertEqual(
             {snapshot.snapshot_id for snapshot in snapshots},
@@ -1430,6 +1449,101 @@ class AgentContractTests(unittest.TestCase):
             all(task.language in snapshot_languages[task.snapshot_id] for task in tasks)
         )
         self.assertTrue(all(task.repo_id == snapshot_repos[task.snapshot_id] for task in tasks))
+
+    def test_visible_corpus_covers_takeover_v1_capabilities_outcomes_and_actions(self) -> None:
+        manifest = json.loads((BENCHMARK_ROOT / "dev-tasks.json").read_text(encoding="utf-8"))
+        tasks = load_task_manifest(BENCHMARK_ROOT / "dev-tasks.json")
+        expected_capabilities = {
+            "discovery",
+            "exact_symbol_lookup",
+            "homonym_disambiguation",
+            "context_orientation",
+            "callers",
+            "callees",
+            "call_path",
+            "impact_tests",
+            "edit",
+            "rename",
+            "logs",
+            "patterns",
+            "workspace_recovery",
+        }
+
+        self.assertEqual("takeover-evaluation-v1", manifest.get("contract_id"))
+        self.assertEqual(expected_capabilities, {capability for task in tasks for capability in task.capabilities})
+        self.assertEqual({"success", "empty", "refusal"}, {task.expected_outcome for task in tasks})
+
+        action_kinds = {
+            action.kind
+            for task in tasks
+            for action in (*task.acceptable_actions, *task.forbidden_actions)
+        }
+        self.assertTrue({"propose_edit", "propose_rename", "report_empty", "refuse_unsafe"}.issubset(action_kinds))
+        ambiguity_tasks = [
+            task
+            for task in tasks
+            if "homonym_disambiguation" in task.capabilities
+            and task.reference_sites
+            and task.forbidden_actions
+        ]
+        self.assertTrue(ambiguity_tasks)
+        self.assertTrue(
+            any(
+                action.kind == "cite_reference_site"
+                for task in ambiguity_tasks
+                for action in task.acceptable_actions
+            )
+        )
+
+    def test_visible_corpus_labels_resolve_in_declared_frozen_snapshots(self) -> None:
+        manifest = json.loads((BENCHMARK_ROOT / "dev-tasks.json").read_text(encoding="utf-8"))
+        snapshots = {
+            snapshot.snapshot_id: snapshot
+            for snapshot in load_snapshot_manifest(BENCHMARK_ROOT / "dev-snapshots.json")
+        }
+        source_root = Path.home() / "source"
+        missing_repos = sorted(
+            {
+                snapshot.repo_id
+                for snapshot in snapshots.values()
+                if not (source_root / snapshot.repo_id / ".git").exists()
+            }
+        )
+        if missing_repos:
+            self.skipTest(f"visible source repositories unavailable: {', '.join(missing_repos)}")
+
+        def blob_lines(snapshot_id: str, path: str) -> list[str]:
+            snapshot = snapshots[snapshot_id]
+            completed = subprocess.run(
+                ["git", "-C", str(source_root / snapshot.repo_id), "show", f"{snapshot.commit}:{path}"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return completed.stdout.splitlines()
+
+        for task in manifest["tasks"]:
+            snapshot_id = task["snapshot_id"]
+            for anchor in task["evidence_anchors"]:
+                with self.subTest(task=task["task_id"], anchor=anchor["anchor_id"]):
+                    lines = blob_lines(snapshot_id, anchor["path"])
+                    if "line_start" in anchor:
+                        self.assertLessEqual(anchor["line_end"], len(lines))
+                        if "symbol" in anchor:
+                            self.assertIn(anchor["symbol"], "\n".join(lines))
+            for site in task.get("reference_sites", []):
+                with self.subTest(task=task["task_id"], site=site["site_id"]):
+                    lines = blob_lines(snapshot_id, site["path"])
+                    self.assertLessEqual(site["line_end"], len(lines))
+            for action in (
+                *task.get("acceptable_actions", []),
+                *task.get("forbidden_actions", []),
+            ):
+                target = action["target"]
+                for field in ("path", "test_path"):
+                    if field in target:
+                        with self.subTest(task=task["task_id"], action=action["action_id"]):
+                            blob_lines(snapshot_id, target[field])
 
 
 if __name__ == "__main__":

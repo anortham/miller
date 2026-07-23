@@ -42,6 +42,9 @@ def _task(task_id: str, workflow_class: str = "concept_search") -> BenchmarkTask
         symbol_cited=(),
         evidence_anchors=(),
         forbidden_claims=(),
+        contract_id="takeover-evaluation-v1",
+        capabilities=("discovery",),
+        expected_outcome="success",
     )
 
 
@@ -165,12 +168,17 @@ class ScriptedCodexAgentRunner(CodexAgentRunner):
     def run(self, task, arm, snapshot, output_dir):
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=False)
-        repetition = len([call for call in self.calls if call[:2] == (task.task_id, arm.product)]) + 1
-        self.calls.append((task.task_id, arm.product, repetition, task.prompt))
-        classification = self.outcomes[(task.task_id, arm.product)].pop(0)
+        repetition = len([call for call in self.calls if call[:2] == (task.task_id, arm.role)]) + 1
+        self.calls.append((task.task_id, arm.role, repetition, task.prompt))
+        classification = self.outcomes[(task.task_id, arm.role)].pop(0)
         proxy = output / "proxy-events.jsonl"
         _proxy_events(proxy)
-        verification = VerificationResult(classification == "valid", () if classification == "valid" else ("failed",), ())
+        verification = VerificationResult(
+            classification == "valid",
+            () if classification == "valid" else ("failed",),
+            (),
+            observed_outcome=task.expected_outcome if classification == "valid" else "wrong_answer",
+        )
         failure_reason = None if classification == "valid" else "incorrect"
         if classification in {"harness_failure", "product_failure"}:
             failure_reason = "product_error"
@@ -183,7 +191,12 @@ class ScriptedCodexAgentRunner(CodexAgentRunner):
             classification=classification,
             failure_reason=failure_reason,
             answer=(
-                StructuredAnswer(status="answered", answer="fixture answer", evidence=())
+                StructuredAnswer(
+                    status="answered",
+                    answer="fixture answer",
+                    evidence=(),
+                    contract_id="takeover-evaluation-v1",
+                )
                 if classification not in {"harness_failure", "product_failure"}
                 else None
             ),
@@ -208,7 +221,7 @@ class DisallowedToolCodexAgentRunner(CodexAgentRunner):
     def run(self, task, arm, snapshot, output_dir):
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=False)
-        self.calls.append((task.task_id, arm.product))
+        self.calls.append((task.task_id, arm.role))
         proxy = output / "proxy-events.jsonl"
         _proxy_events(proxy)
         return AgentRun(
@@ -220,6 +233,7 @@ class DisallowedToolCodexAgentRunner(CodexAgentRunner):
                 False,
                 ("runner: disallowed item type function_call",),
                 (),
+                observed_outcome="wrong_answer",
             ),
             command_manifest_path=output / "command-manifest.json",
             codex_events_path=output / "codex-events.jsonl",
@@ -231,10 +245,325 @@ class DisallowedToolCodexAgentRunner(CodexAgentRunner):
             wall_clock_ms=50,
             exit_code=0,
             child_home_removed=True,
+            observed_outcome="wrong_answer",
         )
 
 
 class BenchAgentEfficiencyTests(unittest.TestCase):
+    def test_takeover_selection_is_capability_derived_and_byte_exact(self):
+        module = _load_module()
+        self.assertTrue(hasattr(module, "build_selection"))
+        capabilities = (
+            "discovery",
+            "exact_symbol_lookup",
+            "homonym_disambiguation",
+            "context_orientation",
+            "callers",
+            "callees",
+            "call_path",
+            "impact_tests",
+            "edit",
+            "rename",
+            "logs",
+            "patterns",
+            "workspace_recovery",
+        )
+        tasks = tuple(
+            replace(
+                _task(f"dev-{index:03d}"),
+                contract_id="takeover-evaluation-v1",
+                capabilities=(capability,),
+                expected_outcome="success",
+            )
+            for index, capability in enumerate(capabilities, start=1)
+        )
+        snapshots = (
+            SnapshotIdentity("snapshot-001", "fixture", "a" * 40, "b" * 64, ("python",)),
+        )
+        parent_bytes = b'{"contract_id":"takeover-evaluation-v1","schema_version":1}\\n'
+        snapshot_bytes = b'{"schema_version":1}\\n'
+        selection = module.build_selection(
+            tasks=tasks,
+            snapshots=snapshots,
+            parent_manifest_bytes=parent_bytes,
+            snapshot_manifest_bytes=snapshot_bytes,
+            corpus_role="calibration",
+            decision_scope="subset",
+            capability_ids=("rename", "discovery"),
+        )
+        expected_ids = ("dev-001", "dev-010")
+        expected_ids_hash = hashlib.sha256(
+            ("\n".join(expected_ids) + "\n").encode()
+        ).hexdigest()
+        payload = {
+            "contract_id": "takeover-evaluation-v1",
+            "schema_version": 1,
+            "corpus_role": "calibration",
+            "decision_scope": "subset",
+            "parent_manifest_sha256": hashlib.sha256(parent_bytes).hexdigest(),
+            "snapshot_manifest_sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+            "selected_capability_ids": ["discovery", "rename"],
+            "selected_task_count": 2,
+            "selected_task_ids_sha256": expected_ids_hash,
+        }
+        expected_selection_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+        self.assertEqual(expected_ids, tuple(task.task_id for task in selection.tasks))
+        self.assertEqual(expected_ids, selection.selected_task_ids)
+        self.assertEqual(expected_ids_hash, selection.selected_task_ids_sha256)
+        self.assertEqual(expected_selection_hash, selection.selection_sha256)
+        changed_parent = module.build_selection(
+            tasks=tasks,
+            snapshots=snapshots,
+            parent_manifest_bytes=parent_bytes + b" ",
+            snapshot_manifest_bytes=snapshot_bytes,
+            corpus_role="calibration",
+            decision_scope="subset",
+            capability_ids=("rename", "discovery"),
+        )
+        changed_snapshot = module.build_selection(
+            tasks=tasks,
+            snapshots=snapshots,
+            parent_manifest_bytes=parent_bytes,
+            snapshot_manifest_bytes=snapshot_bytes + b" ",
+            corpus_role="calibration",
+            decision_scope="subset",
+            capability_ids=("rename", "discovery"),
+        )
+        full_decision = module.build_selection(
+            tasks=tasks,
+            snapshots=snapshots,
+            parent_manifest_bytes=parent_bytes,
+            snapshot_manifest_bytes=snapshot_bytes,
+            corpus_role="decision",
+            decision_scope="full",
+            capability_ids=(),
+        )
+        self.assertNotEqual(selection.selection_sha256, changed_parent.selection_sha256)
+        self.assertNotEqual(selection.selection_sha256, changed_snapshot.selection_sha256)
+        self.assertNotEqual(selection.selection_sha256, full_decision.selection_sha256)
+        for selectors, expected in [
+            (("unknown",), "unknown capability"),
+            (("discovery", "discovery"), "duplicate capability"),
+            ((), "requires at least one"),
+        ]:
+            with self.subTest(selectors=selectors), self.assertRaisesRegex(ValueError, expected):
+                module.build_selection(
+                    tasks=tasks,
+                    snapshots=snapshots,
+                    parent_manifest_bytes=parent_bytes,
+                    snapshot_manifest_bytes=snapshot_bytes,
+                    corpus_role="calibration",
+                    decision_scope="subset",
+                    capability_ids=selectors,
+                )
+        with self.assertRaisesRegex(ValueError, "full scope"):
+            module.build_selection(
+                tasks=tasks,
+                snapshots=snapshots,
+                parent_manifest_bytes=parent_bytes,
+                snapshot_manifest_bytes=snapshot_bytes,
+                corpus_role="calibration",
+                decision_scope="full",
+                capability_ids=("discovery",),
+            )
+        with self.assertRaisesRegex(ValueError, "all 13 capabilities"):
+            module.build_selection(
+                tasks=tasks[:-1],
+                snapshots=snapshots,
+                parent_manifest_bytes=parent_bytes,
+                snapshot_manifest_bytes=snapshot_bytes,
+                corpus_role="calibration",
+                decision_scope="full",
+                capability_ids=(),
+            )
+
+    def test_neutral_roles_are_the_only_execution_identity(self):
+        module = _load_module()
+        self.assertIn("role", AgentArm.__annotations__)
+        baseline = AgentArm(
+            role="baseline",
+            adapter_name="adapter-a",
+            product_command=("tool-a", "serve"),
+        )
+        candidate = AgentArm(
+            role="candidate",
+            adapter_name="adapter-b",
+            product_command=("tool-b", "serve"),
+        )
+        orders = module.balanced_arm_orders(("dev-001", "dev-002"), 7)
+
+        self.assertEqual({"baseline", "candidate"}, {baseline.role, candidate.role})
+        self.assertTrue(
+            all(set(order) == {"baseline", "candidate"} for order in orders.values())
+        )
+        with self.assertRaisesRegex(ValueError, "role"):
+            AgentArm(
+                role="miller",
+                adapter_name="adapter-a",
+                product_command=("tool",),
+            )
+        with self.assertRaisesRegex(ValueError, "exactly baseline and candidate"):
+            module.execute_paired_tasks(
+                tasks=(),
+                snapshots={},
+                arms={"baseline": baseline},
+                runner=mock.Mock(),
+                output_root=Path("/tmp/not-used"),
+                seed=7,
+                identity_sha256="a" * 64,
+            )
+
+    def test_legacy_runtime_adapter_is_explicit_and_never_decisional(self):
+        module = _load_module()
+        self.assertTrue(hasattr(module, "adapt_legacy_runtime"))
+        with tempfile.TemporaryDirectory() as directory:
+            product = Path(directory) / "product"
+            product.write_text("fixture", encoding="utf-8")
+            runtime = _runtime_identity(product)
+        adapted = module.adapt_legacy_runtime(
+            runtime,
+            corpus_role="calibration",
+            decision_scope="subset",
+        )
+        self.assertEqual("agent-efficiency-legacy-calibration", adapted["contract_id"])
+        self.assertEqual({"baseline", "candidate"}, set(adapted["adapters"]))
+        self.assertEqual("julie", adapted["adapters"]["baseline"]["adapter_name"])
+        self.assertEqual("miller", adapted["adapters"]["candidate"]["adapter_name"])
+        with self.assertRaisesRegex(ValueError, "legacy.*calibration"):
+            module.adapt_legacy_runtime(
+                runtime,
+                corpus_role="decision",
+                decision_scope="full",
+            )
+
+    def test_legacy_calibration_rows_execute_and_resume_with_neutral_roles(self):
+        module = _load_module()
+        task = replace(
+            _task("dev-001"),
+            contract_id=None,
+            capabilities=(),
+            expected_outcome=None,
+        )
+        arms = {
+            "baseline": AgentArm("baseline", "julie", ("tool-a",)),
+            "candidate": AgentArm("candidate", "miller", ("tool-b",)),
+        }
+        first_runner = ScriptedCodexAgentRunner(
+            {
+                ("dev-001", "baseline"): ["valid"],
+                ("dev-001", "candidate"): ["valid"],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = module.execute_paired_tasks(
+                tasks=(task,),
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=first_runner,
+                output_root=root / "raw",
+                seed=19,
+                identity_sha256="7" * 64,
+            )
+            resumed = module.execute_paired_tasks(
+                tasks=(task,),
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=ScriptedCodexAgentRunner(
+                    {
+                        ("dev-001", "baseline"): [],
+                        ("dev-001", "candidate"): [],
+                    }
+                ),
+                output_root=root / "raw",
+                seed=19,
+                identity_sha256="7" * 64,
+            )
+            baseline_raw = json.loads(
+                (
+                    root
+                    / "raw"
+                    / "dev-001"
+                    / "pair-01"
+                    / "repetition-1"
+                    / "baseline"
+                    / "run-result.json"
+                ).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual("julie", baseline_raw["product"])
+        self.assertNotIn("contract_id", baseline_raw)
+        self.assertEqual(first.baseline_rows, resumed.baseline_rows)
+        self.assertEqual(first.candidate_rows, resumed.candidate_rows)
+
+    def test_takeover_runtime_roles_are_exact_and_duplicate_json_keys_fail_closed(self):
+        module = _load_module()
+        selection = SimpleNamespace(corpus_role="calibration", decision_scope="subset")
+        runtime = {
+            "contract_id": "takeover-evaluation-v1",
+            "schema_version": 1,
+            "adapters": {"baseline": {}, "candidate": {}},
+        }
+        self.assertEqual(runtime, module.normalize_runtime(runtime, selection))
+        for adapters in (
+            {"baseline": {}},
+            {"baseline": {}, "candidate": {}, "shadow": {}},
+        ):
+            with self.subTest(adapters=adapters), self.assertRaisesRegex(
+                ValueError, "exactly baseline and candidate"
+            ):
+                module.normalize_runtime({**runtime, "adapters": adapters}, selection)
+        with self.assertRaisesRegex(ValueError, "duplicate JSON key: baseline"):
+            module._load_json_no_duplicates(
+                '{"contract_id":"takeover-evaluation-v1","schema_version":1,'
+                '"adapters":{"baseline":{},"baseline":{},"candidate":{}}}'
+            )
+
+    def test_decision_private_paths_must_be_external_and_contained(self):
+        module = _load_module()
+        self.assertTrue(hasattr(module, "validate_decision_paths"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            implementation = root / "implementation"
+            snapshot = root / "snapshot"
+            private = root / "operator-private"
+            implementation.mkdir()
+            snapshot.mkdir()
+            private.mkdir()
+            artifacts = [private / name for name in ("tasks.json", "snapshots.json", "runtime.json", "run")]
+
+            module.validate_decision_paths(
+                private_root=private,
+                implementation_root=implementation,
+                snapshot_roots=(snapshot,),
+                artifact_paths=artifacts,
+            )
+            with self.assertRaisesRegex(ValueError, "implementation checkout"):
+                module.validate_decision_paths(
+                    private_root=implementation / "private",
+                    implementation_root=implementation,
+                    snapshot_roots=(snapshot,),
+                    artifact_paths=artifacts,
+                )
+            with self.assertRaisesRegex(ValueError, "snapshot repository"):
+                module.validate_decision_paths(
+                    private_root=snapshot / "private",
+                    implementation_root=implementation,
+                    snapshot_roots=(snapshot,),
+                    artifact_paths=artifacts,
+                )
+            with self.assertRaisesRegex(ValueError, "outside private root"):
+                module.validate_decision_paths(
+                    private_root=private,
+                    implementation_root=implementation,
+                    snapshot_roots=(snapshot,),
+                    artifact_paths=(*artifacts[:-1], root / "escaped-run"),
+                )
+
     @unittest.skipIf(os.name == "nt", "POSIX process-group orphan assertion")
     def test_preflight_process_cleanup_terminates_real_descendants_on_timeout_and_forced_shutdown(self):
         module = _load_module()
@@ -295,24 +624,24 @@ for line in sys.stdin:
 
         self.assertEqual(first, second)
         self.assertNotEqual(first, changed)
-        miller_first = sum(order[0] == "miller" for order in first.values())
-        self.assertLessEqual(abs(miller_first - (len(task_ids) - miller_first)), 1)
-        self.assertTrue(all(set(order) == {"miller", "julie"} for order in first.values()))
+        baseline_first = sum(order[0] == "baseline" for order in first.values())
+        self.assertLessEqual(abs(baseline_first - (len(task_ids) - baseline_first)), 1)
+        self.assertTrue(all(set(order) == {"baseline", "candidate"} for order in first.values()))
 
     def test_initial_agreement_runs_once_and_disagreement_runs_exactly_three_times(self):
         module = _load_module()
         tasks = (_task("dev-001"), _task("dev-002"))
         runner = ScriptedCodexAgentRunner(
             {
-                ("dev-001", "miller"): ["valid"],
-                ("dev-001", "julie"): ["valid"],
-                ("dev-002", "miller"): ["valid", "valid", "valid"],
-                ("dev-002", "julie"): ["agent_insufficiency", "valid", "agent_insufficiency"],
+                ("dev-001", "baseline"): ["valid"],
+                ("dev-001", "candidate"): ["valid"],
+                ("dev-002", "baseline"): ["valid", "valid", "valid"],
+                ("dev-002", "candidate"): ["agent_insufficiency", "valid", "agent_insufficiency"],
             }
         )
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -330,11 +659,11 @@ for line in sys.stdin:
         counts = {}
         for task_id, arm, _, _ in runner.calls:
             counts[(task_id, arm)] = counts.get((task_id, arm), 0) + 1
-        self.assertEqual(counts[("dev-001", "miller")], 1)
-        self.assertEqual(counts[("dev-001", "julie")], 1)
-        self.assertEqual(counts[("dev-002", "miller")], 3)
-        self.assertEqual(counts[("dev-002", "julie")], 3)
-        self.assertEqual({row["repetition"] for row in result.miller_rows if row["task_id"] == "dev-002"}, {1, 2, 3})
+        self.assertEqual(counts[("dev-001", "baseline")], 1)
+        self.assertEqual(counts[("dev-001", "candidate")], 1)
+        self.assertEqual(counts[("dev-002", "baseline")], 3)
+        self.assertEqual(counts[("dev-002", "candidate")], 3)
+        self.assertEqual({row["repetition"] for row in result.baseline_rows if row["task_id"] == "dev-002"}, {1, 2, 3})
         self.assertEqual(set(order_manifest["orders"]), {"dev-001", "dev-002"})
         self.assertEqual(len({prompt for task_id, _, _, prompt in runner.calls if task_id == "dev-002"}), 1)
 
@@ -343,13 +672,13 @@ for line in sys.stdin:
         task = _task("dev-001")
         runner = ScriptedCodexAgentRunner(
             {
-                ("dev-001", "miller"): ["harness_failure", "valid"],
-                ("dev-001", "julie"): ["valid", "valid"],
+                ("dev-001", "baseline"): ["harness_failure", "valid"],
+                ("dev-001", "candidate"): ["valid", "valid"],
             }
         )
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -365,7 +694,7 @@ for line in sys.stdin:
                 void_ledger_path=root / "void-ledger.jsonl",
             )
             resumed_runner = ScriptedCodexAgentRunner(
-                {("dev-001", "miller"): [], ("dev-001", "julie"): []}
+                {("dev-001", "baseline"): [], ("dev-001", "candidate"): []}
             )
             resumed = module.execute_paired_tasks(
                 tasks=(task,),
@@ -383,23 +712,23 @@ for line in sys.stdin:
         self.assertEqual(len(ledger), 1)
         self.assertEqual(ledger[0]["task_id"], "dev-001")
         self.assertEqual(ledger[0]["pair_attempt"], 1)
-        self.assertEqual(len(result.miller_rows), 1)
-        self.assertEqual(len(result.julie_rows), 1)
+        self.assertEqual(len(result.baseline_rows), 1)
+        self.assertEqual(len(result.candidate_rows), 1)
         self.assertEqual(resumed_runner.calls, [])
-        self.assertEqual(resumed.miller_rows, result.miller_rows)
+        self.assertEqual(resumed.baseline_rows, result.baseline_rows)
 
     def test_product_timeout_is_scored_without_voiding_the_pair(self):
         module = _load_module()
         task = _task("dev-001")
         runner = ScriptedCodexAgentRunner(
             {
-                ("dev-001", "miller"): ["product_failure"],
-                ("dev-001", "julie"): ["product_failure"],
+                ("dev-001", "baseline"): ["product_failure"],
+                ("dev-001", "candidate"): ["product_failure"],
             }
         )
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -419,12 +748,12 @@ for line in sys.stdin:
 
         self.assertEqual(len(runner.calls), 2)
         self.assertEqual(
-            (result.miller_rows[0]["completed"], result.miller_rows[0]["failure_reason"]),
-            (False, "product_error"),
+            (result.baseline_rows[0]["observed_outcome"], result.baseline_rows[0]["failure_reason"]),
+            ("hard_error", "product_error"),
         )
         self.assertEqual(
-            (result.julie_rows[0]["completed"], result.julie_rows[0]["failure_reason"]),
-            (False, "product_error"),
+            (result.candidate_rows[0]["observed_outcome"], result.candidate_rows[0]["failure_reason"]),
+            ("hard_error", "product_error"),
         )
 
     def test_disallowed_tool_is_scored_without_voiding_the_pair(self):
@@ -432,8 +761,8 @@ for line in sys.stdin:
         task = _task("dev-001")
         runner = DisallowedToolCodexAgentRunner()
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -452,22 +781,24 @@ for line in sys.stdin:
 
             self.assertFalse((root / "void-ledger.jsonl").exists())
 
-        self.assertCountEqual(runner.calls, [("dev-001", "miller"), ("dev-001", "julie")])
-        self.assertEqual(result.miller_rows[0]["failure_reason"], "disallowed_tool")
-        self.assertEqual(result.julie_rows[0]["failure_reason"], "disallowed_tool")
+        self.assertCountEqual(runner.calls, [("dev-001", "baseline"), ("dev-001", "candidate")])
+        self.assertEqual(result.baseline_rows[0]["failure_reason"], "disallowed_tool")
+        self.assertEqual(result.candidate_rows[0]["failure_reason"], "disallowed_tool")
+        self.assertEqual(result.baseline_rows[0]["observed_outcome"], "wrong_answer")
+        self.assertEqual(result.candidate_rows[0]["observed_outcome"], "wrong_answer")
 
     def test_discordant_rerun_stops_after_a_pair_void(self):
         module = _load_module()
         task = _task("dev-001")
         runner = ScriptedCodexAgentRunner(
             {
-                ("dev-001", "miller"): ["valid", "harness_failure", "valid"],
-                ("dev-001", "julie"): ["agent_insufficiency", "valid", "valid"],
+                ("dev-001", "baseline"): ["valid", "harness_failure", "valid"],
+                ("dev-001", "candidate"): ["agent_insufficiency", "valid", "valid"],
             }
         )
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
 
         with tempfile.TemporaryDirectory() as directory:
@@ -511,11 +842,11 @@ for line in sys.stdin:
         module = _load_module()
         task = _task("dev-001")
         arms = {
-            "miller": AgentArm("miller", ("miller", "serve")),
-            "julie": AgentArm("julie", ("julie",)),
+            "baseline": AgentArm("baseline", "fixture-a", ("miller", "serve")),
+            "candidate": AgentArm("candidate", "fixture-b", ("julie",)),
         }
         first_runner = ScriptedCodexAgentRunner(
-            {("dev-001", "miller"): ["valid"], ("dev-001", "julie"): ["valid"]}
+            {("dev-001", "baseline"): ["valid"], ("dev-001", "candidate"): ["valid"]}
         )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -525,7 +856,7 @@ for line in sys.stdin:
                 runner=first_runner, output_root=root / "raw", seed=22, identity_sha256="9" * 64,
             )
             resume_runner = ScriptedCodexAgentRunner(
-                {("dev-001", "miller"): [], ("dev-001", "julie"): []}
+                {("dev-001", "baseline"): [], ("dev-001", "candidate"): []}
             )
             resumed = module.execute_paired_tasks(
                 tasks=(task,), snapshots={"snapshot-001": _snapshot(root)}, arms=arms,
@@ -556,8 +887,66 @@ for line in sys.stdin:
                 )
 
         self.assertEqual(resume_runner.calls, [])
-        self.assertEqual(resumed.miller_rows, first.miller_rows)
-        self.assertEqual(resumed.julie_rows, first.julie_rows)
+        self.assertEqual(resumed.baseline_rows, first.baseline_rows)
+        self.assertEqual(resumed.candidate_rows, first.candidate_rows)
+
+    def test_canonical_outcomes_survive_completion_resume_and_scorer_rows(self):
+        module = _load_module()
+        tasks = tuple(
+            replace(_task(f"dev-{index:03d}"), expected_outcome=outcome)
+            for index, outcome in enumerate(("success", "empty", "refusal"), start=1)
+        )
+        arms = {
+            "baseline": AgentArm("baseline", "fixture-a", ("tool-a",)),
+            "candidate": AgentArm("candidate", "fixture-b", ("tool-b",)),
+        }
+        scripted = {
+            (task.task_id, role): ["valid"]
+            for task in tasks
+            for role in ("baseline", "candidate")
+        }
+        first_runner = ScriptedCodexAgentRunner(scripted)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = module.execute_paired_tasks(
+                tasks=tasks,
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=first_runner,
+                output_root=root / "raw",
+                seed=31,
+                identity_sha256="8" * 64,
+            )
+            resume_runner = ScriptedCodexAgentRunner(
+                {(task.task_id, role): [] for task in tasks for role in arms}
+            )
+            resumed = module.execute_paired_tasks(
+                tasks=tasks,
+                snapshots={"snapshot-001": _snapshot(root)},
+                arms=arms,
+                runner=resume_runner,
+                output_root=root / "raw",
+                seed=31,
+                identity_sha256="8" * 64,
+            )
+            for task in tasks:
+                for role in arms:
+                    run_dir = root / "raw" / task.task_id / "pair-01" / "repetition-1" / role
+                    raw = json.loads((run_dir / "run-result.json").read_text(encoding="utf-8"))
+                    marker = json.loads((run_dir / "COMPLETE.json").read_text(encoding="utf-8"))
+                    self.assertEqual(task.expected_outcome, raw["observed_outcome"])
+                    self.assertEqual(task.expected_outcome, marker["observed_outcome"])
+                    self.assertEqual(0, raw["wrong_action_count"])
+                    self.assertEqual(0, marker["wrong_action_count"])
+
+        self.assertEqual([], resume_runner.calls)
+        self.assertEqual(first.baseline_rows, resumed.baseline_rows)
+        self.assertEqual(first.candidate_rows, resumed.candidate_rows)
+        self.assertEqual(
+            {"success", "empty", "refusal"},
+            {row["observed_outcome"] for row in resumed.baseline_rows},
+        )
 
     def test_complete_matching_output_resumes_without_calls_but_partial_or_mismatched_refuses(self):
         module = _load_module()
@@ -600,14 +989,27 @@ for line in sys.stdin:
 
     def test_exports_are_privacy_safe_digest_verified_and_score_command_is_copyable(self):
         module = _load_module()
-        task = _task("dev-001")
+        task = replace(
+            _task("dev-001"),
+            evidence_anchors=(
+                SimpleNamespace(
+                    anchor_id="private-anchor-001",
+                    relevance_grade=3,
+                ),
+            ),
+        )
+        baseline_row = module.empty_scorer_row("dev-001", 1, True)
+        baseline_row["ordered_evidence_matches"] = ["private-anchor-001"]
+        candidate_row = module.empty_scorer_row("dev-001", 1, True)
+        candidate_row["ordered_evidence_matches"] = ["private-anchor-001"]
         result = SimpleNamespace(
-            miller_rows=[module.empty_scorer_row("dev-001", 1, True)],
-            julie_rows=[module.empty_scorer_row("dev-001", 1, True)],
+            baseline_rows=[baseline_row],
+            candidate_rows=[candidate_row],
         )
         source_root = "/Users/private/secret-source"
         identity = {
             "schema_version": 1,
+            "decision_scope": "subset",
             "run_identity_sha256": hashlib.sha256(b"identity").hexdigest(),
             "seed": 7,
             "model": "gpt-5.6-sol",
@@ -618,6 +1020,7 @@ for line in sys.stdin:
         with tempfile.TemporaryDirectory() as directory:
             exports = Path(directory) / "exports"
             module.export_scorer_artifacts(exports, (task,), result, identity)
+            self.assertTrue((exports / "agent-score-command.txt").is_file())
             manifest = json.loads((exports / "evidence-manifest.json").read_text(encoding="utf-8"))
             for artifact in manifest["artifacts"]:
                 path = exports / artifact["path"]
@@ -628,9 +1031,230 @@ for line in sys.stdin:
 
         self.assertNotIn(source_root, combined)
         self.assertNotIn(task.prompt, combined)
-        self.assertNotIn("evidence_anchors", combined)
+        self.assertIn("evidence_anchors", combined)
+        self.assertIn("ordered_evidence_matches", combined)
         self.assertIn("retrieval-eval", combined)
-        self.assertIn("agent-score", combined)
+        self.assertIn("decision-score", combined)
+        self.assertIn("--baseline", combined)
+        self.assertIn("--candidate", combined)
+        self.assertIn("finalize-safe", combined)
+        self.assertNotIn("--miller", combined)
+        self.assertNotIn("--julie", combined)
+
+    def test_legacy_export_keeps_the_calibration_only_agent_score_adapter(self):
+        module = _load_module()
+        task = replace(
+            _task("dev-001"),
+            contract_id=None,
+            capabilities=(),
+            expected_outcome=None,
+        )
+        legacy_row = {
+            "task_id": "dev-001",
+            "repetition": 1,
+            "completed": True,
+            "failure_reason": None,
+            "duration_ms": 100,
+            "tool_calls": 3,
+            "tool_output_bytes": 400,
+            "tool_output_tokens": 100,
+            "model_input_tokens": 50,
+            "model_output_tokens": 20,
+            "product_errors": 0,
+            "duplicate_calls": 0,
+            "uncited_tool_output_tokens": 0,
+        }
+        result = SimpleNamespace(
+            baseline_rows=[dict(legacy_row)],
+            candidate_rows=[dict(legacy_row)],
+        )
+        identity = {
+            "schema_version": 1,
+            "decision_scope": "subset",
+            "run_identity_sha256": hashlib.sha256(b"legacy-identity").hexdigest(),
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            exports = Path(directory) / "exports"
+            module.export_scorer_artifacts(exports, (task,), result, identity)
+            task_row = json.loads(
+                (exports / "agent-tasks.jsonl").read_text(encoding="utf-8")
+            )
+            command = (exports / "agent-score-command.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            {
+                "task_id",
+                "repo",
+                "language",
+                "workflow_class",
+                "evidence_critical",
+            },
+            set(task_row),
+        )
+        self.assertIn("-- agent-score", command)
+        self.assertIn('--miller "$AGENT_EFFICIENCY_EXPORT/candidate-results.jsonl"', command)
+        self.assertIn('--julie "$AGENT_EFFICIENCY_EXPORT/baseline-results.jsonl"', command)
+        self.assertNotIn("decision-score", command)
+
+    def test_safe_aggregate_finalize_exposes_hashes_without_private_filenames(self):
+        module = _load_module()
+        self.assertTrue(hasattr(module, "finalize_safe_export"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exports = root / "private"
+            exports.mkdir()
+            private = exports / "SECRET-private-row.jsonl"
+            private.write_text("{}\n", encoding="utf-8")
+            aggregate = {
+                "contract_id": "takeover-evaluation-v1",
+                "schema_version": 1,
+                "decision_scope": "subset",
+                "decision_verdict": "not_decisional",
+                "action_verdict": "pass",
+                "task_count": 6,
+                "completion": {
+                    "both_correct": 6,
+                    "baseline_only": 0,
+                    "candidate_only": 0,
+                    "neither_correct": 0,
+                },
+                "outcome_counts": {
+                    "baseline": {
+                        "success": 6,
+                        "empty": 0,
+                        "refusal": 0,
+                        "hard_error": 0,
+                        "wrong_answer": 0,
+                    },
+                    "candidate": {
+                        "success": 6,
+                        "empty": 0,
+                        "refusal": 0,
+                        "hard_error": 0,
+                        "wrong_answer": 0,
+                    },
+                },
+                "relevance": {
+                    "verdict": "pass",
+                    "task_count": 6,
+                    "baseline": {
+                        "recall_at_6": 1.0,
+                        "ndcg_at_6": 1.0,
+                        "mrr": 1.0,
+                        "top_1": 1.0,
+                    },
+                    "candidate": {
+                        "recall_at_6": 1.0,
+                        "ndcg_at_6": 1.0,
+                        "mrr": 1.0,
+                        "top_1": 1.0,
+                    },
+                },
+                "correctness": {
+                    "verdict": "pass",
+                    "baseline_correct_count": 6,
+                    "candidate_correct_count": 6,
+                    "critical_loss_count": 0,
+                    "baseline_wrong_action_task_count": 0,
+                    "candidate_wrong_action_task_count": 0,
+                    "baseline_wrong_action_rate": 0.0,
+                    "candidate_wrong_action_rate": 0.0,
+                },
+                "efficiency": {
+                    "verdict": "pass",
+                    "measurable": True,
+                    "both_correct_task_count": 6,
+                    "token_route_passed": True,
+                    "call_route_passed": False,
+                    "wall_guard_passed": True,
+                },
+                "baseline": {
+                    "median_tool_output_tokens": 100.0,
+                    "median_tool_calls": 3.0,
+                    "p75_duration_ms": 100.0,
+                },
+                "candidate": {
+                    "median_tool_output_tokens": 80.0,
+                    "median_tool_calls": 3.0,
+                    "p75_duration_ms": 100.0,
+                },
+                "failure_counts": {"baseline": {}, "candidate": {}},
+                "by_workflow": {},
+                "by_capability": {},
+                "by_repo": {},
+                "by_language": {},
+            }
+            (exports / "aggregate.json").write_text(json.dumps(aggregate), encoding="utf-8")
+            identity = {
+                "contract_id": "takeover-evaluation-v1",
+                "schema_version": 1,
+                "corpus_role": "calibration",
+                "decision_scope": "subset",
+                "run_identity_sha256": "c" * 64,
+                "inputs": {
+                    "parent_manifest_sha256": "a" * 64,
+                    "snapshot_manifest_sha256": "b" * 64,
+                    "selection_sha256": "d" * 64,
+                    "selected_capability_ids": ["discovery"],
+                    "selected_task_count": 6,
+                },
+            }
+            (exports / "identity-manifest.json").write_text(
+                json.dumps(identity), encoding="utf-8"
+            )
+            (exports / "void-status.json").write_text(
+                json.dumps({"unresolved_void_count": 0}), encoding="utf-8"
+            )
+            retained_paths = [
+                private,
+                exports / "identity-manifest.json",
+                exports / "void-status.json",
+            ]
+            (exports / "evidence-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "artifacts": [
+                            {
+                                "path": path.name,
+                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                "bytes": path.stat().st_size,
+                            }
+                            for path in retained_paths
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (exports / "COMPLETE").write_text(
+                identity["run_identity_sha256"] + "\n", encoding="utf-8"
+            )
+            safe_path = root / "safe.json"
+            module.finalize_safe_export(exports, safe_path, identity, unresolved_void_count=0)
+            safe_text = safe_path.read_text(encoding="utf-8")
+            cli_safe_path = root / "cli-safe.json"
+            self.assertEqual(
+                0,
+                module.main(
+                    [
+                        "finalize-safe",
+                        "--exports",
+                        str(exports),
+                        "--safe-output",
+                        str(cli_safe_path),
+                    ]
+                ),
+            )
+            cli_safe_text = cli_safe_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("SECRET", safe_text)
+        self.assertNotIn(".jsonl", safe_text)
+        self.assertIn("artifact_001", safe_text)
+        self.assertIn(
+            hashlib.sha256(json.dumps(aggregate).encode()).hexdigest(),
+            safe_text,
+        )
+        self.assertEqual(safe_text, cli_safe_text)
 
     def test_preflight_uses_real_fixture_processes_and_fails_closed_on_every_frozen_identity(self):
         module = _load_module()
@@ -708,22 +1332,52 @@ for line in sys.stdin:
                 seed=17,
             )
 
-            self.assertEqual(set(arms), {"miller", "julie"})
+            selection = SimpleNamespace(
+                contract_id="takeover-evaluation-v1",
+                corpus_role="calibration",
+                decision_scope="subset",
+                private_identity=lambda: {
+                    "parent_manifest_sha256": "1" * 64,
+                    "snapshot_manifest_sha256": "2" * 64,
+                    "selected_capability_ids": ["discovery"],
+                    "selected_task_count": 2,
+                    "selected_task_ids_sha256": "3" * 64,
+                    "selection_sha256": "4" * 64,
+                },
+            )
+            v1_identity, _, _ = module.preflight_run(
+                tasks=tasks_input,
+                snapshots=snapshots_input,
+                roots=roots_input,
+                runtime=runtime,
+                codex_executable=str(codex),
+                model="gpt-5.6-sol",
+                reasoning="medium",
+                seed=17,
+                selection=selection,
+            )
+
+            self.assertEqual(set(arms), {"baseline", "candidate"})
             self.assertEqual(set(snapshots), {"snapshot-001", "snapshot-002"})
+            self.assertEqual("takeover-evaluation-v1", v1_identity["contract_id"])
+            self.assertEqual(
+                "agent-efficiency-legacy-calibration",
+                v1_identity["runtime_contract_id"],
+            )
             self.assertNotIn(str(snapshot_root), json.dumps(identity))
             self.assertNotIn("miller-snapshot-workspace", json.dumps(identity))
             self.assertIn(
                 "workspace_identity_sha256",
-                identity["products"]["miller"]["snapshots"]["snapshot-001"],
+                identity["adapters"]["candidate"]["snapshots"]["snapshot-001"],
             )
             self.assertEqual(
-                set(identity["products"]["miller"]["snapshots"]),
+                set(identity["adapters"]["candidate"]["snapshots"]),
                 {"snapshot-001", "snapshot-002"},
             )
-            self.assertIn("command_sha256", identity["products"]["miller"])
-            self.assertEqual(artifact_digest, identity["products"]["miller"]["binary_sha256"])
-            self.assertEqual(["JULIE_HOME"], identity["products"]["miller"]["environment_keys"])
-            self.assertIn("environment_sha256", identity["products"]["miller"])
+            self.assertIn("command_sha256", identity["adapters"]["candidate"])
+            self.assertEqual(artifact_digest, identity["adapters"]["candidate"]["binary_sha256"])
+            self.assertEqual(["JULIE_HOME"], identity["adapters"]["candidate"]["environment_keys"])
+            self.assertIn("environment_sha256", identity["adapters"]["candidate"])
             self.assertNotIn(str(root / "isolated-julie-home"), json.dumps(identity))
             self.assertEqual(set(identity["inputs"]), {"task_manifest_sha256", "snapshot_manifest_sha256"})
             self.assertIn("environment_keys", identity)
@@ -744,7 +1398,7 @@ for line in sys.stdin:
             bad_hash["products"]["miller"]["binary_sha256"] = "0" * 64
             with self.assertRaisesRegex(ValueError, "binary hash"):
                 module.preflight_run(
-                    tasks=(task,), snapshots=(snapshot,), roots={"fixture": snapshot_root}, runtime=bad_hash,
+                    tasks=tasks_input, snapshots=snapshots_input, roots=roots_input, runtime=bad_hash,
                     codex_executable=str(codex), model="gpt-5.6-sol", reasoning="medium", seed=17,
                 )
             bad_version = json.loads(json.dumps(runtime))
@@ -853,6 +1507,53 @@ for line in sys.stdin:
 
         self.assertEqual((budget["status"], budget["failure_reason"], budget["answer"]), ("budget_exceeded", "budget_exceeded", None))
         self.assertEqual((disallowed["status"], disallowed["failure_reason"], disallowed["answer"]), ("disallowed_tool", "disallowed_tool", None))
+
+    def test_v1_raw_and_scorer_rows_preserve_canonical_outcomes(self):
+        module = _load_module()
+        task = replace(
+            _task("dev-001"),
+            contract_id="takeover-evaluation-v1",
+            capabilities=("discovery",),
+            expected_outcome="success",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proxy = root / "proxy.jsonl"
+            proxy.write_text("", encoding="utf-8")
+            run = AgentRun(
+                outcome="completed",
+                classification="valid",
+                failure_reason=None,
+                answer=StructuredAnswer(status="answered", answer="answer", evidence=()),
+                verification=VerificationResult(
+                    True,
+                    (),
+                    (),
+                    observed_outcome="success",
+                    wrong_action_count=0,
+                ),
+                command_manifest_path=root / "manifest.json",
+                codex_events_path=root / "codex.jsonl",
+                proxy_events_path=proxy,
+                stderr_path=root / "stderr.txt",
+                diagnostics=(),
+                model_input_tokens=1,
+                model_output_tokens=1,
+                wall_clock_ms=1,
+                exit_code=0,
+                child_home_removed=True,
+            )
+            raw = module._raw_result(task, "baseline", 1, 1, run)
+            scorer = module._scorer_row(raw, 1)
+
+        self.assertIn("contract_id", raw)
+        self.assertEqual("takeover-evaluation-v1", raw["contract_id"])
+        self.assertEqual("baseline", raw["role"])
+        self.assertEqual("success", raw["expected_outcome"])
+        self.assertEqual("success", raw["observed_outcome"])
+        self.assertEqual(0, raw["wrong_action_count"])
+        self.assertEqual("success", scorer["observed_outcome"])
+        self.assertEqual(0, scorer["wrong_action_count"])
 
 
 if __name__ == "__main__":

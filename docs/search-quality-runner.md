@@ -74,3 +74,27 @@ name.
   case file.
 - `mode=file --json` currently scores against normal symbol rows from matching files. There is no separate
   versioned file-result JSON object for this release; compact output provides the file-first human rendering.
+
+## Takeover Agent Evaluation
+
+The cross-tool query runner above is not the Miller/Julie takeover decision harness. The takeover controller
+under `scripts/bench-agent-efficiency.py` runs paired agent tasks under the frozen
+[`takeover-evaluation-v1`](contracts/takeover-evaluation-v1.md) contract and keeps task rows, prompts, ordered
+evidence, and scorer inputs under an operator-owned external root.
+
+For takeover v1, the controller exports graded anchor IDs with the private task rows and ordered anchor matches
+with each private run row. Its generated command runs `decision-score`, which combines:
+
+- recall@6, nDCG@6, MRR, and top-1 over ordered evidence;
+- stabilized correctness and wrong-action rates;
+- tool-output-token, tool-call, and p75 wall-time efficiency.
+
+The controller enforces the external private root before a decision run. The C# scorer remains pure and emits
+`decision_verdict=not_decisional`. `finalize-safe` recursively validates the closed aggregate schema,
+recomputes every gate, verifies full selection identity, capability coverage, zero unresolved voids, and
+retained-artifact hashes, then derives the only safe `pass|fail` decision. It never trusts a verdict supplied
+by the private aggregate and never exports task IDs, prompts, evidence rows, actions, paths, symbols, or
+private filenames.
+
+`agent-score` remains the action-only and legacy-calibration scorer. It cannot produce a retirement decision.
+Synthetic, non-sealed examples of the `decision-score` inputs live under `eval/takeover/fixtures/`.

@@ -422,7 +422,22 @@
         "uncertainty_expectation": {
           "enum": ["must_resolve", "must_disclose", "must_refuse"]
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "expected_outcome": { "const": "success" }
+            },
+            "required": ["expected_outcome"]
+          },
+          "then": {
+            "properties": {
+              "evidence_anchors": { "minItems": 1 }
+            }
+          }
+        }
+      ]
     }
   }
 }

@@ -48,7 +48,7 @@ The semantic integration program established the local vector foundation, but th
 
 ## RC3 evidence
 
-`julie-semantic-sidecar` v0.1.0-rc.3 was published on 2026-07-23 at commit `24ce625` with eight release assets. BGE Small remains the default and Qwen is opt-in. The release advertises Apple arm64 Metal, Linux x64 Vulkan, and Windows x64 Vulkan packages, accelerated backend/device discovery with CPU fallback, size-aware download timeouts, and physical Linux/Windows validation. Treat these as release claims to verify in Miller's Phase 9 preflight; the release does not choose BGE Small over CodeRankEmbed for Miller.
+`julie-semantic-sidecar` v0.1.0-rc.3 was published on 2026-07-23 at commit `24ce625`. The release API lists three portable platform packages plus three `.sha256` sidecars; the release page's total of eight also includes GitHub's two generated source archives. BGE Small remains the default and Qwen is opt-in. The release advertises Apple arm64 Metal, Linux x64 Vulkan, and Windows x64 Vulkan packages, accelerated backend/device discovery with CPU fallback, size-aware download timeouts, and physical Linux/Windows validation. Treat these as release claims to verify in Miller's Phase 9 preflight; the release does not choose BGE Small over CodeRankEmbed for Miller.
 
 ## Success criteria
 

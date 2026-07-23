@@ -20,6 +20,7 @@ from benchlib.agent_contract import (
     SnapshotIdentity,
     StructuredAnswer,
     VerificationResult,
+    _unique_json_object,
     verify_answer,
 )
 
@@ -50,13 +51,16 @@ def isolated_environment_keys() -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class AgentArm:
-    product: str
+    role: str
+    adapter_name: str
     product_command: tuple[str, ...]
     product_environment: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.product not in {"miller", "julie"}:
-            raise ValueError(f"unsupported product: {self.product}")
+        if self.role not in {"baseline", "candidate"}:
+            raise ValueError(f"unsupported role: {self.role}")
+        if not self.adapter_name or "\0" in self.adapter_name:
+            raise ValueError("adapter_name must be non-empty")
         if not self.product_command or any(not value for value in self.product_command):
             raise ValueError("product command must contain non-empty arguments")
         names = [name for name, _ in self.product_environment]
@@ -89,6 +93,8 @@ class AgentRun:
     wall_clock_ms: int
     exit_code: int | None
     child_home_removed: bool
+    observed_outcome: str | None = None
+    wrong_action_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -240,6 +246,8 @@ class CodexAgentRunner:
             wall_clock_ms=result.wall_clock_ms,
             exit_code=result.exit_code,
             child_home_removed=not child_home.exists(),
+            observed_outcome=result.observed_outcome,
+            wrong_action_count=result.wrong_action_count,
         )
 
     def _preflight(self, task: BenchmarkTask, snapshot: AgentSnapshot) -> VerificationResult:
@@ -444,9 +452,10 @@ def _parse_events(text: str) -> _ParsedEvents:
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError as exc:
-            malformed = f"codex JSONL line {line_number}: {exc.msg}"
+            event = json.loads(line, object_pairs_hook=_unique_json_object)
+        except (json.JSONDecodeError, ValueError) as exc:
+            detail = exc.msg if isinstance(exc, json.JSONDecodeError) else str(exc)
+            malformed = f"codex JSONL line {line_number}: {detail}"
             diagnostics.append({"kind": "malformed_event", "line": line_number})
             continue
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
@@ -483,7 +492,10 @@ def _parse_events(text: str) -> _ParsedEvents:
                     answer_error = "final agent message must contain text"
                 else:
                     try:
-                        value = json.loads(text_value)
+                        value = json.loads(
+                            text_value,
+                            object_pairs_hook=_unique_json_object,
+                        )
                         if not isinstance(value, dict):
                             raise ValueError("final answer must be a JSON object")
                         answer = StructuredAnswer.from_mapping(value)
@@ -534,6 +546,7 @@ def _classify_run(
     timed_out: bool,
 ) -> AgentRun:
     verification = VerificationResult(False, ("runner: no valid answer",), ())
+    observed_outcome = "hard_error"
     outcome = "failed"
     classification = "harness_failure"
     failure_reason: str | None = "product_error"
@@ -546,6 +559,7 @@ def _classify_run(
         classification = "agent_insufficiency"
         failure_reason = "disallowed_tool"
         verification = VerificationResult(False, (parsed.disallowed_item,), ())
+        observed_outcome = "wrong_answer"
     elif parsed.malformed:
         verification = VerificationResult(False, (parsed.malformed,), ())
     elif authentication_failure := _authentication_failure(parsed.diagnostics):
@@ -560,12 +574,16 @@ def _classify_run(
         verification = VerificationResult(False, ("codex JSONL ended before turn.completed",), ())
     elif parsed.answer is None:
         outcome = "invalid_answer"
+        classification = "agent_insufficiency"
         failure_reason = "invalid_answer"
         detail = parsed.answer_error or "final structured answer was missing"
         verification = VerificationResult(False, (detail,), ())
     else:
         answer = parsed.answer
         verification = verify_answer(task, answer, snapshot_root)
+        observed_outcome = verification.observed_outcome or (
+            "success" if verification.passed else "wrong_answer"
+        )
         outcome = "completed"
         if verification.passed:
             classification = "valid"
@@ -591,6 +609,8 @@ def _classify_run(
         wall_clock_ms=wall_clock_ms,
         exit_code=exit_code,
         child_home_removed=False,
+        observed_outcome=observed_outcome,
+        wrong_action_count=verification.wrong_action_count,
     )
 
 

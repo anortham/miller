@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -13,7 +14,13 @@ SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_ROOT = SCRIPTS_ROOT / "tests" / "fixtures" / "agent-efficiency"
 sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from benchlib.agent_contract import SnapshotIdentity, load_task_manifest
+from benchlib import agent_runner
+from benchlib.agent_contract import (
+    SnapshotIdentity,
+    StructuredAnswer,
+    VerificationResult,
+    load_task_manifest,
+)
 from benchlib.agent_runner import AgentArm, AgentSnapshot, CodexAgentRunner, isolated_environment_keys
 
 
@@ -174,6 +181,56 @@ def _runner(fake_codex: Path, source_home: Path, timeout: float = 3) -> CodexAge
 
 
 class AgentRunnerTests(unittest.TestCase):
+    def test_classification_copies_success_empty_and_refusal_from_the_verifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = _create_task(root)
+            paths = {
+                name: root / filename
+                for name, filename in {
+                    "manifest": "command.json",
+                    "events": "events.jsonl",
+                    "proxy": "proxy.jsonl",
+                    "stderr": "stderr.txt",
+                }.items()
+            }
+            paths["proxy"].write_text("", encoding="utf-8")
+            parsed = agent_runner._ParsedEvents(
+                answer=StructuredAnswer(status="answered", answer="fixture", evidence=()),
+                answer_error=None,
+                diagnostics=(),
+                disallowed_item=None,
+                malformed=None,
+                turn_completed=True,
+                turn_failed=False,
+                model_input_tokens=1,
+                model_output_tokens=1,
+            )
+            for observed in ("success", "empty", "refusal"):
+                with self.subTest(observed=observed), mock.patch.object(
+                    agent_runner,
+                    "verify_answer",
+                    return_value=VerificationResult(
+                        True,
+                        (),
+                        (),
+                        observed_outcome=observed,
+                        wrong_action_count=0,
+                    ),
+                ):
+                    result = agent_runner._classify_run(
+                        task,
+                        root,
+                        parsed,
+                        paths,
+                        exit_code=0,
+                        timed_out=False,
+                        wall_clock_ms=1,
+                    )
+                    self.assertEqual("valid", result.classification)
+                    self.assertEqual(observed, result.observed_outcome)
+                    self.assertEqual(0, result.wrong_action_count)
+
     def test_success_uses_exact_isolated_command_and_verifies_answer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -199,7 +256,8 @@ class AgentRunnerTests(unittest.TestCase):
             result = _runner(executable, source_home).run(
                 task,
                 AgentArm(
-                    product="miller",
+                    role="baseline",
+                    adapter_name="fixture",
                     product_command=("miller", "serve"),
                     product_environment=(("JULIE_HOME", "/private/bench/julie-home"),),
                 ),
@@ -279,7 +337,7 @@ class AgentRunnerTests(unittest.TestCase):
 
             result = _runner(executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 root / "output",
             )
@@ -287,6 +345,7 @@ class AgentRunnerTests(unittest.TestCase):
             self.assertEqual("disallowed_tool", result.outcome)
             self.assertEqual("agent_insufficiency", result.classification)
             self.assertEqual("disallowed_tool", result.failure_reason)
+            self.assertEqual("wrong_answer", result.observed_outcome)
             self.assertIsNone(result.answer)
             self.assertFalse(result.verification.passed)
 
@@ -334,7 +393,7 @@ class AgentRunnerTests(unittest.TestCase):
                     )
                     result = _runner(executable, source_home).run(
                         task,
-                        AgentArm(product="miller", product_command=("miller", "serve")),
+                        AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                         snapshot,
                         root / f"output-disallowed-{index}",
                     )
@@ -360,7 +419,7 @@ class AgentRunnerTests(unittest.TestCase):
                     "{\"type\":\"turn.completed\",\"usage\":{}}\n",
                     0,
                     "invalid_answer",
-                    "harness_failure",
+                    "agent_insufficiency",
                 ),
                 (
                     "incorrect",
@@ -381,12 +440,38 @@ class AgentRunnerTests(unittest.TestCase):
                     _write_fake_codex(executable, fixture, root / f"capture-{label}.json", exit_code=exit_code)
                     result = _runner(executable, source_home).run(
                         task,
-                        AgentArm(product="miller", product_command=("miller", "serve")),
+                        AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                         snapshot,
                         root / f"output-{label}",
                     )
                     self.assertEqual(outcome, result.outcome)
                     self.assertEqual(classification, result.classification)
+                    self.assertEqual(
+                        "wrong_answer" if label == "incorrect" else "hard_error",
+                        result.observed_outcome,
+                    )
+
+    def test_final_answer_rejects_duplicate_json_object_keys(self) -> None:
+        answer = (
+            '{"status":"answered","status":"answered",'
+            '"answer":"token-baseline fallback",'
+            '"evidence":[]}'
+        )
+        event = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "i",
+                    "type": "agent_message",
+                    "text": answer,
+                },
+            }
+        )
+
+        parsed = agent_runner._parse_events(event)
+
+        self.assertIsNone(parsed.answer)
+        self.assertIn("duplicate JSON object key: status", parsed.answer_error or "")
 
     def test_cli_and_product_failures_are_classified_from_proxy_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -412,12 +497,13 @@ class AgentRunnerTests(unittest.TestCase):
                     )
                     result = _runner(executable, source_home).run(
                         task,
-                        AgentArm(product="miller", product_command=("miller", "serve")),
+                        AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                         snapshot,
                         root / f"output-{label}",
                     )
                     self.assertEqual("failed", result.outcome)
                     self.assertEqual(expected, result.classification)
+                    self.assertEqual("hard_error", result.observed_outcome)
 
     def test_reused_output_directory_cannot_reuse_stale_proxy_failure_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -439,7 +525,7 @@ class AgentRunnerTests(unittest.TestCase):
             )
             first = _runner(product_executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 output,
             )
@@ -453,7 +539,7 @@ class AgentRunnerTests(unittest.TestCase):
 
             second = _runner(cli_executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 output,
             )
@@ -484,7 +570,7 @@ class AgentRunnerTests(unittest.TestCase):
 
             result = _runner(executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 root / "output",
             )
@@ -515,7 +601,7 @@ class AgentRunnerTests(unittest.TestCase):
 
             result = _runner(executable, source_home, timeout=0.5).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 root / "output",
             )
@@ -555,7 +641,7 @@ class AgentRunnerTests(unittest.TestCase):
 
             result = _runner(executable, source_home).run(
                 task,
-                AgentArm(product="miller", product_command=("miller", "serve")),
+                AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
                 snapshot,
                 root / "output",
             )

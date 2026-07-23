@@ -1,0 +1,1 @@
+{"contract_id":"takeover-evaluation-v1","schema_version":1,"task_id":"synthetic-task-001","repo":"fixture","language":"csharp","workflow_class":"concept_search","evidence_critical":false,"expected_outcome":"success","capabilities":["discovery"],"evidence_anchors":[{"anchor_id":"anchor-a","relevance_grade":3},{"anchor_id":"anchor-b","relevance_grade":1}]}

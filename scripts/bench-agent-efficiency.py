@@ -14,7 +14,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -28,6 +28,7 @@ from benchlib.agent_contract import (
     validate_run_result,
 )
 from benchlib.agent_runner import AgentArm, AgentRun, AgentSnapshot, CodexAgentRunner, isolated_environment_keys
+from benchlib.reporting import project_safe_aggregate
 
 
 SCRIPT_ROOT = Path(__file__).resolve().parent
@@ -53,12 +54,246 @@ ALLOWED_PRODUCT_ENVIRONMENT = frozenset(
         "MILLER_SEMANTIC",
     }
 )
+TAKEOVER_CONTRACT_ID = "takeover-evaluation-v1"
+LEGACY_CALIBRATION_CONTRACT_ID = "agent-efficiency-legacy-calibration"
+TAKEOVER_CAPABILITIES = frozenset(
+    {
+        "discovery",
+        "exact_symbol_lookup",
+        "homonym_disambiguation",
+        "context_orientation",
+        "callers",
+        "callees",
+        "call_path",
+        "impact_tests",
+        "edit",
+        "rename",
+        "logs",
+        "patterns",
+        "workspace_recovery",
+    }
+)
+
+
+@dataclass(frozen=True)
+class SelectionIdentity:
+    tasks: tuple[BenchmarkTask, ...]
+    contract_id: str
+    schema_version: int
+    corpus_role: str
+    decision_scope: str
+    parent_manifest_sha256: str
+    snapshot_manifest_sha256: str
+    selected_capability_ids: tuple[str, ...]
+    selected_task_count: int
+    selected_task_ids: tuple[str, ...]
+    selected_task_ids_sha256: str
+    selection_sha256: str
+
+    def private_identity(self) -> dict[str, Any]:
+        return {
+            "contract_id": self.contract_id,
+            "schema_version": self.schema_version,
+            "corpus_role": self.corpus_role,
+            "decision_scope": self.decision_scope,
+            "parent_manifest_sha256": self.parent_manifest_sha256,
+            "snapshot_manifest_sha256": self.snapshot_manifest_sha256,
+            "selected_capability_ids": list(self.selected_capability_ids),
+            "selected_task_count": self.selected_task_count,
+            "selected_task_ids": list(self.selected_task_ids),
+            "selected_task_ids_sha256": self.selected_task_ids_sha256,
+            "selection_sha256": self.selection_sha256,
+        }
+
+
+def build_selection(
+    *,
+    tasks: Sequence[BenchmarkTask],
+    snapshots: Sequence[SnapshotIdentity],
+    parent_manifest_bytes: bytes,
+    snapshot_manifest_bytes: bytes,
+    corpus_role: str,
+    decision_scope: str,
+    capability_ids: Sequence[str],
+) -> SelectionIdentity:
+    if corpus_role not in {"calibration", "decision"}:
+        raise ValueError("corpus_role must be calibration or decision")
+    if decision_scope not in {"subset", "full"}:
+        raise ValueError("decision_scope must be subset or full")
+    if corpus_role == "decision" and decision_scope != "full":
+        raise ValueError("decision corpus requires full scope")
+    if any(task.contract_id != TAKEOVER_CONTRACT_ID for task in tasks):
+        raise ValueError("takeover selection requires a v1 parent manifest")
+    task_ids = [task.task_id for task in tasks]
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("task ids must be unique")
+    snapshot_ids = {snapshot.snapshot_id for snapshot in snapshots}
+    if len(snapshot_ids) != len(snapshots):
+        raise ValueError("snapshot ids must be unique")
+    for task in tasks:
+        if task.snapshot_id not in snapshot_ids:
+            raise ValueError(f"task {task.task_id}: missing snapshot {task.snapshot_id}")
+    parent_capabilities = {
+        capability
+        for task in tasks
+        for capability in task.capabilities
+    }
+    if parent_capabilities != TAKEOVER_CAPABILITIES:
+        raise ValueError("parent manifest must cover all 13 capabilities")
+    selectors = tuple(capability_ids)
+    if len(selectors) != len(set(selectors)):
+        raise ValueError("duplicate capability selector")
+    unknown = set(selectors) - TAKEOVER_CAPABILITIES
+    if unknown:
+        raise ValueError(f"unknown capability: {sorted(unknown)[0]}")
+    if decision_scope == "full":
+        if selectors:
+            raise ValueError("full scope does not accept capability selectors")
+        selected = tuple(tasks)
+        selected_capabilities = tuple(sorted(TAKEOVER_CAPABILITIES))
+    else:
+        if not selectors:
+            raise ValueError("subset scope requires at least one capability selector")
+        selected_capabilities = tuple(sorted(selectors))
+        selected = tuple(
+            task
+            for task in tasks
+            if set(task.capabilities).intersection(selected_capabilities)
+        )
+        if not selected:
+            raise ValueError("capability selection is empty")
+    selected_task_ids = tuple(sorted(task.task_id for task in selected))
+    selected_task_ids_sha256 = hashlib.sha256(
+        ("".join(f"{task_id}\n" for task_id in selected_task_ids)).encode()
+    ).hexdigest()
+    payload = {
+        "contract_id": TAKEOVER_CONTRACT_ID,
+        "schema_version": 1,
+        "corpus_role": corpus_role,
+        "decision_scope": decision_scope,
+        "parent_manifest_sha256": hashlib.sha256(parent_manifest_bytes).hexdigest(),
+        "snapshot_manifest_sha256": hashlib.sha256(snapshot_manifest_bytes).hexdigest(),
+        "selected_capability_ids": list(selected_capabilities),
+        "selected_task_count": len(selected),
+        "selected_task_ids_sha256": selected_task_ids_sha256,
+    }
+    selection_sha256 = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return SelectionIdentity(
+        tasks=selected,
+        contract_id=TAKEOVER_CONTRACT_ID,
+        schema_version=1,
+        corpus_role=corpus_role,
+        decision_scope=decision_scope,
+        parent_manifest_sha256=payload["parent_manifest_sha256"],
+        snapshot_manifest_sha256=payload["snapshot_manifest_sha256"],
+        selected_capability_ids=selected_capabilities,
+        selected_task_count=len(selected),
+        selected_task_ids=selected_task_ids,
+        selected_task_ids_sha256=selected_task_ids_sha256,
+        selection_sha256=selection_sha256,
+    )
+
+
+def adapt_legacy_runtime(
+    runtime: Mapping[str, Any],
+    *,
+    corpus_role: str,
+    decision_scope: str,
+) -> dict[str, Any]:
+    if corpus_role != "calibration" or decision_scope != "subset":
+        raise ValueError("legacy runtime is calibration subset evidence only")
+    if set(runtime) != {"schema_version", "products"} or runtime.get("schema_version") != 1:
+        raise ValueError("legacy runtime identity has an invalid shape")
+    products = runtime.get("products")
+    if not isinstance(products, dict) or set(products) != {"miller", "julie"}:
+        raise ValueError("legacy runtime must contain exactly Miller and Julie products")
+    return {
+        "contract_id": LEGACY_CALIBRATION_CONTRACT_ID,
+        "schema_version": 1,
+        "corpus_role": "calibration",
+        "decision_scope": "subset",
+        "adapters": {
+            "baseline": {"adapter_name": "julie", **products["julie"]},
+            "candidate": {"adapter_name": "miller", **products["miller"]},
+        },
+    }
+
+
+def normalize_runtime(
+    runtime: Mapping[str, Any],
+    selection: SelectionIdentity | Any | None,
+) -> dict[str, Any]:
+    if runtime.get("schema_version") != 1:
+        raise ValueError("runtime identity schema_version must be 1")
+    if runtime.get("contract_id") == TAKEOVER_CONTRACT_ID:
+        if set(runtime) != {"contract_id", "schema_version", "adapters"}:
+            raise ValueError("takeover runtime identity has unsupported fields")
+        if selection is None:
+            raise ValueError("takeover runtime requires selection identity")
+        adapters = runtime.get("adapters")
+        if not isinstance(adapters, dict) or set(adapters) != {"baseline", "candidate"}:
+            raise ValueError("runtime identity must contain exactly baseline and candidate adapters")
+        return dict(runtime)
+    corpus_role = selection.corpus_role if selection is not None else "calibration"
+    decision_scope = selection.decision_scope if selection is not None else "subset"
+    return adapt_legacy_runtime(
+        runtime,
+        corpus_role=corpus_role,
+        decision_scope=decision_scope,
+    )
+
+
+def _load_json_no_duplicates(value: str) -> Any:
+    def object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = item
+        return result
+
+    return json.loads(value, object_pairs_hook=object_from_pairs)
+
+
+def validate_decision_paths(
+    *,
+    private_root: Path,
+    implementation_root: Path,
+    snapshot_roots: Sequence[Path],
+    artifact_paths: Sequence[Path],
+) -> None:
+    private = Path(private_root).expanduser().resolve()
+    implementation = Path(implementation_root).resolve()
+    if _paths_overlap(private, implementation):
+        raise ValueError("decision private root overlaps the implementation checkout")
+    for snapshot_root in snapshot_roots:
+        snapshot = Path(snapshot_root).resolve()
+        if _paths_overlap(private, snapshot):
+            raise ValueError("decision private root overlaps a snapshot repository")
+    for artifact_path in artifact_paths:
+        artifact = Path(artifact_path).expanduser().resolve()
+        if not _is_within(artifact, private):
+            raise ValueError(f"decision artifact is outside private root: {artifact}")
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return _is_within(first, second) or _is_within(second, first)
 
 
 class PairedExecution:
-    def __init__(self, miller_rows: list[dict[str, Any]], julie_rows: list[dict[str, Any]]):
-        self.miller_rows = miller_rows
-        self.julie_rows = julie_rows
+    def __init__(self, baseline_rows: list[dict[str, Any]], candidate_rows: list[dict[str, Any]]):
+        self.baseline_rows = baseline_rows
+        self.candidate_rows = candidate_rows
 
 
 class ResumedRun:
@@ -66,6 +301,8 @@ class ResumedRun:
         self.classification = str(marker["classification"])
         self.outcome = str(marker["outcome"])
         self.failure_reason = marker.get("failure_reason")
+        self.observed_outcome = raw.get("observed_outcome")
+        self.wrong_action_count = int(raw.get("wrong_action_count", 0))
         verification = raw["verification"]
         self.verification = SimpleVerification(
             bool(verification["passed"]),
@@ -87,7 +324,7 @@ def balanced_arm_orders(task_ids: Sequence[str], seed: int) -> dict[str, tuple[s
     shuffled = list(task_ids)
     generator = random.Random(seed)
     generator.shuffle(shuffled)
-    first_arm = generator.choice(("miller", "julie"))
+    first_arm = generator.choice(("baseline", "candidate"))
     orders: dict[str, tuple[str, str]] = {}
     for index, task_id in enumerate(shuffled):
         arm = first_arm if index % 2 == 0 else _other_arm(first_arm)
@@ -107,8 +344,10 @@ def execute_paired_tasks(
     void_ledger_path: Path | None = None,
     max_void_attempts: int = 3,
 ) -> PairedExecution:
-    if set(arms) != {"miller", "julie"}:
-        raise ValueError("paired execution requires exactly miller and julie arms")
+    if set(arms) != {"baseline", "candidate"}:
+        raise ValueError("paired execution requires exactly baseline and candidate roles")
+    if any(arms[role].role != role for role in arms):
+        raise ValueError("role adapter key does not match its role")
     if max_void_attempts < 1:
         raise ValueError("max_void_attempts must be positive")
     output_root = Path(output_root)
@@ -123,19 +362,19 @@ def execute_paired_tasks(
         "orders": {task_id: list(order) for task_id, order in orders.items()},
     }
     if order_path.exists():
-        existing_order = json.loads(order_path.read_text(encoding="utf-8"))
+        existing_order = _load_json_no_duplicates(order_path.read_text(encoding="utf-8"))
         if existing_order != order_value:
             raise ValueError("raw run identity mismatch")
     else:
         with order_path.open("x", encoding="utf-8") as stream:
             stream.write(_pretty_json(order_value))
-    rows = {"miller": [], "julie": []}
+    rows = {"baseline": [], "candidate": []}
 
     for task in tasks:
         if task.snapshot_id not in snapshots:
             raise ValueError(f"task {task.task_id}: unknown snapshot {task.snapshot_id}")
         for pair_attempt in range(1, max_void_attempts + 1):
-            attempt_rows: dict[str, list[dict[str, Any]]] = {"miller": [], "julie": []}
+            attempt_rows: dict[str, list[dict[str, Any]]] = {"baseline": [], "candidate": []}
             void_reasons: list[dict[str, Any]] = []
             first = _run_repetition(
                 task,
@@ -154,8 +393,11 @@ def execute_paired_tasks(
                     void_reasons.append(_void_reason(arm_name, raw))
 
             if not void_reasons:
-                initial = {arm_name: scorer["completed"] for arm_name, _, scorer in first}
-                if initial["miller"] != initial["julie"]:
+                initial = {
+                    arm_name: _scorer_row_is_correct(task, scorer)
+                    for arm_name, _, scorer in first
+                }
+                if initial["baseline"] != initial["candidate"]:
                     for repetition in (2, 3):
                         reruns = _run_repetition(
                             task,
@@ -187,13 +429,13 @@ def execute_paired_tasks(
                 )
                 continue
 
-            rows["miller"].extend(attempt_rows["miller"])
-            rows["julie"].extend(attempt_rows["julie"])
+            rows["baseline"].extend(attempt_rows["baseline"])
+            rows["candidate"].extend(attempt_rows["candidate"])
             break
         else:
             raise RuntimeError(f"task {task.task_id}: harness void persisted for {max_void_attempts} pairs")
 
-    return PairedExecution(rows["miller"], rows["julie"])
+    return PairedExecution(rows["baseline"], rows["candidate"])
 
 
 def _run_repetition(
@@ -234,6 +476,11 @@ def _run_repetition(
             "classification": run.classification,
             "outcome": run.outcome,
             "failure_reason": run.failure_reason,
+            "contract_id": raw.get("contract_id"),
+            "role": raw.get("role"),
+            "expected_outcome": raw.get("expected_outcome"),
+            "observed_outcome": raw.get("observed_outcome"),
+            "wrong_action_count": raw.get("wrong_action_count"),
             "run_result_sha256": _sha256(summary),
             "artifacts": [
                 {"path": name, "bytes": (run_dir / name).stat().st_size, "sha256": _sha256(run_dir / name)}
@@ -257,7 +504,7 @@ def _resume_run(
     result_path = run_dir / "run-result.json"
     if not marker_path.is_file() or not result_path.is_file():
         raise ValueError(f"partial run directory cannot be resumed: {run_dir}")
-    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker = _load_json_no_duplicates(marker_path.read_text(encoding="utf-8"))
     if marker.get("identity_sha256") != identity_sha256:
         raise ValueError(f"run identity mismatch: {run_dir}")
     artifacts = marker.get("artifacts")
@@ -276,14 +523,18 @@ def _resume_run(
             raise ValueError(f"run artifact hash mismatch: {path}")
     if _sha256(result_path) != marker.get("run_result_sha256"):
         raise ValueError(f"run result hash mismatch: {run_dir}")
-    raw = json.loads(result_path.read_text(encoding="utf-8"))
+    raw = _load_json_no_duplicates(result_path.read_text(encoding="utf-8"))
     validate_run_result(raw)
     expected_run_id = f"{task.task_id}.{arm_name}.p{pair_attempt}.r{repetition}"
     if (
         raw.get("run_id") != expected_run_id
         or raw.get("task_id") != task.task_id
         or raw.get("snapshot_id") != task.snapshot_id
-        or raw.get("product") != arm_name
+        or (
+            raw.get("role") != arm_name
+            if raw.get("contract_id") == TAKEOVER_CONTRACT_ID
+            else raw.get("product") != _legacy_product_for_role(arm_name)
+        )
     ):
         raise ValueError(f"run identity mismatch: {run_dir}")
     for key in ("classification", "outcome"):
@@ -313,14 +564,18 @@ def _raw_result(
         and int(event.get("used", 0)) > int(event.get("limit", 0))
         for event in events
     )
+    observed_outcome = run.observed_outcome or run.verification.observed_outcome
+    wrong_action_count = run.wrong_action_count or run.verification.wrong_action_count
     if budget_exceeded:
         status = "budget_exceeded"
         failure_reason = "budget_exceeded"
         answer = None
+        observed_outcome = "hard_error"
     elif run.failure_reason == "disallowed_tool" or run.outcome == "disallowed_tool":
         status = "disallowed_tool"
         failure_reason = "disallowed_tool"
         answer = None
+        observed_outcome = "wrong_answer"
     elif status == "completed" and not run.verification.passed:
         failure_reason = failure_reason or "incorrect"
     elif status == "completed":
@@ -328,9 +583,11 @@ def _raw_result(
     elif status == "invalid_answer":
         failure_reason = "invalid_answer"
         answer = None
+        observed_outcome = "hard_error"
     elif status in {"timeout", "failed"}:
         failure_reason = "product_error"
         answer = None
+        observed_outcome = "hard_error"
 
     if failure_reason not in ALLOWED_FAILURE_REASONS and failure_reason is not None:
         failure_reason = "product_error"
@@ -341,12 +598,12 @@ def _raw_result(
     ]
     if run.classification == "product_failure" and not product_errors:
         product_errors.append("product process failed")
-    return {
+    value = {
         "schema_version": 1,
         "run_id": f"{task.task_id}.{arm_name}.p{pair_attempt}.r{repetition}",
         "task_id": task.task_id,
         "snapshot_id": task.snapshot_id,
-        "product": arm_name,
+        "product": _legacy_product_for_role(arm_name),
         "status": status,
         "failure_reason": failure_reason,
         "answer": answer,
@@ -366,6 +623,27 @@ def _raw_result(
             "matched_anchor_ids": list(run.verification.matched_anchor_ids),
         },
     }
+    if task.contract_id == "takeover-evaluation-v1":
+        value.update(
+            {
+                "contract_id": task.contract_id,
+                "role": arm_name,
+                "expected_outcome": task.expected_outcome,
+                "observed_outcome": observed_outcome or "wrong_answer",
+                "wrong_action_count": wrong_action_count,
+            }
+        )
+        value["verification"].update(
+            {
+                "ordered_evidence_matches": list(
+                    run.verification.ordered_evidence_matches
+                ),
+                "observed_outcome": observed_outcome or "wrong_answer",
+                "wrong_action_count": wrong_action_count,
+            }
+        )
+        value.pop("product")
+    return value
 
 
 def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -435,10 +713,36 @@ def _answer_mapping(answer: StructuredAnswer | None) -> dict[str, Any] | None:
         if item.line is not None:
             value["line"] = item.line
         evidence.append(value)
-    return {"status": answer.status, "answer": answer.answer, "evidence": evidence}
+    value = {"status": answer.status, "answer": answer.answer, "evidence": evidence}
+    if answer.contract_id is not None:
+        value["contract_id"] = answer.contract_id
+        value["actions"] = [asdict(action) for action in answer.actions]
+    return value
 
 
 def _scorer_row(raw: Mapping[str, Any], repetition: int) -> dict[str, Any]:
+    if raw.get("contract_id") == "takeover-evaluation-v1":
+        return {
+            "contract_id": raw["contract_id"],
+            "schema_version": raw["schema_version"],
+            "task_id": raw["task_id"],
+            "repetition": repetition,
+            "observed_outcome": raw["observed_outcome"],
+            "wrong_action_count": raw["wrong_action_count"],
+            "failure_reason": raw["failure_reason"],
+            "duration_ms": raw["wall_clock_ms"],
+            "tool_calls": raw["tool_call_count"],
+            "tool_output_bytes": raw["tool_output_bytes"],
+            "tool_output_tokens": raw["tool_output_tokens"],
+            "model_input_tokens": raw["model_input_tokens"] or 0,
+            "model_output_tokens": raw["model_output_tokens"] or 0,
+            "product_errors": len(raw["product_errors"]),
+            "duplicate_calls": raw["duplicate_calls"],
+            "uncited_tool_output_tokens": raw["uncited_tool_output_tokens"],
+            "ordered_evidence_matches": list(
+                raw["verification"]["ordered_evidence_matches"]
+            ),
+        }
     completed = bool(raw["verification"]["passed"])
     return {
         "task_id": raw["task_id"],
@@ -457,11 +761,23 @@ def _scorer_row(raw: Mapping[str, Any], repetition: int) -> dict[str, Any]:
     }
 
 
+def _scorer_row_is_correct(task: BenchmarkTask, row: Mapping[str, Any]) -> bool:
+    if row.get("contract_id") == TAKEOVER_CONTRACT_ID:
+        return (
+            row.get("observed_outcome") == task.expected_outcome
+            and row.get("wrong_action_count") == 0
+        )
+    return bool(row.get("completed"))
+
+
 def empty_scorer_row(task_id: str, repetition: int, completed: bool) -> dict[str, Any]:
     return {
+        "contract_id": TAKEOVER_CONTRACT_ID,
+        "schema_version": 1,
         "task_id": task_id,
         "repetition": repetition,
-        "completed": completed,
+        "observed_outcome": "success" if completed else "wrong_answer",
+        "wrong_action_count": 0,
         "failure_reason": None if completed else "incorrect",
         "duration_ms": 0,
         "tool_calls": 0,
@@ -472,6 +788,7 @@ def empty_scorer_row(task_id: str, repetition: int, completed: bool) -> dict[str
         "product_errors": 0,
         "duplicate_calls": 0,
         "uncited_tool_output_tokens": 0,
+        "ordered_evidence_matches": [],
     }
 
 
@@ -484,12 +801,12 @@ def completed_export_matches(exports: Path, identity_sha256: str) -> bool:
         return False
     if not manifest_path.exists() or not evidence_path.exists() or not complete_path.exists():
         raise ValueError("partial benchmark output cannot be resumed")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = _load_json_no_duplicates(manifest_path.read_text(encoding="utf-8"))
     recorded = manifest.get("run_identity_sha256")
     marker = complete_path.read_text(encoding="utf-8").strip()
     if recorded != identity_sha256 or marker != identity_sha256:
         raise ValueError("completed benchmark identity mismatch")
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence = _load_json_no_duplicates(evidence_path.read_text(encoding="utf-8"))
     artifacts = evidence.get("artifacts") if isinstance(evidence, dict) else None
     if not isinstance(artifacts, list) or not artifacts:
         raise ValueError("completed benchmark evidence manifest is invalid")
@@ -520,33 +837,80 @@ def export_scorer_artifacts(
         if completed_export_matches(exports, str(identity_manifest["run_identity_sha256"])):
             return
     exports.mkdir(parents=True, exist_ok=True)
-    task_rows = [
-        {
-            "task_id": task.task_id,
-            "repo": task.repo_id,
-            "language": task.language,
-            "workflow_class": task.workflow_class,
-            "evidence_critical": task.evidence_critical,
-        }
-        for task in tasks
-    ]
+    takeover_v1 = all(task.contract_id == TAKEOVER_CONTRACT_ID for task in tasks)
+    legacy = all(task.contract_id is None for task in tasks)
+    if not takeover_v1 and not legacy:
+        raise ValueError("scorer export cannot mix takeover-v1 and legacy tasks")
+    if takeover_v1:
+        task_rows = [
+            {
+                "contract_id": task.contract_id,
+                "schema_version": 1,
+                "task_id": task.task_id,
+                "repo": task.repo_id,
+                "language": task.language,
+                "workflow_class": task.workflow_class,
+                "evidence_critical": task.evidence_critical,
+                "expected_outcome": task.expected_outcome,
+                "capabilities": list(task.capabilities),
+                "evidence_anchors": [
+                    {
+                        "anchor_id": anchor.anchor_id,
+                        "relevance_grade": anchor.relevance_grade,
+                    }
+                    for anchor in task.evidence_anchors
+                ],
+            }
+            for task in tasks
+        ]
+    else:
+        task_rows = [
+            {
+                "task_id": task.task_id,
+                "repo": task.repo_id,
+                "language": task.language,
+                "workflow_class": task.workflow_class,
+                "evidence_critical": task.evidence_critical,
+            }
+            for task in tasks
+        ]
     _write_jsonl(exports / "agent-tasks.jsonl", task_rows)
-    _write_jsonl(exports / "miller-results.jsonl", execution.miller_rows)
-    _write_jsonl(exports / "julie-results.jsonl", execution.julie_rows)
+    _write_jsonl(exports / "baseline-results.jsonl", execution.baseline_rows)
+    _write_jsonl(exports / "candidate-results.jsonl", execution.candidate_rows)
     (exports / "identity-manifest.json").write_text(_pretty_json(dict(identity_manifest)), encoding="utf-8")
-    command = (
-        'dotnet run --project eval/retrieval-eval/RetrievalEval.csproj -- agent-score '
-        '--tasks "$AGENT_EFFICIENCY_EXPORT/agent-tasks.jsonl" '
-        '--miller "$AGENT_EFFICIENCY_EXPORT/miller-results.jsonl" '
-        '--julie "$AGENT_EFFICIENCY_EXPORT/julie-results.jsonl" '
-        '--out "$AGENT_EFFICIENCY_EXPORT/aggregate.json"\n'
+    (exports / "void-status.json").write_text(
+        _pretty_json({"unresolved_void_count": 0}),
+        encoding="utf-8",
     )
+    controller = shlex.quote(str(Path(__file__).resolve()))
+    python = shlex.quote(sys.executable)
+    if takeover_v1:
+        command = (
+            'dotnet run --project eval/retrieval-eval/RetrievalEval.csproj -- decision-score '
+            '--tasks "$AGENT_EFFICIENCY_EXPORT/agent-tasks.jsonl" '
+            '--baseline "$AGENT_EFFICIENCY_EXPORT/baseline-results.jsonl" '
+            '--candidate "$AGENT_EFFICIENCY_EXPORT/candidate-results.jsonl" '
+            f'--decision-scope {identity_manifest["decision_scope"]} '
+            '--out "$AGENT_EFFICIENCY_EXPORT/aggregate.json" && '
+            f"{python} {controller} finalize-safe "
+            '--exports "$AGENT_EFFICIENCY_EXPORT" '
+            '--safe-output "$AGENT_EFFICIENCY_EXPORT/safe-aggregate.json"\n'
+        )
+    else:
+        command = (
+            'dotnet run --project eval/retrieval-eval/RetrievalEval.csproj -- agent-score '
+            '--tasks "$AGENT_EFFICIENCY_EXPORT/agent-tasks.jsonl" '
+            '--miller "$AGENT_EFFICIENCY_EXPORT/candidate-results.jsonl" '
+            '--julie "$AGENT_EFFICIENCY_EXPORT/baseline-results.jsonl" '
+            '--out "$AGENT_EFFICIENCY_EXPORT/aggregate.json"\n'
+        )
     (exports / "agent-score-command.txt").write_text(command, encoding="utf-8")
     artifact_names = [
         "agent-tasks.jsonl",
-        "miller-results.jsonl",
-        "julie-results.jsonl",
+        "baseline-results.jsonl",
+        "candidate-results.jsonl",
         "identity-manifest.json",
+        "void-status.json",
         "agent-score-command.txt",
     ]
     evidence = {
@@ -560,8 +924,71 @@ def export_scorer_artifacts(
     (exports / "COMPLETE").write_text(str(identity_manifest["run_identity_sha256"]) + "\n", encoding="utf-8")
 
 
+def finalize_safe_export(
+    private_exports: Path,
+    safe_output: Path,
+    identity_manifest: Mapping[str, Any],
+    *,
+    unresolved_void_count: int,
+) -> None:
+    exports = Path(private_exports)
+    aggregate_path = exports / "aggregate.json"
+    evidence_path = exports / "evidence-manifest.json"
+    if not aggregate_path.is_file() or not evidence_path.is_file():
+        raise ValueError("private scorer aggregate and evidence manifest are required")
+    evidence = _load_json_no_duplicates(evidence_path.read_text(encoding="utf-8"))
+    artifacts = evidence.get("artifacts") if isinstance(evidence, dict) else None
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ValueError("private evidence manifest is invalid")
+    retained: dict[str, str] = {}
+    for index, artifact in enumerate(artifacts, start=1):
+        if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256", "bytes"}:
+            raise ValueError("private evidence manifest is invalid")
+        relative = Path(str(artifact["path"]))
+        path = exports / relative
+        if (
+            relative.is_absolute()
+            or len(relative.parts) != 1
+            or not path.is_file()
+            or path.stat().st_size != artifact["bytes"]
+            or _sha256(path) != artifact["sha256"]
+        ):
+            raise ValueError("private evidence artifact failed digest verification")
+        retained[f"artifact_{index:03d}"] = str(artifact["sha256"])
+    retained[f"artifact_{len(retained) + 1:03d}"] = _sha256(aggregate_path)
+    inputs = identity_manifest.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise ValueError("selection identity is missing")
+    safe_identity = {
+        "contract_id": identity_manifest["contract_id"],
+        "schema_version": identity_manifest["schema_version"],
+        "corpus_role": identity_manifest["corpus_role"],
+        "decision_scope": identity_manifest["decision_scope"],
+        "parent_manifest_sha256": inputs["parent_manifest_sha256"],
+        "snapshot_manifest_sha256": inputs["snapshot_manifest_sha256"],
+        "runtime_identity_sha256": identity_manifest["run_identity_sha256"],
+        "selection_sha256": inputs["selection_sha256"],
+        "selected_capability_ids": inputs["selected_capability_ids"],
+        "selected_task_count": inputs["selected_task_count"],
+    }
+    aggregate = _load_json_no_duplicates(aggregate_path.read_text(encoding="utf-8"))
+    safe = project_safe_aggregate(
+        aggregate,
+        safe_identity,
+        unresolved_void_count=unresolved_void_count,
+        private_evidence_sha256=retained,
+    )
+    output = Path(safe_output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_pretty_json(safe), encoding="utf-8")
+
+
 def _other_arm(arm: str) -> str:
-    return "julie" if arm == "miller" else "miller"
+    return "candidate" if arm == "baseline" else "baseline"
+
+
+def _legacy_product_for_role(role: str) -> str:
+    return "julie" if role == "baseline" else "miller"
 
 
 def _void_reason(arm_name: str, run: AgentRun) -> dict[str, Any]:
@@ -614,7 +1041,7 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     values = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.strip():
-            value = json.loads(line)
+            value = _load_json_no_duplicates(line)
             if isinstance(value, dict):
                 values.append(value)
     return values
@@ -639,11 +1066,29 @@ def _json_sha256(value: Any) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the frozen paired Miller/Julie agent-efficiency benchmark")
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["finalize-safe"]:
+        parser = argparse.ArgumentParser(
+            description="Project a private agent-efficiency aggregate into the safe sealed output"
+        )
+        parser.add_argument("command", choices=("finalize-safe",))
+        parser.add_argument("--exports", required=True)
+        parser.add_argument("--safe-output", required=True)
+        args = parser.parse_args(arguments)
+        try:
+            return _finalize_safe_cli(args)
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    parser = argparse.ArgumentParser(description="Run the frozen paired agent-efficiency benchmark")
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--snapshots", required=True)
     parser.add_argument("--snapshot-root", action="append", default=[], metavar="REPO=DIR")
-    parser.add_argument("--arm", choices=("miller", "julie", "both"), required=True)
+    parser.add_argument("--arm", choices=("both",), required=True)
+    parser.add_argument("--corpus-role", choices=("calibration", "decision"), required=True)
+    parser.add_argument("--decision-scope", choices=("subset", "full"), required=True)
+    parser.add_argument("--task-family", action="append", default=[])
+    parser.add_argument("--private-root")
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", required=True, type=int)
     parser.add_argument("--model", default=PINNED_MODEL)
@@ -652,7 +1097,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--codex-home", default=str(Path.home() / ".codex"))
     parser.add_argument("--preflight-only", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     try:
         return _run_cli(args)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
@@ -660,15 +1105,63 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
 
+def _finalize_safe_cli(args: argparse.Namespace) -> int:
+    exports = Path(args.exports).expanduser().resolve()
+    identity_path = exports / "identity-manifest.json"
+    void_status_path = exports / "void-status.json"
+    if not identity_path.is_file() or not void_status_path.is_file():
+        raise ValueError("private identity and void status are required")
+    identity = _load_json_no_duplicates(identity_path.read_text(encoding="utf-8"))
+    identity_hash = str(identity.get("run_identity_sha256", ""))
+    if not completed_export_matches(exports, identity_hash):
+        raise ValueError("private scorer export is incomplete")
+    void_status = _load_json_no_duplicates(void_status_path.read_text(encoding="utf-8"))
+    if set(void_status) != {"unresolved_void_count"}:
+        raise ValueError("private void status is invalid")
+    unresolved_void_count = void_status["unresolved_void_count"]
+    if not isinstance(unresolved_void_count, int):
+        raise ValueError("private void status is invalid")
+    finalize_safe_export(
+        exports,
+        Path(args.safe_output).expanduser().resolve(),
+        identity,
+        unresolved_void_count=unresolved_void_count,
+    )
+    return 0
+
+
 def _run_cli(args: argparse.Namespace) -> int:
     if args.arm != "both":
         raise ValueError("decision runs require --arm both")
-    tasks = load_task_manifest(args.manifest)
-    snapshots = load_snapshot_manifest(args.snapshots)
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    snapshots_path = Path(args.snapshots).expanduser().resolve()
+    runtime_path = Path(args.runtime_identity).expanduser().resolve()
+    tasks = load_task_manifest(manifest_path)
+    snapshots = load_snapshot_manifest(snapshots_path)
     roots = _snapshot_roots(args.snapshot_root)
-    runtime = json.loads(Path(args.runtime_identity).read_text(encoding="utf-8"))
-    identity, arms, agent_snapshots = preflight_run(
+    selection = build_selection(
         tasks=tasks,
+        snapshots=snapshots,
+        parent_manifest_bytes=manifest_path.read_bytes(),
+        snapshot_manifest_bytes=snapshots_path.read_bytes(),
+        corpus_role=args.corpus_role,
+        decision_scope=args.decision_scope,
+        capability_ids=args.task_family,
+    )
+    out = Path(args.out).expanduser().resolve()
+    if args.corpus_role == "decision":
+        if not args.private_root:
+            raise ValueError("decision corpus requires --private-root")
+        private_root = Path(args.private_root).expanduser().resolve()
+        validate_decision_paths(
+            private_root=private_root,
+            implementation_root=SCRIPT_ROOT.parent,
+            snapshot_roots=tuple(roots.values()),
+            artifact_paths=(manifest_path, snapshots_path, runtime_path, out),
+        )
+    runtime = _load_json_no_duplicates(runtime_path.read_text(encoding="utf-8"))
+    identity, arms, agent_snapshots = preflight_run(
+        tasks=selection.tasks,
         snapshots=snapshots,
         roots=roots,
         runtime=runtime,
@@ -676,8 +1169,8 @@ def _run_cli(args: argparse.Namespace) -> int:
         model=args.model,
         reasoning=args.reasoning,
         seed=args.seed,
+        selection=selection,
     )
-    out = Path(args.out)
     exports = out / "exports"
     identity_hash = str(identity["run_identity_sha256"])
     if completed_export_matches(exports, identity_hash):
@@ -688,7 +1181,7 @@ def _run_cli(args: argparse.Namespace) -> int:
     proxy = (sys.executable, str(SCRIPT_ROOT / "benchlib" / "recording_mcp_proxy.py"))
     runner = CodexAgentRunner(args.codex, proxy, args.codex_home)
     execution = execute_paired_tasks(
-        tasks=tasks,
+        tasks=selection.tasks,
         snapshots=agent_snapshots,
         arms=arms,
         runner=runner,
@@ -697,7 +1190,7 @@ def _run_cli(args: argparse.Namespace) -> int:
         identity_sha256=identity_hash,
         void_ledger_path=out / "void-ledger.jsonl",
     )
-    export_scorer_artifacts(exports, tasks, execution, identity)
+    export_scorer_artifacts(exports, selection.tasks, execution, identity)
     print((exports / "agent-score-command.txt").read_text(encoding="utf-8"), end="")
     return 0
 
@@ -712,9 +1205,9 @@ def preflight_run(
     model: str,
     reasoning: str,
     seed: int,
+    selection: SelectionIdentity | None = None,
 ) -> tuple[dict[str, Any], dict[str, AgentArm], dict[str, AgentSnapshot]]:
-    if runtime.get("schema_version") != 1:
-        raise ValueError("runtime identity schema_version must be 1")
+    normalized_runtime = normalize_runtime(runtime, selection)
     if model != PINNED_MODEL or reasoning != PINNED_REASONING:
         raise ValueError(f"model identity must be {PINNED_MODEL} with reasoning {PINNED_REASONING}")
     codex_path = _resolve_executable(codex_executable)
@@ -741,16 +1234,17 @@ def preflight_run(
         if task.snapshot_id not in snapshot_by_id:
             raise ValueError(f"task {task.task_id}: unknown snapshot {task.snapshot_id}")
 
-    products = runtime.get("products")
-    if not isinstance(products, dict) or set(products) != {"miller", "julie"}:
-        raise ValueError("runtime identity must contain exactly miller and julie products")
+    adapters = normalized_runtime.get("adapters")
+    if not isinstance(adapters, dict) or set(adapters) != {"baseline", "candidate"}:
+        raise ValueError("runtime identity must contain exactly baseline and candidate adapters")
     arms: dict[str, AgentArm] = {}
-    safe_products: dict[str, Any] = {}
-    for product in ("miller", "julie"):
-        spec = products[product]
+    safe_adapters: dict[str, Any] = {}
+    for role in ("baseline", "candidate"):
+        spec = adapters[role]
         if not isinstance(spec, dict):
-            raise ValueError(f"{product}: identity must be an object")
+            raise ValueError(f"{role}: identity must be an object")
         expected_product_fields = {
+            "adapter_name",
             "command",
             "version_command",
             "version",
@@ -762,11 +1256,14 @@ def preflight_run(
             "environment",
         }
         if set(spec) != expected_product_fields:
-            raise ValueError(f"{product}: identity fields must be {sorted(expected_product_fields)}")
+            raise ValueError(f"{role}: identity fields must be {sorted(expected_product_fields)}")
+        adapter_name = spec.get("adapter_name")
+        if not isinstance(adapter_name, str) or not adapter_name:
+            raise ValueError(f"{role}: adapter_name must be non-empty")
         commit = spec.get("commit")
         if not isinstance(commit, str) or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit) is None:
-            raise ValueError(f"{product}: commit must be a full lowercase hexadecimal commit")
-        command = _string_sequence(spec.get("command"), f"{product}.command")
+            raise ValueError(f"{role}: commit must be a full lowercase hexadecimal commit")
+        command = _string_sequence(spec.get("command"), f"{role}.command")
         environment_value = spec.get("environment")
         if not isinstance(environment_value, dict) or any(
             name not in ALLOWED_PRODUCT_ENVIRONMENT
@@ -776,19 +1273,19 @@ def preflight_run(
             for name, value in environment_value.items()
         ):
             raise ValueError(
-                f"{product}: environment must contain only {sorted(ALLOWED_PRODUCT_ENVIRONMENT)} with non-empty string values"
+                f"{role}: environment must contain only {sorted(ALLOWED_PRODUCT_ENVIRONMENT)} with non-empty string values"
             )
         environment = tuple(sorted(environment_value.items()))
         _resolve_executable(command[0])
         binary_path = Path(spec.get("binary_path", "")).expanduser().resolve()
         if not binary_path.is_file():
-            raise ValueError(f"{product}: binary_path must name a file")
+            raise ValueError(f"{role}: binary_path must name a file")
         if _sha256(binary_path) != spec.get("binary_sha256"):
-            raise ValueError(f"{product}: binary hash mismatch")
-        version_command = _string_sequence(spec.get("version_command"), f"{product}.version_command")
+            raise ValueError(f"{role}: binary hash mismatch")
+        version_command = _string_sequence(spec.get("version_command"), f"{role}.version_command")
         version = _command_output(tuple(version_command), environment=environment_value).strip()
         if version != spec.get("version"):
-            raise ValueError(f"{product}: version mismatch")
+            raise ValueError(f"{role}: version mismatch")
         readiness_commands = spec.get("readiness_commands")
         expected_readiness = spec.get("readiness")
         expected_snapshot_ids = set(agents)
@@ -798,13 +1295,13 @@ def preflight_run(
             or set(readiness_commands) != expected_snapshot_ids
             or set(expected_readiness) != expected_snapshot_ids
         ):
-            raise ValueError(f"{product}: readiness identities must cover every snapshot")
+            raise ValueError(f"{role}: readiness identities must cover every snapshot")
         safe_snapshot_identities: dict[str, Any] = {}
         for snapshot_id in sorted(expected_snapshot_ids):
             readiness_command = _string_sequence(
-                readiness_commands[snapshot_id], f"{product}.readiness_commands.{snapshot_id}"
+                readiness_commands[snapshot_id], f"{role}.readiness_commands.{snapshot_id}"
             )
-            readiness = json.loads(
+            readiness = _load_json_no_duplicates(
                 _command_output(
                     tuple(readiness_command),
                     cwd=agents[snapshot_id].root,
@@ -813,13 +1310,13 @@ def preflight_run(
             )
             expected = expected_readiness[snapshot_id]
             if readiness != expected or not isinstance(readiness, dict) or readiness.get("ready") is not True:
-                raise ValueError(f"{product}: stale or incomplete readiness identity for {snapshot_id}")
+                raise ValueError(f"{role}: stale or incomplete readiness identity for {snapshot_id}")
             identity_values = {
                 key: readiness.get(key)
                 for key in ("workspace_identity", "index_identity", "vector_identity", "model_identity")
             }
             if any(not isinstance(value, str) or not value for value in identity_values.values()):
-                raise ValueError(f"{product}: stale or incomplete readiness identity for {snapshot_id}")
+                raise ValueError(f"{role}: stale or incomplete readiness identity for {snapshot_id}")
             mcp = _probe_mcp(
                 tuple(command),
                 agents[snapshot_id].root,
@@ -833,8 +1330,9 @@ def preflight_run(
                 "instructions_sha256": mcp["instructions_sha256"],
                 "tools_sha256": mcp["tools_sha256"],
             }
-        arms[product] = AgentArm(product, tuple(command), environment)
-        safe_products[product] = {
+        arms[role] = AgentArm(role, adapter_name, tuple(command), environment)
+        safe_adapters[role] = {
+            "adapter_name": adapter_name,
             "version": version,
             "binary_sha256": spec["binary_sha256"],
             "commit": commit,
@@ -849,7 +1347,15 @@ def preflight_run(
         for name in ("answer-schema.json", "run-result.schema.json", "task-manifest.schema.json", "snapshot-manifest.schema.json")
     }
     safe = {
+        "contract_id": (
+            selection.contract_id
+            if selection is not None
+            else normalized_runtime["contract_id"]
+        ),
+        "runtime_contract_id": normalized_runtime["contract_id"],
         "schema_version": 1,
+        "corpus_role": selection.corpus_role if selection else "calibration",
+        "decision_scope": selection.decision_scope if selection else "subset",
         "seed": seed,
         "model": model,
         "reasoning": reasoning,
@@ -857,10 +1363,14 @@ def preflight_run(
         "tokenizer": {"package": "tiktoken", "version": tokenizer_version, "encoding": PINNED_TOKENIZER},
         "environment_keys": list(isolated_environment_keys()),
         "schemas": schema_hashes,
-        "inputs": {
-            "task_manifest_sha256": _json_sha256([asdict(task) for task in tasks]),
-            "snapshot_manifest_sha256": _json_sha256([asdict(snapshot) for snapshot in snapshots]),
-        },
+        "inputs": (
+            selection.private_identity()
+            if selection
+            else {
+                "task_manifest_sha256": _json_sha256([asdict(task) for task in tasks]),
+                "snapshot_manifest_sha256": _json_sha256([asdict(snapshot) for snapshot in snapshots]),
+            }
+        ),
         "snapshots": [
             {
                 "snapshot_id": snapshot.snapshot_id,
@@ -871,7 +1381,7 @@ def preflight_run(
             }
             for snapshot in snapshots
         ],
-        "products": safe_products,
+        "adapters": safe_adapters,
     }
     safe["run_identity_sha256"] = hashlib.sha256(
         json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -941,7 +1451,7 @@ def _mcp_request(process: subprocess.Popen[str], message: Mapping[str, Any], tim
     def read_response() -> None:
         try:
             for line in process.stdout:
-                value = json.loads(line)
+                value = _load_json_no_duplicates(line)
                 if isinstance(value, dict) and value.get("id") == message.get("id"):
                     responses.put(value)
                     return

@@ -62,7 +62,7 @@ def _events(path: Path) -> list[dict]:
 def _wait_for_file(path: Path, timeout: float = 5) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.exists():
+        if path.exists() and path.stat().st_size > 0:
             return
         time.sleep(0.01)
     raise AssertionError(f"timed out waiting for {path}")
@@ -86,6 +86,17 @@ def _wait_for_process_exit(pid: int, timeout: float = 5) -> bool:
 
 
 class RecordingMcpProxyTests(unittest.TestCase):
+    def test_wait_for_file_requires_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pending"
+            path.touch()
+
+            with self.assertRaises(AssertionError):
+                _wait_for_file(path, timeout=0.02)
+
+            path.write_text("ready", encoding="utf-8")
+            _wait_for_file(path, timeout=0.02)
+
     def test_product_environment_is_passed_to_the_product_process(self) -> None:
         request = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'
         with tempfile.TemporaryDirectory() as directory:

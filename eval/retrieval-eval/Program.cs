@@ -17,6 +17,9 @@ public static class Program
           agent-score --tasks <manifest.jsonl> --baseline <results.jsonl>
                       --candidate <results.jsonl> --decision-scope <subset|full>
                       --out <aggregate.json>
+          decision-score --tasks <manifest.jsonl> --baseline <results.jsonl>
+                         --candidate <results.jsonl> --decision-scope <subset|full>
+                         --out <aggregate.json>
 
         Legacy agent-score input adapter: --miller <results.jsonl> --julie <results.jsonl>.
         Legacy inputs always produce decision_scope=subset and decision_verdict=not_decisional.
@@ -35,6 +38,7 @@ public static class Program
                 "validate" => RunValidate(ParseOptions(args.Skip(1))),
                 "task-score" => RunTaskScore(ParseOptions(args.Skip(1))),
                 "agent-score" => RunAgentScore(ParseOptions(args.Skip(1))),
+                "decision-score" => RunDecisionScore(ParseOptions(args.Skip(1))),
                 "--help" or "-h" or "help" => Ok(Usage),
                 _ => Fail($"unknown verb '{args[0]}'\n\n{Usage}"),
             };
@@ -213,6 +217,44 @@ public static class Program
         }
     }
 
+    static int RunDecisionScore(Options options)
+    {
+        var tasksPath = options.Require("tasks");
+        var baselinePath = options.Require("baseline");
+        var candidatePath = options.Require("candidate");
+        var decisionScope = options.Require("decision-scope");
+        var outPath = options.Require("out");
+
+        try
+        {
+            var tasks = ReadAgentRows<AgentTaskManifestRow>(
+                tasksPath,
+                "decision task manifest",
+                AgentDecisionTaskManifestFields,
+                ValidateDecisionTask);
+            var baseline = ReadAgentRows<AgentRunResult>(
+                baselinePath,
+                "decision baseline results",
+                AgentDecisionRunResultFields);
+            var candidate = ReadAgentRows<AgentRunResult>(
+                candidatePath,
+                "decision candidate results",
+                AgentDecisionRunResultFields);
+            var report = AgentDecisionScorer.Score(tasks, baseline, candidate, decisionScope);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(outPath));
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(outPath, JsonSerializer.Serialize(report, Jsonl.Options));
+
+            Console.WriteLine($"tasks={report.TaskCount}  relevance={report.Relevance.Verdict}  correctness={report.Correctness.Verdict}  efficiency={report.Efficiency.Verdict}  action={report.ActionVerdict}  decision={report.DecisionVerdict}");
+            Console.WriteLine("aggregate written");
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+        {
+            return ValidationFail(ex.Message);
+        }
+    }
+
     static AgentTaskManifestRow AdaptLegacyTask(LegacyAgentTaskManifestRow task) => new()
     {
         ContractId = AgentEvaluationContract.LegacyAdapterId,
@@ -298,7 +340,11 @@ public static class Program
         }
     }
 
-    static List<T> ReadAgentRows<T>(string path, string label, IReadOnlySet<string> requiredFields)
+    static List<T> ReadAgentRows<T>(
+        string path,
+        string label,
+        IReadOnlySet<string> requiredFields,
+        Action<JsonElement, string, int>? validateNested = null)
     {
         var lineNumber = 0;
         try
@@ -324,6 +370,7 @@ public static class Program
                 foreach (var field in requiredFields)
                     if (!seen.Contains(field))
                         throw new InvalidOperationException($"{label} row {lineNumber} is missing required field '{field}'.");
+                validateNested?.Invoke(document.RootElement, label, lineNumber);
             }
 
             return Jsonl.ReadAll<T>(path);
@@ -335,6 +382,33 @@ public static class Program
         catch (JsonException ex)
         {
             throw new InvalidOperationException($"{label} row {lineNumber} is not valid JSON.", ex);
+        }
+    }
+
+    static void ValidateDecisionTask(JsonElement row, string label, int lineNumber)
+    {
+        var anchors = row.GetProperty("evidence_anchors");
+        if (anchors.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException($"{label} row {lineNumber} evidence_anchors must be an array.");
+
+        var anchorIndex = 0;
+        foreach (var anchor in anchors.EnumerateArray())
+        {
+            anchorIndex++;
+            if (anchor.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException($"{label} row {lineNumber} evidence anchor {anchorIndex} must be an object.");
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in anchor.EnumerateObject())
+            {
+                if (!seen.Add(property.Name))
+                    throw new InvalidOperationException($"{label} row {lineNumber} evidence anchor {anchorIndex} contains duplicate field '{property.Name}'.");
+                if (!AgentEvidenceAnchorFields.Contains(property.Name))
+                    throw new InvalidOperationException($"{label} row {lineNumber} evidence anchor {anchorIndex} contains unsupported field '{property.Name}'.");
+            }
+            foreach (var field in AgentEvidenceAnchorFields)
+                if (!seen.Contains(field))
+                    throw new InvalidOperationException($"{label} row {lineNumber} evidence anchor {anchorIndex} is missing required field '{field}'.");
         }
     }
 
@@ -371,6 +445,19 @@ public static class Program
         "wrong_action_count", "failure_reason", "duration_ms", "tool_calls", "tool_output_bytes",
         "tool_output_tokens", "model_input_tokens", "model_output_tokens", "product_errors",
         "duplicate_calls", "uncited_tool_output_tokens",
+    };
+
+    static readonly IReadOnlySet<string> AgentDecisionTaskManifestFields = new HashSet<string>(
+        AgentTaskManifestFields.Append("evidence_anchors"),
+        StringComparer.Ordinal);
+
+    static readonly IReadOnlySet<string> AgentDecisionRunResultFields = new HashSet<string>(
+        AgentRunResultFields.Append("ordered_evidence_matches"),
+        StringComparer.Ordinal);
+
+    static readonly IReadOnlySet<string> AgentEvidenceAnchorFields = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "anchor_id", "relevance_grade",
     };
 
     static readonly IReadOnlySet<string> LegacyAgentTaskManifestFields = new HashSet<string>(StringComparer.Ordinal)
