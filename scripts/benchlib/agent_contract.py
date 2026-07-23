@@ -236,18 +236,17 @@ class StructuredAnswer:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> StructuredAnswer:
-        _validate_value(value, "answer-schema.json")
-        for item in value["evidence"]:
+        normalized = _normalize_answer_mapping(value)
+        _validate_value(normalized, "answer-schema.json")
+        for item in normalized["evidence"]:
             path = item["path"]
-            relative = PurePosixPath(path)
-            if relative.is_absolute() or "\\" in path or ".." in relative.parts:
-                raise ValueError("answer-schema.json: evidence path does not match repo-relative path contract")
-        actions = tuple(_submitted_action(item) for item in value.get("actions", ()))
+            _validate_repo_relative_identity("answer-schema.json evidence path", path)
+        actions = tuple(_submitted_action(item) for item in normalized.get("actions") or ())
         for action in actions:
             _validate_action_target("answer", action.kind, action.kind, action.target)
         return cls(
-            status=value["status"],
-            answer=value["answer"],
+            status=normalized["status"],
+            answer=normalized["answer"],
             evidence=tuple(
                 _AnswerEvidence(
                     path=item["path"],
@@ -255,10 +254,10 @@ class StructuredAnswer:
                     symbol=item.get("symbol"),
                     line=item.get("line"),
                 )
-                for item in value["evidence"]
+                for item in normalized["evidence"]
             ),
             actions=actions,
-            contract_id=value.get("contract_id"),
+            contract_id=normalized.get("contract_id"),
         )
 
 
@@ -768,6 +767,55 @@ def _forbidden_action(value: Mapping[str, Any]) -> _ForbiddenAction:
     )
 
 
+def _normalize_answer_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(value)
+    normalized.setdefault("contract_id", None)
+    actions = normalized.get("actions")
+    if actions is None:
+        normalized["actions"] = None
+        return normalized
+    if not isinstance(actions, list):
+        return normalized
+
+    normalized_actions: list[Any] = []
+    for item in actions:
+        if not isinstance(item, Mapping):
+            normalized_actions.append(item)
+            continue
+        action = dict(item)
+        target_value = action.get("target")
+        if not isinstance(target_value, Mapping):
+            normalized_actions.append(action)
+            continue
+        target = dict(target_value)
+        for field in (
+            "path",
+            "symbol_id",
+            "target_symbol_id",
+            "reference_site",
+            "test_path",
+            "pattern_id",
+            "workspace_selector",
+        ):
+            target.setdefault(field, None)
+        reference_site = target.get("reference_site")
+        if isinstance(reference_site, Mapping):
+            normalized_reference_site = dict(reference_site)
+            normalized_reference_site.setdefault("column_start", None)
+            normalized_reference_site.setdefault("column_end", None)
+            target["reference_site"] = normalized_reference_site
+        action["target"] = target
+        normalized_actions.append(action)
+    normalized["actions"] = normalized_actions
+    return normalized
+
+
+def _validate_repo_relative_identity(label: str, value: str) -> None:
+    relative = PurePosixPath(value)
+    if relative.is_absolute() or "\\" in value or ".." in relative.parts:
+        raise ValueError(f"{label} does not match repo-relative identity contract")
+
+
 def _submitted_action(value: Mapping[str, Any]) -> _SubmittedAction:
     return _SubmittedAction(
         kind=value["kind"],
@@ -948,6 +996,19 @@ def _validate_action_target(
         raise ValueError(
             f"task {task_id} action {action_id}: typed target does not match {kind}"
         )
+    for field in (
+        "path",
+        "symbol_id",
+        "target_symbol_id",
+        "test_path",
+        "workspace_selector",
+    ):
+        value = getattr(target, field)
+        if value is not None:
+            _validate_repo_relative_identity(
+                f"task {task_id} action {action_id} {field}",
+                value,
+            )
     if target.reference_site is not None:
         _validate_reference_site_identity(task_id, action_id, target.reference_site)
 
@@ -957,9 +1018,28 @@ def _validate_reference_site_identity(
     label_id: str,
     site: _ReferenceSiteIdentity,
 ) -> None:
+    _validate_repo_relative_identity(
+        f"task {task_id} reference {label_id} path",
+        site.path,
+    )
+    for field in (
+        "containing_symbol_id",
+        "source_symbol_id",
+        "target_symbol_id",
+    ):
+        value = getattr(site, field)
+        if value is not None:
+            _validate_repo_relative_identity(
+                f"task {task_id} reference {label_id} {field}",
+                value,
+            )
     if site.line_end < site.line_start:
         raise ValueError(
             f"task {task_id} reference {label_id}: line_end must be at least line_start"
+        )
+    if (site.column_start is None) != (site.column_end is None):
+        raise ValueError(
+            f"task {task_id} reference {label_id}: column bounds must both be present or null"
         )
     if (
         site.line_start == site.line_end

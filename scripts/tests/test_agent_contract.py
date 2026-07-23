@@ -1295,6 +1295,30 @@ class AgentContractTests(unittest.TestCase):
         self.assertEqual(1, task["$defs"]["evidenceAnchor"]["properties"]["line_start"]["minimum"])
         self.assertEqual(["answered", "not_found", "blocked"], answer["properties"]["status"]["enum"])
         self.assertEqual(8, answer["properties"]["evidence"]["maxItems"])
+        serialized_answer_schema = json.dumps(answer, sort_keys=True)
+        for unsupported_keyword in (
+            '"allOf"',
+            '"dependentRequired"',
+            '"minProperties"',
+            '"oneOf"',
+            '"pattern"',
+        ):
+            self.assertNotIn(unsupported_keyword, serialized_answer_schema)
+        self.assertEqual(
+            [
+                {"$ref": "#/$defs/canonicalSymbolId"},
+                {"type": "null"},
+            ],
+            answer["$defs"]["nullableCanonicalSymbolId"]["anyOf"],
+        )
+        for object_schema in (
+            answer,
+            answer["properties"]["evidence"]["items"],
+            answer["$defs"]["referenceSiteIdentity"],
+            answer["$defs"]["actionTarget"],
+            answer["$defs"]["submittedAction"],
+        ):
+            self.assertEqual(set(object_schema["properties"]), set(object_schema["required"]))
         evidence = answer["properties"]["evidence"]["items"]
         self.assertEqual(set(evidence["properties"]), set(evidence["required"]))
         self.assertEqual(["string", "null"], evidence["properties"]["symbol"]["type"])
@@ -1324,6 +1348,35 @@ class AgentContractTests(unittest.TestCase):
         ]:
             self.assertEqual(0, run["properties"][field]["minimum"])
         self.assertNotIn("maximum", run["properties"]["tool_output_tokens"])
+
+    def test_answer_actions_keep_repo_relative_paths_and_symbol_ids_outside_the_output_schema(self) -> None:
+        for label, action in (
+            (
+                "path",
+                {"kind": "inspect_file", "target": {"path": "/private/source.py"}},
+            ),
+            (
+                "symbol",
+                {"kind": "inspect_symbol", "target": {"symbol_id": "../private:symbol"}},
+            ),
+            (
+                "reference site",
+                {
+                    "kind": "cite_reference_site",
+                    "target": {
+                        "reference_site": {
+                            **_reference_site(),
+                            "path": "/private/source.py",
+                        }
+                    },
+                },
+            ),
+        ):
+            with self.subTest(label=label):
+                answer = _valid_v1_answer()
+                answer["actions"] = [action]
+                with self.assertRaisesRegex(ValueError, "repo-relative"):
+                    StructuredAnswer.from_mapping(answer)
 
     def test_takeover_v1_schemas_freeze_semantics_without_exposing_labels(self) -> None:
         task = json.loads((BENCHMARK_ROOT / "task-manifest.schema.json").read_text(encoding="utf-8"))
