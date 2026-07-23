@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Miller.Core.Resolver;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -15,17 +16,14 @@ using ModelContextProtocol.Server;
 namespace Miller.Server.Tools;
 
 /// <summary>
-/// The <c>trace</c> tool (M4 Task 10): follow a thread of code through the repository. Graph modes traverse the
-/// in-memory graphs Miller already builds; refs mode reads name-based identifier rows from the same extracted artifact:
+/// Follow exact references, dependency paths, and cross-language bridges. Path and bridge modes traverse the
+/// in-memory graphs Miller already builds; refs reads target-resolved evidence from the extracted artifact:
 /// <list type="bullet">
-/// <item><b>auto</b> — the symbol's immediate neighbourhood (callers + callees) via the dependency
-///   <see cref="SymbolGraph.Reach"/> in <see cref="Direction.Both"/>, the same neighbour walk <c>context</c>/<c>impact</c>
-///   use.</item>
 /// <item><b>path</b> — the shortest dependency path from <c>target</c> to <c>to</c> via
 ///   <see cref="SymbolGraph.ShortestPath"/> (Task 8); a clean message when the two are not connected within
 ///   <c>depth</c>.</item>
-/// <item><b>refs</b> — name-based identifier occurrences for the resolved target symbol. These rows are honest about
-///   being name-based because extractor refs do not carry resolved target symbol IDs.</item>
+/// <item><b>refs</b> — exact identifier, relationship, and resolution evidence keyed by the target symbol ID, with
+///   unresolved name matches isolated as fallback.</item>
 /// <item><b>bridge</b> — the provider-scoped structural chain via <see cref="BridgeGraph.Walk"/> over the loaded
 ///   <see cref="BridgeGraph"/>, rendering each scored bridge edge with its confidence band and score. Current
 ///   providers are dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, and backend-http.</item>
@@ -56,11 +54,11 @@ public sealed class TraceTool
 
     [McpServerTool(Name = "trace")]
     [Description(
-        "Follow a thread of code. mode=refs lists name-based identifier references (usages) with the enclosing " +
-        "symbol per hit; mode=path finds the shortest dependency path from target to 'to'; mode=bridge follows " +
+        "Follow a thread of code. mode=refs lists exact target-resolved references with enclosing symbols and " +
+        "separately labels unresolved fallback evidence; " +
+        "mode=path finds the shortest dependency path from target to 'to'; mode=bridge follows " +
         "provider-scoped cross-language chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, " +
-        "backend-http) with a confidence band. mode=auto (callers/callees) is subsumed by inspect depth=full — " +
-        "prefer inspect for that. refs is name-based and may be empty for some languages; on empty, fall back to " +
+        "backend-http) with a confidence band. refs may be empty for some languages; on empty, use " +
         "search mode=source for text occurrences. Reduced-confidence links are flagged [verb-unknown]/[ambiguous]; " +
         "treat flagged and unflagged links alike as leads to confirm with inspect. NOT for: a symbol's own definition/signature " +
         "(inspect), or ranking which tests to run before a change (impact). Example: trace target=FreshnessService " +
@@ -71,14 +69,16 @@ public sealed class TraceTool
         string target,
         [Description("Disambiguate an ambiguous target symbol name to a file. Optional.")]
         string? scope = null,
-        [Description("Trace mode: refs (name-based usages) | path (shortest path to 'to') | bridge (provider-scoped cross-language chain) | auto (callers+callees; prefer inspect depth=full). Default auto.")]
-        string mode = "auto",
+        [Description("Trace mode: refs (exact usages plus labeled fallback) | path | bridge. Default refs.")]
+        string mode = "refs",
         [Description("For mode=path: the destination symbol name/id the path must reach. Ignored otherwise.")]
         string? to = null,
         [Description("For mode=refs: optional reference kind filter: call, variable_ref, type_usage, member_access, or import.")]
         string? reference_kind = null,
         [Description("For mode=refs: include the resolved target definition in compact output and JSON nodes. Default true.")]
         bool include_definition = true,
+        [Description("For mode=refs: stateless continuation token returned by a prior truncated reference page.")]
+        string? continuation = null,
         [Description("How many hops to follow. Default 3.")] int depth = 3,
         [Description("Max links/neighbours to return. Default 20.")] int limit = 20,
         [Description("Output format: compact|json|full. full adds the firing signals per bridge link in compact output. Default compact.")]
@@ -98,7 +98,12 @@ public sealed class TraceTool
             string output = Run(context.Index, context.Resolver,
                 target, scope, mode, to, depth, limit, full,
                 json, reference_kind, include_definition,
-                symbol => ExtractReader.ReadReferences(context.IndexDbPath, symbol.Name),
+                (symbol, query) => ReferenceEvidenceReader.Read(context.IndexDbPath, symbol.SymbolId, query),
+                context.WorkspaceId ?? "current",
+                NormalizeMode(mode) == ModeRefs
+                    ? ReferenceEvidenceReader.ReadSnapshot(context.IndexDbPath)
+                    : null,
+                continuation,
                 out int emitted, out int nodesVisited);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             string normalizedMode = NormalizeMode(mode);
@@ -146,11 +151,11 @@ public sealed class TraceTool
         }
     }
 
-    private const string ModeAuto = "auto";
     private const string ModePath = "path";
     private const string ModeRefs = "refs";
     private const string ModeBridge = "bridge";
     private const int MaxNextActions = 10;
+    private const int MaxReferencePageBytes = 16 * 1024;
 
     private sealed record TraceNextAction(string Tool, string Reason, IReadOnlyList<KeyValuePair<string, string>> Args);
 
@@ -192,11 +197,11 @@ public sealed class TraceTool
         "reference_kind must be one of: call, variable_ref, type_usage, member_access, import.";
 
     private static string NormalizeMode(string? mode) =>
-        string.IsNullOrWhiteSpace(mode) ? ModeAuto : mode.Trim().ToLowerInvariant();
+        string.IsNullOrWhiteSpace(mode) ? ModeRefs : mode.Trim().ToLowerInvariant();
 
     private static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target)
     {
-        if (mode is not (ModeAuto or ModePath or ModeRefs or ModeBridge))
+        if (mode is not (ModePath or ModeRefs or ModeBridge))
             return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
 
         string code = mode switch
@@ -204,7 +209,6 @@ public sealed class TraceTool
             ModePath => "no_path",
             ModeRefs => "no_references",
             ModeBridge => "no_bridge_path",
-            _ when output.Contains("No neighbours", StringComparison.Ordinal) => "no_neighbours",
             _ when output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
                    output.Contains("Multiple candidates", StringComparison.Ordinal) => "unresolved_target",
             _ => "no_trace_edges",
@@ -259,22 +263,50 @@ public sealed class TraceTool
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         string? referenceKind, bool includeDefinition,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>>? readReferences,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet>? readReferenceEvidence,
+        out int emitted, out int nodesVisited) =>
+        Run(
+            index,
+            resolver,
+            target,
+            scope,
+            mode,
+            to,
+            depth,
+            limit,
+            fullFormat,
+            json,
+            referenceKind,
+            includeDefinition,
+            readReferenceEvidence,
+            "current",
+            null,
+            null,
+            out emitted,
+            out nodesVisited);
+
+    public static string Run(
+        MillerRepositoryIndex index, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
+        string? referenceKind, bool includeDefinition,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet>? readReferenceEvidence,
+        string workspaceId,
+        ReferenceEvidenceSnapshot? snapshot,
+        string? continuation,
         out int emitted, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
 
-        string normalizedMode = (mode ?? ModeAuto).Trim().ToLowerInvariant();
+        string normalizedMode = (mode ?? ModeRefs).Trim().ToLowerInvariant();
 
         return normalizedMode switch
         {
-            ModeAuto => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
-                json, out emitted, out nodesVisited),
             ModePath => RunGraph(index, index.Graph, resolver, target, scope, normalizedMode, to, depth, limit, fullFormat,
                 json, out emitted, out nodesVisited),
             ModeRefs => RunRefs(index, resolver, target, scope, depth, limit, json,
-                referenceKind, includeDefinition, readReferences, out emitted, out nodesVisited),
+                referenceKind, includeDefinition, readReferenceEvidence, workspaceId, snapshot, continuation,
+                out emitted, out nodesVisited),
             ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, json, out emitted, out nodesVisited),
             _ =>
                 UnknownMode(mode, json, target, to, depth, limit, out emitted, out nodesVisited),
@@ -284,9 +316,34 @@ public sealed class TraceTool
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
+        string? referenceKind, bool includeDefinition,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>>? readReferences,
+        out int emitted, out int nodesVisited) =>
+        Run(
+            index,
+            resolver,
+            target,
+            scope,
+            mode,
+            to,
+            depth,
+            limit,
+            fullFormat,
+            json,
+            referenceKind,
+            includeDefinition,
+            readReferences is null
+                ? null
+                : (symbol, query) => LegacyReferenceEvidence(symbol, readReferences(symbol), query),
+            out emitted,
+            out nodesVisited);
+
+    public static string Run(
+        MillerRepositoryIndex index, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         out int emitted, out int nodesVisited) =>
         Run(index, resolver, target, scope, mode, to, depth, limit, fullFormat, json,
-            referenceKind: null, includeDefinition: true, readReferences: null, out emitted, out nodesVisited);
+            referenceKind: null, includeDefinition: true, readReferenceEvidence: null, out emitted, out nodesVisited);
 
     public static string RunGraph(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
@@ -299,7 +356,37 @@ public sealed class TraceTool
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         string? referenceKind, bool includeDefinition,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>>? readReferences,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet>? readReferenceEvidence,
+        out int emitted, out int nodesVisited) =>
+        RunGraph(
+            index,
+            graph,
+            resolver,
+            target,
+            scope,
+            mode,
+            to,
+            depth,
+            limit,
+            fullFormat,
+            json,
+            referenceKind,
+            includeDefinition,
+            readReferenceEvidence,
+            "current",
+            null,
+            null,
+            out emitted,
+            out nodesVisited);
+
+    public static string RunGraph(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
+        string? referenceKind, bool includeDefinition,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet>? readReferenceEvidence,
+        string workspaceId,
+        ReferenceEvidenceSnapshot? snapshot,
+        string? continuation,
         out int emitted, out int nodesVisited)
     {
         ArgumentNullException.ThrowIfNull(index);
@@ -310,14 +397,14 @@ public sealed class TraceTool
         emitted = 0;
         nodesVisited = 0;
 
-        string normalizedMode = (mode ?? ModeAuto).Trim().ToLowerInvariant();
+        string normalizedMode = (mode ?? ModeRefs).Trim().ToLowerInvariant();
 
         return normalizedMode switch
         {
-            ModeAuto => RunAuto(index, graph, resolver, target, scope, depth, limit, json, out emitted, out nodesVisited),
             ModePath => RunPath(index, graph, resolver, target, scope, to, depth, limit, json, out emitted, out nodesVisited),
             ModeRefs => RunRefs(index, resolver, target, scope, depth, limit, json,
-                referenceKind, includeDefinition, readReferences, out emitted, out nodesVisited),
+                referenceKind, includeDefinition, readReferenceEvidence, workspaceId, snapshot, continuation,
+                out emitted, out nodesVisited),
             ModeBridge => json
                 ? RenderTraceJson(ModeBridge, target, to, depth, limit, emitted: 0, nodesVisited: 0,
                     note: "trace mode=bridge requires the full repository bridge graph.",
@@ -332,7 +419,7 @@ public sealed class TraceTool
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         out int emitted, out int nodesVisited) =>
         RunGraph(index, graph, resolver, target, scope, mode, to, depth, limit, fullFormat, json,
-            referenceKind: null, includeDefinition: true, readReferences: null, out emitted, out nodesVisited);
+            referenceKind: null, includeDefinition: true, readReferenceEvidence: null, out emitted, out nodesVisited);
 
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
@@ -346,96 +433,6 @@ public sealed class TraceTool
         out int emitted, out int nodesVisited) =>
         Run(index, resolver, target, scope: null, mode, to, depth, limit, fullFormat, json,
             out emitted, out nodesVisited);
-
-    // ---------- mode: auto (callers + callees neighbourhood) ----------
-
-    private static string RunAuto(
-        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope,
-        int depth, int limit, bool json, out int emitted, out int nodesVisited)
-    {
-        emitted = 0;
-        nodesVisited = 0;
-
-        if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
-            return json
-                ? RenderTraceJson(ModeAuto, target, to: null, depth, limit, emitted, nodesVisited, note, DiagnosticCode(note!),
-                    nextActions: nextActions)
-                : AppendNextActions(note!, nextActions);
-
-        IReadOnlyList<ReachedNode> reached =
-            graph.Reach([seedId], depth, limit, Direction.Both);
-        nodesVisited = reached.Count;
-
-        if (reached.Count == 0)
-        {
-            IReadOnlyList<TraceNextAction> noNeighboursNextActions = NoNeighboursNextActions(index, seedId);
-            string message = RenderNoNeighboursMessage(index, target, depth, seedId);
-            return json
-                ? RenderAutoJson(index, target, to: null, depth, limit, emitted, nodesVisited, seedId, reached, message, "no_neighbours",
-                    noNeighboursNextActions)
-                : AppendNextActions(message, noNeighboursNextActions);
-        }
-
-        if (json)
-        {
-            emitted = reached.Count;
-            return RenderAutoJson(index, target, to: null, depth, limit, emitted: reached.Count, nodesVisited, seedId, reached, note: null, diagnosticCode: null);
-        }
-
-        var seed = index.FindBySymbolId(seedId);
-        var sb = new StringBuilder();
-        sb.Append("# trace ").Append(seed is not null ? seed.Name : target)
-          .Append(" (auto, ").Append(reached.Count).Append(" neighbour(s))\n");
-        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id));
-        foreach (var node in reached)
-        {
-            if (!symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
-                continue; // inconsistent build — drop rather than NRE
-            sb.Append(NeighbourLine(symbol, node.Hop)).Append('\n');
-            emitted++;
-        }
-        return sb.ToString().TrimEnd('\n');
-    }
-
-    // "Name  kind  file:line  (hop N)" — an auto-mode neighbour line.
-    private static string NeighbourLine(IndexedSymbol s, int hop) =>
-        $"{s.Name}  {s.Kind}  {s.FilePath}:{s.StartLine}  (hop {hop})";
-
-    private static string RenderNoNeighboursMessage(ISymbolLookupIndex index, string target, int depth, string seedId)
-    {
-        var sb = new StringBuilder();
-        sb.Append("No neighbours — nothing connects to '").Append(target).Append("' within ")
-          .Append(depth).Append(" hop(s).");
-
-        IndexedSymbol? seed = index.FindBySymbolId(seedId);
-        if (seed is null)
-            return sb.ToString();
-
-        sb.Append('\n')
-          .Append("Resolved target: ")
-          .Append(seed.Name).Append(' ')
-          .Append(seed.Kind).Append(' ')
-          .Append(seed.FilePath).Append(':').Append(seed.StartLine);
-
-        var sameFile = index.FindByFilePath(seed.FilePath)
-            .Where(symbol => !string.Equals(symbol.SymbolId, seed.SymbolId, StringComparison.Ordinal))
-            .Take(5)
-            .ToArray();
-        if (sameFile.Length > 0)
-        {
-            sb.Append('\n').Append("Same-file symbols:");
-            foreach (IndexedSymbol symbol in sameFile)
-            {
-                sb.Append('\n')
-                  .Append("  ")
-                  .Append(symbol.Name).Append("  ")
-                  .Append(symbol.Kind).Append("  ")
-                  .Append(symbol.FilePath).Append(':').Append(symbol.StartLine);
-            }
-        }
-
-        return sb.ToString();
-    }
 
     // ---------- mode: path (shortest dependency path target -> to) ----------
 
@@ -505,11 +502,6 @@ public sealed class TraceTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    // ---------- mode: refs (name-based identifier references) ----------
-
-    // trace refs is 46% empty: usually the extractor does not emit name-based refs for this language/symbol,
-    // not that the symbol is unused. Point the agent at the text fallback (search mode=source) and the graph
-    // fallback (trace mode=auto) instead of a bare "No references found.".
     private static string RefsEmptyHint(string name, string? normalizedKind) =>
         normalizedKind is null
             ? $"No extracted refs for '{name}' — the extractor may not emit refs here."
@@ -518,7 +510,10 @@ public sealed class TraceTool
     private static string RunRefs(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target, string? scope,
         int depth, int limit, bool json, string? referenceKind, bool includeDefinition,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>>? readReferences,
+        Func<IndexedSymbol, ReferenceEvidenceQuery, ReferenceEvidenceSet>? readReferenceEvidence,
+        string workspaceId,
+        ReferenceEvidenceSnapshot? snapshot,
+        string? continuation,
         out int emitted, out int nodesVisited)
     {
         emitted = 0;
@@ -531,22 +526,25 @@ public sealed class TraceTool
         if (!TryNormalizeReferenceKind(referenceKind, out string? normalizedKind, out string? kindError))
             return json
                 ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    references: [], normalizedKind, includeDefinition, kindError, "invalid_reference_kind")
+                    evidence: null, exact: [], fallback: [], normalizedKind, includeDefinition, kindError,
+                    "invalid_reference_kind")
                 : kindError!;
 
-        if (readReferences is null)
+        if (readReferenceEvidence is null)
         {
             const string message = "trace mode=refs requires the workspace reference reader.";
             return json
                 ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    references: [], normalizedKind, includeDefinition, message, "refs_requires_reader")
+                    evidence: null, exact: [], fallback: [], normalizedKind, includeDefinition, message,
+                    "refs_requires_reader")
                 : message;
         }
 
         if (!ResolveSymbol(index, resolver, target, scope, out string seedId, out string? note, out IReadOnlyList<TraceNextAction> nextActions))
             return json
                 ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    references: [], normalizedKind, includeDefinition, note!, DiagnosticCode(note!), nextActions)
+                    evidence: null, exact: [], fallback: [], normalizedKind, includeDefinition, note!,
+                    DiagnosticCode(note!), nextActions)
                 : AppendNextActions(note!, nextActions);
 
         IndexedSymbol? targetSymbol = index.FindBySymbolId(seedId);
@@ -555,46 +553,229 @@ public sealed class TraceTool
             const string message = "trace refs could not load the resolved target symbol.";
             return json
                 ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    references: [], normalizedKind, includeDefinition, message, "target_symbol_missing")
+                    evidence: null, exact: [], fallback: [], normalizedKind, includeDefinition, message,
+                    "target_symbol_missing")
                 : message;
         }
 
-        IReadOnlyList<SymbolRef> allReferences = readReferences(targetSymbol) ?? Array.Empty<SymbolRef>();
-        nodesVisited = allReferences.Count;
-        SymbolRef[] filtered = allReferences
-            .Where(reference => normalizedKind is null ||
-                                string.Equals(reference.Kind, normalizedKind, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(static reference => reference.FilePath, StringComparer.Ordinal)
-            .ThenBy(static reference => reference.StartLine)
+        ReferenceKind? kind = normalizedKind is null
+            ? null
+            : ReferenceEvidenceReader.NormalizeKind(normalizedKind);
+        var cursor = new ToolReferenceContinuationCursor(0, 0);
+        ToolReferenceContinuationIdentity? continuationIdentity = null;
+        if (!string.IsNullOrWhiteSpace(continuation))
+        {
+            if (snapshot is null)
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "continuation_unavailable",
+                    "Reference continuation requires an artifact snapshot."));
+            }
+            continuationIdentity = new ToolReferenceContinuationIdentity(
+                workspaceId,
+                targetSymbol.SymbolId,
+                snapshot.ArtifactId,
+                snapshot.Revision,
+                normalizedKind ?? "all",
+                includeDefinition,
+                limit);
+            cursor = ToolOutputBudget.DecodeReferenceCursor(continuation, continuationIdentity);
+        }
+
+        int consumed = checked(cursor.ExactOffset + cursor.FallbackOffset);
+        if (consumed >= limit)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_offset_invalid",
+                "Reference continuation has already reached the requested limit."));
+        }
+        int pageSize = Math.Min(24, limit - consumed);
+        var query = new ReferenceEvidenceQuery(
+            new ReferenceEvidenceBounds(pageSize, pageSize),
+            kind,
+            cursor.ExactOffset,
+            cursor.FallbackOffset);
+        ReferenceEvidenceSet evidence = readReferenceEvidence(targetSymbol, query);
+        ReferenceEvidenceSnapshot? effectiveSnapshot = snapshot ?? evidence.Snapshot;
+        if (continuationIdentity is null && effectiveSnapshot is not null)
+        {
+            continuationIdentity = new ToolReferenceContinuationIdentity(
+                workspaceId,
+                targetSymbol.SymbolId,
+                effectiveSnapshot.ArtifactId,
+                effectiveSnapshot.Revision,
+                normalizedKind ?? "all",
+                includeDefinition,
+                limit);
+        }
+        ReferenceEvidence[] exact = evidence.Exact
+            .Where(reference => kind is null || reference.Kind == kind)
+            .Take(pageSize)
             .ToArray();
-        SymbolRef[] shown = filtered.Take(limit).ToArray();
-        emitted = shown.Length;
+        ReferenceEvidence[] fallback = evidence.Fallback
+            .Where(reference => kind is null || reference.Kind == kind)
+            .Take(Math.Max(0, pageSize - exact.Length))
+            .ToArray();
+        bool pageHadReferences = exact.Length + fallback.Length > 0;
+        while (exact.Length + fallback.Length > 0)
+        {
+            int candidateNextExactOffset = cursor.ExactOffset + exact.Length;
+            int candidateNextFallbackOffset = cursor.FallbackOffset + fallback.Length;
+            bool candidateMoreExact = evidence.Coverage.ExactAvailable > candidateNextExactOffset;
+            bool candidateMoreFallback =
+                evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available &&
+                evidence.Coverage.FallbackAvailable > candidateNextFallbackOffset;
+            bool candidateWithinLimit = consumed + exact.Length + fallback.Length < limit;
+            string? candidateContinuation =
+                continuationIdentity is not null &&
+                candidateWithinLimit &&
+                (candidateMoreExact || candidateMoreFallback)
+                    ? ToolOutputBudget.EncodeReferenceCursor(
+                        continuationIdentity,
+                        new ToolReferenceContinuationCursor(
+                            candidateNextExactOffset,
+                            candidateNextFallbackOffset))
+                    : null;
+            var candidateCoverage = evidence.Coverage with
+            {
+                ExactReturned = exact.Length,
+                FallbackReturned = fallback.Length,
+                ExactTruncated = candidateMoreExact,
+                FallbackTruncated = candidateMoreFallback,
+            };
+            bool candidateFallbackSuppressed =
+                evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName &&
+                evidence.Coverage.FallbackAvailable > 0;
+            int candidateServableAvailable =
+                evidence.Coverage.ExactAvailable +
+                (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available
+                    ? evidence.Coverage.FallbackAvailable
+                    : 0);
+            bool candidateLimitTruncated =
+                candidateContinuation is null &&
+                (candidateMoreExact ||
+                 candidateMoreFallback ||
+                 consumed + exact.Length + fallback.Length <
+                 candidateServableAvailable);
+            string? candidateNote = candidateContinuation is not null
+                ? "reference page truncated by the 16 KiB output budget; continue with the returned token."
+                : candidateLimitTruncated
+                    ? "reference trace truncated by limit."
+                    : candidateFallbackSuppressed
+                        ? "Unresolved same-name matches were suppressed because the target name is ambiguous."
+                        : null;
+            string? candidateDiagnosticCode = candidateContinuation is not null
+                ? "output_page_truncated"
+                : candidateLimitTruncated
+                    ? "limit_truncated"
+                    : candidateFallbackSuppressed
+                        ? "fallback_suppressed_ambiguous_name"
+                        : null;
+            string candidateJson = RenderRefsJson(
+                index,
+                target,
+                depth,
+                limit,
+                exact.Length + fallback.Length,
+                evidence.Coverage.ExactAvailable + evidence.Coverage.FallbackAvailable,
+                targetSymbol,
+                evidence with { Coverage = candidateCoverage },
+                exact,
+                fallback,
+                normalizedKind,
+                includeDefinition,
+                candidateNote,
+                candidateDiagnosticCode,
+                continuation: candidateContinuation);
+            if (Encoding.UTF8.GetByteCount(candidateJson) <= MaxReferencePageBytes)
+                break;
+            if (continuationIdentity is null)
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "continuation_unavailable",
+                    "Reference output exceeds 16 KiB but no artifact snapshot is available for safe continuation."));
+            }
+            if (fallback.Length > 0)
+                fallback = fallback[..^1];
+            else
+                exact = exact[..^1];
+        }
+        if (pageHadReferences && exact.Length + fallback.Length == 0)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "reference_item_too_large",
+                "A single reference row exceeds the 16 KiB output budget."));
+        }
+        int nextExactOffset = cursor.ExactOffset + exact.Length;
+        int nextFallbackOffset = cursor.FallbackOffset + fallback.Length;
+        bool moreExact = evidence.Coverage.ExactAvailable > nextExactOffset;
+        bool moreFallback =
+            evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available &&
+            evidence.Coverage.FallbackAvailable > nextFallbackOffset;
+        bool withinRequestedLimit = consumed + exact.Length + fallback.Length < limit;
+        string? nextContinuation =
+            continuationIdentity is not null && withinRequestedLimit && (moreExact || moreFallback)
+                ? ToolOutputBudget.EncodeReferenceCursor(
+                    continuationIdentity,
+                    new ToolReferenceContinuationCursor(nextExactOffset, nextFallbackOffset))
+                : null;
+        var displayCoverage = evidence.Coverage with
+        {
+            ExactReturned = exact.Length,
+            FallbackReturned = fallback.Length,
+            ExactTruncated = moreExact,
+            FallbackTruncated = moreFallback,
+        };
+        evidence = evidence with { Coverage = displayCoverage };
+        nodesVisited = evidence.Coverage.ExactAvailable + evidence.Coverage.FallbackAvailable;
+        emitted = exact.Length + fallback.Length;
 
         string? resultNote = null;
         string? diagnosticCode = null;
         IReadOnlyList<TraceNextAction> resultNextActions = [];
-        if (filtered.Length == 0)
+        if (emitted == 0)
         {
             resultNote = RefsEmptyHint(targetSymbol.Name, normalizedKind);
+            if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName)
+                resultNote += " Unresolved same-name matches were suppressed because the target name is ambiguous.";
             diagnosticCode = "no_references";
             resultNextActions = RefsEmptyNextActions(targetSymbol.Name);
         }
-        else if (shown.Length < filtered.Length)
+        else if (nextContinuation is not null)
+        {
+            resultNote = "reference page truncated by the 16 KiB output budget; continue with the returned token.";
+            diagnosticCode = "output_page_truncated";
+        }
+        else if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName &&
+                 evidence.Coverage.FallbackAvailable > 0)
+        {
+            resultNote = "Unresolved same-name matches were suppressed because the target name is ambiguous.";
+            diagnosticCode = "fallback_suppressed_ambiguous_name";
+        }
+        else if (evidence.Coverage.ExactTruncated ||
+                 evidence.Coverage.FallbackTruncated ||
+                 consumed + emitted <
+                 evidence.Coverage.ExactAvailable +
+                 (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available
+                     ? evidence.Coverage.FallbackAvailable
+                     : 0))
         {
             resultNote = "reference trace truncated by limit.";
             diagnosticCode = "limit_truncated";
         }
 
         if (json)
-            return RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol, shown, normalizedKind,
-                includeDefinition, resultNote, diagnosticCode, resultNextActions);
+            return RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol, evidence,
+                exact, fallback, normalizedKind, includeDefinition, resultNote, diagnosticCode,
+                resultNextActions, nextContinuation);
 
         var sb = new StringBuilder();
         sb.Append("# trace refs ").Append(targetSymbol.Name)
-          .Append(" (").Append(shown.Length).Append(" reference(s)");
+          .Append(" (").Append(emitted).Append(" reference(s), exact=")
+          .Append(exact.Length).Append(", fallback=").Append(fallback.Length);
         if (normalizedKind is not null)
             sb.Append(", kind=").Append(normalizedKind);
-        sb.Append(", name-based)\n");
+        sb.Append(")\n");
 
         if (includeDefinition)
         {
@@ -606,40 +787,113 @@ public sealed class TraceTool
               .Append('\n');
         }
 
-        if (shown.Length == 0)
+        if (emitted == 0)
         {
             sb.Append(resultNote);
             AppendNextActions(sb, resultNextActions);
         }
         else
         {
-            sb.Append("references:\n");
-            foreach (SymbolRef reference in shown)
-                sb.Append("  ").Append(ReferenceLine(index, reference)).Append('\n');
+            if (exact.Length > 0)
+            {
+                sb.Append("exact:\n");
+                foreach (ReferenceEvidence reference in exact)
+                    sb.Append("  ").Append(ReferenceLine(index, reference)).Append('\n');
+            }
+            if (fallback.Length > 0)
+            {
+                sb.Append("fallback (unresolved):\n");
+                foreach (ReferenceEvidence reference in fallback)
+                    sb.Append("  ").Append(ReferenceLine(index, reference)).Append('\n');
+            }
             if (resultNote is not null)
                 sb.Append(resultNote).Append('\n');
-            // Delivery-time nudge: a non-empty ref set is a "who uses this?" answer, so the natural next move
-            // before touching the symbol is an impact check. Suppress for test targets (editing a test has no
-            // downstream blast radius worth an impact pass) and for the empty path (handled above). JSON returns
-            // earlier, so this compact-only line never perturbs structured output.
-            if (!targetSymbol.IsTest)
+            if (nextContinuation is not null)
+            {
+                sb.Append(NextStepHint.Render(
+                    $"trace target=\"{targetSymbol.SymbolId}\" mode=refs limit={limit}" +
+                    (normalizedKind is null ? "" : $" reference_kind={normalizedKind}") +
+                    (includeDefinition ? "" : " include_definition=false") +
+                    $" continuation=\"{EscapeShellishArgument(nextContinuation)}\"",
+                    "continue exact/fallback reference evidence")).Append('\n');
+            }
+            else if (!targetSymbol.IsTest)
                 sb.Append(NextStepHint.Render($"impact target=\"{targetSymbol.Name}\"", "before editing")).Append('\n');
         }
 
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string ReferenceLine(ISymbolLookupIndex index, SymbolRef reference)
+    private static string ReferenceLine(ISymbolLookupIndex index, ReferenceEvidence reference)
     {
         var sb = new StringBuilder();
-        sb.Append(reference.FilePath).Append(':').Append(reference.StartLine)
-          .Append("  ").Append(reference.Kind);
-        // Resolve the enclosing symbol id to its name (like InspectTool.DistinctCallers). A raw 32-hex id is
-        // unusable in compact output, so when it does not resolve, drop the segment entirely.
+        sb.Append(reference.FilePath).Append(':').Append(reference.StartLine ?? 0)
+          .Append("  ").Append(reference.SourceKind);
         if (reference.ContainingSymbolId is { } containingId &&
             index.FindBySymbolId(containingId) is { } containing)
             sb.Append("  in=").Append(containing.Name);
+        sb.Append("  [").Append(reference.ResolutionStatus == ReferenceResolutionStatus.Exact ? "exact" : "fallback")
+          .Append(" source=").Append(EvidenceSourceLabel(reference.Source))
+          .Append(" confidence=").Append(reference.Confidence.ToString("0.00", CultureInfo.InvariantCulture));
+        if (reference.ResolutionTier is { } tier)
+            sb.Append(" tier=").Append(tier);
+        sb.Append(']');
         return sb.ToString();
+    }
+
+    private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch
+    {
+        ReferenceEvidenceSource.IdentifierDirect => "identifier_direct",
+        ReferenceEvidenceSource.IdentifierResolution => "identifier_resolution",
+        ReferenceEvidenceSource.Relationship => "relationship",
+        ReferenceEvidenceSource.PendingResolution => "pending_resolution",
+        ReferenceEvidenceSource.NameFallback => "name_fallback",
+        _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
+    };
+
+    private static ReferenceEvidenceSet LegacyReferenceEvidence(
+        IndexedSymbol target,
+        IReadOnlyList<SymbolRef> references,
+        ReferenceEvidenceQuery query)
+    {
+        ReferenceEvidence[] all = references
+            .Select(reference => new ReferenceEvidence(
+                null,
+                reference.ContainingSymbolId,
+                reference.FilePath,
+                reference.StartLine,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
+                reference.Kind,
+                ReferenceEvidenceSource.NameFallback,
+                null,
+                0.5,
+                ReferenceResolutionStatus.Fallback))
+            .Where(reference => query.Kind is null || reference.Kind == query.Kind)
+            .OrderBy(reference => reference.FilePath, StringComparer.Ordinal)
+            .ThenBy(reference => reference.StartLine)
+            .ToArray();
+        ReferenceEvidence[] page = all
+            .Skip(query.FallbackOffset)
+            .Take(query.Bounds.FallbackLimit)
+            .ToArray();
+        return new ReferenceEvidenceSet(
+            [],
+            page,
+            new ReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                all.Length,
+                page.Length,
+                1,
+                false,
+                all.Length > query.FallbackOffset + page.Length,
+                all.Length == 0 ? ReferenceFallbackStatus.NoCandidates : ReferenceFallbackStatus.Available));
     }
 
     private static bool TryNormalizeReferenceKind(string? referenceKind, out string? normalized, out string? error)
@@ -1622,37 +1876,11 @@ public sealed class TraceTool
             ("query", target),
             ("mode", "source")),
         NextAction(
-            "trace",
-            "inspect ordinary graph neighbours for callers and callees",
+            "inspect",
+            "inspect callers and callees from the symbol graph",
             ("target", target),
-            ("mode", ModeAuto)),
+            ("depth", "full")),
     ];
-
-    private static IReadOnlyList<TraceNextAction> NoNeighboursNextActions(ISymbolLookupIndex index, string seedId)
-    {
-        IndexedSymbol? seed = index.FindBySymbolId(seedId);
-        if (seed is null)
-            return [];
-
-        return
-        [
-            NextAction(
-                "search",
-                "look for text references not represented in the graph",
-                ("query", seed.Name),
-                ("mode", "source")),
-            NextAction(
-                "inspect",
-                "inspect nearby same-file context before widening the search",
-                ("target", seed.FilePath),
-                ("depth", "overview")),
-            NextAction(
-                "trace",
-                "check extracted identifier references directly",
-                ("target", seed.Name),
-                ("mode", ModeRefs)),
-        ];
-    }
 
     private static IReadOnlyList<TraceNextAction> BridgeFallbackNextActions(string target, BridgeCapabilityReport? capabilityReport = null)
     {
@@ -1664,10 +1892,10 @@ public sealed class TraceTool
             ("target", target),
             ("mode", ModeRefs)),
             NextAction(
-            "trace",
-            "inspect ordinary graph neighbours for callers and callees",
+            "inspect",
+            "inspect callers and callees from the symbol graph",
             ("target", target),
-            ("mode", ModeAuto)),
+            ("depth", "full")),
             NextAction(
             "search",
             "look for source text links not represented in the bridge graph",
@@ -1851,52 +2079,13 @@ public sealed class TraceTool
     {
         emitted = 0;
         nodesVisited = 0;
-        string message = $"Unknown mode '{mode}'. Use one of: auto, path, refs, bridge.";
+        string message = $"Unknown mode '{mode}'. Use one of: refs, path, bridge.";
         return json
             ? RenderTraceJson(mode ?? string.Empty, target, to, depth, limit, emitted, nodesVisited, message, "unknown_mode")
             : message;
     }
 
     // ---------- JSON rendering ----------
-
-    private static string RenderAutoJson(
-        ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
-        string seedId, IReadOnlyList<ReachedNode> reached, string? note, string? diagnosticCode,
-        IReadOnlyList<TraceNextAction>? nextActions = null)
-    {
-        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reached.Select(static node => node.Id).Prepend(seedId));
-        symbolsById.TryGetValue(seedId, out IndexedSymbol? seed);
-        return RenderTraceJson(ModeAuto, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
-            writeResolvedTarget: w => WriteSymbolOrNull(w, seed),
-            writeNodes: w =>
-            {
-                w.WriteStartArray();
-                if (seed is not null)
-                    WriteSymbolNode(w, seed, "target", hop: 0);
-                foreach (var node in reached)
-                {
-                    if (symbolsById.TryGetValue(node.Id, out IndexedSymbol? symbol))
-                        WriteSymbolNode(w, symbol, "neighbour", node.Hop);
-                }
-                w.WriteEndArray();
-            },
-            writeLinks: w =>
-            {
-                w.WriteStartArray();
-                foreach (var node in reached)
-                {
-                    w.WriteStartObject();
-                    w.WriteString("source", seedId);
-                    w.WriteString("target", node.Id);
-                    w.WriteString("kind", "neighbour");
-                    w.WriteString("direction", "both");
-                    w.WriteNumber("hop", node.Hop);
-                    w.WriteEndObject();
-                }
-                w.WriteEndArray();
-            },
-            nextActions: nextActions);
-    }
 
     private static string RenderPathJson(
         ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
@@ -1962,8 +2151,12 @@ public sealed class TraceTool
     private static string RenderRefsJson(
         ISymbolLookupIndex index,
         string target, int depth, int limit, int emitted, int nodesVisited, IndexedSymbol? targetSymbol,
-        IReadOnlyList<SymbolRef> references, string? normalizedKind, bool includeDefinition,
-        string? note, string? diagnosticCode, IReadOnlyList<TraceNextAction>? nextActions = null)
+        ReferenceEvidenceSet? evidence,
+        IReadOnlyList<ReferenceEvidence> exact,
+        IReadOnlyList<ReferenceEvidence> fallback,
+        string? normalizedKind, bool includeDefinition,
+        string? note, string? diagnosticCode, IReadOnlyList<TraceNextAction>? nextActions = null,
+        string? continuation = null)
     {
         return RenderTraceJson(ModeRefs, target, to: null, depth, limit, emitted, nodesVisited, note, diagnosticCode,
             nextActions: nextActions,
@@ -1971,11 +2164,25 @@ public sealed class TraceTool
             {
                 if (normalizedKind is null) w.WriteNull("reference_kind"); else w.WriteString("reference_kind", normalizedKind);
                 w.WriteBoolean("include_definition", includeDefinition);
+                if (continuation is null) w.WriteNull("continuation"); else w.WriteString("continuation", continuation);
                 w.WritePropertyName("references");
                 w.WriteStartArray();
-                foreach (SymbolRef reference in references)
-                    WriteReference(index, w, reference);
+                foreach (ReferenceEvidence reference in exact)
+                    WriteReference(index, w, reference, targetSymbol?.Name);
+                foreach (ReferenceEvidence reference in fallback)
+                    WriteReference(index, w, reference, targetSymbol?.Name);
                 w.WriteEndArray();
+                w.WritePropertyName("exact_references");
+                w.WriteStartArray();
+                foreach (ReferenceEvidence reference in exact)
+                    WriteReference(index, w, reference, targetSymbol?.Name);
+                w.WriteEndArray();
+                w.WritePropertyName("fallback_references");
+                w.WriteStartArray();
+                foreach (ReferenceEvidence reference in fallback)
+                    WriteReference(index, w, reference, targetSymbol?.Name);
+                w.WriteEndArray();
+                WriteReferenceCoverage(w, evidence?.Coverage);
             },
             writeResolvedTarget: w => WriteSymbolOrNull(w, targetSymbol),
             writeNodes: w =>
@@ -1986,6 +2193,36 @@ public sealed class TraceTool
                 w.WriteEndArray();
             });
     }
+
+    private static void WriteReferenceCoverage(Utf8JsonWriter w, ReferenceEvidenceCoverage? coverage)
+    {
+        w.WritePropertyName("reference_coverage");
+        if (coverage is null)
+        {
+            w.WriteNullValue();
+            return;
+        }
+
+        w.WriteStartObject();
+        w.WriteNumber("exact_observed", coverage.ExactObserved);
+        w.WriteNumber("exact_available", coverage.ExactAvailable);
+        w.WriteNumber("exact_returned", coverage.ExactReturned);
+        w.WriteNumber("fallback_available", coverage.FallbackAvailable);
+        w.WriteNumber("fallback_returned", coverage.FallbackReturned);
+        w.WriteNumber("same_name_definition_count", coverage.SameNameDefinitionCount);
+        w.WriteBoolean("exact_truncated", coverage.ExactTruncated);
+        w.WriteBoolean("fallback_truncated", coverage.FallbackTruncated);
+        w.WriteString("fallback_status", FallbackStatusLabel(coverage.FallbackStatus));
+        w.WriteEndObject();
+    }
+
+    private static string FallbackStatusLabel(ReferenceFallbackStatus status) => status switch
+    {
+        ReferenceFallbackStatus.NoCandidates => "no_candidates",
+        ReferenceFallbackStatus.Available => "available",
+        ReferenceFallbackStatus.SuppressedAmbiguousName => "suppressed_ambiguous_name",
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, null),
+    };
 
     private static string RenderBridgeJson(
         BridgeGraph graph, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
@@ -2134,24 +2371,44 @@ public sealed class TraceTool
         w.WriteEndObject();
     }
 
-    private static void WriteReference(ISymbolLookupIndex index, Utf8JsonWriter w, SymbolRef reference)
+    private static void WriteReference(
+        ISymbolLookupIndex index,
+        Utf8JsonWriter w,
+        ReferenceEvidence reference,
+        string? fallbackName)
     {
+        string? name = reference.TargetSymbolId is null
+            ? fallbackName
+            : index.FindBySymbolId(reference.TargetSymbolId)?.Name ?? fallbackName;
         w.WriteStartObject();
-        w.WriteString("name", reference.Name);
-        w.WriteString("kind", reference.Kind);
+        if (name is null) w.WriteNull("name"); else w.WriteString("name", name);
+        w.WriteString("target_symbol_id", reference.TargetSymbolId);
+        w.WriteString("kind", reference.SourceKind);
+        w.WriteString("canonical_kind", reference.Kind.ToString());
         w.WriteString("file", reference.FilePath);
-        w.WriteNumber("line", reference.StartLine);
+        if (reference.StartLine is null) w.WriteNull("line"); else w.WriteNumber("line", reference.StartLine.Value);
+        if (reference.StartColumn is null) w.WriteNull("column"); else w.WriteNumber("column", reference.StartColumn.Value);
+        if (reference.EndLine is null) w.WriteNull("end_line"); else w.WriteNumber("end_line", reference.EndLine.Value);
+        if (reference.EndColumn is null) w.WriteNull("end_column"); else w.WriteNumber("end_column", reference.EndColumn.Value);
+        if (reference.StartByte is null) w.WriteNull("start_byte"); else w.WriteNumber("start_byte", reference.StartByte.Value);
+        if (reference.EndByte is null) w.WriteNull("end_byte"); else w.WriteNumber("end_byte", reference.EndByte.Value);
         if (reference.ContainingSymbolId is null)
             w.WriteNull("containing_symbol_id");
         else
             w.WriteString("containing_symbol_id", reference.ContainingSymbolId);
-        // Additive: the resolved enclosing symbol name next to the chainable id. Null when absent or unresolvable.
         if (reference.ContainingSymbolId is { } containingId &&
             index.FindBySymbolId(containingId) is { } containing)
             w.WriteString("containing_symbol_name", containing.Name);
         else
             w.WriteNull("containing_symbol_name");
-        w.WriteString("confidence", "name_based");
+        w.WriteString("resolution_status",
+            reference.ResolutionStatus == ReferenceResolutionStatus.Exact ? "exact" : "fallback");
+        w.WriteString("source", EvidenceSourceLabel(reference.Source));
+        if (reference.ResolutionTier is null)
+            w.WriteNull("resolution_tier");
+        else
+            w.WriteNumber("resolution_tier", reference.ResolutionTier.Value);
+        w.WriteNumber("confidence", reference.Confidence);
         w.WriteEndObject();
     }
 

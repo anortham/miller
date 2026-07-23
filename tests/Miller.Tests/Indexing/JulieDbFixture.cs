@@ -890,10 +890,7 @@ internal sealed class JulieDbFixture : IDisposable
     public const string UserServiceId = "a1b2c3d4e5f600112233445566778899";
 
     /// <summary>
-    /// A fixture wired for the M2 inspect/ExtractReader tests: GetUser carries doc_comment + visibility +
-    /// body byte/line spans into <see cref="UserServiceContent"/>; identifiers record two name-based refs to
-    /// GetUser (in two enclosing symbols) and one call FROM GetUser to a helper (callee). DeleteUser carries
-    /// NULL body spans (the graceful-degradation case). workspace_id drives the artifact identity keys.
+    /// A fixture wired for inspect and ExtractReader tests with exact inbound and outgoing reference targets.
     /// </summary>
     public static JulieDbFixture CreateForInspect()
     {
@@ -934,14 +931,15 @@ internal sealed class JulieDbFixture : IDisposable
 
         var identifiers = new[]
         {
-            // Two name-based refs to "GetUser": one inside Controller, one inside Find's file (top-level).
             new IdentifierRow("f100000000000000000000000000000a", "GetUser", "call", "csharp",
-                "web/Controller.cs", 4, "ee001122334455667788990a1b2c3d4e"),
+                "web/Controller.cs", 4, "ee001122334455667788990a1b2c3d4e")
+                { TargetSymbolId = GetUserId },
             new IdentifierRow("f100000000000000000000000000000b", "GetUser", "call", "csharp",
-                "auth/Repo.cs", 9, "dd001122334455667788990a1b2c3d4e"),
-            // A call FROM GetUser to "Find" (callee one-hop): containing_symbol_id == GetUser, kind 'call'.
+                "auth/Repo.cs", 9, "dd001122334455667788990a1b2c3d4e")
+                { TargetSymbolId = GetUserId },
             new IdentifierRow("f100000000000000000000000000000c", "Find", "call", "csharp",
-                "auth/UserService.cs", 3, GetUserId),
+                "auth/UserService.cs", 3, GetUserId)
+                { TargetSymbolId = "dd001122334455667788990a1b2c3d4e" },
         };
 
         var content = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -1001,7 +999,7 @@ internal sealed class JulieDbFixture : IDisposable
     /// defines a HOMONYM <c>Total</c> method; its def is a symbol, not an identifier, so it surfaces via
     /// <c>ReadEditSpan</c>, while the name-based identifier sites are what <c>ReadIdentifierSites</c> returns.
     /// </summary>
-    public static JulieDbFixture CreateForEdit()
+    public static JulieDbFixture CreateForEdit(bool resolveReferenceTargets = false)
     {
         var rows = new[]
         {
@@ -1041,15 +1039,19 @@ internal sealed class JulieDbFixture : IDisposable
         {
             // orders/OrderService.cs: the method-header name token [41,46) and the i.Total access [80,85).
             new IdentifierRow("d100000000000000000000000000000a", "Total", "member_access", "csharp",
-                "orders/OrderService.cs", 2, TotalMethodId) { StartByte = 41, EndByte = 46 },
+                "orders/OrderService.cs", 2, TotalMethodId)
+                { StartByte = 41, EndByte = 46, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
             new IdentifierRow("d100000000000000000000000000000b", "Total", "member_access", "csharp",
-                "orders/OrderService.cs", 3, TotalMethodId) { StartByte = 80, EndByte = 85 },
+                "orders/OrderService.cs", 3, TotalMethodId)
+                { StartByte = 80, EndByte = 85, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
             // billing/Invoice.cs: the genuine o.Total() call [71,76).
             new IdentifierRow("d100000000000000000000000000000c", "Total", "call", "csharp",
-                "billing/Invoice.cs", 3, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00") { StartByte = 71, EndByte = 76 },
+                "billing/Invoice.cs", 3, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00")
+                { StartByte = 71, EndByte = 76, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
             // unicode/Café.cs: a call at BYTE offset 31 (char offset would be 30 — the é shifts it).
             new IdentifierRow("d100000000000000000000000000000d", "Total", "call", "csharp",
-                "unicode/Café.cs", 2, null) { StartByte = 31, EndByte = 36 },
+                "unicode/Café.cs", 2, null)
+                { StartByte = 31, EndByte = 36, TargetSymbolId = resolveReferenceTargets ? TotalMethodId : null },
         };
 
         var content = new Dictionary<string, string>(StringComparer.Ordinal)

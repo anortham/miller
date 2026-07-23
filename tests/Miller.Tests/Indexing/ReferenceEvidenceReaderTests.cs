@@ -11,6 +11,14 @@ public sealed class ReferenceEvidenceReaderTests
     private const string FirstCallerId = "20000000000000000000000000000001";
     private const string SecondCallerId = "20000000000000000000000000000002";
 
+    [Theory]
+    [InlineData("import")]
+    [InlineData("imports")]
+    public void NormalizeKind_RecognizesSingularAndRelationshipImportKinds(string kind)
+    {
+        Assert.Equal(ReferenceKind.Import, ReferenceEvidenceReader.NormalizeKind(kind));
+    }
+
     [Fact]
     public void Read_SameNameDefinitions_HaveDisjointExactReferenceSets()
     {
@@ -364,6 +372,39 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
+    public void Read_TiedInboundRowsChooseContainingSymbolDeterministically()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(FirstCallerId, "FirstCaller", "method", "csharp", "src/Caller.cs", "void FirstCaller()", 1, null),
+                new(SecondCallerId, "SecondCaller", "method", "csharp", "src/Caller.cs", "void SecondCaller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-second", "Run", "call", "csharp", "src/Caller.cs", 12, SecondCallerId)
+                {
+                    TargetSymbolId = FirstTargetId,
+                },
+                new("identifier-first", "Run", "call", "csharp", "src/Caller.cs", 12, FirstCallerId)
+                {
+                    TargetSymbolId = FirstTargetId,
+                },
+            ]);
+
+        var result = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            FirstTargetId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        Assert.Equal(
+            [FirstCallerId, SecondCallerId],
+            result.Exact.Select(reference => reference.ContainingSymbolId));
+    }
+
+    [Fact]
     public void Read_IdentifierResolution_PropagatesResolutionTier()
     {
         using var fixture = JulieDbFixture.Create(
@@ -416,6 +457,168 @@ public sealed class ReferenceEvidenceReaderTests
         Assert.Empty(result.Fallback);
         Assert.Equal(0, result.Coverage.FallbackAvailable);
         Assert.Equal(ReferenceFallbackStatus.NoCandidates, result.Coverage.FallbackStatus);
+    }
+
+    [Fact]
+    public void ReadOutgoing_SeparatesResolvedTargetsFromUnresolvedFallback()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/First.cs", "void Run()", 1, null),
+                new(SecondTargetId, "Run", "method", "csharp", "src/Second.cs", "void Run()", 1, null),
+                new(FirstCallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-direct", "Run", "call", "csharp", "src/Caller.cs", 10, FirstCallerId)
+                {
+                    StartByte = 100,
+                    EndByte = 103,
+                    TargetSymbolId = FirstTargetId,
+                },
+                new("identifier-overlay", "Run", "call", "csharp", "src/Caller.cs", 11, FirstCallerId)
+                {
+                    StartByte = 110,
+                    EndByte = 113,
+                },
+                new("identifier-unresolved", "Missing", "call", "csharp", "src/Caller.cs", 12, FirstCallerId)
+                {
+                    StartByte = 120,
+                    EndByte = 127,
+                },
+            ]);
+        fixture.AddIdentifierResolution("identifier-overlay", SecondTargetId, tier: 2, confidence: 0.8);
+
+        var result = ReferenceEvidenceReader.ReadOutgoing(
+            fixture.DbPath,
+            FirstCallerId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        Assert.Collection(
+            result.Exact,
+            row =>
+            {
+                Assert.Equal(FirstTargetId, row.TargetSymbolId);
+                Assert.Equal("Run", row.TargetName);
+                Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, row.Source);
+                Assert.Equal(ReferenceResolutionStatus.Exact, row.ResolutionStatus);
+            },
+            row =>
+            {
+                Assert.Equal(SecondTargetId, row.TargetSymbolId);
+                Assert.Equal("Run", row.TargetName);
+                Assert.Equal(ReferenceEvidenceSource.IdentifierResolution, row.Source);
+                Assert.Equal(2, row.ResolutionTier);
+                Assert.Equal(0.8, row.Confidence);
+            });
+
+        var unresolved = Assert.Single(result.Fallback);
+        Assert.Null(unresolved.TargetSymbolId);
+        Assert.Equal("Missing", unresolved.TargetName);
+        Assert.Equal(ReferenceEvidenceSource.NameFallback, unresolved.Source);
+        Assert.Equal(ReferenceResolutionStatus.Fallback, unresolved.ResolutionStatus);
+        Assert.Equal(2, result.Coverage.ExactAvailable);
+        Assert.Equal(1, result.Coverage.FallbackAvailable);
+    }
+
+    [Fact]
+    public void ReadOutgoing_BoundsExactAndFallbackSeparately()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "First", "method", "csharp", "src/First.cs", "void First()", 1, null),
+                new(SecondTargetId, "Second", "method", "csharp", "src/Second.cs", "void Second()", 1, null),
+                new(FirstCallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-first", "First", "call", "csharp", "src/Caller.cs", 10, FirstCallerId)
+                {
+                    TargetSymbolId = FirstTargetId,
+                },
+                new("identifier-second", "Second", "call", "csharp", "src/Caller.cs", 11, FirstCallerId)
+                {
+                    TargetSymbolId = SecondTargetId,
+                },
+                new("identifier-missing-one", "MissingOne", "call", "csharp", "src/Caller.cs", 12, FirstCallerId),
+                new("identifier-missing-two", "MissingTwo", "call", "csharp", "src/Caller.cs", 13, FirstCallerId),
+            ]);
+
+        var result = ReferenceEvidenceReader.ReadOutgoing(
+            fixture.DbPath,
+            FirstCallerId,
+            new ReferenceEvidenceBounds(ExactLimit: 1, FallbackLimit: 1));
+
+        Assert.Single(result.Exact);
+        Assert.Single(result.Fallback);
+        Assert.Equal(2, result.Coverage.ExactAvailable);
+        Assert.Equal(2, result.Coverage.FallbackAvailable);
+        Assert.True(result.Coverage.ExactTruncated);
+        Assert.True(result.Coverage.FallbackTruncated);
+    }
+
+    [Fact]
+    public void Read_UsesIdentifierEvidenceWhenRelationshipProjectionIsUnavailable()
+    {
+        using var fixture = JulieDbFixture.CreateForInspect();
+        SqliteFixtureMutator.DropRelationshipsTable(fixture.DbPath);
+
+        ReferenceEvidenceSet inbound = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            JulieDbFixture.GetUserId,
+            new ReferenceEvidenceBounds(10, 10));
+        OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
+            fixture.DbPath,
+            JulieDbFixture.GetUserId,
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(10, 10),
+                ReferenceKind.Call));
+
+        Assert.Equal(2, inbound.Exact.Count);
+        OutgoingReferenceEvidence callee = Assert.Single(outgoing.Exact);
+        Assert.Equal("dd001122334455667788990a1b2c3d4e", callee.TargetSymbolId);
+        Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, callee.Source);
+    }
+
+    [Fact]
+    public void Read_RelationshipEvidenceSurvivesMissingLanguageProjectionRow()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(FirstCallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            relationships:
+            [
+                new("relationship-orphan-file", FirstCallerId, FirstTargetId, "calls")
+                {
+                    FilePath = "src/Caller.cs",
+                    StartLine = 12,
+                    StartColumn = 4,
+                },
+            ]);
+        fixture.ExecuteWrite("""
+            DELETE FROM files
+            WHERE file_id = (
+                SELECT file_id
+                FROM relationships
+                WHERE relationship_id = 'relationship-orphan-file');
+            """);
+
+        var result = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            FirstTargetId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        var reference = Assert.Single(result.Exact);
+        Assert.Equal(ReferenceEvidenceSource.Relationship, reference.Source);
+        Assert.Null(reference.Language);
     }
 
     [Theory]

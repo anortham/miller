@@ -142,9 +142,11 @@ public sealed class LiveEditTests
             var renameResult = service2.Execute(new EditRequest("rename_symbol", "OrderService.Total")
             {
                 NewText = "GrandTotal",
+                RenameMode = "include_fallback",
                 Apply = true,
             });
             Assert.True(renameResult.Applied, renameResult.Output);
+            Assert.Contains("mode=include_fallback", renameResult.Output, StringComparison.Ordinal);
 
             // The def in OrderService.cs AND the cross-file call in CallSite.cs are both rewritten.
             Assert.Contains("GrandTotal", File.ReadAllText(Path.Combine(repo, "OrderService.cs")));

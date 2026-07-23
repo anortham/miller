@@ -67,11 +67,9 @@ public sealed record RenamePlan
 }
 
 /// <summary>
-/// Pure planner for a workspace-wide, exact-span, name-matched rename (M6 decision log #5, Components/1).
-/// Given the old/new names and the per-file occurrence sites the Server read from julie's <c>identifiers</c>
-/// table, it produces one <see cref="PlannedEdit"/> per file (each site → a <see cref="TextEdit"/> rewriting
-/// that exact byte token to the new name) plus a preview summary listing every site. The planner does not resolve
-/// or filter sites; it validates the new name and rewrites exactly what its caller supplies.
+/// Pure planner for an exact-span workspace rename.
+/// The server resolves and validates target-proven sites before calling this planner. The planner rewrites exactly
+/// those supplied byte spans, validates the new name, and returns one <see cref="PlannedEdit"/> per changed file.
 /// </summary>
 public static class RenamePlanner
 {

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from benchlib.scoring import _detect_trace_outcome, score_workflow_anchors
+from benchlib.scoring import _detect_trace_outcome, _reference_count, score_workflow_anchors
 
 
 def load_bench_foundation_matrix():
@@ -57,6 +57,17 @@ class BenchScoringTests(unittest.TestCase):
         self.assertFalse(scored["output_chars_within_limit"])
         self.assertEqual(20, scored["max_output_chars"])
         self.assertIn("output_chars_exceeded", {item["type"] for item in scored["diagnostics"]})
+
+    def test_reference_count_accepts_exact_and_fallback_sections(self) -> None:
+        text = """# trace refs Target (2 reference(s), exact=1, fallback=1)
+exact:
+  src/Exact.cs:10  call  in=Caller  [exact source=identifier_direct confidence=1.00]
+fallback (unresolved):
+  src/Fallback.cs:20  call  [fallback source=name_fallback confidence=0.50]
+next: impact target="Target" — before editing
+"""
+
+        self.assertEqual(2, _reference_count(text))
 
 
 if __name__ == "__main__":

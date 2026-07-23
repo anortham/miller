@@ -73,6 +73,13 @@ public sealed partial class SmartTargetResolver
         if (target.Contains('/') || target.Contains('\\'))
             return new TargetResolution.File(Index.ResolveIndexedFilePath(target) ?? target);
 
+        if (TryNormalizeColonQualifiedMember(target, out string qualifiedTarget))
+        {
+            TargetResolution qualified = ResolveByName(qualifiedTarget, scope);
+            if (qualified is not TargetResolution.NotFound)
+                return qualified;
+        }
+
         // Rule 2: id shape (32-hex MD5 | contains '::' | starts 'file_') → use directly, no name search.
         if (LooksLikeSymbolId(target))
         {
@@ -97,8 +104,13 @@ public sealed partial class SmartTargetResolver
 
     private TargetResolution ResolveAsSymbol(string target, string? scope)
     {
-        // as=symbol: an id shape is still used directly; anything else is a NAME lookup (bypassing the
-        // file-path heuristic so a path-shaped string is treated as a name).
+        if (TryNormalizeColonQualifiedMember(target, out string qualifiedTarget))
+        {
+            TargetResolution qualified = ResolveByName(qualifiedTarget, scope);
+            if (qualified is not TargetResolution.NotFound)
+                return qualified;
+        }
+
         if (LooksLikeSymbolId(target))
         {
             var byId = Index.FindBySymbolId(target);
@@ -107,6 +119,20 @@ public sealed partial class SmartTargetResolver
                 : new TargetResolution.NotFound(target);
         }
         return ResolveByName(target, scope);
+    }
+
+    private static bool TryNormalizeColonQualifiedMember(string target, out string normalized)
+    {
+        normalized = target;
+        if (!target.Contains("::", StringComparison.Ordinal))
+            return false;
+
+        string[] parts = target.Split("::", StringSplitOptions.None);
+        if (parts.Length < 2 || parts.Any(string.IsNullOrWhiteSpace))
+            return false;
+
+        normalized = string.Join('.', parts);
+        return true;
     }
 
     private TargetResolution ResolveByName(string name, string? scope)
@@ -243,16 +269,36 @@ public sealed partial class SmartTargetResolver
 
         string parentName = name[..lastDot];
         string memberName = name[(lastDot + 1)..];
-        string expectedParent = parentName.Contains('.')
-            ? parentName[(parentName.LastIndexOf('.') + 1)..]
-            : parentName;
+        string[] expectedAncestors = parentName.Split(
+            '.',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         var members = ScopeMatches(Index.FindByName(memberName), scope);
         return members
             .Where(s => s.ParentId is { } parentId
-                        && Index.FindBySymbolId(parentId) is { } parent
-                        && string.Equals(parent.Name, expectedParent, StringComparison.Ordinal))
+                        && AncestorPathMatches(parentId, expectedAncestors))
             .ToList();
+    }
+
+    private bool AncestorPathMatches(string parentId, IReadOnlyList<string> expectedAncestors)
+    {
+        string currentId = parentId;
+        for (int index = expectedAncestors.Count - 1; index >= 0; index--)
+        {
+            if (Index.FindBySymbolId(currentId) is not { } ancestor
+                || !string.Equals(ancestor.Name, expectedAncestors[index], StringComparison.Ordinal))
+                return false;
+
+            if (index > 0)
+            {
+                if (ancestor.ParentId is not { } ancestorParentId)
+                    return false;
+
+                currentId = ancestorParentId;
+            }
+        }
+
+        return expectedAncestors.Count > 0;
     }
 
     private static IReadOnlyList<IndexedSymbol> ScopeMatches(IReadOnlyList<IndexedSymbol> matches, string? scope)

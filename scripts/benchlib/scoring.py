@@ -587,7 +587,7 @@ def _reference_count(text: str) -> int:
     count = 0
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped == "references:":
+        if stripped in {"references:", "exact:", "fallback (unresolved):"}:
             in_references = True
             continue
         if not in_references:

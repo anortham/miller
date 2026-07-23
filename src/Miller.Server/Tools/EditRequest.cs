@@ -41,6 +41,9 @@ public sealed record EditRequest(string Operation, string Target)
     /// <summary>Disambiguate an ambiguous symbol name to a file (passed through to the resolver).</summary>
     public string? Scope { get; init; }
 
+    /// <summary>rename_symbol safety mode: exact | include_fallback. Default exact.</summary>
+    public string RenameMode { get; init; } = "exact";
+
     /// <summary>Output format: compact | json. Default compact.</summary>
     public string Format { get; init; } = "compact";
 }

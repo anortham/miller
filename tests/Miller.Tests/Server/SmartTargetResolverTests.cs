@@ -493,6 +493,57 @@ public sealed class SmartTargetResolverTests
         Assert.Equal("src/Miller.Server/Tools/WorkspaceTool.cs", sym.Value.FilePath);
     }
 
+    [Theory]
+    [InlineData("WorkspaceTool.ResolveTarget")]
+    [InlineData("WorkspaceTool::ResolveTarget")]
+    public void Resolve_QualifiedMember_SyntaxPrecedesSymbolIdHeuristic(string target)
+    {
+        using var fx = JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, new[]
+        {
+            new JulieDbFixture.SymbolRow("aa11223344556677889900aabbccddee", "WorkspaceTool", "class", "csharp",
+                "src/Miller.Server/Tools/WorkspaceTool.cs", "public sealed class WorkspaceTool", 31, null),
+            new JulieDbFixture.SymbolRow("bb11223344556677889900aabbccddee", "ResolveTarget", "method", "csharp",
+                "src/Miller.Server/Tools/WorkspaceTool.cs", "private TargetWorkspace ResolveTarget()", 592,
+                "aa11223344556677889900aabbccddee"),
+        });
+        var resolver = new SmartTargetResolver(BuildIndex(fx));
+
+        var result = Assert.IsType<TargetResolution.Symbol>(resolver.Resolve(target));
+
+        Assert.Equal("bb11223344556677889900aabbccddee", result.Value.SymbolId);
+    }
+
+    [Theory]
+    [InlineData("Ns1.Widget.Render")]
+    [InlineData("Ns1::Widget::Render")]
+    public void Resolve_FullyQualifiedMember_UsesTheWholeAncestorPath(string target)
+    {
+        const string firstNamespaceId = "aa11223344556677889900aabbccd101";
+        const string firstTypeId = "aa11223344556677889900aabbccd102";
+        const string firstMethodId = "aa11223344556677889900aabbccd103";
+        const string secondNamespaceId = "aa11223344556677889900aabbccd201";
+        const string secondTypeId = "aa11223344556677889900aabbccd202";
+        const string secondMethodId = "aa11223344556677889900aabbccd203";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(firstNamespaceId, "Ns1", "namespace", "csharp", "src/Ns1.cs", "namespace Ns1", 1, null),
+                new(firstTypeId, "Widget", "class", "csharp", "src/Ns1.cs", "class Widget", 2, firstNamespaceId),
+                new(firstMethodId, "Render", "method", "csharp", "src/Ns1.cs", "void Render()", 3, firstTypeId),
+                new(secondNamespaceId, "Ns2", "namespace", "csharp", "src/Ns2.cs", "namespace Ns2", 1, null),
+                new(secondTypeId, "Widget", "class", "csharp", "src/Ns2.cs", "class Widget", 2, secondNamespaceId),
+                new(secondMethodId, "Render", "method", "csharp", "src/Ns2.cs", "void Render()", 3, secondTypeId),
+            ]);
+        var resolver = new SmartTargetResolver(BuildIndex(fixture));
+
+        var result = resolver.Resolve(target);
+
+        Assert.Equal(
+            firstMethodId,
+            Assert.IsType<TargetResolution.Symbol>(result).Value.SymbolId);
+    }
+
     [Fact]
     public void Resolve_AsFile_ForcesNameLikeStringToFile()
     {

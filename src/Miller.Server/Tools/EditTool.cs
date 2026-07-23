@@ -82,6 +82,8 @@ public sealed class EditTool
         [Description("Set true to commit the edit to disk. Default false (preview a diff and write nothing).")] bool apply = false,
         [Description("Bypass the index-stale refusal for the target file. Default false.")] bool allow_stale = false,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
+        [Description("rename_symbol safety: exact (default) or include_fallback (explicit name-based fallback).")]
+        string rename_mode = "exact",
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
     {
         var telemetry = TelemetryContext.Current;
@@ -99,6 +101,7 @@ public sealed class EditTool
                 Apply = apply,
                 AllowStale = allow_stale,
                 Scope = scope,
+                RenameMode = rename_mode,
                 Format = format,
             };
 
@@ -110,6 +113,8 @@ public sealed class EditTool
                 telemetry.SetMetadata("apply", apply);
                 telemetry.SetMetadata("allow_stale", allow_stale);
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
+                telemetry.SetMetadata("rename_mode",
+                    string.IsNullOrWhiteSpace(rename_mode) ? "exact" : rename_mode.Trim().ToLowerInvariant());
                 telemetry.SetMetadata("match_mode", string.IsNullOrWhiteSpace(match_mode) ? "auto" : match_mode.Trim().ToLowerInvariant());
                 telemetry.SetMetadata("has_query", !string.IsNullOrEmpty(query));
                 telemetry.SetMetadata("has_anchor", !string.IsNullOrEmpty(anchor));

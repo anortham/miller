@@ -177,7 +177,8 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 7. Refuse a supposedly exact workspace rename when coverage is incomplete unless the caller explicitly selects labeled fallback behavior.
 8. Preserve atomic multi-file apply and rollback.
 9. Add a compact post-apply hint to run `impact` and the selected tests.
-10. Mark `trace auto` deprecated in guidance and telemetry; keep a compatibility alias until the final release decision.
+10. Remove `trace auto` from MCP, CLI, guidance, telemetry, contracts, implementation, and tests; default trace to
+    exact `refs`, and route callers/callees to `inspect depth=full`.
 
 ### Gate
 

@@ -1113,7 +1113,7 @@ public sealed class EditToolTests : IDisposable
     [Fact]
     public void Execute_RenameSymbol_StaleFile_InlineRecoveryConverges_ThenApplies()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         LayFiles(EditFixtureFiles);
         // Drift ONE of the three rename-touched files by appending (sites' byte spans stay valid).
         File.WriteAllText(AbsPath("billing/Invoice.cs"),
@@ -1173,7 +1173,7 @@ public sealed class EditToolTests : IDisposable
     [Fact]
     public void Execute_RenameSymbol_PrependDrift_RecoveryConverges_RewritesAtConvergedOffsets()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         LayFiles(EditFixtureFiles);
         // Same prepend-drift hazard for the rename path: the identifier sites were read from the PRE-recovery
         // index, so after a successful recovery the plan must be rebuilt from the converged sites.
@@ -1325,9 +1325,9 @@ public sealed class EditToolTests : IDisposable
     // ---- workspace-wide rename (the differentiator) ----
 
     [Fact]
-    public void Execute_RenameSymbol_DryRun_ListsEverySite_GroupedByFile_NameBasedNote_NoWrite()
+    public void Execute_RenameSymbol_DryRun_ListsExactSitesAndCoverage_NoWrite()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 
@@ -1337,19 +1337,247 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
-        // Preview surfaces the name-based-match caveat and lists sites across files.
-        Assert.Contains("name-based", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("mode=exact", result.Output, StringComparison.Ordinal);
+        Assert.Contains("exact sites:", result.Output, StringComparison.Ordinal);
         Assert.Contains("orders/OrderService.cs", result.Output);
-        Assert.Contains("billing/Invoice.cs", result.Output);   // the homonym call site IS listed
-        Assert.Contains("unicode/Café.cs", result.Output);      // the UTF-8 site too
-        // Nothing written.
+        Assert.Contains("billing/Invoice.cs", result.Output);
+        Assert.Contains("unicode/Café.cs", result.Output);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
     [Fact]
-    public void Execute_RenameSymbol_Apply_RewritesEveryByteToken_AcrossFiles_IncludingDefAndHomonym()
+    public void Execute_RenameSymbol_ExactMode_DeduplicatesMultipleExactFactsForOneToken()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            INSERT INTO identifiers (
+                identifier_id, file_id, path, language, name, kind,
+                start_line, start_column, end_line, end_column,
+                start_byte, end_byte, confidence, containing_symbol_id, target_symbol_id)
+            SELECT
+                'd100000000000000000000000000000e', file_id, path, language, name, 'call',
+                start_line, start_column, end_line, end_column,
+                start_byte, end_byte, confidence, containing_symbol_id, target_symbol_id
+            FROM identifiers
+            WHERE identifier_id = 'd100000000000000000000000000000a';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ok", result.Outcome);
+        Assert.DoesNotContain("without usable byte spans", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_DefaultExactMode_RefusesIncompleteCoverage()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = NULL
+            WHERE identifier_id = 'd100000000000000000000000000000d';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("error", result.Outcome);
+        Assert.Contains("incomplete exact reference coverage", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rename_mode=include_fallback", result.Output, StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.CafeContent, File.ReadAllText(AbsPath("unicode/Café.cs")));
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_IncludeFallback_LabelsExactFallbackAndCoverage()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = NULL
+            WHERE identifier_id = 'd100000000000000000000000000000d';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            RenameMode = "include_fallback",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ok", result.Outcome);
+        Assert.Contains("exact sites:", result.Output, StringComparison.Ordinal);
+        Assert.Contains("fallback sites (name-based, may include homonyms):", result.Output, StringComparison.Ordinal);
+        Assert.Contains("unicode/Café.cs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("csharp/call", result.Output, StringComparison.Ordinal);
+        Assert.Contains("csharp/member_access", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_ExactMode_ExcludesResolvedHomonymSites()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = 'ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100'
+            WHERE identifier_id = 'd100000000000000000000000000000c';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ok", result.Outcome);
+        Assert.DoesNotContain("billing/Invoice.cs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("orders/OrderService.cs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("unicode/Café.cs", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_IncludeFallback_ExcludesResolvedHomonymSites()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = 'ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100'
+            WHERE identifier_id = 'd100000000000000000000000000000c';
+
+            UPDATE identifiers
+            SET target_symbol_id = NULL
+            WHERE identifier_id = 'd100000000000000000000000000000d';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            RenameMode = "include_fallback",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ok", result.Outcome);
+        Assert.DoesNotContain("billing/Invoice.cs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("orders/OrderService.cs", result.Output, StringComparison.Ordinal);
+        Assert.Contains("unicode/Café.cs", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_DefinitionSelectsDeclarationNameAfterReturnType()
+    {
+        const string path = "Palette.cs";
+        const string content = """
+            public sealed class Palette
+            {
+                public Color Color { get; }
+            }
+            """;
+        int propertyStart = content.IndexOf("public Color", StringComparison.Ordinal);
+        int propertyEnd = content.IndexOf("{ get; }", propertyStart, StringComparison.Ordinal) + "{ get; }".Length;
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow(
+                "11000000000000000000000000000001",
+                "Palette",
+                "class",
+                "csharp",
+                path,
+                "public sealed class Palette",
+                1,
+                null)
+            {
+                StartByte = 0,
+                EndByte = content.Length,
+            },
+            new JulieDbFixture.SymbolRow(
+                "11000000000000000000000000000002",
+                "Color",
+                "property",
+                "csharp",
+                path,
+                "public Color Color",
+                3,
+                "11000000000000000000000000000001")
+            {
+                StartByte = propertyStart,
+                EndByte = propertyEnd,
+            },
+        };
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [path] = content,
+        };
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows,
+            fileContent: files);
+        LayFiles(files);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "Palette.Color") with
+        {
+            NewText = "Shade",
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        Assert.Contains("public Color Shade", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Shade Color", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_Json_SeparatesExactAndFallbackEvidence()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = NULL
+            WHERE identifier_id = 'd100000000000000000000000000000d';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            RenameMode = "include_fallback",
+            Format = "json",
+        });
+
+        using var doc = JsonDocument.Parse(result.Output);
+        JsonElement evidence = doc.RootElement.GetProperty("rename_evidence");
+        Assert.Equal("include_fallback", evidence.GetProperty("mode").GetString());
+        Assert.Equal(3, evidence.GetProperty("exact_sites").GetArrayLength());
+        JsonElement fallback = Assert.Single(evidence.GetProperty("fallback_sites").EnumerateArray());
+        Assert.Equal("unicode/Café.cs", fallback.GetProperty("file").GetString());
+        Assert.Equal("name_based", fallback.GetProperty("source").GetString());
+        Assert.Equal("fallback", fallback.GetProperty("resolution_status").GetString());
+        Assert.Contains(evidence.GetProperty("coverage").EnumerateArray(), row =>
+            row.GetProperty("language").GetString() == "csharp"
+            && row.GetProperty("kind").GetString() == "member_access"
+            && row.GetProperty("resolution_status").GetString() == "exact");
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_Apply_RewritesEveryExactTargetSiteAndAddsVerificationHint()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         LayFiles(EditFixtureFiles);
         var (svc, wt) = Build(fx);
 
@@ -1360,22 +1588,22 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.True(result.Applied);
+        Assert.EndsWith(
+            $"next: impact target=\"{JulieDbFixture.TotalMethodId}\" — verify the rename, then run the selected tests",
+            result.Output,
+            StringComparison.Ordinal);
 
-        // orders/OrderService.cs: the def name token (header) + the i.Total access both rewritten.
         string orders = File.ReadAllText(AbsPath("orders/OrderService.cs"));
-        Assert.Contains("public int GrandTotal()", orders); // def name token (located within the signature span)
-        Assert.Contains("i => i.GrandTotal", orders);        // identifier site
+        Assert.Contains("public int GrandTotal()", orders);
+        Assert.Contains("i => i.GrandTotal", orders);
 
-        // billing/Invoice.cs: the genuine o.Total() call rewritten (name-based — homonym included).
         string invoice = File.ReadAllText(AbsPath("billing/Invoice.cs"));
         Assert.Contains("o.GrandTotal()", invoice);
 
-        // unicode/Café.cs: the UTF-8 site rewritten (byte-exact splice past the accent).
         string cafe = File.ReadAllText(AbsPath("unicode/Café.cs"));
         Assert.Contains("GrandTotal()", cafe);
-        Assert.StartsWith("// café configuration\n", cafe); // the accented comment line is intact
+        Assert.StartsWith("// café configuration\n", cafe);
 
-        // Write-through converged each changed file (3 files).
         Assert.Equal(3, wt.Converged.Count);
         Assert.Contains(AbsPath("orders/OrderService.cs"), wt.Converged);
         Assert.Contains(AbsPath("billing/Invoice.cs"), wt.Converged);
@@ -1385,7 +1613,7 @@ public sealed class EditToolTests : IDisposable
     [Fact]
     public void Execute_RenameSymbol_ApplyFails_ReportsFreshnessVerdict_OnFreshWorkspace()
     {
-        using var fx = JulieDbFixture.CreateForEdit();
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         LayFiles(EditFixtureFiles);
 
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));

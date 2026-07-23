@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -14,7 +15,7 @@ namespace Miller.Server.Tools;
 /// <summary>
 /// The <c>inspect</c> tool (M2 §5): view a file or a symbol you can already name (absorbs julie get_symbols +
 /// deep_dive, ~44% of calls). A file path lists the file's symbols; a symbol name shows its definition,
-/// signature and docs; <c>depth=full</c> adds children, name-based references, one-hop callers/callees, and
+/// signature and docs; <c>depth=full</c> adds children, exact references, one-hop callers/callees, and
 /// the body re-sliced from the on-disk file under the workspace root, gated by the content_hash freshness
 /// invariant (a drifted file degrades to a "body unavailable" note, never stale bytes). The resolved cross-ref
 /// graph + bridge are M4, not this. The target is smart-resolved; an ambiguous name returns candidates
@@ -517,42 +518,102 @@ public sealed class InspectTool
             AppendOmittedLine(sb, children.Count, childLimit, "children");
         }
 
-        var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
+        ReferenceEvidenceSet referenceEvidence = ReferenceEvidenceReader.Read(
+            dbPath,
+            sym.SymbolId,
+            new ReferenceEvidenceBounds(relationLimit + 1, relationLimit + 1));
+        IReadOnlyList<ReferenceEvidence> refs = referenceEvidence.Exact;
         if (refs.Count > 0)
         {
             sb.Append("\n## references\n");
-            // Group the (path/line-ordered) refs by file so a file with N reference sites costs one line
-            // (`path:l1,l2,…`) instead of N. Group AFTER Take(relationLimit) so the ref limit/omitted-count
-            // semantics are unchanged — the omitted line still counts underlying refs, not files.
             AppendGroupedReferences(sb, refs.Take(relationLimit));
-            AppendOmittedLine(sb, refs.Count, relationLimit, "refs");
+            AppendOmittedLine(sb, referenceEvidence.Coverage.ExactAvailable, relationLimit, "refs");
         }
 
-        var callers = DistinctCallers(index, refs);
+        if (referenceEvidence.Fallback.Count > 0)
+        {
+            sb.Append("\n## reference fallback (unresolved)\n");
+            AppendGroupedReferences(sb, referenceEvidence.Fallback.Take(relationLimit));
+            AppendOmittedLine(
+                sb,
+                referenceEvidence.Coverage.FallbackAvailable,
+                relationLimit,
+                "fallback refs");
+        }
+        else if (referenceEvidence.Coverage.FallbackStatus ==
+                 ReferenceFallbackStatus.SuppressedAmbiguousName &&
+                 referenceEvidence.Coverage.FallbackAvailable > 0)
+        {
+            sb.Append("\nreference fallback suppressed because the target name is ambiguous (")
+                .Append(referenceEvidence.Coverage.FallbackAvailable)
+                .Append(" unresolved same-name candidate(s)).\n");
+        }
+
+        var callers = ResolveContainingSymbols(
+            index,
+            referenceEvidence.ExactCallerSymbolIds,
+            refs);
         if (callers.Count > 0)
         {
             sb.Append("\n## callers\n");
             foreach (var c in callers.Take(relationLimit))
-                sb.Append(c).Append('\n');
+                sb.Append(c.Name).Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
             AppendOmittedLine(sb, callers.Count, relationLimit, "callers");
         }
 
-        var callees = ExtractReader.ReadCallees(dbPath, sym.SymbolId);
+        var referencedBy = ResolveContainingSymbols(
+            index,
+            referenceEvidence.ExactReferencedBySymbolIds,
+            refs);
+        if (referencedBy.Count > 0)
+        {
+            sb.Append("\n## referenced_by\n");
+            foreach (var reference in referencedBy.Take(relationLimit))
+                sb.Append(reference.Name).Append("  ").Append(reference.FilePath).Append(':')
+                    .Append(reference.StartLine).Append('\n');
+            AppendOmittedLine(sb, referencedBy.Count, relationLimit, "referenced_by");
+        }
+
+        OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
+            dbPath,
+            sym.SymbolId,
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(RefLimit + 1, RefLimit + 1),
+                ReferenceKind.Call));
+        var callees = DistinctCallees(index, outgoing.Exact);
         if (callees.Count > 0)
         {
             sb.Append("\n## callees\n");
-            // Dedup by callee name (first location wins, `×N` when a name recurs) BEFORE the relation limit,
-            // so full depth spends its 50-row budget on distinct callees rather than repeated identifiers.
-            // The omitted-count line counts DISTINCT callees so it can't overstate.
-            var distinctCallees = DistinctCallees(callees);
-            foreach (var c in distinctCallees.Take(relationLimit))
+            foreach (var c in callees.Take(relationLimit))
             {
                 sb.Append(c.Name);
                 if (c.Count > 1)
                     sb.Append(" ×").Append(c.Count);
-                sb.Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
+                sb.Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine)
+                    .Append("  [exact id=").Append(c.TargetSymbolId)
+                    .Append(" source=").Append(EvidenceSourceLabel(c.Source))
+                    .Append(" confidence=")
+                    .Append(c.Confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture))
+                    .Append("]\n");
             }
-            AppendOmittedLine(sb, distinctCallees.Count, relationLimit, "callees");
+            AppendOmittedLine(sb, callees.Count, relationLimit, "callees");
+        }
+
+        var calleeFallback = DistinctFallbackCallees(outgoing.Fallback);
+        if (calleeFallback.Count > 0)
+        {
+            sb.Append("\n## callee fallback (unresolved)\n");
+            foreach (var c in calleeFallback.Take(relationLimit))
+            {
+                sb.Append(c.Name);
+                if (c.Count > 1)
+                    sb.Append(" ×").Append(c.Count);
+                sb.Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine)
+                    .Append("  [fallback source=name_fallback confidence=")
+                    .Append(c.Confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture))
+                    .Append("]\n");
+            }
+            AppendOmittedLine(sb, calleeFallback.Count, relationLimit, "callees (fallback)");
         }
 
         sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
@@ -574,14 +635,8 @@ public sealed class InspectTool
             sb.Append(bodyPage.Text);
         }
 
-        // Delivery-time nudge (compact only; this path is overview/full — summary returned early). Rendered
-        // last, at most once, and only in compact output (JSON shape stays byte-identical). Recovering refs
-        // this render dropped outranks the impact nudge, because that data is otherwise lost from the answer.
-        // Only the RefLimit cap qualifies: the overview cap already advertises depth=full as its recovery, and
-        // firing there would displace the impact nudge on every overview read of a hot symbol. The explicit
-        // limit is load-bearing — trace mode=refs defaults to 20, so a bare call would hand back FEWER refs
-        // than the render that prompted it.
-        bool refsTruncatedAtRefLimit = relationLimit == RefLimit && refs.Count > relationLimit;
+        bool refsTruncatedAtRefLimit =
+            relationLimit == RefLimit && referenceEvidence.Coverage.ExactAvailable > relationLimit;
         string callName = EscapeCallString(sym.Name);
         if (bodyPage is { Truncated: true, Continuation: not null })
         {
@@ -591,10 +646,12 @@ public sealed class InspectTool
         }
         else if (refsTruncatedAtRefLimit)
             sb.Append('\n').Append(NextStepHint.Render(
-                $"trace target=\"{callName}\" mode=refs limit={refs.Count}", "full reference list"));
-        else if (!sym.IsTest && refs.Count >= ImpactHintMinReferences)
+                $"trace target=\"{callName}\" mode=refs limit={referenceEvidence.Coverage.ExactAvailable}",
+                "full reference list"));
+        else if (!sym.IsTest && referenceEvidence.Coverage.ExactAvailable >= ImpactHintMinReferences)
             sb.Append('\n').Append(NextStepHint.Render(
-                $"impact target=\"{callName}\"", $"{refs.Count} dependents"));
+                $"impact target=\"{callName}\"",
+                $"{referenceEvidence.Coverage.ExactAvailable} dependents"));
 
         return sb.ToString().TrimEnd('\n');
     }
@@ -646,36 +703,60 @@ public sealed class InspectTool
                 WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
                     depth == InspectDepth.Overview ? OverviewChildLimit : int.MaxValue));
 
-                var refs = ExtractReader.ReadReferences(dbPath, sym.Name);
+                ReferenceEvidenceSet referenceEvidence = ReferenceEvidenceReader.Read(
+                    dbPath,
+                    sym.SymbolId,
+                    new ReferenceEvidenceBounds(relationLimit, relationLimit));
+                IReadOnlyList<ReferenceEvidence> refs = referenceEvidence.Exact;
                 w.WritePropertyName("refs");
                 w.WriteStartArray();
-                foreach (var r in refs.Take(relationLimit))
-                {
-                    w.WriteStartObject();
-                    w.WriteString("file", r.FilePath);
-                    w.WriteNumber("line", r.StartLine);
-                    w.WriteString("kind", r.Kind);
-                    w.WriteEndObject();
-                }
+                foreach (ReferenceEvidence reference in refs)
+                    WriteInboundReference(w, reference);
                 w.WriteEndArray();
+
+                w.WritePropertyName("reference_fallback");
+                w.WriteStartArray();
+                foreach (ReferenceEvidence reference in referenceEvidence.Fallback)
+                    WriteInboundReference(w, reference);
+                w.WriteEndArray();
+                WriteInboundCoverage(w, referenceEvidence.Coverage);
 
                 w.WritePropertyName("callers");
                 w.WriteStartArray();
-                foreach (var c in DistinctCallers(index, refs).Take(relationLimit))
-                    w.WriteStringValue(c);
+                foreach (var c in ResolveContainingSymbols(
+                             index,
+                             referenceEvidence.ExactCallerSymbolIds,
+                             refs).Take(relationLimit))
+                    w.WriteStringValue(c.Name);
                 w.WriteEndArray();
 
+                w.WritePropertyName("referenced_by");
+                w.WriteStartArray();
+                foreach (var reference in ResolveContainingSymbols(
+                             index,
+                             referenceEvidence.ExactReferencedBySymbolIds,
+                             refs).Take(relationLimit))
+                    w.WriteStringValue(reference.Name);
+                w.WriteEndArray();
+
+                OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
+                    dbPath,
+                    sym.SymbolId,
+                    new ReferenceEvidenceQuery(
+                        new ReferenceEvidenceBounds(relationLimit, relationLimit),
+                        ReferenceKind.Call));
                 w.WritePropertyName("callees");
                 w.WriteStartArray();
-                foreach (var c in ExtractReader.ReadCallees(dbPath, sym.SymbolId).Take(relationLimit))
-                {
-                    w.WriteStartObject();
-                    w.WriteString("name", c.Name);
-                    w.WriteString("file", c.FilePath);
-                    w.WriteNumber("line", c.StartLine);
-                    w.WriteEndObject();
-                }
+                foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
+                    WriteOutgoingReference(w, index, callee);
                 w.WriteEndArray();
+
+                w.WritePropertyName("callee_fallback");
+                w.WriteStartArray();
+                foreach (OutgoingReferenceEvidence callee in outgoing.Fallback)
+                    WriteOutgoingReference(w, index, callee);
+                w.WriteEndArray();
+                WriteOutgoingCoverage(w, outgoing.Coverage);
 
                 var body = detail is null
                     ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
@@ -793,12 +874,7 @@ public sealed class InspectTool
             sb.Append("... ").Append(total - visible).Append(" more ").Append(label).Append(" (use depth=full)\n");
     }
 
-    /// <summary>
-    /// Render a reference list as one <c>path:l1,l2,…</c> line per file, preserving first-seen file order and
-    /// the incoming line order within each file. Refs arrive path/line-ordered from <c>ReadReferences</c>, so a
-    /// file's sites are already contiguous; the insertion-ordered map keeps the output stable regardless.
-    /// </summary>
-    private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<SymbolRef> refs)
+    private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<ReferenceEvidence> refs)
     {
         var order = new List<string>();
         var linesByFile = new Dictionary<string, List<int>>(StringComparer.Ordinal);
@@ -810,37 +886,234 @@ public sealed class InspectTool
                 linesByFile[r.FilePath] = lines;
                 order.Add(r.FilePath);
             }
-            lines.Add(r.StartLine);
+            lines.Add(r.StartLine ?? 0);
         }
         foreach (var file in order)
             sb.Append(file).Append(':').Append(string.Join(',', linesByFile[file])).Append('\n');
     }
 
-    private readonly record struct DistinctCallee(string Name, string FilePath, int StartLine, int Count);
+    private readonly record struct DistinctCallee(
+        string TargetSymbolId,
+        string Name,
+        string FilePath,
+        int StartLine,
+        int Count,
+        ReferenceEvidenceSource Source,
+        double Confidence);
 
-    /// <summary>
-    /// Collapse a callee list to distinct callee names, preserving first occurrence (which also fixes the
-    /// rendered location) and counting recurrences. No name is filtered — <c>nameof</c>/<c>ArgumentException</c>
-    /// still carry information; dedup removes only the repetition cost. The caller applies the relation limit
-    /// AFTER this collapse so full depth shows up to the limit in DISTINCT callees.
-    /// </summary>
-    private static List<DistinctCallee> DistinctCallees(IReadOnlyList<SymbolRef> callees)
+    private readonly record struct DistinctFallbackCallee(
+        string Name,
+        string FilePath,
+        int StartLine,
+        int Count,
+        double Confidence);
+
+    private readonly record struct ContainingSymbol(string SymbolId, string Name, string FilePath, int StartLine);
+
+    private static List<DistinctCallee> DistinctCallees(
+        ISymbolLookupIndex index,
+        IReadOnlyList<OutgoingReferenceEvidence> callees)
     {
-        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        var indexById = new Dictionary<string, int>(StringComparer.Ordinal);
         var result = new List<DistinctCallee>();
         foreach (var c in callees)
         {
-            if (indexByName.TryGetValue(c.Name, out var i))
+            if (c.TargetSymbolId is not { } targetId)
+                continue;
+            if (indexById.TryGetValue(targetId, out var i))
             {
                 result[i] = result[i] with { Count = result[i].Count + 1 };
             }
             else
             {
-                indexByName[c.Name] = result.Count;
-                result.Add(new DistinctCallee(c.Name, c.FilePath, c.StartLine, 1));
+                IndexedSymbol? target = index.FindBySymbolId(targetId);
+                indexById[targetId] = result.Count;
+                result.Add(new DistinctCallee(
+                    targetId,
+                    target?.Name ?? c.TargetName,
+                    target?.FilePath ?? c.FilePath,
+                    target?.StartLine ?? c.StartLine ?? 0,
+                    1,
+                    c.Source,
+                    c.Confidence));
             }
         }
         return result;
+    }
+
+    private static List<DistinctFallbackCallee> DistinctFallbackCallees(
+        IReadOnlyList<OutgoingReferenceEvidence> callees)
+    {
+        var indexByName = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new List<DistinctFallbackCallee>();
+        foreach (var c in callees)
+        {
+            if (indexByName.TryGetValue(c.TargetName, out int index))
+            {
+                result[index] = result[index] with { Count = result[index].Count + 1 };
+                continue;
+            }
+
+            indexByName[c.TargetName] = result.Count;
+            result.Add(new DistinctFallbackCallee(
+                c.TargetName,
+                c.FilePath,
+                c.StartLine ?? 0,
+                1,
+                c.Confidence));
+        }
+        return result;
+    }
+
+    private static List<ContainingSymbol> ResolveContainingSymbols(
+        ISymbolLookupIndex index,
+        IReadOnlyList<string> symbolIds,
+        IReadOnlyList<ReferenceEvidence> displayedReferences)
+    {
+        var result = new List<ContainingSymbol>(symbolIds.Count);
+        foreach (string containingId in symbolIds)
+        {
+            IndexedSymbol? symbol = index.FindBySymbolId(containingId);
+            if (symbol is not null)
+            {
+                result.Add(new ContainingSymbol(
+                    containingId,
+                    symbol.Name,
+                    symbol.FilePath,
+                    symbol.StartLine));
+                continue;
+            }
+
+            ReferenceEvidence? reference = displayedReferences.FirstOrDefault(row =>
+                string.Equals(row.ContainingSymbolId, containingId, StringComparison.Ordinal));
+            result.Add(new ContainingSymbol(
+                containingId,
+                containingId,
+                reference?.FilePath ?? string.Empty,
+                reference?.StartLine ?? 0));
+        }
+        return result;
+    }
+
+    private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch
+    {
+        ReferenceEvidenceSource.IdentifierDirect => "identifier_direct",
+        ReferenceEvidenceSource.IdentifierResolution => "identifier_resolution",
+        ReferenceEvidenceSource.Relationship => "relationship",
+        ReferenceEvidenceSource.PendingResolution => "pending_resolution",
+        ReferenceEvidenceSource.NameFallback => "name_fallback",
+        _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
+    };
+
+    private static string ResolutionStatusLabel(ReferenceResolutionStatus status) =>
+        status == ReferenceResolutionStatus.Exact ? "exact" : "fallback";
+
+    private static void WriteInboundReference(Utf8JsonWriter writer, ReferenceEvidence reference)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("target_symbol_id", reference.TargetSymbolId);
+        writer.WriteString("file", reference.FilePath);
+        WriteNullableNumber(writer, "line", reference.StartLine);
+        WriteNullableNumber(writer, "column", reference.StartColumn);
+        WriteNullableNumber(writer, "end_line", reference.EndLine);
+        WriteNullableNumber(writer, "end_column", reference.EndColumn);
+        WriteNullableNumber(writer, "start_byte", reference.StartByte);
+        WriteNullableNumber(writer, "end_byte", reference.EndByte);
+        writer.WriteString("kind", reference.SourceKind);
+        writer.WriteString("resolution_status", ResolutionStatusLabel(reference.ResolutionStatus));
+        writer.WriteString("source", EvidenceSourceLabel(reference.Source));
+        WriteNullableNumber(writer, "resolution_tier", reference.ResolutionTier);
+        writer.WriteNumber("confidence", reference.Confidence);
+        if (reference.ContainingSymbolId is null)
+            writer.WriteNull("containing_symbol_id");
+        else
+            writer.WriteString("containing_symbol_id", reference.ContainingSymbolId);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteOutgoingReference(
+        Utf8JsonWriter writer,
+        ISymbolLookupIndex index,
+        OutgoingReferenceEvidence reference)
+    {
+        IndexedSymbol? target = reference.TargetSymbolId is null
+            ? null
+            : index.FindBySymbolId(reference.TargetSymbolId);
+        writer.WriteStartObject();
+        if (reference.TargetSymbolId is null)
+            writer.WriteNull("target_symbol_id");
+        else
+            writer.WriteString("target_symbol_id", reference.TargetSymbolId);
+        writer.WriteString("name", target?.Name ?? reference.TargetName);
+        if (target is null)
+        {
+            writer.WriteNull("definition_file");
+            writer.WriteNull("definition_line");
+        }
+        else
+        {
+            writer.WriteString("definition_file", target.FilePath);
+            writer.WriteNumber("definition_line", target.StartLine);
+        }
+        writer.WriteString("site_file", reference.FilePath);
+        WriteNullableNumber(writer, "site_line", reference.StartLine);
+        writer.WriteString("kind", reference.SourceKind);
+        writer.WriteString("resolution_status", ResolutionStatusLabel(reference.ResolutionStatus));
+        writer.WriteString("source", EvidenceSourceLabel(reference.Source));
+        WriteNullableNumber(writer, "resolution_tier", reference.ResolutionTier);
+        writer.WriteNumber("confidence", reference.Confidence);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteInboundCoverage(Utf8JsonWriter writer, ReferenceEvidenceCoverage coverage)
+    {
+        writer.WritePropertyName("reference_coverage");
+        writer.WriteStartObject();
+        writer.WriteNumber("exact_available", coverage.ExactAvailable);
+        writer.WriteNumber("exact_returned", coverage.ExactReturned);
+        writer.WriteNumber("fallback_available", coverage.FallbackAvailable);
+        writer.WriteNumber("fallback_returned", coverage.FallbackReturned);
+        writer.WriteBoolean("exact_truncated", coverage.ExactTruncated);
+        writer.WriteBoolean("fallback_truncated", coverage.FallbackTruncated);
+        writer.WriteString("fallback_status", coverage.FallbackStatus switch
+        {
+            ReferenceFallbackStatus.NoCandidates => "no_candidates",
+            ReferenceFallbackStatus.Available => "available",
+            ReferenceFallbackStatus.SuppressedAmbiguousName => "suppressed_ambiguous_name",
+            _ => throw new ArgumentOutOfRangeException(nameof(coverage), coverage.FallbackStatus, null),
+        });
+        writer.WriteEndObject();
+    }
+
+    private static void WriteOutgoingCoverage(
+        Utf8JsonWriter writer,
+        OutgoingReferenceEvidenceCoverage coverage)
+    {
+        writer.WritePropertyName("callee_coverage");
+        writer.WriteStartObject();
+        writer.WriteNumber("exact_available", coverage.ExactAvailable);
+        writer.WriteNumber("exact_returned", coverage.ExactReturned);
+        writer.WriteNumber("fallback_available", coverage.FallbackAvailable);
+        writer.WriteNumber("fallback_returned", coverage.FallbackReturned);
+        writer.WriteBoolean("exact_truncated", coverage.ExactTruncated);
+        writer.WriteBoolean("fallback_truncated", coverage.FallbackTruncated);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteNullableNumber(Utf8JsonWriter writer, string name, int? value)
+    {
+        if (value is null)
+            writer.WriteNull(name);
+        else
+            writer.WriteNumber(name, value.Value);
+    }
+
+    private static void WriteNullableNumber(Utf8JsonWriter writer, string name, long? value)
+    {
+        if (value is null)
+            writer.WriteNull(name);
+        else
+            writer.WriteNumber(name, value.Value);
     }
 
     private readonly record struct BodyPreviewResult(string? Text, bool Truncated);
@@ -895,23 +1168,6 @@ public sealed class InspectTool
                 continue;
             }
             result.Add(line);
-        }
-        return result;
-    }
-
-    // distinct enclosing symbols of the refs, rendered as "Name  file:line" where resolvable, else the id.
-    private static List<string> DistinctCallers(ISymbolLookupIndex index, IReadOnlyList<SymbolRef> refs)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var result = new List<string>();
-        foreach (var r in refs)
-        {
-            if (r.ContainingSymbolId is not { } cid || !seen.Add(cid))
-                continue;
-            var containing = index.FindBySymbolId(cid);
-            result.Add(containing is not null
-                ? $"{containing.Name}  {containing.FilePath}:{containing.StartLine}"
-                : cid);
         }
         return result;
     }

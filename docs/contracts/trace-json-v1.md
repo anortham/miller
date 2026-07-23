@@ -1,11 +1,10 @@
 # Miller trace JSON v1 contract
 
-`miller trace <target> --json` and MCP `trace(format="json")` return structured trace data for the same four
+`miller trace <target> --json` and MCP `trace(format="json")` return structured trace data for the same three
 trace modes as compact output:
 
-- `mode=auto`: bounded caller/callee neighbourhood around one symbol.
 - `mode=path`: shortest dependency path from `target` to `to`.
-- `mode=refs`: name-based identifier references for one resolved symbol.
+- `mode=refs`: exact target-resolved references with unresolved name fallback kept separate.
 - `mode=bridge`: provider-scoped cross-language bridge links.
 
 Compact trace output remains the human reading surface. JSON is the stable machine surface for Eros and other
@@ -19,7 +18,7 @@ Overall outcome classification follows the
 
 ```json
 {
-  "mode": "auto | path | refs | bridge",
+  "mode": "path | refs | bridge",
   "target": "GetUser",
   "to": null,
   "depth": 3,
@@ -65,14 +64,7 @@ Example `next_actions` row:
 }
 ```
 
-## Symbol graph modes
-
-`mode=auto` emits:
-
-- `resolved_target`: symbol object with `id`, `symbol_id`, `name`, `kind`, `file`, `line`, `role`, and `hop`.
-- `nodes`: the target symbol followed by reached neighbour symbols.
-- `links`: synthetic neighbour links from the target id to each reached id. These links describe trace reachability,
-  not a precise caller-vs-callee direction; use each node's `hop` for distance.
+## Symbol graph mode
 
 `mode=path` emits:
 
@@ -88,28 +80,46 @@ at one bounded depth bump.
 
 ## References mode
 
-`mode=refs` emits name-based identifier references from the extracted `identifiers` table. The result is honest
-about confidence: extractor rows currently match by identifier name, not by resolved target symbol id, so homonyms
-can appear.
+`mode=refs` resolves the requested symbol to its exact symbol ID, then reads target-resolved evidence from the
+extracted identifier-resolution, relationship, and pending-resolution data. Unresolved same-name rows are a
+separate fallback tier. When multiple definitions share the target name, fallback is suppressed instead of
+mixing homonyms into the exact result.
 
 Mode-specific top-level fields:
 
 - `reference_kind`: normalized filter value (`call`, `variable_ref`, `type_usage`, `member_access`, or `import`),
   or `null` when all kinds are included.
 - `include_definition`: whether the resolved definition is repeated in `nodes`.
-- `references`: rendered reference rows after filtering and `limit`.
+- `references`: compatibility array containing the rendered exact rows followed by fallback rows.
+- `exact_references`: target-resolved rows only.
+- `fallback_references`: unresolved same-name rows only.
+- `reference_coverage`: observed, available, returned, and truncated counts for each tier plus
+  `same_name_definition_count` and `fallback_status`.
+- `continuation`: opaque artifact-bound token for the next exact/fallback page, or `null`.
 
 Reference row fields:
 
-- `name`: referenced identifier name.
-- `kind`: identifier/reference kind.
+- `target_symbol_id`: exact target ID, or `null` for unresolved fallback.
+- `name`: resolved target name.
+- `kind`: extractor identifier/reference kind.
+- `canonical_kind`: normalized Miller reference kind.
 - `file`: workspace-relative file path.
-- `line`: 1-based occurrence line.
+- `line`, `column`, `end_line`, `end_column`: occurrence position when available.
+- `start_byte`, `end_byte`: source byte span when available.
 - `containing_symbol_id`: enclosing symbol id when the extractor reported one, otherwise `null`.
-- `confidence`: currently `name_based`.
+- `containing_symbol_name`: resolved enclosing symbol name when available, otherwise `null`.
+- `resolution_status`: `exact` or `fallback`.
+- `source`: evidence provenance such as `identifier_direct`, `identifier_resolution`, `relationship`, or
+  `pending_name`.
+- `resolution_tier`: extractor resolution tier when available.
+- `confidence`: numeric evidence confidence.
 
 `resolved_target` is still the resolved symbol object. `nodes` contains the target symbol only when
-`include_definition` is true. `links` is empty because name-based reference occurrences are rows, not graph edges.
+`include_definition` is true. `links` is empty because reference occurrences are rows, not graph edges.
+
+Reference pages are capped at 16 KiB of UTF-8 JSON. The stateless continuation identity binds the workspace,
+target symbol, artifact ID, artifact revision, reference-kind filter, definition flag, requested limit, and
+independent exact/fallback offsets. See [Tool Continuation Contract v1](tool-continuation-v1.md).
 
 ## Bridge mode
 

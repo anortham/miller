@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -94,8 +95,14 @@ public sealed partial class ContextTool
                     output = RunReferenceAware(context.Index, context.Index.Graph, context.Resolver,
                         query, token_budget, max_hops, entry_symbols, failing_test, stack_trace,
                         reference_depth, exclude_tests, json,
-                        readReferences: symbol => ExtractReader.ReadReferences(context.IndexDbPath, symbol.Name).Take(ReferenceRowsPerSymbol).ToArray(),
-                        readCallees: symbol => ExtractReader.ReadCallees(context.IndexDbPath, symbol.SymbolId).Take(ReferenceRowsPerSymbol).ToArray(),
+                        readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
+                            context.IndexDbPath,
+                            symbol.SymbolId,
+                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
+                        readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
+                            context.IndexDbPath,
+                            symbol.SymbolId,
+                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
                             ContentCorpusSidecar.ContentDbPathFor(context.IndexDbPath),
                             symbols,
@@ -260,16 +267,16 @@ public sealed partial class ContextTool
         string query, int tokenBudget, int maxHops,
         IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
         int referenceDepth, bool excludeTests, bool json,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
         Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
         out int selectedCount, out int candidatesExamined)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
-        ArgumentNullException.ThrowIfNull(readReferences);
-        ArgumentNullException.ThrowIfNull(readCallees);
+        ArgumentNullException.ThrowIfNull(readReferenceEvidence);
+        ArgumentNullException.ThrowIfNull(readOutgoingEvidence);
         ArgumentNullException.ThrowIfNull(readContentChunks);
 
         if (referenceDepth < 0) referenceDepth = 0;
@@ -287,7 +294,12 @@ public sealed partial class ContextTool
         }
 
         IReadOnlyList<ReferenceContextItem> items = BuildReferenceItems(
-            candidates, referenceDepth, excludeTests, readReferences, readCallees, readContentChunks);
+            candidates,
+            referenceDepth,
+            excludeTests,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks);
         var packCandidates = new List<PackCandidate<ReferenceContextItem>>(items.Count);
         foreach (ReferenceContextItem item in items)
             packCandidates.Add(new PackCandidate<ReferenceContextItem>(item, (int)TokenEstimator.Count(ReferenceCostLine(item))));
@@ -297,6 +309,34 @@ public sealed partial class ContextTool
         Func<IReadOnlyList<ReferenceContextItem>, string> boundedRenderer = json ? RenderBoundedReferenceJson : RenderReferenceCompact;
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
+
+    internal static string RunReferenceAware(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string query, int tokenBudget, int maxHops,
+        IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
+        int referenceDepth, bool excludeTests, bool json,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
+        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        out int selectedCount, out int candidatesExamined) =>
+        RunReferenceAware(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            failingTest,
+            stackTrace,
+            referenceDepth,
+            excludeTests,
+            json,
+            symbol => LegacyInboundEvidence(symbol, readReferences(symbol)),
+            symbol => LegacyOutgoingEvidence(symbol, readCallees(symbol)),
+            readContentChunks,
+            out selectedCount,
+            out candidatesExamined);
 
     private static string RenderWithinBudget<T>(
         IReadOnlyList<T> initiallySelected,
@@ -365,7 +405,11 @@ public sealed partial class ContextTool
         string? ChunkId = null,
         int? LineStart = null,
         int? LineEnd = null,
-        string? Snippet = null);
+        string? Snippet = null,
+        string? TargetSymbolId = null,
+        string? ResolutionStatus = null,
+        string? Provenance = null,
+        double? EvidenceConfidence = null);
 
     private static IReadOnlyList<Candidate> BuildCandidates(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
@@ -527,8 +571,8 @@ public sealed partial class ContextTool
         IReadOnlyList<Candidate> candidates,
         int referenceDepth,
         bool excludeTests,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
         Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks)
     {
         var items = new List<ReferenceContextItem>();
@@ -581,34 +625,81 @@ public sealed partial class ContextTool
             foreach (Candidate candidate in usableCandidates)
             {
                 IndexedSymbol symbol = candidate.Symbol;
-                foreach (SymbolRef callee in readCallees(symbol))
+                OutgoingReferenceEvidenceSet outgoing = readOutgoingEvidence(symbol);
+                foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
                 {
                     if (excludeTests && IsTestPath.Check(callee.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(
                         ItemType: "identifier",
-                        Reason: "callee_identifier",
-                        Confidence: "containing_symbol",
-                        Name: callee.Name,
-                        Kind: callee.Kind,
+                        Reason: IsCallLike(callee.Kind) ? "callee" : "dependency",
+                        Confidence: "exact",
+                        Name: callee.TargetName,
+                        Kind: callee.SourceKind,
                         File: callee.FilePath,
-                        Line: callee.StartLine,
-                        ContainingSymbolId: callee.ContainingSymbolId));
+                        Line: callee.StartLine ?? 0,
+                        ContainingSymbolId: callee.ContainingSymbolId,
+                        TargetSymbolId: callee.TargetSymbolId,
+                        ResolutionStatus: "exact",
+                        Provenance: EvidenceSourceLabel(callee.Source),
+                        EvidenceConfidence: callee.Confidence));
                 }
 
-                foreach (SymbolRef reference in readReferences(symbol))
+                foreach (OutgoingReferenceEvidence callee in outgoing.Fallback)
+                {
+                    if (excludeTests && IsTestPath.Check(callee.FilePath))
+                        continue;
+                    AddItem(new ReferenceContextItem(
+                        ItemType: "identifier",
+                        Reason: IsCallLike(callee.Kind) ? "unresolved_callee" : "unresolved_dependency",
+                        Confidence: "fallback",
+                        Name: callee.TargetName,
+                        Kind: callee.SourceKind,
+                        File: callee.FilePath,
+                        Line: callee.StartLine ?? 0,
+                        ContainingSymbolId: callee.ContainingSymbolId,
+                        ResolutionStatus: "fallback",
+                        Provenance: EvidenceSourceLabel(callee.Source),
+                        EvidenceConfidence: callee.Confidence));
+                }
+
+                ReferenceEvidenceSet inbound = readReferenceEvidence(symbol);
+                foreach (ReferenceEvidence reference in inbound.Exact)
+                {
+                    if (excludeTests && IsTestPath.Check(reference.FilePath))
+                        continue;
+                    AddItem(new ReferenceContextItem(
+                        ItemType: "identifier",
+                        Reason: "reference",
+                        Confidence: "exact",
+                        Name: symbol.Name,
+                        Kind: reference.SourceKind,
+                        File: reference.FilePath,
+                        Line: reference.StartLine ?? 0,
+                        ContainingSymbolId: reference.ContainingSymbolId,
+                        TargetSymbolId: reference.TargetSymbolId,
+                        ResolutionStatus: "exact",
+                        Provenance: EvidenceSourceLabel(reference.Source),
+                        EvidenceConfidence: reference.Confidence));
+                }
+
+                foreach (ReferenceEvidence reference in inbound.Fallback)
                 {
                     if (excludeTests && IsTestPath.Check(reference.FilePath))
                         continue;
                     AddItem(new ReferenceContextItem(
                         ItemType: "identifier",
                         Reason: "possible_reference",
-                        Confidence: "name_based",
-                        Name: reference.Name,
-                        Kind: reference.Kind,
+                        Confidence: "fallback",
+                        Name: symbol.Name,
+                        Kind: reference.SourceKind,
                         File: reference.FilePath,
-                        Line: reference.StartLine,
-                        ContainingSymbolId: reference.ContainingSymbolId));
+                        Line: reference.StartLine ?? 0,
+                        ContainingSymbolId: reference.ContainingSymbolId,
+                        TargetSymbolId: reference.TargetSymbolId,
+                        ResolutionStatus: "fallback",
+                        Provenance: EvidenceSourceLabel(reference.Source),
+                        EvidenceConfidence: reference.Confidence));
                 }
             }
         }
@@ -621,7 +712,7 @@ public sealed partial class ContextTool
             {
                 "symbol" => "symbol:" + item.SymbolId,
                 "content_chunk" => "chunk:" + item.SourceId + ":" + item.ChunkId,
-                "identifier" => "identifier:" + item.Reason + ":" + item.File + ":" + item.Line + ":" + item.Name + ":" + item.Kind + ":" + item.ContainingSymbolId,
+                "identifier" => "identifier:" + item.Reason + ":" + item.File + ":" + item.Line + ":" + item.Name + ":" + item.Kind + ":" + item.ContainingSymbolId + ":" + item.TargetSymbolId,
                 _ => item.ItemType + ":" + item.File + ":" + item.Line + ":" + item.Name,
             };
             if (seen.Add(key))
@@ -817,6 +908,94 @@ public sealed partial class ContextTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static ReferenceEvidenceSet LegacyInboundEvidence(
+        IndexedSymbol target,
+        IReadOnlyList<SymbolRef> references)
+    {
+        ReferenceEvidence[] fallback = references
+            .Select(reference => new ReferenceEvidence(
+                null,
+                reference.ContainingSymbolId,
+                reference.FilePath,
+                reference.StartLine,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
+                reference.Kind,
+                ReferenceEvidenceSource.NameFallback,
+                null,
+                0.5,
+                ReferenceResolutionStatus.Fallback))
+            .ToArray();
+        return new ReferenceEvidenceSet(
+            [],
+            fallback,
+            new ReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                fallback.Length,
+                fallback.Length,
+                1,
+                false,
+                false,
+                fallback.Length == 0
+                    ? ReferenceFallbackStatus.NoCandidates
+                    : ReferenceFallbackStatus.Available));
+    }
+
+    private static OutgoingReferenceEvidenceSet LegacyOutgoingEvidence(
+        IndexedSymbol containing,
+        IReadOnlyList<SymbolRef> references)
+    {
+        OutgoingReferenceEvidence[] fallback = references
+            .Select(reference => new OutgoingReferenceEvidence(
+                containing.SymbolId,
+                null,
+                reference.Name,
+                reference.FilePath,
+                reference.StartLine,
+                null,
+                null,
+                null,
+                null,
+                null,
+                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
+                reference.Kind,
+                ReferenceEvidenceSource.NameFallback,
+                null,
+                0.5,
+                ReferenceResolutionStatus.Fallback))
+            .ToArray();
+        return new OutgoingReferenceEvidenceSet(
+            [],
+            fallback,
+            new OutgoingReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                fallback.Length,
+                fallback.Length,
+                false,
+                false));
+    }
+
+    private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch
+    {
+        ReferenceEvidenceSource.IdentifierDirect => "identifier_direct",
+        ReferenceEvidenceSource.IdentifierResolution => "identifier_resolution",
+        ReferenceEvidenceSource.Relationship => "relationship",
+        ReferenceEvidenceSource.PendingResolution => "pending_resolution",
+        ReferenceEvidenceSource.NameFallback => "name_fallback",
+        _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
+    };
+
+    private static bool IsCallLike(ReferenceKind kind) =>
+        kind is ReferenceKind.Call or ReferenceKind.Instantiation;
+
     private static string ReferenceCostLine(ReferenceContextItem item)
     {
         var sb = new StringBuilder();
@@ -832,6 +1011,13 @@ public sealed partial class ContextTool
             sb.Append(' ').Append(Truncate(item.Signature!, ToolRenderLimits.SignatureMaxLength));
         if (!string.IsNullOrEmpty(item.Snippet))
             sb.Append(' ').Append(Truncate(item.Snippet!, ToolRenderLimits.SignatureMaxLength));
+        if (item.ResolutionStatus is not null)
+            sb.Append(" resolution=").Append(item.ResolutionStatus);
+        if (item.Provenance is not null)
+            sb.Append(" source=").Append(item.Provenance);
+        if (item.EvidenceConfidence is not null)
+            sb.Append(" evidence_confidence=")
+                .Append(item.EvidenceConfidence.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
         return sb.ToString();
     }
 
@@ -849,6 +1035,13 @@ public sealed partial class ContextTool
             sb.Append("  ").Append(Truncate(item.Signature!, ToolRenderLimits.SignatureMaxLength));
         else if (!string.IsNullOrEmpty(item.Snippet))
             sb.Append("  ").Append(Truncate(item.Snippet!, ToolRenderLimits.SignatureMaxLength));
+        if (item.ResolutionStatus is not null)
+            sb.Append(" resolution=").Append(item.ResolutionStatus);
+        if (item.Provenance is not null)
+            sb.Append(" source=").Append(item.Provenance);
+        if (item.EvidenceConfidence is not null)
+            sb.Append(" evidence_confidence=")
+                .Append(item.EvidenceConfidence.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
         return sb.ToString();
     }
 
@@ -916,6 +1109,14 @@ public sealed partial class ContextTool
                     w.WriteString("symbol_id", item.SymbolId);
                 if (item.ContainingSymbolId is not null)
                     w.WriteString("containing_symbol_id", item.ContainingSymbolId);
+                if (item.TargetSymbolId is not null)
+                    w.WriteString("target_symbol_id", item.TargetSymbolId);
+                if (item.ResolutionStatus is not null)
+                    w.WriteString("resolution_status", item.ResolutionStatus);
+                if (item.Provenance is not null)
+                    w.WriteString("provenance", item.Provenance);
+                if (item.EvidenceConfidence is not null)
+                    w.WriteNumber("evidence_confidence", item.EvidenceConfidence.Value);
                 if (item.SourceId is not null)
                     w.WriteString("source_id", item.SourceId);
                 if (item.ChunkId is not null)

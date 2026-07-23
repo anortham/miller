@@ -27,7 +27,16 @@ Miller is already better in six foundation areas:
 5. atomic multi-file edit transactions with rollback and freshness recovery;
 6. confidence-banded, provider-diagnostic cross-language bridge trace.
 
-The right product is the existing Miller surface with deeper shared implementations. All nine MCP tools remain justified. No new MCP tool is required by this audit. `trace auto` should be deprecated after its useful evidence is folded into exact references, and unbounded `content export` should become CLI-only.
+The right product is the existing Miller surface with deeper shared implementations. All nine MCP tools remain
+justified. No new MCP tool is required by this audit. `trace auto` was removed during Phase 3 after callers and
+callees moved to `inspect`; unbounded `content export` should become CLI-only.
+
+## Remediation progress
+
+- Phase 1 shipped the exact symbol-ID reference evidence seam.
+- Phase 2 shipped typed diagnostics and stateless output continuation.
+- Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
+  continuation, and removed `trace auto`.
 
 ## Replacement Standard
 
@@ -167,7 +176,7 @@ Create one deep reference-evidence module whose caller-facing input is a symbol 
 | `search` | BM25 + exact-name adjustment, OR-only, separate file/symbol lanes, optional semantic RRF | richer reranker, AND→OR relaxation, mixed file/symbol list, scope and semantic rescue | stronger empty diagnosis, deterministic backends, optional/off-switchable semantics | keep; redesign ranking and auto routing | P1 |
 | `inspect` | one file/symbol tool, fresh body slice, compact/JSON, refs/callers/callees | resolved and typed relationships, implementations/types/tests, qualified resolution, kind-aware render | hash-guarded live body, strict ambiguity, JSON, smaller surface | keep; rebuild relationships and enrich typed sections | P0/P1 |
 | `context` | token-bounded signatures and neighbours, lexical seeds, optional usage enrichment | bodies, hybrid seeds, pivot scoring, task signals, adaptive depth | deterministic/offline path, copyable next calls, query-affinity neighbours | keep; redesign as pivot/body bundle | P0 |
-| `trace` | refs/path/bridge/auto, strong bridge diagnostics, JSON | exact-first refs, confidence, naming variants, call-precise path | bridge providers and honesty flags are substantially better | keep; replace refs, type path, deprecate auto | P0/P2 |
+| `trace` | exact/fallback refs, path, bridge, strong diagnostics, JSON, stateless paging | naming variants and call-precise path remain stronger | bridge providers, provenance, homonym safety, and honesty flags are substantially better | keep; type path and evaluate naming variants | P2 |
 | `impact` | line-precise diff/git seeds, in-memory reverse walk, no-arg post-edit workflow | centrality/edge ranking, broader test linkage, revision range, why reasons | faster architecture, stateless output, honest test-evidence scope | keep; rank, widen tests, expose revision delta | P1 |
 | `edit` | seven operations, indexed selectors, atomic multi-file rollback, JSON, self-heal | live AST reparse, qualified symbol recovery, narrower identifier edits | transaction safety, match evidence, one tool, write-through | keep; exact rename, coverage gate, parse/syntax guard | P1 |
 | `content` | persistent import/search/read/list/remove/export and cross-workspace corpus | no equivalent; only ephemeral spillover and workspace line search | decisive Miller advantage | keep; bound list, add shape, move export CLI-only | P1/P2 |
@@ -522,7 +531,7 @@ The edit rate is dominated by intentional refusals; content errors are mostly un
 | Surface | Decision | Reason |
 |---|---|---|
 | Nine MCP tools | Keep | Each owns a distinct agent intent and earns its interface. |
-| `trace auto` | Deprecate after migration | Duplicates inspect and is almost unused. |
+| `trace auto` | Removed | Callers and callees belong to `inspect`; reference and path workflows remain in `trace`. |
 | `content export` MCP operation | Remove after contract review | Unbounded process/export workflow belongs on CLI/JSONL. |
 | New refs/call-path/blast-radius tools | Do not add | Existing `trace` and `impact` can become deep enough. |
 | Generic spillover tool | Do not add | Adds state and another call; fix primary bounds instead. |

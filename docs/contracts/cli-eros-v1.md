@@ -53,7 +53,7 @@ Current `json_commands` include:
 | `inspect --json` | File/symbol summary or full inspect result. |
 | `context --json` | Token-budgeted code bundle. `--reference-mode usage` adds reason/confidence-labeled usage evidence. |
 | `impact --json` | Downstream impact result for a symbol, changed paths, or diff. Index-revision mode is documented by [`impact-index-revision-delta-v1.md`](impact-index-revision-delta-v1.md); bounded graph evidence by [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md); positive test-role evidence by [`impact-test-role-evidence-v1.md`](impact-test-role-evidence-v1.md). |
-| `trace --json` | Structured auto/path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
+| `trace --json` | Structured path/refs/bridge trace result. See [`trace-json-v1.md`](trace-json-v1.md). |
 | `patterns --json` | List, summarize, and search extractor-recognized code-shape facts. See [`patterns-json-v1.md`](patterns-json-v1.md). |
 | `metrics churn --json` | Local git commit-range churn mapped to the current index. See [`metrics-json-v1.md`](metrics-json-v1.md). |
 | `metrics clones --json` | Duplicate groups by identical non-empty body hash. See [`metrics-json-v1.md`](metrics-json-v1.md). |

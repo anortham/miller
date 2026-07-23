@@ -1,7 +1,6 @@
 # Tool Continuation Contract v1
 
-Status: active for `inspect depth=full` bodies. Phase 3 reference-list migrations must reuse this
-foundation instead of defining another token format or MCP tool.
+Status: active for `inspect depth=full` bodies and `trace mode=refs` reference pages.
 
 ## Budget
 
@@ -16,6 +15,14 @@ opaque continuation token:
 
 Offsets are zero-based UTF-8 byte offsets within the extracted body text. `body_continuation` is `null`
 on the final page.
+
+A reference page contains at most 16 KiB of UTF-8 JSON. Exact rows are emitted before unresolved fallback rows,
+and the continuation maintains independent offsets for both tiers:
+
+- Compact: the final `next:` action repeats `trace mode=refs` with the exact symbol ID and `continuation`.
+- JSON: `exact_references`, `fallback_references`, `reference_coverage`, and `continuation`.
+
+The original `limit` remains the total result cap across every page.
 
 ## Stateless Identity
 
@@ -33,11 +40,24 @@ staleness token, not an authorization credential and not a secret.
 
 Miller keeps no spillover session or server-side continuation state.
 
+The version-1 reference token checksum-binds:
+
+- workspace ID
+- exact target symbol ID
+- artifact ID and extraction revision
+- normalized reference-kind filter
+- include-definition flag
+- total result limit
+- next exact and fallback offsets
+
 ## Rejection
 
-Continuation requires `depth=full`. Miller returns a typed refusal when the token is malformed,
+Body continuation requires `depth=full`. Miller returns a typed refusal when the token is malformed,
 non-canonical, unsupported, outside the current body, or bound to a different workspace, symbol, hash, or
 source span.
+
+Reference continuation requires `mode=refs` and a current artifact snapshot. A token bound to another artifact
+revision, target, filter, definition flag, or limit is refused rather than replayed against changed evidence.
 
 Stable rejection codes are:
 
@@ -51,6 +71,9 @@ Stable rejection codes are:
 - `continuation_target_mismatch`
 - `continuation_body_unavailable`
 - `output_budget_too_small`
+- `continuation_stale`
+- `continuation_unavailable`
+- `reference_item_too_large`
 
 If a large extracted body lacks the hash or positive source span required to issue a safe token, Miller
 returns `unavailable/continuation_identity_unavailable` and recommends a workspace refresh.

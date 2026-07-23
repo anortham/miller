@@ -346,12 +346,14 @@ public sealed class InspectToolTests
         };
         var identifiers = new[]
         {
-            // Name-based references to "Cmp" (ReadReferences), ordered by path/line: a.cs 5,8,12 then b.cs 3.
-            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000a", "Cmp", "call", "csharp", "src/a.cs", 5, null),
-            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000b", "Cmp", "call", "csharp", "src/a.cs", 8, null),
-            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000c", "Cmp", "call", "csharp", "src/a.cs", 12, null),
-            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000d", "Cmp", "call", "csharp", "src/b.cs", 3, null),
-            // Callees FROM Cmp (containing == Cmp, kind 'call'), ordered by line 3..8: repeated names collapse.
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000a", "Cmp", "call", "csharp", "src/a.cs", 5, null)
+                { TargetSymbolId = cmpId },
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000b", "Cmp", "call", "csharp", "src/a.cs", 8, null)
+                { TargetSymbolId = cmpId },
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000c", "Cmp", "call", "csharp", "src/a.cs", 12, null)
+                { TargetSymbolId = cmpId },
+            new JulieDbFixture.IdentifierRow("bb00000000000000000000000000000d", "Cmp", "call", "csharp", "src/b.cs", 3, null)
+                { TargetSymbolId = cmpId },
             new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000a", "TryParse", "call", "csharp", "src/a.cs", 3, cmpId),
             new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000b", "nameof", "call", "csharp", "src/a.cs", 4, cmpId),
             new JulieDbFixture.IdentifierRow("cc00000000000000000000000000000c", "TryParse", "call", "csharp", "src/a.cs", 5, cmpId),
@@ -412,7 +414,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Run_SymbolFull_Json_KeepsRawUndedupedRefsAndCallees()
+    public void Run_SymbolFull_Json_KeepsRawExactRefsAndUnresolvedCalleesSeparated()
     {
         using var fx = GroupAndDedupFixture();
         var (index, resolver) = Build(fx);
@@ -422,10 +424,146 @@ public sealed class InspectToolTests
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        // JSON is untouched: one object per raw reference (4) and per raw call site (6), no ×N collapsing.
         Assert.Equal(4, root.GetProperty("refs").GetArrayLength());
-        Assert.Equal(6, root.GetProperty("callees").GetArrayLength());
+        Assert.Empty(root.GetProperty("callees").EnumerateArray());
+        Assert.Equal(6, root.GetProperty("callee_fallback").GetArrayLength());
         Assert.DoesNotContain("×", json);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_UsesExactInboundAndOutgoingEvidence()
+    {
+        const string targetId = "aa000000000000000000000000000011";
+        const string homonymId = "aa000000000000000000000000000012";
+        const string callerId = "aa000000000000000000000000000013";
+        const string homonymCallerId = "aa000000000000000000000000000014";
+        const string typeUserId = "aa000000000000000000000000000015";
+        const string calleeId = "aa000000000000000000000000000016";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(homonymId, "Run", "method", "csharp", "src/Homonym.cs", "void Run()", 1, null),
+                new(callerId, "CallTarget", "method", "csharp", "src/Caller.cs", "void CallTarget()", 1, null),
+                new(homonymCallerId, "CallHomonym", "method", "csharp", "src/HomonymCaller.cs", "void CallHomonym()", 1, null),
+                new(typeUserId, "UseTargetType", "method", "csharp", "src/TypeUser.cs", "void UseTargetType()", 1, null),
+                new(calleeId, "Save", "method", "csharp", "src/Save.cs", "void Save()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-target-call", "Run", "call", "csharp", "src/Caller.cs", 10, callerId),
+                new("identifier-homonym-call", "Run", "call", "csharp", "src/HomonymCaller.cs", 20, homonymCallerId),
+                new("identifier-target-type", "Run", "type_usage", "csharp", "src/TypeUser.cs", 30, typeUserId),
+                new("identifier-save", "Save", "call", "csharp", "src/Target.cs", 40, targetId),
+                new("identifier-unresolved", "Missing", "call", "csharp", "src/Target.cs", 50, targetId),
+                new("identifier-ambiguous-run", "Run", "call", "csharp", "src/HomonymCaller.cs", 60, homonymCallerId),
+            ]);
+        fx.AddIdentifierResolution("identifier-target-call", targetId);
+        fx.AddIdentifierResolution("identifier-homonym-call", homonymId);
+        fx.AddIdentifierResolution("identifier-target-type", targetId);
+        fx.AddIdentifierResolution("identifier-save", calleeId);
+        var (index, resolver) = Build(fx);
+
+        string json = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            targetId,
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        JsonElement[] refs = root.GetProperty("refs").EnumerateArray().ToArray();
+        Assert.Equal(2, refs.Length);
+        Assert.DoesNotContain(refs, row => row.GetProperty("file").GetString() == "src/HomonymCaller.cs");
+        Assert.Equal("CallTarget", Assert.Single(root.GetProperty("callers").EnumerateArray()).GetString());
+        Assert.Equal("UseTargetType", Assert.Single(root.GetProperty("referenced_by").EnumerateArray()).GetString());
+
+        JsonElement callee = Assert.Single(root.GetProperty("callees").EnumerateArray());
+        Assert.Equal(calleeId, callee.GetProperty("target_symbol_id").GetString());
+        Assert.Equal("Save", callee.GetProperty("name").GetString());
+        Assert.Equal("exact", callee.GetProperty("resolution_status").GetString());
+        JsonElement unresolved = Assert.Single(root.GetProperty("callee_fallback").EnumerateArray());
+        Assert.Equal("Missing", unresolved.GetProperty("name").GetString());
+        Assert.Equal("fallback", unresolved.GetProperty("resolution_status").GetString());
+
+        string compact = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            targetId,
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+        Assert.Contains(
+            "reference fallback suppressed because the target name is ambiguous",
+            compact,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_CallersAreNotLimitedByTheDisplayedReferencePage()
+    {
+        const string targetId = "aa000000000000000000000000000021";
+        const string callerId = "aa000000000000000000000000000022";
+        const string firstTypeUserId = "aa000000000000000000000000000023";
+        const string secondTypeUserId = "aa000000000000000000000000000024";
+        const string thirdTypeUserId = "aa000000000000000000000000000025";
+        const string fourthTypeUserId = "aa000000000000000000000000000026";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(callerId, "Caller", "method", "csharp", "src/ZCaller.cs", "void Caller()", 1, null),
+                new(firstTypeUserId, "FirstTypeUser", "method", "csharp", "src/A1.cs", "void FirstTypeUser()", 1, null),
+                new(secondTypeUserId, "SecondTypeUser", "method", "csharp", "src/A2.cs", "void SecondTypeUser()", 1, null),
+                new(thirdTypeUserId, "ThirdTypeUser", "method", "csharp", "src/A3.cs", "void ThirdTypeUser()", 1, null),
+                new(fourthTypeUserId, "FourthTypeUser", "method", "csharp", "src/A4.cs", "void FourthTypeUser()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-type-1", "Run", "type_usage", "csharp", "src/A1.cs", 10, firstTypeUserId)
+                    { TargetSymbolId = targetId },
+                new("identifier-type-2", "Run", "type_usage", "csharp", "src/A2.cs", 10, secondTypeUserId)
+                    { TargetSymbolId = targetId },
+                new("identifier-type-3", "Run", "type_usage", "csharp", "src/A3.cs", 10, thirdTypeUserId)
+                    { TargetSymbolId = targetId },
+                new("identifier-type-4", "Run", "type_usage", "csharp", "src/A4.cs", 10, fourthTypeUserId)
+                    { TargetSymbolId = targetId },
+                new("identifier-call", "Run", "call", "csharp", "src/ZCaller.cs", 10, callerId)
+                    { TargetSymbolId = targetId },
+            ]);
+        var (index, resolver) = Build(fixture);
+
+        string json = InspectTool.Run(
+            index,
+            resolver,
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            targetId,
+            depth: "overview",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(
+            "Caller",
+            Assert.Single(document.RootElement.GetProperty("callers").EnumerateArray()).GetString());
     }
 
     [Fact]
@@ -698,7 +836,10 @@ public sealed class InspectToolTests
         };
         var identifiers = Enumerable.Range(0, refCount)
             .Select(i => new JulieDbFixture.IdentifierRow(
-                "ee" + i.ToString("x30"), name, "call", "csharp", "src/Caller.cs", 10 + i, null))
+                "ee" + i.ToString("x30"), name, "call", "csharp", "src/Caller.cs", 10 + i, null)
+            {
+                TargetSymbolId = hotId,
+            })
             .ToArray();
         return JulieDbFixture.Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract,
             rows, identifiers: identifiers, workspaceId: "ws-inspect-hot");

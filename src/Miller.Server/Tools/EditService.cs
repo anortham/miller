@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Editing;
 using Miller.Core.Freshness;
+using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -637,16 +638,100 @@ public sealed class EditService
 
         string oldName = target.Name;
         string newName = request.NewText!;
+        if (!RenamePlanner.IsValidIdentifier(newName))
+        {
+            return Error(
+                $"new_name \"{newName}\" is not a valid identifier (must start with a letter or underscore and " +
+                "contain only letters, digits, or underscores).",
+                json,
+                failureReason: FailureInvalidRequest);
+        }
 
-        // Every name-based occurrence across the workspace (homonyms INCLUDED — decision-5), grouped by file.
-        IReadOnlyList<IdentifierSite> sites = ExtractReader.ReadIdentifierSites(_dbPath, oldName);
+        string renameMode = string.IsNullOrWhiteSpace(request.RenameMode)
+            ? "exact"
+            : request.RenameMode.Trim().ToLowerInvariant();
+        if (renameMode is not ("exact" or "include_fallback"))
+        {
+            return Error(
+                "rename_mode must be exact or include_fallback.",
+                json,
+                failureReason: FailureInvalidRequest);
+        }
 
-        // The DEFINITION name token is NOT an identifier row; locate it inside the def symbol's signature span
-        // (the name token within [start_byte, body_start_byte) — or [start_byte, end_byte) for a bodyless symbol)
-        // on the def file's disk content, and add it as an IsDefinition site (handoff contract).
+        var evidenceBounds = new ReferenceEvidenceBounds(int.MaxValue, int.MaxValue);
+        ReferenceEvidenceSet evidence = ReferenceEvidenceReader.Read(
+            _dbPath,
+            target.SymbolId,
+            evidenceBounds);
+        IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact);
+        int unusableExactSites = evidence.Exact.Count(reference => !HasUsableRenameSpan(reference));
+        int missingExactFiles = exactSites
+            .Select(site => site.FilePath)
+            .Distinct(StringComparer.Ordinal)
+            .Count(path => !File.Exists(ToAbsolute(path)));
+        bool incompleteExactCoverage =
+            evidence.Coverage.ExactTruncated ||
+            unusableExactSites > 0 ||
+            missingExactFiles > 0 ||
+            evidence.Coverage.FallbackAvailable > 0;
+        if (renameMode == "exact" && incompleteExactCoverage)
+        {
+            return Error(
+                "incomplete exact reference coverage: " +
+                $"{evidence.Coverage.ExactAvailable} exact site(s), " +
+                $"{unusableExactSites} exact site(s) without usable byte spans, and " +
+                $"{missingExactFiles} missing exact file(s), and " +
+                $"{evidence.Coverage.FallbackAvailable} unresolved fallback candidate(s). " +
+                "Refresh the workspace or explicitly retry with rename_mode=include_fallback after reviewing " +
+                "the name-based homonym risk.",
+                json,
+                failureReason: FailureNoMatch);
+        }
+
+        IReadOnlyList<IdentifierSite> fallbackSites = [];
+        if (renameMode == "include_fallback")
+        {
+            var exactKeys = exactSites
+                .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
+                .ToHashSet();
+            var resolvedHomonymKeys = _index.FindByName(oldName)
+                .Where(symbol => !string.Equals(symbol.SymbolId, target.SymbolId, StringComparison.Ordinal))
+                .SelectMany(symbol => RenameIdentifierSites(
+                    ReferenceEvidenceReader.Read(_dbPath, symbol.SymbolId, evidenceBounds).Exact))
+                .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
+                .ToHashSet();
+            fallbackSites = ExtractReader.ReadIdentifierSites(_dbPath, oldName)
+                .Where(site =>
+                    !exactKeys.Contains((site.FilePath, site.StartByte, site.EndByte))
+                    && !resolvedHomonymKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
+                .ToArray();
+        }
+
+        string? missingSelectedFile = exactSites
+            .Concat(fallbackSites)
+            .Select(site => site.FilePath)
+            .Distinct(StringComparer.Ordinal)
+            .FirstOrDefault(path => !File.Exists(ToAbsolute(path)));
+        if (missingSelectedFile is not null)
+        {
+            return Error(
+                $"rename coverage includes missing file '{missingSelectedFile}'. Refresh the workspace and retry.",
+                json,
+                failureReason: FailureNoMatch);
+        }
+
+        IReadOnlyList<IdentifierSite> sites = exactSites.Concat(fallbackSites).ToArray();
         var span = ExtractReader.ReadEditSpan(_dbPath, target.SymbolId);
 
-        var files = BuildRenameFiles(oldName, sites, target, span);
+        var files = BuildRenameFiles(oldName, sites, target, span, out IdentifierSite? definitionSite);
+        if (definitionSite is null)
+        {
+            return Error(
+                "incomplete exact reference coverage: the selected symbol definition name token could not be " +
+                "proved against current disk content. Refresh the workspace and retry.",
+                json,
+                failureReason: FailureNoMatch);
+        }
         if (files.Count == 0)
             return Error($"no occurrences of '{oldName}' found to rename.", json,
                 failureReason: FailureNoMatch);
@@ -657,10 +742,29 @@ public sealed class EditService
                 failureReason: FailureReasonFor(plan.Error.Kind));
 
         string diff = RenderRenameDiff(plan);
-        string summary = RenderRenameSummary(oldName, newName, plan);
+        IReadOnlyList<IdentifierSite> renderedExactSites = exactSites
+            .Where(site =>
+                !string.Equals(site.FilePath, definitionSite.FilePath, StringComparison.Ordinal)
+                || site.StartByte != definitionSite.StartByte
+                || site.EndByte != definitionSite.EndByte)
+            .ToArray();
+        IReadOnlyList<ReferenceEvidence> renderedExactEvidence = evidence.Exact
+            .Where(reference =>
+                !string.Equals(reference.FilePath, definitionSite.FilePath, StringComparison.Ordinal)
+                || reference.StartByte != definitionSite.StartByte
+                || reference.EndByte != definitionSite.EndByte)
+            .ToArray();
+        var renameEvidence = new RenameEvidenceSummary(
+            renameMode,
+            target,
+            renderedExactSites,
+            fallbackSites,
+            evidence.Coverage,
+            renderedExactEvidence);
+        string summary = RenderRenameSummary(oldName, newName, plan, renameEvidence);
 
         if (!IsApply(request))
-            return Preview(diff, json, summary, plan.TotalSites);
+            return Preview(diff, json, summary, plan.TotalSites, renameEvidence: renameEvidence);
 
         // --- apply: gate EVERY touched file (with gate-time self-heal under ONE shared budget), then atomic
         // multi-file write, then per-file write-through ---
@@ -700,17 +804,21 @@ public sealed class EditService
         _writeThrough.Converge(plan.PlannedEdits.Select(p => p.FilePath).ToArray());
 
         string appliedSummary = summary + "\n" + diff;
+        string postApplyHint = NextStepHint.Render(
+            $"impact target=\"{target.SymbolId}\"",
+            "verify the rename, then run the selected tests");
         return Applied(appliedSummary, staleAllowed: anyStale, filesWritten: applyResult.FilesWritten,
-            indexFresh: !anyStale, json, resultCountOverride: plan.TotalSites);
+            indexFresh: !anyStale, json, resultCountOverride: plan.TotalSites,
+            renameEvidence: renameEvidence, postApplyHint: postApplyHint);
     }
 
-    // Assemble per-file RenameFileInputs from the identifier sites + the def name-token site, reading each
-    // file's CURRENT disk content (the spans index into it). The def file gets the def token appended (deduped
-    // so a def that also surfaced as an identifier is not rewritten twice).
     private List<RenameFileInput> BuildRenameFiles(
-        string oldName, IReadOnlyList<IdentifierSite> sites, IndexedSymbol target, SymbolEditSpan? span)
+        string oldName,
+        IReadOnlyList<IdentifierSite> sites,
+        IndexedSymbol target,
+        SymbolEditSpan? span,
+        out IdentifierSite? definitionSite)
     {
-        // Group identifier sites by relative file path (already ordered file_path,start_byte by the reader).
         var byFile = new Dictionary<string, List<RenameSite>>(StringComparer.Ordinal);
         var content = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -718,7 +826,7 @@ public sealed class EditService
         {
             string abs = ToAbsolute(s.FilePath);
             if (!File.Exists(abs))
-                continue; // the index references a file that is gone; skip its sites (can't splice a missing file)
+                continue;
             if (!content.ContainsKey(s.FilePath))
                 content[s.FilePath] = ReadDisk(abs);
             if (!byFile.TryGetValue(s.FilePath, out var list))
@@ -726,17 +834,14 @@ public sealed class EditService
             list.Add(new RenameSite(s.StartByte, s.EndByte, s.StartLine, IsDefinition: false));
         }
 
-        // Locate + add the definition name-token site in the def file.
-        AddDefinitionSite(oldName, target, span, byFile, content);
+        definitionSite = AddDefinitionSite(oldName, target, span, byFile, content);
 
         var result = new List<RenameFileInput>(byFile.Count);
         foreach (var (path, list) in byFile)
         {
-            // Dedup any (start,end) collision (e.g. the def token already present as an identifier) and order
-            // by start byte so the splicer's non-overlap validation sees a clean ascending set.
             var deduped = list
                 .GroupBy(r => (r.StartByte, r.EndByte))
-                .Select(g => g.First())
+                .Select(g => g.OrderByDescending(r => r.IsDefinition).First())
                 .OrderBy(r => r.StartByte)
                 .ToArray();
             result.Add(new RenameFileInput(ToAbsolute(path), content[path], deduped));
@@ -744,36 +849,34 @@ public sealed class EditService
         return result;
     }
 
-    private void AddDefinitionSite(
+    private IdentifierSite? AddDefinitionSite(
         string oldName, IndexedSymbol target, SymbolEditSpan? span,
         Dictionary<string, List<RenameSite>> byFile, Dictionary<string, string> content)
     {
         if (span is null)
-            return;
+            return null;
 
         string defRel = target.FilePath;
         string defAbs = ToAbsolute(defRel);
         if (!File.Exists(defAbs))
-            return;
+            return null;
 
         if (!content.TryGetValue(defRel, out var fileText))
             content[defRel] = fileText = ReadDisk(defAbs);
 
-        // The signature region is [start_byte, body_start_byte) when there is a body, else the whole span.
         int signatureEnd = span.BodyStartByte ?? span.EndByte;
         int? nameByteStart = FindNameTokenByteOffset(fileText, span.StartByte, signatureEnd, oldName);
         if (nameByteStart is not { } start)
-            return; // could not locate the name token in the signature span — skip the def site (refs still rename)
+            return null;
 
-        var defSite = new RenameSite(start, start + Encoding.UTF8.GetByteCount(oldName), span.StartLine, IsDefinition: true);
+        int end = start + Encoding.UTF8.GetByteCount(oldName);
+        var defSite = new RenameSite(start, end, span.StartLine, IsDefinition: true);
         if (!byFile.TryGetValue(defRel, out var list))
             byFile[defRel] = list = [];
         list.Add(defSite);
+        return new IdentifierSite(defRel, start, end, span.StartLine);
     }
 
-    // Find the byte offset of the FIRST whole-word occurrence of <paramref name="name"/> within the UTF-8 byte
-    // window [windowStartByte, windowEndByte) of <paramref name="content"/>. Whole-word = not flanked by an
-    // identifier char, so "Total" does not match inside "GrandTotalizer". Returns null if not found.
     private static int? FindNameTokenByteOffset(string content, int windowStartByte, int windowEndByte, string name)
     {
         byte[] bytes = Encoding.UTF8.GetBytes(content);
@@ -784,19 +887,35 @@ public sealed class EditService
         if (needle.Length == 0 || needle.Length > windowEndByte - windowStartByte)
             return null;
 
+        (int Offset, int Score)? best = null;
         for (int i = windowStartByte; i + needle.Length <= windowEndByte; i++)
         {
             if (!MatchesAt(bytes, i, needle))
                 continue;
-            // Whole-word boundary check on the ASCII identifier-char class (the name token itself is ASCII or
-            // not — but the boundary chars that matter for splitting an identifier are ASCII letters/digits/_).
+
             bool leftOk = i == windowStartByte || !IsIdentifierByte(bytes[i - 1]);
             int after = i + needle.Length;
             bool rightOk = after >= bytes.Length || !IsIdentifierByte(bytes[after]);
-            if (leftOk && rightOk)
-                return i;
+            if (!leftOk || !rightOk)
+                continue;
+
+            while (after < windowEndByte && bytes[after] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+                after++;
+
+            int score = after >= windowEndByte
+                ? 2
+                : bytes[after] switch
+                {
+                    (byte)'(' or (byte)'{' or (byte)'=' or (byte)';' or (byte)':'
+                        or (byte)',' or (byte)')' or (byte)']' => 3,
+                    (byte)'<' => 1,
+                    _ => 0,
+                };
+            if (best is null || score >= best.Value.Score)
+                best = (i, score);
         }
-        return null;
+
+        return best?.Offset;
     }
 
     private static bool MatchesAt(byte[] haystack, int at, byte[] needle)
@@ -816,7 +935,13 @@ public sealed class EditService
 
     // ---------- rendering ----------
 
-    private EditResult Preview(string diff, bool json, string? renameSummary, int siteCount, EditMatchEvidence? evidence = null)
+    private EditResult Preview(
+        string diff,
+        bool json,
+        string? renameSummary,
+        int siteCount,
+        EditMatchEvidence? evidence = null,
+        RenameEvidenceSummary? renameEvidence = null)
     {
         if (diff.Length == 0 && renameSummary is null)
         {
@@ -859,6 +984,7 @@ public sealed class EditService
                     w.WriteString("rename_summary", renameSummary);
                     w.WriteNumber("sites", siteCount);
                 }
+                WriteRenameEvidenceJson(w, renameEvidence);
                 WriteEvidenceJson(w, evidence);
             });
             return new EditResult(body, false, false, null, "ok", renameSummary is null ? 1 : siteCount);
@@ -874,9 +1000,89 @@ public sealed class EditService
             renameSummary is null ? 1 : siteCount);
     }
 
-    private static EditResult Applied(
+    private void WriteRenameEvidenceJson(Utf8JsonWriter writer, RenameEvidenceSummary? evidence)
+    {
+        if (evidence is null)
+            return;
+
+        writer.WritePropertyName("rename_evidence");
+        writer.WriteStartObject();
+        writer.WriteString("mode", evidence.Mode);
+        writer.WriteString("target_symbol_id", evidence.Target.SymbolId);
+        writer.WritePropertyName("exact_sites");
+        writer.WriteStartArray();
+        WriteRenameSiteJson(
+            writer,
+            evidence.Target.FilePath,
+            evidence.Target.StartLine,
+            "definition",
+            "exact");
+        foreach (IdentifierSite site in evidence.ExactSites)
+            WriteRenameSiteJson(writer, site.FilePath, site.StartLine, "reference", "exact");
+        writer.WriteEndArray();
+        writer.WritePropertyName("fallback_sites");
+        writer.WriteStartArray();
+        foreach (IdentifierSite site in evidence.FallbackSites)
+            WriteRenameSiteJson(writer, site.FilePath, site.StartLine, "name_based", "fallback");
+        writer.WriteEndArray();
+        writer.WritePropertyName("coverage");
+        writer.WriteStartArray();
+        writer.WriteStartObject();
+        writer.WriteString("language", evidence.Target.Language);
+        writer.WriteString("kind", "definition");
+        writer.WriteString("resolution_status", "exact");
+        writer.WriteNumber("count", 1);
+        writer.WriteEndObject();
+        foreach (var group in evidence.ExactEvidence
+                     .GroupBy(reference => (
+                         Language: reference.Language ?? evidence.Target.Language,
+                         Kind: reference.SourceKind))
+                     .OrderBy(group => group.Key.Language, StringComparer.Ordinal)
+                     .ThenBy(group => group.Key.Kind, StringComparer.Ordinal))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("language", group.Key.Language);
+            writer.WriteString("kind", group.Key.Kind);
+            writer.WriteString("resolution_status", "exact");
+            writer.WriteNumber("count", group.Count());
+            writer.WriteEndObject();
+        }
+        if (evidence.FallbackSites.Count > 0)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("language", "unknown");
+            writer.WriteString("kind", "name_based");
+            writer.WriteString("resolution_status", "fallback");
+            writer.WriteNumber("count", evidence.FallbackSites.Count);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteNumber("fallback_candidates", evidence.Coverage.FallbackAvailable);
+        writer.WriteString("fallback_status", evidence.Coverage.FallbackStatus.ToString());
+        writer.WriteEndObject();
+    }
+
+    private void WriteRenameSiteJson(
+        Utf8JsonWriter writer,
+        string filePath,
+        int line,
+        string source,
+        string resolutionStatus)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("file", ToRelative(ToAbsolute(filePath)));
+        writer.WriteNumber("line", line);
+        writer.WriteString("source", source);
+        writer.WriteString("resolution_status", resolutionStatus);
+        writer.WriteEndObject();
+    }
+
+    private EditResult Applied(
         string diffOrSummary, bool staleAllowed, int filesWritten, bool indexFresh, bool json,
-        int? resultCountOverride = null, EditMatchEvidence? evidence = null)
+        int? resultCountOverride = null,
+        EditMatchEvidence? evidence = null,
+        RenameEvidenceSummary? renameEvidence = null,
+        string? postApplyHint = null)
     {
         int count = resultCountOverride ?? filesWritten;
         if (json)
@@ -888,6 +1094,9 @@ public sealed class EditService
                 w.WriteBoolean("stale_allowed", staleAllowed);
                 w.WriteBoolean("index_fresh", indexFresh);
                 w.WriteString("diff", diffOrSummary);
+                WriteRenameEvidenceJson(w, renameEvidence);
+                if (postApplyHint is not null)
+                    w.WriteString("post_apply_hint", postApplyHint);
                 WriteEvidenceJson(w, evidence);
             });
             return new EditResult(body, true, staleAllowed, indexFresh, "ok", count);
@@ -903,6 +1112,8 @@ public sealed class EditService
             sb.Append('\n');
             AppendEvidence(sb, evidence);
         }
+        if (postApplyHint is not null)
+            sb.Append('\n').Append(postApplyHint);
         return new EditResult(sb.ToString().TrimEnd('\n'), true, staleAllowed, indexFresh, "ok", count);
     }
 
@@ -1020,18 +1231,100 @@ public sealed class EditService
         }
     }
 
-    private string RenderRenameSummary(string oldName, string newName, RenamePlan plan)
+    private sealed record RenameEvidenceSummary(
+        string Mode,
+        IndexedSymbol Target,
+        IReadOnlyList<IdentifierSite> ExactSites,
+        IReadOnlyList<IdentifierSite> FallbackSites,
+        ReferenceEvidenceCoverage Coverage,
+        IReadOnlyList<ReferenceEvidence> ExactEvidence);
+
+    private static IReadOnlyList<IdentifierSite> RenameIdentifierSites(
+        IReadOnlyList<ReferenceEvidence> evidence)
+    {
+        var sites = new List<IdentifierSite>(evidence.Count);
+        foreach (ReferenceEvidence reference in evidence)
+        {
+            if (!HasUsableRenameSpan(reference))
+                continue;
+
+            sites.Add(new IdentifierSite(
+                reference.FilePath,
+                (int)reference.StartByte!.Value,
+                (int)reference.EndByte!.Value,
+                reference.StartLine!.Value));
+        }
+
+        return sites
+            .GroupBy(static site => (site.FilePath, site.StartByte, site.EndByte))
+            .Select(static group => group.First())
+            .OrderBy(static site => site.FilePath, StringComparer.Ordinal)
+            .ThenBy(static site => site.StartByte)
+            .ToArray();
+    }
+
+    private static bool HasUsableRenameSpan(ReferenceEvidence reference) =>
+        reference.StartByte is { } startByte &&
+        reference.EndByte is { } endByte &&
+        reference.StartLine is not null &&
+        startByte >= 0 &&
+        endByte > startByte &&
+        startByte <= int.MaxValue &&
+        endByte <= int.MaxValue;
+
+    private string RenderRenameSummary(
+        string oldName,
+        string newName,
+        RenamePlan plan,
+        RenameEvidenceSummary evidence)
     {
         var sb = new StringBuilder();
         sb.Append("rename '").Append(oldName).Append("' → '").Append(newName).Append("': ")
           .Append(plan.TotalSites).Append(plan.TotalSites == 1 ? " site across " : " sites across ")
-          .Append(plan.Summary.Count).Append(plan.Summary.Count == 1 ? " file" : " files").Append('\n');
-        sb.Append("name-based match from the legacy rename-site query — homonyms ARE included; ")
-          .Append("review every site before apply.\n");
+          .Append(plan.Summary.Count).Append(plan.Summary.Count == 1 ? " file" : " files")
+          .Append("  mode=").Append(evidence.Mode).Append('\n');
+        sb.Append("exact sites:\n");
+        sb.Append("  ").Append(evidence.Target.FilePath).Append(':').Append(evidence.Target.StartLine)
+            .Append("  definition\n");
+        AppendRenameSites(sb, evidence.ExactSites);
+        if (evidence.FallbackSites.Count > 0)
+        {
+            sb.Append("fallback sites (name-based, may include homonyms):\n");
+            AppendRenameSites(sb, evidence.FallbackSites);
+        }
+        sb.Append("coverage:\n");
+        sb.Append("  ").Append(evidence.Target.Language).Append("/definition=1\n");
+        foreach (var group in evidence.ExactEvidence
+                     .GroupBy(reference => (
+                         Language: reference.Language ?? evidence.Target.Language,
+                         Kind: reference.SourceKind))
+                     .OrderBy(group => group.Key.Language, StringComparer.Ordinal)
+                     .ThenBy(group => group.Key.Kind, StringComparer.Ordinal))
+        {
+            sb.Append("  exact ").Append(group.Key.Language).Append('/').Append(group.Key.Kind)
+                .Append('=').Append(group.Count()).Append('\n');
+        }
+        if (evidence.FallbackSites.Count > 0)
+            sb.Append("  fallback unknown/name_based=").Append(evidence.FallbackSites.Count).Append('\n');
+        sb.Append("  fallback_status=").Append(evidence.Coverage.FallbackStatus)
+            .Append(" candidates=").Append(evidence.Coverage.FallbackAvailable).Append('\n');
+        sb.Append("files:\n");
         foreach (var f in plan.Summary)
             sb.Append("  ").Append(ToRelative(f.FilePath)).Append("  (")
               .Append(f.SiteCount).Append(f.SiteCount == 1 ? " site)" : " sites)").Append('\n');
         return sb.ToString().TrimEnd('\n');
+    }
+
+    private static void AppendRenameSites(StringBuilder sb, IReadOnlyList<IdentifierSite> sites)
+    {
+        foreach (var group in sites
+                     .GroupBy(static site => site.FilePath, StringComparer.Ordinal)
+                     .OrderBy(static group => group.Key, StringComparer.Ordinal))
+        {
+            sb.Append("  ").Append(group.Key).Append(':')
+                .Append(string.Join(',', group.Select(static site => site.StartLine)))
+                .Append('\n');
+        }
     }
 
     private string RenderRenameDiff(RenamePlan plan)

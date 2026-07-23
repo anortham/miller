@@ -1,5 +1,6 @@
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Miller.Core.Resolver;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -14,7 +15,7 @@ namespace Miller.Tests.Tools;
 
 /// <summary>
 /// Fast/pure unit tests for the <c>trace</c> tool's <see cref="TraceTool.Run"/> core (M4 Task 10). The trace modes
-/// (auto / path / refs / bridge) plus the no-path case, the load-bearing honesty flags ([verb-unknown] / [ambiguous]),
+/// (path / refs / bridge) plus the no-path case, the load-bearing honesty flags ([verb-unknown] / [ambiguous]),
 /// depth/limit bounds, and compact-vs-full rendering are exercised directly against in-memory fixtures — no MCP, no DI,
 /// no DB, no julie. Category!=Scale (the default fast suite).
 /// </summary>
@@ -146,213 +147,6 @@ public sealed class TraceToolTests
         return (string)cmd.ExecuteScalar()!;
     }
 
-    // ---------- mode: auto ----------
-
-    [Fact]
-    public void Auto_ReturnsCallersAndCallees_WithHopAndProvenance()
-    {
-        // A depends on B; C depends on A. Direction.Both from A reaches both B (callee) and C (caller).
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a", "Alpha", "method", "src/A.cs", 10),
-                ("b", "Beta", "method", "src/B.cs", 20),
-                ("c", "Gamma", "method", "src/C.cs", 30),
-            },
-            new[] { ("a", "b"), ("c", "a") });
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out int visited);
-
-        Assert.Equal(2, emitted);
-        Assert.Equal(2, visited);
-        Assert.Contains("# trace Alpha (auto, 2 neighbour(s))", outp);
-        Assert.Contains("Beta  method  src/B.cs:20  (hop 1)", outp);
-        Assert.Contains("Gamma  method  src/C.cs:30  (hop 1)", outp);
-    }
-
-    [Fact]
-    public void Auto_Json_RendersStructuredNeighbours()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a", "Alpha", "method", "src/A.cs", 10),
-                ("b", "Beta", "method", "src/B.cs", 20),
-                ("c", "Gamma", "method", "src/C.cs", 30),
-            },
-            new[] { ("a", "b"), ("c", "a") });
-
-        string json = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
-            out int emitted, out int visited);
-
-        Assert.Equal(2, emitted);
-        Assert.Equal(2, visited);
-        using var doc = JsonDocument.Parse(json);
-        JsonElement root = doc.RootElement;
-        Assert.Equal("auto", root.GetProperty("mode").GetString());
-        Assert.Equal("Alpha", root.GetProperty("target").GetString());
-        Assert.Equal(2, root.GetProperty("emitted").GetInt32());
-        Assert.Equal(2, root.GetProperty("nodes_visited").GetInt32());
-        Assert.Equal("Alpha", root.GetProperty("resolved_target").GetProperty("name").GetString());
-
-        JsonElement[] nodes = root.GetProperty("nodes").EnumerateArray().ToArray();
-        Assert.Equal(3, nodes.Length);
-        Assert.Contains(nodes, node => node.GetProperty("id").GetString() == "a" &&
-                                       node.GetProperty("role").GetString() == "target");
-        Assert.Contains(nodes, node => node.GetProperty("name").GetString() == "Beta" &&
-                                       node.GetProperty("hop").GetInt32() == 1);
-
-        JsonElement[] links = root.GetProperty("links").EnumerateArray().ToArray();
-        Assert.Equal(2, links.Length);
-        Assert.Contains(links, link => link.GetProperty("source").GetString() == "a" &&
-                                       link.GetProperty("target").GetString() == "b" &&
-                                       link.GetProperty("kind").GetString() == "neighbour");
-    }
-
-    [Fact]
-    public void Auto_RespectsLimit()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a", "Alpha", "method", "src/A.cs", 1),
-                ("b", "Beta", "method", "src/B.cs", 2),
-                ("c", "Gamma", "method", "src/C.cs", 3),
-                ("d", "Delta", "method", "src/D.cs", 4),
-            },
-            new[] { ("a", "b"), ("a", "c"), ("a", "d") });
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 1, limit: 2, fullFormat: false,
-            out int emitted, out _);
-
-        Assert.Equal(2, emitted);
-    }
-
-    [Fact]
-    public void Auto_NoNeighbours_CleanMessage()
-    {
-        var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
-            Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("No neighbours", outp);
-    }
-
-    [Fact]
-    public void Auto_NoNeighbours_OffersSameFileFallbacks()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a", "Alpha", "method", "src/A.cs", 1),
-                ("b", "Beta", "method", "src/A.cs", 10),
-            },
-            Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("No neighbours", outp);
-        Assert.Contains("Resolved target: Alpha method src/A.cs:1", outp);
-        Assert.Contains("Same-file symbols:", outp);
-        Assert.Contains("Beta  method  src/A.cs:10", outp);
-        Assert.Contains("Next:", outp);
-        Assert.Contains("search query=\"Alpha\" mode=\"source\"", outp);
-        Assert.Contains("inspect target=\"src/A.cs\" depth=\"overview\"", outp);
-        Assert.Contains("trace target=\"Alpha\" mode=\"refs\"", outp);
-    }
-
-    [Fact]
-    public void Auto_NoNeighbours_JsonCarriesNextActions()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a", "Alpha", "method", "src/A.cs", 1),
-                ("b", "Beta", "method", "src/A.cs", 10),
-            },
-            Array.Empty<(string, string)>());
-
-        string json = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false, json: true,
-            out int emitted, out _);
-
-        Assert.Equal(0, emitted);
-        using var doc = JsonDocument.Parse(json);
-        JsonElement root = doc.RootElement;
-        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
-        Assert.Equal("no_neighbours", diagnostic.GetProperty("code").GetString());
-        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
-        Assert.Equal(3, actions.Length);
-        Assert.Equal("search", actions[0].GetProperty("tool").GetString());
-        Assert.Equal("Alpha", actions[0].GetProperty("args").GetProperty("query").GetString());
-        Assert.Equal("source", actions[0].GetProperty("args").GetProperty("mode").GetString());
-        Assert.Equal("inspect", actions[1].GetProperty("tool").GetString());
-        Assert.Equal("src/A.cs", actions[1].GetProperty("args").GetProperty("target").GetString());
-        Assert.Equal("overview", actions[1].GetProperty("args").GetProperty("depth").GetString());
-        Assert.Equal("trace", actions[2].GetProperty("tool").GetString());
-        Assert.Equal("Alpha", actions[2].GetProperty("args").GetProperty("target").GetString());
-        Assert.Equal("refs", actions[2].GetProperty("args").GetProperty("mode").GetString());
-    }
-
-    [Fact]
-    public void Trace_EmptyTelemetry_DistinguishesNoNeighbours()
-    {
-        var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
-            Array.Empty<(string, string)>());
-        string dir = Path.Combine(Path.GetTempPath(), "miller-trace-empty-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        string telemetryDb = Path.Combine(dir, "telemetry.db");
-        var provider = new RecordingWorkspaceIndexProvider(
-            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", dir));
-        var tool = new TraceTool(provider);
-
-        try
-        {
-            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", dir))
-            {
-                using var scope = ledger.Measure("trace", op: null);
-                string output = tool.Trace("Alpha");
-                Assert.Contains("No neighbours", output);
-            }
-
-            using var doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
-            Assert.Equal("no_neighbours", doc.RootElement.GetProperty("empty_reason").GetString());
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
-        }
-    }
-
-    [Fact]
-    public void Auto_TargetNotFound_CleanMessage()
-    {
-        var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
-            Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "DoesNotExist", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("not found", outp);
-    }
-
     [Fact]
     public void Trace_TargetNotFoundDiagnosticAction_BoundsLongTarget()
     {
@@ -364,7 +158,7 @@ public sealed class TraceToolTests
         var tool = new TraceTool(provider);
         string target = new('x', 500);
 
-        using var document = JsonDocument.Parse(tool.Trace(target, format: "json"));
+        using var document = JsonDocument.Parse(tool.Trace(target, mode: "path", to: "Alpha", format: "json"));
         string call = document.RootElement
             .GetProperty("diagnostic")
             .GetProperty("next_actions")[0]
@@ -374,171 +168,6 @@ public sealed class TraceToolTests
         Assert.DoesNotContain(new string('x', 161), call, StringComparison.Ordinal);
         Assert.Contains(new string('x', 160), call, StringComparison.Ordinal);
     }
-
-    [Fact]
-    public void Auto_MisspelledTarget_SuggestsNearMissesInNote()
-    {
-        var index = BuildSymbolIndex(
-            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
-            Array.Empty<(string, string)>());
-
-        // Wrong-case miss of "Alpha" — the note must offer the close name for a one-turn correction.
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "alpha", mode: "auto", to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("not found", outp);
-        Assert.Contains("Closest:", outp);
-        Assert.Contains("Alpha", outp);
-    }
-
-    [Fact]
-    public void Auto_ScopeDisambiguatesAmbiguousTarget()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a1", "Handle", "method", "src/First.cs", 1),
-                ("a2", "Handle", "method", "src/Second.cs", 1),
-                ("b", "Next", "method", "src/Next.cs", 10),
-            },
-            new[] { ("a2", "b") });
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Handle", scope: "src/Second.cs", mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, emitted: out int emitted, nodesVisited: out int visited);
-
-        Assert.Equal(1, emitted);
-        Assert.Equal(1, visited);
-        Assert.Contains("# trace Handle (auto, 1 neighbour(s))", outp);
-        Assert.Contains("Next  method  src/Next.cs:10  (hop 1)", outp);
-        Assert.DoesNotContain("Multiple candidates", outp);
-    }
-
-    [Fact]
-    public void Auto_AmbiguousTarget_PointsToScope()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a1", "Handle", "method", "src/First.cs", 1),
-                ("a2", "Handle", "method", "src/Second.cs", 1),
-            },
-            Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Handle", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("Multiple candidates", outp);
-        Assert.Contains("scope=<file>", outp);
-        Assert.Contains("Try:", outp);
-        Assert.Contains("trace target=\"Handle\" scope=\"src/First.cs\"", outp);
-        Assert.Contains("trace target=\"Handle\" scope=\"src/Second.cs\"", outp);
-    }
-
-    [Fact]
-    public void Auto_AmbiguousTarget_CompactCapsCandidatesWithRemainderNote()
-    {
-        var symbols = Enumerable.Range(1, 25)
-            .Select(i => ($"a{i}", "Search", "method", $"src/File{i:00}.cs", i))
-            .ToArray();
-        var index = BuildSymbolIndex(symbols, Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Search", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("src/File20.cs", outp);
-        Assert.DoesNotContain("src/File21.cs", outp);
-        Assert.Contains("5 more candidates", outp);
-    }
-
-    [Fact]
-    public void Auto_ScopedAmbiguousTarget_AsksForMoreSpecificTarget()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a1", "SearchTool", "class", "src/SearchTool.cs", 10),
-                ("a2", "SearchTool", "constructor", "src/SearchTool.cs", 12),
-            },
-            Array.Empty<(string, string)>());
-
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "SearchTool", scope: "src/SearchTool.cs", mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, emitted: out int emitted, nodesVisited: out _);
-
-        Assert.Equal(0, emitted);
-        Assert.Contains("more specific target", outp);
-        Assert.DoesNotContain("pass scope=<file>", outp);
-        Assert.Contains("Next:", outp);
-        Assert.Contains("trace target=\"a1\"", outp);
-        Assert.Contains("class in src/SearchTool.cs:10", outp);
-        Assert.Contains("trace target=\"a2\"", outp);
-        Assert.Contains("constructor in src/SearchTool.cs:12", outp);
-    }
-
-    [Fact]
-    public void Auto_AmbiguousTarget_JsonCarriesDiagnostic()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a1", "Handle", "method", "src/First.cs", 1),
-                ("a2", "Handle", "method", "src/Second.cs", 1),
-            },
-            Array.Empty<(string, string)>());
-
-        string json = TraceTool.Run(index, ResolverFor(index),
-            target: "Handle", scope: null, mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, json: true, emitted: out int emitted, nodesVisited: out _);
-
-        Assert.Equal(0, emitted);
-        using var doc = JsonDocument.Parse(json);
-        JsonElement root = doc.RootElement;
-        Assert.Contains("Multiple candidates", root.GetProperty("note").GetString());
-        JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
-        Assert.Equal("ambiguous_target", diagnostic.GetProperty("code").GetString());
-        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
-        Assert.Equal(2, actions.Length);
-        Assert.Equal("trace", actions[0].GetProperty("tool").GetString());
-        Assert.Equal("Handle", actions[0].GetProperty("args").GetProperty("target").GetString());
-        Assert.Equal("src/First.cs", actions[0].GetProperty("args").GetProperty("scope").GetString());
-        Assert.Empty(root.GetProperty("nodes").EnumerateArray());
-        Assert.Empty(root.GetProperty("links").EnumerateArray());
-    }
-
-    [Fact]
-    public void Auto_ScopedAmbiguousTarget_JsonCarriesSymbolIdNextActions()
-    {
-        var index = BuildSymbolIndex(
-            new[]
-            {
-                ("a1", "SearchTool", "class", "src/SearchTool.cs", 10),
-                ("a2", "SearchTool", "constructor", "src/SearchTool.cs", 12),
-            },
-            Array.Empty<(string, string)>());
-
-        string json = TraceTool.Run(index, ResolverFor(index),
-            target: "SearchTool", scope: "src/SearchTool.cs", mode: "auto", to: null, depth: 3, limit: 20,
-            fullFormat: false, json: true, emitted: out int emitted, nodesVisited: out _);
-
-        Assert.Equal(0, emitted);
-        using var doc = JsonDocument.Parse(json);
-        JsonElement root = doc.RootElement;
-        Assert.Contains("more specific target", root.GetProperty("note").GetString());
-        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
-        Assert.Equal(2, actions.Length);
-        Assert.Equal("trace", actions[0].GetProperty("tool").GetString());
-        Assert.Equal("a1", actions[0].GetProperty("args").GetProperty("target").GetString());
-        Assert.Equal("a2", actions[1].GetProperty("args").GetProperty("target").GetString());
-    }
-
-    // ---------- mode: path ----------
 
     [Fact]
     public void Path_RendersOrderedShortestPath()
@@ -756,7 +385,7 @@ public sealed class TraceToolTests
     // ---------- mode: refs ----------
 
     [Fact]
-    public void Refs_RendersDefinitionAndFilteredNameBasedReferences()
+    public void Refs_RendersDefinitionAndFilteredFallbackReferences()
     {
         var index = BuildSymbolIndex(
             new[]
@@ -778,14 +407,394 @@ public sealed class TraceToolTests
             out int emitted, out int visited);
 
         Assert.Equal(1, emitted);
-        Assert.Equal(2, visited);
-        Assert.Contains("# trace refs Alpha (1 reference(s), kind=call, name-based)", outp);
+        Assert.Equal(1, visited);
+        Assert.Contains("# trace refs Alpha (1 reference(s), exact=0, fallback=1, kind=call)", outp);
         Assert.Contains("definition:", outp);
         Assert.Contains("Alpha  method  src/A.cs:1", outp);
-        // Compact resolves the containing symbol id to its enclosing symbol name — no raw hash/id.
-        Assert.Contains("src/Caller.cs:10  call  in=CallerMethod", outp);
+        Assert.Contains("src/Caller.cs:10  call  in=CallerMethod  [fallback source=name_fallback confidence=0.50]", outp);
         Assert.DoesNotContain("containing=", outp);
         Assert.DoesNotContain("src/Types.cs", outp);
+    }
+
+    [Fact]
+    public void Refs_Json_SeparatesExactEvidenceFromFallback()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
+            },
+            Array.Empty<(string, string)>());
+        var exact = new ReferenceEvidence(
+            "a",
+            "caller",
+            "src/Caller.cs",
+            10,
+            4,
+            10,
+            9,
+            100,
+            105,
+            ReferenceKind.Call,
+            "call",
+            ReferenceEvidenceSource.IdentifierResolution,
+            2,
+            0.9,
+            ReferenceResolutionStatus.Exact);
+        var evidence = new ReferenceEvidenceSet(
+            [exact],
+            [],
+            new ReferenceEvidenceCoverage(1, 1, 1, 0, 0, 1, false, false, ReferenceFallbackStatus.NoCandidates));
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 20,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: (_, _) => evidence,
+            out int emitted,
+            out int visited);
+
+        Assert.Equal(1, emitted);
+        Assert.Equal(1, visited);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        JsonElement reference = Assert.Single(root.GetProperty("exact_references").EnumerateArray());
+        Assert.Equal("a", reference.GetProperty("target_symbol_id").GetString());
+        Assert.Equal("exact", reference.GetProperty("resolution_status").GetString());
+        Assert.Equal("identifier_resolution", reference.GetProperty("source").GetString());
+        Assert.Equal(2, reference.GetProperty("resolution_tier").GetInt32());
+        Assert.Equal(0.9, reference.GetProperty("confidence").GetDouble());
+        Assert.Empty(root.GetProperty("fallback_references").EnumerateArray());
+    }
+
+    [Fact]
+    public void Refs_Json_ExplainsAmbiguousFallbackSuppressionWithoutCallingItLimitTruncation()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var exact = new ReferenceEvidence(
+            "a",
+            null,
+            "src/Caller.cs",
+            10,
+            4,
+            10,
+            9,
+            100,
+            105,
+            ReferenceKind.Call,
+            "call",
+            ReferenceEvidenceSource.IdentifierDirect,
+            null,
+            1,
+            ReferenceResolutionStatus.Exact);
+        var evidence = new ReferenceEvidenceSet(
+            [exact],
+            [],
+            new ReferenceEvidenceCoverage(
+                1,
+                1,
+                1,
+                1,
+                0,
+                2,
+                false,
+                false,
+                ReferenceFallbackStatus.SuppressedAmbiguousName));
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 20,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: (_, _) => evidence,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(json);
+        JsonElement diagnostic = Assert.Single(
+            document.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal(
+            "fallback_suppressed_ambiguous_name",
+            diagnostic.GetProperty("code").GetString());
+        Assert.Contains(
+            "suppressed because the target name is ambiguous",
+            diagnostic.GetProperty("message").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Refs_Json_UsesArtifactBoundStatelessContinuationAboveOutputBudget()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        ReferenceEvidence[] references = Enumerable.Range(1, 30)
+            .Select(line => new ReferenceEvidence(
+                "a",
+                null,
+                $"src/Caller{line}.cs",
+                line,
+                1,
+                line,
+                6,
+                line * 10,
+                line * 10 + 5,
+                ReferenceKind.Call,
+                "call",
+                ReferenceEvidenceSource.IdentifierDirect,
+                null,
+                1,
+                ReferenceResolutionStatus.Exact,
+                "csharp"))
+            .ToArray();
+        var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
+        ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
+        {
+            ReferenceEvidence[] page = references
+                .Skip(query.ExactOffset)
+                .Take(query.Bounds.ExactLimit)
+                .ToArray();
+            return new ReferenceEvidenceSet(
+                page,
+                [],
+                new ReferenceEvidenceCoverage(
+                    references.Length,
+                    references.Length,
+                    page.Length,
+                    0,
+                    0,
+                    1,
+                    references.Length > query.ExactOffset + page.Length,
+                    false,
+                    ReferenceFallbackStatus.NoCandidates),
+                snapshot);
+        }
+
+        string first = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 30,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPage,
+            workspaceId: "workspace",
+            snapshot,
+            continuation: null,
+            out int firstCount,
+            out _);
+        using var firstDocument = JsonDocument.Parse(first);
+        string token = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+
+        string second = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 30,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPage,
+            workspaceId: "workspace",
+            snapshot,
+            continuation: token,
+            out int secondCount,
+            out _);
+        using var secondDocument = JsonDocument.Parse(second);
+
+        Assert.InRange(firstCount, 1, 24);
+        Assert.Equal(30 - firstCount, secondCount);
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(first), 1, 16 * 1024);
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(second), 1, 16 * 1024);
+        Assert.Equal(
+            30,
+            firstDocument.RootElement.GetProperty("exact_references").GetArrayLength() +
+            secondDocument.RootElement.GetProperty("exact_references").GetArrayLength());
+        Assert.Equal(JsonValueKind.Null, secondDocument.RootElement.GetProperty("continuation").ValueKind);
+    }
+
+    [Fact]
+    public void Refs_Json_ContinuationKeepsEachPageWithinSixteenKiB()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        string directory = new('x', 700);
+        ReferenceEvidence[] references = Enumerable.Range(1, 30)
+            .Select(line => new ReferenceEvidence(
+                "a",
+                null,
+                $"src/{directory}/Caller{line}.cs",
+                line,
+                1,
+                line,
+                6,
+                line * 10,
+                line * 10 + 5,
+                ReferenceKind.Call,
+                "call",
+                ReferenceEvidenceSource.IdentifierDirect,
+                null,
+                1,
+                ReferenceResolutionStatus.Exact,
+                "csharp"))
+            .ToArray();
+        var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
+        ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
+        {
+            ReferenceEvidence[] page = references
+                .Skip(query.ExactOffset)
+                .Take(query.Bounds.ExactLimit)
+                .ToArray();
+            return new ReferenceEvidenceSet(
+                page,
+                [],
+                new ReferenceEvidenceCoverage(
+                    references.Length,
+                    references.Length,
+                    page.Length,
+                    0,
+                    0,
+                    1,
+                    references.Length > query.ExactOffset + page.Length,
+                    false,
+                    ReferenceFallbackStatus.NoCandidates),
+                snapshot);
+        }
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 30,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPage,
+            workspaceId: "workspace",
+            snapshot,
+            continuation: null,
+            out int emitted,
+            out _);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(json), 1, 16 * 1024);
+        Assert.InRange(emitted, 1, 23);
+        Assert.Equal(JsonValueKind.String, document.RootElement.GetProperty("continuation").ValueKind);
+    }
+
+    [Fact]
+    public void Refs_Json_LimitTruncationNeverEscapesSixteenKiBBudget()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
+
+        for (int directoryLength = 50; directoryLength <= 500; directoryLength++)
+        {
+            string directory = new('x', directoryLength);
+            ReferenceEvidence[] references = Enumerable.Range(1, 21)
+                .Select(line => new ReferenceEvidence(
+                    "a",
+                    null,
+                    $"src/{directory}/Caller{line}.cs",
+                    line,
+                    1,
+                    line,
+                    6,
+                    line * 10,
+                    line * 10 + 5,
+                    ReferenceKind.Call,
+                    "call",
+                    ReferenceEvidenceSource.IdentifierDirect,
+                    null,
+                    1,
+                    ReferenceResolutionStatus.Exact,
+                    "csharp"))
+                .ToArray();
+            ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
+            {
+                ReferenceEvidence[] page = references
+                    .Skip(query.ExactOffset)
+                    .Take(query.Bounds.ExactLimit)
+                    .ToArray();
+                return new ReferenceEvidenceSet(
+                    page,
+                    [],
+                    new ReferenceEvidenceCoverage(
+                        references.Length,
+                        references.Length,
+                        page.Length,
+                        0,
+                        0,
+                        1,
+                        references.Length > query.ExactOffset + page.Length,
+                        false,
+                        ReferenceFallbackStatus.NoCandidates),
+                    snapshot);
+            }
+
+            string json = TraceTool.Run(
+                index,
+                ResolverFor(index),
+                target: "Alpha",
+                scope: null,
+                mode: "refs",
+                to: null,
+                depth: 3,
+                limit: 20,
+                fullFormat: false,
+                json: true,
+                referenceKind: null,
+                includeDefinition: true,
+                readReferenceEvidence: ReadPage,
+                workspaceId: "workspace",
+                snapshot,
+                continuation: null,
+                out _,
+                out _);
+
+            Assert.True(
+                System.Text.Encoding.UTF8.GetByteCount(json) <= 16 * 1024,
+                $"directoryLength={directoryLength}");
+        }
     }
 
     [Fact]
@@ -847,16 +856,20 @@ public sealed class TraceToolTests
 
         JsonElement[] refs = root.GetProperty("references").EnumerateArray().ToArray();
         Assert.Equal(2, refs.Length);
-        Assert.Equal("Alpha", refs[0].GetProperty("name").GetString());
+        Assert.Equal(JsonValueKind.Null, refs[0].GetProperty("target_symbol_id").ValueKind);
         Assert.Equal("call", refs[0].GetProperty("kind").GetString());
         Assert.Equal("src/Caller.cs", refs[0].GetProperty("file").GetString());
         Assert.Equal(10, refs[0].GetProperty("line").GetInt32());
         Assert.Equal("caller", refs[0].GetProperty("containing_symbol_id").GetString());
-        // JSON keeps the chainable id AND adds the resolved enclosing symbol name (additive).
         Assert.Equal("CallerMethod", refs[0].GetProperty("containing_symbol_name").GetString());
-        Assert.Equal("name_based", refs[0].GetProperty("confidence").GetString());
+        Assert.Equal("fallback", refs[0].GetProperty("resolution_status").GetString());
+        Assert.Equal("name_fallback", refs[0].GetProperty("source").GetString());
+        Assert.Equal(0.5, refs[0].GetProperty("confidence").GetDouble());
         Assert.Equal(JsonValueKind.Null, refs[1].GetProperty("containing_symbol_id").ValueKind);
         Assert.Equal(JsonValueKind.Null, refs[1].GetProperty("containing_symbol_name").ValueKind);
+        Assert.Empty(root.GetProperty("exact_references").EnumerateArray());
+        Assert.Equal(2, root.GetProperty("fallback_references").GetArrayLength());
+        Assert.Equal("available", root.GetProperty("reference_coverage").GetProperty("fallback_status").GetString());
     }
 
     [Fact]
@@ -918,7 +931,7 @@ public sealed class TraceToolTests
         Assert.Contains("No extracted refs for 'Alpha'", outp, StringComparison.Ordinal);
         Assert.Contains("Next:", outp, StringComparison.Ordinal);
         Assert.Contains("search query=\"Alpha\" mode=\"source\"", outp, StringComparison.Ordinal);
-        Assert.Contains("trace target=\"Alpha\" mode=\"auto\"", outp, StringComparison.Ordinal);
+        Assert.Contains("inspect target=\"Alpha\" depth=\"full\"", outp, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -945,9 +958,9 @@ public sealed class TraceToolTests
         Assert.Equal("search", actions[0].GetProperty("tool").GetString());
         Assert.Equal("Alpha", actions[0].GetProperty("args").GetProperty("query").GetString());
         Assert.Equal("source", actions[0].GetProperty("args").GetProperty("mode").GetString());
-        Assert.Equal("trace", actions[1].GetProperty("tool").GetString());
+        Assert.Equal("inspect", actions[1].GetProperty("tool").GetString());
         Assert.Equal("Alpha", actions[1].GetProperty("args").GetProperty("target").GetString());
-        Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("full", actions[1].GetProperty("args").GetProperty("depth").GetString());
     }
 
     [Fact]
@@ -972,10 +985,8 @@ public sealed class TraceToolTests
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
-        Assert.Contains("references:", outp, StringComparison.Ordinal);
-        // The nudge fires after the references block, uses the resolved target name, and is the final line.
+        Assert.Contains("fallback (unresolved):", outp, StringComparison.Ordinal);
         Assert.EndsWith("next: impact target=\"Alpha\" — before editing", outp, StringComparison.Ordinal);
-        // Exactly one hint line.
         Assert.Equal(1, outp.Split('\n').Count(line => line.StartsWith("next:", StringComparison.Ordinal)));
     }
 
@@ -999,7 +1010,6 @@ public sealed class TraceToolTests
 
         Assert.Equal(1, emitted);
         Assert.Contains("reference trace truncated by limit.", outp, StringComparison.Ordinal);
-        // The nudge renders AFTER the truncation note.
         Assert.EndsWith("next: impact target=\"Alpha\" — before editing", outp, StringComparison.Ordinal);
     }
 
@@ -1026,7 +1036,7 @@ public sealed class TraceToolTests
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
-        Assert.Contains("references:", outp, StringComparison.Ordinal);
+        Assert.Contains("fallback (unresolved):", outp, StringComparison.Ordinal);
         Assert.DoesNotContain("next:", outp, StringComparison.Ordinal);
     }
 
@@ -2361,7 +2371,7 @@ public sealed class TraceToolTests
         Assert.Contains("not on a cross-language bridge", outp);
         Assert.Contains("Next:", outp);
         Assert.Contains("trace target=\"Loner\" mode=\"refs\"", outp);
-        Assert.Contains("trace target=\"Loner\" mode=\"auto\"", outp);
+        Assert.Contains("inspect target=\"Loner\" depth=\"full\"", outp);
         Assert.Contains("search query=\"Loner\" mode=\"source\"", outp);
     }
 
@@ -2417,8 +2427,8 @@ public sealed class TraceToolTests
         Assert.Equal(3, actions.Length);
         Assert.Equal("trace", actions[0].GetProperty("tool").GetString());
         Assert.Equal("refs", actions[0].GetProperty("args").GetProperty("mode").GetString());
-        Assert.Equal("trace", actions[1].GetProperty("tool").GetString());
-        Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("inspect", actions[1].GetProperty("tool").GetString());
+        Assert.Equal("full", actions[1].GetProperty("args").GetProperty("depth").GetString());
         Assert.Equal("search", actions[2].GetProperty("tool").GetString());
         Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
     }
@@ -2452,7 +2462,7 @@ public sealed class TraceToolTests
 
         Assert.Equal(0, emitted);
         Assert.Contains("trace target=\"Loner\" mode=\"refs\"", outp);
-        Assert.Contains("trace target=\"Loner\" mode=\"auto\"", outp);
+        Assert.Contains("inspect target=\"Loner\" depth=\"full\"", outp);
         Assert.Contains("search query=\"Loner\" mode=\"source\"", outp);
         Assert.Contains("patterns operation=\"search\" query=\"route\"", outp);
         Assert.Contains("patterns operation=\"search\" pattern_id=\"htmx.attribute.v1\"", outp);
@@ -2649,7 +2659,7 @@ public sealed class TraceToolTests
         Assert.Contains("No bridge links from 'OrderDto' within 0 hop(s).", outp);
         Assert.Contains("Next:", outp);
         Assert.Contains("trace target=\"OrderDto\" mode=\"refs\"", outp);
-        Assert.Contains("trace target=\"OrderDto\" mode=\"auto\"", outp);
+        Assert.Contains("inspect target=\"OrderDto\" depth=\"full\"", outp);
         Assert.Contains("search query=\"OrderDto\" mode=\"source\"", outp);
     }
 
@@ -2679,7 +2689,8 @@ public sealed class TraceToolTests
         JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
         Assert.Equal(3, actions.Length);
         Assert.Equal("refs", actions[0].GetProperty("args").GetProperty("mode").GetString());
-        Assert.Equal("auto", actions[1].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("inspect", actions[1].GetProperty("tool").GetString());
+        Assert.Equal("full", actions[1].GetProperty("args").GetProperty("depth").GetString());
         Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
     }
 
@@ -2810,7 +2821,7 @@ public sealed class TraceToolTests
             ("target-ws", ReadToolRoutingTestSupport.ContextFor(targetIndex, "target.db", "target-ws", targetRoot)));
         var tool = new TraceTool(provider);
 
-        string output = tool.Trace("Alpha", workspace_id: "target-ws");
+        string output = tool.Trace("Alpha", mode: "path", to: "Beta", workspace_id: "target-ws");
 
         Assert.Equal("target-ws", provider.LastWorkspaceId);
         Assert.True(provider.LastEnsureFresh);
@@ -2831,19 +2842,21 @@ public sealed class TraceToolTests
         Assert.Throws<ArgumentNullException>(() => new TraceTool(null!));
     }
 
-    [Fact]
-    public void UnknownMode_CleanMessage()
+    [Theory]
+    [InlineData("sideways")]
+    [InlineData("auto")]
+    public void UnknownMode_CleanMessage(string mode)
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
 
         string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: "sideways", to: null, depth: 3, limit: 20, fullFormat: false,
+            target: "Alpha", mode: mode, to: null, depth: 3, limit: 20, fullFormat: false,
             out int emitted, out _);
 
         Assert.Equal(0, emitted);
-        Assert.Contains("Unknown mode 'sideways'", outp);
+        Assert.Contains($"Unknown mode '{mode}'", outp);
     }
 
     [Fact]
@@ -2855,9 +2868,9 @@ public sealed class TraceToolTests
         var resolver = ResolverFor(index);
 
         Assert.Throws<ArgumentNullException>(() =>
-            TraceTool.Run(null!, resolver, "Alpha", "auto", null, 3, 20, false, out _, out _));
+            TraceTool.Run(null!, resolver, "Alpha", "path", "Beta", 3, 20, false, out _, out _));
         Assert.Throws<ArgumentNullException>(() =>
-            TraceTool.Run(index, null!, "Alpha", "auto", null, 3, 20, false, out _, out _));
+            TraceTool.Run(index, null!, "Alpha", "path", "Beta", 3, 20, false, out _, out _));
     }
 
     // ---------- backend-http provider (plan Task 6): route diagnostics, next_actions, render agreement ----------

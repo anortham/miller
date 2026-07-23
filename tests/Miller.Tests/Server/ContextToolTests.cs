@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
+using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -719,7 +720,7 @@ public sealed class ContextToolTests
     // ---- reference-aware usage mode ----
 
     [Fact]
-    public void RunReferenceAware_Json_LabelsNameBasedReferencesAndContainingChunks()
+    public void RunReferenceAware_Json_LabelsFallbackReferencesAndContainingChunks()
     {
         var (index, resolver) = BuildFixture();
 
@@ -758,18 +759,118 @@ public sealed class ContextToolTests
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("item_type").GetString() == "identifier"
             && item.GetProperty("reason").GetString() == "possible_reference"
-            && item.GetProperty("confidence").GetString() == "name_based"
+            && item.GetProperty("confidence").GetString() == "fallback"
+            && item.GetProperty("resolution_status").GetString() == "fallback"
+            && item.GetProperty("provenance").GetString() == "name_fallback"
             && item.GetProperty("file").GetString() == "web/OrderController.cs");
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("item_type").GetString() == "identifier"
-            && item.GetProperty("reason").GetString() == "callee_identifier"
-            && item.GetProperty("confidence").GetString() == "containing_symbol"
+            && item.GetProperty("reason").GetString() == "unresolved_callee"
+            && item.GetProperty("confidence").GetString() == "fallback"
             && item.GetProperty("name").GetString() == "OrderRepo");
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("item_type").GetString() == "content_chunk"
             && item.GetProperty("reason").GetString() == "containing_chunk"
             && item.GetProperty("confidence").GetString() == "exact"
             && item.GetProperty("chunk_id").GetString() == "chunk-a");
+    }
+
+    [Fact]
+    public void RunReferenceAware_Json_PreservesExactTargetAndProvenance()
+    {
+        var (index, resolver) = BuildFixture();
+        var inbound = new ReferenceEvidence(
+            ServiceId,
+            ControllerId,
+            "web/OrderController.cs",
+            12,
+            4,
+            12,
+            16,
+            100,
+            112,
+            ReferenceKind.TypeUsage,
+            "type_usage",
+            ReferenceEvidenceSource.IdentifierResolution,
+            1,
+            0.95,
+            ReferenceResolutionStatus.Exact);
+        var outbound = new OutgoingReferenceEvidence(
+            ServiceId,
+            RepoId,
+            "OrderRepo",
+            "src/OrderService.cs",
+            20,
+            8,
+            20,
+            17,
+            200,
+            209,
+            ReferenceKind.Call,
+            "call",
+            ReferenceEvidenceSource.IdentifierDirect,
+            null,
+            1,
+            ReferenceResolutionStatus.Exact);
+        var dependency = new OutgoingReferenceEvidence(
+            ServiceId,
+            ControllerId,
+            "OrderController",
+            "src/OrderService.cs",
+            22,
+            8,
+            22,
+            23,
+            220,
+            235,
+            ReferenceKind.TypeUsage,
+            "type_usage",
+            ReferenceEvidenceSource.IdentifierDirect,
+            null,
+            1,
+            ReferenceResolutionStatus.Exact);
+
+        string output = ContextTool.RunReferenceAware(
+            index,
+            index.Graph,
+            resolver,
+            query: "zzz no lexical match zzz",
+            tokenBudget: 100000,
+            maxHops: 0,
+            entrySymbols: [ServiceId],
+            failingTest: null,
+            stackTrace: null,
+            referenceDepth: 1,
+            excludeTests: false,
+            json: true,
+            readReferenceEvidence: _ => new ReferenceEvidenceSet(
+                [inbound],
+                [],
+                new ReferenceEvidenceCoverage(1, 1, 1, 0, 0, 1, false, false, ReferenceFallbackStatus.NoCandidates)),
+            readOutgoingEvidence: _ => new OutgoingReferenceEvidenceSet(
+                [outbound, dependency],
+                [],
+                new OutgoingReferenceEvidenceCoverage(2, 2, 2, 0, 0, false, false)),
+            readContentChunks: (_, _) => [],
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement bundle = doc.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "reference"
+            && item.GetProperty("target_symbol_id").GetString() == ServiceId
+            && item.GetProperty("resolution_status").GetString() == "exact"
+            && item.GetProperty("provenance").GetString() == "identifier_resolution");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "callee"
+            && item.GetProperty("target_symbol_id").GetString() == RepoId
+            && item.GetProperty("resolution_status").GetString() == "exact"
+            && item.GetProperty("provenance").GetString() == "identifier_direct");
+        Assert.Contains(bundle.EnumerateArray(), item =>
+            item.GetProperty("reason").GetString() == "dependency"
+            && item.GetProperty("target_symbol_id").GetString() == ControllerId
+            && item.GetProperty("resolution_status").GetString() == "exact");
     }
 
     [Fact]
@@ -789,7 +890,8 @@ public sealed class ContextToolTests
 
         Assert.Contains("# context bundle", output);
         Assert.Contains("reason=definition confidence=exact", output);
-        Assert.Contains("reason=possible_reference confidence=name_based", output);
+        Assert.Contains("reason=possible_reference confidence=fallback", output);
+        Assert.Contains("resolution=fallback source=name_fallback", output);
     }
 
     [Fact]
@@ -937,7 +1039,7 @@ public sealed class ContextToolTests
         string[] expectedPrefix = fullItems.Take(selectedCount).Select(static item => item.GetRawText()).ToArray();
         string[] actualItems = boundedItems.Select(static item => item.GetRawText()).ToArray();
 
-        Assert.Equal(668, selectedCount);
+        Assert.Equal(494, selectedCount);
         Assert.Equal(expectedPrefix, actualItems);
         Assert.True(TokenEstimator.Count(bounded) <= 40000);
         Assert.True(allocated < 32_000_000, $"Context rendering allocated {allocated:N0} bytes.");
@@ -1012,9 +1114,10 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void Context_ReferenceModeUsage_ReadsNameReferencesAndCalleesFromWorkspaceArtifact()
+    public void Context_ReferenceModeUsage_SeparatesWorkspaceFallbackReferencesAndCallees()
     {
         using var fx = JulieDbFixture.CreateForInspect();
+        fx.ExecuteWrite("UPDATE identifiers SET target_symbol_id = NULL;");
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
@@ -1035,11 +1138,11 @@ public sealed class ContextToolTests
             && item.GetProperty("symbol_id").GetString() == JulieDbFixture.GetUserId);
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("reason").GetString() == "possible_reference"
-            && item.GetProperty("confidence").GetString() == "name_based"
+            && item.GetProperty("confidence").GetString() == "fallback"
             && item.GetProperty("file").GetString() == "web/Controller.cs");
         Assert.Contains(bundle.EnumerateArray(), item =>
-            item.GetProperty("reason").GetString() == "callee_identifier"
-            && item.GetProperty("confidence").GetString() == "containing_symbol"
+            item.GetProperty("reason").GetString() == "unresolved_callee"
+            && item.GetProperty("confidence").GetString() == "fallback"
             && item.GetProperty("name").GetString() == "Find");
     }
 

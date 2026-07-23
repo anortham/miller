@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.DeadCode;
+using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
@@ -1856,10 +1857,20 @@ public static class CliDispatch
         {
             output = ContextTool.RunReferenceAware(
                 index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
-                entrySymbols: null, failingTest: null, stackTrace: null,
-                referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
-                readReferences: symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name).Take(ContextTool.ReferenceRowsPerSymbol).ToArray(),
-                readCallees: symbol => ExtractReader.ReadCallees(ctx.ExtractDbPath, symbol.SymbolId).Take(ContextTool.ReferenceRowsPerSymbol).ToArray(),
+                    entrySymbols: null, failingTest: null, stackTrace: null,
+                    referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
+                    readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
+                        ctx.ExtractDbPath,
+                        symbol.SymbolId,
+                        new ReferenceEvidenceBounds(
+                            ContextTool.ReferenceRowsPerSymbol,
+                            ContextTool.ReferenceRowsPerSymbol)),
+                    readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
+                        ctx.ExtractDbPath,
+                        symbol.SymbolId,
+                        new ReferenceEvidenceBounds(
+                            ContextTool.ReferenceRowsPerSymbol,
+                            ContextTool.ReferenceRowsPerSymbol)),
                 readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
                     ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath),
                     symbols,
@@ -2030,11 +2041,11 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "full", "json", "no-definition");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]");
+            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
-        string mode = o.Value("mode", "auto")!;
+        string mode = o.Value("mode", "refs")!;
         bool json = o.Has("json");
         string? referenceKind = o.Value("reference-kind", o.Value("kind"));
         bool includeDefinition = BoolOption(o, "include-definition", fallback: true) && !o.Has("no-definition");
@@ -2048,7 +2059,12 @@ public static class CliDispatch
                 fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
                 depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
                 referenceKind, includeDefinition,
-                symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name),
+                (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+                ctx.WorkspaceId ?? "current",
+                string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
+                    ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                    : null,
+                o.Value("continuation"),
                 out _, out _);
             outw.WriteLine(bridgeOutput);
             return 0;
@@ -2063,7 +2079,12 @@ public static class CliDispatch
             index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
             depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
             referenceKind, includeDefinition,
-            symbol => ExtractReader.ReadReferences(ctx.ExtractDbPath, symbol.Name),
+            (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+            ctx.WorkspaceId ?? "current",
+            string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
+                ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                : null,
+            o.Value("continuation"),
             out _, out _);
         outw.WriteLine(output);
         return 0;
@@ -3108,8 +3129,8 @@ public static class CliDispatch
           impact <input>     Downstream symbols + tests a change would affect.
                              <symbol> | --changed-paths PATH[,PATH...] | --diff DIFF | --git [--base REF] [--staged]
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
-          trace <symbol>     Follow callers/callees, references, a path, or a cross-language bridge.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode auto|path|refs|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--full] [--json]
+          trace <symbol>     Follow exact references, a dependency path, or a cross-language bridge.
+                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
           workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove | prune.

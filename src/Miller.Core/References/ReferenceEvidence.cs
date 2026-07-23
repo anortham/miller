@@ -37,9 +37,26 @@ public readonly record struct ReferenceEvidenceBounds(int ExactLimit, int Fallba
     }
 }
 
+/// <summary>Kind-aware, offset-based bounds for a stateless reference evidence page.</summary>
+public readonly record struct ReferenceEvidenceQuery(
+    ReferenceEvidenceBounds Bounds,
+    ReferenceKind? Kind = null,
+    int ExactOffset = 0,
+    int FallbackOffset = 0)
+{
+    public void Validate()
+    {
+        Bounds.Validate();
+        if (ExactOffset < 0)
+            throw new ArgumentOutOfRangeException(nameof(ExactOffset), ExactOffset, "ExactOffset cannot be negative.");
+        if (FallbackOffset < 0)
+            throw new ArgumentOutOfRangeException(nameof(FallbackOffset), FallbackOffset, "FallbackOffset cannot be negative.");
+    }
+}
+
 /// <summary>A normalized reference site with provenance and resolution facts.</summary>
 public sealed record ReferenceEvidence(
-    string TargetSymbolId,
+    string? TargetSymbolId,
     string? ContainingSymbolId,
     string FilePath,
     int? StartLine,
@@ -53,7 +70,8 @@ public sealed record ReferenceEvidence(
     ReferenceEvidenceSource Source,
     int? ResolutionTier,
     double Confidence,
-    ReferenceResolutionStatus ResolutionStatus);
+    ReferenceResolutionStatus ResolutionStatus,
+    string? Language = null);
 
 /// <summary>Counts and fallback safety facts for one bounded reference read.</summary>
 public sealed record ReferenceEvidenceCoverage(
@@ -67,8 +85,54 @@ public sealed record ReferenceEvidenceCoverage(
     bool FallbackTruncated,
     ReferenceFallbackStatus FallbackStatus);
 
+/// <summary>Artifact identity that binds stateless reference continuation cursors.</summary>
+public sealed record ReferenceEvidenceSnapshot(string ArtifactId, long Revision);
+
 /// <summary>Bounded exact and fallback reference evidence for one resolved symbol.</summary>
 public sealed record ReferenceEvidenceSet(
     IReadOnlyList<ReferenceEvidence> Exact,
     IReadOnlyList<ReferenceEvidence> Fallback,
-    ReferenceEvidenceCoverage Coverage);
+    ReferenceEvidenceCoverage Coverage,
+    ReferenceEvidenceSnapshot? Snapshot = null)
+{
+    public IReadOnlyList<string> ExactCallerSymbolIds { get; init; } = [];
+
+    public IReadOnlyList<string> ExactReferencedBySymbolIds { get; init; } = [];
+}
+
+/// <summary>A normalized outgoing reference with an exact target or an unresolved fallback name.</summary>
+public sealed record OutgoingReferenceEvidence(
+    string ContainingSymbolId,
+    string? TargetSymbolId,
+    string TargetName,
+    string FilePath,
+    int? StartLine,
+    int? StartColumn,
+    int? EndLine,
+    int? EndColumn,
+    long? StartByte,
+    long? EndByte,
+    ReferenceKind Kind,
+    string SourceKind,
+    ReferenceEvidenceSource Source,
+    int? ResolutionTier,
+    double Confidence,
+    ReferenceResolutionStatus ResolutionStatus,
+    string? Language = null);
+
+/// <summary>Counts for one independently bounded outgoing reference read.</summary>
+public sealed record OutgoingReferenceEvidenceCoverage(
+    int ExactObserved,
+    int ExactAvailable,
+    int ExactReturned,
+    int FallbackAvailable,
+    int FallbackReturned,
+    bool ExactTruncated,
+    bool FallbackTruncated);
+
+/// <summary>Bounded resolved and unresolved outgoing evidence for one containing symbol.</summary>
+public sealed record OutgoingReferenceEvidenceSet(
+    IReadOnlyList<OutgoingReferenceEvidence> Exact,
+    IReadOnlyList<OutgoingReferenceEvidence> Fallback,
+    OutgoingReferenceEvidenceCoverage Coverage,
+    ReferenceEvidenceSnapshot? Snapshot = null);

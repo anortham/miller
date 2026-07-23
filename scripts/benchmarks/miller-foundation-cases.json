@@ -3232,10 +3232,10 @@
       }
     },
     {
-      "id": "miller.trace.refs.reference-kind-usage-empty-guidance",
+      "id": "miller.trace.refs.reference-kind-usage-fallback-label",
       "repo": "miller",
       "task_class": "trace.refs",
-      "intent": "Gate trace refs empty-state recovery guidance for a resolved Miller symbol with no reference rows.",
+      "intent": "Gate exact/fallback separation for an unresolved reference to a resolved Miller symbol.",
       "miller": {
         "tool": "trace",
         "args": {
@@ -3254,18 +3254,18 @@
       },
       "expected": {
         "path": "src/Miller.Server/Tools/TraceTool.cs",
-        "anchor": "No extracted refs"
+        "anchor": "fallback (unresolved):"
       },
       "scoring": {
         "mode": "trace_refs",
         "required_anchors": [
-          "No extracted refs for 'ReferenceKindUsage'",
-          "search mode=source ReferenceKindUsage",
-          "trace mode=auto"
+          "fallback (unresolved):",
+          "[fallback source=name_fallback confidence=0.50]",
+          "next: impact target=\"ReferenceKindUsage\""
         ],
         "definition_anchor": "definition:",
-        "min_references": 0,
-        "readiness": "needs-search"
+        "min_references": 1,
+        "readiness": "inspect-ready"
       },
       "gate": {
         "hard": true
@@ -4184,7 +4184,7 @@
       "miller": {
         "tool": "trace",
         "args": {
-          "target": "ReferenceKindUsage",
+          "target": "ReferenceCursor_RejectsMissingChecksum",
           "mode": "refs",
           "format": "compact",
           "limit": 20
@@ -4193,12 +4193,12 @@
       "julie": {
         "tool": "fast_refs",
         "args": {
-          "target": "ReferenceKindUsage"
+          "target": "ReferenceCursor_RejectsMissingChecksum"
         },
         "report_only": true
       },
       "expected": {
-        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "path": "tests/Miller.Tests/Server/ToolContinuationTests.cs",
         "anchor": "No extracted refs"
       },
       "scoring": {
@@ -4209,7 +4209,7 @@
         "required_anchors": [
           "No extracted refs",
           "mode=\"source\"",
-          "mode=\"auto\""
+          "depth=\"full\""
         ]
       },
       "gate": {
@@ -4224,7 +4224,7 @@
       "miller": {
         "tool": "trace",
         "args": {
-          "target": "ReferenceKindUsage",
+          "target": "ReferenceCursor_RejectsMissingChecksum",
           "mode": "refs",
           "format": "json",
           "limit": 20
@@ -4233,12 +4233,12 @@
       "julie": {
         "tool": "fast_refs",
         "args": {
-          "target": "ReferenceKindUsage"
+          "target": "ReferenceCursor_RejectsMissingChecksum"
         },
         "report_only": true
       },
       "expected": {
-        "path": "src/Miller.Server/Tools/TraceTool.cs",
+        "path": "tests/Miller.Tests/Server/ToolContinuationTests.cs",
         "anchor": "next_actions"
       },
       "scoring": {

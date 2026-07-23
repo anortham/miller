@@ -1737,7 +1737,7 @@ public sealed class CliDispatchTests : IDisposable
     [InlineData("inspect", "GetUser", "Gets a user by id.")]
     [InlineData("context", "GetUser", "# context bundle")]
     [InlineData("impact", "GetUser", "# impacted")]
-    [InlineData("trace", "GetUser", "# trace GetUser")]
+    [InlineData("trace", "GetUser", "# trace refs GetUser")]
     public void ReadVerbs_WorkspaceIdSelector_ReadsRegisteredWorkspace(
         string verb,
         string target,
@@ -2035,7 +2035,7 @@ public sealed class CliDispatchTests : IDisposable
             new[] { "inspect", "GetUser", "--depth", "full" },
             Context(fx.DbPath, fx.WorkspaceRoot));
 
-        Assert.Equal(0, code);
+        Assert.True(code == 0, errText + Environment.NewLine + outText);
         Assert.Empty(errText);
         Assert.Contains("## body", outText);
         Assert.Contains("return _repo.Find(id);", outText);
@@ -2174,13 +2174,15 @@ public sealed class CliDispatchTests : IDisposable
         using var doc = JsonDocument.Parse(outText);
         var bundle = doc.RootElement.GetProperty("bundle");
         Assert.Contains(bundle.EnumerateArray(), item =>
-            item.GetProperty("reason").GetString() == "possible_reference"
-            && item.GetProperty("confidence").GetString() == "name_based"
-            && item.GetProperty("file").GetString() == "web/Controller.cs");
+            item.GetProperty("reason").GetString() == "reference"
+            && item.GetProperty("confidence").GetString() == "exact"
+            && item.GetProperty("file").GetString() == "web/Controller.cs"
+            && item.GetProperty("target_symbol_id").GetString() == JulieDbFixture.GetUserId);
         Assert.Contains(bundle.EnumerateArray(), item =>
-            item.GetProperty("reason").GetString() == "callee_identifier"
-            && item.GetProperty("confidence").GetString() == "containing_symbol"
-            && item.GetProperty("name").GetString() == "Find");
+            item.GetProperty("reason").GetString() == "callee"
+            && item.GetProperty("confidence").GetString() == "exact"
+            && item.GetProperty("name").GetString() == "Find"
+            && item.GetProperty("target_symbol_id").GetString() == "dd001122334455667788990a1b2c3d4e");
     }
 
     [Fact]
@@ -2353,7 +2355,7 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Trace_Symbol_RendersNeighbourhood()
+    public void Trace_Symbol_RendersExactReferences()
     {
         using var fx = JulieDbFixture.CreateForInspect();
 
@@ -2363,30 +2365,30 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("# trace refs GetUser", outText);
         Assert.Contains("Find", outText);
         Assert.Contains("auth/Repo.cs", outText);
     }
 
     [Fact]
-    public void Trace_Auto_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    public void Trace_Path_Compact_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
 
         var (code, outText, errText) = Run(
-            new[] { "trace", "GetUser", "--depth", "1" },
+            new[] { "trace", "GetUser", "--mode", "path", "--to", "Find", "--depth", "1" },
             Context(fx.DbPath, fx.WorkspaceRoot));
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("# trace path GetUser -> Find", outText);
         Assert.Contains("Find", outText);
         Assert.Contains("auth/Repo.cs", outText);
     }
 
     [Fact]
-    public void Trace_Auto_Json_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
+    public void Trace_DefaultsToExactRefsWithoutFullGraphLoad()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         SqliteFixtureMutator.DropTypeArgumentsTable(fx.DbPath);
@@ -2399,13 +2401,13 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         using var doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
-        Assert.Equal("auto", root.GetProperty("mode").GetString());
+        Assert.Equal("refs", root.GetProperty("mode").GetString());
         Assert.Equal("GetUser", root.GetProperty("target").GetString());
         Assert.Equal("GetUser", root.GetProperty("resolved_target").GetProperty("name").GetString());
         Assert.Contains(
-            root.GetProperty("nodes").EnumerateArray(),
-            node => node.GetProperty("name").GetString() == "Find" &&
-                    node.GetProperty("file").GetString() == "auth/Repo.cs");
+            root.GetProperty("exact_references").EnumerateArray(),
+            reference => reference.GetProperty("file").GetString() == "web/Controller.cs" &&
+                         reference.GetProperty("target_symbol_id").GetString() == JulieDbFixture.GetUserId);
     }
 
     [Fact]
@@ -2485,7 +2487,7 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("# trace GetUser", outText);
+        Assert.Contains("# trace refs GetUser", outText);
         Assert.Contains("Find", outText);
     }
 
