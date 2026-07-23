@@ -116,16 +116,11 @@ public sealed class ExtractReaderEditTests
     [Fact]
     public void ReadIdentifierSites_IncludesHomonymCallSite()
     {
-        // Invoice.cs:3 is a GENUINE o.Total() call, but Invoice.cs also defines an unrelated Total method.
-        // Because target_symbol_id is NULL at extract, matching is name-based: the read layer returns the call
-        // site verbatim with no resolution filtering (the documented homonym behavior, contained by preview).
         using var fx = JulieDbFixture.CreateForEdit();
 
         var sites = ExtractReader.ReadIdentifierSites(fx.DbPath, "Total");
 
         Assert.Contains(sites, s => s.FilePath == "billing/Invoice.cs" && s.StartByte == 71);
-        // The homonym DEFINITION (Invoice.cs:5) is a symbols-table row, not an identifier; ReadIdentifierSites
-        // returns identifier occurrences only. The def name token is the Server's job (ReadEditSpan + name).
         Assert.DoesNotContain(sites, s => s.FilePath == "billing/Invoice.cs" && s.StartByte == 97);
     }
 

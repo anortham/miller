@@ -406,7 +406,7 @@ internal sealed class JulieDbFixture : IDisposable
         public long? ContentBytesOverride { get; init; }
     }
 
-    /// <summary>A row as written into the synthesized v1 <c>identifiers</c> table (M2 <c>ReadReferences</c>).</summary>
+    /// <summary>A row as written into the synthesized <c>identifiers</c> table.</summary>
     internal sealed record IdentifierRow(
         string Id,
         string Name,
@@ -414,7 +414,7 @@ internal sealed class JulieDbFixture : IDisposable
         string Language,
         string FilePath,
         int StartLine,
-        string? ContainingSymbolId) // POPULATED (enclosing symbol). target_symbol_id is ALWAYS NULL.
+        string? ContainingSymbolId)
     {
         /// <summary>
         /// The exact per-occurrence byte token span (julie's <c>identifiers.start_byte</c>/<c>end_byte</c>),
@@ -423,6 +423,7 @@ internal sealed class JulieDbFixture : IDisposable
         /// </summary>
         public int? StartByte { get; init; }
         public int? EndByte { get; init; }
+        public string? TargetSymbolId { get; init; }
     }
 
     /// <summary>
@@ -436,7 +437,17 @@ internal sealed class JulieDbFixture : IDisposable
         string Id,
         string FromSymbolId,
         string ToSymbolId,
-        string Kind);
+        string Kind)
+    {
+        public string FilePath { get; init; } = string.Empty;
+        public int? StartLine { get; init; }
+        public int? StartColumn { get; init; }
+        public int? EndLine { get; init; }
+        public int? EndColumn { get; init; }
+        public int? StartByte { get; init; }
+        public int? EndByte { get; init; }
+        public double Confidence { get; init; } = 1.0;
+    }
 
     /// <summary>
     /// A row as written into the synthesized v2 <c>source_regions</c> table. It carries the full julie column
@@ -670,7 +681,6 @@ internal sealed class JulieDbFixture : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
-            // identifiers rows — target_symbol_id is ALWAYS NULL from extract (not written here).
             if (identifiers is not null)
             {
                 foreach (var ident in identifiers)
@@ -680,7 +690,7 @@ internal sealed class JulieDbFixture : IDisposable
                         "INSERT INTO identifiers (identifier_id, file_id, path, language, name, kind, " +
                         "start_line, start_column, end_line, end_column, start_byte, end_byte, confidence, " +
                         "containing_symbol_id, target_symbol_id) " +
-                        "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sl, 0, $sl, 0, $sb, $eb, 1.0, $cid, NULL);";
+                        "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sl, 0, $sl, 0, $sb, $eb, 1.0, $cid, $target);";
                     cmd.Parameters.AddWithValue("$id", ident.Id);
                     cmd.Parameters.AddWithValue("$fid", FileId(ident.FilePath));
                     cmd.Parameters.AddWithValue("$fp", ident.FilePath);
@@ -691,11 +701,11 @@ internal sealed class JulieDbFixture : IDisposable
                     cmd.Parameters.AddWithValue("$sb", (object?)ident.StartByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$eb", (object?)ident.EndByte ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$cid", (object?)ident.ContainingSymbolId ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$target", (object?)ident.TargetSymbolId ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
                 }
             }
 
-            // relationships rows (M5 D2 precise edges). v1 columns; from/to FK to symbols(symbol_id).
             if (relationships is not null)
             {
                 foreach (var rel in relationships)
@@ -703,11 +713,21 @@ internal sealed class JulieDbFixture : IDisposable
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
                         "INSERT INTO relationships (relationship_id, from_symbol_id, to_symbol_id, file_id, path, " +
-                        "kind, confidence) VALUES ($id, $from, $to, '', '', $kind, 1.0);";
+                        "kind, start_line, start_column, end_line, end_column, start_byte, end_byte, confidence) " +
+                        "VALUES ($id, $from, $to, $fid, $path, $kind, $sl, $sc, $el, $ec, $sb, $eb, $confidence);";
                     cmd.Parameters.AddWithValue("$id", rel.Id);
                     cmd.Parameters.AddWithValue("$from", rel.FromSymbolId);
                     cmd.Parameters.AddWithValue("$to", rel.ToSymbolId);
+                    cmd.Parameters.AddWithValue("$fid", string.IsNullOrEmpty(rel.FilePath) ? string.Empty : FileId(rel.FilePath));
+                    cmd.Parameters.AddWithValue("$path", rel.FilePath);
                     cmd.Parameters.AddWithValue("$kind", rel.Kind);
+                    cmd.Parameters.AddWithValue("$sl", (object?)rel.StartLine ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$sc", (object?)rel.StartColumn ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$el", (object?)rel.EndLine ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$ec", (object?)rel.EndColumn ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$sb", (object?)rel.StartByte ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$eb", (object?)rel.EndByte ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("$confidence", rel.Confidence);
                     cmd.ExecuteNonQuery();
                 }
             }

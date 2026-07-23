@@ -139,8 +139,8 @@ public sealed class ExtractReader
     }
 
     /// <summary>
-    /// All identifier rows whose <c>name</c> equals <paramref name="name"/> (the name-based reference list).
-    /// Ordered deterministically by file then line then id. Empty if none.
+    /// Legacy name-based identifier rows for <paramref name="name"/>. This method does not imply target
+    /// resolution; use <see cref="ReferenceEvidenceReader"/> for symbol-specific inbound evidence.
     /// </summary>
     public static IReadOnlyList<SymbolRef> ReadReferences(string dbPath, string name)
     {
@@ -200,13 +200,9 @@ public sealed class ExtractReader
     }
 
     /// <summary>
-    /// Every exact per-occurrence byte token in <c>identifiers</c> whose <c>name</c> equals
-    /// <paramref name="name"/> — the rename input (verified-fact 2). Each <see cref="IdentifierSite"/> carries
-    /// the absolute UTF-8 byte span (<c>[start_byte, end_byte)</c>) of that occurrence, so the Server splices the
-    /// exact token at every site (no fuzzy whole-word matching). Ordered by <c>file_path</c> then
-    /// <c>start_byte</c> for a deterministic, file-grouped rename preview. Matching is NAME-based (so a homonym
-    /// is included — see <see cref="IdentifierSite"/>) because <c>target_symbol_id</c> is NULL at extract. Rows
-    /// whose <c>start_byte</c>/<c>end_byte</c> are NULL are skipped (no usable token to rewrite). Empty if none.
+    /// Legacy name-based rename sites for <paramref name="name"/>, ordered by path and byte offset. Each
+    /// <see cref="IdentifierSite"/> carries the exact UTF-8 token span, but this method does not resolve the
+    /// occurrence to a target symbol. Rows without a usable byte span are omitted.
     /// </summary>
     /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
     public static IReadOnlyList<IdentifierSite> ReadIdentifierSites(string dbPath, string name)

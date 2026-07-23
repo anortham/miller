@@ -30,10 +30,9 @@ public sealed record SymbolComplexity(
     long? ParameterCount);
 
 /// <summary>
-/// One identifier-table row: a name-based reference, callable site, type usage, or member access. Refs are
-/// NAME-based because <c>identifiers.target_symbol_id</c> is ALWAYS NULL at extract — resolution is the
-/// consumer's job (M4). <see cref="ContainingSymbolId"/> (the enclosing symbol) IS populated and is the
-/// source of one-hop callers.
+/// Legacy name-based identifier projection used by the current tool renderers.
+/// <see cref="ContainingSymbolId"/> identifies the enclosing symbol but does not resolve the target.
+/// Symbol-specific callers use <see cref="Miller.Core.References.ReferenceEvidence"/> instead.
 /// </summary>
 public sealed record SymbolRef(
     string Name,
@@ -43,12 +42,9 @@ public sealed record SymbolRef(
     string? ContainingSymbolId);
 
 /// <summary>
-/// One occurrence of a name in julie's <c>identifiers</c> table: the exact per-occurrence byte token to
-/// rewrite for an M6 workspace-wide rename (verified-fact 2 — e.g. a 5-char <c>Total</c> call at
-/// <c>start_byte=120, end_byte=125</c>). Byte offsets are absolute UTF-8 byte indices into the file content
-/// (NOT UTF-16 char indices). Matching is NAME-based because <c>target_symbol_id</c> is NULL at extract, so a
-/// homonym site is also returned — the Server maps these into the pure <c>RenamePlanner</c>'s per-file sites
-/// and the preview surfaces every one before any write.
+/// One occurrence returned by the legacy name-based rename reader. Byte offsets are absolute UTF-8 byte
+/// indices into the file content. This shape carries no resolved target identity; callers requiring safe
+/// symbol-specific edits must filter through <see cref="Miller.Core.References.ReferenceEvidence"/>.
 /// </summary>
 /// <param name="FilePath">The file the occurrence lives in (julie's relative <c>file_path</c>).</param>
 /// <param name="StartByte">Inclusive start of the name token (absolute UTF-8 byte offset).</param>

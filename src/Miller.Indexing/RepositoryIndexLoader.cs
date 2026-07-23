@@ -27,8 +27,6 @@ namespace Miller.Indexing;
 /// </summary>
 public static class RepositoryIndexLoader
 {
-    private const int MaxIdentifierFallbackTargets = 16;
-
     /// <summary>
     /// Read the julie extract at <paramref name="dbPath"/> and build the index + dependency graph + bridge graph as
     /// one immutable unit.
@@ -49,12 +47,9 @@ public static class RepositoryIndexLoader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
-        // 1) Read the symbols (the schema gate fires here, before the edge reads).
         var symbols = SqliteSymbolReader.Read(dbPath);
 
-        // 2) Build the name→ids map from THESE symbols, so the edge resolver and the index share the exact same
-        //    symbol set: an identifier name resolves only to symbols this extract indexed (the graph then bounds
-        //    edge endpoints to the same set). Multi-valued by design — homonyms resolve to every matching id (D2).
+        // Fallback name resolution is safe only when exactly one symbol in this artifact has the name.
         var nameToIds = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var symbol in symbols)
         {
@@ -69,8 +64,7 @@ public static class RepositoryIndexLoader
             dbPath,
             name => nameToIds.TryGetValue(name, out var ids)
                 ? ids
-                : (IReadOnlyList<string>)Array.Empty<string>(),
-            maxNameResolutionTargets: MaxIdentifierFallbackTargets));
+                : (IReadOnlyList<string>)Array.Empty<string>()));
         edges.AddRange(BlazorComponentGraphReader.Read(dbPath, bridgeData.StructuralFacts));
 
         var symbolDetails = ProjectToSymbolDetails(symbols);

@@ -3,33 +3,19 @@ using Miller.Core.Graph;
 namespace Miller.Indexing;
 
 /// <summary>
-/// The D2 edge-load + name-resolution layer (M5). Reads julie's three edge sources and unions them into the
-/// resolved <see cref="GraphEdge"/> list that <see cref="MillerRepositoryIndex.Build(System.Collections.Generic.IReadOnlyList{IndexedSymbol},System.Collections.Generic.IReadOnlyList{GraphEdge})"/>
-/// feeds to the Core <see cref="SymbolGraph"/>:
+/// Reads extractor relationship evidence into the dependency graph:
 /// <list type="bullet">
 /// <item><b><c>relationships</c></b> (precise, sparse): <c>from_symbol_id → to_symbol_id</c> directly, by id,
 ///   carrying <c>kind</c>. No name resolution — both endpoints are already resolved symbol ids.</item>
 /// <item><b>resolved <c>pending_relationships</c></b> (precise, sparse): join each pending row to
 ///   <c>pending_resolutions</c> by <c>pending_relationship_id</c>, then emit its <c>from_symbol_id →
 ///   target_symbol_id</c> by id, carrying the pending row's <c>kind</c>. Unresolved pending rows are omitted.</item>
-/// <item><b><c>identifiers</c></b> (dense): for each row with a non-NULL <c>containing_symbol_id</c> C and a
-///   <c>name</c> N, resolve N to <b>every</b> indexed symbol of that name <c>{T₁…Tₖ}</c> (via the supplied
-///   resolver) and emit <c>C → Tᵢ</c>, carrying <c>kind</c>, only while K stays under the caller's ambiguity
-///   cap.</item>
+/// <item><b><c>identifiers</c></b> (dense): prefer the direct target or
+///   <c>identifier_resolutions</c> overlay. Use name fallback only when the name resolves to exactly one symbol.</item>
 /// </list>
 ///
-/// <para>Drop discipline (D2): a NULL <c>containing_symbol_id</c> row has no source node and is dropped; a name
-/// that resolves to no indexed symbol (an external/library ref — <c>Assert.Equal</c>, an import) is dropped,
-/// bounding the graph to indexed symbols; a fallback name that resolves above <c>maxNameResolutionTargets</c> is
-/// dropped as too ambiguous to be useful dependency evidence; a self-edge (a name resolving back to its own
-/// container) is dropped defensively — a symbol is never its own dependency. <b>De-duplication is the graph's job</b>
-/// (<see cref="SymbolGraph.Build"/> collapses duplicate <c>(from, to)</c> pairs per direction), so this reader
-/// emits the union as-is, including the same <c>(from, to)</c> appearing in both sources.</para>
-///
-/// <para>Honesty (D2): name resolution over-approximates on homonyms — two methods both named <c>Process</c>
-/// make a call to <c>Process</c> an edge to <i>both</i>. For a blast radius this is the safe direction
-/// (over-include a caller rather than miss one); for context it widens the neighbour set slightly. This is the
-/// documented limitation until julie's analyze pass resolves <c>identifiers.target_symbol_id</c>.</para>
+/// <para>Rows without a source node, external names, ambiguous fallback names, and self-edges are omitted.
+/// <see cref="SymbolGraph.Build"/> deduplicates repeated endpoint pairs.</para>
 ///
 /// <para>Same D4 read discipline as the other readers: <c>Mode=ReadOnly</c> via
 /// <see cref="SqliteReadOnlyAccess.Open"/>, parameterized, single startup pass (sync by design).</para>
@@ -37,13 +23,10 @@ namespace Miller.Indexing;
 public static class SymbolGraphReader
 {
     /// <summary>
-    /// Read all three edge sources from the julie extract at <paramref name="dbPath"/> and union them into a resolved
-    /// edge list. <paramref name="resolveName"/> maps a symbol name to every indexed symbol id of that name (the
-    /// production caller passes <see cref="MillerRepositoryIndex.FindByName"/> projected to ids); it must return
-    /// an empty list — never null — for an unknown name.
+    /// Read exact relationship sources plus unambiguous identifier fallback from the extract.
     /// </summary>
     /// <param name="dbPath">Path to the julie extract DB (opened <c>Mode=ReadOnly</c>).</param>
-    /// <param name="resolveName">Resolves an identifier name to the indexed symbol ids it names (empty if none).</param>
+    /// <param name="resolveName">Provides bounded fallback candidates for unresolved identifiers.</param>
     /// <returns>
     /// The unioned, drop-filtered (but NOT de-duplicated — the graph dedups) directed dependency edges.
     /// </returns>
@@ -53,16 +36,10 @@ public static class SymbolGraphReader
     /// <exception cref="InvalidOperationException">The DB's directory is not writable (WAL sidecar trap).</exception>
     public static IReadOnlyList<GraphEdge> Read(
         string dbPath,
-        Func<string, IReadOnlyList<string>> resolveName,
-        int maxNameResolutionTargets = int.MaxValue)
+        Func<string, IReadOnlyList<string>> resolveName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(resolveName);
-        if (maxNameResolutionTargets < 1)
-            throw new ArgumentOutOfRangeException(
-                nameof(maxNameResolutionTargets),
-                maxNameResolutionTargets,
-                "The fallback name-resolution target cap must be positive.");
 
         // Shared D4 read discipline (file-exists + writable-dir probe + Mode=ReadOnly + SQLITE_READONLY map).
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
@@ -70,7 +47,7 @@ public static class SymbolGraphReader
         var edges = new List<GraphEdge>();
         ReadRelationships(connection, edges);
         ReadResolvedPendingRelationships(connection, edges);
-        ReadIdentifiers(connection, resolveName, edges, maxNameResolutionTargets);
+        ReadIdentifiers(connection, resolveName, edges);
         return edges;
     }
 
@@ -128,46 +105,41 @@ public static class SymbolGraphReader
         }
     }
 
-    // identifiers: dense name-resolved edges. Only rows with a source node (non-NULL containing_symbol_id);
-    // the name resolves to every indexed symbol of that name (homonym over-approximation, D2).
     private static void ReadIdentifiers(
         Microsoft.Data.Sqlite.SqliteConnection connection,
         Func<string, IReadOnlyList<string>> resolveName,
-        List<GraphEdge> edges,
-        int maxNameResolutionTargets)
+        List<GraphEdge> edges)
     {
         using var command = connection.CreateCommand();
-        // WHERE containing_symbol_id IS NOT NULL: a NULL source node (namespace ref) yields no edge, so we never
-        // read those rows at all.
         command.CommandText = """
-            SELECT name, kind, containing_symbol_id
-            FROM identifiers
-            WHERE containing_symbol_id IS NOT NULL;
+            SELECT i.name, i.kind, i.containing_symbol_id,
+                   COALESCE(i.target_symbol_id, ir.target_symbol_id) AS resolved_target_symbol_id
+            FROM identifiers i
+            LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+            WHERE i.containing_symbol_id IS NOT NULL;
             """;
 
         using var reader = command.ExecuteReader();
-        // By-name reads (D6).
         int oName = reader.GetOrdinal("name");
         int oKind = reader.GetOrdinal("kind");
         int oContaining = reader.GetOrdinal("containing_symbol_id");
+        int oResolvedTarget = reader.GetOrdinal("resolved_target_symbol_id");
         while (reader.Read())
         {
-            string name = reader.GetString(oName);      // name                 NOT NULL
-            string kind = reader.GetString(oKind);      // kind                 NOT NULL
-            string from = reader.GetString(oContaining); // containing_symbol_id NOT NULL by the WHERE
-
-            // Resolve the name to every indexed symbol it names. A name with no indexed target (external/library
-            // ref) yields an empty list → no edge (bounds the graph to indexed symbols).
-            var targets = resolveName(name);
-            if (targets is null)
-                continue; // a misbehaving resolver returned null; treat as "no indexed target"
-            if (targets.Count > maxNameResolutionTargets)
-                continue; // too ambiguous to be useful, and explosive on large repos without target_symbol_id
+            string name = reader.GetString(oName);
+            string kind = reader.GetString(oKind);
+            string from = reader.GetString(oContaining);
+            string? exactTarget = reader.IsDBNull(oResolvedTarget) ? null : reader.GetString(oResolvedTarget);
+            IReadOnlyList<string> targets = exactTarget is null
+                ? resolveName(name) ?? Array.Empty<string>()
+                : [exactTarget];
+            if (exactTarget is null && targets.Count != 1)
+                continue;
 
             foreach (var to in targets)
             {
                 if (string.Equals(from, to, StringComparison.Ordinal))
-                    continue; // a name resolving back to its own container is a self-loop: drop it
+                    continue;
 
                 edges.Add(new GraphEdge(from, to, kind));
             }

@@ -4,37 +4,16 @@ using Xunit;
 
 namespace Miller.Tests.Indexing;
 
-/// <summary>
-/// Pins the D2 edge-load + name-resolution layer against the synthesized julie schema. These are Miller's
-/// read-CONTRACT tests for the dependency edge model, NOT a re-test of julie extraction. They assert the
-/// resolved+unioned <see cref="GraphEdge"/> list the reader produces:
-/// <list type="bullet">
-/// <item>a precise <c>relationships</c> row becomes a by-id edge verbatim;</item>
-/// <item>a <c>pending_relationships</c> row becomes a by-id edge only when joined to its
-///   <c>pending_resolutions</c> target;</item>
-/// <item>an <c>identifiers</c> row resolves its <c>name</c> to every indexed symbol of that name and emits
-///   <c>containing → each id</c> (homonyms over-approximate — both ids, D2 honesty clause);</item>
-/// <item>a NULL <c>containing_symbol_id</c> identifier is dropped (no source node);</item>
-/// <item>a name that resolves to NO indexed symbol (external/library ref) is dropped (bounds the graph);</item>
-/// <item>a name whose fallback resolution is too ambiguous is dropped (bounds explosive homonym fan-out);</item>
-/// <item>a self-edge (a name resolving back to its own container) is dropped defensively.</item>
-/// </list>
-/// The name resolver is supplied by the caller (the index name map in production); these tests pass a small
-/// in-memory map so the reader's resolution + drop discipline is exercised without an index build.
-/// </summary>
 public sealed class SymbolGraphReaderTests
 {
-    // Opaque ids for the synthetic graph (32-char hex, like julie's MD5 scheme).
     private const string ProcessId = "00000000000000000000000000000001";
     private const string ValidateId = "00000000000000000000000000000002";
     private const string HandleId = "00000000000000000000000000000003";
     private const string ProgramId = "00000000000000000000000000000004";
     private const string FooId = "00000000000000000000000000000005";
-    // Two symbols sharing the name "Log" — the homonym case (over-approximation).
     private const string LogAId = "0000000000000000000000000000000a";
     private const string LogBId = "0000000000000000000000000000000b";
 
-    // A name→ids resolver mirroring what MillerRepositoryIndex.FindByName provides in production.
     private static Func<string, IReadOnlyList<string>> ResolverFor(
         IReadOnlyDictionary<string, IReadOnlyList<string>> map) =>
         name => map.TryGetValue(name, out var ids) ? ids : Array.Empty<string>();
@@ -45,11 +24,9 @@ public sealed class SymbolGraphReaderTests
             ["Process"] = new[] { ProcessId },
             ["Validate"] = new[] { ValidateId },
             ["Handle"] = new[] { HandleId },
-            ["Log"] = new[] { LogAId, LogBId }, // homonym
+            ["Log"] = new[] { LogAId, LogBId },
         };
 
-    // A fixture carrying the symbols the ids name (so the FKs resolve), plus the supplied relationships and
-    // identifiers. Symbol names/ids match NameMap.
     private static JulieDbFixture FixtureWith(
         IReadOnlyList<JulieDbFixture.RelationshipRow>? relationships,
         IReadOnlyList<JulieDbFixture.IdentifierRow>? identifiers)
@@ -139,10 +116,8 @@ public sealed class SymbolGraphReaderTests
     }
 
     [Fact]
-    public void Read_HomonymName_EmitsEdgesToBothIds()
+    public void Read_UnresolvedHomonymName_EmitsNoFallbackEdges()
     {
-        // D2 honesty: "Log" names TWO indexed symbols, so a call to Log from Process over-approximates to BOTH
-        // (the safe direction for blast radius). The reader emits Process → LogA AND Process → LogB.
         using var fx = FixtureWith(
             relationships: null,
             identifiers: new[]
@@ -152,28 +127,25 @@ public sealed class SymbolGraphReaderTests
 
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
-        Assert.Contains(edges, e => e.From == ProcessId && e.To == LogAId && e.Kind == "call");
-        Assert.Contains(edges, e => e.From == ProcessId && e.To == LogBId && e.Kind == "call");
+        Assert.DoesNotContain(edges, edge => edge.From == ProcessId && edge.To == LogAId);
+        Assert.DoesNotContain(edges, edge => edge.From == ProcessId && edge.To == LogBId);
     }
 
     [Fact]
-    public void Read_NameResolvingAboveFanoutLimit_IsDropped()
+    public void Read_ResolvedHomonymIdentifier_EmitsOnlyTheExactTarget()
     {
-        // Without target_symbol_id from julie, name fallback is an approximation. Very high homonym counts are not
-        // useful dependency evidence and can explode into millions of edges on large TS repos.
         using var fx = FixtureWith(
             relationships: null,
-            identifiers: new[]
-            {
+            identifiers:
+            [
                 new JulieDbFixture.IdentifierRow("i1", "Log", "call", "csharp", "src/A.cs", 2, ProcessId),
-            });
+            ]);
+        fx.AddIdentifierResolution("i1", LogBId);
 
-        var edges = SymbolGraphReader.Read(
-            fx.DbPath,
-            ResolverFor(NameMap),
-            maxNameResolutionTargets: 1);
+        var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
-        Assert.Empty(edges);
+        Assert.DoesNotContain(edges, edge => edge.From == ProcessId && edge.To == LogAId);
+        Assert.Contains(edges, edge => edge.From == ProcessId && edge.To == LogBId && edge.Kind == "call");
     }
 
     [Fact]

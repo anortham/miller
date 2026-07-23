@@ -27,10 +27,8 @@ public enum ResolutionStatus
 public sealed record NameResolution(ResolutionStatus Status, string? SymbolId, int MatchCount);
 
 /// <summary>
-/// Resolves a <c>type_name</c> to a symbol by NAME over an in-memory symbol set (design §3). julie ships
-/// <c>target_symbol_id</c> NULL at extract (verified 0/1797 type_args, 0/24830 identifiers), so every cross-file leg
-/// (CreateMap, DbSet entity, response/request DTO) must do string-name resolution here. Pure: the symbol set is passed
-/// in; no DB, no I/O.
+/// Resolves a bridge <c>type_name</c> to a symbol by name over an in-memory symbol set. Bridge facts that do not
+/// carry exact reference evidence use this bounded fallback. Pure: the symbol set is passed in; no DB, no I/O.
 ///
 /// <para><b>Ambiguity policy (load-bearing precision guard):</b> a unique name resolves; a namespace or file/project
 /// hint can break a tie; but &gt;1 match with no usable hint is <see cref="ResolutionStatus.Ambiguous"/> — the resolver

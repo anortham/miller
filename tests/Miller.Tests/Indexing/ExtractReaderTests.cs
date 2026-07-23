@@ -7,7 +7,7 @@ namespace Miller.Tests.Indexing;
 
 /// <summary>
 /// Pins the M2 on-demand read layer (<see cref="ExtractReader"/>): per-inspect detail (doc/visibility/body
-/// spans), name-based references (identifiers — <c>target_symbol_id</c> is always NULL), and the body slice
+/// spans), legacy name-based reference projection, and the body slice
 /// re-sourced from DISK under the fixture's <c>WorkspaceRoot</c> with the hard content_hash freshness invariant
 /// (a drifted file is never sliced) and graceful NULL-span degradation. Driven against the inspect fixture;
 /// opens the DB Mode=ReadOnly like the M1 reader. Fast suite (no julie-extract binary).

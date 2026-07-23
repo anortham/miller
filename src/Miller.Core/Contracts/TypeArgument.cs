@@ -5,9 +5,8 @@ namespace Miller.Core.Contracts;
 /// use-site, e.g. one side of a <c>CreateMap&lt;A,B&gt;</c>. Keyed by <see cref="IdentifierId"/> — all arguments of
 /// one generic use-site share that id and are ordered by <see cref="Ordinal"/>.
 ///
-/// <para><b>Resolution is by name.</b> The verified extract has <c>target_symbol_id</c> NULL for 0/1797 rows, so the
-/// bridge never gets a resolved link — <see cref="TypeName"/> is resolved to a symbol by string name downstream
-/// (<c>SymbolResolver</c>). This record deliberately omits the always-NULL <c>target_symbol_id</c> column.</para>
+/// <para>This contract carries the extracted type name rather than reference-resolution evidence.
+/// <see cref="TypeName"/> is resolved by <c>SymbolResolver</c> for bridge workflows.</para>
 /// </summary>
 /// <param name="IdentifierId">
 /// <c>type_arguments.identifier_id</c> → <c>identifiers(id)</c>. The grouping key: all generic args of one use-site

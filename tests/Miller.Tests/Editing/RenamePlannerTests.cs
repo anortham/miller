@@ -98,10 +98,7 @@ public sealed class RenamePlannerTests
     [Fact]
     public void Plan_HomonymSite_IsIncludedAndVisibleInPreview()
     {
-        // FileC contains an UNRELATED symbol also named "Total" (a homonym). Because target_symbol_id is NULL
-        // at extract, the Server supplies it as a site and the planner rewrites it too. The documented
-        // name-based behavior: the homonym IS renamed and IS counted in the preview summary.
-        const string homonymFile = "class Report { int Total; }"; // an unrelated 'Total' field
+        const string homonymFile = "class Report { int Total; }";
         var totalIdx = homonymFile.IndexOf("Total", StringComparison.Ordinal);
         var inputs = new[]
         {
@@ -113,9 +110,7 @@ public sealed class RenamePlannerTests
 
         Assert.True(plan.IsSuccess);
         Assert.Equal(2, plan.TotalSites);
-        // The homonym file appears in the preview summary with its 1 site.
         Assert.Contains(plan.Summary, s => s.FilePath == "/repo/Report.cs" && s.SiteCount == 1);
-        // And it is actually rewritten.
         Assert.Equal("class Report { int Sum; }", plan.PlannedEdits.Single(p => p.FilePath == "/repo/Report.cs").NewContent);
     }
 

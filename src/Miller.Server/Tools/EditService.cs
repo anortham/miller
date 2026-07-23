@@ -1026,7 +1026,7 @@ public sealed class EditService
         sb.Append("rename '").Append(oldName).Append("' → '").Append(newName).Append("': ")
           .Append(plan.TotalSites).Append(plan.TotalSites == 1 ? " site across " : " sites across ")
           .Append(plan.Summary.Count).Append(plan.Summary.Count == 1 ? " file" : " files").Append('\n');
-        sb.Append("name-based match (target_symbol_id is unresolved at extract) — homonyms ARE included; ")
+        sb.Append("name-based match from the legacy rename-site query — homonyms ARE included; ")
           .Append("review every site before apply.\n");
         foreach (var f in plan.Summary)
             sb.Append("  ").Append(ToRelative(f.FilePath)).Append("  (")

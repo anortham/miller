@@ -5,8 +5,7 @@ using Xunit;
 namespace Miller.Tests.Resolver;
 
 /// <summary>
-/// Pins <see cref="SymbolResolver"/> — the by-NAME cross-file resolver that every leg leans on because julie ships
-/// <c>target_symbol_id</c> NULL at extract (design §3 "[v3] Cross-file resolution is by NAME"). Asserts the four
+/// Pins <see cref="SymbolResolver"/> — the by-name fallback for bridge facts without exact resolution. Asserts the four
 /// outcomes: a unique name resolves; a namespace/project hint breaks a tie; &gt;1 match with no usable hint is
 /// AMBIGUOUS (the caller must lower/drop — NEVER High); 0 match is UNRESOLVED. The ambiguity case is the load-bearing
 /// negative: two same-named types in different files must never auto-resolve to one symbol.

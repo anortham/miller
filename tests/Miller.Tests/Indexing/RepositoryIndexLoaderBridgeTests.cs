@@ -60,6 +60,10 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                     identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER,
                     containing_symbol_id TEXT, target_symbol_id TEXT
                 );
+                CREATE TABLE identifier_resolutions (
+                    identifier_id TEXT PRIMARY KEY, target_symbol_id TEXT, tier INTEGER, confidence REAL,
+                    method TEXT, outcome TEXT NOT NULL, candidates INTEGER, resolved_at_revision INTEGER NOT NULL
+                );
                 CREATE TABLE relationships (
                     relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT
                 );
@@ -213,6 +217,10 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             CREATE TABLE identifiers (
                 identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER,
                 containing_symbol_id TEXT, target_symbol_id TEXT
+            );
+            CREATE TABLE identifier_resolutions (
+                identifier_id TEXT PRIMARY KEY, target_symbol_id TEXT, tier INTEGER, confidence REAL,
+                method TEXT, outcome TEXT NOT NULL, candidates INTEGER, resolved_at_revision INTEGER NOT NULL
             );
             CREATE TABLE relationships (
                 relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT
@@ -899,6 +907,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                 command.CommandText = $"""
                     CREATE TABLE symbols (symbol_id TEXT PRIMARY KEY, name TEXT, signature TEXT, kind TEXT, language TEXT, path TEXT, start_line INTEGER, end_line INTEGER, parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0, metadata_json TEXT);
                     CREATE TABLE identifiers (identifier_id TEXT PRIMARY KEY, name TEXT, kind TEXT, path TEXT, start_line INTEGER, containing_symbol_id TEXT, target_symbol_id TEXT);
+                    CREATE TABLE identifier_resolutions (identifier_id TEXT PRIMARY KEY, target_symbol_id TEXT, tier INTEGER, confidence REAL, method TEXT, outcome TEXT NOT NULL, candidates INTEGER, resolved_at_revision INTEGER NOT NULL);
                     CREATE TABLE relationships (relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT, to_symbol_id TEXT, path TEXT, kind TEXT);
                     CREATE TABLE pending_relationships (
                         pending_relationship_id TEXT PRIMARY KEY,

@@ -70,10 +70,8 @@ public sealed record RenamePlan
 /// Pure planner for a workspace-wide, exact-span, name-matched rename (M6 decision log #5, Components/1).
 /// Given the old/new names and the per-file occurrence sites the Server read from julie's <c>identifiers</c>
 /// table, it produces one <see cref="PlannedEdit"/> per file (each site → a <see cref="TextEdit"/> rewriting
-/// that exact byte token to the new name) plus a preview summary listing every site. Because resolution does
-/// not exist yet (<c>target_symbol_id</c> is NULL at extract), matching is name-based: a homonym (an unrelated
-/// symbol with the same name) is supplied by the Server and IS included — this is contained by preview-first.
-/// The planner does not filter sites; it validates the new name and rewrites exactly what it is given.
+/// that exact byte token to the new name) plus a preview summary listing every site. The planner does not resolve
+/// or filter sites; it validates the new name and rewrites exactly what its caller supplies.
 /// </summary>
 public static class RenamePlanner
 {

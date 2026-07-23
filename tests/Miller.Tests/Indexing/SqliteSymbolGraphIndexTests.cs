@@ -6,6 +6,11 @@ namespace Miller.Tests.Indexing;
 
 public sealed class SqliteSymbolGraphIndexTests
 {
+    private const string FirstTargetId = "10000000000000000000000000000001";
+    private const string SecondTargetId = "10000000000000000000000000000002";
+    private const string CallerId = "20000000000000000000000000000001";
+    private const string MissingTargetId = "30000000000000000000000000000001";
+
     [Fact]
     public void Reach_MatchesRepositoryGraphForInspectFixture()
     {
@@ -69,5 +74,68 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Equal(
             full.Graph.ShortestPath(JulieDbFixture.GetUserId, findId, maxDepth: 2),
             sqliteGraph.ShortestPath(JulieDbFixture.GetUserId, findId, maxDepth: 2));
+    }
+
+    [Fact]
+    public void Reach_ResolvedHomonym_MatchesExactFirstRepositoryGraphInBothDirections()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/First.cs", "void Run()", 1, null),
+                new(SecondTargetId, "Run", "method", "csharp", "src/Second.cs", "void Run()", 1, null),
+                new(CallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-run", "Run", "call", "csharp", "src/Caller.cs", 10, CallerId),
+            ]);
+        fixture.AddIdentifierResolution("identifier-run", SecondTargetId);
+
+        var repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        Assert.Equal(
+            repository.Graph.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id),
+            sqlite.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id));
+        Assert.Equal(
+            repository.Graph.Reach([FirstTargetId], 1, 10, Direction.Reverse).Select(node => node.Id),
+            sqlite.Reach([FirstTargetId], 1, 10, Direction.Reverse).Select(node => node.Id));
+        Assert.Equal(
+            repository.Graph.Reach([SecondTargetId], 1, 10, Direction.Reverse).Select(node => node.Id),
+            sqlite.Reach([SecondTargetId], 1, 10, Direction.Reverse).Select(node => node.Id));
+    }
+
+    [Fact]
+    public void Reach_ResolvedIdentifierOutsideArtifact_MatchesRepositoryGraph()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(CallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new JulieDbFixture.IdentifierRow(
+                    "identifier-missing-target",
+                    "Missing",
+                    "call",
+                    "csharp",
+                    "src/Caller.cs",
+                    10,
+                    CallerId)
+                {
+                    TargetSymbolId = MissingTargetId,
+                },
+            ]);
+
+        var repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        Assert.Equal(
+            repository.Graph.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id),
+            sqlite.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id));
     }
 }

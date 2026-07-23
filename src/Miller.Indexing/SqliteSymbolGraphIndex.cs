@@ -9,31 +9,20 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposable
 {
-    private const int DefaultMaxNameResolutionTargets = 16;
-
     private static readonly IReadOnlyList<string> Empty = Array.Empty<string>();
 
     private readonly string _dbPath;
-    private readonly int _maxNameResolutionTargets;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
     private readonly Dictionary<string, bool> _symbolExistsCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _symbolNameCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _nameResolutionCache = new(StringComparer.Ordinal);
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
 
-    public SqliteSymbolGraphIndex(
-        string dbPath,
-        int maxNameResolutionTargets = DefaultMaxNameResolutionTargets)
+    public SqliteSymbolGraphIndex(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
-        if (maxNameResolutionTargets < 1)
-            throw new ArgumentOutOfRangeException(
-                nameof(maxNameResolutionTargets),
-                maxNameResolutionTargets,
-                "The fallback name-resolution target cap must be positive.");
 
         _dbPath = dbPath;
-        _maxNameResolutionTargets = maxNameResolutionTargets;
     }
 
     public IReadOnlyList<ReachedNode> Reach(IEnumerable<string> starts, int maxDepth, int limit, Direction dir) =>
@@ -97,20 +86,46 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         using (var command = Connection.CreateCommand())
         {
             command.CommandText = """
-                SELECT name
-                FROM identifiers
-                WHERE containing_symbol_id = $id;
+                SELECT pr.target_symbol_id
+                FROM pending_relationships p
+                JOIN pending_resolutions pr
+                  ON pr.pending_relationship_id = p.pending_relationship_id
+                JOIN symbols s ON s.symbol_id = pr.target_symbol_id
+                WHERE p.from_symbol_id = $id;
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddCandidate(ids, id, reader.GetString(0));
+        }
+
+        using (var command = Connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT i.name, COALESCE(i.target_symbol_id, ir.target_symbol_id)
+                FROM identifiers i
+                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                LEFT JOIN symbols target
+                  ON target.symbol_id = COALESCE(i.target_symbol_id, ir.target_symbol_id)
+                WHERE i.containing_symbol_id = $id
+                  AND (
+                      COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      OR target.symbol_id IS NOT NULL
+                  );
                 """;
             command.Parameters.AddWithValue("$id", id);
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                IReadOnlyList<string> targets = ResolveNameIds(reader.GetString(0));
-                if (targets.Count > _maxNameResolutionTargets)
+                if (!reader.IsDBNull(1))
+                {
+                    AddCandidate(ids, id, reader.GetString(1));
                     continue;
+                }
 
-                foreach (string targetId in targets)
-                    AddCandidate(ids, id, targetId);
+                IReadOnlyList<string> targets = ResolveNameIds(reader.GetString(0));
+                if (targets.Count == 1)
+                    AddCandidate(ids, id, targets[0]);
             }
         }
 
@@ -138,15 +153,48 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 AddCandidate(ids, id, reader.GetString(0));
         }
 
+        using (var command = Connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT p.from_symbol_id
+                FROM pending_relationships p
+                JOIN pending_resolutions pr
+                  ON pr.pending_relationship_id = p.pending_relationship_id
+                JOIN symbols s ON s.symbol_id = p.from_symbol_id
+                WHERE pr.target_symbol_id = $id;
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddCandidate(ids, id, reader.GetString(0));
+        }
+
+        using (var command = Connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT i.containing_symbol_id
+                FROM identifiers i
+                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                JOIN symbols s ON s.symbol_id = i.containing_symbol_id
+                WHERE COALESCE(i.target_symbol_id, ir.target_symbol_id) = $id;
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                AddCandidate(ids, id, reader.GetString(0));
+        }
+
         IReadOnlyList<string> nameTargets = ResolveNameIds(targetName);
-        if (nameTargets.Count <= _maxNameResolutionTargets)
+        if (nameTargets.Count == 1)
         {
             using var command = Connection.CreateCommand();
             command.CommandText = """
                 SELECT i.containing_symbol_id
                 FROM identifiers i
+                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                 JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE i.name = $name AND i.containing_symbol_id IS NOT NULL;
+                WHERE i.name = $name
+                  AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL;
                 """;
             command.Parameters.AddWithValue("$name", targetName);
             using var reader = command.ExecuteReader();
@@ -167,9 +215,8 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
     private static void AddCandidate(SortedSet<string> ids, string sourceId, string candidateId)
     {
-        if (string.Equals(sourceId, candidateId, StringComparison.Ordinal))
-            return;
-        ids.Add(candidateId);
+        if (!string.Equals(sourceId, candidateId, StringComparison.Ordinal))
+            ids.Add(candidateId);
     }
 
     private bool SymbolExists(string id)
@@ -195,8 +242,6 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         command.Parameters.AddWithValue("$id", id);
         string? name = command.ExecuteScalar() as string;
         _symbolNameCache[id] = name;
-        if (name is not null)
-            _symbolExistsCache[id] = true;
         return name;
     }
 
@@ -206,26 +251,15 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             return cached;
 
         using var command = Connection.CreateCommand();
-        command.CommandText = """
-            SELECT symbol_id
-            FROM symbols
-            WHERE name = $name
-            ORDER BY path, start_line, symbol_id
-            LIMIT $limit;
-            """;
+        command.CommandText = "SELECT symbol_id FROM symbols WHERE name = $name ORDER BY symbol_id;";
         command.Parameters.AddWithValue("$name", name);
-        command.Parameters.AddWithValue("$limit", _maxNameResolutionTargets + 1);
-
-        var ids = new List<string>();
         using var reader = command.ExecuteReader();
+        var ids = new List<string>();
         while (reader.Read())
             ids.Add(reader.GetString(0));
 
-        IReadOnlyList<string> result = ids.Count == 0 ? Empty : ids;
+        IReadOnlyList<string> result = ids.Count == 0 ? Empty : ids.ToArray();
         _nameResolutionCache[name] = result;
-        foreach (string id in result)
-            _symbolExistsCache[id] = true;
         return result;
     }
-
 }

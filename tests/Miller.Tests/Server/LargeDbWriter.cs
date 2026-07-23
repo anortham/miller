@@ -71,6 +71,11 @@ internal static class LargeDbWriter
                 end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
             """);
         Exec(conn, """
+            CREATE TABLE identifier_resolutions (
+                identifier_id TEXT PRIMARY KEY, target_symbol_id TEXT, tier INTEGER, confidence REAL,
+                method TEXT, outcome TEXT NOT NULL, candidates INTEGER, resolved_at_revision INTEGER NOT NULL);
+            """);
+        Exec(conn, """
             CREATE TABLE pending_relationships (
                 pending_relationship_id TEXT PRIMARY KEY,
                 from_symbol_id TEXT NOT NULL,
