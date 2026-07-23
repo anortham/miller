@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 import sys
@@ -476,6 +477,72 @@ class AgentContractTests(unittest.TestCase):
             ),
             result,
         )
+
+    def test_takeover_v1_verifier_accepts_grounded_symbol_path_metadata(self) -> None:
+        task = _load_v1_task()
+        answer = _valid_v1_answer()
+        answer["actions"][0]["target"]["path"] = "src/factory.py"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            accepted = verify_answer(task, answer, root)
+
+            answer["actions"][0]["target"]["path"] = "src/other.py"
+            rejected = verify_answer(task, answer, root)
+
+        self.assertTrue(accepted.passed)
+        self.assertFalse(rejected.passed)
+        self.assertEqual(1, rejected.wrong_action_count)
+
+    def test_takeover_v1_verifier_accepts_current_workspace_selector_aliases(self) -> None:
+        task_value = _valid_v1_task()
+        task_value.update(
+            {
+                "expected_outcome": "empty",
+                "fact_predicates": [],
+                "path_cited": [],
+                "symbol_cited": [],
+                "evidence_anchors": [],
+                "reference_sites": [],
+                "acceptable_actions": [
+                    {
+                        "action_id": "action-001",
+                        "kind": "report_empty",
+                        "target": {"workspace_selector": "fixture"},
+                        "requirement_group": "outcome",
+                    }
+                ],
+                "forbidden_actions": [],
+                "uncertainty_expectation": "must_resolve",
+            }
+        )
+        task = _load_v1_task(task_value)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = str(root.resolve())
+            normalized = (
+                canonical_root.lower()
+                if sys.platform in {"darwin", "win32"}
+                else canonical_root
+            )
+            workspace_id = hashlib.sha256(normalized.encode()).hexdigest()
+            for selector in (".", "current", "fixture", workspace_id):
+                with self.subTest(selector=selector):
+                    answer = {
+                        "contract_id": "takeover-evaluation-v1",
+                        "status": "not_found",
+                        "answer": "No qualifying result exists.",
+                        "evidence": [],
+                        "actions": [
+                            {
+                                "kind": "report_empty",
+                                "target": {"workspace_selector": selector},
+                            }
+                        ],
+                    }
+                    self.assertTrue(verify_answer(task, answer, root).passed)
 
     def test_takeover_v1_verifier_rejects_wrong_homonym_site_and_forbidden_actions(self) -> None:
         task = _load_v1_task()

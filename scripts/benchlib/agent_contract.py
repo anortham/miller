@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -497,10 +498,6 @@ def _verify_takeover_answer(
 
     satisfied_groups: set[str] = set()
     wrong_action_identities: set[str] = set()
-    forbidden_by_identity = {
-        _action_identity_key(action.kind, action.target): action
-        for action in task.forbidden_actions
-    }
     reference_sites = {
         site.site_id: site.identity
         for site in task.reference_sites
@@ -512,7 +509,21 @@ def _verify_takeover_answer(
     }
     for action in structured.actions:
         identity = _action_identity_key(action.kind, action.target)
-        forbidden = forbidden_by_identity.get(identity)
+        forbidden = next(
+            (
+                label
+                for label in task.forbidden_actions
+                if label.kind == action.kind
+                and _action_targets_match(
+                    task,
+                    label.target,
+                    action.target,
+                    root,
+                    grounded_paths=None,
+                )
+            ),
+            None,
+        )
         if forbidden is not None:
             wrong_action_identities.add(identity)
             failures.append(
@@ -523,7 +534,18 @@ def _verify_takeover_answer(
         acceptable = [
             label
             for label in task.acceptable_actions
-            if label.kind == action.kind and label.target == action.target
+            if label.kind == action.kind
+            and _action_targets_match(
+                task,
+                label.target,
+                action.target,
+                root,
+                grounded_paths={
+                    anchor.path
+                    for anchor in task.evidence_anchors
+                    if anchor.anchor_id in label.evidence_anchor_ids
+                },
+            )
         ]
         if not acceptable:
             wrong_action_identities.add(identity)
@@ -1119,6 +1141,83 @@ def _evidence_anchors_overlap(first: _EvidenceAnchor, second: _EvidenceAnchor) -
     first_end = first.line_end if first.line_end is not None else 2**63 - 1
     second_end = second.line_end if second.line_end is not None else 2**63 - 1
     return max(first_start, second_start) <= min(first_end, second_end)
+
+
+def _action_targets_match(
+    task: BenchmarkTask,
+    expected: _ActionTarget,
+    submitted: _ActionTarget,
+    root: Path,
+    *,
+    grounded_paths: set[str] | None,
+) -> bool:
+    if expected == submitted:
+        return True
+
+    if (
+        expected.workspace_selector in {task.repo_id, "current"}
+        and _only_workspace_selector(expected)
+        and _only_workspace_selector(submitted)
+    ):
+        return submitted.workspace_selector in _current_workspace_aliases(task, root)
+
+    if (
+        expected.symbol_id is not None
+        and expected.symbol_id == submitted.symbol_id
+        and _equal_except_path(expected, submitted)
+    ):
+        if expected.path is not None:
+            return expected.path == submitted.path
+        if submitted.path is None or grounded_paths is None:
+            return True
+        return submitted.path in grounded_paths
+
+    return False
+
+
+def _only_workspace_selector(target: _ActionTarget) -> bool:
+    return (
+        target.workspace_selector is not None
+        and target.path is None
+        and target.symbol_id is None
+        and target.target_symbol_id is None
+        and target.reference_site is None
+        and target.test_path is None
+        and target.pattern_id is None
+    )
+
+
+def _equal_except_path(expected: _ActionTarget, submitted: _ActionTarget) -> bool:
+    return (
+        expected.symbol_id == submitted.symbol_id
+        and expected.target_symbol_id == submitted.target_symbol_id
+        and expected.reference_site == submitted.reference_site
+        and expected.test_path == submitted.test_path
+        and expected.pattern_id == submitted.pattern_id
+        and expected.workspace_selector == submitted.workspace_selector
+    )
+
+
+def _current_workspace_aliases(task: BenchmarkTask, root: Path) -> frozenset[str]:
+    canonical_root = str(root.resolve())
+    stable_root = (
+        canonical_root.lower()
+        if os.name == "nt" or sys.platform == "darwin"
+        else canonical_root
+    )
+    stable_id = hashlib.sha256(stable_root.encode()).hexdigest()
+    case_sensitive_id = hashlib.sha256(canonical_root.encode()).hexdigest()
+    return frozenset(
+        {
+            ".",
+            "current",
+            task.repo_id,
+            canonical_root,
+            stable_id,
+            f"{task.repo_id}-{stable_id[:12]}",
+            f"{task.repo_id}_{case_sensitive_id[:8]}",
+        }
+    )
 
 
 def _action_identity_key(kind: str, target: _ActionTarget) -> str:

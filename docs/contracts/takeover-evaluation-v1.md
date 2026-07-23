@@ -177,6 +177,8 @@ Each acceptable action label has a stable label-side `action_id`, exact `kind` a
 
 Each forbidden action label has a stable label-side ID, exact `kind` and forbidden target, and a reason. Any submitted action matching a forbidden action is a wrong action. A submitted final action that matches no acceptable action is also a wrong action. Matching uses typed fields, never prose or substring search.
 
+Canonical matching treats a grounded repository path attached to an exact symbol-ID action as corroborating metadata rather than a different action. The path must match an evidence anchor tied to the acceptable action; a conflicting path remains unrecognized. Current-workspace actions likewise accept only aliases that resolve to the prepared snapshot: the task repository ID, `.`, `current`, canonical root, stable workspace ID, or the product display-ID form derived from that identity.
+
 `wrong_action_count` is the number of distinct submitted actions that are forbidden or unrecognized, de-duplicated by canonical action identity. A task is action-correct only when all required groups are satisfied and `wrong_action_count=0`.
 
 ### Uncertainty
