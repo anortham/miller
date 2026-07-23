@@ -62,6 +62,27 @@ _ACTION_TARGET_FIELDS = {
 _EXACT_ACTION_TARGET_ALTERNATIVES = frozenset({"refuse_unsafe"})
 
 
+def action_target_guidance() -> str:
+    lines = [
+        "Use exact symbol IDs returned by product tools; never invent an ID from a path or name.",
+        "For every action target, leave every unlisted field null.",
+    ]
+    for kind, (allowed, required_alternatives) in _ACTION_TARGET_FIELDS.items():
+        alternatives = " or ".join(
+            "+".join(sorted(required))
+            for required in required_alternatives
+        )
+        if kind in _EXACT_ACTION_TARGET_ALTERNATIVES:
+            rule = f"exactly one of {alternatives}"
+        else:
+            rule = (
+                f"require {alternatives}; allowed non-null fields "
+                f"{'+'.join(sorted(allowed))}"
+            )
+        lines.append(f"- {kind}: {rule}")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class _FactPredicate:
     predicate_id: str

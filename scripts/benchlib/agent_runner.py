@@ -21,6 +21,7 @@ from benchlib.agent_contract import (
     StructuredAnswer,
     VerificationResult,
     _unique_json_object,
+    action_target_guidance,
     verify_answer,
 )
 
@@ -347,6 +348,7 @@ def _prompt(task: BenchmarkTask) -> str:
         "Use only the benchmark MCP server to answer this task. Do not execute commands, read files "
         "or the filesystem directly, modify files, access the web, or use any other tool or MCP server. "
         "Return only the requested structured JSON answer.\n\n"
+        f"{action_target_guidance()}\n\n"
         f"Task: {task.prompt}\n"
     )
 

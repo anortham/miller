@@ -277,6 +277,32 @@ class AgentRunnerTests(unittest.TestCase):
             self.assertEqual(0o700, captured["home_mode"])
             self.assertEqual(0o600, captured["auth_mode"])
             self.assertIn("Use only the benchmark MCP server", captured["stdin"])
+            self.assertIn(
+                "Use exact symbol IDs returned by product tools; never invent an ID from a path or name.",
+                captured["stdin"],
+            )
+            self.assertIn(
+                "For every action target, leave every unlisted field null.",
+                captured["stdin"],
+            )
+            for action_kind in (
+                "inspect_symbol",
+                "inspect_file",
+                "assemble_context",
+                "trace_callers",
+                "trace_callees",
+                "trace_call_path",
+                "cite_reference_site",
+                "select_tests",
+                "propose_edit",
+                "propose_rename",
+                "read_log",
+                "query_pattern",
+                "recover_workspace",
+                "report_empty",
+                "refuse_unsafe",
+            ):
+                self.assertIn(f"- {action_kind}:", captured["stdin"])
             for option in [
                 "--json",
                 "--ephemeral",
