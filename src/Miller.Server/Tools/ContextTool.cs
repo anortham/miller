@@ -63,7 +63,8 @@ public sealed partial class ContextTool
         "First call in an UNFAMILIAR code area: give a task plus optional entry symbols, edited files, failing " +
         "test, or stack trace. Returns ranked pivots with bounded implementation snippets, neighbour signatures, " +
         "reasons, and an evidence disposition within token_budget; a next action appears only when evidence is " +
-        "insufficient. NOT for: a symbol you can already name (inspect it) or text lookups (search). Example: " +
+        "insufficient. When disposition is sufficient, answer from the bundle instead of inspecting every pivot. " +
+        "NOT for: a symbol you can already name (inspect it) or text lookups (search). Example: " +
         "context query=\"how does workspace refresh converge the search sidecar\". Compact by default; " +
         "format=json to chain.")]
     public string Context(

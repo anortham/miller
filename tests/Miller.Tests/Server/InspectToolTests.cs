@@ -243,6 +243,35 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_FileSummary_McpRoute_ClampsRequestedLimitToTwentyRows()
+    {
+        var rows = Enumerable.Range(0, 30)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"{i + 1:x32}",
+                $"Member{i}",
+                "method",
+                "csharp",
+                "src/Many.cs",
+                $"void Member{i}()",
+                i + 1,
+                null))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-many", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("src/Many.cs", limit: 100, format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(20, document.RootElement.GetProperty("children").GetArrayLength());
+    }
+
+    [Fact]
     public void Run_UnknownPath_ReturnsNote_NotError()
     {
         using var fx = JulieDbFixture.CreateForInspect();

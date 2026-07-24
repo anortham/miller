@@ -48,7 +48,7 @@ public sealed class InspectTool
         string depth = "summary",
         [Description("Filter a file listing to one kind (function/class/...). Optional.")] string? kind = null,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
-        [Description("Max symbols when listing a file. Default 50.")] int limit = 50,
+        [Description("Max symbols when listing a file. Default and maximum 20.")] int limit = ToolOutputBudget.McpRowLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
@@ -62,6 +62,7 @@ public sealed class InspectTool
         {
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
+            int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
 
             WorkspaceSymbolReadContext context =
                 _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, ensureFresh);
@@ -75,7 +76,7 @@ public sealed class InspectTool
                 depth,
                 kind,
                 scope,
-                limit,
+                effectiveLimit,
                 json,
                 continuation,
                 out int count,
@@ -95,7 +96,7 @@ public sealed class InspectTool
                 telemetry.SetMetadata("format", json ? "json" : "compact");
                 telemetry.SetMetadata("has_kind", !string.IsNullOrWhiteSpace(kind));
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
-                telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
+                telemetry.SetMetadata("limit_bucket", LimitBucket(effectiveLimit));
             }
             if (diagnostic is not null)
                 output = ToolDiagnosticRenderer.Attach(

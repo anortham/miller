@@ -20,6 +20,10 @@ Full-depth inspect renders at most 10 exact callees and 10 unresolved fallback c
 `callee_coverage` reports exact available/returned/truncated counts for both tiers; compact output reports
 omitted counts. `trace` remains the exhaustive graph path.
 
+MCP `search` and file-target `inspect` calls return at most 20 rows, regardless of a larger requested limit.
+MCP search JSON truncates each signature to the shared 110-character agent-rendering bound. Static tool cores
+and CLI/process JSON retain the caller's requested row limit and complete signatures.
+
 A reference page contains at most 16 KiB of UTF-8 JSON. Exact rows are emitted before unresolved fallback rows,
 and the continuation maintains independent offsets for both tiers:
 

@@ -251,6 +251,18 @@ class AgentContractTests(unittest.TestCase):
             "Actions are the minimum typed evidence needed to ground the answer, not a transcript",
             guidance,
         )
+        self.assertIn(
+            "Choose action kinds from the task outcome and cited evidence, not from the tools you happened to call",
+            guidance,
+        )
+        self.assertIn(
+            "Configuration evidence is inspect_file even when a product tool exposes the config object as a symbol",
+            guidance,
+        )
+        self.assertIn(
+            "Every cited call site needs cite_reference_site",
+            guidance,
+        )
         self.assertIn("inspect_file means a file, document, or config fact", guidance)
         self.assertIn("select_tests means tests selected for the task", guidance)
         self.assertIn("read_log means evidence from captured logs or command output", guidance)

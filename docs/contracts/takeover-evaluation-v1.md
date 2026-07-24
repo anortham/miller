@@ -173,7 +173,11 @@ These kinds are semantic result categories, not product tool names or a transcri
 
 An action contains `kind` and a typed target composed only from repository-relative path, canonical symbol identity, canonical reference-site fields, test path, pattern ID, or workspace selector as applicable. Empty target fields are rejected. Edit and rename actions are proposals only; the evaluation runner remains read-only.
 
-The shared agent prompt states that actions are the minimum typed evidence needed to ground the answer, not a transcript of every tool call. This exposes the scoring rule equally to both roles without revealing task-specific accepted targets.
+The shared agent prompt states that actions are the minimum typed evidence needed to ground the answer, not a
+transcript of every tool call. It tells both roles to select semantic action kinds from the requested outcome
+and cited evidence: config/document facts are file actions, assembled code-area evidence is a context action,
+call-graph claims use caller/callee/path actions, and each cited call site uses a reference-site action. This
+exposes the scoring rule equally to both roles without revealing task-specific accepted targets.
 
 Each acceptable action label has a stable label-side `action_id`, exact `kind` and target, a non-empty `requirement_group`, and optional evidence-anchor/site requirements. Each requirement group must be satisfied by at least one submitted action. Multiple labels in one group express valid alternatives.
 

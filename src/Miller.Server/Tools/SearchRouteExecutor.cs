@@ -15,7 +15,8 @@ internal sealed record SearchRouteExecutionRequest(
     Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? HasDocLookup = null,
     Func<string, IReadOnlyList<IndexedSymbol>>? SuggestionLookup = null,
     ISymbolFusionArm? FusionArm = null,
-    string WorkspaceRoot = "");
+    string WorkspaceRoot = "",
+    bool BoundAgentOutput = false);
 
 /// <summary>
 /// Everything an additional retrieval arm may see about the lexical stage: the query, the ranking it already
@@ -134,7 +135,8 @@ internal static class SearchRouteExecutor
             out IReadOnlyList<SymbolCandidate> servedPage,
             request.CompactBanner,
             request.HasDocLookup,
-            fusion);
+            fusion,
+            request.BoundAgentOutput);
 
         return new SymbolExecution(
             new SearchRouteExecutionResult(

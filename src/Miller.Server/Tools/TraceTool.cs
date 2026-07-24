@@ -55,7 +55,8 @@ public sealed class TraceTool
     [McpServerTool(Name = "trace")]
     [Description(
         "Follow a thread of code. mode=refs lists exact target-resolved references with enclosing symbols and " +
-        "separately labels unresolved fallback evidence; " +
+        "separately labels unresolved fallback evidence; JSON reference rows include exact spans plus target and " +
+        "containing symbol ids for direct call-site evidence. " +
         "mode=path finds the shortest dependency path from target to 'to'; mode=bridge follows " +
         "provider-scoped cross-language chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, " +
         "backend-http) with a confidence band. refs may be empty for some languages; on empty, use " +

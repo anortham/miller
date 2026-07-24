@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-24T07:17:48.197Z
+updated: 2026-07-24T18:59:39.663Z
 tags:
   - miller
   - julie
@@ -20,21 +20,20 @@ Make Miller strictly better than Julie at getting an agent the evidence it needs
 
 ## Current state
 
-- Takeover Phases 0-7 are complete on `codex/miller-julie-takeover` through commit `5ffa4782`.
-- Phase 8 all-language reference resolution is complete and clean in julie-extractors at `8d5b7a8f`: 36 languages, 689 coverage cells, zero silent cells/debts, final Claude review clean. It targets `julie-extract 2.17.0`; release and Miller pin integration remain approval-gated.
-- RC4 sidecar/platform prep is complete and clean at `15f6500b`: deterministic arm64 package SHA `4c4834f...`, macOS x64 Metal lane, final Claude review clean. Release and Miller pin integration remain approval-gated.
-- The Miller CodeRank evaluation adapter and frozen visible model comparison are the remaining Phase 9 work. BGE-small stays the production default unless CodeRank wins the defined gate.
-- Phase 10 prerequisite commits are isolated on `codex/miller-phase10-readiness-docs`: package smoke now asserts all nine tools (`2963335`); hash-bound product attestation tooling/contract is clean (`25a5646`); conditional Miller 1.14 migration/release docs are clean (`525ceae`). Julie retirement text is not touched until Julie's active session is reconciled.
+- Takeover Phases 0-9 and the released/pinned extractor 2.17.0 plus semantic sidecar RC4 prerequisites are complete on `codex/miller-julie-takeover`.
+- The first two full visible Phase 10 calibrations were non-decisional: relevance/correctness passed, but oversized MCP responses and ambiguous semantic-action guidance failed efficiency/action.
+- Commit `27a0ccdb` bounded inspect/context/patterns/workspace output. The current verified second-loop diff additionally caps MCP search/file-inspect at 20 rows, bounds MCP search signatures while preserving process JSON, clarifies sufficient context and exact trace evidence, and makes the evaluator action contract outcome-based.
+- Fast (4,826), Scale (91), evaluator Python (100), retrieval (95), focused contract (297), plugin (48), Release build, and local osx-arm64 Native AOT gates pass for the uncommitted second-loop diff.
 
 ## Next sequence
 
-1. Finish and commit the CodeRank adapter/evidence lane.
-2. Integrate Miller Phase 9 and Phase 10 commits; release/pin extractor 2.17.0 and sidecar RC4 only with explicit approval.
-3. Freeze the exact candidate, then run full visible calibration.
-4. Run nine fresh tool-specific Claude reviews plus one broad review; fix and refreeze until clean.
-5. Run all local gates, then the approval-gated four-platform package-only workflow against the exact frozen ref.
-6. Run the approval-gated sealed decision once; accept only the safe aggregate and schema-valid hash-bound Miller attestation.
-7. If every gate passes, reconcile worktrees and present the clean exact commit ready for local merge to main. Do not push, publish, release, or modify Julie without explicit approval.
+1. Checkpoint and commit the second-loop output/action-guidance fix.
+2. Rebuild exact AOT runtime and regenerate hash-bound runtime identity.
+3. Reuse the five exact source snapshots but rebuild candidate artifacts as needed, run preflight, and repeat the complete visible calibration until relevance, correctness, efficiency, and action all pass.
+4. Run nine fresh tool-specific Claude reviews plus one broad Claude review; disposition findings, fix, rerun affected reviews, and refreeze until clean.
+5. Run final local, evaluator, plugin, mirror, AOT, and package-smoke gates; reconcile all Miller worktrees.
+6. Request only unavoidable approval boundaries for GitHub-hosted four-platform package validation and the spend-once sealed decision. Do not push, publish, release, merge local main, or modify Julie without approval.
+7. Present the clean exact commit ready for local merge to main.
 
 ## Constraints
 
@@ -43,7 +42,7 @@ Make Miller strictly better than Julie at getting an agent the evidence it needs
 - Exact/fallback evidence stays separate and provenance-bearing. Extractor-backed behavior must pass all-language coverage.
 - `MILLER_SEMANTIC=off` remains a permanent zero-work guarantee.
 - Never inspect sealed prompts, labels, task rows, mappings, answers, evidence, trajectories, or scorer rows.
-- No push, release, package dispatch, paid sealed spend, local-main merge, or Julie retirement without the applicable approval.
+- No push, release, paid sealed spend, local-main merge, or Julie retirement without the applicable approval.
 
 ## References
 

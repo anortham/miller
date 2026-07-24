@@ -1322,6 +1322,62 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_McpRoute_ClampsRequestedLimitToTwentyRows()
+    {
+        var rows = Enumerable.Range(0, 30)
+            .Select(i => (
+                Symbol: Symbol(i, $"sym-widget-{i}", $"Widget{i}", "class", $"src/Widget{i}.cs", i + 1),
+                Score: 30.0 - i))
+            .ToArray();
+        var index = new StubSymbolSearchIndex(rows);
+        var provider = new FixedSymbolSearchProvider(index, "/workspace");
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("Widget", mode: "symbol", limit: 100, format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(20, document.RootElement.GetArrayLength());
+    }
+
+    [Fact]
+    public void Search_McpRoute_TruncatesLongSignatures()
+    {
+        string signature = "export default grammar(" + new string('x', 60_000) + ")";
+        var symbol = Symbol(0, "sym-grammar", "grammar", "export", "grammar.js", 1, signature, "javascript");
+        var index = new StubSymbolSearchIndex((symbol, 1.0));
+        var provider = new FixedSymbolSearchProvider(index, "/workspace");
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("grammar", mode: "symbol", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        string rendered = document.RootElement[0].GetProperty("signature").GetString()!;
+        Assert.True(rendered.Length <= ToolRenderLimits.SignatureMaxLength);
+        Assert.EndsWith("…", rendered, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(output) < 8 * 1024);
+    }
+
+    [Fact]
+    public void Run_Json_PreservesCompleteSignatureForProcessConsumers()
+    {
+        string signature = "export default grammar(" + new string('x', 60_000) + ")";
+        var symbol = Symbol(0, "sym-grammar", "grammar", "export", "grammar.js", 1, signature, "javascript");
+        var index = new StubSymbolSearchIndex((symbol, 1.0));
+
+        string output = SearchTool.Run(
+            index,
+            "grammar",
+            SearchToolMode.Symbol,
+            limit: 10,
+            excludeTests: null,
+            json: true,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(signature, document.RootElement[0].GetProperty("signature").GetString());
+    }
+
+    [Fact]
     public void Run_Empty_ReturnsNoResultsSentinel()
     {
         using var fx = JulieDbFixture.CreateDefault();

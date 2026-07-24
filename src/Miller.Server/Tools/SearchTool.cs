@@ -291,7 +291,7 @@ public sealed class SearchTool
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
         [Description("Interpretation axis: auto|text|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
-        [Description("Max results to return. Default 6.")] int limit = DefaultLimit,
+        [Description("Max results to return. Default 6; MCP requests above 20 are clamped.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
@@ -314,10 +314,11 @@ public sealed class SearchTool
             SearchRetrievalMode retrievalMode = ParseRetrieval(retrieval);
             SearchRoute route = SearchRoutePlanner.Plan(mode, regions, query);
             EnsureRetrievalSupportsRoute(retrievalMode, route);
+            int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             if (scope is not null)
             {
-                ApplyTelemetryShape(scope, route, json, limit, regions, file_pattern, language, exclude_tests);
+                ApplyTelemetryShape(scope, route, json, effectiveLimit, regions, file_pattern, language, exclude_tests);
                 scope.SetMetadata("retrieval", RetrievalName(retrievalMode));
             }
 
@@ -332,12 +333,13 @@ public sealed class SearchTool
                     route,
                     new SearchRouteExecutionRequest(
                         query,
-                        limit,
+                        effectiveLimit,
                         json,
                         exclude_tests,
                         compactBanner,
                         FilePattern: file_pattern,
-                        Language: language));
+                        Language: language,
+                        BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
                 if (scope is not null)
@@ -355,12 +357,13 @@ public sealed class SearchTool
                     route,
                     new SearchRouteExecutionRequest(
                         query,
-                        limit,
+                        effectiveLimit,
                         json,
                         exclude_tests,
                         compactBanner,
                         FilePattern: file_pattern,
-                        Language: language));
+                        Language: language,
+                        BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
                 if (scope is not null)
@@ -383,7 +386,7 @@ public sealed class SearchTool
                 ContentCanaryOutcome canary = RunContentWithCanaryProbe(
                     content.Index,
                     query,
-                    limit,
+                    effectiveLimit,
                     json,
                     contentBanner,
                     file_pattern,
@@ -430,14 +433,15 @@ public sealed class SearchTool
                     route,
                     new SearchRouteExecutionRequest(
                         query,
-                        limit,
+                        effectiveLimit,
                         json,
                         exclude_tests,
                         contentBanner,
                         FilePattern: file_pattern,
                         Language: language,
                         SuggestionLookup: identifier =>
-                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh)));
+                            SuggestSymbolsBestEffort(identifier, workspace_id, ensureFresh),
+                        BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
                 if (!json && route.Mode == SearchToolMode.Source &&
@@ -458,7 +462,7 @@ public sealed class SearchTool
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
                 var request = new SearchRouteExecutionRequest(
                     query,
-                    limit,
+                    effectiveLimit,
                     json,
                     exclude_tests,
                     compactBanner,
@@ -466,7 +470,8 @@ public sealed class SearchTool
                     FilePattern: file_pattern,
                     Language: language,
                     FusionArm: _fusionArm,
-                    WorkspaceRoot: context.WorkspaceRoot);
+                    WorkspaceRoot: context.WorkspaceRoot,
+                    BoundAgentOutput: true);
 
                 string canaryOp = ModeName(route.Mode);
                 CanaryMode canaryMode = retrievalMode == SearchRetrievalMode.Auto
@@ -513,7 +518,7 @@ public sealed class SearchTool
                 {
                     AutoTextRescueResult? rescue = TryRunAutoTextRescue(
                         query,
-                        limit,
+                        effectiveLimit,
                         exclude_tests,
                         output,
                         count,
@@ -1560,9 +1565,11 @@ public sealed class SearchTool
         SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
         out int renderedCount, string? compactBanner = null,
         Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
-        IReadOnlyDictionary<string, FusedCandidate>? fusion = null) =>
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null,
+        bool boundAgentOutput = false) =>
         RenderSymbolCandidates(
-            candidates, query, mode, limit, json, out renderedCount, out _, compactBanner, hasDocLookup, fusion);
+            candidates, query, mode, limit, json, out renderedCount, out _, compactBanner, hasDocLookup, fusion,
+            boundAgentOutput);
 
     /// <summary>
     /// Renders collected candidates and also exposes the served page slice — the exact rows the caller rendered,
@@ -1572,7 +1579,8 @@ public sealed class SearchTool
         SymbolCandidateSet candidates, string query, SearchToolMode mode, int limit, bool json,
         out int renderedCount, out IReadOnlyList<SymbolCandidate> servedPage, string? compactBanner = null,
         Func<IReadOnlyCollection<string>, IReadOnlySet<string>>? hasDocLookup = null,
-        IReadOnlyDictionary<string, FusedCandidate>? fusion = null)
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         if (limit < 1) limit = 1;
@@ -1625,7 +1633,8 @@ public sealed class SearchTool
                 fusion,
                 candidates.Relaxed,
                 candidates.Mixed,
-                exactMiss);
+                exactMiss,
+                boundAgentOutput);
         if (candidates.FileMode)
             return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
 
@@ -4247,7 +4256,8 @@ public sealed class SearchTool
         IReadOnlyDictionary<string, FusedCandidate>? fusion = null,
         bool relaxed = false,
         bool mixed = false,
-        bool exactMiss = false)
+        bool exactMiss = false,
+        bool boundAgentOutput = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4262,7 +4272,11 @@ public sealed class SearchTool
                 writer.WriteString("file", s.FilePath);
                 writer.WriteNumber("line", s.StartLine);
                 if (s.Signature is null) writer.WriteNull("signature");
-                else writer.WriteString("signature", s.Signature);
+                else writer.WriteString(
+                    "signature",
+                    boundAgentOutput
+                        ? Truncate(s.Signature, ToolRenderLimits.SignatureMaxLength)
+                        : s.Signature);
                 writer.WriteNumber("score", s.Score);
                 writer.WriteString("symbol_id", s.SymbolId);
                 if (mixed)
