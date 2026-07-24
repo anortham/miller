@@ -42,6 +42,9 @@ artifact-generation guard, usage errors, and `delta_status` rules.
     "limit": 100,
     "reached_count": 12,
     "returned_count": 12,
+    "graph_returned_count": 10,
+    "test_candidate_count": 2,
+    "test_candidates_truncated": false,
     "truncated_by_depth": false,
     "truncated_by_limit": false,
     "seeded_paths": ["src/Service.cs"],
@@ -58,15 +61,20 @@ artifact-generation guard, usage errors, and `delta_status` rules.
 - `reason` (string): exactly `complete`, `depth`, `limit`, `depth_and_limit`, `delta_unavailable`, `no_changes`,
   `index_unavailable`, or `no_seeds`.
 - `max_depth` (integer): the effective reverse-traversal depth bound. Values below 1 are normalized to 1.
-- `limit` (integer): the effective cap on graph nodes returned for `impacted[]` plus `tests[]`. Values below 1
+- `limit` (integer): the effective cap on all rows returned for `impacted[]` plus `tests[]`. Values below 1
   are normalized to 1.
 - `reached_count` (integer): total non-seed graph nodes reached before the `limit` prefix is applied. It is 0 when
   traversal was not run.
-- `returned_count` (integer): graph nodes actually rendered across `impacted[]` and `tests[]` after the limit and
-  indexed-symbol lookup. It is 0 when traversal was not run.
+- `returned_count` (integer): all rows actually rendered across `impacted[]` and `tests[]` after the limit and
+  indexed-symbol lookup, including labeled heuristic test candidates.
+- `graph_returned_count` (integer): the subset of `returned_count` reached through indexed graph evidence.
+- `test_candidate_count` (integer): the subset of `returned_count` added by the labeled filename/role heuristic.
+- `test_candidates_truncated` (boolean): true when the result limit omitted at least one observed heuristic
+  candidate or the bounded candidate lookup reached its scan ceiling, so more candidates may exist.
 - `truncated_by_depth` (boolean): true when a node at `max_depth` had an unseen indexed neighbour, so deeper
   traversal was omitted.
-- `truncated_by_limit` (boolean): true when `reached_count` exceeded `limit`.
+- `truncated_by_limit` (boolean): true when graph `reached_count` exceeded `limit`; heuristic truncation is
+  reported separately by `test_candidates_truncated`.
 - `seeded_paths` (array of strings): changed paths with one or more current indexed symbols used as traversal
   seeds. Exhaustion is relative only to these paths.
 - `unseeded_paths` (array of strings): changed paths that had no current indexed symbols and therefore did not
@@ -109,7 +117,7 @@ When `status` is `not_run`, both truncation flags are false, both counts are 0, 
 
 ## Stability
 
-Schema v1 freezes the eleven traversal field names and the status/reason pairs above. A breaking change requires a
+Schema v1 freezes the fourteen traversal field names and the status/reason pairs above. A breaking change requires a
 new `schema_version` and contract document.
 
 Compact output begins with the same status, reason, effective bounds, counts, and truncation flags. It is capped

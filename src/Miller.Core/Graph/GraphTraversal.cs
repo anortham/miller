@@ -107,15 +107,15 @@ internal static class GraphTraversal
         {
             string current = frontier.Dequeue();
             int currentHop = reached[current].Hop;
-            GraphNeighbour[] adjacent = neighbours(current, direction).ToArray();
             if (currentHop >= maxDepth)
             {
                 if (!truncatedByDepth && currentHop == maxDepth &&
-                    adjacent.Any(neighbour => !reached.ContainsKey(neighbour.Id)))
+                    neighbours(current, direction).Any(neighbour => !reached.ContainsKey(neighbour.Id)))
                     truncatedByDepth = true;
                 continue;
             }
 
+            GraphNeighbour[] adjacent = neighbours(current, direction).ToArray();
             int nextHop = currentHop + 1;
             foreach (GraphNeighbour neighbour in adjacent)
             {

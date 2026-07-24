@@ -49,10 +49,27 @@
 
 ## Verification
 
-- Phase 6 focused filter: 116 passed, 0 failed.
-- Agent guidance/description gates: 52 passed, 0 failed.
+- Phase 6 focused and compatibility filter: 235 passed, 0 failed.
+- Fast suite: 4,727 passed, 2 environment skips.
+- Scale suite: 87 passed, 0 failed against the real pinned extractor.
+- Plugin contracts: 48 passed.
+- Agent-efficiency Python harness: 99 passed.
+- Retrieval evaluator: 95 passed.
+- Native AOT `osx-arm64` publish: passed.
 - `dotnet build Miller.slnx -c Release --no-restore`: succeeded, 0 warnings, 0 errors.
 - `git diff --check`: clean.
+
+## Claude review disposition
+
+- Six findings were accepted and fixed with red/green coverage: cross-language filename-role conventions,
+  normal-mode path evidence, dangling linkage parity, bounded frontier probing, edge-kind tie-breaking, and
+  explicit heuristic candidate counts/truncation.
+- The follow-up review accepted four more fixes: normal zero-seed traversals now report `not_run/no_seeds`,
+  SQLite string tie-breaks are ordinal across cultures, and both stale traversal contract examples are current.
+- The full gate exposed stale synthetic bridge and large-DB v1 schemas after Phase 6 added visibility and
+  confidence reads. Those fixtures now match the pinned extractor columns.
+- The scale latency tripwire failed once under suite contention, passed in isolation on both Phase 5 and the
+  repaired Phase 6 tree, then passed in the full 87-test rerun.
 
 ## Changed files
 
@@ -69,4 +86,4 @@
   fixture-proven but dormant until the extractor emits labeled evidence.
 - Exhaustion remains scoped to current indexed edges; dynamic dispatch, reflection, configuration, generated
   code, and unresolved extractor edges remain outside the claim.
-- Full fast, Scale, Native AOT, plugin, evaluator, and branch-wide gates remain lead-owned.
+- Branch-wide final gates and the nine-tool broad review remain later-plan responsibilities.

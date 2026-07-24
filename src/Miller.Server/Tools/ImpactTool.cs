@@ -384,8 +384,9 @@ public sealed class ImpactTool
             return Usage(json);
         }
 
-        // --- resolve the seed symbol ids (D5), collecting any user-facing note (not-found / whole-file). ---
         var seedIds = new List<string>();
+        var seededPaths = new List<string>();
+        var unseededPaths = new List<string>();
         string? note = null;
 
         if (!string.IsNullOrWhiteSpace(target))
@@ -400,34 +401,45 @@ public sealed class ImpactTool
         }
         else if (changedPaths is { Count: > 0 })
         {
-            var unmatched = new List<string>();
             foreach (var path in changedPaths)
             {
-                if (SeedFromFile(index, path, seedIds) == 0)
-                    unmatched.Add(path);
+                if (SeedFromFile(index, path, seedIds) > 0)
+                    seededPaths.Add(path);
+                else
+                    unseededPaths.Add(path);
             }
-            if (unmatched.Count > 0)
-                note = NoSeedSymbolsNote("changed path(s)", unmatched);
+            if (unseededPaths.Count > 0)
+                note = NoSeedSymbolsNote("changed path(s)", unseededPaths);
         }
-        else // diff
+        else
         {
-            note = SeedFromDiff(index, diff!, seedIds);
+            note = SeedFromDiff(index, diff!, seedIds, seededPaths, unseededPaths);
         }
 
         if (seedIds.Count == 0 && note is null)
             note = "No indexed symbols matched the impact input. Try search mode=file for the changed path.";
 
-        // --- bounded REVERSE reachability over the in-memory graph (D3/D5). Starts are excluded by Reach. ---
+        if (seedIds.Count == 0)
+        {
+            impactedCount = 0;
+            var noSeedTraversal = new ImpactTraversal(
+                [], [], null, seededPaths, unseededPaths, [],
+                0, false,
+                "not_run", "no_seeds");
+            return json
+                ? RenderJson(noSeedTraversal, note, maxDepth, limit)
+                : RenderCompact(noSeedTraversal, note, maxDepth, limit);
+        }
+
         GraphReachResult graphResult =
             graph.ReachWithEvidence(seedIds, maxDepth, limit, Direction.Reverse);
         nodesVisited = graphResult.ReachedCount;
-        IReadOnlyList<ReachedNode> reachedNodes = AddHeuristicTestCandidates(
+        TestCandidateExpansion expansion = AddHeuristicTestCandidates(
             index, seedIds, graphResult.Nodes, limit);
+        IReadOnlyList<ReachedNode> reachedNodes = expansion.Nodes;
         if (seedIds.Count > 0 && reachedNodes.Count == 0 && note is null)
             note = NoDependentsNote(index, seedIds);
 
-        // --- partition the reached nodes into impacted symbols vs likely tests (D5). Hydrate ids → symbols;
-        // an id absent from the index is skipped (defensive — the graph bounds edges to indexed nodes). ---
         var impacted = new List<Reached>();
         var tests = new List<Reached>();
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reachedNodes.Select(static node => node.Id));
@@ -450,9 +462,11 @@ public sealed class ImpactTool
             impacted,
             tests,
             graphResult,
+            seededPaths,
+            unseededPaths,
             [],
-            [],
-            [],
+            expansion.CandidateCount,
+            expansion.Truncated,
             status,
             reason);
         return json
@@ -598,7 +612,7 @@ public sealed class ImpactTool
                 deltaReason, paths, maxDepth, limit, traversal);
 
         static ImpactTraversal NotRun(string reason, IReadOnlyList<string> deleted) =>
-            new([], [], null, [], [], deleted, "not_run", reason);
+            new([], [], null, [], [], deleted, 0, false, "not_run", reason);
     }
 
     // Seed every changed path's symbols, then partition the bounded reverse-reachability set into impacted symbols
@@ -629,11 +643,13 @@ public sealed class ImpactTool
         if (seedIds.Count == 0)
             return new(
                 impacted, tests, null, seededPaths, unseededPaths, deletedPaths,
+                0, false,
                 "not_run", "no_seeds");
 
         GraphReachResult graphResult = graph.ReachWithEvidence(seedIds, maxDepth, limit, Direction.Reverse);
-        IReadOnlyList<ReachedNode> reachedNodes = AddHeuristicTestCandidates(
+        TestCandidateExpansion expansion = AddHeuristicTestCandidates(
             index, seedIds, graphResult.Nodes, limit);
+        IReadOnlyList<ReachedNode> reachedNodes = expansion.Nodes;
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reachedNodes.Select(static node => node.Id));
         var ranked = ImpactRanker.Rank(reachedNodes
             .Where(node => symbolsById.ContainsKey(node.Id))
@@ -651,6 +667,7 @@ public sealed class ImpactTool
         (string status, string reason) = TraversalDisposition(graphResult);
         return new(
             impacted, tests, graphResult, seededPaths, unseededPaths, deletedPaths,
+            expansion.CandidateCount, expansion.Truncated,
             status, reason);
     }
 
@@ -667,19 +684,20 @@ public sealed class ImpactTool
         return (status, reason);
     }
 
-    private static IReadOnlyList<ReachedNode> AddHeuristicTestCandidates(
+    private static TestCandidateExpansion AddHeuristicTestCandidates(
         ISymbolLookupIndex index,
         IReadOnlyList<string> seedIds,
         IReadOnlyList<ReachedNode> graphNodes,
         int limit)
     {
-        if (graphNodes.Count >= limit)
-            return graphNodes;
-
+        const int scanLimit = 64;
         var combined = graphNodes.ToList();
+        int candidateCount = 0;
+        bool truncated = false;
         var seen = new HashSet<string>(
             seedIds.Concat(graphNodes.Select(static node => node.Id)),
             StringComparer.Ordinal);
+        var seenStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         IReadOnlyDictionary<string, IndexedSymbol> seeds =
             SymbolLookupBatch.FindBySymbolIds(index, seedIds);
         foreach (IndexedSymbol seed in seeds.Values
@@ -688,10 +706,13 @@ public sealed class ImpactTool
                      .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
         {
             string stem = Path.GetFileNameWithoutExtension(seed.FilePath);
-            if (string.IsNullOrWhiteSpace(stem))
+            if (string.IsNullOrWhiteSpace(stem) || !seenStems.Add(stem))
                 continue;
 
-            foreach (IndexedSymbol candidate in index.FindByFilePathFragment(stem, 64)
+            IReadOnlyList<IndexedSymbol> scanned = index.FindByFilePathFragment(stem, scanLimit + 1);
+            if (scanned.Count > scanLimit)
+                truncated = true;
+            foreach (IndexedSymbol candidate in scanned.Take(scanLimit)
                          .Where(static symbol => symbol.IsTest)
                          .Where(symbol => IsFilenameRoleCandidate(stem, symbol.FilePath))
                          .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
@@ -700,6 +721,8 @@ public sealed class ImpactTool
             {
                 if (!seen.Add(candidate.SymbolId))
                     continue;
+                if (combined.Count >= limit)
+                    return new(combined, candidateCount, true);
 
                 combined.Add(new ReachedNode(
                     candidate.SymbolId,
@@ -709,19 +732,28 @@ public sealed class ImpactTool
                     0.35,
                     "filename_role",
                     Visibility: candidate.Visibility));
-                if (combined.Count >= limit)
-                    return combined;
+                candidateCount++;
             }
         }
-        return combined;
+        return new(combined, candidateCount, truncated);
     }
 
     private static bool IsFilenameRoleCandidate(string sourceStem, string candidatePath)
     {
         string candidateStem = Path.GetFileNameWithoutExtension(candidatePath);
-        return candidateStem.StartsWith(sourceStem, StringComparison.OrdinalIgnoreCase) &&
-               candidateStem.AsSpan(sourceStem.Length).StartsWith("test", StringComparison.OrdinalIgnoreCase);
+        if (candidateStem.StartsWith(sourceStem, StringComparison.OrdinalIgnoreCase) &&
+            IsTestRole(candidateStem[sourceStem.Length..].Trim('_', '.', '-')))
+            return true;
+
+        return candidateStem.EndsWith(sourceStem, StringComparison.OrdinalIgnoreCase) &&
+               IsTestRole(candidateStem[..^sourceStem.Length].Trim('_', '.', '-'));
     }
+
+    private static bool IsTestRole(string value) =>
+        value.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("spec", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("specs", StringComparison.OrdinalIgnoreCase);
 
     private static string RenderDeltaJson(
         string workspaceId, bool complete, long fromRevision, long toRevision,
@@ -772,6 +804,11 @@ public sealed class ImpactTool
         writer.WriteNumber("limit", limit);
         writer.WriteNumber("reached_count", traversal.Graph?.ReachedCount ?? 0);
         writer.WriteNumber("returned_count", traversal.Impacted.Count + traversal.Tests.Count);
+        writer.WriteNumber(
+            "graph_returned_count",
+            traversal.Impacted.Count + traversal.Tests.Count - traversal.TestCandidateCount);
+        writer.WriteNumber("test_candidate_count", traversal.TestCandidateCount);
+        writer.WriteBoolean("test_candidates_truncated", traversal.TestCandidatesTruncated);
         writer.WriteBoolean("truncated_by_depth", traversal.Graph?.TruncatedByDepth ?? false);
         writer.WriteBoolean("truncated_by_limit", traversal.Graph?.TruncatedByLimit ?? false);
         writer.WritePropertyName("seeded_paths");
@@ -808,7 +845,12 @@ public sealed class ImpactTool
         sb.Append("traversal: ").Append(traversal.Status).Append('/').Append(traversal.Reason)
           .Append("  max_depth: ").Append(maxDepth).Append("  limit: ").Append(limit)
           .Append("  reached: ").Append(traversal.Graph?.ReachedCount ?? 0)
-          .Append("  returned: ").Append(traversal.Impacted.Count + traversal.Tests.Count).Append('\n');
+          .Append("  returned: ").Append(traversal.Impacted.Count + traversal.Tests.Count)
+          .Append("  graph_returned: ")
+          .Append(traversal.Impacted.Count + traversal.Tests.Count - traversal.TestCandidateCount)
+          .Append("  test_candidates: ").Append(traversal.TestCandidateCount)
+          .Append("  test_candidates_truncated: ").Append(traversal.TestCandidatesTruncated)
+          .Append('\n');
         if (!complete)
         {
             sb.Append("delta unavailable — falling back conservatively (no truthful changed_paths).");
@@ -860,8 +902,15 @@ public sealed class ImpactTool
         IReadOnlyList<string> SeededPaths,
         IReadOnlyList<string> UnseededPaths,
         IReadOnlyList<string> DeletedPaths,
+        int TestCandidateCount,
+        bool TestCandidatesTruncated,
         string Status,
         string Reason);
+
+    private sealed record TestCandidateExpansion(
+        IReadOnlyList<ReachedNode> Nodes,
+        int CandidateCount,
+        bool Truncated);
 
     // ---------- seed resolution ----------
 
@@ -922,22 +971,24 @@ public sealed class ImpactTool
     // Seed from a unified diff (D5): per changed file, the symbols whose [start_line, end_line] intersect a
     // changed new-side range; when nothing intersects (or no spans recorded), degrade to ALL symbols in the file
     // (a safe over-approximation, noted). Returns a degradation note when any file degraded, else null.
-    private static string? SeedFromDiff(ISymbolLookupIndex index, string diff, List<string> seedIds)
+    private static string? SeedFromDiff(
+        ISymbolLookupIndex index,
+        string diff,
+        List<string> seedIds,
+        List<string> seededPaths,
+        List<string> unseededPaths)
     {
         var degradedFiles = new List<string>();
-        var unmatchedFiles = new List<string>();
         foreach (var file in DiffTargets.Parse(diff))
         {
             string resolved = index.ResolveIndexedFilePath(file.Path) ?? file.Path;
             var symbols = index.FindByFilePath(resolved);
             if (symbols.Count == 0)
             {
-                unmatchedFiles.Add(file.Path);
-                continue; // a changed file with no indexed symbols contributes no seeds
+                unseededPaths.Add(file.Path);
+                continue;
             }
 
-            // Collect the symbols whose whole span intersects ANY changed range. A symbol with no recorded span
-            // (StartLine 0 / EndLine 0) can never intersect, so it falls into the whole-file degradation below.
             var intersecting = new List<string>();
             foreach (var symbol in symbols)
             {
@@ -959,20 +1010,20 @@ public sealed class ImpactTool
             }
             else
             {
-                // No line-precise intersection → seed the whole file (over-approximate, never silently narrow).
                 foreach (var symbol in symbols)
                     seedIds.Add(symbol.SymbolId);
                 degradedFiles.Add(resolved);
             }
+            seededPaths.Add(file.Path);
         }
 
-        if (seedIds.Count == 0 && unmatchedFiles.Count > 0)
-            return NoSeedSymbolsNote("diff file(s)", unmatchedFiles);
+        if (seedIds.Count == 0 && unseededPaths.Count > 0)
+            return NoSeedSymbolsNote("diff file(s)", unseededPaths);
         if (degradedFiles.Count > 0)
             return "note: no line-precise span matched in " + string.Join(", ", degradedFiles) +
                    " — seeded the whole file(s).";
-        if (unmatchedFiles.Count > 0)
-            return "note: no indexed symbols matched diff file(s): " + string.Join(", ", unmatchedFiles) + ".";
+        if (unseededPaths.Count > 0)
+            return "note: no indexed symbols matched diff file(s): " + string.Join(", ", unseededPaths) + ".";
         return null;
     }
 
@@ -1034,9 +1085,14 @@ public sealed class ImpactTool
             .Append(" limit=").Append(limit)
             .Append(" reached=").Append(traversal.Graph?.ReachedCount ?? 0)
             .Append(" returned=").Append(impacted.Count + tests.Count)
+            .Append(" graph_returned=").Append(impacted.Count + tests.Count - traversal.TestCandidateCount)
+            .Append(" test_candidates=").Append(traversal.TestCandidateCount)
+            .Append(" test_candidates_truncated=").Append(traversal.TestCandidatesTruncated)
             .Append(" truncated_by_depth=").Append(traversal.Graph?.TruncatedByDepth ?? false)
             .Append(" truncated_by_limit=").Append(traversal.Graph?.TruncatedByLimit ?? false)
             .Append('\n');
+        AppendCompactPaths(sb, "seeded_paths", traversal.SeededPaths);
+        AppendCompactPaths(sb, "unseeded_paths", traversal.UnseededPaths);
 
         if (impacted.Count == 0 && tests.Count == 0)
         {
@@ -1086,6 +1142,22 @@ public sealed class ImpactTool
         }
 
         return BoundCompact(sb);
+    }
+
+    private static void AppendCompactPaths(
+        StringBuilder builder,
+        string label,
+        IReadOnlyList<string> paths)
+    {
+        if (paths.Count == 0)
+            return;
+
+        const int shownLimit = 5;
+        builder.Append(label).Append(" (").Append(paths.Count).Append("): ")
+            .Append(string.Join(", ", paths.Take(shownLimit)));
+        if (paths.Count > shownLimit)
+            builder.Append(" ... +").Append(paths.Count - shownLimit).Append(" (use format=json for all)");
+        builder.Append('\n');
     }
 
     private static void AppendReachedGroups(StringBuilder sb, IReadOnlyList<Reached> items)

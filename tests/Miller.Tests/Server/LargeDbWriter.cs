@@ -45,7 +45,7 @@ internal static class LargeDbWriter
             CREATE TABLE symbols (
                 symbol_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, path TEXT NOT NULL, language TEXT NOT NULL,
                 name TEXT NOT NULL, kind TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER,
-                parent_symbol_id TEXT, is_test INTEGER NOT NULL DEFAULT 0,
+                parent_symbol_id TEXT, visibility TEXT, is_test INTEGER NOT NULL DEFAULT 0,
                 test_container INTEGER NOT NULL DEFAULT 0, test_lifecycle INTEGER NOT NULL DEFAULT 0,
                 metadata_json TEXT);
             """);
@@ -62,13 +62,14 @@ internal static class LargeDbWriter
         Exec(conn, """
             CREATE TABLE relationships (
                 relationship_id TEXT PRIMARY KEY, from_symbol_id TEXT NOT NULL, to_symbol_id TEXT NOT NULL,
-                path TEXT, kind TEXT NOT NULL);
+                path TEXT, kind TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 1.0);
             """);
         Exec(conn, """
             CREATE TABLE identifiers (
                 identifier_id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, language TEXT NOT NULL,
                 path TEXT NOT NULL, start_line INTEGER NOT NULL, start_column INTEGER NOT NULL,
-                end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, containing_symbol_id TEXT, target_symbol_id TEXT);
+                end_line INTEGER NOT NULL, end_column INTEGER NOT NULL, containing_symbol_id TEXT,
+                target_symbol_id TEXT, confidence REAL NOT NULL DEFAULT 1.0);
             """);
         Exec(conn, """
             CREATE TABLE identifier_resolutions (
@@ -169,8 +170,8 @@ internal static class LargeDbWriter
             cmd.Transaction = tx;
             cmd.CommandText =
                 "INSERT INTO symbols (symbol_id, file_id, path, language, name, kind, signature, start_line, " +
-                "end_line, parent_symbol_id, is_test, test_container, test_lifecycle, metadata_json) " +
-                "VALUES ($id, $fid, $p, $lang, $name, $kind, $sig, $sl, $el, $pid, $istest, $tcont, $tlife, NULL);";
+                "end_line, parent_symbol_id, visibility, is_test, test_container, test_lifecycle, metadata_json) " +
+                "VALUES ($id, $fid, $p, $lang, $name, $kind, $sig, $sl, $el, $pid, $visibility, $istest, $tcont, $tlife, NULL);";
             var pId = Add(cmd, "$id");
             var pFid = Add(cmd, "$fid");
             var pPath = Add(cmd, "$p");
@@ -181,6 +182,7 @@ internal static class LargeDbWriter
             var pSl = Add(cmd, "$sl");
             var pEl = Add(cmd, "$el");
             var pPid = Add(cmd, "$pid");
+            var pVisibility = Add(cmd, "$visibility");
             var pIsTest = Add(cmd, "$istest");
             var pTestContainer = Add(cmd, "$tcont");
             var pTestLifecycle = Add(cmd, "$tlife");
@@ -198,6 +200,7 @@ internal static class LargeDbWriter
                 pSl.Value = s.StartLine;
                 pEl.Value = s.EndLine;
                 pPid.Value = (object?)s.ParentId ?? DBNull.Value;
+                pVisibility.Value = (object?)s.Visibility ?? DBNull.Value;
                 pIsTest.Value = s.IsTest ? 1 : 0;
                 pTestContainer.Value = s.TestContainer ? 1 : 0;
                 pTestLifecycle.Value = s.TestLifecycle ? 1 : 0;

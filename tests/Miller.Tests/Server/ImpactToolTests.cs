@@ -178,6 +178,7 @@ public sealed class ImpactToolTests
             new[]
             {
                 "status", "reason", "max_depth", "limit", "reached_count", "returned_count",
+                "graph_returned_count", "test_candidate_count", "test_candidates_truncated",
                 "truncated_by_depth", "truncated_by_limit", "seeded_paths", "unseeded_paths",
                 "deleted_paths",
             },
@@ -294,7 +295,7 @@ public sealed class ImpactToolTests
         Assert.Equal(4, impactedCount);
         Assert.Equal(
             "# traversal\n" +
-            "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 truncated_by_depth=False truncated_by_limit=False\n" +
+            "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 graph_returned=5 test_candidates=0 test_candidates_truncated=False truncated_by_depth=False truncated_by_limit=False\n" +
             "\n" +
             "# impacted (4)\n" +
             "src/Service.cs:\n" +
@@ -756,7 +757,76 @@ public sealed class ImpactToolTests
         // Same seeds as the file target → Handle impacted, ProcessWorks a test.
         Assert.Contains("Handle", output);
         Assert.Contains("ProcessWorks", output);
+        Assert.Contains("seeded_paths (1): src/Service.cs", output);
         Assert.Equal(1, impactedCount);
+    }
+
+    [Fact]
+    public void Run_ChangedPaths_JsonReportsSeededAndUnseededPaths()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(
+            index,
+            resolver,
+            target: null,
+            changedPaths: ["src/Service.cs", "does/not/exist.cs"],
+            diff: null,
+            maxDepth: 2,
+            limit: 100,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(
+            ["src/Service.cs"],
+            traversal.GetProperty("seeded_paths").EnumerateArray().Select(static item => item.GetString()));
+        Assert.Equal(
+            ["does/not/exist.cs"],
+            traversal.GetProperty("unseeded_paths").EnumerateArray().Select(static item => item.GetString()));
+    }
+
+    [Fact]
+    public void Run_Diff_JsonReportsSeededAndUnseededPaths()
+    {
+        var (index, resolver) = BuildFixture();
+        const string patch = """
+            diff --git a/src/Service.cs b/src/Service.cs
+            --- a/src/Service.cs
+            +++ b/src/Service.cs
+            @@ -1,1 +1,1 @@
+            -class Service {}
+            +class Service { }
+            diff --git a/does/not/exist.cs b/does/not/exist.cs
+            --- a/does/not/exist.cs
+            +++ b/does/not/exist.cs
+            @@ -1,1 +1,1 @@
+            -old
+            +new
+            """;
+
+        string output = ImpactTool.Run(
+            index,
+            resolver,
+            target: null,
+            changedPaths: null,
+            diff: patch,
+            maxDepth: 2,
+            limit: 100,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(
+            ["src/Service.cs"],
+            traversal.GetProperty("seeded_paths").EnumerateArray().Select(static item => item.GetString()));
+        Assert.Equal(
+            ["does/not/exist.cs"],
+            traversal.GetProperty("unseeded_paths").EnumerateArray().Select(static item => item.GetString()));
     }
 
     [Fact]
@@ -828,6 +898,102 @@ public sealed class ImpactToolTests
         Assert.Equal("heuristic", evidence.GetProperty("tier").GetString());
         Assert.Equal("filename_role", evidence.GetProperty("edge_source").GetString());
         Assert.Equal("test_candidate", evidence.GetProperty("edge_kind").GetString());
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(0, traversal.GetProperty("graph_returned_count").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.False(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void Run_Target_ReportsTruncatedHeuristicTestCandidates()
+    {
+        const string sourceId = "53000000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(
+                0, sourceId, "OrderService", "class OrderService", "class", "csharp",
+                "src/OrderService.cs", 1, 20, null, false),
+        };
+        for (int i = 1; i <= 3; i++)
+        {
+            symbols.Add(new IndexedSymbol(
+                i,
+                $"5300000000000000000000000000001{i}",
+                $"CreateOrderWorks{i}",
+                $"void CreateOrderWorks{i}()",
+                "method",
+                "csharp",
+                $"tests/{i}/OrderServiceTests.cs",
+                5,
+                10,
+                null,
+                true));
+        }
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, []);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "OrderService",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 2,
+            limit: 2,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(2, doc.RootElement.GetProperty("tests").GetArrayLength());
+        Assert.Equal(2, traversal.GetProperty("returned_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("graph_returned_count").GetInt32());
+        Assert.Equal(2, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.True(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("go", "src/parser.go", "tests/parser_test.go")]
+    [InlineData("rust", "src/parser.rs", "tests/parser_tests.rs")]
+    [InlineData("python", "src/parser.py", "tests/test_parser.py")]
+    [InlineData("typescript", "src/parser.ts", "tests/parser.test.ts")]
+    [InlineData("ruby", "src/parser.rb", "tests/parser_spec.rb")]
+    public void Run_Target_FindsLanguageSpecificFilenameRoleCandidates(
+        string language,
+        string sourcePath,
+        string testPath)
+    {
+        const string sourceId = "53100000000000000000000000000001";
+        const string testId = "53100000000000000000000000000002";
+        var index = MillerRepositoryIndex.Build(
+            [
+                new IndexedSymbol(
+                    0, sourceId, "Parser", "Parser", "class", language,
+                    sourcePath, 1, 20, null, false),
+                new IndexedSymbol(
+                    1, testId, "ParserWorks", "ParserWorks", "method", language,
+                    testPath, 5, 10, null, true),
+            ],
+            []);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Parser",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 2,
+            limit: 100,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement test = Assert.Single(doc.RootElement.GetProperty("tests").EnumerateArray());
+        Assert.Equal(testId, test.GetProperty("symbol_id").GetString());
+        Assert.Equal(
+            "filename_role",
+            test.GetProperty("impact_evidence").GetProperty("edge_source").GetString());
     }
 
     [Fact]
@@ -842,7 +1008,33 @@ public sealed class ImpactToolTests
         Assert.Equal(0, impactedCount);
         Assert.Contains("nothing", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("No indexed symbols matched changed path(s): does/not/exist.cs", output);
+        Assert.Contains("unseeded_paths (1): does/not/exist.cs", output);
         Assert.Contains("Try search mode=file", output);
+    }
+
+    [Fact]
+    public void Run_ChangedPaths_UnknownFile_JsonReportsTraversalNotRunBecauseNoSeeds()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: null, changedPaths: new[] { "does/not/exist.cs" }, diff: null,
+            maxDepth: 2, limit: 100, json: true, out int impactedCount, out int nodesVisited);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = document.RootElement.GetProperty("traversal");
+        Assert.Equal(0, impactedCount);
+        Assert.Equal(0, nodesVisited);
+        Assert.Equal("not_run", traversal.GetProperty("status").GetString());
+        Assert.Equal("no_seeds", traversal.GetProperty("reason").GetString());
+        Assert.Equal(0, traversal.GetProperty("reached_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("returned_count").GetInt32());
+        Assert.False(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Empty(traversal.GetProperty("seeded_paths").EnumerateArray());
+        Assert.Equal(
+            "does/not/exist.cs",
+            Assert.Single(traversal.GetProperty("unseeded_paths").EnumerateArray()).GetString());
     }
 
     [Fact]

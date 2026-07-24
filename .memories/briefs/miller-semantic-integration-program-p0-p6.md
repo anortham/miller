@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-23T02:49:45.246Z
+updated: 2026-07-24T04:04:04.900Z
 tags:
   - miller
   - julie
@@ -33,18 +33,19 @@ The semantic integration program established the local vector foundation, but th
 7. Make impact risk-ranked and test-aware.
 8. Bound and simplify content, patterns, and workspace.
 9. Raise all-language resolution coverage in julie-extractors.
-10. Validate RC3 protocol/platform support early; decide BGE-small versus CodeRankEmbed after final search/context behavior exists.
+10. Validate RC3 protocol/platform support; decide BGE-small versus CodeRankEmbed after final search/context behavior exists.
 11. Run the sealed paired decision, nine fresh Claude tool reviews, a separate broad Claude review, and only then decide Julie retirement.
 
 ## Constraints
 
 - Miller owns the local agent workflow and optional local semantics; julie-extractors owns parser-backed extraction; julie-semantic-sidecar owns embedding generation; Eros owns fleet semantics.
-- Keep the nine MCP tools unless evidence and explicit user approval justify a surface change. No new MCP tool without explicit approval.
+- Keep the nine MCP tools unless evidence and explicit user approval justify a surface change. Removed MCP behavior is hard-removed, not deprecated. No new MCP tool without explicit approval.
 - Exact and fallback evidence remain separate and provenance-bearing.
 - Extractor-backed behavior must report and pass all-language coverage.
 - MILLER_SEMANTIC=off remains a permanent zero-work guarantee.
 - Use TDD, architecture-quality review, per-phase verification gates, and fresh Claude review for every affected tool. The final gate repeats all nine tool reviews plus a broad review.
 - No push, release, or Julie retirement without explicit user approval.
+- Never inspect sealed evaluator prompts, labels, or task rows. Complete all reviews and fixes before freezing candidates and spending the sealed run.
 
 ## RC3 evidence
 
@@ -64,4 +65,4 @@ Miller meets or beats Julie on sealed correctness, nDCG/MRR/top-1, calls, tokens
 
 ## Status
 
-The isolated implementation worktree is `/Users/murphy/source/miller/.worktrees/miller-julie-takeover` on `codex/miller-julie-takeover`. Phase 0's v1 contract, MRR/top-1 metrics, and disallowed-tool void fix are committed locally at `87bf18a`; Python semantic-contract and pure C# action-scorer work is active. RC3 is released and queued for the early protocol/platform preflight after Phase 0. Do not inspect sealed labels or interfere with the active Julie session.
+The isolated implementation worktree is `/Users/murphy/source/miller/.worktrees/miller-julie-takeover` on `codex/miller-julie-takeover`. Phases 0–6 are complete: evaluator freeze, exact reference evidence, typed diagnostics and budgets, exact consumer/rename migration, shared search reranking/routing, one-call context, and risk-ranked/test-aware impact. Phase 6 passed 4,727 fast tests, 87 scale tests, Release build, Native AOT publish, plugin contracts, evaluator suites, and two fresh Claude review passes; all accepted findings were fixed. Phase 7 is active across content, patterns, and workspace. Phase 8 and Phase 9 readiness audits are complete and identify the exact upstream extractor and semantic-sidecar gaps. Phase 10 must use the corrected order: reviews and all fixes before candidate freeze, pushed package-only validation before the one sealed spend, and safe aggregate plus operator-side product-role attestation. Do not inspect sealed labels or interfere with the active Julie session.

@@ -1,5 +1,6 @@
 using Miller.Core.Graph;
 using Miller.Indexing;
+using System.Globalization;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -168,5 +169,100 @@ public sealed class SqliteSymbolGraphIndexTests
             repository.Graph.Reach([sourceId], 1, 10, Direction.Reverse),
             sqlite.Reach([sourceId], 1, 10, Direction.Reverse));
         Assert.Equal(expected.Nodes, actual.Nodes);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_DanglingTestLinkageTarget_MatchesRepositoryGraph()
+    {
+        const string testId = "52100000000000000000000000000001";
+        const string missingId = "52100000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + missingId +
+                        "\",\"confidence\":0.97}}",
+                },
+            ]);
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        GraphReachResult expected = repository.Graph.ReachWithEvidence(
+            [testId], 1, 10, Direction.Forward);
+        GraphReachResult actual = sqlite.ReachWithEvidence(
+            [testId], 1, 10, Direction.Forward);
+
+        Assert.Equal(expected, actual);
+        Assert.Empty(actual.Nodes);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_EqualPriorityEdgesUseDeterministicKindTieBreak()
+    {
+        const string fromId = "52200000000000000000000000000001";
+        const string toId = "52200000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(fromId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+                new(toId, "Target", "method", "csharp", "src/Target.cs", "void Target()", 1, null),
+            ],
+            relationships:
+            [
+                new("rel-uses", fromId, toId, "uses"),
+                new("rel-references", fromId, toId, "references"),
+            ]);
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        ReachedNode memoryNode = Assert.Single(repository.Graph.ReachWithEvidence(
+            [fromId], 1, 10, Direction.Forward).Nodes);
+        ReachedNode sqliteNode = Assert.Single(sqlite.ReachWithEvidence(
+            [fromId], 1, 10, Direction.Forward).Nodes);
+
+        Assert.Equal("references", memoryNode.EdgeKind);
+        Assert.Equal(memoryNode, sqliteNode);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_EqualPriorityEdgeKindTieBreakIsOrdinalAcrossCultures()
+    {
+        const string fromId = "52300000000000000000000000000001";
+        const string toId = "52300000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(fromId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+                new(toId, "Target", "method", "csharp", "src/Target.cs", "void Target()", 1, null),
+            ],
+            relationships:
+            [
+                new("rel-z", fromId, toId, "z_kind"),
+                new("rel-a-umlaut", fromId, toId, "ä_kind"),
+            ]);
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            ReachedNode memoryNode = Assert.Single(repository.Graph.ReachWithEvidence(
+                [fromId], 1, 10, Direction.Forward).Nodes);
+            ReachedNode sqliteNode = Assert.Single(sqlite.ReachWithEvidence(
+                [fromId], 1, 10, Direction.Forward).Nodes);
+
+            Assert.Equal("z_kind", memoryNode.EdgeKind);
+            Assert.Equal(memoryNode, sqliteNode);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 }

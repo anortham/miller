@@ -77,6 +77,15 @@ public sealed class GraphTraversalTests
         };
     }
 
+    private static Func<string, Direction, IEnumerable<GraphNeighbour>> RecordingEvidenceNeighbours(
+        List<string> calls)
+    {
+        Func<string, Direction, IEnumerable<string>> neighbours = RecordingNeighbours(calls);
+        return (id, direction) => neighbours(id, direction)
+            .Select(static neighbour => new GraphNeighbour(
+                neighbour, "calls", 1.0, "test", 0, null));
+    }
+
     [Fact]
     public void Reach_AtMaxDepth_DoesNotProbeFrontierNeighbours()
     {
@@ -107,6 +116,21 @@ public sealed class GraphTraversalTests
 
         // "a" expands; "b" is probed and proves truncation. "c" is on the same frontier and also hides an
         // unseen neighbour, but the flag is monotonic, so it is never probed.
+        Assert.Equal(["a", "b"], calls);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_EvidenceStopsProbingOnceDepthTruncationIsKnown()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+        var calls = new List<string>();
+
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
+            ["a"], maxDepth: 1, limit: 10, Direction.Forward, known.Contains,
+            RecordingEvidenceNeighbours(calls));
+
+        Assert.Equal(["b", "c"], result.Nodes.Select(static node => node.Id));
+        Assert.True(result.TruncatedByDepth);
         Assert.Equal(["a", "b"], calls);
     }
 

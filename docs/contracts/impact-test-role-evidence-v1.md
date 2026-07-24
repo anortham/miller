@@ -37,9 +37,11 @@ Exact test links are read only when an `is_test` symbol's `metadata_json` contai
 extractor artifact emits neither key, so this tier is honestly dormant unless evidence is present.
 
 After exact graph reachability, Miller may fill remaining result capacity with filename/role candidates such as
-`ServiceTests` for `Service`. Those rows are always labeled `edge_kind: "test_candidate"`,
+`ServiceTests`, `service_test`, `service.test`, `service_spec`, or `test_service` for `Service`. Those rows are
+always labeled `edge_kind: "test_candidate"`,
 `edge_source: "filename_role"`, `tier: "heuristic"`, and confidence `0.35`; they are never blended with exact
-links.
+links. Candidate lookup is bounded; `traversal.test_candidates_truncated` reports either an observed result-limit
+cut or a saturated bounded scan.
 
 Every object in `impacted[]` and `tests[]` has this nested object in addition to the existing row fields:
 

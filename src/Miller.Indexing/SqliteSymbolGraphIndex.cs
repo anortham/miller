@@ -75,7 +75,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             Direction.Both => Edges(id, Direction.Forward)
                 .Concat(Edges(id, Direction.Reverse))
                 .GroupBy(edge => NeighbourId(edge, id), StringComparer.Ordinal)
-                .Select(group => group.OrderBy(EdgePriority).First()),
+                .Select(group => group.OrderBy(static edge => edge, EdgeComparer).First()),
             _ => [],
         };
 
@@ -192,7 +192,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
         foreach (GraphEdge edge in TestLinkageEdges())
         {
-            if (string.Equals(edge.From, id, StringComparison.Ordinal))
+            if (string.Equals(edge.From, id, StringComparison.Ordinal) && Contains(edge.To))
                 AddEdge(edges, id, edge.To, edge);
         }
 
@@ -323,7 +323,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         if (string.Equals(sourceId, neighbourId, StringComparison.Ordinal))
             return;
         if (!edges.TryGetValue(neighbourId, out GraphEdge? current) ||
-            EdgePriority(candidate).CompareTo(EdgePriority(current)) < 0)
+            CompareEdges(candidate, current) < 0)
             edges[neighbourId] = candidate;
     }
 
@@ -332,12 +332,30 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             .Select(static pair => pair.Value)
             .ToArray();
 
-    private static (int Kind, int Source, double Confidence, string SourceName) EdgePriority(GraphEdge edge) =>
-        (
-            ImpactRanker.RelationshipPriority(edge.Kind),
-            ImpactRanker.SourcePriority(edge.Source),
-            -edge.Confidence,
-            edge.Source);
+    private static readonly IComparer<GraphEdge> EdgeComparer =
+        Comparer<GraphEdge>.Create(CompareEdges);
+
+    private static int CompareEdges(GraphEdge left, GraphEdge right)
+    {
+        int comparison = ImpactRanker.RelationshipPriority(left.Kind)
+            .CompareTo(ImpactRanker.RelationshipPriority(right.Kind));
+        if (comparison != 0)
+            return comparison;
+
+        comparison = ImpactRanker.SourcePriority(left.Source)
+            .CompareTo(ImpactRanker.SourcePriority(right.Source));
+        if (comparison != 0)
+            return comparison;
+
+        comparison = right.Confidence.CompareTo(left.Confidence);
+        if (comparison != 0)
+            return comparison;
+
+        comparison = StringComparer.Ordinal.Compare(left.Source, right.Source);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(left.Kind, right.Kind);
+    }
 
     private static string NeighbourId(GraphEdge edge, string currentId) =>
         string.Equals(edge.From, currentId, StringComparison.Ordinal) ? edge.To : edge.From;
@@ -416,7 +434,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
 
         foreach (GraphEdge edge in TestLinkageEdges())
         {
-            if (string.Equals(edge.From, id, StringComparison.Ordinal))
+            if (string.Equals(edge.From, id, StringComparison.Ordinal) && Contains(edge.To))
                 AddCandidate(ids, id, edge.To);
         }
 

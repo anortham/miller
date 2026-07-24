@@ -37,7 +37,7 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
     private static IReadOnlyList<IndexedSymbol> Sample() => new[]
     {
         new IndexedSymbol(0, "a0000000000000000000000000000001", "Parent", "public class Parent",
-            "class", "csharp", "src/Parent.cs", 1, 20, null, IsTest: false),
+            "class", "csharp", "src/Parent.cs", 1, 20, null, IsTest: false, Visibility: "public"),
         new IndexedSymbol(1, "a0000000000000000000000000000002", "DoWork", "public void DoWork()",
             "method", "csharp", "src/Parent.cs", 5, 9, "a0000000000000000000000000000001", IsTest: false),
         // A typed-test row in a production-named path: only the is_test column carries the signal in v1.
@@ -95,10 +95,13 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         Assert.True(ColumnExists(c, "symbols", "is_test"));
         Assert.True(ColumnExists(c, "symbols", "test_container"));
         Assert.True(ColumnExists(c, "symbols", "test_lifecycle"));
+        Assert.True(ColumnExists(c, "symbols", "visibility"));
         Assert.False(ColumnExists(c, "symbols", "file_path"), "renamed to path");
         Assert.False(ColumnExists(c, "symbols", "parent_id"), "renamed to parent_symbol_id");
 
         Assert.True(ColumnExists(c, "relationships", "relationship_id"));
+        Assert.True(ColumnExists(c, "relationships", "confidence"));
+        Assert.True(ColumnExists(c, "identifiers", "confidence"));
         Assert.False(ColumnExists(c, "relationships", "id"), "renamed to relationship_id");
     }
 
@@ -115,6 +118,7 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         var parent = symbols.Single(s => s.Name == "Parent");
         Assert.Equal("src/Parent.cs", parent.FilePath);
         Assert.Equal(1, parent.StartLine);
+        Assert.Equal("public", parent.Visibility);
         Assert.False(parent.IsTest);
 
         var child = symbols.Single(s => s.Name == "DoWork");

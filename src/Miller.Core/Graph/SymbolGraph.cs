@@ -215,9 +215,12 @@ public sealed class SymbolGraph : ISymbolGraphReachability
         if (source != 0)
             return source;
         int confidence = right.Confidence.CompareTo(left.Confidence);
-        return confidence != 0
-            ? confidence
-            : StringComparer.Ordinal.Compare(left.Source, right.Source);
+        if (confidence != 0)
+            return confidence;
+        int sourceName = StringComparer.Ordinal.Compare(left.Source, right.Source);
+        return sourceName != 0
+            ? sourceName
+            : StringComparer.Ordinal.Compare(left.Kind, right.Kind);
     }
 
     /// <summary>

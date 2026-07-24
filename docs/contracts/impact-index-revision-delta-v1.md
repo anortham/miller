@@ -57,6 +57,9 @@ same impact core.
     "limit": 100,
     "reached_count": 0,
     "returned_count": 0,
+    "graph_returned_count": 0,
+    "test_candidate_count": 0,
+    "test_candidates_truncated": false,
     "truncated_by_depth": false,
     "truncated_by_limit": false,
     "seeded_paths": ["src/Service.cs"],
@@ -91,8 +94,9 @@ same impact core.
   object shape as `impacted`. Empty when the delta is unavailable. This is a likely-tests list; an empty array
   does not exonerate tests.
 - `traversal` (object): independent bounded graph-execution evidence. It has exactly `status`, `reason`,
-  `max_depth`, `limit`, `reached_count`, `returned_count`, `truncated_by_depth`, `truncated_by_limit`,
-  `seeded_paths`, `unseeded_paths`, and `deleted_paths` in v1. See
+  `max_depth`, `limit`, `reached_count`, `returned_count`, `graph_returned_count`, `test_candidate_count`,
+  `test_candidates_truncated`, `truncated_by_depth`, `truncated_by_limit`, `seeded_paths`, `unseeded_paths`,
+  and `deleted_paths` in v1. See
   [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and valid status/reason pair.
 
 `delta_status` meaning is unchanged by `traversal`: it remains only the changed-path journal completeness signal.
