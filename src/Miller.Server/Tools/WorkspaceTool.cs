@@ -163,7 +163,9 @@ public sealed class WorkspaceTool
         [Description("operation=list only: max compact entries before the omitted-count tail. Default 20; <=0 unlimited. JSON is unlimited unless set to a positive value.")]
         int? limit = null,
         [Description("operation=prune only: list candidates without removing registry rows. Default false.")]
-        bool dry_run = false)
+        bool dry_run = false,
+        [Description("operation=health with format=json only: summary|full. Default summary; full includes every extraction-quality row.")]
+        string detail = "summary")
     {
         var telemetry = TelemetryContext.Current;
         // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
@@ -173,7 +175,9 @@ public sealed class WorkspaceTool
             telemetry.Op = (operation ?? "status").ToLowerInvariant();
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         WorkspaceHealthFormat healthFormat = json
-            ? WorkspaceHealthFormat.Json
+            ? string.Equals(detail, "full", StringComparison.OrdinalIgnoreCase)
+                ? WorkspaceHealthFormat.Json
+                : WorkspaceHealthFormat.JsonSummary
             : string.Equals(format, "markdown", StringComparison.OrdinalIgnoreCase)
                 ? WorkspaceHealthFormat.Markdown
                 : WorkspaceHealthFormat.Compact;

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Graph;
@@ -333,6 +334,8 @@ public sealed class ContextToolTests
                 entrySymbols: null, failingTest: null, stackTrace: null, json, out int selectedCount, out _);
 
             Assert.True(TokenEstimator.Count(output) <= tokenBudget);
+            if (tokenBudget >= 512)
+                Assert.True(Encoding.UTF8.GetByteCount(output) <= tokenBudget * 3);
             AssertRenderedCount(output, json, selectedCount);
             if (selectedCount > 0)
                 Assert.Contains("BudgetRoot", output, StringComparison.Ordinal);
@@ -1032,7 +1035,7 @@ public sealed class ContextToolTests
         string[] expectedPrefix = fullItems.Take(selectedCount).Select(static item => item.GetRawText()).ToArray();
         string[] actualItems = boundedItems.Select(static item => item.GetRawText()).ToArray();
 
-        Assert.Equal(494, selectedCount);
+        Assert.Equal(370, selectedCount);
         Assert.Equal(expectedPrefix, actualItems);
         Assert.True(TokenEstimator.Count(bounded) <= 40000);
         Assert.True(allocated < 32_000_000, $"Context rendering allocated {allocated:N0} bytes.");

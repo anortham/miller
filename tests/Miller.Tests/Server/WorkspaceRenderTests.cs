@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Hosting;
@@ -756,6 +757,41 @@ public sealed class WorkspaceRenderTests
         Assert.True(complexity.GetProperty("available").GetBoolean());
         Assert.Equal("parse_diagnostics", root.GetProperty("warnings")[0].GetProperty("code").GetString());
         Assert.Equal("inspect parse diagnostics", root.GetProperty("recommended_actions")[0].GetString());
+    }
+
+    [Fact]
+    public void Health_JsonSummary_IsBoundedAndKeepsActionableCounts()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: Telemetry,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings:
+            [
+                new HealthWarning("first", "degraded", "first warning"),
+                new HealthWarning("second", "degraded", "second warning"),
+            ],
+            RecommendedActions: ["first action", "second action"],
+            State: HealthState.Degraded,
+            Summary: "workspace readable but degraded");
+
+        string output = WorkspaceRender.Health(health, WorkspaceHealthFormat.JsonSummary);
+
+        using var json = JsonDocument.Parse(output);
+        JsonElement root = json.RootElement;
+        Assert.Equal("summary", root.GetProperty("detail").GetString());
+        Assert.Equal(565, root.GetProperty("index").GetProperty("document_count").GetInt64());
+        Assert.Equal(
+            2,
+            root.GetProperty("extraction_quality").GetProperty("parse_diagnostic_count").GetInt64());
+        Assert.Equal(
+            1,
+            root.GetProperty("extraction_quality").GetProperty("open_capability_gap_count").GetInt64());
+        Assert.Equal("first", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+        Assert.Equal("first action", root.GetProperty("recommended_actions")[0].GetString());
+        Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.WorkspaceHealthMcpMaxBytes);
+        Assert.False(root.GetProperty("extraction_quality").TryGetProperty("language_capabilities", out _));
     }
 
     [Fact]

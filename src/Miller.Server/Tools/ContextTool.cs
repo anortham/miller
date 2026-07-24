@@ -565,16 +565,19 @@ public sealed partial class ContextTool
             selectedCount = 0;
             return string.Empty;
         }
-        if (TokenEstimator.Count(emptyOutput) > tokenBudget)
+        int renderBudget = tokenBudget >= 512
+            ? Math.Max(1, tokenBudget * 3 / 4)
+            : tokenBudget;
+        if (TokenEstimator.Count(emptyOutput) > renderBudget)
         {
             selectedCount = 0;
-            return emptyOutput.StartsWith('{') && TokenEstimator.Count("{}") <= tokenBudget
+            return emptyOutput.StartsWith('{') && TokenEstimator.Count("{}") <= renderBudget
                 ? "{}"
                 : string.Empty;
         }
 
         string fullOutput = renderer(initiallySelected);
-        if (TokenEstimator.Count(fullOutput) <= tokenBudget)
+        if (TokenEstimator.Count(fullOutput) <= renderBudget)
         {
             selectedCount = initiallySelected.Count;
             return fullOutput;
@@ -590,7 +593,7 @@ public sealed partial class ContextTool
             int candidateCount = lowestCandidateCount + ((highestCandidateCount - lowestCandidateCount) / 2);
             var prefix = new ArraySegment<T>(retained, 0, candidateCount);
             string output = boundedRenderer(prefix);
-            if (TokenEstimator.Count(output) <= tokenBudget)
+            if (TokenEstimator.Count(output) <= renderBudget)
             {
                 bestCount = candidateCount;
                 bestOutput = output;

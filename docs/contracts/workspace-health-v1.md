@@ -10,7 +10,11 @@ quality, security status, semantic search quality, or enterprise readiness.
   240 characters. It renders aggregate quality counts, the first warning, and the first recommended action. Its
   final `omitted` line reports all six hidden extraction-detail groups, their exact grouped-row total, and the
   exact warning/action counts not rendered.
-- `json` is complete and follows the shape below; no extraction rows, warnings, or actions are capped.
+- CLI `--json` and MCP `format="json", detail="full"` are complete and follow the shape below; no extraction
+  rows, warnings, or actions are capped.
+- MCP `format="json"` defaults to `detail="summary"`, a 12 KiB agent-facing report. It preserves the verdict,
+  workspace identity, actionable index and sidecar state, extraction section availability and exact row counts,
+  telemetry outcome counts, and bounded warnings/actions. `detail="full"` is the explicit exhaustive path.
 - `markdown` is available from the CLI with `--markdown` and from MCP with `format="markdown"`. It contains the
   compact summary followed by the complete JSON report in a fenced block.
 
@@ -34,6 +38,12 @@ quality, security status, semantic search quality, or enterprise readiness.
 
 This v1 contract is additive: consumers must ignore unknown fields and unknown `extraction_quality` subsections.
 Removing or renaming documented fields requires a new contract version.
+
+The MCP summary adds `detail: "summary"`. Its extraction sections report `available`, `error`, and `row_count`
+instead of copying every grouped row. `warnings` and `recommended_actions` return at most three entries each,
+with `warnings_total_count`, `warnings_omitted_count`, `recommended_actions_total_count`, and
+`recommended_actions_omitted_count` preserving exact coverage. `next_action` points to
+`workspace(operation="health", format="json", detail="full")`.
 
 ## Sections
 

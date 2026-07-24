@@ -120,6 +120,7 @@ public sealed class InspectTool
     }
 
     private const int RefLimit = 50;
+    private const int FullCalleeLimit = 10;
     private const int OverviewRelationLimit = 3;
     private const int OverviewChildLimit = 5;
     private const int OverviewBodyPreviewMaxLines = 16;
@@ -504,6 +505,7 @@ public sealed class InspectTool
         }
 
         int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+        int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
 
         var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
@@ -581,7 +583,7 @@ public sealed class InspectTool
         if (callees.Count > 0)
         {
             sb.Append("\n## callees\n");
-            foreach (var c in callees.Take(relationLimit))
+            foreach (var c in callees.Take(calleeLimit))
             {
                 sb.Append(c.Name);
                 if (c.Count > 1)
@@ -593,14 +595,14 @@ public sealed class InspectTool
                     .Append(c.Confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture))
                     .Append("]\n");
             }
-            AppendOmittedLine(sb, callees.Count, relationLimit, "callees");
+            AppendOmittedLine(sb, callees.Count, calleeLimit, "callees");
         }
 
         var calleeFallback = DistinctFallbackCallees(outgoing.Fallback);
         if (calleeFallback.Count > 0)
         {
             sb.Append("\n## callee fallback (unresolved)\n");
-            foreach (var c in calleeFallback.Take(relationLimit))
+            foreach (var c in calleeFallback.Take(calleeLimit))
             {
                 sb.Append(c.Name);
                 if (c.Count > 1)
@@ -610,7 +612,7 @@ public sealed class InspectTool
                     .Append(c.Confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture))
                     .Append("]\n");
             }
-            AppendOmittedLine(sb, calleeFallback.Count, relationLimit, "callees (fallback)");
+            AppendOmittedLine(sb, calleeFallback.Count, calleeLimit, "callees (fallback)");
         }
 
         sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
@@ -695,6 +697,7 @@ public sealed class InspectTool
                 }
 
                 int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+                int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
 
                 w.WritePropertyName("children");
                 WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
@@ -740,7 +743,7 @@ public sealed class InspectTool
                     dbPath,
                     sym.SymbolId,
                     new ReferenceEvidenceQuery(
-                        new ReferenceEvidenceBounds(relationLimit, relationLimit),
+                        new ReferenceEvidenceBounds(calleeLimit, calleeLimit),
                         ReferenceKind.Call));
                 w.WritePropertyName("callees");
                 w.WriteStartArray();
@@ -1249,7 +1252,9 @@ public sealed class InspectTool
         w.WriteString("file", s.FilePath);
         w.WriteNumber("line", s.StartLine);
         if (s.Signature is null) w.WriteNull("signature");
-        else w.WriteString("signature", s.Signature);
+        else w.WriteString(
+            "signature",
+            Truncate(InlineSignature(s.Signature), ToolRenderLimits.SignatureMaxLength));
         w.WriteString("symbol_id", s.SymbolId);
         if (detail is not null)
         {

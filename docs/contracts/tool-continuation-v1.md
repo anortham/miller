@@ -4,7 +4,7 @@ Status: active for `inspect depth=full` bodies and `trace mode=refs` reference p
 
 ## Budget
 
-An inspect full-body page contains at most 16 KiB of UTF-8 source text. A page never splits a UTF-8 code
+An inspect full-body page contains at most 4 KiB of UTF-8 source text. A page never splits a UTF-8 code
 point. Compact and JSON calls page the same byte sequence deterministically.
 
 Small bodies remain byte-identical and need no continuation. A body that exceeds the budget returns an
@@ -15,6 +15,10 @@ opaque continuation token:
 
 Offsets are zero-based UTF-8 byte offsets within the extracted body text. `body_continuation` is `null`
 on the final page.
+
+Full-depth inspect renders at most 10 exact callees and 10 unresolved fallback callees. JSON
+`callee_coverage` reports exact available/returned/truncated counts for both tiers; compact output reports
+omitted counts. `trace` remains the exhaustive graph path.
 
 A reference page contains at most 16 KiB of UTF-8 JSON. Exact rows are emitted before unresolved fallback rows,
 and the continuation maintains independent offsets for both tiers:

@@ -32,7 +32,9 @@ public sealed record ToolReferenceContinuationCursor(int ExactOffset, int Fallba
 
 public static partial class ToolOutputBudget
 {
-    public const int InspectFullBodyMaxBytes = 16 * 1024;
+    public const int InspectFullBodyMaxBytes = 4 * 1024;
+    public const int PatternsMcpMaxBytes = 12 * 1024;
+    public const int WorkspaceHealthMcpMaxBytes = 12 * 1024;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
@@ -77,6 +79,46 @@ public static partial class ToolOutputBudget
         bool truncated = end < bytes.LongLength;
         string? next = truncated ? Encode(identity, end) : null;
         return new ToolOutputPage(pageText, start, end, truncated, next);
+    }
+
+    public static string RenderPrefixWithinByteBudget<T>(
+        IReadOnlyList<T> items,
+        int maxBytes,
+        Func<IReadOnlyList<T>, int, string> renderer)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(renderer);
+        if (maxBytes < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Output budget must be positive.");
+
+        string full = renderer(items, 0);
+        if (Encoding.UTF8.GetByteCount(full) <= maxBytes)
+            return full;
+
+        T[] retained = items.ToArray();
+        int low = 0;
+        int high = retained.Length;
+        string best = renderer(Array.Empty<T>(), retained.Length);
+        if (Encoding.UTF8.GetByteCount(best) > maxBytes)
+            throw new InvalidOperationException("Output metadata exceeds the configured byte budget.");
+
+        while (low <= high)
+        {
+            int count = low + ((high - low) / 2);
+            var prefix = new ArraySegment<T>(retained, 0, count);
+            string output = renderer(prefix, retained.Length - count);
+            if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
+            {
+                best = output;
+                low = count + 1;
+            }
+            else
+            {
+                high = count - 1;
+            }
+        }
+
+        return best;
     }
 
     public static string EncodeReferenceCursor(

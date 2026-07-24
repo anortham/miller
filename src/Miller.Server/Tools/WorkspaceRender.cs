@@ -86,6 +86,7 @@ public sealed record WorkspaceListFacts(
 public enum WorkspaceHealthFormat
 {
     Compact,
+    JsonSummary,
     Json,
     Markdown,
 }
@@ -760,6 +761,7 @@ public static class WorkspaceRender
         format switch
         {
             WorkspaceHealthFormat.Compact => HealthCompact(facts),
+            WorkspaceHealthFormat.JsonSummary => HealthSummaryJson(facts),
             WorkspaceHealthFormat.Json => HealthJson(facts),
             WorkspaceHealthFormat.Markdown => HealthMarkdown(facts),
             _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
@@ -993,6 +995,124 @@ public static class WorkspaceRender
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static string HealthSummaryJson(WorkspaceHealthFacts facts)
+    {
+        WorkspaceFacts status = facts.StatusFacts;
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = NewWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", 1);
+            writer.WriteString("detail", "summary");
+
+            writer.WriteStartObject("verdict");
+            writer.WriteString("state", WorkspaceHealthFacts.StateName(facts.State));
+            writer.WriteString("summary", HealthCompactValue(facts.Summary));
+            writer.WriteEndObject();
+
+            writer.WriteStartObject("workspace");
+            writer.WriteString("root", status.Root);
+            if (status.WorkspaceId is null) writer.WriteNull("workspace_id");
+            else writer.WriteString("workspace_id", status.WorkspaceId);
+            if (status.DisplayId is null) writer.WriteNull("display_id");
+            else writer.WriteString("display_id", status.DisplayId);
+            writer.WriteBoolean("leader", status.IsLeader);
+            if (status.ServerVersion is null) writer.WriteNull("server_version");
+            else writer.WriteString("server_version", status.ServerVersion);
+            writer.WriteEndObject();
+
+            writer.WriteStartObject("index");
+            writer.WriteNumber("document_count", status.DocumentCount);
+            writer.WriteNumber("known_extensions", status.KnownExtensionsCount);
+            writer.WriteNumber("built_revision", status.BuiltRevision);
+            writer.WriteNumber("latest_revision", status.LatestObservedRevision);
+            if (status.IndexFresh is { } fresh) writer.WriteBoolean("index_fresh", fresh);
+            else writer.WriteNull("index_fresh");
+            if (status.FreshnessStatus is null) writer.WriteNull("freshness_status");
+            else writer.WriteString("freshness_status", status.FreshnessStatus);
+            writer.WriteBoolean("queue_empty", status.QueueEmpty);
+            writer.WritePropertyName("search_sidecar");
+            WriteSearchSidecarJson(writer, status.SearchSidecar);
+            writer.WritePropertyName("content_corpus");
+            WriteContentCorpusJson(writer, status.ContentCorpus);
+            WriteVectorsJson(writer, status.Vectors);
+            writer.WritePropertyName("history_db");
+            WriteHistorySidecarJson(writer, facts.History);
+            writer.WriteEndObject();
+
+            WorkspaceExtractionHealthFacts extraction = facts.Extraction;
+            writer.WriteStartObject("extraction_quality");
+            writer.WriteNumber("parse_diagnostic_count", ParseDiagnosticCount(extraction));
+            writer.WriteNumber("open_capability_gap_count", OpenCapabilityGapCount(extraction));
+            writer.WriteNumber("structural_fact_count", StructuralFactCount(extraction));
+            writer.WriteNumber("complexity_metric_count", ComplexityMetricCount(extraction));
+            writer.WriteNumber(
+                "detailed_row_count",
+                extraction.ParseDiagnostics.Rows.Count +
+                extraction.CapabilityGaps.Rows.Count +
+                extraction.LanguageCapabilities.Rows.Count +
+                extraction.StructuralFacts.Rows.Count +
+                extraction.ComplexityMetrics.Rows.Count +
+                extraction.Files.Rows.Count);
+            writer.WriteStartObject("availability");
+            WriteHealthSectionAvailability(writer, "parse_diagnostics", extraction.ParseDiagnostics);
+            WriteHealthSectionAvailability(writer, "capability_gaps", extraction.CapabilityGaps);
+            WriteHealthSectionAvailability(writer, "language_capabilities", extraction.LanguageCapabilities);
+            WriteHealthSectionAvailability(writer, "structural_facts", extraction.StructuralFacts);
+            WriteHealthSectionAvailability(writer, "complexity_metrics", extraction.ComplexityMetrics);
+            WriteHealthSectionAvailability(writer, "files", extraction.Files);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+
+            writer.WriteStartObject("telemetry");
+            writer.WriteNumber("ok_count", facts.TelemetryHealth.OkCount);
+            writer.WriteNumber("empty_count", facts.TelemetryHealth.EmptyCount);
+            writer.WriteNumber("error_count", facts.TelemetryHealth.ErrorCount);
+            writer.WriteNumber("total_calls", facts.TelemetryHealth.TotalCalls);
+            writer.WriteEndObject();
+
+            writer.WriteNumber("warnings_total_count", facts.Warnings.Count);
+            writer.WriteStartArray("warnings");
+            foreach (HealthWarning warning in facts.Warnings.Take(3))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("code", warning.Code);
+                writer.WriteString("severity", warning.Severity);
+                writer.WriteString("message", HealthCompactValue(warning.Message));
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+
+            writer.WriteNumber("recommended_actions_total_count", facts.RecommendedActions.Count);
+            writer.WriteStartArray("recommended_actions");
+            foreach (string action in facts.RecommendedActions.Take(3))
+                writer.WriteStringValue(HealthCompactValue(action));
+            writer.WriteEndArray();
+            writer.WriteString(
+                "full_detail",
+                "Use workspace operation=health format=json detail=full or `miller workspace health --json`.");
+            writer.WriteEndObject();
+        }
+
+        string output = Utf8(buffer);
+        if (Encoding.UTF8.GetByteCount(output) > ToolOutputBudget.WorkspaceHealthMcpMaxBytes)
+            throw new InvalidOperationException("Workspace health summary exceeded its MCP output budget.");
+        return output;
+    }
+
+    private static void WriteHealthSectionAvailability<TRow>(
+        Utf8JsonWriter writer,
+        string name,
+        HealthFactSection<TRow> section)
+    {
+        writer.WriteStartObject(name);
+        writer.WriteBoolean("available", section.Available);
+        if (section.Error is null) writer.WriteNull("error");
+        else writer.WriteString("error", HealthCompactValue(section.Error));
+        writer.WriteNumber("row_count", section.Rows.Count);
+        writer.WriteEndObject();
     }
 
     private static void WriteExtractionHealthJson(Utf8JsonWriter w, WorkspaceExtractionHealthFacts facts)

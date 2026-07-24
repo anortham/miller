@@ -855,7 +855,10 @@ public sealed class WorkspaceToolTests : IDisposable
             TargetHash: null,
             MetadataJson: "{}"));
 
-        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "health", format: "json"));
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "health",
+            format: "json",
+            detail: "full"));
         JsonElement root = doc.RootElement;
 
         Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
@@ -945,7 +948,8 @@ public sealed class WorkspaceToolTests : IDisposable
         using var doc = JsonDocument.Parse(harness.Tool.Workspace(
             operation: "health",
             workspace_id: OtherWs,
-            format: "json"));
+            format: "json",
+            detail: "full"));
 
         Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());

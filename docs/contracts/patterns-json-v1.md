@@ -109,6 +109,10 @@ Search accepts either an exact `pattern_id` or a free-text `query`. A free-text 
   "schema_version": 1,
   "operation": "search",
   "pattern_id": "htmx.attribute.v1",
+  "matches_total_count": 1,
+  "matches_returned_count": 1,
+  "matches_omitted_count": 0,
+  "matches_truncated": false,
   "matches": [
     {
       "fact_id": "fact-hx-get",
@@ -138,6 +142,11 @@ Search accepts either an exact `pattern_id` or a free-text `query`. A free-text 
 
 `metadata` is present when `metadata_json` is valid JSON object data. If a row has malformed metadata, search
 keeps the row for unfiltered output and writes `metadata_error`; metadata-filtered searches skip malformed rows.
+
+The four `matches_*` coverage fields are always present. CLI JSON returns every row admitted by `--limit`. MCP
+JSON and compact output retain the largest deterministic row prefix that fits the 12 KiB agent-output budget;
+when rows are omitted, `matches_truncated` is true and the output names the exact omitted count and the CLI
+command for exhaustive retrieval.
 
 ### Filters
 

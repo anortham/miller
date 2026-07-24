@@ -388,8 +388,43 @@ public sealed class InspectToolTests
         // A single-occurrence callee never gets a count annotation.
         Assert.DoesNotContain("Validate ×", full);
         Assert.DoesNotContain("Check ×", full);
-        // All four distinct callees fit under the 50-row full limit — no omitted line.
         Assert.DoesNotContain("more callees", full);
+    }
+
+    [Fact]
+    public void Run_SymbolFull_BoundsCalleesAndReportsCoverage()
+    {
+        const string targetId = "aa000000000000000000000000000021";
+        var identifiers = Enumerable.Range(0, 11)
+            .Select(i => new JulieDbFixture.IdentifierRow(
+                "bb" + i.ToString("x30"),
+                "Call" + i,
+                "call",
+                "csharp",
+                "src/Target.cs",
+                10 + i,
+                targetId))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new(targetId, "Target", "method", "csharp", "src/Target.cs", "void Target()", 1, null)],
+            identifiers: identifiers);
+        var (index, resolver) = Build(fx);
+
+        string compact = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "full", kind: null, scope: null, limit: 50, json: false, out _);
+        string json = InspectTool.Run(index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+
+        Assert.Contains("... 1 more callees (fallback)", compact);
+        using var doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(10, root.GetProperty("callee_fallback").GetArrayLength());
+        JsonElement coverage = root.GetProperty("callee_coverage");
+        Assert.Equal(11, coverage.GetProperty("fallback_available").GetInt32());
+        Assert.Equal(10, coverage.GetProperty("fallback_returned").GetInt32());
+        Assert.True(coverage.GetProperty("fallback_truncated").GetBoolean());
     }
 
     [Fact]
@@ -1171,25 +1206,76 @@ public sealed class InspectToolTests
                 fx.WorkspaceRoot));
         var tool = new InspectTool(provider);
 
-        string firstOutput = tool.Inspect("LongBody", depth: "full", format: "json");
-        using var firstDocument = JsonDocument.Parse(firstOutput);
-        JsonElement first = firstDocument.RootElement;
-        string firstBody = first.GetProperty("body").GetString()!;
-        string continuation = first.GetProperty("body_continuation").GetString()!;
-        Assert.True(first.GetProperty("body_truncated").GetBoolean());
-        Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(firstBody));
+        var reconstructed = new StringBuilder();
+        string? continuation = null;
+        int pages = 0;
+        do
+        {
+            string output = tool.Inspect(
+                "LongBody",
+                depth: "full",
+                format: "json",
+                continuation: continuation);
+            using var document = JsonDocument.Parse(output);
+            JsonElement root = document.RootElement;
+            string body = root.GetProperty("body").GetString()!;
+            reconstructed.Append(body);
+            pages++;
 
-        string secondOutput = tool.Inspect(
-            "LongBody",
-            depth: "full",
-            format: "json",
-            continuation: continuation);
-        using var secondDocument = JsonDocument.Parse(secondOutput);
-        JsonElement second = secondDocument.RootElement;
-        string secondBody = second.GetProperty("body").GetString()!;
-        Assert.False(second.GetProperty("body_truncated").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, second.GetProperty("body_continuation").ValueKind);
-        Assert.Equal(fixture.Body, firstBody + secondBody);
+            bool truncated = root.GetProperty("body_truncated").GetBoolean();
+            continuation = root.GetProperty("body_continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : root.GetProperty("body_continuation").GetString();
+            if (truncated)
+            {
+                Assert.NotNull(continuation);
+                Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(body));
+            }
+            else
+            {
+                Assert.Null(continuation);
+            }
+        }
+        while (continuation is not null && pages < 100);
+
+        Assert.InRange(pages, 2, 99);
+        Assert.Equal(fixture.Body, reconstructed.ToString());
+    }
+
+    [Fact]
+    public void Inspect_OverviewJson_BoundsDefinitionSignature()
+    {
+        string signature = "export default grammar(" + new string('x', 60_000) + ")";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "d0000000000000000000000000000def",
+                    "default",
+                    "export",
+                    "javascript",
+                    "grammar.js",
+                    signature,
+                    1,
+                    null),
+            ]);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-long-signature",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("d0000000000000000000000000000def", depth: "overview", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        string rendered = document.RootElement.GetProperty("symbol").GetProperty("signature").GetString()!;
+        Assert.True(rendered.Length <= ToolRenderLimits.SignatureMaxLength);
+        Assert.EndsWith("…", rendered, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(output) < 8 * 1024);
     }
 
     [Fact]
@@ -1206,21 +1292,35 @@ public sealed class InspectToolTests
                 fx.WorkspaceRoot));
         var tool = new InspectTool(provider);
 
-        string firstOutput = tool.Inspect("LongBody", depth: "full");
-        int bodyStart = firstOutput.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
-        int nextStart = firstOutput.IndexOf("\nnext:", bodyStart, StringComparison.Ordinal);
-        string firstBody = firstOutput[bodyStart..nextStart];
-        const string tokenPrefix = "continuation=\"";
-        int tokenStart = firstOutput.IndexOf(tokenPrefix, nextStart, StringComparison.Ordinal) + tokenPrefix.Length;
-        int tokenEnd = firstOutput.IndexOf('"', tokenStart);
-        string continuation = firstOutput[tokenStart..tokenEnd];
-        Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(firstBody));
+        var reconstructed = new StringBuilder();
+        string? continuation = null;
+        int pages = 0;
+        do
+        {
+            string output = tool.Inspect("LongBody", depth: "full", continuation: continuation);
+            int bodyStart = output.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
+            int nextStart = output.IndexOf("\nnext:", bodyStart, StringComparison.Ordinal);
+            string body = nextStart < 0 ? output[bodyStart..] : output[bodyStart..nextStart];
+            reconstructed.Append(body);
+            pages++;
 
-        string secondOutput = tool.Inspect("LongBody", depth: "full", continuation: continuation);
-        int secondBodyStart = secondOutput.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
-        string secondBody = secondOutput[secondBodyStart..];
-        Assert.DoesNotContain("\nnext:", secondBody, StringComparison.Ordinal);
-        Assert.Equal(fixture.Body, firstBody + secondBody);
+            if (nextStart < 0)
+            {
+                continuation = null;
+            }
+            else
+            {
+                const string tokenPrefix = "continuation=\"";
+                int tokenStart = output.IndexOf(tokenPrefix, nextStart, StringComparison.Ordinal) + tokenPrefix.Length;
+                int tokenEnd = output.IndexOf('"', tokenStart);
+                continuation = output[tokenStart..tokenEnd];
+                Assert.Equal(ToolOutputBudget.InspectFullBodyMaxBytes, Encoding.UTF8.GetByteCount(body));
+            }
+        }
+        while (continuation is not null && pages < 100);
+
+        Assert.InRange(pages, 2, 99);
+        Assert.Equal(fixture.Body, reconstructed.ToString());
     }
 
     [Fact]

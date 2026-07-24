@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
@@ -436,6 +437,45 @@ public sealed class PatternsToolTests
         Assert.True(doc.RootElement.GetProperty("pattern_id_fanout_truncated").GetBoolean());
         Assert.Equal(25, doc.RootElement.GetProperty("matched_pattern_ids").GetArrayLength());
         Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+    }
+
+    [Fact]
+    public void Patterns_SearchJson_BoundsMcpRowsAndReportsOmissions()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 200
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                printf('fact-budget-%03d', n), 'file:src/Auth.cs', printf('src/Generated%03d.cs', n), 'csharp',
+                'budget.pattern.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0,
+                '{"verb":"GET","route_template":"/generated/abcdefghijklmnopqrstuvwxyz"}'
+            FROM seq;
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(
+            operation: "search",
+            pattern_id: "budget.pattern.v1",
+            limit: 500,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.True(Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.PatternsMcpMaxBytes);
+        Assert.True(doc.RootElement.GetProperty("matches_truncated").GetBoolean());
+        Assert.Equal(200, doc.RootElement.GetProperty("matches_total_count").GetInt32());
+        int returned = doc.RootElement.GetProperty("matches_returned_count").GetInt32();
+        Assert.InRange(returned, 1, 199);
+        Assert.Equal(200 - returned, doc.RootElement.GetProperty("matches_omitted_count").GetInt32());
+        Assert.Equal(returned, doc.RootElement.GetProperty("matches").GetArrayLength());
     }
 
     [Fact]
