@@ -577,6 +577,19 @@ class AgentContractTests(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(0, result.wrong_action_count)
 
+    def test_takeover_v1_verifier_accepts_missing_redundant_source_symbol(self) -> None:
+        task = _load_v1_task()
+        answer = _valid_v1_answer()
+        answer["actions"][1]["target"]["reference_site"]["source_symbol_id"] = None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            result = verify_answer(task, answer, root)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(0, result.wrong_action_count)
+
     def test_takeover_v1_verifier_accepts_current_workspace_selector_aliases(self) -> None:
         task_value = _valid_v1_task()
         task_value.update(
@@ -1800,8 +1813,41 @@ class AgentContractTests(unittest.TestCase):
             {action["requirement_group"] for action in dev002["acceptable_actions"]},
         )
 
+        dev003 = tasks["dev-003"]
+        self.assertEqual(
+            {"token-baseline", "token baseline"},
+            set(dev003["fact_predicates"][0]["any_terms"]),
+        )
+        self.assertIn(
+            "b04df60c3f3eeb41efe4e0ee280f9ec2",
+            {
+                action["target"]["symbol_id"]
+                for action in dev003["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
+
+        dev004 = tasks["dev-004"]
+        self.assertEqual(3, len(dev004["fact_predicates"]))
+        self.assertIn(
+            "b8d481930d1990215014fb72bcb11391",
+            {
+                action["target"]["symbol_id"]
+                for action in dev004["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
+
         dev005 = tasks["dev-005"]
         self.assertNotIn("five", dev005["fact_predicates"][0]["all_terms"])
+        self.assertIn(
+            "84b9fb5025910b0190926e5a0c67ea92",
+            {
+                action["target"]["symbol_id"]
+                for action in dev005["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
 
         dev007 = tasks["dev-007"]
         self.assertNotIn("externals", dev007["fact_predicates"][0]["all_terms"])
@@ -1809,10 +1855,28 @@ class AgentContractTests(unittest.TestCase):
             "tree_sitter_razor_external_scanner_scan",
             dev007["fact_predicates"][0]["all_terms"],
         )
-        self.assertIn("externals", [item["symbol"] for item in dev007["symbol_cited"]])
+        self.assertIn("_tag_name", [item["symbol"] for item in dev007["symbol_cited"]])
+        self.assertIn("scan_markup_tag", [item["symbol"] for item in dev007["symbol_cited"]])
+        self.assertEqual("scan_markup_tag", dev007["evidence_anchors"][1]["symbol"])
+        self.assertTrue(
+            {
+                ("assemble_context", "a23c44196ed5ebcb9b34d01916d9c530"),
+                ("propose_edit", "a23c44196ed5ebcb9b34d01916d9c530"),
+                ("cite_reference_site", None),
+            }.issubset(
+                {
+                    (action["kind"], action["target"].get("symbol_id"))
+                    for action in dev007["acceptable_actions"]
+                }
+            )
+        )
 
         dev008 = tasks["dev-008"]
         self.assertNotIn("test_can_load_grammar", dev008["fact_predicates"][0]["all_terms"])
+        self.assertEqual(
+            {"c_sharp", "C#"},
+            set(dev008["fact_predicates"][0]["any_terms"]),
+        )
         self.assertEqual(
             ["test_can_load_grammar"],
             [item["symbol"] for item in dev008["symbol_cited"]],
@@ -1860,6 +1924,18 @@ class AgentContractTests(unittest.TestCase):
             ["anchor-002", "anchor-003"],
             dev011["fact_predicates"][0]["evidence_anchor_ids"],
         )
+        self.assertTrue(
+            {
+                "b05e8cedf3c3b56e920e041a8c9c9955",
+                "43cacdf7463c28f5388e858745b9e783",
+            }.issubset(
+                {
+                    action["target"]["symbol_id"]
+                    for action in dev011["acceptable_actions"]
+                    if action["kind"] == "inspect_symbol"
+                }
+            )
+        )
 
         dev012 = tasks["dev-012"]
         self.assertEqual(
@@ -1867,7 +1943,7 @@ class AgentContractTests(unittest.TestCase):
             dev012["fact_predicates"][0]["evidence_anchor_ids"],
         )
         self.assertEqual(
-            ["DRIFT DETECTED", "manifest drift", "drift"],
+            ["DRIFT DETECTED", "manifest drift", "drift", "audit failure"],
             dev012["fact_predicates"][0]["any_terms"],
         )
 

@@ -146,8 +146,9 @@
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
-          "source": "evidence_claim",
-          "all_terms": ["token-baseline", "llamasharp-inmemory", "llamasharp-sqlite-vec"],
+          "source": "answer",
+          "all_terms": ["in-memory", "SQLite-vector"],
+          "any_terms": ["token-baseline", "token baseline"],
           "evidence_anchor_ids": ["anchor-001"]
         }
       ],
@@ -161,7 +162,7 @@
       "symbol_cited": [
         {
           "predicate_id": "symbol-001",
-          "symbol": "SemanticMillerCandidateFactory",
+          "symbol": "Create",
           "evidence_anchor_ids": ["anchor-001"]
         }
       ],
@@ -169,8 +170,8 @@
         {
           "anchor_id": "anchor-001",
           "path": "src/Eros.Eval/SemanticMillerCandidates.cs",
-          "symbol": "SemanticMillerCandidateFactory",
-          "line_start": 50,
+          "symbol": "Create",
+          "line_start": 56,
           "line_end": 66,
           "relevance_grade": 3
         }
@@ -183,6 +184,27 @@
           "action_id": "action-001",
           "kind": "inspect_symbol",
           "target": {"symbol_id": "ebee49b5754d52e765c08aea33c0fd49"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "b04df60c3f3eeb41efe4e0ee280f9ec2"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "00a1019c94944e70f68fd2c437209fee"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "9dfce5330377cf56783c656e66126a40"},
           "requirement_group": "discover-choice-point",
           "evidence_anchor_ids": ["anchor-001"]
         }
@@ -203,8 +225,22 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["registered ancestor", "parent walk", "recall"],
+          "all_terms": ["recall"],
           "any_terms": ["unsafe", "mutating"],
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "fact-002",
+          "source": "answer",
+          "all_terms": ["registered"],
+          "any_terms": ["ancestor", "project", "workspace"],
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "fact-003",
+          "source": "answer",
+          "all_terms": ["walk"],
+          "any_terms": ["parent", "upward", "ancestor"],
           "evidence_anchor_ids": ["anchor-001"]
         }
       ],
@@ -240,6 +276,37 @@
           "action_id": "action-001",
           "kind": "recover_workspace",
           "target": {"workspace_selector": "goldfish"},
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "b8d481930d1990215014fb72bcb11391"},
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "5e75dd021b7428ef1f136be6be7c2985"},
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {
+            "path": "src/workspace.ts",
+            "symbol_id": "0d741b962a9b0406e349b2f7780d4d18"
+          },
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "9a6b168ab9bc297c7bba54a270d9c481"},
           "requirement_group": "recover-workspace",
           "evidence_anchor_ids": ["anchor-001"]
         }
@@ -310,6 +377,13 @@
           "target": {"path": ".version-bump.json"},
           "requirement_group": "inspect-version-manifest",
           "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "84b9fb5025910b0190926e5a0c67ea92"},
+          "requirement_group": "find-version-properties",
+          "evidence_anchor_ids": ["anchor-001"]
         }
       ],
       "forbidden_actions": [],
@@ -396,12 +470,12 @@
       "symbol_cited": [
         {
           "predicate_id": "symbol-001",
-          "symbol": "externals",
+          "symbol": "_tag_name",
           "evidence_anchor_ids": ["anchor-001"]
         },
         {
           "predicate_id": "symbol-002",
-          "symbol": "tree_sitter_razor_external_scanner_scan",
+          "symbol": "scan_markup_tag",
           "evidence_anchor_ids": ["anchor-002"]
         }
       ],
@@ -409,16 +483,17 @@
         {
           "anchor_id": "anchor-001",
           "path": "grammar.js",
-          "line_start": 16,
-          "line_end": 31,
+          "symbol": "_tag_name",
+          "line_start": 642,
+          "line_end": 644,
           "relevance_grade": 3
         },
         {
           "anchor_id": "anchor-002",
           "path": "src/scanner.c",
-          "symbol": "tree_sitter_razor_external_scanner_scan",
-          "line_start": 313,
-          "line_end": 358,
+          "symbol": "scan_markup_tag",
+          "line_start": 164,
+          "line_end": 199,
           "relevance_grade": 3
         }
       ],
@@ -446,6 +521,41 @@
           "target": {"path": "src/scanner.c"},
           "requirement_group": "edit-target",
           "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "assemble_context",
+          "target": {"symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"},
+          "requirement_group": "scanner-context",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-006",
+          "kind": "propose_edit",
+          "target": {"symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"},
+          "requirement_group": "edit-target",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-007",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/scanner.c",
+              "line_start": 165,
+              "line_end": 165,
+              "column_start": 19,
+              "column_end": 32,
+              "reference_kind": "call",
+              "containing_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+              "source_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+              "target_symbol_id": "f7bbebc087f2ed99ee062256b7a61007",
+              "resolution": "exact"
+            }
+          },
+          "requirement_group": "scanner-context",
+          "evidence_anchor_ids": ["anchor-002"],
+          "reference_site_ids": ["site-001"]
         }
       ],
       "forbidden_actions": [
@@ -456,7 +566,21 @@
           "reason": "A grammar-only edit omits the scanner dispatch that implements tag-name recognition."
         }
       ],
-      "reference_sites": [],
+      "reference_sites": [
+        {
+          "site_id": "site-001",
+          "path": "src/scanner.c",
+          "line_start": 165,
+          "line_end": 165,
+          "column_start": 19,
+          "column_end": 32,
+          "reference_kind": "call",
+          "containing_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+          "source_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+          "target_symbol_id": "f7bbebc087f2ed99ee062256b7a61007",
+          "resolution": "exact"
+        }
+      ],
       "uncertainty_expectation": "must_resolve"
     },
     {
@@ -470,8 +594,9 @@
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
-          "source": "answer",
-          "all_terms": ["c_sharp", "LANGUAGE", "tree_sitter_c_sharp"],
+          "source": "evidence_claim",
+          "all_terms": ["LANGUAGE", "tree_sitter_c_sharp"],
+          "any_terms": ["c_sharp", "C#"],
           "evidence_anchor_ids": ["anchor-001", "anchor-002"]
         }
       ],
@@ -874,6 +999,20 @@
           "target": {"test_path": "bindings/rust/lib.rs"},
           "requirement_group": "rust-test",
           "evidence_anchor_ids": ["anchor-003"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "b05e8cedf3c3b56e920e041a8c9c9955"},
+          "requirement_group": "node-test",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "43cacdf7463c28f5388e858745b9e783"},
+          "requirement_group": "rust-test",
+          "evidence_anchor_ids": ["anchor-003"]
         }
       ],
       "forbidden_actions": [],
@@ -893,7 +1032,7 @@
           "predicate_id": "fact-001",
           "source": "answer",
           "all_terms": ["tests/version-audit.test.mjs", "tests/version-sync.test.mjs"],
-          "any_terms": ["DRIFT DETECTED", "manifest drift", "drift"],
+          "any_terms": ["DRIFT DETECTED", "manifest drift", "drift", "audit failure"],
           "evidence_anchor_ids": ["anchor-002", "anchor-003"]
         }
       ],

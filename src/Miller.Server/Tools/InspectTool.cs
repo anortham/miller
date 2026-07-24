@@ -369,14 +369,24 @@ public sealed class InspectTool
 
         if (json)
         {
-            int jsonPage = Math.Min(limit, all.Count);
+            List<IndexedSymbol> ordered = all
+                .OrderBy(static symbol => IsLowSignalKind(symbol.Kind) ? 1 : 0)
+                .ThenBy(static symbol => KindRank(symbol.Kind))
+                .ThenBy(static symbol => symbol.StartLine)
+                .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
+                .ToList();
+            int jsonPage = Math.Min(limit, ordered.Count);
             resultCount = jsonPage;
             var buffer = new ArrayBufferWriter<byte>();
             using var w = NewWriter(buffer);
             w.WriteStartObject();
             w.WriteString("file", path);
             w.WritePropertyName("children");
-            WriteSymbolArray(w, all.Take(jsonPage));
+            WriteSymbolArray(w, ordered.Take(jsonPage));
+            w.WriteNumber("children_total_count", ordered.Count);
+            w.WriteNumber("children_returned_count", jsonPage);
+            w.WriteNumber("children_omitted_count", ordered.Count - jsonPage);
+            w.WriteBoolean("children_truncated", jsonPage < ordered.Count);
             w.WriteEndObject();
             w.Flush();
             return Utf8(buffer);

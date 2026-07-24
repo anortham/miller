@@ -237,9 +237,10 @@ public sealed class InspectToolTests
         using var doc = JsonDocument.Parse(output);
         var children = doc.RootElement.GetProperty("children");
         Assert.Equal(6, children.GetArrayLength());
-        Assert.Equal("System", children[0].GetProperty("name").GetString());
-        Assert.Equal("import", children[0].GetProperty("kind").GetString());
-        Assert.Equal("using System;", children[0].GetProperty("signature").GetString());
+        JsonElement import = children.EnumerateArray().Single(
+            child => child.GetProperty("name").GetString() == "System");
+        Assert.Equal("import", import.GetProperty("kind").GetString());
+        Assert.Equal("using System;", import.GetProperty("signature").GetString());
     }
 
     [Fact]
@@ -269,6 +270,59 @@ public sealed class InspectToolTests
 
         using var document = JsonDocument.Parse(output);
         Assert.Equal(10, document.RootElement.GetProperty("children").GetArrayLength());
+    }
+
+    [Fact]
+    public void Run_FileSummary_Json_PrioritizesDefinitionsAndReportsOmittedChildren()
+    {
+        JulieDbFixture.SymbolRow[] imports = Enumerable.Range(0, 12)
+            .Select(index => new JulieDbFixture.SymbolRow(
+                $"{index + 1:x32}",
+                $"Import{index}",
+                "import",
+                "javascript",
+                "tests/version-audit.test.mjs",
+                $"import Import{index}",
+                index + 1,
+                null))
+            .ToArray();
+        var test = new JulieDbFixture.SymbolRow(
+            "f0000000000000000000000000000001",
+            "--audit exits non-zero when a declared manifest has drifted",
+            "function",
+            "javascript",
+            "tests/version-audit.test.mjs",
+            "test(\"--audit exits non-zero when a declared manifest has drifted\")",
+            60,
+            null);
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [.. imports, test]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "tests/version-audit.test.mjs",
+            depth: "summary",
+            kind: null,
+            scope: null,
+            limit: 10,
+            json: true,
+            out _);
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement root = document.RootElement;
+        Assert.Contains(
+            root.GetProperty("children").EnumerateArray(),
+            child => child.GetProperty("name").GetString() ==
+                "--audit exits non-zero when a declared manifest has drifted");
+        Assert.Equal(13, root.GetProperty("children_total_count").GetInt32());
+        Assert.Equal(3, root.GetProperty("children_omitted_count").GetInt32());
+        Assert.True(root.GetProperty("children_truncated").GetBoolean());
     }
 
     [Fact]

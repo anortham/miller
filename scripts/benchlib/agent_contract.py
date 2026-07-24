@@ -1284,13 +1284,21 @@ def _reference_sites_match(
     expected: _ReferenceSiteIdentity,
     submitted: _ReferenceSiteIdentity,
 ) -> bool:
+    source_matches = (
+        expected.source_symbol_id == submitted.source_symbol_id
+        or (
+            submitted.source_symbol_id is None
+            and expected.source_symbol_id == expected.containing_symbol_id
+            and submitted.containing_symbol_id == expected.containing_symbol_id
+        )
+    )
     if (
         expected.path != submitted.path
         or expected.line_start != submitted.line_start
         or expected.line_end != submitted.line_end
         or expected.reference_kind != submitted.reference_kind
         or expected.containing_symbol_id != submitted.containing_symbol_id
-        or expected.source_symbol_id != submitted.source_symbol_id
+        or not source_matches
         or expected.target_symbol_id != submitted.target_symbol_id
         or expected.resolution != submitted.resolution
     ):
