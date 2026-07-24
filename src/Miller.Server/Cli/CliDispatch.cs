@@ -1845,7 +1845,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "json", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]");
+            return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--entry-symbol NAME] [--edited-files PATHS] [--failing-test TEXT] [--stack-trace TEXT] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -1855,12 +1855,20 @@ public static class CliDispatch
         using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
         var resolver = new SmartTargetResolver(index);
         string referenceMode = o.Value("reference-mode", "off")!;
+        string[]? entrySymbols = OptionValues(o.Value("entry-symbol"));
+        string[]? editedFiles = OptionValues(o.Value("edited-files"));
+        string? failingTest = o.Value("failing-test");
+        string? stackTrace = o.Value("stack-trace");
         string output;
         if (string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase))
         {
-            output = ContextTool.RunReferenceAware(
+            output = ContextTool.RunReferenceAwareActionable(
                 index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
-                    entrySymbols: null, failingTest: null, stackTrace: null,
+                    entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
+                    readBody: symbol => ContextTool.ReadPivotBody(
+                        ctx.ExtractDbPath,
+                        ctx.WorkspaceRoot,
+                        symbol),
                     referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
                     readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
                         ctx.ExtractDbPath,
@@ -1883,9 +1891,14 @@ public static class CliDispatch
         }
         else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
         {
-            output = ContextTool.Run(
+            output = ContextTool.RunActionable(
                 index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
-                entrySymbols: null, failingTest: null, stackTrace: null, json: o.Has("json"), out _, out _);
+                entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
+                readBody: symbol => ContextTool.ReadPivotBody(
+                    ctx.ExtractDbPath,
+                    ctx.WorkspaceRoot,
+                    symbol),
+                json: o.Has("json"), out _, out _);
         }
         else
         {
@@ -1895,6 +1908,11 @@ public static class CliDispatch
         outw.WriteLine(output);
         return 0;
     }
+
+    private static string[]? OptionValues(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static int Impact(
         IReadOnlyList<string> args,
@@ -3128,7 +3146,7 @@ public static class CliDispatch
           inspect <target>   List a file's symbols, or show a symbol's definition.
                              [--workspace-id SELECTOR] [--workspace DIR] [--depth summary|overview|full] [--kind K] [--scope FILE] [--limit N] [--json]
           context <query>    Token-budgeted bundle of the most relevant code for a task.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--entry-symbol NAME] [--edited-files PATHS] [--failing-test TEXT] [--stack-trace TEXT] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]
           impact <input>     Downstream symbols + tests a change would affect.
                              <symbol> | --changed-paths PATH[,PATH...] | --diff DIFF | --git [--base REF] [--staged]
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]

@@ -41,10 +41,12 @@ parameters and selectors below are what those short forms omit.
   `summary`. The first symbol read should usually be `inspect target depth=overview` (bounded refs/calls/body
   preview); use `depth=full` for the complete body and complete relation lists. Optional `workspace_id` and
   `ensure_fresh` follow `search`.
-- **`context`** — give the task plus optional `failing_test`/`stack_trace`; compact output leads with seeds and
-  reasons, then neighbours, then `## next inspect`. `reference_mode=usage` adds definitions, name-based refs, call
-  IDs, and source chunks; treat `confidence=name_based` as possible, not proven. `exclude_tests=true` filters tests
-  only in usage mode. Optional `workspace_id` and `ensure_fresh` route through the registry provider.
+- **`context`** — give the task plus optional `entry_symbols`, `edited_files`, `failing_test`, or `stack_trace`.
+  Compact output leads with ranked pivots and bounded implementation snippets, then neighbour signatures and an
+  evidence disposition. A next action appears only when the bundle is insufficient. `reference_mode=usage` adds
+  implementations, identifiers, and source chunks in the same reason/confidence schema; treat
+  `confidence=name_based` as possible, not proven. `exclude_tests=true` filters tests only in usage mode. Optional
+  `workspace_id` and `ensure_fresh` route through the registry provider.
 - **`trace`** — `mode=refs` (name-based usages; optional `reference_kind=call|variable_ref|type_usage|member_access|import`;
   on empty, fall back to `search mode=source`), `mode=path` (shortest path to `to`; no path means no extracted
   graph path within depth, **not** proof the code is unrelated), `mode=bridge` (provider-scoped). Links are flagged

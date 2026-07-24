@@ -2,26 +2,13 @@ using System.Diagnostics;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
-/// <summary>
-/// The M5 D11 end-to-end Scale proof: restore julie-extract → scan a temp polyglot repo with a real dependency
-/// chain (<c>OrderController → OrderService → OrderRepo</c>) plus an xUnit test that calls <c>OrderService</c> →
-/// <see cref="RepositoryIndexLoader.Load"/> the extract (graph included) → drive the REAL
-/// <see cref="ImpactTool.Run"/> / <see cref="ContextTool.Run"/> cores and assert:
-/// <list type="bullet">
-/// <item><c>impact</c> on <c>OrderService</c> returns the expected downstream set including a likely-test
-///   (julie's cross-language <c>is_test</c> flag, partitioned out);</item>
-/// <item><c>context</c> returns a non-empty, budget-bounded bundle of the cluster;</item>
-/// <item>latency: <c>context</c> &lt; 100ms and <c>impact</c> well under 1s at default depths (julie's
-///   blast_radius was 5s p95 — the founding adoption thesis), and the graph build stays within the rebuild budget.</item>
-/// </list>
-/// Depends on the pinned binary + a real extract, so it is <c>[Trait("Category","Scale")]</c> and EXCLUDED from
-/// the default suite; it <see cref="Assert.Skip"/>s if <c>.tools/julie-extract</c> is absent rather than failing.
-/// </summary>
+/// <summary>Proves actionable context and impact behavior over a real extractor artifact.</summary>
 [Trait("Category", "Scale")]
 public sealed class LiveContextImpactTests
 {
@@ -139,44 +126,98 @@ public sealed class LiveContextImpactTests
                 target: "Process", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: false, out _, out _);
             Assert.Contains("ProcessWorks", impactProcess);
 
-            // === context("order processing") — a non-empty, budget-bounded bundle, sub-100ms. ===
-            // First call doubles as WARMUP (JIT + cold caches) and the non-empty/content correctness check; its
-            // latency is deliberately NOT measured — a cold first sample is not representative of steady state.
-            string ctxOut = ContextTool.Run(index, resolver,
+            string legacyContext = ContextTool.Run(index, resolver,
                 query: "order processing", tokenBudget: 4000, maxHops: 1,
-                entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int ctxCount, out _);
+                entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-            Assert.True(ctxCount >= 1, $"expected a non-empty context bundle; output:\n{ctxOut}");
-            Assert.Contains("OrderService", ctxOut);
+            string actionableContext = ContextTool.RunActionable(
+                index,
+                index.Graph,
+                resolver,
+                query: "order processing",
+                tokenBudget: 4000,
+                maxHops: 1,
+                entrySymbols: ["OrderService"],
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                readBody: symbol => ExtractReader.ReadBody(canonicalDb, canonicalRoot, symbol),
+                json: false,
+                out int actionableCount,
+                out _);
 
-            // The sub-100ms target (julie's get_context was 439ms avg / 1.2s p95). Assert on the MEDIAN of repeated
-            // steady-state runs, never a single shot: one GC pause or scheduler preemption (common when the Scale
-            // suite runs under CPU load) blows an absolute single-sample wall-clock budget, while the median still
-            // proves the in-memory traversal meets the "fast or vestigial" mandate. The generous 100ms ceiling vs.
-            // the real sub-millisecond cost leaves ample headroom above the median.
+            Assert.True(actionableCount >= 1, $"expected a non-empty context bundle; output:\n{actionableContext}");
+            Assert.Contains("OrderService", actionableContext);
+            Assert.Contains("return _repo.Load(id);", actionableContext);
+            Assert.Contains("evidence=sufficient", actionableContext);
+            Assert.DoesNotContain("## next inspect", actionableContext);
+            Assert.True(TokenEstimator.Count(actionableContext) <= 4000);
+
+            string legacyFollowUp = InspectTool.Run(
+                index,
+                resolver,
+                canonicalDb,
+                canonicalRoot,
+                target: "OrderService",
+                depth: "overview",
+                kind: null,
+                scope: null,
+                limit: 50,
+                json: false,
+                out _);
+            Assert.True(
+                TokenEstimator.Count(actionableContext) <
+                TokenEstimator.Count(legacyContext) + TokenEstimator.Count(legacyFollowUp));
+
             const int ctxSamples = 21;
             var ctxRunsMs = new double[ctxSamples];
             for (int i = 0; i < ctxSamples; i++)
             {
                 var ctxSw = Stopwatch.StartNew();
-                _ = ContextTool.Run(index, resolver,
-                    query: "order processing", tokenBudget: 4000, maxHops: 1,
-                    entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
+                _ = ContextTool.RunActionable(
+                    index,
+                    index.Graph,
+                    resolver,
+                    query: "order processing",
+                    tokenBudget: 4000,
+                    maxHops: 1,
+                    entrySymbols: ["OrderService"],
+                    editedFiles: null,
+                    failingTest: null,
+                    stackTrace: null,
+                    semanticSeeds: null,
+                    readBody: symbol => ExtractReader.ReadBody(canonicalDb, canonicalRoot, symbol),
+                    json: false,
+                    out _,
+                    out _);
                 ctxSw.Stop();
                 ctxRunsMs[i] = ctxSw.Elapsed.TotalMilliseconds;
             }
             Array.Sort(ctxRunsMs);
-            double ctxMedianMs = ctxRunsMs[ctxSamples / 2];
-            Assert.True(ctxMedianMs < 100,
-                $"context median {ctxMedianMs:F1}ms over {ctxSamples} runs exceeded the 100ms budget " +
+            double ctxP95Ms = ctxRunsMs[(int)Math.Ceiling(ctxSamples * 0.95) - 1];
+            Assert.True(ctxP95Ms < 100,
+                $"context p95 {ctxP95Ms:F1}ms over {ctxSamples} runs exceeded the 100ms budget " +
                 $"(min {ctxRunsMs[0]:F1}ms, max {ctxRunsMs[ctxSamples - 1]:F1}ms).");
 
-            // A tiny budget truncates the bundle (the budget, not a count, bounds it).
-            string tiny = ContextTool.Run(index, resolver,
-                query: "order processing", tokenBudget: 20, maxHops: 1,
-                entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int tinyCount, out _);
-            Assert.True(tinyCount < ctxCount,
-                $"a tiny budget should truncate the bundle (tiny={tinyCount}, full={ctxCount}).");
+            string tiny = ContextTool.RunActionable(
+                index,
+                index.Graph,
+                resolver,
+                query: "order processing",
+                tokenBudget: 20,
+                maxHops: 1,
+                entrySymbols: ["OrderService"],
+                editedFiles: null,
+                failingTest: null,
+                stackTrace: null,
+                semanticSeeds: null,
+                readBody: symbol => ExtractReader.ReadBody(canonicalDb, canonicalRoot, symbol),
+                json: false,
+                out int tinyCount,
+                out _);
+            Assert.True(TokenEstimator.Count(tiny) <= 20);
+            Assert.True(tinyCount < actionableCount);
         }
         finally
         {

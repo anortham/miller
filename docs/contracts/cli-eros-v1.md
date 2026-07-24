@@ -253,9 +253,15 @@ selector, and pass that selector to the read command. If B is not listed, call
 `content search --workspace-id all` and `telemetry export --workspace-id all`; it is not a symbol/code read
 selector.
 
-`miller context <query> --reference-mode usage --json` keeps the normal `bundle` array but adds mixed item types:
-`symbol`, `identifier`, and `content_chunk`. Each item includes `reason` and `confidence`; `confidence=name_based`
-means the identifier came from a same-name row and is a possible reference, not a resolved target-symbol edge.
+`miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
+`confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and
+`--stack-trace` add task evidence to pivot ranking. Ignored or ambiguous evidence appears in
+`anchor_diagnostics`; an empty or insufficient result includes `next_actions`.
+
+`miller context <query> --reference-mode usage --json` keeps the same `bundle` array and adds mixed item types:
+`implementation`, `identifier`, and `content_chunk`. Each item includes `reason` and `confidence`;
+`confidence=name_based` means the identifier came from a same-name row and is a possible reference, not a
+resolved target-symbol edge.
 
 Telemetry JSONL fields:
 

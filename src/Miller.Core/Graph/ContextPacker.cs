@@ -7,7 +7,7 @@ namespace Miller.Core.Graph;
 /// </summary>
 /// <param name="Payload">The opaque item returned when this candidate is selected.</param>
 /// <param name="TokenCost">The estimated token cost of including this candidate; expected to be ≥ 0.</param>
-public sealed record PackCandidate<T>(T Payload, int TokenCost);
+public sealed record PackCandidate<T>(T Payload, int TokenCost, int AllocationTier = 0);
 
 /// <summary>
 /// The pure <c>context</c> token-budget selector (M5 decision D6). Given candidates already in the caller's
@@ -52,5 +52,34 @@ public static class ContextPacker
         }
 
         return selected;
+    }
+
+    /// <summary>Select by allocation tier, then restore the caller's render order.</summary>
+    public static IReadOnlyList<T> PackAllocated<T>(
+        IReadOnlyList<PackCandidate<T>> candidates,
+        int budget)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        if (budget <= 0 || candidates.Count == 0)
+            return [];
+
+        var selectedIndices = new HashSet<int>();
+        int used = 0;
+        foreach (var entry in candidates
+                     .Select(static (candidate, index) => (Candidate: candidate, Index: index))
+                     .OrderBy(static entry => entry.Candidate.AllocationTier)
+                     .ThenBy(static entry => entry.Index))
+        {
+            if (used + entry.Candidate.TokenCost > budget)
+                continue;
+            selectedIndices.Add(entry.Index);
+            used += entry.Candidate.TokenCost;
+        }
+
+        return candidates
+            .Select(static (candidate, index) => (Candidate: candidate, Index: index))
+            .Where(entry => selectedIndices.Contains(entry.Index))
+            .Select(static entry => entry.Candidate.Payload)
+            .ToArray();
     }
 }

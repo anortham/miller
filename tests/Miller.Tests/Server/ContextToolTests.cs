@@ -4,6 +4,7 @@ using Miller.Core.Graph;
 using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -13,13 +14,7 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
-/// <summary>
-/// Pins the <c>context</c> tool (M5 D6/D1/D8/D10) against an in-memory synth index (symbols + edges, no SQLite —
-/// the Server <c>Run</c> core is DB-free for context). Exercises <see cref="ContextTool.Run"/> directly: the
-/// seed union (BM25 search ∪ resolved entry_symbols ∪ identifier tokens parsed from failing_test / stack_trace),
-/// both-direction neighbour expansion to max_hops, the token-budget pack (a tiny budget truncates the bundle),
-/// both render formats, the max_hops clamp, and empty-query handling.
-/// </summary>
+/// <summary>Pins context pivot ranking, evidence packing, rendering, semantic policy, and task anchors.</summary>
 public sealed class ContextToolTests
 {
     private const string ControllerId = "00000000000000000000000000000001";
@@ -145,8 +140,6 @@ public sealed class ContextToolTests
         return (index, new SmartTargetResolver(index));
     }
 
-    // A wide, shallow cluster: one seed (Hub) with 15 direct neighbours, each in its own file. Used to exercise the
-    // neighbour render cap (MaxNeighbourCandidates) and the omission note.
     private static (MillerRepositoryIndex index, SmartTargetResolver resolver) BuildWideFixture()
     {
         const string hubId = "00000000000000000000000000000001";
@@ -195,15 +188,13 @@ public sealed class ContextToolTests
         }
         else if (selectedCount == 0)
         {
-            Assert.Equal("Bundle empty — raise token_budget.", output);
+            Assert.Equal("No evidence fit token_budget.", output);
         }
         else
         {
             Assert.Contains($"# context bundle ({selectedCount})", output, StringComparison.Ordinal);
         }
     }
-
-    // ---- seeds + expansion ----
 
     [Fact]
     public void Run_SearchSeed_ExpandsBothDirections_IncludesTheCluster()
@@ -325,6 +316,7 @@ public sealed class ContextToolTests
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out int count, out _);
 
         Assert.Equal(0, count);
+        Assert.Empty(output);
     }
 
     [Theory]
@@ -352,7 +344,7 @@ public sealed class ContextToolTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public void Run_PositiveBudgetBelowEmptyEnvelope_ReturnsCanonicalEmptyBundle(
+    public void Run_PositiveBudgetBelowEmptyEnvelope_StaysWithinBudget(
         bool referenceAware,
         bool json)
     {
@@ -384,8 +376,8 @@ public sealed class ContextToolTests
         }
 
         Assert.Equal(0, selectedCount);
-        Assert.Equal(json ? "{\"bundle\":[]}" : "Bundle empty — raise token_budget.", output);
-        Assert.True(TokenEstimator.Count(output) > 1);
+        Assert.Equal(json ? "{}" : string.Empty, output);
+        Assert.True(TokenEstimator.Count(output) <= 1);
     }
 
     [Fact]
@@ -531,8 +523,12 @@ public sealed class ContextToolTests
         Assert.True(first.TryGetProperty("file", out _));
         Assert.True(first.TryGetProperty("line", out _));
         Assert.True(first.TryGetProperty("hop", out _));
-        // The search seed is hop 0 and sorts first in priority order.
+        Assert.Equal("symbol", first.GetProperty("item_type").GetString());
+        Assert.Equal("pivot", first.GetProperty("role").GetString());
+        Assert.Equal("exact", first.GetProperty("confidence").GetString());
+        Assert.True(first.TryGetProperty("reason", out _));
         Assert.Equal(0, first.GetProperty("hop").GetInt32());
+        Assert.Equal("partial", root.GetProperty("disposition").GetProperty("status").GetString());
     }
 
     [Fact]
@@ -544,10 +540,8 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-        // Opinionated render: hop-0 seeds lead with a "seed" reason and full provenance on one line; only graph
-        // neighbours (hop >= 1) carry a hop label. The JSON shape still carries hop for every candidate.
-        Assert.Contains("## seeds", output);
-        Assert.Contains("OrderService  class  src/OrderService.cs:1  seed  class OrderService", output);
+        Assert.Contains("## pivots", output);
+        Assert.Contains("OrderService  class  src/OrderService.cs:1  pivot  class OrderService", output);
         Assert.Contains("## neighbours", output);
         Assert.Contains("hop=1", output);
         Assert.Contains("class OrderService", output);
@@ -565,14 +559,14 @@ public sealed class ContextToolTests
             json: false, out int count, out _);
 
         Assert.Equal(3, count);
-        // maxHops=0 → every candidate is a seed; no neighbours section. Seeds are listed first, each on one line
-        // with the "seed" reason, followed by copyable overview-first inspect calls for the top 3 seeds.
         Assert.Equal(
             "# context bundle (3)\n" +
-            "## seeds\n" +
-            "Alpha  method  src/Shared.cs:10  seed  method Alpha()\n" +
-            "Beta  method  src/Shared.cs:20  seed  method Beta()\n" +
-            "Gamma  class  src/Gamma.cs:30  seed  class Gamma\n" +
+            "## pivots\n" +
+            "Alpha  method  src/Shared.cs:10  pivot  method Alpha()\n" +
+            "Beta  method  src/Shared.cs:20  pivot  method Beta()\n" +
+            "Gamma  class  src/Gamma.cs:30  pivot  class Gamma\n" +
+            "## disposition\n" +
+            "evidence=partial  reason=pivot_signature_only\n" +
             "## next inspect\n" +
             "inspect(target=\"Alpha\", scope=\"src/Shared.cs\", depth=\"overview\")\n" +
             "inspect(target=\"Beta\", scope=\"src/Shared.cs\", depth=\"overview\")\n" +
@@ -589,19 +583,17 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-        // Seeds section leads with the anchor; neighbours follow, grouped by file in reach order (hop asc, id asc).
-        Assert.Contains("## seeds", output);
-        Assert.Contains("OrderService  class  src/OrderService.cs:1  seed  class OrderService", output);
+        Assert.Contains("## pivots", output);
+        Assert.Contains("OrderService  class  src/OrderService.cs:1  pivot  class OrderService", output);
         Assert.Contains("## neighbours", output);
         Assert.Contains("web/OrderController.cs:\n  :1 OrderController class hop=1", output);
         Assert.Contains("src/OrderRepo.cs:\n  :1 OrderRepo class hop=1", output);
         Assert.Contains("tests/OrderServiceTests.cs:\n  :1 OrderServiceTests class hop=1", output);
-        // Footer points at the single seed with a copyable overview-first inspect call.
         Assert.Contains("## next inspect\ninspect(target=\"OrderService\", scope=\"src/OrderService.cs\", depth=\"overview\")", output);
     }
 
     [Fact]
-    public void Run_Compact_CapsNeighboursAndNotesOmission()
+    public void Run_Compact_RendersEverySelectedNeighbour()
     {
         var (index, resolver) = BuildWideFixture();
 
@@ -609,11 +601,10 @@ public sealed class ContextToolTests
             query: "Hub", tokenBudget: 100000, maxHops: 1,
             entrySymbols: null, failingTest: null, stackTrace: null, json: false, out _, out _);
 
-        // 1 seed (Hub) + 15 hop-1 neighbours; the neighbour section is capped at 12 with an omission note.
-        Assert.Contains("## seeds", output);
-        Assert.Contains("Hub  class  src/Hub.cs:1  seed  class Hub", output);
-        Assert.Contains("... 3 more neighbours omitted — inspect a seed for the full graph.", output);
-        Assert.Equal(12, output.Split("hop=1").Length - 1);
+        Assert.Contains("## pivots", output);
+        Assert.Contains("Hub  class  src/Hub.cs:1  pivot  class Hub", output);
+        Assert.DoesNotContain("neighbours omitted", output, StringComparison.Ordinal);
+        Assert.Equal(15, output.Split("hop=1").Length - 1);
         Assert.Contains("## next inspect\ninspect(target=\"Hub\", scope=\"src/Hub.cs\", depth=\"overview\")", output);
     }
 
@@ -753,7 +744,8 @@ public sealed class ContextToolTests
         var bundle = doc.RootElement.GetProperty("bundle");
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("item_type").GetString() == "symbol"
-            && item.GetProperty("reason").GetString() == "definition"
+            && item.GetProperty("reason").GetString() == "entry_symbol"
+            && item.GetProperty("role").GetString() == "pivot"
             && item.GetProperty("confidence").GetString() == "exact"
             && item.GetProperty("symbol_id").GetString() == ServiceId);
         Assert.Contains(bundle.EnumerateArray(), item =>
@@ -889,7 +881,8 @@ public sealed class ContextToolTests
             out _, out _);
 
         Assert.Contains("# context bundle", output);
-        Assert.Contains("reason=definition confidence=exact", output);
+        Assert.Contains("reason=entry_symbol confidence=exact", output);
+        Assert.Contains("role=pivot", output);
         Assert.Contains("reason=possible_reference confidence=fallback", output);
         Assert.Contains("resolution=fallback source=name_fallback", output);
     }
@@ -961,7 +954,7 @@ public sealed class ContextToolTests
             out int count, out _);
 
         Assert.Equal(0, count);
-        Assert.Equal("Bundle empty — raise token_budget.", output);
+        Assert.Empty(output);
     }
 
     [Theory]
@@ -1114,6 +1107,238 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_EditedFileAnchorBeatsUnrelatedExactQueryHit()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "UnrelatedHelper",
+            format: "json",
+            edited_files: ["src/OrderRepo.cs"]);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement first = document.RootElement.GetProperty("bundle")[0];
+        Assert.Equal("OrderRepo", first.GetProperty("name").GetString());
+        Assert.Equal("edited_file", first.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void RunActionable_EditedFileUsesQueryRankAndExcludesMemberStorage()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "00000000000000000000000000000101", "PivotHost", "class PivotHost", "class", "csharp",
+                "src/PivotHost.cs", 1, 40, null, false),
+            new(1, "00000000000000000000000000000102", "_first", "string _first", "field", "csharp",
+                "src/PivotHost.cs", 2, 2, null, false),
+            new(2, "00000000000000000000000000000103", "_second", "string _second", "field", "csharp",
+                "src/PivotHost.cs", 3, 3, null, false),
+            new(3, "00000000000000000000000000000104", "_third", "string _third", "field", "csharp",
+                "src/PivotHost.cs", 4, 4, null, false),
+            new(4, "00000000000000000000000000000105", "RankPivots", "void RankPivots()", "method", "csharp",
+                "src/PivotHost.cs", 10, 20, null, false),
+            new(5, "00000000000000000000000000000106", "PivotHost", "PivotHost()", "constructor", "csharp",
+                "src/PivotHost.cs", 21, 24, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "rank pivots",
+            tokenBudget: 2000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: ["src/PivotHost.cs"],
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement bundle = document.RootElement.GetProperty("bundle");
+        Assert.Equal("RankPivots", bundle[0].GetProperty("name").GetString());
+        Assert.DoesNotContain(bundle.EnumerateArray(), item => item.GetProperty("kind").GetString() == "field");
+        Assert.DoesNotContain(bundle.EnumerateArray(), item => item.GetProperty("kind").GetString() == "constructor");
+    }
+
+    [Fact]
+    public void RunActionable_LongTaskQueryRetrievesTaskTermsThroughSharedSearch()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "00000000000000000000000000000201", "rules", "rules", "property", "javascript",
+                "grammar.js", 70, 100, null, false),
+            new(1, "00000000000000000000000000000202", "tree_sitter_razor_external_scanner_serialize",
+                "unsigned tree_sitter_razor_external_scanner_serialize()", "function", "c",
+                "src/scanner.c", 215, 230, null, false),
+            new(2, "00000000000000000000000000000203", "tree_sitter_razor_external_scanner_scan",
+                "bool tree_sitter_razor_external_scanner_scan()", "function", "c",
+                "src/scanner.c", 313, 358, null, false),
+            new(3, "00000000000000000000000000000204", "scan_markup_tag",
+                "bool scan_markup_tag()", "function", "c",
+                "src/scanner.c", 270, 310, null, false),
+            new(4, "00000000000000000000000000000205", "TokenType", "enum TokenType", "enum", "c",
+                "src/scanner.c", 8, 30, null, false),
+            new(5, "00000000000000000000000000000206", "TSLanguage", "struct TSLanguage", "struct", "c",
+                "src/tree_sitter/parser.h", 107, 180, null, false),
+            new(6, "00000000000000000000000000000207", "BdistWheel", "class BdistWheel", "class", "python",
+                "setup.py", 10, 20, null, false),
+            new(7, "00000000000000000000000000000208", "scan_razor_marker", "bool scan_razor_marker()",
+                "function", "c", "src/scanner.c", 120, 145, null, false),
+            new(8, "00000000000000000000000000000209", "tag_names_equal", "bool tag_names_equal()",
+                "function", "c", "src/scanner.c", 180, 200, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "Assemble the minimal grammar and scanner context needed to change how Razor markup tag " +
+                   "names are recognized and dispatched, then propose the scanner implementation as the edit target.",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        string[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .Select(item => item.GetProperty("name").GetString()!)
+            .ToArray();
+        Assert.Contains("tree_sitter_razor_external_scanner_scan", pivots);
+        Assert.Contains("scan_markup_tag", pivots);
+    }
+
+    [Fact]
+    public void RunActionable_IncludesNearbyFileNeighbourWithoutAGraphEdge()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "00000000000000000000000000000301", "LANGUAGE",
+                "pub const LANGUAGE: LanguageFn", "constant", "rust",
+                "bindings/rust/lib.rs", 23, 25, null, false),
+            new(1, "00000000000000000000000000000302", "test_can_load_grammar",
+                "fn test_can_load_grammar()", "function", "rust",
+                "bindings/rust/lib.rs", 54, 59, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "test_can_load_grammar",
+            tokenBudget: 2000,
+            maxHops: 1,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement neighbour = Assert.Single(
+            document.RootElement.GetProperty("bundle").EnumerateArray(),
+            item => item.GetProperty("role").GetString() == "neighbour");
+        Assert.Equal("LANGUAGE", neighbour.GetProperty("name").GetString());
+        Assert.Equal("file_neighbour", neighbour.GetProperty("reason").GetString());
+    }
+
+    [Theory]
+    [InlineData("at Execute (src/Shared.cs:20)")]
+    [InlineData("File \"src/Shared.cs\", line 20, in execute")]
+    public void Context_LineAwareStackFrameSelectsContainingSymbol(string stackTrace)
+    {
+        var (index, _) = BuildSharedFileFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            stack_trace: stackTrace,
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement first = document.RootElement.GetProperty("bundle")[0];
+        Assert.Equal("Beta", first.GetProperty("name").GetString());
+        Assert.Equal("stack_frame", first.GetProperty("reason").GetString());
+        Assert.Equal(20, first.GetProperty("anchor_line").GetInt32());
+    }
+
+    [Fact]
+    public void Context_AmbiguousOrMissingAnchorsAreTypedInOutput()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "OrderService",
+            entry_symbols: ["MissingAnchor"],
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = Assert.Single(
+            document.RootElement.GetProperty("anchor_diagnostics").EnumerateArray());
+        Assert.Equal("entry_symbol", diagnostic.GetProperty("kind").GetString());
+        Assert.Equal("not_found", diagnostic.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Context_EmptyAfterIgnoredAnchorIncludesRecoveryAction()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            entry_symbols: ["MissingAnchor"],
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Empty(document.RootElement.GetProperty("bundle").EnumerateArray());
+        Assert.Equal(
+            "not_found",
+            document.RootElement
+                .GetProperty("anchor_diagnostics")[0]
+                .GetProperty("reason")
+                .GetString());
+        Assert.NotEmpty(document.RootElement.GetProperty("next_actions").EnumerateArray());
+    }
+
+    [Fact]
     public void Context_ReferenceModeUsage_SeparatesWorkspaceFallbackReferencesAndCallees()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -1134,7 +1359,8 @@ public sealed class ContextToolTests
         using var doc = JsonDocument.Parse(output);
         var bundle = doc.RootElement.GetProperty("bundle");
         Assert.Contains(bundle.EnumerateArray(), item =>
-            item.GetProperty("reason").GetString() == "definition"
+            item.GetProperty("reason").GetString() == "entry_symbol"
+            && item.GetProperty("role").GetString() == "pivot"
             && item.GetProperty("symbol_id").GetString() == JulieDbFixture.GetUserId);
         Assert.Contains(bundle.EnumerateArray(), item =>
             item.GetProperty("reason").GetString() == "possible_reference"
@@ -1181,6 +1407,92 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_PivotBodyMakesBundleSufficientAndSuppressesInspectNudge()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "GetUser",
+            entry_symbols: ["GetUser"],
+            max_hops: 0,
+            token_budget: 2000);
+
+        Assert.Contains("## implementations", output, StringComparison.Ordinal);
+        Assert.Contains("GetUser", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "evidence=sufficient  reason=pivot_implementation_present",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("## next inspect", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_SemanticSeedAnchorsConceptualQueryWhenServed()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+                UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
+
+        string output = tool.Context("durable persistence boundary", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement first = document.RootElement.GetProperty("bundle")[0];
+        Assert.Equal("OrderRepo", first.GetProperty("name").GetString());
+        Assert.Equal("semantic_rank_1", first.GetProperty("reason").GetString());
+        Assert.Equal(1, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Context_SemanticOffPerformsZeroSemanticWork()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+                UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.Off));
+
+        string output = tool.Context("OrderService", format: "json");
+        string repeated = tool.Context("OrderService", format: "json");
+
+        Assert.Contains("OrderService", output, StringComparison.Ordinal);
+        Assert.Equal(output, repeated);
+        Assert.Equal(0, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Context_ExactIdentifierPolicySkipsSemanticArm()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(RepoId, null, "src/OrderRepo.cs", 1, 0.91)],
+                UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
+
+        string output = tool.Context("OrderService", format: "json");
+
+        Assert.Contains("OrderService", output, StringComparison.Ordinal);
+        Assert.Equal(0, arm.SymbolCalls);
+    }
+
+    [Fact]
     public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();
@@ -1191,5 +1503,23 @@ public sealed class ContextToolTests
         Assert.NotNull(tool);
 
         Assert.Throws<ArgumentNullException>(() => new ContextTool(null!));
+    }
+
+    private sealed class RecordingContextSemanticArm(SemanticQueryResult result) : ISemanticTextArm
+    {
+        public int SymbolCalls { get; private set; }
+
+        public SemanticQueryResult QuerySymbols(
+            string workspaceRoot,
+            string query,
+            int k,
+            Func<VectorMatch, bool>? allow)
+        {
+            SymbolCalls++;
+            return result;
+        }
+
+        public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k) =>
+            SemanticQueryResult.Unavailable("not configured");
     }
 }

@@ -296,6 +296,26 @@ public sealed class ExtractReader
         return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
     }
 
+    /// <summary>Read an indexed symbol body through the same freshness-guarded line span used by inspect.</summary>
+    public static BodyReadResult ReadBody(
+        string dbPath,
+        string workspaceRoot,
+        IndexedSymbol symbol)
+    {
+        ArgumentNullException.ThrowIfNull(symbol);
+        SymbolDetail? detail = ReadDetail(dbPath, symbol.SymbolId);
+        if (detail is null)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.NoSpanRecorded);
+        return ReadBody(
+            dbPath,
+            workspaceRoot,
+            symbol.FilePath,
+            detail.BodyStartByte,
+            detail.BodyEndByte,
+            detail.BodyStartLine,
+            detail.BodyEndLine);
+    }
+
     /// <summary>
     /// The canonical <c>root_path</c> the artifact was extracted from, recorded in <c>artifact_metadata</c>
     /// (v1's single metadata surface), or null if the key is absent. Startup derives the stable workspace id

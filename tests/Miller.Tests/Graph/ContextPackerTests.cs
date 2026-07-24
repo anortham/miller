@@ -102,4 +102,18 @@ public sealed class ContextPackerTests
 
         Assert.Equal([1, 3], selected);
     }
+
+    [Fact]
+    public void PackAllocated_ReservesBudgetForHigherTierAndRestoresRenderOrder()
+    {
+        IReadOnlyList<string> selected = ContextPacker.PackAllocated(
+            [
+                new PackCandidate<string>("neighbour", 60, AllocationTier: 2),
+                new PackCandidate<string>("pivot", 50, AllocationTier: 0),
+                new PackCandidate<string>("evidence", 30, AllocationTier: 1),
+            ],
+            budget: 90);
+
+        Assert.Equal(["pivot", "evidence"], selected);
+    }
 }

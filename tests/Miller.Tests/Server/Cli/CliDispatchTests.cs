@@ -2141,6 +2141,9 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("# context bundle", outText);
         Assert.Contains("GetUser", outText);
         Assert.Contains("auth/UserService.cs", outText);
+        Assert.Contains("## implementations", outText);
+        Assert.Contains("evidence=sufficient", outText);
+        Assert.DoesNotContain("## next inspect", outText);
     }
 
     [Fact]
