@@ -306,7 +306,9 @@ Design choices that follow from this:
 
 ## Replacing Julie
 
-The 1.0 replacement story is the product family, not Miller alone:
+Miller 1.14.0 carries the frozen candidate for replacing Julie's local agent code-intelligence workflows. It
+becomes the supported replacement only if the complete visible, review, package, and sealed takeover gates pass.
+The replacement has explicit component boundaries:
 
 - **Miller** replaces Julie's deterministic local agent-tool core: search, inspect, context, references, trace/path,
   impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry,
@@ -320,8 +322,9 @@ The 1.0 replacement story is the product family, not Miller alone:
   single-workspace semantic retrieval belongs to Miller — see
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md).
 
-That boundary is deliberate. Miller should stay predictable and local; the product layer above it decides what the
-facts mean and what to do next.
+That boundary is deliberate. Miller stays predictable and local; the product layer above it decides what the
+facts mean and what to do next. Julie users should follow the
+[`migration guide`](docs/migration-from-julie.md); Miller does not uninstall Julie or delete `.julie/`.
 
 ## Project structure
 
@@ -342,8 +345,8 @@ docs/
 
 Miller keeps only the local operational dashboard: registered workspaces, freshness, read-only aggregate facts
 from workspace artifacts, telemetry, sidecar health, and refresh/troubleshooting actions. Miller tools may return
-immediate recovery hints for the next useful local call; Eros owns richer product UX such as workflow guidance,
-confidence/evidence views, semantic/vector retrieval, and commercial workflows.
+immediate recovery hints for the next useful local call; Eros owns richer product UX such as fleet-level
+semantic ranking, workflow guidance, confidence/evidence views, and commercial workflows.
 
 ## The tool surface
 

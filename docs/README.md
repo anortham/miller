@@ -7,6 +7,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 - [`../README.md`](../README.md) - public entry point, install paths, current architecture summary, CLI surface.
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) - source-of-truth agent working notes and generated mirror.
+- [`migration-from-julie.md`](migration-from-julie.md) - Julie-to-Miller install, tool/workflow mapping, artifact rebuild, semantic opt-out, deliberate differences, verification, and rollback guide.
 - [`agent-guidance.md`](agent-guidance.md) - long-form agent reference: full workflow catalog, subagent-dispatch primer, and per-tool parameter detail relocated from the embedded ≤1,900-char ServerInstructions core.
 - [`agent-setup-snippet.md`](agent-setup-snippet.md) - copy-paste CLAUDE.md/AGENTS.md/Cursor-rule routing snippet that keeps agents preferring Miller over shell grep when harnesses defer MCP tool schemas.
 - [`adr/ADR-0001-guidance-delivery-channels.md`](adr/ADR-0001-guidance-delivery-channels.md) - accepted decision record for the three guidance channels (ServerInstructions discovery core, tool-description usage contracts, NextStepHint nudges) and their budgets.
@@ -81,7 +82,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v1.13.0.md`](release-notes/v1.13.0.md) - latest release notes.
+- [`release-notes/v1.14.0.md`](release-notes/v1.14.0.md) - conditional release-candidate notes; publish only after the full takeover gate passes.
+- [`release-notes/v1.13.0.md`](release-notes/v1.13.0.md) - latest published release notes.
 - [`release-notes/v1.12.0.md`](release-notes/v1.12.0.md) - historical `v1.12.0` release notes.
 - [`release-notes/v1.11.1.md`](release-notes/v1.11.1.md) - historical `v1.11.1` release notes.
 - [`release-notes/v1.11.0.md`](release-notes/v1.11.0.md) - historical `v1.11.0` release notes.
