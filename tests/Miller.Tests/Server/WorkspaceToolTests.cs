@@ -73,7 +73,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Func<string, string, bool, ExtractReport>? openScan = null,
         Func<string, IDisposable?>? acquireLock = null,
         Func<string, long>? readLatestRevision = null,
-        IDashboardLauncher? dashboardLauncher = null)
+        IDashboardLauncher? dashboardLauncher = null,
+        VectorSidecar? vectors = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -143,6 +144,7 @@ public sealed class WorkspaceToolTests : IDisposable
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
+            vectors ?? VectorSidecar.FromEnvironment(),
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(

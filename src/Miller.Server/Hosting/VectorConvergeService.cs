@@ -248,7 +248,15 @@ public sealed class VectorConvergeService : BackgroundService
         VectorConvergeSignal signal,
         SemanticEmbeddingSessionBroker broker,
         ILogger<VectorConvergeService> logger)
-        : this(bootstrap, sidecar, signal, logger, SqliteVectorConvergePort.TryOpen, static _ => null, null)
+        : this(
+            bootstrap,
+            sidecar,
+            signal,
+            logger,
+            workspace => SqliteVectorConvergePort.TryOpen(workspace, sidecar.Encoder),
+            static _ => null,
+            null,
+            workspace => SqliteVectorShadowRebuilder.TryOpen(workspace, sidecar.Encoder))
     {
         ArgumentNullException.ThrowIfNull(broker);
         _broker = broker;
@@ -284,7 +292,8 @@ public sealed class VectorConvergeService : BackgroundService
         _openPort = openPort;
         _openSession = openSession;
         _broker = null;
-        _openShadow = openShadow ?? SqliteVectorShadowRebuilder.TryOpen;
+        _openShadow = openShadow
+            ?? (workspace => SqliteVectorShadowRebuilder.TryOpen(workspace, sidecar.Encoder));
         _recoverCorrupt = recoverCorrupt ?? ((failure, path, rebuild) =>
             SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(failure, path, rebuild, logger));
         _diskGateFactory = diskGateFactory ?? ProductionDiskGate;
@@ -692,7 +701,7 @@ public sealed class VectorConvergeService : BackgroundService
                 ArtifactIdChanged = !string.Equals(
                     snapshot.ArtifactId, port.Meta("artifact_id"), StringComparison.Ordinal),
                 IdentityAction = MillerSemanticContract.ClassifyChange(
-                    port.StoredIdentity, MillerSemanticContract.PinnedIdentity(SemanticEncoderSelection.Active)),
+                    port.StoredIdentity, MillerSemanticContract.PinnedIdentity(_sidecar.Encoder)),
                 DeferredPaths = deferredPaths,
             };
 
@@ -1164,23 +1173,30 @@ public sealed class VectorConvergeService : BackgroundService
 /// by <see cref="VectorGenerationManager"/> — which retains the superseded generation under its own tag when the
 /// promote is incompatible, so a matching reader keeps serving through the soak window.
 /// </summary>
-internal sealed class SqliteVectorShadowRebuilder(WorkspaceContext workspace, VectorGenerationManager manager)
+internal sealed class SqliteVectorShadowRebuilder(
+    WorkspaceContext workspace,
+    VectorGenerationManager manager,
+    SemanticEncoderPin encoder)
     : IVectorShadowRebuilder
 {
-    public static IVectorShadowRebuilder? TryOpen(WorkspaceContext workspace)
+    public static IVectorShadowRebuilder? TryOpen(
+        WorkspaceContext workspace,
+        SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
         return VectorStore.ResolveExtensionPath() is null
             ? null
             : new SqliteVectorShadowRebuilder(
-                workspace, new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot));
+                workspace,
+                new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot),
+                encoder ?? SemanticEncoderSelection.Active);
     }
 
     public IVectorConvergePort? OpenShadow()
     {
         manager.PrepareShadow();
-        return SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath);
+        return SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath, encoder);
     }
 
     public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built) =>
@@ -1265,15 +1281,23 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     /// extension is unavailable or the extract artifact has no revision yet: both are ordinary states in which
     /// the drain simply does nothing.
     /// </summary>
-    public static IVectorConvergePort? TryOpen(WorkspaceContext workspace)
+    public static IVectorConvergePort? TryOpen(
+        WorkspaceContext workspace,
+        SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        return TryOpenAt(workspace, VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot));
+        return TryOpenAt(
+            workspace,
+            VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot),
+            encoder);
     }
 
     /// <summary>Opens (creating on first run) a generation at an explicit path — the active artifact, or the
     /// shadow a rebuild is being built into.</summary>
-    public static IVectorConvergePort? TryOpenAt(WorkspaceContext workspace, string vectorsPath)
+    public static IVectorConvergePort? TryOpenAt(
+        WorkspaceContext workspace,
+        string vectorsPath,
+        SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(vectorsPath);
@@ -1291,7 +1315,9 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
             using VectorStore created = VectorStore.Create(
                 vectorsPath,
-                MillerSemanticContract.PinnedIdentity(SemanticEncoderSelection.Active, MillerVersion.Current),
+                MillerSemanticContract.PinnedIdentity(
+                    encoder ?? SemanticEncoderSelection.Active,
+                    MillerVersion.Current),
                 artifactId,
                 extension);
         }

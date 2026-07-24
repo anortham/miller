@@ -79,6 +79,74 @@ public sealed class HostStartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void EvaluationGraph_UsesTheInjectedEncoderWithoutChangingTheProductionSelection()
+    {
+        string configPath = Path.Combine(CreateTempRoot(), "coderank.json");
+        File.WriteAllText(
+            configPath,
+            """
+            {
+              "schema": "miller.semantic.evaluation-adapter",
+              "version": 1,
+              "arm_id": "coderank-current-julie",
+              "normalization": "l2",
+              "encoder": {
+                "model_id": "nomic-ai/CodeRankEmbed",
+                "model_sha256": "827529bcd58aef0d9082e66eeff7e7d53a02f62bd005f841a26b3d3e2fb17ebe",
+                "model_revision": "3c4b60807d71f79b43f3c4363786d9493691f8b1",
+                "dims": 768,
+                "pooling": "cls",
+                "eos_append": "",
+                "query_instruction": "",
+                "document_instruction": "",
+                "storage_schema": "vec0-int8-768-cosine-v1"
+              },
+              "producer": {
+                "executable": "/opt/eval/python",
+                "arguments": ["-m", "sidecar.main"],
+                "environment": {}
+              }
+            }
+            """);
+        SemanticEvaluationAdapter adapter = SemanticEvaluationAdapter.Load(configPath);
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        services.AddMillerServices(adapter, SemanticMode.On);
+
+        using var provider = services.BuildServiceProvider();
+        VectorSidecar sidecar = provider.GetRequiredService<VectorSidecar>();
+        Assert.Equal(SemanticEvaluationAdapter.CodeRankEncoder, sidecar.Encoder);
+        Assert.DoesNotContain(sidecar.Encoder, MillerSemanticContract.KnownEncoders);
+        Assert.Equal(MillerSemanticContract.DefaultEncoder, SemanticEncoderSelection.Active);
+        Assert.Same(
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>(),
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is VectorConvergeService);
+    }
+
+    [Fact]
+    public void EvaluationGraph_WithoutIndexer_KeepsVectorConvergenceAndProductionDefaultKeepsIndexer()
+    {
+        var evaluationServices = new ServiceCollection();
+        evaluationServices.AddLogging();
+        evaluationServices.AddMillerServices(semanticMode: SemanticMode.On, startIndexer: false);
+        using var evaluationProvider = evaluationServices.BuildServiceProvider();
+
+        IHostedService[] evaluationHosted = evaluationProvider.GetServices<IHostedService>().ToArray();
+        Assert.DoesNotContain(evaluationHosted, service => service is IndexerService);
+        Assert.Contains(evaluationHosted, service => service is VectorConvergeService);
+        Assert.Contains(evaluationHosted, service => service is FreshnessService);
+
+        var productionServices = new ServiceCollection();
+        productionServices.AddLogging();
+        productionServices.AddMillerServices(semanticMode: SemanticMode.On);
+        using var productionProvider = productionServices.BuildServiceProvider();
+
+        Assert.Contains(productionProvider.GetServices<IHostedService>(), service => service is IndexerService);
+    }
+
+    [Fact]
     public void CurrentWorkspaceServices_ResolveLatestBootstrapStateAfterRebind()
     {
         string rootA = CreateTempRoot();

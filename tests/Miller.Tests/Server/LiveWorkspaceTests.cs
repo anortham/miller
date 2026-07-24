@@ -123,6 +123,7 @@ public sealed class LiveWorkspaceTests : IDisposable
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
+            VectorSidecar.Disabled,
             NullLogger<WorkspaceTool>.Instance);
         return (tool, indexer, holder, ledger, root, dbPath, runner);
     }

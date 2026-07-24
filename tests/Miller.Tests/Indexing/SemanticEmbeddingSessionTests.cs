@@ -317,6 +317,31 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public void MatchEncoder_WithInjectedEvaluationPin_AcceptsAnEncoderOutsideProductionSelection()
+    {
+        SemanticEncoderPin evaluationPin = SemanticEvaluationAdapter.CodeRankEncoder;
+        var health = new SemanticSidecarHealth(
+            Ready: true,
+            Dims: evaluationPin.Dims,
+            ModelId: evaluationPin.ModelId,
+            ModelSha256: evaluationPin.ModelSha256,
+            ModelRevision: evaluationPin.ModelRevision,
+            Pooling: evaluationPin.Pooling,
+            Normalization: "l2",
+            ResolvedBackend: "mps",
+            Accelerated: true,
+            DegradedReason: null);
+
+        SemanticEncoderHandshake? handshake =
+            SemanticEmbeddingSession.MatchEncoder(health, evaluationPin, out string? reason);
+
+        Assert.Null(reason);
+        Assert.NotNull(handshake);
+        Assert.Same(evaluationPin, handshake.Pin);
+        Assert.Equal(MillerSemanticContract.EncoderFingerprint(evaluationPin), handshake.EncoderFingerprint);
+    }
+
+    [Fact]
     public void ForServe_LauncherPassesTheExplicitServeVerbAndSelectedModel()
     {
         var launcher = ProcessSemanticSidecarLauncher.ForServe("/tools/julie-semantic-sidecar", Pin);

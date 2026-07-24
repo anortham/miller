@@ -1,0 +1,30 @@
+{
+  "schema": "miller.semantic.evaluation-adapter",
+  "version": 1,
+  "arm_id": "coderank-current-julie",
+  "normalization": "l2",
+  "encoder": {
+    "model_id": "nomic-ai/CodeRankEmbed",
+    "model_sha256": "827529bcd58aef0d9082e66eeff7e7d53a02f62bd005f841a26b3d3e2fb17ebe",
+    "model_revision": "3c4b60807d71f79b43f3c4363786d9493691f8b1",
+    "dims": 768,
+    "pooling": "cls",
+    "eos_append": "",
+    "query_instruction": "",
+    "document_instruction": "",
+    "storage_schema": "vec0-int8-768-cosine-v1"
+  },
+  "producer": {
+    "executable": "/absolute/path/to/python",
+    "arguments": [
+      "-m",
+      "sidecar.main"
+    ],
+    "environment": {
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONPATH": "/absolute/path/to/frozen/python/producer"
+    }
+  }
+}

@@ -8,9 +8,37 @@ produces the model/dims/quantization pin recommendation.
 
 Result: [`docs/findings/2026-07-19-model-benchmark.md`](../../docs/findings/2026-07-19-model-benchmark.md).
 
-**This is throwaway bench tooling, not product code.** It is outside `Miller.slnx`, product builds never
-see it, and its llama.cpp pin does **not** define the future `julie-semantic-sidecar` runtime — the
-sidecar vendors llama.cpp itself and will own `scripts/semantic-pins.json` in P1.
+**The model-bench scripts are throwaway tooling, not product code.** They remain outside `Miller.slnx`, product
+builds never see them, and their llama.cpp pin does **not** define the `julie-semantic-sidecar` runtime. The
+separate CodeRank evaluator host described below is in the solution so its bounded adapter and lifecycle seams
+stay build- and test-covered.
+
+## CodeRank final-behavior evaluator
+
+`eval/semantic-model-eval` is a separate evaluator host for comparing an injected protocol-v1 encoder against
+Miller's production BGE arm. It exposes the same nine MCP tools and embedded instructions as Miller, while
+disabling the indexer and blocking tool calls that can mutate or refresh an index. The host takes Miller's
+exclusive workspace writer lease before vector convergence, so it refuses to overlap a live Miller writer or a
+second evaluator. Run it only against a copied frozen snapshot: vector generations are intentionally built in
+that snapshot's `.miller/vectors.db`, never in a live development checkout.
+
+The checked-in example config freezes current Julie's CodeRank identity:
+
+- `nomic-ai/CodeRankEmbed` at revision `3c4b60807d71f79b43f3c4363786d9493691f8b1`;
+- weights SHA-256 `827529bcd58aef0d9082e66eeff7e7d53a02f62bd005f841a26b3d3e2fb17ebe`;
+- 768 dimensions, CLS pooling, L2 normalization, and empty query/document instructions;
+- `vec0-int8-768-cosine-v1` storage.
+
+Run BGE with `miller-semantic-model-eval --production`. Run CodeRank with
+`miller-semantic-model-eval --config <runtime.json>`. The config names a protocol-v1 launcher plus its
+environment overrides; evidence records configured variable names, never their values. The launcher inherits the
+host environment and applies these overrides, so the benchmark runner must supply its normal isolated process
+environment too. Unknown fields, duplicate fields,
+or any pin mismatch fail before serving. `MILLER_SEMANTIC=off` returns before reading the config or touching a
+vector path.
+
+This host is evaluation-only. CodeRank is not added to `MillerSemanticContract.KnownEncoders`, ordinary
+`MILLER_SEMANTIC_MODEL` selection, the production `miller` host, or the MCP tool surface.
 
 ## Run
 

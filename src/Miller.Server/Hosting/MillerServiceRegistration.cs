@@ -27,9 +27,14 @@ namespace Miller.Server.Hosting;
 /// </summary>
 public static class MillerServiceRegistration
 {
-    public static IServiceCollection AddMillerServices(this IServiceCollection services)
+    public static IServiceCollection AddMillerServices(
+        this IServiceCollection services,
+        SemanticEvaluationAdapter? evaluationAdapter = null,
+        SemanticMode? semanticMode = null,
+        bool startIndexer = true)
     {
         ArgumentNullException.ThrowIfNull(services);
+        SemanticMode activeSemanticMode = semanticMode ?? SemanticActivation.FromEnvironment();
 
         // The bootstrap holds the built current-workspace state. Registered as a singleton AND as the FIRST hosted service so
         // its StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any
@@ -55,18 +60,22 @@ public static class MillerServiceRegistration
         services.AddSingleton<FreshnessService>();
         services.AddSingleton<IndexerService>();
         services.AddHostedService(sp => sp.GetRequiredService<FreshnessService>());
-        services.AddHostedService(sp => sp.GetRequiredService<IndexerService>());
+        if (startIndexer)
+            services.AddHostedService(sp => sp.GetRequiredService<IndexerService>());
 
         // Optional local semantic retrieval (ADR-0003). The drain loop follows the SAME lazy-bootstrap-getter
         // discipline as the M3 services above, and under MILLER_SEMANTIC=off its ExecuteAsync returns before
         // waiting, opening, or stating anything — the vectors-v1 zero-work guarantee. The wake signal is the
         // process-wide instance IndexerSidecarConverger stamps.
-        services.AddSingleton(_ => VectorSidecar.FromEnvironment());
+        services.AddSingleton(_ =>
+            evaluationAdapter?.CreateVectorSidecar(activeSemanticMode)
+            ?? new VectorSidecar(activeSemanticMode));
         services.AddSingleton(_ => VectorConvergeSignal.Shared);
         services.AddSingleton(sp => new SemanticEmbeddingSessionBroker(
             sp.GetRequiredService<VectorSidecar>().Enabled,
-            () => SemanticSearchArm.ProcessSession(
-                sp.GetRequiredService<IndexBootstrapService>().Workspace.ToolsRoot)));
+            () => evaluationAdapter?.CreateSession()
+                ?? SemanticSearchArm.ProcessSession(
+                    sp.GetRequiredService<IndexBootstrapService>().Workspace.ToolsRoot)));
         services.AddSingleton<VectorConvergeService>();
         services.AddHostedService(sp => sp.GetRequiredService<VectorConvergeService>());
 

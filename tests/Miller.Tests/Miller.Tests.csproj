@@ -33,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../eval/semantic-model-eval/Miller.SemanticModelEval.csproj" />
     <ProjectReference Include="../../src/Miller.Core/Miller.Core.csproj" />
     <ProjectReference Include="../../src/Miller.Dashboard/Miller.Dashboard.csproj" />
     <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />

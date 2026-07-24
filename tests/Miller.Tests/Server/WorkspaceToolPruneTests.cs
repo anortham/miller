@@ -113,6 +113,7 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
+            VectorSidecar.Disabled,
             (_, _, _) => throw new InvalidOperationException("open scan not expected"),
             _ => SingleWriterLock.TryAcquire(_),
             new RecordingDashboardLauncher(new DashboardLaunchResult(

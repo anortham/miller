@@ -4,6 +4,7 @@ using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Tools;
 using Miller.Tests.Indexing;
 using Miller.Tests.Support;
 using Xunit;
@@ -105,6 +106,196 @@ public sealed class VectorConvergePortScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Converge_InjectedCodeRankPin_BuildsAndQueriesAReal768DimensionGeneration()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        SemanticEncoderPin pin = SemanticEvaluationAdapter.CodeRankEncoder;
+        WorkspaceContext workspace = SeedWorkspace();
+        var sidecar = new VectorSidecar(
+            SemanticMode.On,
+            SystemVectorFileProbe.Instance,
+            encoder: pin);
+        using IVectorConvergePort port = SqliteVectorConvergePort.TryOpen(workspace, pin)!;
+        Assert.NotNull(port);
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(encoder: pin),
+            expectedEncoder: pin);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.True(symbols.Embedded == 2, symbols.LastError ?? symbols.Decision.ToString());
+        using VectorStore opened = sidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal(MillerSemanticContract.EncoderFingerprint(pin), opened.Identity.EncoderFingerprint);
+        await AssertCodeRankSearchAndContext(workspace, sidecar, session);
+    }
+
+    [Fact]
+    public async Task ConfiguredCodeRankProducer_ConvergesAndServesRealSearchAndContext()
+    {
+        string? configPath = Environment.GetEnvironmentVariable("MILLER_CODERANK_EVALUATION_CONFIG");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(configPath),
+            "Set MILLER_CODERANK_EVALUATION_CONFIG to an explicit evaluator-only CodeRank runtime config.");
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        SemanticEvaluationAdapter adapter = SemanticEvaluationAdapter.Load(configPath!);
+        WorkspaceContext workspace = SeedWorkspace();
+        VectorSidecar sidecar = adapter.CreateVectorSidecar(SemanticMode.On);
+        using IVectorConvergePort port = SqliteVectorConvergePort.TryOpen(workspace, adapter.Encoder)!;
+        Assert.NotNull(port);
+        await using SemanticEmbeddingSession session = adapter.CreateSession();
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(port, session, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.True(symbols.Embedded == 2, symbols.LastError ?? symbols.Decision.ToString());
+        await AssertCodeRankSearchAndContext(workspace, sidecar, session);
+    }
+
+    private static async Task AssertCodeRankSearchAndContext(
+        WorkspaceContext workspace,
+        VectorSidecar sidecar,
+        SemanticEmbeddingSession session)
+    {
+        var arm = new SemanticSearchArm(workspace.WorkspaceRoot, sidecar, () => session);
+        SemanticQueryResult first = await arm.QuerySymbolsAsync(
+            "run alpha",
+            3,
+            cancellationToken: TestContext.Current.CancellationToken);
+        SemanticQueryResult second = await arm.QuerySymbolsAsync(
+            "run alpha",
+            3,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(first.Served, first.UnavailableReason);
+        Assert.Equal(first.Hits, second.Hits);
+        Assert.All(first.Hits, hit => Assert.InRange(hit.Cosine, -1d, 1d));
+
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(workspace.CanonicalExtractDbPath!));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                workspace.CanonicalExtractDbPath!,
+                "coderank-eval",
+                workspace.WorkspaceRoot));
+        await using var broker = new SemanticEmbeddingSessionBroker(true, () => session);
+        var fusionArm = new SemanticSymbolFusionArm(
+            SemanticMode.On,
+            new SemanticSearchArm(workspace.WorkspaceRoot, sidecar, broker));
+        var search = new SearchTool(provider, provider, provider, provider, fusionArm, sidecar, broker);
+        string firstSearch = search.Search(
+            "execute the alpha operation",
+            mode: "symbol",
+            format: "json",
+            retrieval: "hybrid");
+        string secondSearch = search.Search(
+            "execute the alpha operation",
+            mode: "symbol",
+            format: "json",
+            retrieval: "hybrid");
+        Assert.Equal(firstSearch, secondSearch);
+        Assert.StartsWith("[", firstSearch, StringComparison.Ordinal);
+        Assert.Contains("\"Alpha\"", firstSearch, StringComparison.Ordinal);
+
+        var context = new ContextTool(provider, sidecar, broker);
+        string firstContext = context.Context("execute the alpha operation", format: "json");
+        string secondContext = context.Context("execute the alpha operation", format: "json");
+        Assert.Equal(firstContext, secondContext);
+        Assert.Contains("\"bundle\":[", firstContext, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Converge_CodeRankOverBge_BuildsAPromotedShadowAndKeepsTheOldGenerationRetained()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        using IVectorConvergePort bgePort = SqliteVectorConvergePort.TryOpen(
+            workspace,
+            MillerSemanticContract.DefaultEncoder)!;
+        Assert.NotNull(bgePort);
+        var bgeSidecar = new VectorSidecar(SemanticMode.On);
+        await using (var bgeSession = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher()))
+        {
+            await NewService(bgeSidecar)
+                .DrainAsync(bgePort, bgeSession, TestContext.Current.CancellationToken);
+        }
+        SemanticEncoderPin pin = SemanticEvaluationAdapter.CodeRankEncoder;
+        var sidecar = new VectorSidecar(
+            SemanticMode.On,
+            SystemVectorFileProbe.Instance,
+            encoder: pin);
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(encoder: pin),
+            expectedEncoder: pin);
+        IVectorShadowRebuilder rebuilder = SqliteVectorShadowRebuilder.TryOpen(workspace, pin)!;
+        Assert.NotNull(rebuilder);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(bgePort, session, rebuilder, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            VectorConvergeDecision.ShadowRebuild,
+            outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol).Decision);
+        bgePort.Dispose();
+        using VectorStore promoted = sidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal(MillerSemanticContract.EncoderFingerprint(pin), promoted.Identity.EncoderFingerprint);
+        Assert.Contains(
+            sidecar.RetainedGenerations(workspace.WorkspaceRoot),
+            path => path.Contains(
+                MillerSemanticContract.GenerationTag(
+                    MillerSemanticContract.PinnedIdentity(MillerSemanticContract.DefaultEncoder)),
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Converge_FailedCodeRankShadow_LeavesTheBgeGenerationActiveAndQueryable()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        using IVectorConvergePort bgePort = SqliteVectorConvergePort.TryOpen(
+            workspace,
+            MillerSemanticContract.DefaultEncoder)!;
+        Assert.NotNull(bgePort);
+        var bgeSidecar = new VectorSidecar(SemanticMode.On);
+        await using (var bgeSession = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher()))
+        {
+            await NewService(bgeSidecar)
+                .DrainAsync(bgePort, bgeSession, TestContext.Current.CancellationToken);
+        }
+        SemanticEncoderPin pin = SemanticEvaluationAdapter.CodeRankEncoder;
+        var sidecar = new VectorSidecar(
+            SemanticMode.On,
+            SystemVectorFileProbe.Instance,
+            encoder: pin);
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.ErrorEnvelope, encoder: pin),
+            expectedEncoder: pin);
+        IVectorShadowRebuilder rebuilder = SqliteVectorShadowRebuilder.TryOpen(workspace, pin)!;
+        Assert.NotNull(rebuilder);
+
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(bgePort, session, rebuilder, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, symbols.Decision);
+        Assert.Contains("internal_error", symbols.LastError);
+        bgePort.Dispose();
+        using VectorStore active = bgeSidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal(
+            MillerSemanticContract.EncoderFingerprint(MillerSemanticContract.DefaultEncoder),
+            active.Identity.EncoderFingerprint);
+    }
+
+    [Fact]
     public void ChunkFacts_ImportedExternalAndWebSources_AreExcludedFromTheSymbolsHashGate()
     {
         string extension = SqliteVecTestSupport.RequireExtension();
@@ -153,9 +344,12 @@ public sealed class VectorConvergePortScaleTests : IDisposable
     }
 
     private static VectorConvergeService NewService() =>
+        NewService(new VectorSidecar(SemanticMode.On));
+
+    private static VectorConvergeService NewService(VectorSidecar sidecar) =>
         new(
             IsolatedBootstrap(),
-            new VectorSidecar(SemanticMode.On),
+            sidecar,
             new VectorConvergeSignal(enabled: true),
             NullLogger.Instance,
             _ => null,

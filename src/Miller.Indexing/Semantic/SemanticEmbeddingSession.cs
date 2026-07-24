@@ -175,7 +175,14 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(health);
         ArgumentNullException.ThrowIfNull(expected);
 
-        if (health.Ready && !string.Equals(health.ModelId, expected.ModelId, StringComparison.Ordinal))
+        if (!health.Ready)
+        {
+            refusalReason = "sidecar reported ready=false" +
+                (string.IsNullOrEmpty(health.DegradedReason) ? "" : $" ({health.DegradedReason})");
+            return null;
+        }
+
+        if (!string.Equals(health.ModelId, expected.ModelId, StringComparison.Ordinal))
         {
             refusalReason =
                 $"sidecar loaded model_id '{health.ModelId}' but Miller selected '{expected.ModelId}' — " +
@@ -183,7 +190,21 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             return null;
         }
 
-        return MatchEncoder(health, out refusalReason);
+        string? disagreement = FirstDisagreement(expected, health);
+        if (disagreement is not null)
+        {
+            refusalReason = $"sidecar handshake disagrees with pin '{expected.ModelId}': {disagreement}";
+            return null;
+        }
+
+        refusalReason = null;
+        return new SemanticEncoderHandshake(
+            expected,
+            MillerSemanticContract.EncoderFingerprint(expected),
+            health.Dims,
+            health.Accelerated,
+            health.ResolvedBackend,
+            health.DegradedReason);
     }
 
     public static SemanticEncoderHandshake? MatchEncoder(SemanticSidecarHealth health, out string? refusalReason)

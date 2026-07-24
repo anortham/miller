@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>miller-semantic-model-eval</AssemblyName>
+    <RootNamespace>Miller.SemanticModelEval</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
+    <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
+    <ProjectReference Include="../../src/Miller.Server/Miller.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Miller.Tests" />
+  </ItemGroup>
+</Project>

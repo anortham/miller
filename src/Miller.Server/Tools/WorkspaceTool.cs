@@ -43,7 +43,7 @@ public sealed class WorkspaceTool
     private readonly CrossWorkspaceRefreshService _crossWorkspaceRefresh;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar = new();
-    private readonly VectorSidecar _vectors = VectorSidecar.FromEnvironment();
+    private readonly VectorSidecar _vectors;
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
@@ -63,6 +63,7 @@ public sealed class WorkspaceTool
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
+        VectorSidecar vectors,
         ILogger<WorkspaceTool> logger)
         : this(
             holder,
@@ -76,6 +77,7 @@ public sealed class WorkspaceTool
             registry,
             crossWorkspaceRefresh,
             sidecar,
+            vectors,
             (root, db, force) => runner.Scan(root, db, force),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             new DashboardCliLauncher(),
@@ -95,6 +97,7 @@ public sealed class WorkspaceTool
         WorkspaceRegistry registry,
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
+        VectorSidecar vectors,
         Func<string, string, bool, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
         IDashboardLauncher dashboardLauncher,
@@ -111,6 +114,7 @@ public sealed class WorkspaceTool
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(crossWorkspaceRefresh);
         ArgumentNullException.ThrowIfNull(sidecar);
+        ArgumentNullException.ThrowIfNull(vectors);
         ArgumentNullException.ThrowIfNull(scanForOpen);
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
         ArgumentNullException.ThrowIfNull(dashboardLauncher);
@@ -125,6 +129,7 @@ public sealed class WorkspaceTool
         _registry = registry;
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
         _sidecar = sidecar;
+        _vectors = vectors;
         _scanForOpen = scanForOpen;
         _acquireWriterLock = acquireWriterLock;
         _dashboardLauncher = dashboardLauncher;
