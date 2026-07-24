@@ -35,7 +35,7 @@ The completed audit used one broad Claude review and nine fresh tool-specific Cl
 | Agent efficiency | Miller meets or beats Julie on calls, tokens, and wall time to first correct action, with no higher wrong-action rate. |
 | Bounds | Compact context, impact, health, list, and content responses stay within their documented budgets. |
 | Reliability | JSON requests always return valid JSON or a classified MCP error; no hard failure masquerades as success text. |
-| Platform | Local semantic retrieval passes RC3 conformance and acceleration checks on macOS, Windows, and Linux. |
+| Platform | Local semantic retrieval passes RC4 conformance and acceleration checks on macOS, Windows, and Linux. |
 | Product | A sealed paired agent run supports retiring Julie without losing a Julie-only workflow. |
 | Independent review | All nine tool-specific Claude implementation reviews and the broad final Claude review are recorded and locally validated. |
 
@@ -43,7 +43,7 @@ The completed audit used one broad Claude review and nine fresh tool-specific Cl
 
 Execute the numbered phases in order: evaluator gap-close, exact symbol-ID reference evidence, typed diagnostics plus deterministic output-budget/continuation contracts, reference consumer and rename migration, shared search ranking/routing, bounded one-call context, risk-ranked impact, remaining-surface cleanup, all-language extractor coverage, semantic-sidecar completion, then visible calibration, all reviews and package validation, and finally the sealed paired decision.
 
-Search remains before context because context consumes the shared ranking signals. RC3 protocol, package, and platform preflight may begin after Phase 0, but that early lane does not complete Phase 9 or choose the default model. Final BGE-small versus CodeRankEmbed selection remains after the Phase 4 search and Phase 5 context behavior gates pass.
+Search remains before context because context consumes the shared ranking signals. RC4 protocol, package, and platform preflight may begin after Phase 0, but that early lane does not complete Phase 9 or choose the default model. Final BGE-small versus CodeRankEmbed selection remains after the Phase 4 search and Phase 5 context behavior gates pass.
 
 ## Phase 0: Freeze The Takeover Evaluator
 
@@ -352,15 +352,15 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - Unsupported or unresolved kinds are explicit capability gaps.
 - Miller Scale tests on the released binary match the source-built artifact.
 
-## Phase 9: Validate `julie-semantic-sidecar` RC3 In Miller
+## Phase 9: Validate `julie-semantic-sidecar` RC4 In Miller
 
-**Repository:** `/Users/murphy/source/julie-semantic-sidecar` for RC3 evidence; Miller remains the integration owner.
+**Repository:** `/Users/murphy/source/julie-semantic-sidecar` for RC4 evidence; Miller remains the integration owner.
 
 ### Early Protocol And Platform Preflight
 
-This lane may begin after Phase 0 while Phases 1–8 continue. It validates RC3 packaging, protocol, provider selection, and resource behavior without choosing the final model or claiming Phase 9 complete.
+This lane may begin after Phase 0 while Phases 1–8 continue. It validates RC4 packaging, protocol, provider selection, and resource behavior without choosing the final model or claiming Phase 9 complete.
 
-1. Run the committed sidecar conformance suite on the released RC3 artifacts.
+1. Run the committed sidecar conformance suite on the released RC4 artifacts.
 2. Verify acceleration/provider selection on Apple MPS, Windows DirectML-equivalent, Linux CUDA/ROCm, and documented Intel fallback/support.
 3. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
 4. Preserve automatic fallback and an explicit zero-work off state.

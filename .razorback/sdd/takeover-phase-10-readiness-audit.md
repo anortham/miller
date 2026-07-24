@@ -12,19 +12,27 @@ dispatch, release, or Julie-session interference
 
 - Phases 7–9 are complete. Miller's CodeRank evaluation lane is committed at `6f2234d8`; the frozen visible
   comparison retained BGE-small and did not open the model-selection sealed gate.
-- The 36-language extractor candidate is clean at julie-extractors `8d5b7a8f` and targets 2.17.0. The RC4
-  sidecar/platform candidate is clean at `15f6500b`. Neither has been pushed, released, or pinned into Miller.
+- `julie-extract 2.17.0` is released and pinned from its four public packages. The all-language resolution
+  gate covers 36 languages and 689 coverage cells with zero silent cells or deferred coverage debt.
+- `julie-semantic-sidecar v0.1.0-rc.4` is released and pinned from four reproducible public packages. The exact
+  Apple arm64 archive passed CPU and Metal conformance, concurrent determinism, fallback, and throughput proof;
+  Apple x64 Metal, Linux Vulkan, and Windows Vulkan remain honestly labeled package candidates until their
+  applicable physical-hardware promotion evidence exists.
 - Package smoke now asserts all nine MCP tool names. The strict hash-bound Miller product attestation, operator
   creation command, fail-closed receipt validator, conditional Miller migration guide, and conditional 1.14.0
   release notes are integrated through `d0fe8cf3`.
-- The remaining prerequisite before candidate freeze is external: approve and publish the extractor/sidecar
-  candidates, update Miller's four-platform pins from live release assets, and reconcile Julie's active session
-  before preparing its retirement/support-window text.
+- Miller's public-pin/runtime integration is committed at `450cda06`; fast, Scale, Release, Native AOT, real
+  semantic search, and packaged sidecar/sqlite-vec smoke gates pass. Three fresh Claude integration reviews
+  found and closed the release-manifest issues; the final review returned zero findings.
+- Julie's active session remains untouched. Its retirement/support-window change is a separate repository
+  integration boundary and is not required to mutate the frozen Miller candidate.
 - The spend-once final takeover lane remains unspent. All privacy prohibitions below remain in force.
 
 ## Verdict
 
-Phase 10 has an executable path, but it is not ready to start the spend-once sealed lane.
+Phase 10 is ready for candidate freeze, visible calibration, the nine tool reviews, broad review, and local
+gates. It is not ready for the spend-once sealed lane until those gates and the approval-gated package workflow
+pass on one unchanged commit.
 
 The safe order is:
 
@@ -48,26 +56,24 @@ The current Phase 10 wording cannot be executed literally:
   schemas, packages, or adapter identity invalidates the spend-once candidate identity.
 - The safe aggregate intentionally hides the adapter-to-product mapping. It does not by itself prove that the
   neutral winning role is Miller.
-- The release workflow checks eight MCP tools and omits `patterns`; it therefore does not currently prove the
-  nine-tool package surface.
+- The former eight-tool package assertion is resolved: package smoke now requires all nine MCP tools, including
+  `patterns`.
 - Miller’s build version includes the git short SHA. Adding replacement documentation after the sealed run changes
   the packaged binary identity even when runtime source is unchanged. Final conditional docs must be part of the
   frozen, reviewed candidate before the sealed run.
 
 ## Current prerequisite state
 
-- The takeover branch is 20 commits ahead of `main` and contains the Phase 0 evaluator plus committed Phases 1–6.
-- The only dirty path at audit start was the lead session’s
-  `.memories/briefs/miller-semantic-integration-program-p0-p6.md`; this audit did not modify it.
-- Phase 9 remains open under `.razorback/sdd/takeover-phase-9-gap-audit.md`: Miller still pins sidecar RC2, RC3
-  has no macOS x64 asset, exact-RC3 physical proof is incomplete, and the final BGE-small/CodeRankEmbed decision
-  has not run.
+- The takeover branch contains the complete Phase 0 evaluator and Phases 1–9, plus Phase 10 readiness,
+  attestation, migration, release-note, extractor-pin, and sidecar-pin work.
+- The final model decision retains BGE-small as production default and keeps CodeRank evaluator-only.
+- The RC4 package matrix includes macOS arm64, macOS x64, Linux x64 Vulkan, and Windows x64 Vulkan.
 - Julie main was read-only inspected at `37543a0e126ca24105bc630ca5f04410837cbee6`,
   `main...origin/main`, clean. Its README already declares Maintenance Mode and directs new workflows to Miller.
   No migration, rollback-window, or retirement guide exists. Julie’s active session remains untouched.
 
-Phase 10 must not freeze candidates until Phases 7–9 have closed or received an explicit, evidence-backed scope
-decision. A failed Phase 9 platform gate cannot be converted into a Phase 10 pass.
+Phases 7–9 are closed. Candidate freeze must still bind the visible snapshots, adapter identities, tool schemas,
+runtime, selection, and package inputs before calibration begins.
 
 ## Corrected executable sequence
 
@@ -75,12 +81,11 @@ decision. A failed Phase 9 platform gate cannot be converted into a Phase 10 pas
 
 Before any paid calibration or sealed execution:
 
-- close Phase 7 remaining-surface work and Phase 8 all-language extraction coverage;
-- resolve the Phase 9 RC3/macOS-x64/platform/model-decision gates;
-- add `patterns` to both Unix and Windows MCP tool-list assertions in `.github/workflows/release.yml`;
-- resolve the snapshot-manifest contract ambiguity and safe product-attestation contract described below;
-- prepare, but do not publish, the Miller replacement text, migration guide, release notes, and Julie retirement
-  text on isolated branches;
+- verify the completed Phase 7 remaining-surface work and Phase 8 all-language extraction coverage;
+- verify the completed Phase 9 RC4/macOS-x64/platform/model-decision gates;
+- retain `patterns` in both Unix and Windows MCP tool-list assertions in `.github/workflows/release.yml`;
+- retain the resolved snapshot-manifest contract and safe product-attestation contract;
+- prepare, but do not publish, the Miller replacement text, migration guide, and release notes;
 - if harness guidance or plugin skills changed, run `scripts/sync-agents.sh` and
   `scripts/sync-plugin-skills.sh` before freezing;
 - reconcile Julie’s active session before creating or modifying any Julie worktree.
@@ -334,7 +339,7 @@ If plugin manifests or the launcher changed, also run the documented Cursor-styl
 - with `${CURSOR_PLUGIN_ROOT}` expanded to the package root;
 - requiring `initialize` and `tools/list`.
 
-RC3 cannot satisfy this gate until its missing macOS x64 package or the supported-platform contract is resolved.
+RC4 supplies the macOS x64 package required by this gate.
 
 ### 8. Run the sealed paired decision once
 
