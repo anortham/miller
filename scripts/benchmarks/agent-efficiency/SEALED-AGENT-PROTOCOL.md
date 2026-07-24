@@ -72,15 +72,35 @@ Keep private:
   calls/results, per-task scorer rows, adapter mapping, private filenames, evidence manifest, and the void
   ledger.
 
-The operator may return only the generated `safe-aggregate.json` and a statement that preflight, automatic
-reruns, artifact verification, and zero unresolved harness voids passed. The safe file contains only the frozen
-aggregate allowlist, public capability IDs and counts, neutral role metrics, five-task-floor subgroups, exact
-identity digests, ordinal private-evidence hashes, zero unresolved voids, and the decision verdict.
+The operator may return only the generated `safe-aggregate.json` and one
+`takeover-product-verdict-v1` attestation validated against
+`product-verdict-attestation.schema.json`. The attestation's `safe_aggregate_sha256` is the SHA-256 of the exact
+safe-aggregate file bytes. The operator derives `product_verdict` by applying the preflight-frozen private role
+mapping to the sealed decision without revealing that mapping. The safe file contains only the frozen aggregate
+allowlist, public capability IDs and counts, neutral role metrics, five-task-floor subgroups, exact identity
+digests, ordinal private-evidence hashes, zero unresolved voids, and the decision verdict.
+
+After privately applying the frozen role mapping, create the attestation:
+
+```bash
+"${AGENT_EFFICIENCY_PYTHON:-.venv-agent-efficiency/bin/python}" \
+  scripts/bench-agent-efficiency.py attest-product \
+  --safe-aggregate "$AGENT_EFFICIENCY_EXPORT/safe-aggregate.json" \
+  --product-verdict pass \
+  --output "$AGENT_EFFICIENCY_EXPORT/product-verdict-attestation.json"
+```
+
+Use `--product-verdict fail` when the sealed decision applied through the private mapping fails Miller. The
+command records the operator's assertion that mapping, preflight, rerun, artifact, and void gates are satisfied;
+it validates the full decisional aggregate, computes the exact file hash, validates the strict schema, and emits
+no mapping field.
 
 Do not return the private scorer aggregate, scorer JSONL, identity/evidence manifests, private filenames, or any
-raw row. Do not ask the implementation agent to diagnose a sealed task. If the run cannot finish cleanly under
-frozen identities, preserve the private state, report only the aggregate blocker, and do not spend replacement
-sealed tasks without a new user decision.
+raw row. Do not return the neutral-role mapping artifact. Correlating the two permitted verdicts may make
+Miller's neutral role inferable after the run; that bounded post-run disclosure is accepted, but no mapping or
+row evidence may cross the boundary. Do not ask the implementation agent to diagnose a sealed task. If the run
+cannot finish cleanly under frozen identities, preserve the private state, report only the aggregate blocker,
+and do not spend replacement sealed tasks without a new user decision.
 
 ## Decision order
 

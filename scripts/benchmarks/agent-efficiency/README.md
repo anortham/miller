@@ -158,4 +158,8 @@ different Python executable. The finalizer verifies every retained private artif
 aggregate digest, rejects private fields and path-like values,
 enforces the five-task subgroup floor, preserves only closed public workflow/capability subgroup labels, strips
 dynamic repository/language labels from decision output, and writes `safe-aggregate.json`. Only that allowlisted
-file may cross the sealed-run boundary. Follow `SEALED-AGENT-PROTOCOL.md` for the one-time decision run.
+file and the schema-valid, exact-file-hash-bound `takeover-product-verdict-v1` attestation may cross the
+sealed-run boundary. The operator derives the product verdict through the frozen private mapping without
+returning the mapping artifact. The operator uses `attest-product` to create the attestation; the implementation
+session uses `validate-safe-return` to revalidate the canonical full decision, exact file hash, schema, and both
+pass verdicts. Follow `SEALED-AGENT-PROTOCOL.md` for the one-time decision run.

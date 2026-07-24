@@ -1232,6 +1232,7 @@ class AgentContractTests(unittest.TestCase):
             ("snapshot-manifest.schema.json", "dev-snapshots.json"),
             ("answer-schema.json", None),
             ("run-result.schema.json", None),
+            ("product-verdict-attestation.schema.json", None),
         ]
         for schema_name, manifest_name in pairs:
             with self.subTest(schema=schema_name):
@@ -1241,6 +1242,50 @@ class AgentContractTests(unittest.TestCase):
                 if manifest_name:
                     manifest = json.loads((BENCHMARK_ROOT / manifest_name).read_text(encoding="utf-8"))
                     Draft202012Validator(schema).validate(manifest)
+
+    def test_product_verdict_attestation_schema_is_strict_and_privacy_safe(self):
+        schema = json.loads(
+            (BENCHMARK_ROOT / "product-verdict-attestation.schema.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            "https://miller.local/schemas/agent-efficiency/product-verdict-attestation-v1.json",
+            schema["$id"],
+        )
+        validator = Draft202012Validator(schema)
+        attestation = {
+            "attestation_contract_id": "takeover-product-verdict-v1",
+            "safe_aggregate_sha256": "a" * 64,
+            "product_under_test": "Miller",
+            "product_verdict": "pass",
+            "mapping_frozen_before_preflight": True,
+            "mapping_changed": False,
+            "preflight_passed": True,
+            "automatic_reruns_complete": True,
+            "artifact_verification_passed": True,
+            "unresolved_void_count": 0,
+        }
+
+        self.assertEqual([], list(validator.iter_errors(attestation)))
+        missing = dict(attestation)
+        del missing["preflight_passed"]
+        self.assertNotEqual([], list(validator.iter_errors(missing)))
+
+        for field, value in (
+            ("safe_aggregate_sha256", "A" * 64),
+            ("product_under_test", "candidate"),
+            ("product_verdict", "not_decisional"),
+            ("mapping_frozen_before_preflight", False),
+            ("mapping_changed", True),
+            ("unresolved_void_count", 1),
+        ):
+            with self.subTest(field=field):
+                invalid = {**attestation, field: value}
+                self.assertNotEqual([], list(validator.iter_errors(invalid)))
+
+        self.assertNotEqual(
+            [],
+            list(validator.iter_errors({**attestation, "neutral_role_mapping": "candidate"})),
+        )
 
     def test_run_result_schema_keeps_typed_diagnostics_and_process_status_consistent(self) -> None:
         schema = json.loads((BENCHMARK_ROOT / "run-result.schema.json").read_text(encoding="utf-8"))

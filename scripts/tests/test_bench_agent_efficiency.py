@@ -1271,6 +1271,101 @@ for line in sys.stdin:
         )
         self.assertEqual(safe_text, cli_safe_text)
 
+        decision = json.loads(safe_text)
+        decision.update(
+            {
+                "corpus_role": "decision",
+                "decision_scope": "full",
+                "selected_capability_ids": sorted(module.TAKEOVER_CAPABILITIES),
+                "selected_task_count": 30,
+                "decision_verdict": "pass",
+            }
+        )
+        decision["completion"] = {
+            "both_correct": 30,
+            "baseline_only": 0,
+            "candidate_only": 0,
+            "neither_correct": 0,
+        }
+        for role in ("baseline", "candidate"):
+            decision["outcome_counts"][role]["success"] = 30
+        decision["relevance"]["task_count"] = 30
+        decision["correctness"]["baseline_correct_count"] = 30
+        decision["correctness"]["candidate_correct_count"] = 30
+        decision["efficiency"]["both_correct_task_count"] = 30
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            safe_path = root / "safe-aggregate.json"
+            safe_path.write_text(module._pretty_json(decision), encoding="utf-8")
+            attestation_path = root / "product-verdict-attestation.json"
+            self.assertEqual(
+                0,
+                module.main(
+                    [
+                        "attest-product",
+                        "--safe-aggregate",
+                        str(safe_path),
+                        "--product-verdict",
+                        "pass",
+                        "--output",
+                        str(attestation_path),
+                    ]
+                ),
+            )
+            attestation = module.validate_safe_return(safe_path, attestation_path)
+
+            self.assertEqual("pass", attestation["product_verdict"])
+            self.assertEqual(
+                hashlib.sha256(safe_path.read_bytes()).hexdigest(),
+                attestation["safe_aggregate_sha256"],
+            )
+            self.assertEqual(
+                0,
+                module.main(
+                    [
+                        "validate-safe-return",
+                        "--safe-aggregate",
+                        str(safe_path),
+                        "--attestation",
+                        str(attestation_path),
+                    ]
+                ),
+            )
+
+            bad_attestation = dict(attestation)
+            bad_attestation["safe_aggregate_sha256"] = "0" * 64
+            attestation_path.write_text(module._pretty_json(bad_attestation), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "safe aggregate hash"):
+                module.validate_safe_return(safe_path, attestation_path)
+
+            failed_attestation = dict(attestation)
+            failed_attestation["product_verdict"] = "fail"
+            attestation_path.write_text(
+                module._pretty_json(failed_attestation),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Miller product verdict"):
+                module.validate_safe_return(safe_path, attestation_path)
+
+            subset_path = root / "subset.json"
+            subset_path.write_text(safe_text, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "full sealed decision"):
+                module.create_product_verdict_attestation(
+                    subset_path,
+                    attestation_path,
+                    product_verdict="pass",
+                )
+
+            decision["private_mapping"] = "candidate"
+            safe_path.write_text(module._pretty_json(decision), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "safe aggregate"):
+                module.create_product_verdict_attestation(
+                    safe_path,
+                    attestation_path,
+                    product_verdict="pass",
+                )
+
     def test_preflight_uses_real_fixture_processes_and_fails_closed_on_every_frozen_identity(self):
         module = _load_module()
         with tempfile.TemporaryDirectory() as directory:
@@ -1400,6 +1495,16 @@ for line in sys.stdin:
             self.assertEqual(
                 module.prompt_contract_sha256(),
                 identity["prompt_contract_sha256"],
+            )
+            self.assertEqual(
+                set(identity["schemas"]),
+                {
+                    "answer-schema.json",
+                    "product-verdict-attestation.schema.json",
+                    "run-result.schema.json",
+                    "snapshot-manifest.schema.json",
+                    "task-manifest.schema.json",
+                },
             )
             probe = module._probe_mcp(
                 (str(product), "serve", "miller"),

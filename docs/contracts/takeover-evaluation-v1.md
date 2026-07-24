@@ -412,6 +412,27 @@ It must not contain task IDs, prompts, acceptance labels, repository roots, file
 
 Safe-export validation runs before the artifact crosses the boundary. Hashes prove private evidence retention without revealing contents. Aggregate values must not be rounded or suppressed in a way that can turn a failed gate into a pass.
 
+### Product verdict attestation
+
+The operator also returns one `takeover-product-verdict-v1` attestation validated against
+`scripts/benchmarks/agent-efficiency/product-verdict-attestation.schema.json`. Its
+`safe_aggregate_sha256` is the SHA-256 of the exact returned `safe-aggregate.json` bytes. The operator derives
+`product_verdict` by applying the preflight-frozen private role mapping to the sealed decision; the
+implementation session must not receive the mapping artifact.
+
+The attestation fixes `product_under_test` to `Miller`, requires the mapping to have been frozen before
+preflight and unchanged afterward, and requires successful preflight, automatic reruns, artifact verification,
+and zero unresolved harness voids. It does not directly disclose the mapping, task data, metrics, paths,
+filenames, adapter commands, or evidence. Correlating the neutral aggregate verdict with the Miller verdict may
+make Miller's neutral role inferable after the run; this bounded post-run disclosure is accepted so the product
+decision can be acted on, while the mapping artifact and all row-level evidence remain private.
+
+The operator creates the attestation with `attest-product` after applying the frozen private mapping. The
+implementation session runs `validate-safe-return`, which revalidates the canonical full 30-task/13-capability
+decision aggregate, verifies the exact-file hash and strict attestation schema, and fails closed unless both the
+neutral decision and Miller verdict pass. A subset, non-decisional, incomplete, invalid, hash-mismatched, or
+failed return cannot authorize the takeover.
+
 ## Phase 0 Requirement Map
 
 | Phase 0 requirement | Frozen v1 owner |

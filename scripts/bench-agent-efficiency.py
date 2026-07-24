@@ -80,6 +80,36 @@ TAKEOVER_CAPABILITIES = frozenset(
         "workspace_recovery",
     }
 )
+SAFE_AGGREGATE_FIELDS = frozenset(
+    {
+        "action_verdict",
+        "baseline",
+        "by_capability",
+        "by_language",
+        "by_repo",
+        "by_workflow",
+        "candidate",
+        "completion",
+        "contract_id",
+        "correctness",
+        "decision_scope",
+        "decision_verdict",
+        "efficiency",
+        "failure_counts",
+        "outcome_counts",
+        "parent_manifest_sha256",
+        "private_evidence_sha256",
+        "relevance",
+        "runtime_identity_sha256",
+        "schema_version",
+        "selection_sha256",
+        "selected_capability_ids",
+        "selected_task_count",
+        "snapshot_manifest_sha256",
+        "corpus_role",
+        "unresolved_void_count",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -993,6 +1023,130 @@ def finalize_safe_export(
     output.write_text(_pretty_json(safe), encoding="utf-8")
 
 
+def create_product_verdict_attestation(
+    safe_aggregate_path: Path,
+    output_path: Path,
+    *,
+    product_verdict: str,
+) -> None:
+    safe_bytes, _ = _validate_decision_safe_aggregate(safe_aggregate_path)
+    attestation = {
+        "attestation_contract_id": "takeover-product-verdict-v1",
+        "safe_aggregate_sha256": hashlib.sha256(safe_bytes).hexdigest(),
+        "product_under_test": "Miller",
+        "product_verdict": product_verdict,
+        "mapping_frozen_before_preflight": True,
+        "mapping_changed": False,
+        "preflight_passed": True,
+        "automatic_reruns_complete": True,
+        "artifact_verification_passed": True,
+        "unresolved_void_count": 0,
+    }
+    _validate_product_verdict_attestation(attestation)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_pretty_json(attestation), encoding="utf-8")
+
+
+def validate_safe_return(
+    safe_aggregate_path: Path,
+    attestation_path: Path,
+) -> dict[str, Any]:
+    safe_bytes, safe = _validate_decision_safe_aggregate(safe_aggregate_path)
+    attestation = _load_json_no_duplicates(Path(attestation_path).read_text(encoding="utf-8"))
+    _validate_product_verdict_attestation(attestation)
+    if attestation["safe_aggregate_sha256"] != hashlib.sha256(safe_bytes).hexdigest():
+        raise ValueError("product attestation safe aggregate hash mismatch")
+    if safe["decision_verdict"] != "pass":
+        raise ValueError("safe aggregate decision verdict is fail")
+    if attestation["product_verdict"] != "pass":
+        raise ValueError("Miller product verdict is fail")
+    return dict(attestation)
+
+
+def _validate_decision_safe_aggregate(path: Path) -> tuple[bytes, dict[str, Any]]:
+    safe_bytes = Path(path).read_bytes()
+    safe = _load_json_no_duplicates(safe_bytes.decode("utf-8"))
+    if not isinstance(safe, dict) or set(safe) != SAFE_AGGREGATE_FIELDS:
+        raise ValueError("safe aggregate fields are invalid")
+    selected_capabilities = safe["selected_capability_ids"]
+    if (
+        safe["contract_id"] != TAKEOVER_CONTRACT_ID
+        or safe["corpus_role"] != "decision"
+        or safe["decision_scope"] != "full"
+        or safe["selected_task_count"] != 30
+        or not isinstance(selected_capabilities, list)
+        or any(not isinstance(value, str) for value in selected_capabilities)
+        or set(selected_capabilities) != TAKEOVER_CAPABILITIES
+        or safe["unresolved_void_count"] != 0
+    ):
+        raise ValueError("safe aggregate is not a complete full sealed decision")
+    identity = {
+        key: safe[key]
+        for key in (
+            "contract_id",
+            "schema_version",
+            "corpus_role",
+            "decision_scope",
+            "parent_manifest_sha256",
+            "snapshot_manifest_sha256",
+            "runtime_identity_sha256",
+            "selection_sha256",
+            "selected_capability_ids",
+            "selected_task_count",
+        )
+    }
+    aggregate = {
+        key: safe[key]
+        for key in (
+            "contract_id",
+            "schema_version",
+            "decision_scope",
+            "decision_verdict",
+            "action_verdict",
+            "completion",
+            "outcome_counts",
+            "relevance",
+            "correctness",
+            "efficiency",
+            "baseline",
+            "candidate",
+            "failure_counts",
+            "by_workflow",
+            "by_capability",
+            "by_repo",
+            "by_language",
+        )
+    }
+    aggregate["task_count"] = safe["selected_task_count"]
+    projected = project_safe_aggregate(
+        aggregate,
+        identity,
+        unresolved_void_count=safe["unresolved_void_count"],
+        private_evidence_sha256=safe["private_evidence_sha256"],
+    )
+    if projected != safe:
+        raise ValueError("safe aggregate failed canonical validation")
+    return safe_bytes, safe
+
+
+def _validate_product_verdict_attestation(value: Any) -> None:
+    from jsonschema import Draft202012Validator
+
+    schema = _load_json_no_duplicates(
+        (BENCHMARK_ROOT / "product-verdict-attestation.schema.json").read_text(encoding="utf-8")
+    )
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(value),
+        key=lambda error: tuple(str(part) for part in error.absolute_path),
+    )
+    if not errors:
+        return
+    error = errors[0]
+    location = ".".join(str(part) for part in error.absolute_path) or "$"
+    raise ValueError(f"product verdict attestation {location}: {error.message}")
+
+
 def _other_arm(arm: str) -> str:
     return "candidate" if arm == "baseline" else "baseline"
 
@@ -1077,6 +1231,42 @@ def _json_sha256(value: Any) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["attest-product"]:
+        parser = argparse.ArgumentParser(
+            description="Create the privacy-safe Miller product verdict attestation"
+        )
+        parser.add_argument("command", choices=("attest-product",))
+        parser.add_argument("--safe-aggregate", required=True)
+        parser.add_argument("--output", required=True)
+        parser.add_argument("--product-verdict", choices=("pass", "fail"), required=True)
+        args = parser.parse_args(arguments)
+        try:
+            create_product_verdict_attestation(
+                Path(args.safe_aggregate).expanduser().resolve(),
+                Path(args.output).expanduser().resolve(),
+                product_verdict=args.product_verdict,
+            )
+            return 0
+        except (OSError, UnicodeError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    if arguments[:1] == ["validate-safe-return"]:
+        parser = argparse.ArgumentParser(
+            description="Validate the sealed safe aggregate and Miller product verdict attestation"
+        )
+        parser.add_argument("command", choices=("validate-safe-return",))
+        parser.add_argument("--safe-aggregate", required=True)
+        parser.add_argument("--attestation", required=True)
+        args = parser.parse_args(arguments)
+        try:
+            validate_safe_return(
+                Path(args.safe_aggregate).expanduser().resolve(),
+                Path(args.attestation).expanduser().resolve(),
+            )
+            return 0
+        except (OSError, UnicodeError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     if arguments[:1] == ["finalize-safe"]:
         parser = argparse.ArgumentParser(
             description="Project a private agent-efficiency aggregate into the safe sealed output"
@@ -1354,7 +1544,13 @@ def preflight_run(
 
     schema_hashes = {
         name: _sha256(BENCHMARK_ROOT / name)
-        for name in ("answer-schema.json", "run-result.schema.json", "task-manifest.schema.json", "snapshot-manifest.schema.json")
+        for name in (
+            "answer-schema.json",
+            "product-verdict-attestation.schema.json",
+            "run-result.schema.json",
+            "snapshot-manifest.schema.json",
+            "task-manifest.schema.json",
+        )
     }
     safe = {
         "contract_id": (

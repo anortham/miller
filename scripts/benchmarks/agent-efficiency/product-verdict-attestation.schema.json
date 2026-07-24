@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://miller.local/schemas/agent-efficiency/product-verdict-attestation-v1.json",
+  "title": "Takeover product verdict attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "attestation_contract_id",
+    "safe_aggregate_sha256",
+    "product_under_test",
+    "product_verdict",
+    "mapping_frozen_before_preflight",
+    "mapping_changed",
+    "preflight_passed",
+    "automatic_reruns_complete",
+    "artifact_verification_passed",
+    "unresolved_void_count"
+  ],
+  "properties": {
+    "attestation_contract_id": {
+      "const": "takeover-product-verdict-v1"
+    },
+    "safe_aggregate_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "product_under_test": {
+      "const": "Miller"
+    },
+    "product_verdict": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "mapping_frozen_before_preflight": {
+      "const": true
+    },
+    "mapping_changed": {
+      "const": false
+    },
+    "preflight_passed": {
+      "const": true
+    },
+    "automatic_reruns_complete": {
+      "const": true
+    },
+    "artifact_verification_passed": {
+      "const": true
+    },
+    "unresolved_void_count": {
+      "const": 0
+    }
+  }
+}
