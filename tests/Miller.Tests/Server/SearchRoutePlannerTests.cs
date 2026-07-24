@@ -45,4 +45,31 @@ public sealed class SearchRoutePlannerTests
         Assert.Equal(SearchToolMode.Content, route.Mode);
         Assert.Null(route.ContentKinds);
     }
+
+    [Fact]
+    public void Plan_AutoPathAndSymbolQueryCreatesMixedRoute()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "auto",
+            regions: null,
+            query: "src/Miller.Server SearchTool");
+
+        Assert.Equal(SearchRouteKind.Symbols, route.Kind);
+        Assert.True(route.Mixed);
+        Assert.Equal("SearchTool", route.SymbolQuery);
+        Assert.Equal("src/Miller.Server", route.FileQuery);
+    }
+
+    [Fact]
+    public void Plan_ExplicitSymbolModeKeepsPathAndSymbolQueryOnSymbolRoute()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "symbol",
+            regions: null,
+            query: "src/Miller.Server SearchTool");
+
+        Assert.False(route.Mixed);
+        Assert.Null(route.SymbolQuery);
+        Assert.Null(route.FileQuery);
+    }
 }

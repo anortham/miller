@@ -1,5 +1,13 @@
 namespace Miller.Core.Search;
 
+/// <summary>The retrieval shape that contributed a symbol candidate.</summary>
+public enum SymbolCandidateOrigin
+{
+    Symbol,
+    File,
+    Container,
+}
+
 /// <summary>
 /// One ranked symbol hit on the symbol search route, carrying exactly the fields symbol rendering reads.
 /// Candidate generation produces an ordered list of these and rendering is a pure function of that list, so a
@@ -15,4 +23,7 @@ public sealed record SymbolCandidate(
     string Kind,
     string FilePath,
     int StartLine,
-    double Score);
+    double Score,
+    string? Language = null,
+    SymbolCandidateOrigin Origin = SymbolCandidateOrigin.Symbol,
+    string? ParentId = null);

@@ -1936,7 +1936,7 @@ public sealed class CliDispatchTests : IDisposable
         var (code, _, errText) = Run(new[] { "search" }, Context(Path.Combine(_dir, "symbols.db")));
 
         Assert.Equal(2, code);
-        Assert.Contains("--arm lexical|semantic|hybrid", errText);
+        Assert.Contains("--arm auto|lexical|semantic|hybrid", errText);
     }
 
     [Fact]

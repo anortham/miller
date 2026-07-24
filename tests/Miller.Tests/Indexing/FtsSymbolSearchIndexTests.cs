@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
 using Miller.Indexing;
+using Miller.Server.Tools;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -314,6 +315,41 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
             for (int i = 0; i < expected.Count; i++)
                 Assert.Equal(expected[i].Score, actual[i].Score, precision: 9);
         }
+    }
+
+    [Fact]
+    public void SearchTool_RerankAndRelaxation_RankingParity_WithInMemoryProjection()
+    {
+        var syms = Corpus(
+            ("s1", "UserService", "class UserService", "class", "csharp", "svc/UserService.cs"),
+            ("s2", "ServiceLocator", "class ServiceLocator", "class", "csharp", "svc/ServiceLocator.cs"),
+            ("s3", "AuthService", "class AuthService : Service", "class", "csharp", "svc/AuthService.cs"),
+            ("s4", "User", "class User", "class", "csharp", "models/User.cs"));
+        SearchIndexWriter.Write(_dbPath, syms, 1);
+
+        var fts = FtsSymbolSearchIndex.Open(_dbPath);
+        var memory = SymbolSearchProjection.Build(syms);
+
+        SymbolCandidateSet expected = SearchTool.CollectSymbolCandidates(
+            memory,
+            "user service",
+            SearchToolMode.Symbol,
+            limit: 4,
+            excludeTests: null);
+        SymbolCandidateSet actual = SearchTool.CollectSymbolCandidates(
+            fts,
+            "user service",
+            SearchToolMode.Symbol,
+            limit: 4,
+            excludeTests: null);
+
+        Assert.Equal(expected.Relaxed, actual.Relaxed);
+        Assert.Equal(
+            expected.Candidates.Select(static candidate => candidate.SymbolId),
+            actual.Candidates.Select(static candidate => candidate.SymbolId));
+        Assert.Equal(
+            expected.Candidates.Select(static candidate => candidate.Score),
+            actual.Candidates.Select(static candidate => candidate.Score));
     }
 
     [Fact]

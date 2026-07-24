@@ -376,7 +376,7 @@ public static class CliDispatch
             ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
         if (!TryParseSearchArm(o.Value("arm"), out CliSearchArm requestedArm))
         {
-            err.WriteLine("--arm must be lexical, semantic, or hybrid.");
+            err.WriteLine("--arm must be auto, lexical, semantic, or hybrid.");
             return Usage(err, SearchUsage);
         }
 
@@ -386,7 +386,7 @@ public static class CliDispatch
         SearchRoute route;
         try
         {
-            route = SearchRoutePlanner.Plan(requestedMode, o.Value("regions"));
+            route = SearchRoutePlanner.Plan(requestedMode, o.Value("regions"), o.Query);
         }
         catch (InvalidOperationException ex)
         {
@@ -538,7 +538,7 @@ public static class CliDispatch
     private const string SearchUsage =
         "miller search <query> [--workspace-id SELECTOR] [--workspace DIR] " +
         "[--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] " +
-        "[--file-pattern GLOB] [--language LANG] [--arm lexical|semantic|hybrid] [--limit N] [--json] " +
+        "[--file-pattern GLOB] [--language LANG] [--arm auto|lexical|semantic|hybrid] [--limit N] [--json] " +
         "[--include-tests|--exclude-tests]";
 
     /// <summary>
@@ -876,6 +876,9 @@ public static class CliDispatch
 
         switch (raw.Trim().ToLowerInvariant())
         {
+            case "auto":
+                arm = CliSearchArm.Policy;
+                return true;
             case "lexical":
                 arm = CliSearchArm.Lexical;
                 return true;
@@ -3086,8 +3089,8 @@ public static class CliDispatch
                              stdout and the target path to stderr, so `miller rules --harness cursor > FILE` works.
                              [--harness cursor|windsurf|cline|kiro|copilot|agents]
           search <query>     Find code by name, identifier, or phrase.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--arm lexical|semantic|hybrid] [--limit N] [--json] [--include-tests|--exclude-tests]
-                             --arm forces one retrieval arm for evaluation (CLI-only, symbol route only); absent = normal policy routing.
+                             [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--arm auto|lexical|semantic|hybrid] [--limit N] [--json] [--include-tests|--exclude-tests]
+                             --arm selects the retrieval policy for this call (symbol route only); absent or auto = normal policy routing.
                              semantic|hybrid need MILLER_SEMANTIC=on and a serving vector artifact — they fail loudly rather than answering lexically.
           todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
                              [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]

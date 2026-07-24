@@ -148,9 +148,10 @@ public sealed class SearchDeterminismTests
     }
 
     [Fact]
-    public void ParseSearchArm_AcceptsTheThreeArmsAndTheAbsentDefault()
+    public void ParseSearchArm_AcceptsAutoTheThreeArmsAndTheAbsentDefault()
     {
         Assert.Equal(CliSearchArm.Policy, Parse(null));
+        Assert.Equal(CliSearchArm.Policy, Parse("auto"));
         Assert.Equal(CliSearchArm.Lexical, Parse("lexical"));
         Assert.Equal(CliSearchArm.Lexical, Parse("LEXICAL"));
         Assert.Equal(CliSearchArm.Semantic, Parse(" semantic "));

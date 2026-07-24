@@ -108,6 +108,14 @@ internal enum SearchServingPolicy
     Shadow,
 }
 
+internal enum SearchRetrievalMode
+{
+    Auto,
+    Lexical,
+    Hybrid,
+    Semantic,
+}
+
 internal sealed record CanaryVectorProbe(string State, SemanticGenerationIdentity? Identity)
 {
     public static CanaryVectorProbe From(VectorSidecarFacts facts) => new(facts.State, facts.Identity);
@@ -125,7 +133,9 @@ internal sealed record SymbolCandidateSet(
     IReadOnlyList<IndexedSymbol> EmptySuggestions,
     bool FileMode,
     ToolSearchFilters Filters,
-    SymbolVisibilityPolicy? Visibility = null);
+    SymbolVisibilityPolicy? Visibility = null,
+    bool Relaxed = false,
+    bool Mixed = false);
 
 /// <summary>
 /// The visibility predicate candidate generation applied, carried forward so another retrieval arm can admit
@@ -293,16 +303,23 @@ public sealed class SearchTool
         [Description("Glob filter for workspace-relative file paths, e.g. src/ui/**. Optional.")]
         string? file_pattern = null,
         [Description("Comma-separated language filter, e.g. csharp,typescript. Optional.")]
-        string? language = null)
+        string? language = null,
+        [Description("Symbol retrieval policy: auto|lexical|hybrid|semantic. lexical performs zero vector work. Default auto.")]
+        string retrieval = "auto")
     {
         var scope = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            SearchRoute route = SearchRoutePlanner.Plan(mode, regions);
+            SearchRetrievalMode retrievalMode = ParseRetrieval(retrieval);
+            SearchRoute route = SearchRoutePlanner.Plan(mode, regions, query);
+            EnsureRetrievalSupportsRoute(retrievalMode, route);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             if (scope is not null)
+            {
                 ApplyTelemetryShape(scope, route, json, limit, regions, file_pattern, language, exclude_tests);
+                scope.SetMetadata("retrieval", RetrievalName(retrievalMode));
+            }
 
             string output;
             int count;
@@ -360,7 +377,9 @@ public sealed class SearchTool
                 string? contentBanner = ReadToolWorkspaceRouting.CompactBanner(content, workspace_id, json);
 
                 CanaryMode canaryMode = CanaryActivation.FromEnvironment();
-                SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
+                SemanticMode semanticMode = retrievalMode == SearchRetrievalMode.Lexical
+                    ? SemanticMode.Off
+                    : _semanticSidecar?.Mode ?? SemanticMode.Off;
                 ContentCanaryOutcome canary = RunContentWithCanaryProbe(
                     content.Index,
                     query,
@@ -374,7 +393,8 @@ public sealed class SearchTool
                         content.Index, query, content.WorkspaceRoot, exclude_tests is true, file_pattern, language),
                     canaryMode,
                     ModeName(route.Mode),
-                    semanticDisabled: semanticMode is SemanticMode.Off,
+                    semanticDisabled: retrievalMode == SearchRetrievalMode.Lexical ||
+                                      semanticMode is SemanticMode.Off,
                     content.WorkspaceId ?? string.Empty,
                     content.WorkspaceRoot,
                     CanaryUtcDate(scope),
@@ -448,29 +468,48 @@ public sealed class SearchTool
                     FusionArm: _fusionArm,
                     WorkspaceRoot: context.WorkspaceRoot);
 
-                CanaryMode canaryMode = CanaryActivation.FromEnvironment();
-                SemanticMode semanticMode = _semanticSidecar?.Mode ?? SemanticMode.Off;
                 string canaryOp = ModeName(route.Mode);
-                SymbolCanaryOutcome canary = RunSymbolsWithCanaryProbe(
-                    context.Index,
-                    route,
-                    request,
-                    canaryMode,
-                    canaryOp,
-                    semanticDisabled: semanticMode is SemanticMode.Off,
-                    context.WorkspaceId ?? string.Empty,
-                    CanaryUtcDate(scope),
-                    () => CanaryVectorProbe.From(_semanticSidecar!.Inspect(context.WorkspaceRoot)),
-                    foreignWorkspace: !context.IsCurrent,
-                    BuildTreatmentArmFactory(context.WorkspaceRoot),
-                    BuildShadowRunner(context.WorkspaceRoot),
-                    semanticMode);
+                CanaryMode canaryMode = retrievalMode == SearchRetrievalMode.Auto
+                    ? CanaryActivation.FromEnvironment()
+                    : CanaryMode.Off;
+                SymbolCanaryOutcome canary = retrievalMode switch
+                {
+                    SearchRetrievalMode.Lexical => new SymbolCanaryOutcome(
+                        SearchRouteExecutor.RunSymbols(
+                            context.Index,
+                            route,
+                            request with { FusionArm = null }),
+                        Facts: null),
+                    SearchRetrievalMode.Hybrid => new SymbolCanaryOutcome(
+                        RunRequiredHybrid(context, route, request),
+                        Facts: null,
+                        ServingPolicy: SearchServingPolicy.Treatment),
+                    SearchRetrievalMode.Semantic => new SymbolCanaryOutcome(
+                        RunRequiredSemantic(context, route, request),
+                        Facts: null,
+                        ServingPolicy: SearchServingPolicy.Treatment),
+                    _ => RunSymbolsWithCanaryProbe(
+                        context.Index,
+                        route,
+                        request,
+                        canaryMode,
+                        canaryOp,
+                        semanticDisabled: (_semanticSidecar?.Mode ?? SemanticMode.Off) is SemanticMode.Off,
+                        context.WorkspaceId ?? string.Empty,
+                        CanaryUtcDate(scope),
+                        () => CanaryVectorProbe.From(_semanticSidecar!.Inspect(context.WorkspaceRoot)),
+                        foreignWorkspace: !context.IsCurrent,
+                        BuildTreatmentArmFactory(context.WorkspaceRoot),
+                        BuildShadowRunner(context.WorkspaceRoot),
+                        _semanticSidecar?.Mode ?? SemanticMode.Off),
+                };
                 output = canary.Result.Output;
                 count = canary.Result.Count;
 
                 string? canaryRescueKind = canaryOp == "auto" ? "none" : null;
                 IReadOnlyList<string> rescueServedPaths = [];
-                if (ShouldRunAutoTextRescue(route, json, query, count, context.Index))
+                if (retrievalMode is SearchRetrievalMode.Auto or SearchRetrievalMode.Lexical &&
+                    ShouldRunAutoTextRescue(route, json, query, count, context.Index))
                 {
                     AutoTextRescueResult? rescue = TryRunAutoTextRescue(
                         query,
@@ -507,6 +546,8 @@ public sealed class SearchTool
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
                     scope.SetMetadata("search_backend", SearchBackendName(context.Index));
+                    scope.SetMetadata("relaxed", canary.Result.Relaxed);
+                    scope.SetMetadata("mixed", canary.Result.Mixed);
                     if (canary.ShadowFacts is { } shadowFacts)
                     {
                         CanaryTelemetry.StampShadow(scope, canaryMode, shadowFacts);
@@ -606,6 +647,189 @@ public sealed class SearchTool
         _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
     };
 
+    internal static SearchRetrievalMode ParseRetrieval(string retrieval) =>
+        retrieval?.ToLowerInvariant() switch
+        {
+            null or "" or "auto" => SearchRetrievalMode.Auto,
+            "lexical" => SearchRetrievalMode.Lexical,
+            "hybrid" => SearchRetrievalMode.Hybrid,
+            "semantic" => SearchRetrievalMode.Semantic,
+            _ => throw new ArgumentException(
+                $"retrieval must be auto, lexical, hybrid, or semantic; got '{retrieval}'.",
+                nameof(retrieval)),
+        };
+
+    private static string RetrievalName(SearchRetrievalMode retrieval) =>
+        retrieval.ToString().ToLowerInvariant();
+
+    private static void EnsureRetrievalSupportsRoute(
+        SearchRetrievalMode retrieval,
+        SearchRoute route)
+    {
+        if (retrieval is SearchRetrievalMode.Auto or SearchRetrievalMode.Lexical)
+            return;
+
+        if (route.Kind != SearchRouteKind.Symbols)
+        {
+            throw new ToolDiagnosticException(
+                ToolDiagnostic.Unsupported(
+                    "retrieval_route_unsupported",
+                    $"retrieval={RetrievalName(retrieval)} is supported only for symbol searches."));
+        }
+
+        if (route.Mode == SearchToolMode.File || route.Mixed)
+        {
+            throw new ToolDiagnosticException(
+                ToolDiagnostic.Unsupported(
+                    "retrieval_route_unsupported",
+                    $"retrieval={RetrievalName(retrieval)} cannot rank file results. Use retrieval=lexical."));
+        }
+    }
+
+    private SearchRouteExecutionResult RunRequiredHybrid(
+        WorkspaceSymbolSearchContext context,
+        SearchRoute route,
+        SearchRouteExecutionRequest request)
+    {
+        ISymbolFusionArm arm;
+        Miller.Server.Cli.ForcedHybridFusionArm? requiredArm = null;
+        if (_semanticSidecar is not null && _embeddingBroker is not null)
+        {
+            if (_semanticSidecar.Mode is SemanticMode.Off)
+                throw SemanticUnavailable("hybrid", "MILLER_SEMANTIC=off disables all vector work.");
+
+            requiredArm = new Miller.Server.Cli.ForcedHybridFusionArm(
+                () => new SemanticSearchArm(
+                    context.WorkspaceRoot,
+                    _semanticSidecar,
+                    _embeddingBroker));
+            arm = requiredArm;
+        }
+        else
+        {
+            arm = _fusionArm
+                ?? throw SemanticUnavailable(
+                    "hybrid",
+                    "The semantic retrieval services are not configured.");
+        }
+
+        var observedArm = new RequiredFusionArm(arm);
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunSymbols(
+            context.Index,
+            route,
+            request with { FusionArm = observedArm });
+        if (requiredArm is { Queried: false })
+            throw SemanticUnavailable("hybrid", "The hybrid arm could not accept this query.");
+        if (requiredArm?.UnservedReason is { } reason)
+            throw SemanticUnavailable("hybrid", reason);
+        if (!observedArm.Queried)
+            throw SemanticUnavailable("hybrid", "The hybrid arm could not accept this query.");
+        if (!observedArm.Served)
+            throw SemanticUnavailable("hybrid", "The hybrid arm did not serve results.");
+        return result;
+    }
+
+    private sealed class RequiredFusionArm(ISymbolFusionArm inner) : ISymbolFusionArm
+    {
+        public bool Queried { get; private set; }
+
+        public bool Served { get; private set; }
+
+        public IReadOnlyList<FusedCandidate>? Fuse(
+            ISymbolLookupIndex index,
+            SymbolFusionRequest request)
+        {
+            Queried = true;
+            IReadOnlyList<FusedCandidate>? result = inner.Fuse(index, request);
+            Served = result is { Count: > 0 };
+            return result;
+        }
+    }
+
+    private SearchRouteExecutionResult RunRequiredSemantic(
+        WorkspaceSymbolSearchContext context,
+        SearchRoute route,
+        SearchRouteExecutionRequest request)
+    {
+        ISemanticTextArm arm;
+        if (_semanticSidecar is not null && _embeddingBroker is not null)
+        {
+            if (_semanticSidecar.Mode is SemanticMode.Off)
+                throw SemanticUnavailable("semantic", "MILLER_SEMANTIC=off disables all vector work.");
+
+            arm = new SemanticTextArm(
+                SemanticMode.On,
+                root => new SemanticSearchArm(root, _semanticSidecar, _embeddingBroker));
+        }
+        else
+        {
+            arm = _semanticArm
+                ?? throw SemanticUnavailable(
+                    "semantic",
+                    "The semantic retrieval services are not configured.");
+        }
+
+        bool hideTests = ResolveExcludeTests(request.ExcludeTests, request.Query, route.Mode);
+        bool hideLowSignalKinds = ResolveHideLowSignalKinds(request.Query, route.Mode);
+        ToolSearchFilters filters = ToolSearchFilters.Parse(request.FilePattern, request.Language);
+        var visibility = new SymbolVisibilityPolicy(hideTests, hideLowSignalKinds, filters);
+        int k = Math.Clamp(request.Limit * 2, 10, SemanticSearchArm.MaxCandidates);
+        SemanticQueryResult semantic = arm.QuerySymbols(
+            context.WorkspaceRoot,
+            request.Query,
+            k,
+            match => context.Index.FindBySymbolId(match.UnitId) is { } symbol &&
+                     visibility.Allows(symbol));
+        if (!semantic.Served)
+        {
+            throw SemanticUnavailable(
+                "semantic",
+                semantic.UnavailableReason ?? "The semantic arm did not serve this query.");
+        }
+
+        var candidates = new List<SymbolCandidate>(semantic.Hits.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (SemanticHit hit in semantic.Hits)
+        {
+            if (hit.SymbolId is not { } symbolId ||
+                !seen.Add(symbolId) ||
+                context.Index.FindBySymbolId(symbolId) is not { } symbol ||
+                !visibility.Allows(symbol))
+            {
+                continue;
+            }
+
+            candidates.Add(ToCandidate(symbol, hit.Cosine));
+        }
+
+        var candidateSet = new SymbolCandidateSet(
+            candidates,
+            [],
+            [],
+            FileMode: false,
+            filters,
+            visibility);
+        string output = RenderSymbolCandidates(
+            candidateSet,
+            request.Query,
+            route.Mode,
+            request.Limit,
+            request.Json,
+            out int count,
+            request.CompactBanner,
+            request.HasDocLookup);
+        return new SearchRouteExecutionResult(output, count);
+    }
+
+    private static ToolDiagnosticException SemanticUnavailable(string retrieval, string reason) =>
+        new(
+            ToolDiagnostic.Unavailable(
+                "semantic_unavailable",
+                $"retrieval={retrieval} was requested but unavailable: {reason}",
+                [new ToolDiagnosticAction(
+                    "workspace(operation=\"health\")",
+                    "inspect semantic artifact readiness")]));
+
     internal static IReadOnlyCollection<string> ContentKindsForMode(SearchToolMode mode) =>
         mode switch
         {
@@ -673,6 +897,7 @@ public sealed class SearchTool
     {
         scope.Op = route.Kind == SearchRouteKind.Regions ? "regions" : ModeName(route.Mode);
         scope.SetMetadata("route", RouteName(route.Kind));
+        scope.SetMetadata("mixed", route.Mixed);
         scope.SetMetadata("format", json ? "json" : "compact");
         scope.SetMetadata("limit_bucket", LimitBucket(limit));
         scope.SetMetadata("has_regions", !string.IsNullOrWhiteSpace(regions));
@@ -1133,74 +1358,182 @@ public sealed class SearchTool
         ISymbolLookupIndex index, string query, SearchToolMode mode, int limit,
         bool? excludeTests,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        string? mixedFileQuery = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         ThrowIfQueryTooLong(query);
         if (limit < 1) limit = 1;
 
+        bool mixed = !string.IsNullOrWhiteSpace(mixedFileQuery);
         bool fileMode = mode == SearchToolMode.File ||
                         (mode == SearchToolMode.Auto && IsPathLikeQuery(query, index));
 
         bool hideTests = ResolveExcludeTests(excludeTests, query, mode);
-        bool hideLowSignalKinds = fileMode || ResolveHideLowSignalKinds(query, mode);
+        bool hideLowSignalKinds = fileMode || mixed || ResolveHideLowSignalKinds(query, mode);
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
-        // Pull enough to know whether there is an overflow beyond `limit` after post-search filters, so the
-        // "… N more" note is accurate. Natural-language phrase search can be import/module-heavy, so use the cap.
         int overFetch = hideLowSignalKinds || filters.HasAny ? 500 : Math.Min(limit * 4 + 10, 500);
 
-        // Preserve index order; only filter (never re-sort).
         var kept = new List<IndexedSymbol>();
         var scores = new List<double>();
         var outsideScope = new List<IndexedSymbol>(OutsideScopeHintLimit);
-        FetchWithEscalation(overFetch, limit, window =>
+
+        void Fetch(SearchMode searchMode)
         {
-            kept.Clear();
-            scores.Clear();
-            outsideScope.Clear();
-            if (fileMode)
+            FetchWithEscalation(overFetch, limit, window =>
             {
-                IReadOnlyList<IndexedSymbol> symbols = FindByFilePathWithPrefixRecovery(index, query, window);
-                foreach (IndexedSymbol sym in symbols)
-                    AddIfVisible(sym, score: 1.0);
-                return (symbols.Count, kept.Count);
+                kept.Clear();
+                scores.Clear();
+                outsideScope.Clear();
+                if (fileMode)
+                {
+                    IReadOnlyList<IndexedSymbol> symbols = FindByFilePathWithPrefixRecovery(index, query, window);
+                    foreach (IndexedSymbol symbol in symbols)
+                        AddIfVisible(symbol, score: 1.0);
+                    return (symbols.Count, kept.Count);
+                }
+
+                IReadOnlyList<SearchHit> hits = index.Search(query, window, searchMode);
+                foreach (SearchHit hit in hits)
+                    AddIfVisible(index.Resolve(hit.Document.DocId), hit.Score);
+                return (hits.Count, kept.Count);
+            });
+        }
+
+        IReadOnlyList<SymbolCandidate> CurrentCandidates(bool rerank)
+        {
+            SymbolCandidate[] candidates = kept
+                .Select((symbol, index) => ToCandidate(symbol, scores[index]))
+                .ToArray();
+            if (!rerank)
+                return candidates;
+
+            SymbolRerankInput input = SymbolReranker.ExpandContainers(
+                query,
+                candidates,
+                parentId =>
+                {
+                    if (index.FindBySymbolId(parentId) is not { } parent ||
+                        hideTests && IsTestPath.IsTest(parent) ||
+                        hideLowSignalKinds && IsLowSignalKind(parent.Kind) ||
+                        !filters.Allows(parent.FilePath, parent.Language))
+                    {
+                        return null;
+                    }
+
+                    return ToCandidate(parent, score: 0);
+                });
+            return SymbolReranker.Rank(
+                    query,
+                    input.Candidates,
+                    containerEvidence: input.ContainerEvidence)
+                .Select(static result => result.Candidate)
+                .ToArray();
+        }
+
+        IReadOnlyList<SymbolCandidate> orderedCandidates;
+        bool relaxed = false;
+        if (fileMode)
+        {
+            Fetch(SearchMode.Or);
+            orderedCandidates = CurrentCandidates(rerank: false);
+        }
+        else
+        {
+            int distinctTerms = SearchRelaxation.DistinctTermCount(query);
+            SearchMode primaryMode = distinctTerms > 1 ? SearchMode.And : SearchMode.Or;
+            Fetch(primaryMode);
+            IReadOnlyList<SymbolCandidate> strict = CurrentCandidates(rerank: true);
+            SearchRelaxationDecision decision = SearchRelaxation.Decide(
+                distinctTerms,
+                strict.Count,
+                limit);
+            relaxed = decision.Relaxed;
+            if (decision.FallbackMode is { } fallbackMode)
+            {
+                Fetch(fallbackMode);
+                IReadOnlyList<SymbolCandidate> fallback = CurrentCandidates(rerank: true);
+                orderedCandidates = SearchRelaxation.Merge(
+                    strict,
+                    fallback,
+                    strict.Count + fallback.Count);
+            }
+            else
+            {
+                orderedCandidates = strict;
+            }
+        }
+
+        if (mixed)
+        {
+            var fileCandidates = new List<SymbolCandidate>();
+            var seenFiles = new HashSet<string>(StringComparer.Ordinal);
+            IReadOnlyList<IndexedSymbol> fileSymbols = FindByFilePathWithPrefixRecovery(
+                index,
+                mixedFileQuery!,
+                Math.Max(limit * 4, 20));
+            foreach (IndexedSymbol symbol in fileSymbols)
+            {
+                if (hideTests && IsTestPath.IsTest(symbol))
+                    continue;
+                if (hideLowSignalKinds && IsLowSignalKind(symbol.Kind))
+                    continue;
+                if (!filters.Allows(symbol.FilePath, symbol.Language))
+                {
+                    if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
+                        outsideScope.Add(symbol);
+                    continue;
+                }
+                if (seenFiles.Add(symbol.FilePath))
+                {
+                    fileCandidates.Add(
+                        ToCandidate(symbol, score: 1.0) with
+                        {
+                            Origin = SymbolCandidateOrigin.File,
+                        });
+                }
             }
 
-            IReadOnlyList<SearchHit> hits = index.Search(query, window, SearchMode.Or);
-            foreach (var hit in hits)
-                AddIfVisible(index.Resolve(hit.Document.DocId), hit.Score);
-            return (hits.Count, kept.Count);
-        });
+            var mixedCandidates = new List<SymbolCandidate>(
+                orderedCandidates.Count + fileCandidates.Count);
+            if (orderedCandidates.Count > 0)
+                mixedCandidates.Add(orderedCandidates[0]);
+            if (fileCandidates.Count > 0)
+                mixedCandidates.Add(fileCandidates[0]);
+            mixedCandidates.AddRange(orderedCandidates.Skip(1));
+            mixedCandidates.AddRange(fileCandidates.Skip(1));
+            orderedCandidates = mixedCandidates;
+        }
 
         IReadOnlyList<IndexedSymbol> emptySuggestions =
-            kept.Count == 0 && !fileMode && outsideScope.Count == 0
+            orderedCandidates.Count == 0 && !fileMode && outsideScope.Count == 0
                 ? SymbolSuggestionEngine.Suggest(index, query, EmptySuggestionLimit)
                 : [];
 
         return new SymbolCandidateSet(
-            [.. kept.Select((symbol, i) => ToCandidate(symbol, scores[i]))],
+            orderedCandidates,
             [.. outsideScope.Select(static symbol => ToCandidate(symbol, score: 0))],
             emptySuggestions,
             fileMode,
             filters,
-            new SymbolVisibilityPolicy(hideTests, hideLowSignalKinds, filters));
+            new SymbolVisibilityPolicy(hideTests, hideLowSignalKinds, filters),
+            relaxed,
+            mixed);
 
-        void AddIfVisible(IndexedSymbol sym, double score)
+        void AddIfVisible(IndexedSymbol symbol, double score)
         {
-            // Cross-language predicate (decision-4): julie's persisted is_test OR the path fallback. Using the
-            // shared helper means an AST-flagged test in a non-test-named file is hidden, not just *Tests.cs.
-            if (hideTests && IsTestPath.IsTest(sym))
+            if (hideTests && IsTestPath.IsTest(symbol))
                 return;
-            if (hideLowSignalKinds && IsLowSignalKind(sym.Kind))
+            if (hideLowSignalKinds && IsLowSignalKind(symbol.Kind))
                 return;
-            if (!filters.Allows(sym.FilePath, sym.Language))
+            if (!filters.Allows(symbol.FilePath, symbol.Language))
             {
                 if (filters.HasAny && outsideScope.Count < OutsideScopeHintLimit)
-                    outsideScope.Add(sym);
+                    outsideScope.Add(symbol);
                 return;
             }
-            kept.Add(sym);
+            kept.Add(symbol);
             scores.Add(score);
         }
     }
@@ -1214,7 +1547,9 @@ public sealed class SearchTool
             symbol.Kind,
             symbol.FilePath,
             symbol.StartLine,
-            score);
+            score,
+            symbol.Language,
+            ParentId: symbol.ParentId);
 
     /// <summary>
     /// Stage two of the symbol route: render collected candidates. Reads no index and performs no lookup —
@@ -1260,7 +1595,9 @@ public sealed class SearchTool
             }
             IReadOnlyList<IndexedSymbol> suggestions = candidates.EmptySuggestions;
             if (json)
-                return suggestions.Count > 0 ? RenderEmptyJson(suggestions) : "[]";
+                return suggestions.Count > 0 || candidates.Relaxed
+                    ? RenderEmptyJson(suggestions, candidates.Relaxed)
+                    : "[]";
             return candidates.OutsideScope.Count > 0
                 ? RenderFilteredMissCompact(candidates.Filters, compactBanner, candidates.OutsideScope)
                 : RenderEmptySymbolMissCompact(compactBanner, query, suggestions);
@@ -1273,20 +1610,55 @@ public sealed class SearchTool
             hasDocSymbolIds = hasDocLookup(pageIds);
         }
 
+        bool exactMiss =
+            !candidates.FileMode &&
+            !candidates.Mixed &&
+            mode is (SearchToolMode.Auto or SearchToolMode.Symbol) &&
+            LooksLikeExactIdentifierQuery(query) &&
+            FindPromotableDefinitionIndex(kept, kept.Count, query) < 0;
+
         if (json)
-            return RenderJson(kept, page, hasDocSymbolIds, fusion);
+            return RenderJson(
+                kept,
+                page,
+                hasDocSymbolIds,
+                fusion,
+                candidates.Relaxed,
+                candidates.Mixed,
+                exactMiss);
         if (candidates.FileMode)
             return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
 
-        string compact = RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+        string compact = candidates.Mixed
+            ? RenderMixedCompact(kept, page, compactBanner)
+            : RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+        if (exactMiss)
+            compact = PrefixExactMiss(compact, compactBanner, query);
+        if (candidates.Relaxed)
+            compact += "\nnote: relaxed=or — strict AND results first, followed by OR fallback.";
         // Delivery-time nudge: a named symbol top hit is a natural inspect target, so route the agent there.
         // Rendered last, exactly once. Suppressed for JSON (returned above, byte-identical), file-path hits
         // (returned above), and empty results (returned earlier). Text/content/source/markers modes never reach
         // this symbol path — and text mode, which does, is gated out here so only symbol/auto intent nudges.
-        if (mode is SearchToolMode.Auto or SearchToolMode.Symbol)
+        if (!exactMiss && mode is (SearchToolMode.Auto or SearchToolMode.Symbol))
             compact += "\n" + NextStepHint.Render(
                 $"inspect target=\"{EscapeCallString(kept[0].Name)}\" depth=overview");
         return compact;
+    }
+
+    private static string PrefixExactMiss(
+        string compact,
+        string? compactBanner,
+        string query)
+    {
+        string header = $"No exact symbol named '{query.Trim()}'. Near matches:";
+        if (string.IsNullOrWhiteSpace(compactBanner))
+            return header + "\n" + compact;
+
+        string banner = compactBanner + "\n";
+        return compact.StartsWith(banner, StringComparison.Ordinal)
+            ? banner + header + "\n" + compact[banner.Length..]
+            : header + "\n" + compact;
     }
 
     /// <summary>
@@ -3260,6 +3632,25 @@ public sealed class SearchTool
         return hasLetter;
     }
 
+    private static bool LooksLikeExactIdentifierQuery(string query)
+    {
+        string trimmed = query.Trim();
+        if (!LooksLikeWeakIdentifierQuery(trimmed))
+            return false;
+
+        bool hasSeparator = trimmed.IndexOfAny(['_', '.']) >= 0;
+        bool hasLower = false;
+        bool hasUpperAfterFirst = false;
+        for (int i = 0; i < trimmed.Length; i++)
+        {
+            char ch = trimmed[i];
+            hasLower |= char.IsLower(ch);
+            hasUpperAfterFirst |= i > 0 && char.IsUpper(ch);
+        }
+
+        return hasSeparator || (hasLower && hasUpperAfterFirst);
+    }
+
     // A natural-language phrase = multiple whitespace-delimited words (a single identifier-ish token is not).
     private static bool IsNaturalLanguagePhrase(string query)
     {
@@ -3570,6 +3961,56 @@ public sealed class SearchTool
             sb.Append("  has_doc");
     }
 
+    private static string RenderMixedCompact(
+        IReadOnlyList<SymbolCandidate> kept,
+        int page,
+        string? compactBanner)
+    {
+        SymbolCandidate[] symbols = kept
+            .Take(page)
+            .Where(candidate => candidate.Origin == SymbolCandidateOrigin.Symbol)
+            .ToArray();
+        SymbolCandidate[] files = kept
+            .Take(page)
+            .Where(candidate => candidate.Origin == SymbolCandidateOrigin.File)
+            .ToArray();
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(compactBanner))
+            builder.Append(compactBanner).Append('\n');
+        if (symbols.Length > 0)
+        {
+            builder.Append("Symbol matches:").Append('\n');
+            foreach (SymbolCandidate symbol in symbols)
+            {
+                builder.Append("  ")
+                    .Append(symbol.Name)
+                    .Append("  ")
+                    .Append(symbol.Kind)
+                    .Append("  ")
+                    .Append(symbol.FilePath)
+                    .Append(':')
+                    .Append(symbol.StartLine);
+                if (!string.IsNullOrWhiteSpace(symbol.Signature))
+                {
+                    builder.Append('\n')
+                        .Append("    ")
+                        .Append(Truncate(symbol.Signature, ToolRenderLimits.SignatureMaxLength));
+                }
+                builder.Append('\n');
+            }
+        }
+        if (files.Length > 0)
+        {
+            if (symbols.Length > 0)
+                builder.Append('\n');
+            builder.Append("File matches:").Append('\n');
+            foreach (SymbolCandidate file in files)
+                builder.Append("  ").Append(file.FilePath).Append('\n');
+        }
+        TrimTrailingNewlines(builder);
+        return builder.ToString();
+    }
+
     private static string RenderFileCompact(
         IReadOnlyList<SymbolCandidate> kept,
         int page,
@@ -3803,7 +4244,10 @@ public sealed class SearchTool
         IReadOnlyList<SymbolCandidate> kept,
         int page,
         IReadOnlySet<string>? hasDocSymbolIds,
-        IReadOnlyDictionary<string, FusedCandidate>? fusion = null)
+        IReadOnlyDictionary<string, FusedCandidate>? fusion = null,
+        bool relaxed = false,
+        bool mixed = false,
+        bool exactMiss = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -3821,6 +4265,16 @@ public sealed class SearchTool
                 else writer.WriteString("signature", s.Signature);
                 writer.WriteNumber("score", s.Score);
                 writer.WriteString("symbol_id", s.SymbolId);
+                if (mixed)
+                {
+                    writer.WriteString(
+                        "result_type",
+                        s.Origin == SymbolCandidateOrigin.File ? "file" : "symbol");
+                }
+                if (relaxed)
+                    writer.WriteBoolean("relaxed", true);
+                if (exactMiss)
+                    writer.WriteBoolean("exact_match", false);
                 if (fusion is not null && fusion.TryGetValue(s.SymbolId, out FusedCandidate? fused))
                 {
                     writer.WriteNumber("rrf_score", fused.RrfScore);
@@ -3838,7 +4292,9 @@ public sealed class SearchTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string RenderEmptyJson(IReadOnlyList<IndexedSymbol> suggestions)
+    private static string RenderEmptyJson(
+        IReadOnlyList<IndexedSymbol> suggestions,
+        bool relaxed = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -3860,6 +4316,8 @@ public sealed class SearchTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            if (relaxed)
+                writer.WriteBoolean("relaxed", true);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);

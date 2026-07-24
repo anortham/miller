@@ -29,7 +29,12 @@ parameters and selectors below are what those short forms omit.
 - **`search`** — `mode=auto|text|symbol|file|markers|content|source|external|web|all-text`. Natural-language
   queries auto-hide tests (`exclude_tests=false` to include them). `mode=content` has the alias `docs`. Scope with
   `file_pattern`, `language`, and `limit`. `regions=comment|doc_comment|string_literal` restricts to source
-  regions; `MILLER_REGION_INDEX=0` opts the region index out. `mode=markers` with `query=TODO,FIXME,HACK,XXX` runs
+  regions; `MILLER_REGION_INDEX=0` opts the region index out. Multi-term symbol searches use AND first and expose
+  `relaxed=or` when OR fallback fills the page. Auto mode can return typed symbol and file arms for mixed queries.
+  Identifier-shaped queries with only fuzzy near matches state that no exact symbol exists and omit the inspect
+  nudge; JSON marks those rows with `exact_match=false`.
+  `retrieval=auto|lexical|hybrid|semantic` selects the per-call symbol policy; lexical does no vector work and the
+  global semantic off switch remains authoritative. `mode=markers` with `query=TODO,FIXME,HACK,XXX` runs
   a marker audit. Symbol hits may include `has_doc`. Optional `workspace_id` accepts a display ID, unique prefix,
   full ID, root path, `current`, or `primary`; an explicit `workspace_id` defaults `ensure_fresh=true`.
 - **`inspect`** — a file path lists symbols; a symbol name gives definition, signature, and docs. Default depth is
@@ -42,8 +47,8 @@ parameters and selectors below are what those short forms omit.
   only in usage mode. Optional `workspace_id` and `ensure_fresh` route through the registry provider.
 - **`trace`** — `mode=refs` (name-based usages; optional `reference_kind=call|variable_ref|type_usage|member_access|import`;
   on empty, fall back to `search mode=source`), `mode=path` (shortest path to `to`; no path means no extracted
-  graph path within depth, **not** proof the code is unrelated), `mode=bridge` (provider-scoped). `mode=auto` is
-  subsumed by `inspect depth=full`. Links are flagged `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
+  graph path within depth, **not** proof the code is unrelated), `mode=bridge` (provider-scoped). Links are flagged
+  `[verb-unknown]`/`[ambiguous]`. Use `format=json` for
   refs/nodes/links/diagnostics/actions; `scope=<file>` for duplicate names. `mode=bridge` is provider-scoped to
   `dotnet-web`, `nextjs`, `nextjs-api`, `nuxt`, `nuxt-api`, `vue`, `react`, and `backend-http`; on any other stack
   use `mode=refs`/`mode=path` or `inspect depth=full`.

@@ -92,12 +92,12 @@ public sealed class SearchGoldenParityTests
         new(
             "symbol-exact-compact",
             "GetUser", SearchToolMode.Symbol, 6, false,
-            "Definition found: GetUser\n  auth/UserService.cs:5 (method)\n  public User GetUser(int id)\n\nOther matches:\n\nhttp/Server.go:25 (method)\n  func (s *Server) getHTTPResponseCode() int\n\nauth/UserService.cs:\n  :1 (class)\n    public class UserService\n  :12 (method)\nnext: inspect target=\"GetUser\" depth=overview",
+            "Definition found: GetUser\n  auth/UserService.cs:5 (method)\n  public User GetUser(int id)\n\nOther matches:\n\nauth/UserService.cs:\n  :1 (class)\n    public class UserService\n  :12 (method)\n\nhttp/Server.go:25 (method)\n  func (s *Server) getHTTPResponseCode() int\nnext: inspect target=\"GetUser\" depth=overview",
             4),
         new(
             "symbol-exact-json",
             "GetUser", SearchToolMode.Symbol, 6, true,
-            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":12.444753393701339,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\"},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"}]",
+            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":12.444753393701339,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\"}]",
             4),
         new(
             "symbol-auto-compact",
@@ -107,12 +107,12 @@ public sealed class SearchGoldenParityTests
         new(
             "phrase-text-compact",
             "get user by id", SearchToolMode.Text, 6, false,
-            "auth/UserService.cs:\n  :5 GetUser method  public User GetUser(int id)\n  :1 UserService class  public class UserService\n  :12 DeleteUser method\nhttp/Server.go:\n  :25 getHTTPResponseCode method  func (s *Server) getHTTPResponseCode() int",
+            "auth/UserService.cs:\n  :5 GetUser method  public User GetUser(int id)\n  :1 UserService class  public class UserService\n  :12 DeleteUser method\nhttp/Server.go:\n  :25 getHTTPResponseCode method  func (s *Server) getHTTPResponseCode() int\nnote: relaxed=or — strict AND results first, followed by OR fallback.",
             4),
         new(
             "phrase-text-json",
             "get user by id", SearchToolMode.Text, 6, true,
-            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":6.098686861112545,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\"},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"}]",
+            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":6.098686861112545,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\",\"relaxed\":true},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\",\"relaxed\":true},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\",\"relaxed\":true},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\",\"relaxed\":true}]",
             4),
         new(
             "file-mode-compact",
@@ -162,7 +162,7 @@ public sealed class SearchGoldenParityTests
         new(
             "has-doc-annotation-compact",
             "GetUser", SearchToolMode.Symbol, 6, false,
-            "Definition found: GetUser\n  auth/UserService.cs:5 (method) has_doc\n  public User GetUser(int id)\n\nOther matches:\n\nhttp/Server.go:25 (method) has_doc\n  func (s *Server) getHTTPResponseCode() int\n\nauth/UserService.cs:\n  :1 (class) has_doc\n    public class UserService\n  :12 (method) has_doc\nnext: inspect target=\"GetUser\" depth=overview",
+            "Definition found: GetUser\n  auth/UserService.cs:5 (method) has_doc\n  public User GetUser(int id)\n\nOther matches:\n\nauth/UserService.cs:\n  :1 (class) has_doc\n    public class UserService\n  :12 (method) has_doc\n\nhttp/Server.go:25 (method) has_doc\n  func (s *Server) getHTTPResponseCode() int\nnext: inspect target=\"GetUser\" depth=overview",
             4, WithDocLookup: true),
         new(
             "banner-prefixed-compact",

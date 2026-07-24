@@ -173,7 +173,7 @@ Create one deep reference-evidence module whose caller-facing input is a symbol 
 
 | Tool | Current Miller | Julie advantage | Miller advantage | Required decision | Priority |
 |---|---|---|---|---|---|
-| `search` | BM25 + exact-name adjustment, OR-only, separate file/symbol lanes, optional semantic RRF | richer reranker, AND→OR relaxation, mixed file/symbol list, scope and semantic rescue | stronger empty diagnosis, deterministic backends, optional/off-switchable semantics | keep; redesign ranking and auto routing | P1 |
+| `search` | shared transparent reranker, AND→OR relaxation, typed mixed file/symbol auto lane, container evidence, per-call retrieval policy, optional semantic RRF | final sealed comparative evidence remains outstanding | deterministic rank-identical backends, stronger empty diagnosis, structural choice-point recovery, optional/off-switchable semantics | keep; Phase 4 implementation complete, carry to sealed gate | P1 complete |
 | `inspect` | one file/symbol tool, fresh body slice, compact/JSON, refs/callers/callees | resolved and typed relationships, implementations/types/tests, qualified resolution, kind-aware render | hash-guarded live body, strict ambiguity, JSON, smaller surface | keep; rebuild relationships and enrich typed sections | P0/P1 |
 | `context` | token-bounded signatures and neighbours, lexical seeds, optional usage enrichment | bodies, hybrid seeds, pivot scoring, task signals, adaptive depth | deterministic/offline path, copyable next calls, query-affinity neighbours | keep; redesign as pivot/body bundle | P0 |
 | `trace` | exact/fallback refs, path, bridge, strong diagnostics, JSON, stateless paging | naming variants and call-precise path remain stronger | bridge providers, provenance, homonym safety, and honesty flags are substantially better | keep; type path and evaluate naming variants | P2 |
@@ -193,6 +193,14 @@ Create one deep reference-evidence module whose caller-facing input is a symbol 
 - Julie permits a per-call lexical, semantic, or hybrid choice. Miller's semantic activation is process-wide (`off|shadow|on`) and its search schema has no per-call arm override.
 - Live 14-day telemetry: 6,729 calls, 31.0% empty, 632 ms average, 2.37 KB average response. Source mode is 41.4% empty and file mode 50.1%; auto is only 2.7% empty.
 - Semantic retrieval is correctly local, optional, and off-switchable. It should remain a fused arm rather than leak into reference truth.
+
+### Phase 4 Disposition
+
+Completed 2026-07-23. Miller now has the shared feature reranker, structural container evidence, AND-first
+retrieval with explicit OR relaxation, typed mixed auto results, per-call retrieval control, and post-rerank
+FTS5/in-memory parity. A visible conceptual choice-point query improved from no expected target in the top six
+to the correct owning factory at rank one. See
+[`2026-07-23-phase4-shared-search-ranking-and-routing.md`](2026-07-23-phase4-shared-search-ranking-and-routing.md).
 
 ### Recommendation
 

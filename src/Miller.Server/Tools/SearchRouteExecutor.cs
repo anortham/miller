@@ -46,7 +46,12 @@ public interface ISymbolFusionArm
     IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request);
 }
 
-internal sealed record SearchRouteExecutionResult(string Output, int Count, long SourceBytes = 0);
+internal sealed record SearchRouteExecutionResult(
+    string Output,
+    int Count,
+    long SourceBytes = 0,
+    bool Relaxed = false,
+    bool Mixed = false);
 
 /// <summary>
 /// One symbol-route serving pass: the rendered result plus the facts a canary row needs — the served page slice
@@ -78,12 +83,13 @@ internal static class SearchRouteExecutor
 
         return SearchTool.CollectSymbolCandidates(
             index,
-            request.Query,
+            route.SymbolQuery ?? request.Query,
             route.Mode,
             request.Limit,
             request.ExcludeTests,
             request.FilePattern,
-            request.Language);
+            request.Language,
+            route.FileQuery);
     }
 
     public static SearchRouteExecutionResult RunSymbols(
@@ -111,6 +117,7 @@ internal static class SearchRouteExecutor
 
         if (armOverride is { } arm &&
             !candidates.FileMode &&
+            !candidates.Mixed &&
             arm.Fuse(index, FusionRequestFor(candidates, request)) is { Count: > 0 } fused)
         {
             candidates = candidates with { Candidates = [.. fused.Select(static row => row.Candidate)] };
@@ -129,7 +136,15 @@ internal static class SearchRouteExecutor
             request.HasDocLookup,
             fusion);
 
-        return new SymbolExecution(new SearchRouteExecutionResult(output, count), servedPage, lexicalResultCount, fusion);
+        return new SymbolExecution(
+            new SearchRouteExecutionResult(
+                output,
+                count,
+                Relaxed: candidates.Relaxed,
+                Mixed: candidates.Mixed),
+            servedPage,
+            lexicalResultCount,
+            fusion);
     }
 
     public static SearchRouteExecutionResult RunContent(
@@ -290,6 +305,9 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, Se
         ArgumentNullException.ThrowIfNull(request);
 
         if (mode is not SemanticMode.On)
+            return null;
+
+        if (request.Candidates.FirstOrDefault()?.Origin is SymbolCandidateOrigin.Container)
             return null;
 
         SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query, EvidenceFrom(request.Candidates));

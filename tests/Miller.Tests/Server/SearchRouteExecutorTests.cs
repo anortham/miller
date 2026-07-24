@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Tools;
@@ -156,6 +157,229 @@ public sealed class SearchRouteExecutorTests
             second => Assert.Equal("gadget-symbol", second.SymbolId));
         Assert.Empty(candidates.OutsideScope);
         Assert.False(candidates.FileMode);
+    }
+
+    [Fact]
+    public void CollectSymbolCandidates_UsesAndFirstThenRelaxesToFillPage()
+    {
+        IndexedSymbol strict = Symbol(
+            0,
+            "strict-symbol",
+            "SearchWorkspace",
+            "src/SearchWorkspace.cs",
+            isTest: false);
+        IndexedSymbol relaxed = Symbol(
+            1,
+            "relaxed-symbol",
+            "SearchRunner",
+            "src/SearchRunner.cs",
+            isTest: false);
+        var index = new ModeAwareSymbolLookupIndex(strict, relaxed);
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "search workspace",
+                Limit: 2,
+                Json: false,
+                ExcludeTests: null));
+
+        Assert.Equal([SearchMode.And, SearchMode.Or], index.Modes);
+        Assert.True(candidates.Relaxed);
+        Assert.Equal(
+            ["strict-symbol", "relaxed-symbol"],
+            candidates.Candidates.Select(candidate => candidate.SymbolId));
+    }
+
+    [Fact]
+    public void CollectSymbolCandidates_ReranksGeneratedCopyBelowSourceDefinition()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(0, "generated-symbol", "Widget", "generated/Widget.g.cs", isTest: false),
+            Symbol(1, "source-symbol", "Widget", "src/Widget.cs", isTest: false));
+
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "Widget",
+                Limit: 2,
+                Json: false,
+                ExcludeTests: null));
+
+        Assert.False(candidates.Relaxed);
+        Assert.Equal(
+            ["source-symbol", "generated-symbol"],
+            candidates.Candidates.Select(candidate => candidate.SymbolId));
+        Assert.All(candidates.Candidates, candidate => Assert.Equal(2.0, candidate.Score));
+    }
+
+    [Fact]
+    public void CollectSymbolCandidates_SurfacesUnmatchedParentFromMultipleChildMatches()
+    {
+        IndexedSymbol parent = Symbol(
+            0,
+            "candidate-factory",
+            "SemanticCandidateFactory",
+            "src/SemanticCandidates.cs",
+            isTest: false) with
+        {
+            Kind = "class",
+        };
+        IndexedSymbol token = Symbol(
+            1,
+            "token-baseline",
+            "TokenBaseline",
+            "src/SemanticCandidates.cs",
+            isTest: false) with
+        {
+            Kind = "constant",
+            ParentId = parent.SymbolId,
+        };
+        IndexedSymbol memory = Symbol(
+            2,
+            "in-memory",
+            "CreateInMemory",
+            "src/SemanticCandidates.cs",
+            isTest: false) with
+        {
+            ParentId = parent.SymbolId,
+        };
+        IndexedSymbol sqlite = Symbol(
+            3,
+            "sqlite-vector",
+            "CreateSqliteVector",
+            "src/SemanticCandidates.cs",
+            isTest: false) with
+        {
+            ParentId = parent.SymbolId,
+        };
+        ISymbolLookupIndex index = SymbolSearchProjection.Build([parent, token, memory, sqlite]);
+
+        SymbolCandidateSet candidates = SearchTool.CollectSymbolCandidates(
+            index,
+            "choose token baseline in memory or sqlite vector",
+            SearchToolMode.Symbol,
+            limit: 6,
+            excludeTests: null);
+
+        Assert.Equal(parent.SymbolId, candidates.Candidates[0].SymbolId);
+        Assert.Equal(0, candidates.Candidates[0].Score);
+    }
+
+    [Fact]
+    public void RenderSymbolCandidates_ExposesRelaxationInCompactAndJson()
+    {
+        IndexedSymbol strict = Symbol(
+            0,
+            "strict-symbol",
+            "SearchWorkspace",
+            "src/SearchWorkspace.cs",
+            isTest: false);
+        IndexedSymbol relaxed = Symbol(
+            1,
+            "relaxed-symbol",
+            "SearchRunner",
+            "src/SearchRunner.cs",
+            isTest: false);
+        var index = new ModeAwareSymbolLookupIndex(strict, relaxed);
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "search workspace",
+                Limit: 2,
+                Json: false,
+                ExcludeTests: null));
+
+        string compact = SearchTool.RenderSymbolCandidates(
+            candidates,
+            "search workspace",
+            SearchToolMode.Symbol,
+            2,
+            json: false,
+            out _);
+        string json = SearchTool.RenderSymbolCandidates(
+            candidates,
+            "search workspace",
+            SearchToolMode.Symbol,
+            2,
+            json: true,
+            out _);
+
+        Assert.Contains("note: relaxed=or", compact, StringComparison.Ordinal);
+        Assert.True(
+            compact.IndexOf("note: relaxed=or", StringComparison.Ordinal) <
+            compact.IndexOf("next:", StringComparison.Ordinal));
+        using var document = JsonDocument.Parse(json);
+        Assert.All(
+            document.RootElement.EnumerateArray(),
+            row => Assert.True(row.GetProperty("relaxed").GetBoolean()));
+    }
+
+    [Fact]
+    public void CollectAndRenderSymbolCandidates_MixedRouteKeepsTypedFileAndSymbolArms()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "auto",
+            regions: null,
+            query: "src/Miller.Server/Tools SearchTool");
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(
+                0,
+                "search-tool",
+                "SearchTool",
+                "src/Miller.Server/Tools/SearchTool.cs",
+                isTest: false),
+            Symbol(
+                1,
+                "search-helper",
+                "SearchHelper",
+                "src/Miller.Server/Tools/SearchHelper.cs",
+                isTest: false));
+        var request = new SearchRouteExecutionRequest(
+            Query: "src/Miller.Server/Tools SearchTool",
+            Limit: 4,
+            Json: false,
+            ExcludeTests: null);
+
+        SymbolCandidateSet candidates =
+            SearchRouteExecutor.CollectSymbolCandidates(index, route, request);
+        string compact = SearchTool.RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            SearchToolMode.Auto,
+            request.Limit,
+            json: false,
+            out _);
+        string json = SearchTool.RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            SearchToolMode.Auto,
+            request.Limit,
+            json: true,
+            out _);
+
+        Assert.True(candidates.Mixed);
+        Assert.Contains(
+            candidates.Candidates,
+            candidate => candidate.Origin == SymbolCandidateOrigin.Symbol);
+        Assert.Contains(
+            candidates.Candidates,
+            candidate => candidate.Origin == SymbolCandidateOrigin.File);
+        Assert.Contains("Symbol matches:", compact, StringComparison.Ordinal);
+        Assert.Contains("File matches:", compact, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(json);
+        Assert.Contains(
+            document.RootElement.EnumerateArray(),
+            row => row.GetProperty("result_type").GetString() == "symbol");
+        Assert.Contains(
+            document.RootElement.EnumerateArray(),
+            row => row.GetProperty("result_type").GetString() == "file");
     }
 
     [Fact]
@@ -359,5 +583,56 @@ public sealed class SearchRouteExecutorTests
         public string? ResolveIndexedFilePath(string target) =>
             _symbols.FirstOrDefault(symbol => string.Equals(symbol.FilePath, target, StringComparison.Ordinal))
                 ?.FilePath;
+    }
+
+    private sealed class ModeAwareSymbolLookupIndex : ISymbolLookupIndex
+    {
+        private readonly IndexedSymbol _strict;
+        private readonly IndexedSymbol _relaxed;
+
+        public ModeAwareSymbolLookupIndex(IndexedSymbol strict, IndexedSymbol relaxed)
+        {
+            _strict = strict;
+            _relaxed = relaxed;
+        }
+
+        public List<SearchMode> Modes { get; } = [];
+        public int DocumentCount => 2;
+        public IReadOnlySet<string> KnownExtensions { get; } =
+            new HashSet<string>(StringComparer.Ordinal) { ".cs" };
+
+        public IReadOnlyList<SearchHit> Search(
+            string query,
+            int limit = 10,
+            SearchMode mode = SearchMode.Or)
+        {
+            Modes.Add(mode);
+            IndexedSymbol[] rows = mode == SearchMode.And
+                ? [_strict]
+                : [_strict, _relaxed];
+            return rows
+                .Take(limit)
+                .Select(symbol => new SearchHit(symbol.ToSearchableDocument(), 2.0))
+                .ToArray();
+        }
+
+        public IndexedSymbol Resolve(int docId) =>
+            docId == _strict.DocId ? _strict : _relaxed;
+
+        public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
+            new[] { _strict, _relaxed }
+                .Where(symbol => string.Equals(symbol.Name, name, StringComparison.Ordinal))
+                .ToArray();
+
+        public IndexedSymbol? FindBySymbolId(string symbolId) =>
+            new[] { _strict, _relaxed }
+                .FirstOrDefault(symbol =>
+                    string.Equals(symbol.SymbolId, symbolId, StringComparison.Ordinal));
+
+        public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => [];
+        public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) => [];
+        public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) => [];
+        public bool IsIndexedFilePath(string path) => false;
+        public string? ResolveIndexedFilePath(string target) => null;
     }
 }

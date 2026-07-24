@@ -69,6 +69,33 @@ public sealed class HybridSearchTests
     }
 
     [Fact]
+    public async Task StructuralContainerWinner_NeverConsultsTheAutomaticArm()
+    {
+        RecordingSymbolLookupIndex index = TwoSymbolIndex();
+        var port = new RecordingPort { Matches = [Match(1, 0.1, "gadget-symbol", "src/Gadget.cs")] };
+        await using SemanticEmbeddingSession session = NewSession();
+        SemanticSymbolFusionArm fusion = OnArm(port, session);
+        SymbolCandidate container = SearchTool.ToCandidate(
+            index.FindBySymbolId("widget-symbol")!,
+            score: 0) with
+        {
+            Origin = SymbolCandidateOrigin.Container,
+        };
+
+        IReadOnlyList<FusedCandidate>? result = fusion.Fuse(
+            index,
+            new SymbolFusionRequest(
+                ConceptualQuery,
+                [container],
+                Limit: 6,
+                Allows: _ => true,
+                WorkspaceRoot: Root));
+
+        Assert.Null(result);
+        Assert.Equal(0, port.OpenCount);
+    }
+
+    [Fact]
     public async Task UnavailableArtifact_FailsOpenToTheLexicalBytes()
     {
         RecordingSymbolLookupIndex index = TwoSymbolIndex();

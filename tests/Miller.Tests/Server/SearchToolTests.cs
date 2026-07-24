@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -222,7 +223,10 @@ public sealed class SearchToolTests
     // backend-tagging telemetry path with either the on-disk FtsSymbolSearchIndex or an in-memory index
     // (the production RecordingWorkspaceIndexProvider only ever yields a MillerRepositoryIndex-backed context).
     private sealed class FixedSymbolSearchProvider
-        : IWorkspaceSearchProvider, IWorkspaceContentSearchProvider, IWorkspaceTextContentSearchProvider
+        : IWorkspaceSearchProvider,
+          IWorkspaceContentSearchProvider,
+          IWorkspaceRegionSearchProvider,
+          IWorkspaceTextContentSearchProvider
     {
         private readonly WorkspaceSymbolSearchContext _context;
         private readonly WorkspaceTextContentSearchContext? _textContentContext;
@@ -258,6 +262,9 @@ public sealed class SearchToolTests
 
         public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>
             throw new NotSupportedException("FixedSymbolSearchProvider serves symbol search only.");
+
+        public WorkspaceRegionSearchContext ResolveRegionSearch(string? workspaceId, bool ensureFresh) =>
+            throw new NotSupportedException("FixedSymbolSearchProvider serves no region route.");
 
         public WorkspaceTextContentSearchContext ResolveTextContentSearch(string? workspaceId, bool ensureFresh)
         {
@@ -312,6 +319,294 @@ public sealed class SearchToolTests
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public void Search_RetrievalLexical_NeverConsultsConfiguredFusionArm()
+    {
+        var index = new StubSymbolSearchIndex((
+            Symbol(
+                0,
+                "10000000000000000000000000000001",
+                "Widget",
+                "class",
+                "src/Widget.cs",
+                1),
+            4.0));
+        var provider = new FixedSymbolSearchProvider(index, "/workspace");
+        var arm = new RecordingFusionArm();
+        var tool = new SearchTool(provider, provider, provider, provider, arm);
+
+        string output = tool.Search(
+            "Widget",
+            mode: "symbol",
+            retrieval: "lexical");
+
+        Assert.Contains("Widget", output, StringComparison.Ordinal);
+        Assert.Equal(0, arm.Calls);
+    }
+
+    [Fact]
+    public void Search_RetrievalHybrid_ConsultsConfiguredFusionArm()
+    {
+        var index = new StubSymbolSearchIndex((
+            Symbol(
+                0,
+                "10000000000000000000000000000001",
+                "Widget",
+                "class",
+                "src/Widget.cs",
+                1),
+            4.0));
+        var provider = new FixedSymbolSearchProvider(index, "/workspace");
+        var arm = new RecordingFusionArm(serve: true);
+        var tool = new SearchTool(provider, provider, provider, provider, arm);
+
+        string output = tool.Search(
+            "Widget",
+            mode: "symbol",
+            retrieval: "hybrid");
+
+        Assert.Contains("Widget", output, StringComparison.Ordinal);
+        Assert.Equal(1, arm.Calls);
+    }
+
+    [Fact]
+    public void Search_RetrievalHybrid_DeclinedFusionReturnsTypedUnavailable()
+    {
+        var index = new StubSymbolSearchIndex((
+            Symbol(
+                0,
+                "10000000000000000000000000000001",
+                "Widget",
+                "class",
+                "src/Widget.cs",
+                1),
+            4.0));
+        var provider = new FixedSymbolSearchProvider(index, "/workspace");
+        var arm = new RecordingFusionArm();
+        var tool = new SearchTool(provider, provider, provider, provider, arm);
+
+        string output = tool.Search(
+            "Widget",
+            mode: "symbol",
+            format: "json",
+            retrieval: "hybrid");
+
+        Assert.Contains("\"code\":\"semantic_unavailable\"", output, StringComparison.Ordinal);
+        Assert.Contains("did not serve", output, StringComparison.Ordinal);
+        Assert.Equal(1, arm.Calls);
+    }
+
+    [Fact]
+    public void Search_RetrievalSemantic_ServesOnlySemanticRanking()
+    {
+        IndexedSymbol lexicalFirst = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "LexicalFirst",
+            "class",
+            "src/LexicalFirst.cs",
+            1);
+        IndexedSymbol semanticFirst = Symbol(
+            1,
+            "20000000000000000000000000000002",
+            "SemanticFirst",
+            "class",
+            "src/SemanticFirst.cs",
+            1);
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((lexicalFirst, 4.0), (semanticFirst, 1.0)),
+            "/workspace");
+        var semanticArm = new RecordingSemanticTextArm(
+            new SemanticQueryResult(
+                [new SemanticHit(semanticFirst.SymbolId, null, semanticFirst.FilePath, 1, 0.9)],
+                UnavailableReason: null));
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm);
+
+        string output = tool.Search(
+            "conceptual widget",
+            mode: "symbol",
+            retrieval: "semantic");
+
+        Assert.Contains("SemanticFirst", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("LexicalFirst", output, StringComparison.Ordinal);
+        Assert.Equal(1, semanticArm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Search_RetrievalSemantic_UnservedArmReturnsTypedUnavailable()
+    {
+        IndexedSymbol symbol = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "Widget",
+            "class",
+            "src/Widget.cs",
+            1);
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 4.0)),
+            "/workspace");
+        var semanticArm = new RecordingSemanticTextArm(
+            SemanticQueryResult.Unavailable("vectors are stale"));
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm);
+
+        string output = tool.Search(
+            "conceptual widget",
+            mode: "symbol",
+            format: "json",
+            retrieval: "semantic");
+
+        Assert.Contains("\"code\":\"semantic_unavailable\"", output, StringComparison.Ordinal);
+        Assert.Contains("vectors are stale", output, StringComparison.Ordinal);
+        Assert.Equal(1, semanticArm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Search_RetrievalSemantic_GlobalOffNeverConsultsInjectedArm()
+    {
+        IndexedSymbol symbol = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "Widget",
+            "class",
+            "src/Widget.cs",
+            1);
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 4.0)),
+            "/workspace");
+        var semanticArm = new RecordingSemanticTextArm(new SemanticQueryResult([], null));
+        using var broker = new SemanticEmbeddingSessionBroker(
+            enabled: false,
+            sessionFactory: () => null);
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm,
+            semanticSidecar: new VectorSidecar(SemanticMode.Off),
+            broker);
+
+        string output = tool.Search(
+            "conceptual widget",
+            mode: "symbol",
+            format: "json",
+            retrieval: "semantic");
+
+        Assert.Contains("\"code\":\"semantic_unavailable\"", output, StringComparison.Ordinal);
+        Assert.Contains("MILLER_SEMANTIC=off", output, StringComparison.Ordinal);
+        Assert.Equal(0, semanticArm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Search_RetrievalHybrid_MixedRouteReturnsTypedUnsupportedWithoutConsultingArm()
+    {
+        IndexedSymbol symbol = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "SearchTool",
+            "class",
+            "src/Miller.Server/Tools/SearchTool.cs",
+            1);
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 4.0)),
+            "/workspace");
+        var arm = new RecordingFusionArm();
+        var tool = new SearchTool(provider, provider, provider, provider, arm);
+
+        string output = tool.Search(
+            "src/Miller.Server SearchTool",
+            format: "json",
+            retrieval: "hybrid");
+
+        Assert.Contains("\"code\":\"retrieval_route_unsupported\"", output, StringComparison.Ordinal);
+        Assert.Equal(0, arm.Calls);
+    }
+
+    [Fact]
+    public void Search_InvalidRetrievalReturnsTypedInvalidRequest()
+    {
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex(),
+            "/workspace");
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search(
+            "Widget",
+            format: "json",
+            retrieval: "obsolete");
+
+        Assert.Contains("\"code\":\"invalid_request\"", output, StringComparison.Ordinal);
+        Assert.Contains("auto, lexical, hybrid, or semantic", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_IdentifierNearMatches_CompactStatesNoExactSymbolAndStopsNavigation()
+    {
+        var index = new StubSymbolSearchIndex((
+            Symbol(
+                0,
+                "10000000000000000000000000000001",
+                "normalizePathKeyForSafetyCheck",
+                "function",
+                "src/workspace.ts",
+                165),
+            4.0));
+
+        string output = SearchTool.Run(
+            index,
+            "normalizePathKeyForUnsafeMutation",
+            SearchToolMode.Symbol,
+            limit: 6,
+            excludeTests: null,
+            json: false,
+            out _);
+
+        Assert.StartsWith(
+            "No exact symbol named 'normalizePathKeyForUnsafeMutation'. Near matches:",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("next: inspect", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Run_IdentifierNearMatches_JsonTypesRowsAsNonExact()
+    {
+        var index = new StubSymbolSearchIndex((
+            Symbol(
+                0,
+                "10000000000000000000000000000001",
+                "normalizePathKeyForSafetyCheck",
+                "function",
+                "src/workspace.ts",
+                165),
+            4.0));
+
+        string output = SearchTool.Run(
+            index,
+            "normalizePathKeyForUnsafeMutation",
+            SearchToolMode.Symbol,
+            limit: 6,
+            excludeTests: null,
+            json: true,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        Assert.False(document.RootElement[0].GetProperty("exact_match").GetBoolean());
     }
 
     [Fact]
@@ -3195,6 +3490,42 @@ public sealed class SearchToolTests
         Assert.Contains("has_doc", compact);
         using var doc = JsonDocument.Parse(json);
         Assert.True(doc.RootElement[0].GetProperty("has_doc").GetBoolean());
+    }
+
+    private sealed class RecordingFusionArm(bool serve = false) : ISymbolFusionArm
+    {
+        public int Calls { get; private set; }
+
+        public IReadOnlyList<FusedCandidate>? Fuse(
+            ISymbolLookupIndex index,
+            SymbolFusionRequest request)
+        {
+            Calls++;
+            return serve
+                ? request.Candidates
+                    .Select((candidate, index) =>
+                        new FusedCandidate(candidate, 1, index + 1, index + 1))
+                    .ToArray()
+                : null;
+        }
+    }
+
+    private sealed class RecordingSemanticTextArm(SemanticQueryResult symbols) : ISemanticTextArm
+    {
+        public int SymbolCalls { get; private set; }
+
+        public SemanticQueryResult QuerySymbols(
+            string workspaceRoot,
+            string query,
+            int k,
+            Func<VectorMatch, bool>? allow)
+        {
+            SymbolCalls++;
+            return symbols;
+        }
+
+        public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k) =>
+            SemanticQueryResult.Unavailable("chunk retrieval is not configured.");
     }
 
     private sealed class StubSymbolSearchIndex : ISymbolLookupIndex
