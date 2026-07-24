@@ -13,7 +13,8 @@ namespace Miller.Tests.Conventions;
 /// The launch signals are the two places a test obtains a real pinned binary to spawn it:
 /// <see cref="ScaleTestSupport.RequireJulieServer"/> / <see cref="ScaleTestSupport.LocateJulieServer"/> for
 /// <c>.tools/julie-extract</c>, and <see cref="ScaleTestSupport.RequireSemanticSidecar"/> /
-/// <see cref="ScaleTestSupport.LocateSemanticSidecar"/> for <c>.tools/julie-semantic-sidecar</c>. The guard
+/// <see cref="ScaleTestSupport.LocateSemanticSidecar"/> for the runtime under
+/// <c>.tools/julie-semantic-sidecar-runtime</c>. The guard
 /// scans the test sources and asserts: every file that references either signal also carries the Scale trait.
 /// It is intentionally ONE-directional (spawns a pinned binary ⟹ Scale), not the converse: a test can be Scale
 /// for other reasons (e.g. <c>RebuildLatencyTests</c> builds a 50k-symbol fixture, no julie), and that is fine.

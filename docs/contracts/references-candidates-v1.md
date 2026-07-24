@@ -224,7 +224,7 @@ A single JSON object with `schema_version: 1`.
     "artifact_id": "artifact-2026-07-07",
     "revision": 42,
     "reference_resolution_status": "partial",
-    "reference_resolution_version": "1"
+    "reference_resolution_version": "2"
   }
 }
 ```

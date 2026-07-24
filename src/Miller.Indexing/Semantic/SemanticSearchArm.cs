@@ -227,14 +227,13 @@ public sealed class SemanticSearchArm
 
     /// <summary>
     /// The production session locator, mirroring the converge service's: a start-on-demand session over the
-    /// pinned sidecar binary beside the executable, or null when that binary is not installed.
+    /// pinned sidecar runtime package under the tools root, or null when that package is not installed.
     /// </summary>
     public static SemanticEmbeddingSession? ProcessSession(string toolsRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
 
-        string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
-        string executable = Path.Combine(toolsRoot, name);
+        string executable = SemanticSidecarLayout.ExecutablePath(toolsRoot);
         SemanticEncoderPin active = SemanticEncoderSelection.Active;
         return File.Exists(executable)
             ? new SemanticEmbeddingSession(

@@ -197,12 +197,13 @@ public sealed class PackageSemanticSmokeTests
         public StagedPackage(bool writeSidecar = true, bool writeSqliteVec = true)
         {
             string tools = Directory.CreateDirectory(Path.Combine(_root, ".tools")).FullName;
-            string sidecar = Path.Combine(tools, OperatingSystem.IsWindows()
-                ? "julie-semantic-sidecar.exe"
-                : "julie-semantic-sidecar");
+            string sidecar = SemanticSidecarLayout.ExecutablePath(tools);
             string sqliteVec = Path.Combine(tools, VectorStore.PackagedExtensionFileName);
             if (writeSidecar)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(sidecar)!);
                 File.WriteAllText(sidecar, "sidecar");
+            }
             if (writeSqliteVec)
                 File.WriteAllText(sqliteVec, "sqlite-vec");
             Paths = new PackageSemanticPayloadPaths(_root, sidecar, sqliteVec);

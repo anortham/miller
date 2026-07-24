@@ -48,11 +48,13 @@ Every platform archive carries two pinned toolsets under `.tools/`:
 | Pin file | Restored artifacts | Restore script |
 | --- | --- | --- |
 | `scripts/julie-pins.json` | `julie-extract[.exe]` | `scripts/restore-julie-extract.sh` / `.ps1` |
-| `scripts/semantic-pins.json` | `julie-semantic-sidecar[.exe]`, `vec0.dylib`/`vec0.so`/`vec0.dll` | `scripts/restore-semantic-sidecar.sh` / `.ps1` |
+| `scripts/semantic-pins.json` | `julie-semantic-sidecar-runtime/`, `vec0.dylib`/`vec0.so`/`vec0.dll` | `scripts/restore-semantic-sidecar.sh` / `.ps1` |
 
 The release workflow restores both by pin — it never hardcodes URLs or checksums — and each runner's host
-platform equals its matrix target, so the scripts' host detection resolves the right asset. Before either
-archive step, every RID runs `Miller.PackageSemanticSmoke` against that leg's exact
+platform equals its matrix target, so the scripts' host detection resolves the right asset. The semantic
+restore verifies every file, role, size, and checksum in `julie-semantic-sidecar-runtime/package-manifest.json`
+before atomically installing the complete runtime directory. Before either archive step, every RID runs
+`Miller.PackageSemanticSmoke` against that leg's exact
 `artifacts/publish/<target>` staging directory. The helper launches the staged sidecar with Miller's active
 encoder pin, embeds one fixed query, loads the staged sqlite-vec extension, inserts that emitted vector into
 `vec0`, and requires a KNN self-query to return the inserted row at near-zero distance.

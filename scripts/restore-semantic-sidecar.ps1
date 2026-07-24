@@ -7,7 +7,7 @@
   Reads scripts\semantic-pins.json for both pins: `sidecar` (keyed by rust target triple) and
   `sqliteVec` (keyed by .NET RID). Downloads each asset into a temp staging directory OUTSIDE the
   repo, VERIFIES its sha256 against the pin BEFORE extracting, then installs
-  .tools\julie-semantic-sidecar.exe and .tools\vec0.dll. A sha256 mismatch aborts before .tools\ is
+  .tools\julie-semantic-sidecar-runtime\ and .tools\vec0.dll. A sha256 mismatch aborts before .tools\ is
   touched at all.
 
   Semantic retrieval is OPTIONAL (ADR-0003): a machine that never runs this script still builds and
@@ -24,7 +24,9 @@
 [CmdletBinding()]
 param(
     [switch]$FromSource,
-    [string]$SourcePath
+    [string]$SourcePath,
+    [string]$VerifyPackage,
+    [string]$ExpectedTriple
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,6 +35,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Split-Path -Parent $ScriptDir
 $Pins      = if (-not [string]::IsNullOrWhiteSpace($env:MILLER_SEMANTIC_PINS)) { $env:MILLER_SEMANTIC_PINS } else { Join-Path $ScriptDir 'semantic-pins.json' }
 $ToolsDir  = Join-Path $RepoRoot '.tools'
+$RuntimeDir = Join-Path $ToolsDir 'julie-semantic-sidecar-runtime'
 
 if (-not (Test-Path $Pins)) {
     Write-Error "pins file not found at $Pins"
@@ -56,6 +59,99 @@ function Assert-Sha256 {
     }
 }
 
+function Assert-PackageManifest {
+    param(
+        [string]$PackageRoot,
+        [string]$ExpectedTriple
+    )
+
+    $manifestPath = Join-Path $PackageRoot 'package-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "package-manifest.json missing from sidecar package"
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.sidecar_version -ne $sidecarVersion) {
+        throw "sidecar package manifest version '$($manifest.sidecar_version)' does not match '$sidecarVersion'"
+    }
+    if ($manifest.rust_target -ne $ExpectedTriple) {
+        throw "sidecar package manifest target '$($manifest.rust_target)' does not match '$ExpectedTriple'"
+    }
+    if ($null -ne (Get-ChildItem -LiteralPath $PackageRoot -Directory -Force | Select-Object -First 1)) {
+        throw "sidecar package contains an undeclared directory"
+    }
+
+    $expected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $executableCount = 0
+    foreach ($entry in $manifest.files) {
+        $path = [string]$entry.path
+        if ([string]::IsNullOrWhiteSpace($path) -or
+            [System.IO.Path]::IsPathRooted($path) -or
+            [System.IO.Path]::GetFileName($path) -ne $path -or
+            $path -in @('.', '..')) {
+            throw "unsafe sidecar package path '$path'"
+        }
+        if (-not $expected.Add($path)) {
+            throw "duplicate sidecar package path '$path'"
+        }
+        $file = Join-Path $PackageRoot $path
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+            throw "manifest file missing from sidecar package: $path"
+        }
+        Assert-Sha256 -File $file -Expected ([string]$entry.sha256)
+        if ((Get-Item -LiteralPath $file).Length -ne [long]$entry.size) {
+            throw "size mismatch for sidecar package file $path"
+        }
+        if ($entry.role -eq 'executable') {
+            $executableCount++
+            if ($path -ne 'julie-semantic-sidecar.exe') {
+                throw "unexpected sidecar executable path '$path'"
+            }
+        }
+    }
+    if ($executableCount -ne 1) {
+        throw "sidecar package manifest must declare exactly one executable"
+    }
+
+    $actual = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    Get-ChildItem -LiteralPath $PackageRoot -File -Force |
+        Where-Object { $_.Name -ne 'package-manifest.json' } |
+        ForEach-Object { [void]$actual.Add($_.Name) }
+    if (-not $actual.SetEquals($expected)) {
+        throw "sidecar package contents do not match package-manifest.json"
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($VerifyPackage)) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedTriple)) {
+        throw "-VerifyPackage requires -ExpectedTriple"
+    }
+    Assert-PackageManifest -PackageRoot $VerifyPackage -ExpectedTriple $ExpectedTriple
+    Write-Host "Verified sidecar package: $VerifyPackage"
+    exit 0
+}
+
+function Install-RuntimeDirectory {
+    param([string]$Source)
+
+    $candidate = Join-Path $ToolsDir ('.julie-semantic-sidecar-runtime.candidate.' + [Guid]::NewGuid().ToString('N'))
+    $backup = Join-Path $ToolsDir ('.julie-semantic-sidecar-runtime.backup.' + [Guid]::NewGuid().ToString('N'))
+    Copy-Item -LiteralPath $Source -Destination $candidate -Recurse
+    try {
+        if (Test-Path -LiteralPath $RuntimeDir) {
+            Move-Item -LiteralPath $RuntimeDir -Destination $backup
+        }
+        Move-Item -LiteralPath $candidate -Destination $RuntimeDir
+        Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    catch {
+        Remove-Item -LiteralPath $candidate -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $RuntimeDir) -and (Test-Path -LiteralPath $backup)) {
+            Move-Item -LiteralPath $backup -Destination $RuntimeDir
+        }
+        throw
+    }
+}
+
 function Restore-FromSource {
     param([string]$SourceRoot)
 
@@ -72,7 +168,8 @@ function Restore-FromSource {
     }
 
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $binary = Join-Path $ToolsDir 'julie-semantic-sidecar.exe'
+    $sourceRuntime = Join-Path $ToolsDir ('.julie-semantic-sidecar-source.' + [Guid]::NewGuid().ToString('N'))
+    $binary = Join-Path $RuntimeDir 'julie-semantic-sidecar.exe'
     $sourceBinary = Join-Path $sourceFull 'target\release\julie-semantic-sidecar.exe'
 
     Write-Host "Building julie-semantic-sidecar v$sidecarVersion from source: $sourceFull"
@@ -84,11 +181,16 @@ function Restore-FromSource {
         throw "expected build output not found: $sourceBinary"
     }
 
-    Copy-Item -Path $sourceBinary -Destination $binary -Force
-    $versionOutput = (& $binary --version 2>$null)
-    if ($versionOutput -notlike "julie-semantic-sidecar*") {
-        throw "restored binary does not self-identify as julie-semantic-sidecar; actual '$versionOutput'"
+    $versionOutput = (& $sourceBinary --version 2>$null)
+    if ($versionOutput -notlike "julie-semantic-sidecar*$sidecarVersion*") {
+        throw "built binary does not report pinned sidecar version $sidecarVersion; actual '$versionOutput'"
     }
+
+    New-Item -ItemType Directory -Force -Path $sourceRuntime | Out-Null
+    Copy-Item -LiteralPath $sourceBinary -Destination (Join-Path $sourceRuntime 'julie-semantic-sidecar.exe')
+    Install-RuntimeDirectory -Source $sourceRuntime
+    Remove-Item -LiteralPath $sourceRuntime -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $ToolsDir 'julie-semantic-sidecar'), (Join-Path $ToolsDir 'julie-semantic-sidecar.exe') -Force -ErrorAction SilentlyContinue
 
     Write-Host "Installed: $binary"
     & $binary --version 2>$null
@@ -171,11 +273,7 @@ try {
     $sidecarExtract = Join-Path $staging 'sidecar'
     New-Item -ItemType Directory -Force -Path $sidecarExtract | Out-Null
     Expand-Archive -Path $sidecarArchive -DestinationPath $sidecarExtract -Force
-    $foundSidecar = Get-ChildItem -Path $sidecarExtract -Recurse -Filter 'julie-semantic-sidecar.exe' | Select-Object -First 1
-    if ($null -eq $foundSidecar) {
-        Write-Error "julie-semantic-sidecar.exe not found inside $sidecarAsset"
-        exit 1
-    }
+    Assert-PackageManifest -PackageRoot $sidecarExtract -ExpectedTriple $triple
 
     $vecExtract = Join-Path $staging 'vec'
     New-Item -ItemType Directory -Force -Path $vecExtract | Out-Null
@@ -191,10 +289,11 @@ try {
 
     # --- install: every download verified and extracted before .tools\ is touched ---
     New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
-    $sidecarBinary = Join-Path $ToolsDir 'julie-semantic-sidecar.exe'
+    $sidecarBinary = Join-Path $RuntimeDir 'julie-semantic-sidecar.exe'
     $vecLibrary    = Join-Path $ToolsDir $vecMember
-    Copy-Item -Path $foundSidecar.FullName -Destination $sidecarBinary -Force
+    Install-RuntimeDirectory -Source $sidecarExtract
     Copy-Item -Path $vecStaged -Destination $vecLibrary -Force
+    Remove-Item (Join-Path $ToolsDir 'julie-semantic-sidecar'), (Join-Path $ToolsDir 'julie-semantic-sidecar.exe') -Force -ErrorAction SilentlyContinue
 }
 finally {
     Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue

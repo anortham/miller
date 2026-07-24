@@ -154,15 +154,18 @@ public sealed class SemanticPrepareCliTests : IDisposable
     [Fact]
     public void Prepare_ForwardsOnlyModelToTheSidecar_NeverMillerJsonFlag()
     {
+        string? executable = null;
         IReadOnlyList<string>? captured = null;
-        var cli = Build(binaryExists: true, preflight: Ok(), runner: (_, args, _, _) =>
+        var cli = Build(binaryExists: true, preflight: Ok(), runner: (path, args, _, _) =>
         {
+            executable = path;
             captured = args;
             return 0;
         });
 
         Run(cli, new SemanticPrepareRequest("custom-id", Json: true));
 
+        Assert.Equal(SemanticSidecarLayout.ExecutablePath(_toolsRoot), executable);
         Assert.Equal(new[] { "prepare", "--model", "custom-id" }, captured);
     }
 

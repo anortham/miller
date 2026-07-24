@@ -104,7 +104,7 @@ internal sealed class SemanticPrepareCli
         ArgumentNullException.ThrowIfNull(stdout);
         ArgumentNullException.ThrowIfNull(stderr);
 
-        string executable = Path.Combine(toolsRoot, SidecarBinaryName());
+        string executable = SemanticSidecarLayout.ExecutablePath(toolsRoot);
         if (!_fileExists(executable))
         {
             string message =
@@ -139,9 +139,6 @@ internal sealed class SemanticPrepareCli
         }
     }
 
-    // The pinned sidecar's prepare verb accepts only --model (0.1.0-rc.2 rejects --json with a usage
-    // error); its progress events are already JSONL, so Miller's --json flag shapes only Miller-side
-    // refusal envelopes and is never forwarded.
     private static IReadOnlyList<string> BuildArguments(string model) =>
         ["prepare", "--model", model];
 
@@ -242,9 +239,6 @@ internal sealed class SemanticPrepareCli
 
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
-
-    private static string SidecarBinaryName() =>
-        OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
 
     // The shared model cache: JULIE_EMBEDDING_CACHE_DIR wins (shared with Julie by construction, design §4.4);
     // otherwise the platform cache dir. Miller never parses model URLs — this path is only for the disk preflight.

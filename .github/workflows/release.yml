@@ -159,8 +159,8 @@ jobs:
           test -x "${publish_dir}/miller"
           test -x "${publish_dir}/.tools/julie-extract"
           test ! -e "${publish_dir}/.tools/julie-extract.exe"
-          test -x "${publish_dir}/.tools/julie-semantic-sidecar"
-          test ! -e "${publish_dir}/.tools/julie-semantic-sidecar.exe"
+          test -x "${publish_dir}/.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar"
+          test ! -e "${publish_dir}/.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar.exe"
           test -f "${publish_dir}/.tools/${SEMANTIC_VEC_MEMBER}"
           test -x "${publish_dir}/dashboard/Miller.Dashboard"
           test -f "${publish_dir}/dashboard/wwwroot/dashboard.css"
@@ -173,9 +173,9 @@ jobs:
           test -f "${publish_dir}/dashboard/wwwroot/lib/htmx/htmx.min.js"
           test -f "${publish_dir}/dashboard/wwwroot/lib/idiomorph/idiomorph-ext.min.js"
           test ! -e "${publish_dir}/dashboard/.tools/julie-extract"
-          test ! -e "${publish_dir}/dashboard/.tools/julie-semantic-sidecar"
+          test ! -e "${publish_dir}/dashboard/.tools/julie-semantic-sidecar-runtime"
           "${publish_dir}/.tools/julie-extract" --version
-          "${publish_dir}/.tools/julie-semantic-sidecar" --version
+          "${publish_dir}/.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar" --version
           "${publish_dir}/miller" version
           reqs=$(printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
@@ -223,8 +223,8 @@ jobs:
           if (Test-Path $unixBinary) {
             throw "Windows package must not include Unix julie-extract"
           }
-          $windowsSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar.exe"
-          $unixSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar"
+          $windowsSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar.exe"
+          $unixSidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar"
           $vecLibrary = Join-Path $publishDir ".tools/$env:SEMANTIC_VEC_MEMBER"
           if (-not (Test-Path $windowsSidecar)) {
             throw "missing packaged Windows julie-semantic-sidecar.exe"
@@ -295,7 +295,7 @@ jobs:
         run: |
           $publishDir = Join-Path $env:GITHUB_WORKSPACE "artifacts/publish/${{ matrix.target }}"
           $sidecarName = if ($env:RUNNER_OS -eq "Windows") { "julie-semantic-sidecar.exe" } else { "julie-semantic-sidecar" }
-          $sidecar = Join-Path $publishDir ".tools/$sidecarName"
+          $sidecar = Join-Path $publishDir ".tools/julie-semantic-sidecar-runtime/$sidecarName"
           $modelId = dotnet run --project scripts/Miller.PackageSemanticSmoke/Miller.PackageSemanticSmoke.csproj `
             -c Release --no-restore -- --print-model-id
           if ($LASTEXITCODE -ne 0) {
@@ -329,13 +329,15 @@ jobs:
           rsync -a "${publish_dir}/" "${package_dir}/"
           cp "${GITHUB_WORKSPACE}/LICENSE" "${package_dir}/LICENSE"
           cp "${GITHUB_WORKSPACE}/THIRD-PARTY-NOTICES.md" "${package_dir}/THIRD-PARTY-NOTICES.md"
-          find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) -delete
+          find "${package_dir}" -type f \( -name '*.pdb' -o -name '*.dbg' \) \
+            ! -path "${package_dir}/.tools/julie-semantic-sidecar-runtime/*" -delete
           find "${package_dir}" -name '*.dSYM' -type d -prune -exec rm -rf {} +
-          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/.tools/julie-semantic-sidecar" "${package_dir}/dashboard/Miller.Dashboard"
+          bash scripts/restore-semantic-sidecar.sh --verify-package \
+            "${package_dir}/.tools/julie-semantic-sidecar-runtime" "${{ matrix.target }}"
+          chmod +x "${package_dir}/miller" "${package_dir}/.tools/julie-extract" "${package_dir}/.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar" "${package_dir}/dashboard/Miller.Dashboard"
           test -f "${package_dir}/LICENSE"
           test -f "${package_dir}/THIRD-PARTY-NOTICES.md"
-          # The archive redistributes julie-semantic-sidecar (statically linked llama.cpp/ggml) and the
-          # sqlite-vec loadable extension, so shipping without their attribution is a license violation.
+          # The archive redistributes julie-semantic-sidecar, its llama.cpp/ggml runtime, and sqlite-vec.
           for component in julie-extract julie-semantic-sidecar sqlite-vec llama.cpp; do
             grep -qi -- "${component}" "${package_dir}/THIRD-PARTY-NOTICES.md" \
               || { echo "THIRD-PARTY-NOTICES.md is missing an attribution entry for ${component}"; exit 1; }
@@ -360,15 +362,19 @@ jobs:
           Get-ChildItem -Path $publishDir -Force | Copy-Item -Destination $packageDir -Recurse -Force
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE "LICENSE") -Destination (Join-Path $packageDir "LICENSE") -Force
           Copy-Item (Join-Path $env:GITHUB_WORKSPACE "THIRD-PARTY-NOTICES.md") -Destination (Join-Path $packageDir "THIRD-PARTY-NOTICES.md") -Force
-          Get-ChildItem -Path $packageDir -Recurse -Filter *.pdb | Remove-Item -Force
+          $runtimeDir = [System.IO.Path]::GetFullPath((Join-Path $packageDir ".tools/julie-semantic-sidecar-runtime"))
+          $runtimePrefix = $runtimeDir + [System.IO.Path]::DirectorySeparatorChar
+          Get-ChildItem -Path $packageDir -Recurse -Filter *.pdb |
+            Where-Object { -not $_.FullName.StartsWith($runtimePrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
+            Remove-Item -Force
+          ./scripts/restore-semantic-sidecar.ps1 -VerifyPackage $runtimeDir -ExpectedTriple "${{ matrix.target }}"
           if (-not (Test-Path (Join-Path $packageDir "LICENSE"))) {
             throw "missing packaged LICENSE"
           }
           if (-not (Test-Path (Join-Path $packageDir "THIRD-PARTY-NOTICES.md"))) {
             throw "missing packaged THIRD-PARTY-NOTICES.md"
           }
-          # The archive redistributes julie-semantic-sidecar (statically linked llama.cpp/ggml) and the
-          # sqlite-vec loadable extension, so shipping without their attribution is a license violation.
+          # The archive redistributes julie-semantic-sidecar, its llama.cpp/ggml runtime, and sqlite-vec.
           $notices = Get-Content (Join-Path $packageDir "THIRD-PARTY-NOTICES.md") -Raw
           foreach ($component in @("julie-extract", "julie-semantic-sidecar", "sqlite-vec", "llama.cpp")) {
             if ($notices -notmatch [regex]::Escape($component)) {

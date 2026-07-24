@@ -371,7 +371,7 @@ public sealed class DeadCodeCandidateReaderTests
         Assert.StartsWith("artifact-", report.Artifact.ArtifactId);
         Assert.Equal(2L, report.Artifact.Revision);
         Assert.Equal("partial", report.Artifact.ReferenceResolutionStatus);
-        Assert.Equal("1", report.Artifact.ReferenceResolutionVersion);
+        Assert.Equal("2", report.Artifact.ReferenceResolutionVersion);
     }
 
     [Fact]

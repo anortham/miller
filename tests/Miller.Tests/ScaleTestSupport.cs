@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Miller.Indexing.Semantic;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -88,13 +89,12 @@ public static class ScaleTestSupport
     }
 
     /// <summary>
-    /// The pinned julie-semantic-sidecar binary under <c>.tools/</c>, or <c>null</c> if restore has not been
-    /// run. Referencing this method marks a test as sidecar-spawning (see the class remarks).
+    /// The pinned julie-semantic-sidecar runtime under <c>.tools/</c>, or <c>null</c> if restore has not
+    /// been run. Referencing this method marks a test as sidecar-spawning (see the class remarks).
     /// </summary>
     public static string? LocateSemanticSidecar()
     {
-        string name = OperatingSystem.IsWindows() ? "julie-semantic-sidecar.exe" : "julie-semantic-sidecar";
-        string candidate = Path.Combine(RepoRoot(), ".tools", name);
+        string candidate = SemanticSidecarLayout.ExecutablePath(Path.Combine(RepoRoot(), ".tools"));
         return File.Exists(candidate) ? candidate : null;
     }
 
@@ -109,7 +109,7 @@ public static class ScaleTestSupport
         string? binary = LocateSemanticSidecar();
         Assert.SkipWhen(binary is null,
             "julie-semantic-sidecar not found in .tools/. Run scripts/restore-semantic-sidecar.sh, then " +
-            "`.tools/julie-semantic-sidecar prepare` once to populate the model cache, to enable the Scale test.");
+            "run `miller semantic prepare` once to populate the model cache, to enable the Scale test.");
         return binary!;
     }
 

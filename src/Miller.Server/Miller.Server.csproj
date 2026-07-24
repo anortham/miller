@@ -129,17 +129,9 @@
        required: ADR-0003 makes semantic retrieval optional, so an absent restore must still build AND still run — the
        runtime fails open with a stated reason (VectorStore.ResolveExtensionPath returns null). The Exists conditions are
        therefore the whole optionality contract, not a convenience. -->
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar')">
-    <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar">
-      <Link>.tools/julie-semantic-sidecar</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Visible>false</Visible>
-    </Content>
-  </ItemGroup>
-
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar.exe')">
-    <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar.exe">
-      <Link>.tools/julie-semantic-sidecar.exe</Link>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar-runtime')">
+    <Content Include="$(MSBuildProjectDirectory)/../../.tools/julie-semantic-sidecar-runtime/**/*">
+      <Link>.tools/julie-semantic-sidecar-runtime/%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
     </Content>
@@ -157,28 +149,28 @@
 
   <!-- Same exec-bit reassertion as julie-extract: MSBuild's Copy drops +x and Process.Start would fail EACCES. -->
   <Target Name="EnsureSemanticSidecarExecutable" AfterTargets="Build;Publish"
-          Condition="!$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(OutDir).tools/julie-semantic-sidecar')">
-    <Exec Command="chmod +x &quot;$(OutDir).tools/julie-semantic-sidecar&quot;" />
+          Condition="!$([MSBuild]::IsOSPlatform('Windows')) And Exists('$(OutDir).tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar')">
+    <Exec Command="chmod +x &quot;$(OutDir).tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar&quot;" />
   </Target>
 
   <!-- Stale-sidecar build guard, mirroring VerifyPinnedJulieExtractVersion: the Content copy above takes whatever sits
        in .tools with no version check, so a sidecar left over from before a pin bump ships silently and its encoder
        fingerprint no longer matches the vectors.db generation identity. Semantics stay
          missing => builds (runtime fails OPEN, the optionality contract);  stale => build fails loud HERE;  current => silent pass.
-       The version regex admits a prerelease suffix because the pin is 0.1.0-rc.1 — julie-extract's bare
+       The version regex admits a prerelease suffix because sidecar pins are release candidates — julie-extract's bare
        [0-9]+\.[0-9]+\.[0-9]+ would truncate that to 0.1.0 and false-pass a later rc. MILLER_SEMANTIC_PINS overrides the
        pin file path, matching the restore scripts, so the guard can be exercised without editing the committed pins. -->
   <Target Name="VerifyPinnedSemanticSidecarVersion" BeforeTargets="Build;Publish"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar')">
+          Condition="Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar')">
     <PropertyGroup>
-      <_SemanticSidecarBinary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\..\.tools\julie-semantic-sidecar.exe</_SemanticSidecarBinary>
-      <_SemanticSidecarBinary Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar</_SemanticSidecarBinary>
+      <_SemanticSidecarBinary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\..\.tools\julie-semantic-sidecar-runtime\julie-semantic-sidecar.exe</_SemanticSidecarBinary>
+      <_SemanticSidecarBinary Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar</_SemanticSidecarBinary>
       <_SemanticPinsFile Condition="'$(MILLER_SEMANTIC_PINS)' != ''">$(MILLER_SEMANTIC_PINS)</_SemanticPinsFile>
       <_SemanticPinsFile Condition="'$(_SemanticPinsFile)' == ''">$(MSBuildThisFileDirectory)../../scripts/semantic-pins.json</_SemanticPinsFile>
     </PropertyGroup>
 
     <Error Condition="!Exists('$(_SemanticPinsFile)')"
-           Text="Semantic pin file '$(_SemanticPinsFile)' does not exist; the stale-sidecar build guard cannot verify .tools/julie-semantic-sidecar." />
+           Text="Semantic pin file '$(_SemanticPinsFile)' does not exist; the stale-sidecar build guard cannot verify the .tools/julie-semantic-sidecar-runtime package." />
 
     <PropertyGroup>
       <!-- Anchored on the `sidecar` object so the sqliteVec pin below it can never be read as the sidecar version.
@@ -187,7 +179,7 @@
     </PropertyGroup>
 
     <Error Condition="'$(_PinnedSemanticSidecarVersion)' == ''"
-           Text="Could not read the pinned julie-semantic-sidecar version from '$(_SemanticPinsFile)'; the stale-sidecar build guard cannot verify .tools/julie-semantic-sidecar." />
+           Text="Could not read the pinned julie-semantic-sidecar version from '$(_SemanticPinsFile)'; the stale-sidecar build guard cannot verify the .tools/julie-semantic-sidecar-runtime package." />
 
     <!-- IgnoreExitCode so a binary that cannot self-report version raises the clear Error below, not a raw MSB3073. -->
     <Exec Condition="Exists('$(_SemanticSidecarBinary)')"
@@ -205,6 +197,6 @@
            Text="Could not run '$(_SemanticSidecarBinary) --version' (exit $(_SemanticSidecarVersionExit)) to verify the pinned julie-semantic-sidecar. Re-run scripts/restore-semantic-sidecar.ps1 (Windows) or scripts/restore-semantic-sidecar.sh." />
 
     <Error Condition="Exists('$(_SemanticSidecarBinary)') And '$(_SemanticSidecarActualVersion)' != '$(_PinnedSemanticSidecarVersion)'"
-           Text="Bundled julie-semantic-sidecar is v$(_SemanticSidecarActualVersion) but $(_SemanticPinsFile) pins v$(_PinnedSemanticSidecarVersion). The build copies .tools/julie-semantic-sidecar as-is (no version check), so a stale sidecar would emit vectors under an encoder fingerprint the pinned generation identity refuses. Re-run scripts/restore-semantic-sidecar.ps1 (Windows) or scripts/restore-semantic-sidecar.sh, then rebuild." />
+           Text="Bundled julie-semantic-sidecar is v$(_SemanticSidecarActualVersion) but $(_SemanticPinsFile) pins v$(_PinnedSemanticSidecarVersion). The build copies the restored runtime package as-is, so a stale sidecar would emit vectors under an encoder fingerprint the pinned generation identity refuses. Re-run scripts/restore-semantic-sidecar.ps1 (Windows) or scripts/restore-semantic-sidecar.sh, then rebuild." />
   </Target>
 </Project>

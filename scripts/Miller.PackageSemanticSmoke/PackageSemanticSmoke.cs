@@ -13,9 +13,7 @@ public sealed record PackageSemanticPayloadPaths(
         ArgumentException.ThrowIfNullOrWhiteSpace(packageRoot);
         string root = Path.GetFullPath(packageRoot);
         string tools = Path.Combine(root, ".tools");
-        string sidecar = Path.Combine(tools, OperatingSystem.IsWindows()
-            ? "julie-semantic-sidecar.exe"
-            : "julie-semantic-sidecar");
+        string sidecar = SemanticSidecarLayout.ExecutablePath(tools);
         return new(root, sidecar, Path.Combine(tools, VectorStore.PackagedExtensionFileName));
     }
 }

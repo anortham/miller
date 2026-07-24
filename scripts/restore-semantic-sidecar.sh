@@ -6,7 +6,7 @@
 # Reads scripts/semantic-pins.json for both pins: `sidecar` (keyed by rust target triple) and
 # `sqliteVec` (keyed by .NET RID). Detects the host platform, downloads each asset into a temp
 # staging directory OUTSIDE the repo, VERIFIES its sha256 against the pin BEFORE extracting, then
-# installs .tools/julie-semantic-sidecar and .tools/vec0.<ext>. A sha256 mismatch aborts before
+# installs .tools/julie-semantic-sidecar-runtime/ and .tools/vec0.<ext>. A sha256 mismatch aborts before
 # .tools/ is touched at all.
 #
 # Semantic retrieval is OPTIONAL (ADR-0003): a machine that never runs this script still builds and
@@ -31,6 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PINS="${MILLER_SEMANTIC_PINS:-${SCRIPT_DIR}/semantic-pins.json}"
 TOOLS_DIR="${REPO_ROOT}/.tools"
+RUNTIME_DIR="${TOOLS_DIR}/julie-semantic-sidecar-runtime"
 
 if [[ ! -f "${PINS}" ]]; then
   echo "error: pins file not found at ${PINS}" >&2
@@ -120,6 +121,133 @@ install_exec_bits() {
   fi
 }
 
+read_package_field() {
+  local manifest="$1" expr="$2"
+  if command -v jq >/dev/null 2>&1; then
+    jq -r "${expr} // empty" "${manifest}"
+  else
+    python3 - "$expr" "${manifest}" <<'PY'
+import json, sys
+expr, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    value = json.load(f)
+for key in expr.lstrip(".").split("."):
+    value = value.get(key) if isinstance(value, dict) else None
+print("" if value is None else value)
+PY
+  fi
+}
+
+verify_package_manifest() {
+  local root="$1" expected_triple="$2" manifest="${1}/package-manifest.json"
+  if [[ ! -f "${manifest}" ]]; then
+    echo "error: package-manifest.json missing from sidecar package" >&2
+    exit 1
+  fi
+  if [[ "$(read_package_field "${manifest}" .sidecar_version)" != "${VERSION}" ]]; then
+    echo "error: sidecar package manifest version does not match v${VERSION}" >&2
+    exit 1
+  fi
+  if [[ "$(read_package_field "${manifest}" .rust_target)" != "${expected_triple}" ]]; then
+    echo "error: sidecar package manifest target does not match ${expected_triple}" >&2
+    exit 1
+  fi
+  if find "${root}" -mindepth 1 -type d -print -quit | grep -q .; then
+    echo "error: sidecar package contains an undeclared directory" >&2
+    exit 1
+  fi
+
+  local rows
+  if command -v jq >/dev/null 2>&1; then
+    rows="$(jq -r '.files[] | [.path, .sha256, (.size | tostring), .role] | @tsv' "${manifest}")"
+  else
+    rows="$(python3 - "${manifest}" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    manifest = json.load(f)
+for item in manifest.get("files", []):
+    print("\t".join((item["path"], item["sha256"], str(item["size"]), item["role"])))
+PY
+)"
+  fi
+
+  local expected_list="${root}/.manifest-files" executable_count=0
+  : > "${expected_list}"
+  while IFS=$'\t' read -r path expected_sha expected_size role; do
+    if [[ -z "${path}" || "${path}" == */* || "${path}" == "." || "${path}" == ".." ]]; then
+      echo "error: unsafe sidecar package path '${path}'" >&2
+      exit 1
+    fi
+    local file="${root}/${path}"
+    if [[ ! -f "${file}" ]]; then
+      echo "error: manifest file missing from sidecar package: ${path}" >&2
+      exit 1
+    fi
+    verify_sha "${file}" "${expected_sha}"
+    if [[ "$(wc -c < "${file}" | tr -d ' ')" != "${expected_size}" ]]; then
+      echo "error: size mismatch for sidecar package file ${path}" >&2
+      exit 1
+    fi
+    if [[ "${role}" == "executable" ]]; then
+      executable_count=$((executable_count + 1))
+      if [[ "${path}" != "julie-semantic-sidecar" ]]; then
+        echo "error: unexpected sidecar executable path '${path}'" >&2
+        exit 1
+      fi
+    fi
+    printf '%s\n' "${path}" >> "${expected_list}"
+  done <<< "${rows}"
+
+  if [[ "${executable_count}" != "1" ]]; then
+    echo "error: sidecar package manifest must declare exactly one executable" >&2
+    exit 1
+  fi
+
+  local actual_list="${root}/.actual-files"
+  find "${root}" -maxdepth 1 -type f \
+    ! -name package-manifest.json \
+    ! -name .manifest-files \
+    ! -name .actual-files \
+    -exec basename {} \; | LC_ALL=C sort > "${actual_list}"
+  LC_ALL=C sort -o "${expected_list}" "${expected_list}"
+  if [[ -n "$(uniq -d "${expected_list}")" ]]; then
+    echo "error: sidecar package manifest contains duplicate paths" >&2
+    exit 1
+  fi
+  if ! cmp -s "${expected_list}" "${actual_list}"; then
+    echo "error: sidecar package contents do not match package-manifest.json" >&2
+    exit 1
+  fi
+  rm -f "${expected_list}" "${actual_list}"
+}
+
+if [[ "${1:-}" == "--verify-package" ]]; then
+  if [[ $# -ne 3 ]]; then
+    echo "error: --verify-package requires PACKAGE_ROOT and RUST_TARGET" >&2
+    exit 64
+  fi
+  verify_package_manifest "$2" "$3"
+  echo "Verified sidecar package: $2"
+  exit 0
+fi
+
+install_runtime_directory() {
+  local source="$1"
+  local candidate="${TOOLS_DIR}/.julie-semantic-sidecar-runtime.candidate.$$"
+  local backup="${TOOLS_DIR}/.julie-semantic-sidecar-runtime.backup.$$"
+  rm -rf "${candidate}" "${backup}"
+  cp -R "${source}" "${candidate}"
+  if [[ -e "${RUNTIME_DIR}" ]]; then
+    mv "${RUNTIME_DIR}" "${backup}"
+  fi
+  if ! mv "${candidate}" "${RUNTIME_DIR}"; then
+    [[ ! -e "${RUNTIME_DIR}" && -e "${backup}" ]] && mv "${backup}" "${RUNTIME_DIR}"
+    echo "error: failed to install semantic sidecar runtime" >&2
+    exit 1
+  fi
+  rm -rf "${backup}"
+}
+
 if [[ -n "${FROM_SOURCE}" ]]; then
   SOURCE_ROOT="$(cd "${FROM_SOURCE}" && pwd)"
   SOURCE_MANIFEST="${SOURCE_ROOT}/Cargo.toml"
@@ -133,7 +261,8 @@ if [[ -n "${FROM_SOURCE}" ]]; then
   fi
 
   mkdir -p "${TOOLS_DIR}"
-  BINARY="${TOOLS_DIR}/julie-semantic-sidecar"
+  SOURCE_RUNTIME="${TOOLS_DIR}/.julie-semantic-sidecar-source.$$"
+  BINARY="${RUNTIME_DIR}/julie-semantic-sidecar"
   SOURCE_BINARY="${SOURCE_ROOT}/target/release/julie-semantic-sidecar"
 
   echo "Building julie-semantic-sidecar v${VERSION} from source: ${SOURCE_ROOT}"
@@ -143,14 +272,20 @@ if [[ -n "${FROM_SOURCE}" ]]; then
     exit 1
   fi
 
-  cp "${SOURCE_BINARY}" "${BINARY}"
-  install_exec_bits "${BINARY}"
-  VERSION_OUTPUT="$("${BINARY}" --version 2>/dev/null || true)"
-  if [[ "${VERSION_OUTPUT}" != julie-semantic-sidecar* ]]; then
-    echo "error: restored binary does not self-identify as julie-semantic-sidecar" >&2
+  VERSION_OUTPUT="$("${SOURCE_BINARY}" --version 2>/dev/null || true)"
+  if [[ "${VERSION_OUTPUT}" != julie-semantic-sidecar*"${VERSION}"* ]]; then
+    echo "error: built binary does not report pinned sidecar version ${VERSION}" >&2
     echo "  actual: ${VERSION_OUTPUT:-"(no --version output)"}" >&2
     exit 1
   fi
+
+  rm -rf "${SOURCE_RUNTIME}"
+  mkdir -p "${SOURCE_RUNTIME}"
+  cp "${SOURCE_BINARY}" "${SOURCE_RUNTIME}/julie-semantic-sidecar"
+  install_runtime_directory "${SOURCE_RUNTIME}"
+  rm -rf "${SOURCE_RUNTIME}"
+  install_exec_bits "${BINARY}"
+  rm -f "${TOOLS_DIR}/julie-semantic-sidecar" "${TOOLS_DIR}/julie-semantic-sidecar.exe"
 
   echo "Installed: ${BINARY}"
   "${BINARY}" --version 2>/dev/null || true
@@ -240,15 +375,11 @@ curl -fsSL "${VEC_URL}" -o "${STAGING}/${VEC_ASSET}"
 verify_sha "${STAGING}/${VEC_ASSET}" "${VEC_SHA}"
 echo "  sha256 OK"
 
-# --- extract (sidecar binary sits at the ARCHIVE ROOT; vec0 member likewise) ---
+# --- extract ---
 SIDECAR_EXTRACT="${STAGING}/sidecar"
 mkdir -p "${SIDECAR_EXTRACT}"
 tar -xzf "${STAGING}/${SIDECAR_ASSET}" -C "${SIDECAR_EXTRACT}"
-FOUND_SIDECAR="$(find "${SIDECAR_EXTRACT}" -type f -name julie-semantic-sidecar -print -quit)"
-if [[ -z "${FOUND_SIDECAR}" ]]; then
-  echo "error: julie-semantic-sidecar not found inside ${SIDECAR_ASSET}" >&2
-  exit 1
-fi
+verify_package_manifest "${SIDECAR_EXTRACT}" "${TRIPLE}"
 
 VEC_EXTRACT="${STAGING}/vec"
 mkdir -p "${VEC_EXTRACT}"
@@ -260,13 +391,14 @@ fi
 
 # --- install: every download verified and extracted before .tools/ is touched ---
 mkdir -p "${TOOLS_DIR}"
-SIDECAR_BINARY="${TOOLS_DIR}/julie-semantic-sidecar"
+SIDECAR_BINARY="${RUNTIME_DIR}/julie-semantic-sidecar"
 VEC_LIBRARY="${TOOLS_DIR}/${VEC_MEMBER}"
-mv -f "${FOUND_SIDECAR}" "${SIDECAR_BINARY}"
+install_runtime_directory "${SIDECAR_EXTRACT}"
 mv -f "${VEC_EXTRACT}/${VEC_MEMBER}" "${VEC_LIBRARY}"
 
 install_exec_bits "${SIDECAR_BINARY}"
 install_exec_bits "${VEC_LIBRARY}"
+rm -f "${TOOLS_DIR}/julie-semantic-sidecar" "${TOOLS_DIR}/julie-semantic-sidecar.exe"
 
 cleanup_staging
 trap - EXIT

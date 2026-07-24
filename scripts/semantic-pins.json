@@ -1,15 +1,14 @@
 {
-  "note": "Pins for Miller's OPTIONAL local semantic retrieval (ADR-0003). Two sections: `sidecar` is the julie-semantic-sidecar embedding binary keyed by rust target triple; `sqliteVec` is the sqlite-vec loadable extension keyed by .NET RID (values copied verbatim from scripts/spike-pins.json). Sidecar asset names carry NO leading `v` before the version and the binary sits at the ARCHIVE ROOT — both differ from julie-pins.json. The Windows sidecar asset is a .zip; the Windows sqlite-vec asset is a .tar.gz. A missing restore is not an error: semantic fails open with a reason.",
+  "note": "Pins for Miller's OPTIONAL local semantic retrieval (ADR-0003). Two sections: `sidecar` is the julie-semantic-sidecar runtime package keyed by rust target triple; `sqliteVec` is the sqlite-vec loadable extension keyed by .NET RID (values copied verbatim from scripts/spike-pins.json). Sidecar asset names carry NO leading `v` before the version and install as a complete manifest-verified package under `.tools/julie-semantic-sidecar-runtime`. The Windows sidecar asset is a .zip; the Windows sqlite-vec asset is a .tar.gz. A missing restore is not an error: semantic fails open with a reason.",
   "sidecar": {
-    "version": "0.1.0-rc.2",
+    "version": "0.1.0-rc.4",
     "binary": "julie-semantic-sidecar",
-    "archiveInnerPathTemplate": "julie-semantic-sidecar{exe}",
     "urlTemplate": "https://github.com/anortham/julie-semantic-sidecar/releases/download/v{VER}/{asset}",
     "assets": {
-      "aarch64-apple-darwin":     { "name": "julie-semantic-sidecar-{VER}-aarch64-apple-darwin.tar.gz",     "sha256": "a08c5c48ec7fc00eb2555e6a406df42adc35f806f5bc8e4125f0a57894257f69" },
-      "x86_64-apple-darwin":      { "name": "julie-semantic-sidecar-{VER}-x86_64-apple-darwin.tar.gz",      "sha256": "52925e94292aac36ac7eecf042e0fe5a9ac3148b35ffb352fed88f1c45457968" },
-      "x86_64-unknown-linux-gnu": { "name": "julie-semantic-sidecar-{VER}-x86_64-unknown-linux-gnu.tar.gz", "sha256": "43ca76d85b3b078eeee01eea357bbe94afe332f5a09a4fa2148aec9e352f957a" },
-      "x86_64-pc-windows-msvc":   { "name": "julie-semantic-sidecar-{VER}-x86_64-pc-windows-msvc.zip",      "sha256": "5c882c4542a5e8a6a538bfddc83868cb5a3ca304bdea615a9d881306378a91e1" }
+      "aarch64-apple-darwin":     { "name": "julie-semantic-sidecar-{VER}-aarch64-apple-darwin-metal-portable.tar.gz",     "sha256": "8b6169894c4f72f78c64dcc1eb6a0ec98f022b413bbe16d05bd2a30781620d54" },
+      "x86_64-apple-darwin":      { "name": "julie-semantic-sidecar-{VER}-x86_64-apple-darwin-metal-portable.tar.gz",      "sha256": "d48294dde655f1878caa7a716db2a4aefdeb0df7816be8525c20073d65e88552" },
+      "x86_64-unknown-linux-gnu": { "name": "julie-semantic-sidecar-{VER}-x86_64-unknown-linux-gnu-vulkan-portable.tar.gz", "sha256": "10dfd99d0a0847813482145b4f78fc7601a77a4a136a6cb4e72dd729945e38d1" },
+      "x86_64-pc-windows-msvc":   { "name": "julie-semantic-sidecar-{VER}-x86_64-pc-windows-msvc-vulkan-portable.zip",      "sha256": "3ddcbb981293eef8f3b4446c74cc94ab611113256d6654dd65397962d0f0dce3" }
     },
     "ridByTriple": {
       "aarch64-apple-darwin": "osx-arm64",
