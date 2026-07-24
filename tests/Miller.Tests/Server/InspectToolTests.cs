@@ -243,7 +243,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Inspect_FileSummary_McpRoute_ClampsRequestedLimitToTwentyRows()
+    public void Inspect_FileSummary_McpRoute_ClampsRequestedLimitToTenRows()
     {
         var rows = Enumerable.Range(0, 30)
             .Select(i => new JulieDbFixture.SymbolRow(
@@ -268,7 +268,7 @@ public sealed class InspectToolTests
         string output = tool.Inspect("src/Many.cs", limit: 100, format: "json");
 
         using var document = JsonDocument.Parse(output);
-        Assert.Equal(20, document.RootElement.GetProperty("children").GetArrayLength());
+        Assert.Equal(10, document.RootElement.GetProperty("children").GetArrayLength());
     }
 
     [Fact]
@@ -1075,6 +1075,26 @@ public sealed class InspectToolTests
         Assert.DoesNotContain("next:", output);
         using var doc = JsonDocument.Parse(output);
         Assert.Equal("Hot", doc.RootElement.GetProperty("symbol").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void Inspect_SymbolFull_McpRoute_BoundsRelationRows()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-inspect-hot",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("Hot", depth: "full", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(10, document.RootElement.GetProperty("refs").GetArrayLength());
+        Assert.True(Encoding.UTF8.GetByteCount(output) < 12 * 1024);
     }
 
     [Theory]

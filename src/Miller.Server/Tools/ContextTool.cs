@@ -69,7 +69,7 @@ public sealed partial class ContextTool
         "format=json to chain.")]
     public string Context(
         [Description("The task or question to anchor the bundle on.")] string query,
-        [Description("Hard bound on the complete returned output, in estimated tokens. Default 2000.")]
+        [Description("Hard bound on complete output in estimated tokens. Default 2000; MCP maximum 2400.")]
         int token_budget = 2000,
         [Description("Neighbour expansion radius in hops (0–2). Default 1.")] int max_hops = 1,
         [Description("Entry symbol names or ids to rank as pivots. Optional.")] string[]? entry_symbols = null,
@@ -95,6 +95,7 @@ public sealed partial class ContextTool
         try
         {
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
+            int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int selectedCount;
@@ -113,7 +114,7 @@ public sealed partial class ContextTool
                         context.Index.Graph,
                         context.Resolver,
                         query,
-                        token_budget,
+                        effectiveTokenBudget,
                         max_hops,
                         entry_symbols,
                         edited_files,
@@ -133,7 +134,7 @@ public sealed partial class ContextTool
                         context.Index.Graph,
                         context.Resolver,
                         query,
-                        token_budget,
+                        effectiveTokenBudget,
                         max_hops,
                         entry_symbols,
                         edited_files,
@@ -182,7 +183,7 @@ public sealed partial class ContextTool
                 telemetry.BytesExamined = candidatesExamined;
                 telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
                 telemetry.SetMetadata("format", json ? "json" : "compact");
-                telemetry.SetMetadata("token_budget_bucket", TokenBudgetBucket(token_budget));
+                telemetry.SetMetadata("token_budget_bucket", TokenBudgetBucket(effectiveTokenBudget));
                 telemetry.SetMetadata("max_hops_bucket", HopsBucket(max_hops));
                 telemetry.SetMetadata("has_entry_symbols", entry_symbols is { Length: > 0 });
                 telemetry.SetMetadata("has_failing_test", !string.IsNullOrWhiteSpace(failing_test));
@@ -201,7 +202,7 @@ public sealed partial class ContextTool
                     json,
                     telemetry);
             }
-            return BoundFinalOutput(output, token_budget, json);
+            return BoundFinalOutput(output, effectiveTokenBudget, json);
         }
         catch (Exception ex)
         {
@@ -213,7 +214,10 @@ public sealed partial class ContextTool
                 diagnostic,
                 json,
                 telemetry);
-            return BoundFinalOutput(output, token_budget, json);
+            return BoundFinalOutput(
+                output,
+                Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens),
+                json);
         }
     }
 

@@ -48,7 +48,7 @@ public sealed class InspectTool
         string depth = "summary",
         [Description("Filter a file listing to one kind (function/class/...). Optional.")] string? kind = null,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
-        [Description("Max symbols when listing a file. Default and maximum 20.")] int limit = ToolOutputBudget.McpRowLimit,
+        [Description("Max symbols when listing a file. Default and maximum 10.")] int limit = ToolOutputBudget.McpRowLimit,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
@@ -81,7 +81,8 @@ public sealed class InspectTool
                 continuation,
                 out int count,
                 out ToolDiagnostic? diagnostic,
-                compactBanner);
+                compactBanner,
+                boundAgentOutput: true);
 
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
@@ -180,7 +181,7 @@ public sealed class InspectTool
 
         return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
             json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
-            continuation: null);
+            continuation: null, boundAgentOutput: false);
     }
 
     public static string RunLookup(
@@ -198,7 +199,7 @@ public sealed class InspectTool
         var resolver = new SmartTargetResolver(index);
         return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
             json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
-            continuation);
+            continuation, boundAgentOutput: false);
     }
 
     public static string RunSummary(
@@ -219,7 +220,8 @@ public sealed class InspectTool
         out ToolDiagnostic? diagnostic,
         string? compactBanner,
         string workspaceId,
-        string? continuation)
+        string? continuation,
+        bool boundAgentOutput)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -264,9 +266,11 @@ public sealed class InspectTool
                 resultCount = 1;
                 string symbolOutput = json
                     ? RenderSymbolJson(
-                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation)
+                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation,
+                        boundAgentOutput)
                     : RenderSymbolCompact(
-                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation);
+                        index, dbPath, workspaceRoot, workspaceId, sym.Value, depth, continuation,
+                        boundAgentOutput);
                 return ReadToolWorkspaceRouting.PrefixCompact(symbolOutput, json ? null : compactBanner);
 
             case TargetResolution.Candidates cands:
@@ -316,7 +320,8 @@ public sealed class InspectTool
         string? continuation,
         out int resultCount,
         out ToolDiagnostic? diagnostic,
-        string? compactBanner)
+        string? compactBanner,
+        bool boundAgentOutput)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
@@ -339,7 +344,8 @@ public sealed class InspectTool
             out diagnostic,
             compactBanner,
             workspaceId,
-            continuation);
+            continuation,
+            boundAgentOutput);
     }
 
     // ---------- file listing ----------
@@ -478,7 +484,8 @@ public sealed class InspectTool
         string workspaceId,
         IndexedSymbol sym,
         InspectDepth depth,
-        string? continuation)
+        string? continuation,
+        bool boundAgentOutput)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var sb = new StringBuilder();
@@ -505,14 +512,18 @@ public sealed class InspectTool
             sb.Append("  lines=").Append(complexity.CoveredLines).Append('\n');
         }
 
-        int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+        int relationLimit = depth == InspectDepth.Overview
+            ? OverviewRelationLimit
+            : boundAgentOutput ? ToolOutputBudget.McpRowLimit : RefLimit;
         int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
 
         var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
         {
             sb.Append("\n## children\n");
-            int childLimit = depth == InspectDepth.Overview ? OverviewChildLimit : int.MaxValue;
+            int childLimit = depth == InspectDepth.Overview
+                ? OverviewChildLimit
+                : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue;
             foreach (var c in children.Take(childLimit))
                 sb.Append(SymbolLine(c)).Append('\n');
             AppendOmittedLine(sb, children.Count, childLimit, "children");
@@ -663,7 +674,8 @@ public sealed class InspectTool
         string workspaceId,
         IndexedSymbol sym,
         InspectDepth depth,
-        string? continuation)
+        string? continuation,
+        bool boundAgentOutput)
     {
         var detail = ExtractReader.ReadDetail(dbPath, sym.SymbolId);
         var buffer = new ArrayBufferWriter<byte>();
@@ -697,12 +709,16 @@ public sealed class InspectTool
                     w.WriteEndObject();
                 }
 
-                int relationLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : RefLimit;
+                int relationLimit = depth == InspectDepth.Overview
+                    ? OverviewRelationLimit
+                    : boundAgentOutput ? ToolOutputBudget.McpRowLimit : RefLimit;
                 int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
 
                 w.WritePropertyName("children");
                 WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
-                    depth == InspectDepth.Overview ? OverviewChildLimit : int.MaxValue));
+                    depth == InspectDepth.Overview
+                        ? OverviewChildLimit
+                        : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue));
 
                 ReferenceEvidenceSet referenceEvidence = ReferenceEvidenceReader.Read(
                     dbPath,

@@ -1493,10 +1493,18 @@ public static class WorkspaceRender
 
     // ---------- onboarding ----------
 
-    public static string Onboarding(WorkspaceOnboardingFacts facts, bool json) =>
-        json ? OnboardingJson(facts) : OnboardingCompact(facts);
+    public static string Onboarding(
+        WorkspaceOnboardingFacts facts,
+        bool json,
+        int? rowLimit = null)
+    {
+        int effectiveRowLimit = rowLimit is > 0 ? rowLimit.Value : int.MaxValue;
+        return json
+            ? OnboardingJson(facts, effectiveRowLimit)
+            : OnboardingCompact(facts, effectiveRowLimit);
+    }
 
-    private static string OnboardingCompact(WorkspaceOnboardingFacts facts)
+    private static string OnboardingCompact(WorkspaceOnboardingFacts facts, int rowLimit)
     {
         var sb = new StringBuilder();
         sb.Append("# workspace onboarding\n");
@@ -1513,12 +1521,12 @@ public static class WorkspaceRender
             sb.Append("  error ").Append(facts.Telemetry.Error);
         sb.Append('\n');
 
-        AppendLines(sb, "start here", facts.StartHere);
+        AppendLines(sb, "start here", facts.StartHere.Take(rowLimit).ToArray());
 
         if (facts.Telemetry.ToolMix.Count > 0)
         {
             sb.Append("tool mix:\n");
-            foreach (TelemetryToolMix row in facts.Telemetry.ToolMix.Take(5))
+            foreach (TelemetryToolMix row in facts.Telemetry.ToolMix.Take(Math.Min(5, rowLimit)))
                 sb.Append("- ").Append(OnboardingLabel(row.Tool, row.Op)).Append("  calls ")
                     .Append(row.Calls.ToString(CultureInfo.InvariantCulture))
                     .Append("  empty ").Append(row.EmptyCount.ToString(CultureInfo.InvariantCulture))
@@ -1529,7 +1537,7 @@ public static class WorkspaceRender
         if (facts.Telemetry.SuccessfulFlows.Count > 0)
         {
             sb.Append("successful flows:\n");
-            foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(5))
+            foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(Math.Min(5, rowLimit)))
                 sb.Append("- ").Append(flow.From).Append(" -> ").Append(flow.To)
                     .Append(" (").Append(flow.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
         }
@@ -1542,7 +1550,7 @@ public static class WorkspaceRender
             List<RecoveredTargetHash> resolved = facts.HotTargets.Where(static t => !IsUnresolvedTarget(t)).ToList();
             List<RecoveredTargetHash> unresolved = facts.HotTargets.Where(static t => IsUnresolvedTarget(t)).ToList();
 
-            foreach (RecoveredTargetHash target in resolved.Take(5))
+            foreach (RecoveredTargetHash target in resolved.Take(Math.Min(5, rowLimit)))
                 sb.Append("- ").Append(TargetLabel(target)).Append("  ")
                     .Append(target.Confidence).Append("  calls ")
                     .Append(target.Calls.ToString(CultureInfo.InvariantCulture))
@@ -1565,24 +1573,26 @@ public static class WorkspaceRender
         if (facts.Telemetry.CommonMisses.Count > 0)
         {
             sb.Append("common misses:\n");
-            foreach (TelemetryMiss miss in facts.Telemetry.CommonMisses.Take(5))
+            foreach (TelemetryMiss miss in facts.Telemetry.CommonMisses.Take(Math.Min(5, rowLimit)))
                 sb.Append("- ").Append(OnboardingLabel(miss.Tool, miss.Op)).Append("  ")
                     .Append(miss.Reason).Append(" (")
                     .Append(miss.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
         }
 
-        AppendLines(sb, "instruction notes", facts.InstructionNotes);
-        AppendLines(sb, "privacy", facts.PrivacyNotes);
+        AppendLines(sb, "instruction notes", facts.InstructionNotes.Take(rowLimit).ToArray());
+        AppendLines(sb, "privacy", facts.PrivacyNotes.Take(rowLimit).ToArray());
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static string OnboardingJson(WorkspaceOnboardingFacts facts)
+    private static string OnboardingJson(WorkspaceOnboardingFacts facts, int rowLimit)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
         {
             w.WriteStartObject();
             w.WriteString("operation", "onboarding");
+            if (rowLimit != int.MaxValue)
+                w.WriteNumber("agent_row_limit", rowLimit);
             w.WritePropertyName("workspace");
             w.WriteStartObject();
             w.WriteString("root", facts.StatusFacts.Root);
@@ -1606,19 +1616,22 @@ public static class WorkspaceRender
             else w.WriteString("error", facts.Telemetry.Error);
             w.WriteEndObject();
 
-            WriteStringArray(w, "start_here", facts.StartHere);
-            WriteToolMixJson(w, facts.Telemetry.ToolMix);
-            WriteFlowsJson(w, facts.Telemetry.SuccessfulFlows);
-            WriteHotTargetsJson(w, facts.HotTargets);
-            WriteMissesJson(w, facts.Telemetry.CommonMisses);
-            WriteFrictionJson(w, facts.Telemetry.Friction);
-            WriteStringArray(w, "instruction_notes", facts.InstructionNotes);
+            WriteStringArray(w, "start_here", facts.StartHere.Take(rowLimit).ToArray());
+            WriteToolMixJson(w, facts.Telemetry.ToolMix.Take(rowLimit).ToArray());
+            WriteFlowsJson(w, facts.Telemetry.SuccessfulFlows.Take(rowLimit).ToArray());
+            WriteHotTargetsJson(w, facts.HotTargets.Take(rowLimit).ToArray());
+            WriteMissesJson(w, facts.Telemetry.CommonMisses.Take(rowLimit).ToArray());
+            WriteFrictionJson(w, facts.Telemetry.Friction.Take(rowLimit).ToArray());
+            WriteStringArray(
+                w,
+                "instruction_notes",
+                facts.InstructionNotes.Take(rowLimit).ToArray());
 
             w.WritePropertyName("privacy");
             w.WriteStartObject();
             w.WriteBoolean("raw_queries_stored", false);
             w.WriteBoolean("raw_targets_stored", false);
-            WriteStringArray(w, "notes", facts.PrivacyNotes);
+            WriteStringArray(w, "notes", facts.PrivacyNotes.Take(rowLimit).ToArray());
             w.WriteEndObject();
             w.WriteEndObject();
         }

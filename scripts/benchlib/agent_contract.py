@@ -89,6 +89,8 @@ def action_target_guidance() -> str:
         "Configuration evidence is inspect_file even when a product tool exposes the config object as a symbol; assembled code-area context is assemble_context.",
         "Call-graph claims use trace_callers, trace_callees, or trace_call_path as applicable. Every cited call site needs cite_reference_site.",
         "When context reports disposition status sufficient, answer from that bundle instead of inspecting every pivot.",
+        "You have at most 8 tool calls and 12,000 tool-output tokens; answer before the cap and stop once the evidence is sufficient.",
+        "For a whole-file inspect_file or assemble_context action, submit the path only and one action per required file; do not add incidental inspected symbols.",
         "For every action target, leave every unlisted field null.",
         "For a reference_site, resolution exact or fallback requires a non-null target_symbol_id returned by the product; otherwise use unresolved with target_symbol_id null.",
         "Set both reference_site column_start and column_end, or set both null.",
@@ -581,7 +583,13 @@ def _verify_takeover_answer(
                     reference_sites[site_id]
                     for site_id in label.reference_site_ids
                 }
-                if not required_sites.issubset(submitted_reference_sites):
+                if not all(
+                    any(
+                        _reference_sites_match(required, submitted)
+                        for submitted in submitted_reference_sites
+                    )
+                    for required in required_sites
+                ):
                     continue
             satisfied_groups.add(label.requirement_group)
 
@@ -1177,6 +1185,16 @@ def _action_targets_match(
         return True
 
     if (
+        expected.reference_site is not None
+        and submitted.reference_site is not None
+        and _equal_except_reference_site(expected, submitted)
+    ):
+        return _reference_sites_match(
+            expected.reference_site,
+            submitted.reference_site,
+        )
+
+    if (
         expected.workspace_selector in {task.repo_id, "current"}
         and _only_workspace_selector(expected)
         and _only_workspace_selector(submitted)
@@ -1193,6 +1211,15 @@ def _action_targets_match(
         if submitted.path is None or grounded_paths is None:
             return True
         return submitted.path in grounded_paths
+
+    if (
+        expected.path is not None
+        and expected.symbol_id is None
+        and submitted.symbol_id is not None
+        and expected.path == submitted.path
+        and _equal_except_symbol_id(expected, submitted)
+    ):
+        return grounded_paths is not None and expected.path in grounded_paths
 
     return False
 
@@ -1217,6 +1244,54 @@ def _equal_except_path(expected: _ActionTarget, submitted: _ActionTarget) -> boo
         and expected.test_path == submitted.test_path
         and expected.pattern_id == submitted.pattern_id
         and expected.workspace_selector == submitted.workspace_selector
+    )
+
+
+def _equal_except_symbol_id(expected: _ActionTarget, submitted: _ActionTarget) -> bool:
+    return (
+        expected.path == submitted.path
+        and expected.target_symbol_id == submitted.target_symbol_id
+        and expected.reference_site == submitted.reference_site
+        and expected.test_path == submitted.test_path
+        and expected.pattern_id == submitted.pattern_id
+        and expected.workspace_selector == submitted.workspace_selector
+    )
+
+
+def _equal_except_reference_site(
+    expected: _ActionTarget,
+    submitted: _ActionTarget,
+) -> bool:
+    return (
+        expected.path == submitted.path
+        and expected.symbol_id == submitted.symbol_id
+        and expected.target_symbol_id == submitted.target_symbol_id
+        and expected.test_path == submitted.test_path
+        and expected.pattern_id == submitted.pattern_id
+        and expected.workspace_selector == submitted.workspace_selector
+    )
+
+
+def _reference_sites_match(
+    expected: _ReferenceSiteIdentity,
+    submitted: _ReferenceSiteIdentity,
+) -> bool:
+    if (
+        expected.path != submitted.path
+        or expected.line_start != submitted.line_start
+        or expected.line_end != submitted.line_end
+        or expected.reference_kind != submitted.reference_kind
+        or expected.containing_symbol_id != submitted.containing_symbol_id
+        or expected.source_symbol_id != submitted.source_symbol_id
+        or expected.target_symbol_id != submitted.target_symbol_id
+        or expected.resolution != submitted.resolution
+    ):
+        return False
+    if expected.column_start is None and expected.column_end is None:
+        return True
+    return (
+        expected.column_start == submitted.column_start
+        and expected.column_end == submitted.column_end
     )
 
 

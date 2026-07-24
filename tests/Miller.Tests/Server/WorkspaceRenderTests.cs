@@ -327,6 +327,16 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Onboarding_Json_AgentRowLimitBoundsTelemetrySections()
+    {
+        using var doc = JsonDocument.Parse(
+            WorkspaceRender.Onboarding(OnboardingFacts(), json: true, rowLimit: 2));
+
+        Assert.Equal(2, doc.RootElement.GetProperty("tool_mix").GetArrayLength());
+        Assert.True(Encoding.UTF8.GetByteCount(doc.RootElement.GetRawText()) < 6 * 1024);
+    }
+
+    [Fact]
     public void Onboarding_NoTelemetry_StillRendersGenericStarterGuidance()
     {
         WorkspaceOnboardingFacts facts = WorkspaceOnboardingFacts.Create(

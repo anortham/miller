@@ -1322,7 +1322,7 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Search_McpRoute_ClampsRequestedLimitToTwentyRows()
+    public void Search_McpRoute_ClampsRequestedLimitToTenRows()
     {
         var rows = Enumerable.Range(0, 30)
             .Select(i => (
@@ -1336,7 +1336,7 @@ public sealed class SearchToolTests
         string output = tool.Search("Widget", mode: "symbol", limit: 100, format: "json");
 
         using var document = JsonDocument.Parse(output);
-        Assert.Equal(20, document.RootElement.GetArrayLength());
+        Assert.Equal(10, document.RootElement.GetArrayLength());
     }
 
     [Fact]

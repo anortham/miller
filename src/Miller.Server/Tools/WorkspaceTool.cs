@@ -316,7 +316,10 @@ public sealed class WorkspaceTool
             _ledger.DbPath,
             facts.WorkspaceId,
             facts.DbPath);
-        return WorkspaceRender.Onboarding(onboarding, json);
+        return WorkspaceRender.Onboarding(
+            onboarding,
+            json,
+            ToolOutputBudget.WorkspaceOnboardingMcpRowLimit);
     }
 
     // Leader facts enriched with the version-aware-leadership view (D6): the recorded identity + liveness, this
@@ -443,7 +446,13 @@ public sealed class WorkspaceTool
         TelemetryOutcome outcome = onboarding.Telemetry.TotalCalls == 0
             ? TelemetryOutcome.Empty
             : TelemetryOutcome.Ok;
-        return (WorkspaceRender.Onboarding(onboarding, json), 1, outcome);
+        return (
+            WorkspaceRender.Onboarding(
+                onboarding,
+                json,
+                ToolOutputBudget.WorkspaceOnboardingMcpRowLimit),
+            1,
+            outcome);
     }
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetLeader(

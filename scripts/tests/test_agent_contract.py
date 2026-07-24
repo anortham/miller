@@ -263,6 +263,14 @@ class AgentContractTests(unittest.TestCase):
             "Every cited call site needs cite_reference_site",
             guidance,
         )
+        self.assertIn(
+            "You have at most 8 tool calls and 12,000 tool-output tokens",
+            guidance,
+        )
+        self.assertIn(
+            "For a whole-file inspect_file or assemble_context action, submit the path only",
+            guidance,
+        )
         self.assertIn("inspect_file means a file, document, or config fact", guidance)
         self.assertIn("select_tests means tests selected for the task", guidance)
         self.assertIn("read_log means evidence from captured logs or command output", guidance)
@@ -510,6 +518,56 @@ class AgentContractTests(unittest.TestCase):
         self.assertTrue(accepted.passed)
         self.assertFalse(rejected.passed)
         self.assertEqual(1, rejected.wrong_action_count)
+
+    def test_takeover_v1_verifier_accepts_grounded_symbol_metadata_for_path_only_context(self) -> None:
+        task_value = _valid_v1_task()
+        task_value["capabilities"] = ["context_orientation"]
+        task_value["reference_sites"] = []
+        task_value["acceptable_actions"] = [
+            {
+                "action_id": "action-001",
+                "kind": "assemble_context",
+                "target": {"path": "src/factory.py"},
+                "requirement_group": "orient-area",
+                "evidence_anchor_ids": ["anchor-001"],
+            }
+        ]
+        task_value["forbidden_actions"] = []
+        answer = _valid_v1_answer()
+        answer["actions"] = [
+            {
+                "kind": "assemble_context",
+                "target": {
+                    "path": "src/factory.py",
+                    "symbol_id": "python:src/factory.py:create_candidate",
+                },
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            result = verify_answer(_load_v1_task(task_value), answer, root)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(0, result.wrong_action_count)
+
+    def test_takeover_v1_verifier_accepts_precise_columns_when_label_omits_them(self) -> None:
+        task_value = _valid_v1_task()
+        task_site = _reference_site()
+        task_site.pop("column_start")
+        task_site.pop("column_end")
+        task_value["reference_sites"] = [{"site_id": "site-001", **task_site}]
+        task_value["acceptable_actions"][1]["target"] = {"reference_site": task_site}
+        answer = _valid_v1_answer()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _create_answer_snapshot(root)
+            result = verify_answer(_load_v1_task(task_value), answer, root)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(0, result.wrong_action_count)
 
     def test_takeover_v1_verifier_accepts_current_workspace_selector_aliases(self) -> None:
         task_value = _valid_v1_task()

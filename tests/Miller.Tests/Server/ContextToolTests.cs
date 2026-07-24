@@ -1376,6 +1376,39 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_McpRoute_ClampsLargeRequestedTokenBudget()
+    {
+        IndexedSymbol[] symbols = Enumerable.Range(0, 50)
+            .Select(i => new IndexedSymbol(
+                i,
+                $"{i + 1:x32}",
+                $"Widget{i}",
+                $"public sealed class Widget{i}<{new string('X', 900)}>",
+                "class",
+                "csharp",
+                $"src/Widget{i}.cs",
+                1,
+                20,
+                null,
+                false))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(symbols);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "Widget",
+            token_budget: 100000,
+            entry_symbols: symbols.Select(static symbol => symbol.SymbolId).ToArray(),
+            format: "json");
+
+        Assert.NotEqual("{}", output);
+        Assert.True(TokenEstimator.Count(output) <= ToolOutputBudget.ContextMcpMaxTokens);
+    }
+
+    [Fact]
     public void Context_ReferenceModeUsage_ReadsContainingChunksFromContentSidecar()
     {
         using var fx = JulieDbFixture.CreateForInspect();

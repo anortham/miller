@@ -32,7 +32,9 @@ public sealed record ToolReferenceContinuationCursor(int ExactOffset, int Fallba
 
 public static partial class ToolOutputBudget
 {
-    public const int McpRowLimit = 20;
+    public const int McpRowLimit = 10;
+    public const int ContextMcpMaxTokens = 2400;
+    public const int WorkspaceOnboardingMcpRowLimit = 3;
     public const int InspectFullBodyMaxBytes = 4 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int WorkspaceHealthMcpMaxBytes = 12 * 1024;

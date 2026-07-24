@@ -291,7 +291,7 @@ public sealed class SearchTool
     public string Search(
         [Description("Symbol name, identifier, or natural-language phrase.")] string query,
         [Description("Interpretation axis: auto|text|symbol|file|markers|content|source|external|web|all-text. Default auto.")] string mode = "auto",
-        [Description("Max results to return. Default 6; MCP requests above 20 are clamped.")] int limit = DefaultLimit,
+        [Description("Max results to return. Default 6; MCP requests above 10 are clamped.")] int limit = DefaultLimit,
         [Description("Hide test code: leave unset to auto-hide for natural-language queries; true/false to force.")]
         bool? exclude_tests = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
