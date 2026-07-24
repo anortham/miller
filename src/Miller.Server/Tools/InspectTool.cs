@@ -127,6 +127,7 @@ public sealed class InspectTool
     private const int OverviewChildLimit = 5;
     private const int OverviewBodyPreviewMaxLines = 16;
     private const int OverviewBodyPreviewMaxChars = 700;
+    private const int FullValueDeclarationMaxLength = 4096;
 
     // Minimum name-based reference count at which a compact symbol read (overview/full) earns a trailing
     // "run impact" nudge. Below this the symbol is not hot enough for the hint to add value.
@@ -444,6 +445,12 @@ public sealed class InspectTool
     private static bool SignatureAddsInfo(IndexedSymbol s) =>
         !string.IsNullOrEmpty(s.Signature) && !string.Equals(s.Signature!.Trim(), s.Name, StringComparison.Ordinal);
 
+    private static int SignatureLimit(IndexedSymbol symbol, InspectDepth depth) =>
+        depth == InspectDepth.Full &&
+        symbol.Kind is "constant" or "variable" or "field" or "property"
+            ? FullValueDeclarationMaxLength
+            : ToolRenderLimits.SignatureMaxLength;
+
     private static int KindRank(string kind) => kind switch
     {
         "class" or "interface" or "struct" or "record" or "enum" or "type" => 0,
@@ -492,7 +499,7 @@ public sealed class InspectTool
         sb.Append("# ").Append(sym.Name).Append("  (").Append(sym.Kind).Append(")\n");
         sb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
         if (SignatureAddsInfo(sym))
-            sb.Append(Truncate(sym.Signature!, ToolRenderLimits.SignatureMaxLength)).Append('\n');
+            sb.Append(Truncate(sym.Signature!, SignatureLimit(sym, depth))).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
             sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))

@@ -797,12 +797,15 @@ public sealed partial class ContextTool
             {
                 SymbolCandidate candidate = retrieved.Candidates[rank];
                 if (index.FindBySymbolId(candidate.SymbolId) is { } symbol && IsQueryPivot(symbol))
+                {
+                    symbol = PreferDefinitionPivot(index, symbol);
                     AddSignal(
                         symbol,
                         rank + 1,
                         candidate.Score,
                         TaskQueryAffinity(symbol, queryTerms),
                         $"query_rank_{rank + 1}");
+                }
             }
 
             foreach (string term in queryTerms)
@@ -818,6 +821,7 @@ public sealed partial class ContextTool
                     SymbolCandidate candidate = termCandidates.Candidates[rank];
                     if (index.FindBySymbolId(candidate.SymbolId) is { } symbol && IsQueryPivot(symbol))
                     {
+                        symbol = PreferDefinitionPivot(index, symbol);
                         AddSignal(
                             symbol,
                             rank + 1,
@@ -939,12 +943,15 @@ public sealed partial class ContextTool
         if (semanticSeeds is not null)
         {
             foreach (ContextSemanticSeed seed in semanticSeeds.Where(static seed => IsQueryPivot(seed.Symbol)))
+            {
+                IndexedSymbol symbol = PreferDefinitionPivot(index, seed.Symbol);
                 AddSignal(
-                    seed.Symbol,
+                    symbol,
                     SearchSeedLimit + seed.Rank,
                     seed.Score,
                     0,
                     $"semantic_rank_{seed.Rank}");
+            }
         }
 
         anchorDiagnostics = diagnostics;
@@ -1033,6 +1040,24 @@ public sealed partial class ContextTool
         !symbol.FilePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
         !symbol.FilePath.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase) &&
         !symbol.FilePath.EndsWith(".rst", StringComparison.OrdinalIgnoreCase);
+
+    private static IndexedSymbol PreferDefinitionPivot(
+        ISymbolLookupIndex index,
+        IndexedSymbol symbol)
+    {
+        if (symbol.Kind != "export")
+            return symbol;
+
+        return index.FindByName(symbol.Name)
+            .Where(candidate =>
+                candidate.SymbolId != symbol.SymbolId &&
+                candidate.Kind != "export" &&
+                IsQueryPivot(candidate) &&
+                candidate.StartLine == symbol.StartLine &&
+                string.Equals(candidate.FilePath, symbol.FilePath, StringComparison.Ordinal))
+            .OrderBy(static candidate => candidate.SymbolId, StringComparer.Ordinal)
+            .FirstOrDefault() ?? symbol;
+    }
 
     private static IReadOnlyList<string> ContextQueryTerms(string? query)
     {

@@ -336,6 +336,42 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_SymbolFull_ConstantPreservesCompleteInitializer()
+    {
+        string signature = "private const string FailingStdout = \"" + new string('x', 300) + "task9\"";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "c0000000000000000000000000000001",
+                    "FailingStdout",
+                    "constant",
+                    "csharp",
+                    "tests/Fixture.cs",
+                    signature,
+                    5,
+                    null),
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "FailingStdout",
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+
+        Assert.Contains(signature, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_SymbolFull_WithComplexityRow_RendersComplexityLine()
     {
         using var fx = JulieDbFixture.CreateForInspect();

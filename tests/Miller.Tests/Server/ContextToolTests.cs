@@ -217,6 +217,44 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Run_QueryPivot_PrefersDefinitionOverSameSpanExportAlias()
+    {
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, "export-id", "normalizePathKeyForSafetyCheck", null, "export", "typescript",
+                "src/workspace.ts", 165, 170, null, false),
+            new(1, "function-id", "normalizePathKeyForSafetyCheck",
+                "normalizePathKeyForSafetyCheck(value: string): string", "function", "typescript",
+                "src/workspace.ts", 165, 170, null, false),
+        };
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, Array.Empty<GraphEdge>());
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.Run(
+            index,
+            resolver,
+            query: "Locate the path-key normalizer and exact function definition",
+            tokenBudget: 2400,
+            maxHops: 0,
+            entrySymbols: null,
+            failingTest: null,
+            stackTrace: null,
+            json: true,
+            out _,
+            out _);
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement pivot = document.RootElement
+            .GetProperty("bundle")
+            .EnumerateArray()
+            .Single(item =>
+                item.GetProperty("item_type").GetString() == "symbol" &&
+                item.GetProperty("name").GetString() == "normalizePathKeyForSafetyCheck");
+        Assert.Equal("function-id", pivot.GetProperty("symbol_id").GetString());
+        Assert.Equal("function", pivot.GetProperty("kind").GetString());
+    }
+
+    [Fact]
     public void Run_MaxHopsZero_ReturnsOnlyTheSeeds_NoExpansion()
     {
         var (index, resolver) = BuildFixture();
