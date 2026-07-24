@@ -23,7 +23,7 @@ public sealed class ToolDiagnosticIntegrationTests
     public void Inspect_ProviderFailure_RendersTypedJsonDiagnostic()
     {
         var provider = new ThrowingProvider(new UnauthorizedAccessException("denied"));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect("Target", format: "json");
 
@@ -110,12 +110,16 @@ public sealed class ToolDiagnosticIntegrationTests
         Exception exception)
         : IWorkspaceIndexProvider,
           IWorkspaceSearchProvider,
+          IWorkspaceSymbolReadProvider,
           IWorkspaceContentSearchProvider,
           IWorkspaceArtifactProvider
     {
         public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh) => throw exception;
 
         public WorkspaceSymbolSearchContext ResolveSymbolSearch(string? workspaceId, bool ensureFresh) =>
+            throw exception;
+
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh) =>
             throw exception;
 
         public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh) =>

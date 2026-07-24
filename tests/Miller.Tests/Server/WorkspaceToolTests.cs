@@ -436,6 +436,19 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Health_Markdown_KeepsTheCompleteMachineReadableDetail()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        string markdown = tool.Workspace(operation: "health", format: "markdown");
+
+        Assert.Contains("```json", markdown);
+        Assert.Contains("\"extraction_quality\"", markdown);
+        Assert.Contains("\"recommended_actions\"", markdown);
+    }
+
+    [Fact]
     public void StatusAndHealth_CurrentWorkspaceReportUnavailableVectorsWhenSemanticIsOn()
     {
         string? previous = Environment.GetEnvironmentVariable(VectorSidecar.EnvVar);
@@ -621,6 +634,42 @@ public sealed class WorkspaceToolTests : IDisposable
             harness.Tool.Workspace(operation: "list", format: "json", limit: 3));
 
         Assert.Equal(3, doc.RootElement.GetProperty("workspaces").GetArrayLength());
+    }
+
+    [Fact]
+    public void List_Json_ReportsExactRegistrySelectionTotals()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 5, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "list",
+            format: "json",
+            filter: "repo-",
+            limit: 2));
+        JsonElement root = doc.RootElement;
+
+        Assert.Equal(6, root.GetProperty("registered").GetInt32());
+        Assert.Equal(5, root.GetProperty("matched").GetInt32());
+        Assert.Equal(2, root.GetProperty("returned").GetInt32());
+        Assert.Equal(3, root.GetProperty("omitted").GetInt32());
+        Assert.Equal("repo-", root.GetProperty("filter").GetString());
+        Assert.Equal(2, root.GetProperty("limit").GetInt32());
+        Assert.Equal(2, root.GetProperty("workspaces").GetArrayLength());
+    }
+
+    [Fact]
+    public void List_Compact_ReportsExactDefaultSelectionTotals()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 25, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        string output = harness.Tool.Workspace(operation: "list");
+
+        Assert.Contains("totals: registered=26 matched=26 returned=20 omitted=6", output);
+        Assert.Contains("selection: filter=(none) limit=20", output);
     }
 
     [Fact]

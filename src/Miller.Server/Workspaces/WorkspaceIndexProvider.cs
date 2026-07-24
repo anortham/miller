@@ -6,7 +6,7 @@ using Miller.Server.Tools;
 namespace Miller.Server.Workspaces;
 
 public sealed class WorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceSymbolReadProvider, IWorkspaceContentSearchProvider,
       IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider, IWorkspaceArtifactProvider
 {
     private readonly IndexHolder _holder;
@@ -23,6 +23,7 @@ public sealed class WorkspaceIndexProvider
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedSymbolSearch>> _symbolSearchCache = new();
+    private readonly Dictionary<CacheKey, Lazy<CachedSymbolRead>> _symbolReadCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedContentSearch>> _contentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedTextContentSearch>> _textContentSearchCache = new();
     private readonly Dictionary<CacheKey, Lazy<CachedRegionSearch>> _regionSearchCache = new();
@@ -121,6 +122,18 @@ public sealed class WorkspaceIndexProvider
         return ResolveRegisteredSymbolSearch(workspaceId, ensureFresh);
     }
 
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    {
+        if (workspaceId is null)
+            return ResolveCurrentSymbolRead();
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (SelectorTargetsCurrent(workspaceId))
+            return ResolveCurrentSymbolRead();
+
+        return ResolveRegisteredSymbolRead(workspaceId, ensureFresh);
+    }
+
     public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
     {
         if (workspaceId is null)
@@ -204,6 +217,21 @@ public sealed class WorkspaceIndexProvider
             DisplayId: CurrentDisplayId());
     }
 
+    private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
+    {
+        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        return new WorkspaceSymbolReadContext(
+            index,
+            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            _currentWorkspace.WorkspaceId,
+            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+            revision,
+            _currentIndexFresh(revision),
+            "current",
+            WarningText: null,
+            DisplayId: CurrentDisplayId());
+    }
+
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
     // search. Sidecar enabled: require a revision-fresh on-disk sidecar so stale/missing artifacts are visible
     // instead of hidden behind a memory fallback. The chosen backend is cached keyed on (workspace, dbPath,
@@ -250,6 +278,30 @@ public sealed class WorkspaceIndexProvider
         var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
         CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
         return new WorkspaceSymbolSearchContext(
+            cached.Index,
+            row.IndexDbPath,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            revision,
+            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+            WorkspaceFreshnessView.WarningTextFor(refreshResult),
+            row.DisplayId,
+            IsCurrent: false);
+    }
+
+    private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, bool ensureFresh)
+    {
+        RegisteredWorkspaceState state = ResolveRegisteredState(workspaceId, ensureFresh);
+        WorkspaceRegistryRow row = state.Row;
+        WorkspaceRefreshResult? refreshResult = state.RefreshResult;
+
+        long revision = row.LastRevision ?? 0;
+        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+        CachedSymbolRead cached = GetOrAddSymbolReadCache(
+            key,
+            () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath)));
+        return new WorkspaceSymbolReadContext(
             cached.Index,
             row.IndexDbPath,
             row.WorkspaceId,
@@ -446,6 +498,7 @@ public sealed class WorkspaceIndexProvider
         {
             RemoveWorkspaceKeysUnderLock(_cache, workspaceId);
             RemoveWorkspaceKeysUnderLock(_symbolSearchCache, workspaceId);
+            RemoveWorkspaceKeysUnderLock(_symbolReadCache, workspaceId);
             RemoveWorkspaceKeysUnderLock(_contentSearchCache, workspaceId);
             RemoveWorkspaceKeysUnderLock(_textContentSearchCache, workspaceId);
             RemoveWorkspaceKeysUnderLock(_regionSearchCache, workspaceId);
@@ -573,6 +626,37 @@ public sealed class WorkspaceIndexProvider
                 if (_symbolSearchCache.TryGetValue(key, out Lazy<CachedSymbolSearch>? cachedLazy) &&
                     ReferenceEquals(cachedLazy, lazy))
                     _symbolSearchCache.Remove(key);
+            }
+            throw;
+        }
+    }
+
+    private CachedSymbolRead GetOrAddSymbolReadCache(CacheKey key, Func<CachedSymbolRead> load)
+    {
+        Lazy<CachedSymbolRead> lazy;
+        lock (_cacheGate)
+        {
+            if (!_symbolReadCache.TryGetValue(key, out lazy!))
+            {
+                lazy = new Lazy<CachedSymbolRead>(load, LazyThreadSafetyMode.ExecutionAndPublication);
+                _symbolReadCache[key] = lazy;
+                EvictOtherEntriesForWorkspaceUnderLock(_symbolReadCache, key);
+            }
+        }
+
+        try
+        {
+            if (!lazy.IsValueCreated)
+                TelemetryContext.Current?.SetWaitReason("index_load");
+            return lazy.Value;
+        }
+        catch
+        {
+            lock (_cacheGate)
+            {
+                if (_symbolReadCache.TryGetValue(key, out Lazy<CachedSymbolRead>? cachedLazy) &&
+                    ReferenceEquals(cachedLazy, lazy))
+                    _symbolReadCache.Remove(key);
             }
             throw;
         }
@@ -816,6 +900,8 @@ public sealed class WorkspaceIndexProvider
     private sealed record CachedIndex(MillerRepositoryIndex Index, SmartTargetResolver Resolver);
 
     private sealed record CachedSymbolSearch(ISymbolLookupIndex Index, bool IsSidecar);
+
+    private sealed record CachedSymbolRead(ISymbolLookupIndex Index);
 
     private sealed record CachedContentSearch(ContentSearchProjection Index);
 

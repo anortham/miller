@@ -374,16 +374,9 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
     [Fact]
     public async Task CentralFilter_MissingRequiredParam_OnInspect_ReturnsFriendlyToolError_AndRecordsErrorRow()
     {
-        // Dogfood regression (Windows session): calling a tool without a required parameter surfaced the raw
-        // Microsoft.Extensions.AI marshalling ArgumentException ("The arguments dictionary is missing a value
-        // for the required parameter 'target'") as a protocol-level unhandled error, and agents retry-looped on
-        // it. The central filter must catch THAT shape and return a friendly IsError tool result naming the
-        // missing parameter, with a telemetry error row — not an unhandled exception.
         var ct = TestContext.Current.CancellationToken;
         using var ledger = TelemetryLedger.Open(_telemetryDb, workspaceId: "pin-ws");
 
-        // The REAL inspect tool with its real DI deps (an empty fixture index), so the call travels the real
-        // SDK marshalling layer and fails on the genuinely missing 'target'.
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
             JulieDbFixture.PinnedContract,
@@ -401,6 +394,7 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
         services.AddSingleton(ledger);
         services.AddSingleton<IWorkspaceIndexProvider>(provider);
         services.AddSingleton<IWorkspaceSearchProvider>(provider);
+        services.AddSingleton<IWorkspaceSymbolReadProvider>(provider);
         services
             .AddMcpServer(o => { o.ServerInfo = new() { Name = "pin", Version = "0" }; })
             .WithStreamServerTransport(clientToServer.Reader.AsStream(), serverToClient.Writer.AsStream())
@@ -415,15 +409,14 @@ public sealed class CallToolFilterTelemetryTests : IDisposable
             clientToServer.Writer.AsStream(), serverToClient.Reader.AsStream(), NullLoggerFactory.Instance);
         await using var client = await McpClient.CreateAsync(clientTransport, cancellationToken: ct);
 
-        // {} — no 'target'. Must come back as a normal tool result, NOT a protocol error / unhandled exception.
         var result = await client.CallToolAsync(
             "inspect", new Dictionary<string, object?>(), cancellationToken: ct);
 
         Assert.Equal(true, result.IsError);
         string text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
-        Assert.Contains("'target'", text);                                  // names the missing parameter
-        Assert.Contains("inspect", text, StringComparison.OrdinalIgnoreCase); // names the tool
-        Assert.Contains("Example:", text);                                  // mapped tools get a usage example
+        Assert.Contains("'target'", text);
+        Assert.Contains("inspect", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Example:", text);
 
         await client.DisposeAsync();
         await clientToServer.Writer.CompleteAsync();

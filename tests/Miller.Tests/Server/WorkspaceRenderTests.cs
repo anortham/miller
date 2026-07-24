@@ -642,6 +642,69 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Health_Compact_IsBoundedAndReportsEveryOmittedGroupAndRow()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings:
+            [
+                new HealthWarning("first", "degraded", "first warning\n" + new string('x', 300)),
+                new HealthWarning("second", "degraded", "second warning"),
+                new HealthWarning("third", "degraded", "third warning"),
+            ],
+            RecommendedActions: ["first action\n" + new string('y', 300), "second action", "third action"],
+            State: HealthState.Degraded,
+            Summary: "workspace readable but degraded");
+
+        string compact = WorkspaceRender.Health(health, WorkspaceHealthFormat.Compact);
+
+        Assert.Contains("omitted: groups=6 rows=6 warnings=2 actions=2", compact);
+        Assert.Contains("first warning", compact);
+        Assert.Contains("first action", compact);
+        Assert.DoesNotContain("second warning", compact);
+        Assert.DoesNotContain("second action", compact);
+        Assert.DoesNotContain(new string('x', 241), compact);
+        Assert.DoesNotContain(new string('y', 241), compact);
+        Assert.True(compact.Split('\n').Length <= 14);
+    }
+
+    [Fact]
+    public void Health_MarkdownAndJsonKeepCompleteHealthDetails()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings:
+            [
+                new HealthWarning("first", "degraded", "first warning"),
+                new HealthWarning("second", "degraded", "second warning"),
+            ],
+            RecommendedActions: ["first action", "second action"],
+            State: HealthState.Degraded,
+            Summary: "workspace readable but degraded");
+
+        string markdown = WorkspaceRender.Health(health, WorkspaceHealthFormat.Markdown);
+        using var json = JsonDocument.Parse(WorkspaceRender.Health(health, WorkspaceHealthFormat.Json));
+
+        Assert.Contains("second warning", markdown);
+        Assert.Contains("second action", markdown);
+        Assert.Contains("\"parse_diagnostics\"", markdown);
+        Assert.Equal(2, json.RootElement.GetProperty("warnings").GetArrayLength());
+        Assert.Equal(2, json.RootElement.GetProperty("recommended_actions").GetArrayLength());
+        Assert.Equal(
+            1,
+            json.RootElement.GetProperty("extraction_quality")
+                .GetProperty("parse_diagnostics")
+                .GetProperty("rows")
+                .GetArrayLength());
+    }
+
+    [Fact]
     public void Health_Json_RendersStableSections()
     {
         var health = new WorkspaceHealthFacts(

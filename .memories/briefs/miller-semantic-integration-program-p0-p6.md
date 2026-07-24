@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-24T04:04:04.900Z
+updated: 2026-07-24T06:01:42.773Z
 tags:
   - miller
   - julie
@@ -18,51 +18,31 @@ tags:
 
 Make Miller strictly better than Julie at getting an agent the evidence it needs to act correctly, measured by relevance, calls, tokens, wall-clock time, recovery, and wrong-action rate. Retire Julie only after Miller passes the sealed paired gate.
 
-## Why now
-
-The semantic integration program established the local vector foundation, but the completed nine-tool audit found deeper correctness and workflow gaps: name-based reference contamination, weak context composition, thin lexical ranking, flat impact output, unsafe rename coverage, untyped failures, and unbounded responses. Search quality alone will not complete the replacement.
-
-## Execution order
-
-1. Gap-close and freeze the takeover evaluator already present on main.
-2. Build exact symbol-ID reference evidence.
-3. Introduce typed diagnostics and deterministic output-budget/continuation contracts before migrating tool consumers.
-4. Migrate trace, inspect, context usage, and edit/rename truth.
-5. Improve shared search ranking and routing.
-6. Redesign context around bounded, one-call actionability.
-7. Make impact risk-ranked and test-aware.
-8. Bound and simplify content, patterns, and workspace.
-9. Raise all-language resolution coverage in julie-extractors.
-10. Validate RC3 protocol/platform support; decide BGE-small versus CodeRankEmbed after final search/context behavior exists.
-11. Run the sealed paired decision, nine fresh Claude tool reviews, a separate broad Claude review, and only then decide Julie retirement.
-
-## Constraints
+## Ownership and constraints
 
 - Miller owns the local agent workflow and optional local semantics; julie-extractors owns parser-backed extraction; julie-semantic-sidecar owns embedding generation; Eros owns fleet semantics.
 - Keep the nine MCP tools unless evidence and explicit user approval justify a surface change. Removed MCP behavior is hard-removed, not deprecated. No new MCP tool without explicit approval.
-- Exact and fallback evidence remain separate and provenance-bearing.
-- Extractor-backed behavior must report and pass all-language coverage.
-- MILLER_SEMANTIC=off remains a permanent zero-work guarantee.
-- Use TDD, architecture-quality review, per-phase verification gates, and fresh Claude review for every affected tool. The final gate repeats all nine tool reviews plus a broad review.
-- No push, release, or Julie retirement without explicit user approval.
-- Never inspect sealed evaluator prompts, labels, or task rows. Complete all reviews and fixes before freezing candidates and spending the sealed run.
+- Exact and fallback evidence stay separate and provenance-bearing; extractor behavior must prove all-language coverage; `MILLER_SEMANTIC=off` stays zero-work.
+- Use TDD, architecture-quality review, phase gates, and fresh Claude review for every affected tool. The final gate repeats all nine tool reviews plus a broad review.
+- Do not push, release, merge, or retire Julie without explicit user approval. Never inspect sealed evaluator prompts, labels, task rows, mappings, answers, or scorer rows. Do not interfere with the active Julie session.
 
-## RC3 evidence
+## Completed
 
-`julie-semantic-sidecar` v0.1.0-rc.3 was published on 2026-07-23 at commit `24ce625`. The release API lists three portable platform packages plus three `.sha256` sidecars; the release page's total of eight also includes GitHub's two generated source archives. BGE Small remains the default and Qwen is opt-in. The release advertises Apple arm64 Metal, Linux x64 Vulkan, and Windows x64 Vulkan packages, accelerated backend/device discovery with CPU fallback, size-aware download timeouts, and physical Linux/Windows validation. Treat these as release claims to verify in Miller's Phase 9 preflight; the release does not choose BGE Small over CodeRankEmbed for Miller.
+Phases 0-7 are complete in `/Users/murphy/source/miller/.worktrees/miller-julie-takeover` on `codex/miller-julie-takeover`: evaluator freeze, exact reference evidence, typed diagnostics and budgets, exact consumer/rename migration, shared search ranking/routing, bounded one-call context, risk-ranked impact, and bounded content/patterns/workspace surfaces. Phase 7 passed 4,775 fast tests plus two expected skips, 87 scale tests, Release build, Native AOT, 48 plugin tests, mirror/whitespace gates, and fresh Claude reviews for content, patterns, and workspace with every accepted finding fixed.
 
-## Success criteria
+Exact RC3 Apple arm64 proof is committed in julie-semantic-sidecar. The local sidecar integration branch `codex/miller-takeover-macos-x64` at `8977758` also adds a reviewed macOS x64 Metal package candidate. Combined default/Metal Rust suites, clippy, Python harnesses, shell checks, and workflow validation pass. Physical Intel-Mac support proof and an RC4 public artifact remain release-boundary work.
 
-Miller meets or beats Julie on sealed correctness, nDCG/MRR/top-1, calls, tokens, wall time, and wrong-action rate; reference and rename truth are homonym-safe; failures are machine-readable; outputs are bounded and recoverable; semantic integration passes supported-platform gates; no Julie-only workflow is lost.
+## Active next work
+
+1. Finish Phase 8 in `/Users/murphy/source/julie-extractors/.worktrees/miller-takeover-resolution`: close fresh Claude findings, rerun all-language gates, commit, then request approval for release/push before pinning the released extractor in Miller.
+2. Complete Phase 9: implement the bounded test-only CodeRank evaluation adapter through Miller's real vector/search/context path; keep BGE as default unless CodeRank wins visible action efficiency enough to justify its approximately 6x memory and 10x query cost. Do not spend sealed tasks on a visible tie/loss.
+3. Prepare the sidecar RC4 release state and request approval before push/workflow dispatch/release. Exact Linux/Windows and physical Intel-Mac package proof remain open.
+4. Execute Phase 10 in corrected order: conditional retirement docs, candidate freeze, visible evaluator, nine fresh Claude tool reviews, broad review, fix/refreeze, full local gates, approval-gated pushed package-only validation, one operator-controlled sealed run, safe aggregate plus product-role attestation, then prepare the local merge decision.
 
 ## References
 
 - `docs/findings/2026-07-22-miller-julie-takeover-matrix.md`
 - `docs/plans/2026-07-22-miller-julie-takeover-remediation-plan.md`
 - `docs/plans/2026-07-22-miller-julie-takeover-audit-plan.md`
-- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
+- `.razorback/sdd/takeover-phase-10-readiness-audit.md`
 - `https://github.com/anortham/julie-semantic-sidecar/releases/tag/v0.1.0-rc.3`
-
-## Status
-
-The isolated implementation worktree is `/Users/murphy/source/miller/.worktrees/miller-julie-takeover` on `codex/miller-julie-takeover`. Phases 0–6 are complete: evaluator freeze, exact reference evidence, typed diagnostics and budgets, exact consumer/rename migration, shared search reranking/routing, one-call context, and risk-ranked/test-aware impact. Phase 6 passed 4,727 fast tests, 87 scale tests, Release build, Native AOT publish, plugin contracts, evaluator suites, and two fresh Claude review passes; all accepted findings were fixed. Phase 7 is active across content, patterns, and workspace. Phase 8 and Phase 9 readiness audits are complete and identify the exact upstream extractor and semantic-sidecar gaps. Phase 10 must use the corrected order: reviews and all fixes before candidate freeze, pushed package-only validation before the one sealed spend, and safe aggregate plus operator-side product-role attestation. Do not inspect sealed labels or interfere with the active Julie session.

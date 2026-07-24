@@ -90,6 +90,206 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
     }
 
     [Fact]
+    public void Import_WithRaisedMaxBytes_StreamsAndPreservesHashChunksAndLineWindows()
+    {
+        string logPath = Path.Combine(_dir, "streamed.log");
+        string content = string.Join('\n', Enumerable.Range(1, 500).Select(static line => $"line {line:D3}"));
+        File.WriteAllText(logPath, content);
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+
+        ExternalContentImportResult imported = store.Import(
+            _contentDbPath,
+            logPath,
+            maxBytes: new FileInfo(logPath).Length);
+
+        Assert.Equal("blake3:" + ContentHasher.Blake3FileHex(logPath), imported.ContentHash);
+        Assert.True(imported.ChunkCount > 1);
+        ExternalContentReadResult first = store.ReadWindow(_contentDbPath, imported.SourceId, line: 1, contextLines: 0);
+        ExternalContentReadResult middle = store.ReadWindow(_contentDbPath, imported.SourceId, line: 250, contextLines: 0);
+        ExternalContentReadResult last = store.ReadWindow(_contentDbPath, imported.SourceId, line: 500, contextLines: 0);
+        Assert.Equal("line 001", Assert.Single(first.Lines).Text);
+        Assert.Equal("line 250", Assert.Single(middle.Lines).Text);
+        Assert.Equal("line 500", Assert.Single(last.Lines).Text);
+        Assert.Equal(500, last.SourceLineCount);
+    }
+
+    [Fact]
+    public void Import_NonStreamingAndStreamingUseNormalizedLfByteOffsetsForCrLfInput()
+    {
+        string lfPath = Path.Combine(_dir, "lf.log");
+        string crlfPath = Path.Combine(_dir, "crlf.log");
+        string normalized = string.Join(
+            '\n',
+            Enumerable.Range(1, ContentCorpusChunker.DefaultChunkLines + 40)
+                .Select(static line => $"líne {line:D3}"));
+        File.WriteAllText(lfPath, normalized);
+        File.WriteAllText(crlfPath, normalized.Replace("\n", "\r\n", StringComparison.Ordinal));
+        var nonStreamingStore = new ContentCorpusExternalStore();
+        var streamingStore = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+
+        ExternalContentImportResult lf = nonStreamingStore.Import(_contentDbPath, lfPath);
+        ExternalContentImportResult crlf = streamingStore.Import(
+            _contentDbPath,
+            crlfPath,
+            maxBytes: new FileInfo(crlfPath).Length);
+
+        Assert.True(crlf.SourceBytes > lf.SourceBytes);
+        using var connection = new SqliteConnection($"Data Source={_contentDbPath};Mode=ReadOnly");
+        connection.Open();
+        IReadOnlyList<(int LineStart, int LineEnd, long ByteStart, long ByteEnd, string Text)> ReadChunks(
+            string sourceId)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT line_start, line_end, byte_start, byte_end, raw_text
+                FROM content_chunks
+                WHERE source_id = $source
+                ORDER BY line_start, chunk_id;
+                """;
+            command.Parameters.AddWithValue("$source", sourceId);
+            var chunks = new List<(int, int, long, long, string)>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                chunks.Add((
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetString(4)));
+            }
+            return chunks;
+        }
+
+        Assert.Equal(ReadChunks(lf.SourceId), ReadChunks(crlf.SourceId));
+        Assert.Equal(
+            System.Text.Encoding.UTF8.GetByteCount(normalized),
+            ReadChunks(lf.SourceId)[^1].ByteEnd);
+    }
+
+    [Fact]
+    public void Import_WithRaisedMaxBytes_RejectsOverlongLogicalLineWithoutPersistingPartialChunks()
+    {
+        string logPath = Path.Combine(_dir, "overlong-line.log");
+        File.WriteAllText(logPath, new string('x', ContentCorpusExternalStore.MaxStreamingLineChars + 1));
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            store.Import(_contentDbPath, logPath, maxBytes: new FileInfo(logPath).Length));
+
+        Assert.Contains("logical line", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(store.List(_contentDbPath));
+        Assert.Empty(store.Search(_contentDbPath, "xxxxx", limit: 5));
+    }
+
+    [Fact]
+    public void Import_WithRaisedMaxBytes_BoundsPersistedChunksAndPreservesReadAndHashContracts()
+    {
+        string logPath = Path.Combine(_dir, "bounded-chunks.log");
+        string line = new('x', 60_000);
+        File.WriteAllText(logPath, string.Join('\n', Enumerable.Repeat(line, 20)));
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+
+        ExternalContentImportResult imported = store.Import(
+            _contentDbPath,
+            logPath,
+            maxBytes: new FileInfo(logPath).Length);
+
+        Assert.Equal("blake3:" + ContentHasher.Blake3FileHex(logPath), imported.ContentHash);
+        Assert.Equal(line, Assert.Single(store.ReadWindow(
+            _contentDbPath,
+            imported.SourceId,
+            line: 20,
+            contextLines: 0).Lines).Text);
+        using var connection = new SqliteConnection($"Data Source={_contentDbPath};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT MAX(length(raw_text)) FROM content_chunks;";
+        Assert.InRange(
+            Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture),
+            1,
+            ContentCorpusExternalStore.MaxStreamingChunkChars);
+    }
+
+    [Fact]
+    public void Import_WithRaisedMaxBytes_InvalidUtf8RollsBackChunksWrittenBeforeDecodeFailure()
+    {
+        string logPath = Path.Combine(_dir, "invalid-streamed.log");
+        File.WriteAllText(logPath, "OriginalRollbackMarker\n");
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 64);
+        ExternalContentImportResult original = store.Import(_contentDbPath, logPath);
+        byte[] validPrefix = System.Text.Encoding.UTF8.GetBytes(
+            string.Concat(Enumerable.Repeat(
+                "valid searchable line " + new string('v', 96) + "\n",
+                ContentCorpusChunker.DefaultChunkLines + 40)));
+        Assert.True(validPrefix.Length > 16 * 1024);
+        Assert.True(validPrefix.Count(static value => value == (byte)'\n') > ContentCorpusChunker.DefaultChunkLines);
+        File.WriteAllBytes(logPath, [.. validPrefix, 0xC3, 0x28]);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            store.Import(_contentDbPath, logPath, maxBytes: new FileInfo(logPath).Length));
+
+        Assert.Contains("UTF-8", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(original.SourceId, Assert.Single(store.List(_contentDbPath)).SourceId);
+        Assert.Single(store.Search(_contentDbPath, "OriginalRollbackMarker", limit: 5));
+        Assert.Empty(store.Search(_contentDbPath, "searchable", limit: 5));
+    }
+
+    [Fact]
+    public void Import_WithRaisedMaxBytes_SizeDriftRollsBackChunksWrittenBeforeLengthCheck()
+    {
+        string logPath = Path.Combine(_dir, "size-drift-streamed.log");
+        File.WriteAllText(logPath, "OriginalSizeMarker\n");
+        var store = new ContentCorpusExternalStore(defaultMaxImportBytes: 4);
+        ExternalContentImportResult original = store.Import(
+            _contentDbPath,
+            logPath,
+            maxBytes: new FileInfo(logPath).Length);
+        string replacement = string.Concat(Enumerable.Repeat(
+            "replacement searchable line " + new string('r', 96) + "\n",
+            ContentCorpusChunker.DefaultChunkLines + 40));
+        byte[] bytesBeforeGrowth = System.Text.Encoding.UTF8.GetBytes(replacement);
+        Assert.True(bytesBeforeGrowth.Length > 16 * 1024);
+        Assert.True(bytesBeforeGrowth.Count(static value => value == (byte)'\n') > ContentCorpusChunker.DefaultChunkLines);
+        File.WriteAllText(logPath, replacement);
+        byte[] bytesAfterGrowth = System.Text.Encoding.UTF8.GetBytes(replacement + "concurrent growth\n");
+        var driftingStore = new ContentCorpusExternalStore(
+            defaultMaxImportBytes: 4,
+            writeLockTimeout: null,
+            _ => new MemoryStream(bytesAfterGrowth, writable: false));
+
+        var ex = Assert.Throws<IOException>(() =>
+            driftingStore.Import(
+                _contentDbPath,
+                logPath,
+                maxBytes: bytesAfterGrowth.Length + 1L));
+
+        Assert.Contains("changed while it was being imported", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(original.SourceId, Assert.Single(store.List(_contentDbPath)).SourceId);
+        Assert.Single(store.Search(_contentDbPath, "OriginalSizeMarker", limit: 5));
+        Assert.Empty(store.Search(_contentDbPath, "replacement", limit: 5));
+    }
+
+    [Fact]
+    public void Import_WithRaisedMaxBytes_RejectsGrowthBeforeReadingTheWholeStream()
+    {
+        string logPath = Path.Combine(_dir, "growing-streamed.log");
+        File.WriteAllText(logPath, new string('a', 512));
+        byte[] grownBytes = System.Text.Encoding.UTF8.GetBytes(
+            string.Concat(Enumerable.Repeat("grown line\n", 100_000)));
+        var store = new ContentCorpusExternalStore(
+            defaultMaxImportBytes: 4,
+            writeLockTimeout: null,
+            _ => new ThrowAfterPositionStream(grownBytes, 20 * 1024));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            store.Import(_contentDbPath, logPath, maxBytes: 1024));
+
+        Assert.Contains("exceeds max_bytes 1024", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(store.List(_contentDbPath));
+    }
+
+    [Fact]
     public void Import_WhenContentWriteLockIsHeld_TimesOutWithoutMutating()
     {
         string logPath = Path.Combine(_dir, "locked.log");
@@ -162,5 +362,22 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
 
         Assert.DoesNotContain(store.Search(_contentDbPath, "WebResearchMarker", TextContentKind.ExternalFile, limit: 5),
             static h => h.ContentKind == TextContentKind.Web);
+    }
+
+    private sealed class ThrowAfterPositionStream(byte[] bytes, long limit) : MemoryStream(bytes, writable: false)
+    {
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (Position >= limit)
+                throw new InvalidOperationException("Import continued reading after the fail-fast threshold.");
+            return base.Read(buffer, offset, (int)Math.Min(count, limit - Position));
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (Position >= limit)
+                throw new InvalidOperationException("Import continued reading after the fail-fast threshold.");
+            return base.Read(buffer[..(int)Math.Min(buffer.Length, limit - Position)]);
+        }
     }
 }

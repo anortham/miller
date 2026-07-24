@@ -356,6 +356,12 @@ public sealed class PatternFactsReader
                 row.CaptureName,
                 Path: null,
                 Directory: PatternDirectory.FromPath(row.Path)),
+            PatternSummaryGroupBy.TopDirectory => new SummaryGroupKey(
+                row.Language,
+                row.PatternId,
+                row.CaptureName,
+                Path: null,
+                Directory: PatternDirectory.TopFromPath(row.Path)),
             _ => new SummaryGroupKey(row.Language, row.PatternId, row.CaptureName, Path: null, Directory: null),
         };
 
@@ -580,6 +586,7 @@ public enum PatternSummaryGroupBy
     LanguagePatternCapture,
     File,
     Directory,
+    TopDirectory,
 }
 
 public sealed record PatternListRow(
@@ -646,9 +653,14 @@ internal static class PatternDirectory
         string[] segments = normalized[..lastSlash].Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
             return string.Empty;
-        if (segments.Length == 1)
-            return segments[0];
 
-        return string.Join('/', segments[..Math.Min(2, segments.Length)]);
+        return string.Join('/', segments);
+    }
+
+    public static string TopFromPath(string path)
+    {
+        string parent = FromPath(path);
+        int firstSlash = parent.IndexOf('/');
+        return firstSlash < 0 ? parent : parent[..firstSlash];
     }
 }

@@ -17,6 +17,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/takeover-evaluation-v1.md`](contracts/takeover-evaluation-v1.md) - frozen product-neutral takeover evaluator contract: capability coverage, typed outcomes/actions/evidence, subset replay identity, scoring gates, and sealed privacy.
 - [`contracts/tool-diagnostics-v1.md`](contracts/tool-diagnostics-v1.md) - shared typed empty/error, compact/JSON, telemetry, and MCP error-channel contract for the seven read/lifecycle tools migrated in takeover Phase 2.
 - [`contracts/tool-continuation-v1.md`](contracts/tool-continuation-v1.md) - stateless checksum-bound output paging for bounded `inspect depth=full` bodies and exact/fallback `trace mode=refs` pages.
+- [`contracts/patterns-v1.md`](contracts/patterns-v1.md) - deterministic free-text fan-out diagnostics, exact full-population aggregation, and explicit full-parent versus top-directory summary grouping.
 - [`contracts/exact-reference-consumers-v1.md`](contracts/exact-reference-consumers-v1.md) - shared exact/fallback, provenance, caller/callee, context, and rename contract across every agent-facing reference consumer.
 - [`contracts/edit-json-v1.md`](contracts/edit-json-v1.md) - additive exact-rename safety mode, evidence tiers, language/kind coverage, and atomic apply JSON contract.
   - [`findings/2026-07-22-miller-julie-agent-efficiency-visible-baseline.md`](findings/2026-07-22-miller-julie-agent-efficiency-visible-baseline.md) - historical 12-task visible benchmark, context-render repair, and BGE-small/CodeRankEmbed isolation.
@@ -26,6 +27,9 @@ Use this page to avoid treating old milestone plans as the current product contr
           - [`findings/2026-07-23-phase3-exact-consumers-and-rename-safety.md`](findings/2026-07-23-phase3-exact-consumers-and-rename-safety.md) - Phase 3 exact-reference consumer migration, exact-by-default rename safety, 16 KiB reference continuation, and `trace auto` removal.
           - [`findings/2026-07-23-phase4-shared-search-ranking-and-routing.md`](findings/2026-07-23-phase4-shared-search-ranking-and-routing.md) - Phase 4 shared reranking, container evidence, AND-to-OR relaxation, mixed routing, per-call retrieval control, and visible search calibration.
           - [`findings/2026-07-23-phase5-context-one-call-actionability.md`](findings/2026-07-23-phase5-context-one-call-actionability.md) - Phase 5 task-ranked pivots, bounded implementation evidence, aligned schemas, hard budgets, and visible one-call context calibration.
+          - [`findings/2026-07-23-phase7-content-bounds.md`](findings/2026-07-23-phase7-content-bounds.md) - Phase 7A bounded content inventory/shape, CLI-only export boundary, and raised-cap streaming evidence.
+          - [`findings/2026-07-23-phase7-patterns-bounds.md`](findings/2026-07-23-phase7-patterns-bounds.md) - Phase 7B pattern-query fan-out diagnostics, exact 10,005-row aggregation, full-parent directory semantics, and runtime-authoritative catalog guidance.
+          - [`findings/2026-07-23-phase-7-workspace-bounds.md`](findings/2026-07-23-phase-7-workspace-bounds.md) - Phase 7C exact workspace-list totals, bounded health formats, and authoritative symbol-read readiness.
 - [`plans/2026-07-22-miller-julie-takeover-audit-plan.md`](plans/2026-07-22-miller-julie-takeover-audit-plan.md) - completed nine-tool Miller-versus-Julie audit method, including one broad and nine mandatory tool-specific Claude reviews.
 - [`findings/2026-07-22-miller-julie-takeover-matrix.md`](findings/2026-07-22-miller-julie-takeover-matrix.md) - complete source-, artifact-, telemetry-, and Claude-validated comparison matrix with exact shortcomings and takeover gates.
 - [`plans/2026-07-22-miller-julie-takeover-remediation-plan.md`](plans/2026-07-22-miller-julie-takeover-remediation-plan.md) - evidence-gated multi-phase plan to make Miller outperform Julie and repeat all nine Claude tool reviews before retirement.
@@ -52,6 +56,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`findings/2026-07-23-phase-6-impact-evidence.md`](findings/2026-07-23-phase-6-impact-evidence.md) - Phase 6 evidence for ranked graph explanations, exact-versus-heuristic tests, shared MCP/CLI revision deltas, and bounded compact output.
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
+- [`contracts/content-mcp-v2.md`](contracts/content-mcp-v2.md) - active bounded MCP list/shape contract and CLI-only export boundary.
 - [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - active references/usage JSONL export contract.
 - [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active patterns JSON contract over extractor structural facts.

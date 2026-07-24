@@ -377,7 +377,7 @@ selectors. The `workspace_id=all` selector is only for `content search` text aud
 content DBs.
 
 `patterns` is the structural-facts surface. It lists and searches known code-shape facts emitted by
-the pinned `julie-extract` catalog — 194 pattern ids across 36 languages, spanning framework facts
+the pinned `julie-extract` catalog, spanning framework facts
 (ASP.NET minimal API routes, htmx attributes, Alpine directives), language facts (async/await, unsafe blocks,
 decorators, goroutines), SQL DDL/DML shapes, and JSON/YAML/TOML/Markdown document structure. It is intentionally not
 a raw AST query language:

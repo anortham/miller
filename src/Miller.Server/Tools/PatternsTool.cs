@@ -37,6 +37,16 @@ public sealed class PatternsTool
         string Reason,
         IReadOnlyList<KeyValuePair<string, string>> Args);
 
+    private sealed record PatternQueryFanout(
+        int ConsideredCount,
+        int MatchedCount,
+        IReadOnlyList<string> ReturnedPatternIds)
+    {
+        public int ReturnedCount => ReturnedPatternIds.Count;
+        public int OmittedCount => MatchedCount - ReturnedCount;
+        public bool Truncated => OmittedCount > 0;
+    }
+
     public PatternsTool(IWorkspaceArtifactProvider workspaceProvider, PatternFactsReader reader)
     {
         ArgumentNullException.ThrowIfNull(workspaceProvider);
@@ -47,8 +57,8 @@ public sealed class PatternsTool
 
     [McpServerTool(Name = "patterns")]
     [Description(
-        "Query generic code-shape facts pre-extracted by julie-extractors (194 pattern ids, 36 languages: HTTP routes, " +
-        "HTML/htmx/Alpine, SQL DDL/DML, async/await, JSON/YAML/TOML/Markdown structure). Call with no args to list " +
+        "Query generic code-shape facts pre-extracted by julie-extractors, including HTTP routes, HTML/htmx/Alpine, " +
+        "SQL DDL/DML, async/await, and JSON/YAML/TOML/Markdown structure. Call with no args to list " +
         "observed pattern_id values; then operation=search with pattern_id (plus path/language/where filters) or " +
         "a free-text query that matches pattern ids. Use INSTEAD of raw-grepping routes, config keys, or document " +
         "structure. NOT for: raw AST queries or arbitrary text (search). Examples: patterns operation=search " +
@@ -56,11 +66,11 @@ public sealed class PatternsTool
     public string Patterns(
         [Description("list|summary|search. Default list.")] string? operation = "list",
         [Description("Pattern id. Required for search unless query is given; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,
-        [Description("Free-text query for search when pattern_id is omitted. Maps to every pattern_id containing the substring (case-insensitive) and searches across them. Ignored when pattern_id is supplied. Example: route.")] string? query = null,
+        [Description("Free-text search over observed pattern IDs when pattern_id is omitted. Reports exact fan-out counts and searches at most 25 matched IDs. Ignored when pattern_id is supplied. Example: route.")] string? query = null,
         [Description("Language filter such as csharp, html, or razor. Optional.")] string? language = null,
         [Description("Workspace-relative glob filter, e.g. Views/**. Optional.")] string? path = null,
         [Description("Top-level metadata equality filter as key=value. Repeatable on CLI; MCP accepts key=value or semicolon-separated AND filters. Requires pattern_id or query for search.")] string? where = null,
-        [Description("summary grouping: language_pattern_capture|file|directory. Default language_pattern_capture.")] string? group_by = null,
+        [Description("summary grouping: language_pattern_capture|file|directory|top_directory. Default language_pattern_capture.")] string? group_by = null,
         [Description("Optional summary metadata facet key.")] string? facet = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
@@ -233,8 +243,9 @@ public sealed class PatternsTool
             "language_pattern_capture" or "default" => PatternSummaryGroupBy.LanguagePatternCapture,
             "file" => PatternSummaryGroupBy.File,
             "directory" or "dir" => PatternSummaryGroupBy.Directory,
+            "top_directory" => PatternSummaryGroupBy.TopDirectory,
             _ => throw InvalidRequest(
-                "patterns group_by must be language_pattern_capture, file, or directory."),
+                "patterns group_by must be language_pattern_capture, file, directory, or top_directory."),
         };
     }
 
@@ -362,15 +373,22 @@ public sealed class PatternsTool
         bool json)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
-        string[] matchedPatternIds = reader.List(dbPath)
+        PatternListRow[] consideredPatternIds = reader.List(dbPath).ToArray();
+        PatternListRow[] matchedPatternIds = consideredPatternIds
             .Where(row => row.PatternId.Contains(query, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(static row => row.Count)
             .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
+            .ToArray();
+        string[] returnedPatternIds = matchedPatternIds
             .Take(MaxQueryPatternIds)
             .Select(static row => row.PatternId)
             .ToArray();
+        var fanout = new PatternQueryFanout(
+            consideredPatternIds.Length,
+            matchedPatternIds.Length,
+            returnedPatternIds);
 
-        if (matchedPatternIds.Length == 0)
+        if (fanout.MatchedCount == 0)
         {
             IReadOnlyList<string> nearMatches = SuggestPatternIds(reader, dbPath, query, language);
             const string emptyReason = "query_no_match";
@@ -384,6 +402,7 @@ public sealed class PatternsTool
                     writer.WriteString("operation", "search");
                     writer.WriteString("query", query);
                     writer.WriteString("empty_reason", emptyReason);
+                    WriteQueryFanoutJson(writer, fanout);
                     WriteStringArray(writer, "matched_pattern_ids", Array.Empty<string>());
                     WriteStringArray(writer, "near_matches", nearMatches);
                     WriteActiveFiltersJson(writer, path, language, metadataFilters);
@@ -397,14 +416,14 @@ public sealed class PatternsTool
                 return new PatternToolResult(Encoding.UTF8.GetString(buffer.WrittenSpan), 0, emptyReason);
             }
 
-            string hint = RenderQueryNoMatchCompact(query, nearMatches);
+            string hint = RenderQueryNoMatchCompact(query, fanout, nearMatches);
             return new PatternToolResult(hint, 0, emptyReason);
         }
 
-        var combined = new List<PatternMatchRow>(capacity: Math.Min(boundedLimit * matchedPatternIds.Length, MaxLimit * MaxQueryPatternIds));
+        var combined = new List<PatternMatchRow>(capacity: Math.Min(boundedLimit * returnedPatternIds.Length, MaxLimit * MaxQueryPatternIds));
         foreach (PatternMatchRow row in reader.EnumerateMatches(
                      dbPath,
-                     matchedPatternIds,
+                     returnedPatternIds,
                      language,
                      path,
                      metadataFilters.Count == 0 ? null : metadataFilters,
@@ -428,8 +447,8 @@ public sealed class PatternsTool
 
         return new PatternToolResult(
             json
-                ? RenderSearchJsonForQuery(query, matchedPatternIds, rows, path, language, metadataFilters, resultEmptyReason)
-                : RenderSearchCompactForQuery(query, matchedPatternIds, rows, metadataFilters.Count == 1 ? metadataFilters[0] : null),
+                ? RenderSearchJsonForQuery(query, fanout, rows, path, language, metadataFilters, resultEmptyReason)
+                : RenderSearchCompactForQuery(query, fanout, rows, metadataFilters.Count == 1 ? metadataFilters[0] : null),
             rows.Length,
             resultEmptyReason);
     }
@@ -465,13 +484,13 @@ public sealed class PatternsTool
         var sb = new StringBuilder();
         sb.AppendLine("# patterns summary");
         if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
-            sb.Append("group_by=").Append(groupBy.ToString().ToLowerInvariant()).AppendLine();
+            sb.Append("group_by=").Append(SummaryGroupByName(groupBy)).AppendLine();
         if (!string.IsNullOrWhiteSpace(facet))
             sb.Append("facet=").Append(facet.Trim()).AppendLine();
 
         if (groupBy == PatternSummaryGroupBy.File)
             sb.AppendLine("language\tpattern_id\tcapture\tpath\tcount");
-        else if (groupBy == PatternSummaryGroupBy.Directory)
+        else if (groupBy is PatternSummaryGroupBy.Directory or PatternSummaryGroupBy.TopDirectory)
             sb.AppendLine("language\tpattern_id\tcapture\tdirectory\tcount");
         else if (!string.IsNullOrWhiteSpace(facet))
             sb.AppendLine("language\tpattern_id\tcapture\tfacet\tcount");
@@ -485,7 +504,7 @@ public sealed class PatternsTool
               .Append(row.CaptureName).Append('\t');
             if (groupBy == PatternSummaryGroupBy.File)
                 sb.Append(row.Path).Append('\t');
-            else if (groupBy == PatternSummaryGroupBy.Directory)
+            else if (groupBy is PatternSummaryGroupBy.Directory or PatternSummaryGroupBy.TopDirectory)
                 sb.Append(row.Directory).Append('\t');
             else if (!string.IsNullOrWhiteSpace(facet))
                 sb.Append(row.FacetValue).Append('\t');
@@ -526,21 +545,26 @@ public sealed class PatternsTool
 
     private static string RenderSearchCompactForQuery(
         string query,
-        IReadOnlyList<string> matchedPatternIds,
+        PatternQueryFanout fanout,
         IReadOnlyList<PatternMatchRow> rows,
         PatternMetadataFilter? metadataFilter)
     {
         var sb = new StringBuilder();
         sb.Append("# patterns search query='").Append(query).AppendLine("'");
-        sb.Append("matched_pattern_ids: ").Append(string.Join(", ", matchedPatternIds)).AppendLine();
+        AppendQueryFanoutCompact(sb, fanout);
+        sb.Append("matched_pattern_ids: ").Append(string.Join(", ", fanout.ReturnedPatternIds)).AppendLine();
         AppendMatchGroups(sb, rows, metadataFilter);
         return sb.ToString().TrimEnd();
     }
 
-    private static string RenderQueryNoMatchCompact(string query, IReadOnlyList<string> nearMatches)
+    private static string RenderQueryNoMatchCompact(
+        string query,
+        PatternQueryFanout fanout,
+        IReadOnlyList<string> nearMatches)
     {
         var sb = new StringBuilder();
         sb.Append("No patterns match '").Append(query).AppendLine("'. Try `patterns operation=list` to see observed pattern_id values.");
+        AppendQueryFanoutCompact(sb, fanout);
         if (nearMatches.Count > 0)
             sb.Append("near matches: ").AppendLine(string.Join(", ", nearMatches));
         AppendNextActions(sb, QueryNoMatchNextActions(nearMatches));
@@ -781,7 +805,7 @@ public sealed class PatternsTool
             writer.WriteNumber("schema_version", 1);
             writer.WriteString("operation", "summary");
             if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
-                writer.WriteString("group_by", groupBy.ToString().ToLowerInvariant());
+                writer.WriteString("group_by", SummaryGroupByName(groupBy));
             if (!string.IsNullOrWhiteSpace(facet))
                 writer.WriteString("facet", facet.Trim());
             writer.WriteStartArray("groups");
@@ -851,7 +875,7 @@ public sealed class PatternsTool
 
     private static string RenderSearchJsonForQuery(
         string query,
-        IReadOnlyList<string> matchedPatternIds,
+        PatternQueryFanout fanout,
         IReadOnlyList<PatternMatchRow> rows,
         string? path,
         string? language,
@@ -865,7 +889,8 @@ public sealed class PatternsTool
             writer.WriteNumber("schema_version", 1);
             writer.WriteString("operation", "search");
             writer.WriteString("query", query);
-            WriteStringArray(writer, "matched_pattern_ids", matchedPatternIds);
+            WriteQueryFanoutJson(writer, fanout);
+            WriteStringArray(writer, "matched_pattern_ids", fanout.ReturnedPatternIds);
             if (rows.Count == 0 && !string.IsNullOrWhiteSpace(emptyReason))
             {
                 writer.WriteString("empty_reason", emptyReason);
@@ -923,6 +948,25 @@ public sealed class PatternsTool
         foreach (string value in values)
             writer.WriteStringValue(value);
         writer.WriteEndArray();
+    }
+
+    private static void AppendQueryFanoutCompact(StringBuilder sb, PatternQueryFanout fanout)
+    {
+        sb.Append("pattern_id_fanout: considered=").Append(fanout.ConsideredCount)
+          .Append(" matched=").Append(fanout.MatchedCount)
+          .Append(" returned=").Append(fanout.ReturnedCount)
+          .Append(" omitted=").Append(fanout.OmittedCount)
+          .Append(" truncated=").Append(fanout.Truncated ? "true" : "false")
+          .AppendLine();
+    }
+
+    private static void WriteQueryFanoutJson(Utf8JsonWriter writer, PatternQueryFanout fanout)
+    {
+        writer.WriteNumber("pattern_ids_considered_count", fanout.ConsideredCount);
+        writer.WriteNumber("pattern_ids_matched_count", fanout.MatchedCount);
+        writer.WriteNumber("pattern_ids_returned_count", fanout.ReturnedCount);
+        writer.WriteNumber("pattern_ids_omitted_count", fanout.OmittedCount);
+        writer.WriteBoolean("pattern_id_fanout_truncated", fanout.Truncated);
     }
 
     private static string MetadataCompact(PatternMatchRow row, PatternMetadataFilter? metadataFilter)
@@ -1067,6 +1111,16 @@ public sealed class PatternsTool
             _ => normalized,
         };
     }
+
+    private static string SummaryGroupByName(PatternSummaryGroupBy groupBy) =>
+        groupBy switch
+        {
+            PatternSummaryGroupBy.LanguagePatternCapture => "language_pattern_capture",
+            PatternSummaryGroupBy.File => "file",
+            PatternSummaryGroupBy.Directory => "directory",
+            PatternSummaryGroupBy.TopDirectory => "top_directory",
+            _ => throw new ArgumentOutOfRangeException(nameof(groupBy), groupBy, null),
+        };
 
     private static string RequiredPatternId(string? patternId)
     {

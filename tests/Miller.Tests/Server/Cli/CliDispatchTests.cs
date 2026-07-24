@@ -977,6 +977,155 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Content_ReadFailure_CompactExitsThreeAndWritesDiagnosticToStderr()
+    {
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+
+        var (code, outText, errText) = Run(
+            new[] { "content", "read", "--source-id", "external_file:missing", "--line", "1" },
+            ctx);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        Assert.Contains("diagnostic_code=content_corpus_missing", errText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_ReadFailure_JsonExitsThreeAndWritesTypedDiagnosticToStderr()
+    {
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+
+        var (code, outText, errText) = Run(
+            new[] { "content", "read", "--source-id", "external_file:missing", "--line", "1", "--json" },
+            ctx);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        using JsonDocument doc = JsonDocument.Parse(errText);
+        Assert.Equal("content_corpus_missing", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Theory]
+    [InlineData("list", false)]
+    [InlineData("list", true)]
+    [InlineData("export", false)]
+    [InlineData("export", true)]
+    public void Content_InvalidKind_ExitsThreeWithTypedDiagnostic(string operation, bool json)
+    {
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        var args = new List<string> { "content", operation, "--kind", "externl" };
+        if (json)
+            args.Add("--json");
+
+        var (code, outText, errText) = Run(args, ctx);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outText);
+        if (json)
+        {
+            using JsonDocument doc = JsonDocument.Parse(errText);
+            Assert.Equal(operation, doc.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("content_error", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        }
+        else
+        {
+            Assert.Contains("diagnostic_code=content_error", errText, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("read", false)]
+    [InlineData("read", true)]
+    [InlineData("shape", false)]
+    [InlineData("shape", true)]
+    public void Content_Success_WithDiagnosticLookingText_ExitsZero(string operation, bool json)
+    {
+        string logPath = Path.Combine(_dir, "diagnostic-looking.log");
+        File.WriteAllText(logPath, "diagnostic_code=literal-content\n");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        Run(
+            new[]
+            {
+                "content", "import", logPath,
+                "--display-path", "content failed: fixture",
+            },
+            ctx);
+        var args = new List<string>
+        {
+            "content", operation,
+            "--source-id", ContentCorpusExternalStore.SourceIdFor(logPath),
+            "--line", "1",
+            "--context-lines", "0",
+        };
+        if (json)
+            args.Add("--json");
+
+        var (code, outText, errText) = Run(args, ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("diagnostic_code=literal-content", outText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_ListKindAll_ReturnsExternalAndWebInFlatV1Shape()
+    {
+        string logPath = Path.Combine(_dir, "external.log");
+        string markdownPath = Path.Combine(_dir, "page.md");
+        File.WriteAllText(logPath, "external marker\n");
+        File.WriteAllText(markdownPath, "web marker\n");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        Run(new[] { "content", "import", logPath, "--display-path", "external.log" }, ctx);
+        Run(
+            new[]
+            {
+                "content", "add-markdown", markdownPath,
+                "--url", "https://example.test/page",
+                "--display-path", "page",
+            },
+            ctx);
+
+        var (allCode, allOut, allErr) = Run(new[] { "content", "list", "--kind", "all", "--json" }, ctx);
+        var (defaultCode, defaultOut, defaultErr) = Run(new[] { "content", "list", "--json" }, ctx);
+
+        Assert.Equal(0, allCode);
+        Assert.Empty(allErr);
+        using JsonDocument allDoc = JsonDocument.Parse(allOut);
+        JsonElement[] all = allDoc.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(new[] { "external_file", "web" }, all.Select(
+            static row => row.GetProperty("content_kind").GetString()).ToArray());
+        Assert.All(all, static row => Assert.Equal(
+            new[]
+            {
+                "source_id", "content_kind", "display_path", "url", "content_hash",
+                "source_bytes", "line_count", "chunk_count", "indexed_at_utc",
+            },
+            row.EnumerateObject().Select(static property => property.Name).ToArray()));
+
+        Assert.Equal(0, defaultCode);
+        Assert.Empty(defaultErr);
+        using JsonDocument defaultDoc = JsonDocument.Parse(defaultOut);
+        Assert.Equal(
+            "external_file",
+            Assert.Single(defaultDoc.RootElement.EnumerateArray()).GetProperty("content_kind").GetString());
+    }
+
+    [Fact]
+    public void Content_SearchNoResults_JsonRemainsSuccessfulEmptyOutput()
+    {
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+
+        var (code, outText, errText) = Run(
+            new[] { "content", "search", "NoSuchMarker", "--json" },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal("no_results", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
     public void Content_AddMarkdownSearchAndRead_WebKind()
     {
         string markdownPath = Path.Combine(_dir, "page.md");
@@ -1710,6 +1859,7 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(2, code);
         Assert.Contains("miller patterns", errText);
+        Assert.Contains("top_directory", errText);
         Assert.DoesNotContain("no Miller index", errText);
     }
 
@@ -2575,6 +2725,24 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void WorkspaceHealth_Markdown_KeepsCompleteExtractionAndWarningDetails()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        SeedHealthRows(fx.DbPath);
+        SeedRegisteredWorkspace("target-ws", "target-111111111111", fx.WorkspaceRoot, fx.DbPath);
+
+        var (code, outText, errText) = Run(
+            ["workspace", "health", "--id", "target-ws", "--markdown"],
+            Context(Path.Combine(_dir, "current", ".miller", "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.Contains("```json", outText);
+        Assert.Contains("\"parse_diagnostics\"", outText);
+        Assert.Contains("\"recommended_actions\"", outText);
     }
 
     [Fact]

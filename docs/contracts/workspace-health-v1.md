@@ -4,6 +4,16 @@
 verdict for one workspace. The report is deterministic and based only on Miller artifacts; it does not claim code
 quality, security status, semantic search quality, or enterprise readiness.
 
+## Output formats and bounds
+
+- `compact` is hard-bounded to at most 14 lines, and each dynamic value is flattened to one line and capped at
+  240 characters. It renders aggregate quality counts, the first warning, and the first recommended action. Its
+  final `omitted` line reports all six hidden extraction-detail groups, their exact grouped-row total, and the
+  exact warning/action counts not rendered.
+- `json` is complete and follows the shape below; no extraction rows, warnings, or actions are capped.
+- `markdown` is available from the CLI with `--markdown` and from MCP with `format="markdown"`. It contains the
+  compact summary followed by the complete JSON report in a fenced block.
+
 ## Top-level shape
 
 ```json
@@ -82,6 +92,13 @@ Removing or renaming documented fields requires a new contract version.
 - `telemetry.summary`: the same per-tool summary shape used by `workspace status --json`.
 - `warnings`: objects with `code`, `severity`, and `message`.
 - `recommended_actions`: short strings intended for agents and downstream dashboards.
+
+Missing, stale, corrupt, or incompatible derived sidecars remain typed warnings rather than changing the
+authoritative `symbols.db` readiness verdict. Missing/stale `search_sidecar` and `content_corpus` warnings carry a
+`workspace refresh` recovery action; corrupt or otherwise unreadable derived artifacts carry a `workspace full`
+recovery action. Non-search symbol reads such as `inspect`, `context`, `impact`, and `trace` continue from a fresh,
+compatible `symbols.db` when an unrelated search/content/vector sidecar is unavailable. Symbol search still fails
+visibly when its required `search.db` is missing, stale, or corrupt.
 
 ## State rules
 

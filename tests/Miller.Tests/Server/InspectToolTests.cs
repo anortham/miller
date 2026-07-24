@@ -1145,7 +1145,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-ambiguous",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect("Duplicate", format: "json");
 
@@ -1169,7 +1169,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-long-body",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string firstOutput = tool.Inspect("LongBody", depth: "full", format: "json");
         using var firstDocument = JsonDocument.Parse(firstOutput);
@@ -1204,7 +1204,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-long-body",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string firstOutput = tool.Inspect("LongBody", depth: "full");
         int bodyStart = firstOutput.IndexOf("## body\n", StringComparison.Ordinal) + "## body\n".Length;
@@ -1234,7 +1234,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-file-target",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect(
             "auth/UserService.cs",
@@ -1260,7 +1260,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-long-body",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string firstOutput = tool.Inspect("LongBody", depth: "full", format: "json");
         using var firstDocument = JsonDocument.Parse(firstOutput);
@@ -1305,7 +1305,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-long-body",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         using var firstDocument = JsonDocument.Parse(
             tool.Inspect("LongBody", depth: "full", format: "json"));
@@ -1334,7 +1334,7 @@ public sealed class InspectToolTests
                 fx.DbPath,
                 "ws-long-target",
                 fx.WorkspaceRoot));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
         string target = new('x', 500);
 
         using var document = JsonDocument.Parse(tool.Inspect(target, format: "json"));
@@ -1506,7 +1506,7 @@ public sealed class InspectToolTests
                 targetRoot,
                 indexFresh: false,
                 freshnessStatus: "unconfirmed_lock_busy")));
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect(
             "GetUser",
@@ -1522,8 +1522,11 @@ public sealed class InspectToolTests
         Assert.Contains("Gets a user by id.", output);
     }
 
-    [Fact]
-    public void Inspect_Summary_RegisteredWorkspace_UsesSymbolProjectionWithoutFullLoad()
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("stale")]
+    [InlineData("corrupt")]
+    public void Inspect_Summary_RegisteredWorkspace_UsesSymbolsWhenSearchSidecarCannotServe(string sidecarState)
     {
         using var current = EmptyFixture("current-ws");
         using var target = JulieDbFixture.CreateForInspect();
@@ -1537,6 +1540,11 @@ public sealed class InspectToolTests
             using var registry = WorkspaceRegistry.Open(registryDb);
             registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
             registry.MarkScanned("target-ws", revision: 1);
+            string searchDbPath = SymbolSearchSidecar.SearchDbPathFor(target.DbPath);
+            if (sidecarState == "stale")
+                SearchIndexWriter.Write(searchDbPath, SqliteSymbolReader.Read(target.DbPath), revision: 0);
+            else if (sidecarState == "corrupt")
+                File.WriteAllText(searchDbPath, "not a sqlite artifact");
 
             int fullLoadCount = 0;
             int symbolLoadCount = 0;
@@ -1571,8 +1579,8 @@ public sealed class InspectToolTests
                 loadRegionSearch: (_, _) =>
                     throw new InvalidOperationException("region loader was not expected"),
                 currentIndexFresh: _ => true,
-                sidecar: SymbolSearchSidecar.Disabled);
-            var tool = new InspectTool(provider, provider);
+                sidecar: new SymbolSearchSidecar(enabled: true));
+            var tool = new InspectTool(provider);
 
             string output = tool.Inspect(
                 "GetUser",
@@ -1616,7 +1624,7 @@ public sealed class InspectToolTests
                 targetRoot),
             () => fullResolveCount++,
             () => searchResolveCount++);
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect(
             "GetUser",
@@ -1653,7 +1661,7 @@ public sealed class InspectToolTests
                 targetRoot),
             () => fullResolveCount++,
             () => searchResolveCount++);
-        var tool = new InspectTool(provider, provider);
+        var tool = new InspectTool(provider);
 
         string output = tool.Inspect(
             "Duplicate",
@@ -1685,7 +1693,8 @@ public sealed class InspectToolTests
         Assert.Equal(1, cmd.ExecuteNonQuery());
     }
 
-    private sealed class FullInspectRecordingProvider : IWorkspaceIndexProvider, IWorkspaceSearchProvider
+    private sealed class FullInspectRecordingProvider
+        : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceSymbolReadProvider
     {
         private readonly WorkspaceReadContext _current;
         private readonly WorkspaceReadContext _target;
@@ -1714,6 +1723,12 @@ public sealed class InspectToolTests
         {
             _onSearchResolve();
             return ReadToolRoutingTestSupport.SearchContextFor(workspaceId is null ? _current : _target);
+        }
+
+        public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+        {
+            _onSearchResolve();
+            return ReadToolRoutingTestSupport.SymbolReadContextFor(workspaceId is null ? _current : _target);
         }
     }
 }

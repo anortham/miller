@@ -147,8 +147,10 @@ public sealed class ContentToolTests : IDisposable
 
         string listJson = tool.Content("list", format: "json");
         using JsonDocument listDoc = JsonDocument.Parse(listJson);
-        Assert.Equal(sourceId, listDoc.RootElement[0].GetProperty("source_id").GetString());
-        Assert.Equal("ci.log", Path.GetFileName(listDoc.RootElement[0].GetProperty("display_path").GetString()));
+        JsonElement listedSource = Assert.Single(
+            listDoc.RootElement.GetProperty("kinds")[0].GetProperty("sources").EnumerateArray());
+        Assert.Equal(sourceId, listedSource.GetProperty("source_id").GetString());
+        Assert.Equal("ci.log", Path.GetFileName(listedSource.GetProperty("display_path").GetString()));
 
         string removed = tool.Content("remove", source_id: sourceId);
         Assert.Contains("removed", removed);
@@ -175,7 +177,8 @@ public sealed class ContentToolTests : IDisposable
     {
         string listJson = tool.Content("list", format: "json");
         using JsonDocument doc = JsonDocument.Parse(listJson);
-        return doc.RootElement.EnumerateArray()
+        return doc.RootElement.GetProperty("kinds").EnumerateArray()
+            .SelectMany(static kind => kind.GetProperty("sources").EnumerateArray())
             .Single(source => source.GetProperty("display_path").GetString() == displayPath)
             .GetProperty("source_id").GetString()!;
     }
@@ -214,13 +217,15 @@ public sealed class ContentToolTests : IDisposable
     [Fact]
     public void Content_Read_AmbiguousExactDisplayPath_StillListsCandidates()
     {
-        ContentTool tool = ToolWithImportedSources("shared/notes.md", "shared/notes.md");
+        ContentTool tool = ToolWithImportedSources(
+            "shared/notes.md", "shared/notes.md", "shared/notes.md",
+            "shared/notes.md", "shared/notes.md", "shared/notes.md");
 
         string read = tool.Content("read", source_id: "shared/notes.md", line: 1);
 
         Assert.Contains("matches multiple imported sources by display_path", read, StringComparison.Ordinal);
         Assert.Contains("diagnostic_code=ambiguous_source", read, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(read, "external_file:"));
+        Assert.Equal(5, CountOccurrences(read, "external_file:"));
     }
 
     [Fact]
@@ -340,7 +345,8 @@ public sealed class ContentToolTests : IDisposable
     private int SourceLineCount(ContentTool tool, string displayPath)
     {
         using JsonDocument doc = JsonDocument.Parse(tool.Content("list", format: "json"));
-        return doc.RootElement.EnumerateArray()
+        return doc.RootElement.GetProperty("kinds").EnumerateArray()
+            .SelectMany(static kind => kind.GetProperty("sources").EnumerateArray())
             .Single(source => source.GetProperty("display_path").GetString() == displayPath)
             .GetProperty("line_count").GetInt32();
     }
@@ -622,8 +628,86 @@ public sealed class ContentToolTests : IDisposable
         Assert.DoesNotContain("window clamped", json, StringComparison.Ordinal);
         using JsonDocument doc = JsonDocument.Parse(json);
         Assert.Equal(
-            new[] { "source_id", "display_path", "line_start", "line_end", "lines" },
+            new[] { "source_id", "display_path", "line_start", "line_end", "truncated_line_count", "lines" },
             doc.RootElement.EnumerateObject().Select(static p => p.Name).ToArray());
+    }
+
+    [Fact]
+    public void Content_Read_DefaultCapHugeLine_BoundsCompactAndReportsTruncation()
+    {
+        string logPath = Path.Combine(_dir, "huge-single-line.log");
+        File.WriteAllText(logPath, new string('x', 200_000));
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "huge-single-line.log");
+
+        string output = tool.Content(
+            "read",
+            source_id: "huge-single-line.log",
+            line: 1,
+            context_lines: 0);
+
+        Assert.DoesNotContain("content read failed:", output, StringComparison.Ordinal);
+        Assert.InRange(output.Length, 1, 48_000);
+        Assert.Contains("read truncated_lines=1", output, StringComparison.Ordinal);
+        Assert.EndsWith("…", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_DefaultCapEscapeHeavyLine_BoundsJsonAndReportsTruncation()
+    {
+        string logPath = Path.Combine(_dir, "escape-heavy-single-line.log");
+        File.WriteAllText(logPath, string.Concat(Enumerable.Repeat("\u0001\"\\", 60_000)));
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "escape-heavy-single-line.log");
+
+        string output = tool.Content(
+            "read",
+            source_id: "escape-heavy-single-line.log",
+            line: 1,
+            context_lines: 0,
+            format: "json");
+
+        Assert.InRange(output.Length, 1, 48_000);
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal(1, doc.RootElement.GetProperty("truncated_line_count").GetInt32());
+        JsonElement line = Assert.Single(doc.RootElement.GetProperty("lines").EnumerateArray());
+        Assert.True(line.GetProperty("truncated").GetBoolean());
+        Assert.EndsWith("…", line.GetProperty("text").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_JsonTruncationReportsSameLengthReplacement()
+    {
+        string logPath = Path.Combine(_dir, "same-length-truncation.log");
+        File.WriteAllText(logPath, new string('a', 156) + "\u0001");
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "same-length-truncation.log");
+
+        string output = tool.Content(
+            "read",
+            source_id: "same-length-truncation.log",
+            line: 1,
+            context_lines: 0,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal(1, doc.RootElement.GetProperty("truncated_line_count").GetInt32());
+        JsonElement line = Assert.Single(doc.RootElement.GetProperty("lines").EnumerateArray());
+        Assert.True(line.GetProperty("truncated").GetBoolean());
+        Assert.EndsWith("…", line.GetProperty("text").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_UnknownLongOperation_JsonDiagnosticStaysWithinHardBudget()
+    {
+        string output = new ContentTool(_workspace, new ContentCorpusExternalStore()).Content(
+            new string('x', 50_000),
+            format: "json");
+
+        Assert.InRange(output.Length, 1, 8_000);
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal("content_error", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.EndsWith("…", doc.RootElement.GetProperty("operation").GetString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -1020,36 +1104,210 @@ public sealed class ContentToolTests : IDisposable
 
         string listJson = tool.Content("list", content_kind: TextContentKind.Web, format: "json");
         using JsonDocument listDoc = JsonDocument.Parse(listJson);
-        Assert.Equal(sourceId, listDoc.RootElement[0].GetProperty("source_id").GetString());
-        Assert.Equal("https://example.test/web-tool", listDoc.RootElement[0].GetProperty("url").GetString());
+        JsonElement listedSource = Assert.Single(
+            listDoc.RootElement.GetProperty("kinds")[0].GetProperty("sources").EnumerateArray());
+        Assert.Equal(sourceId, listedSource.GetProperty("source_id").GetString());
+        Assert.Equal("https://example.test/web-tool", listedSource.GetProperty("url").GetString());
     }
 
     [Fact]
-    public void Content_Export_ReturnsJsonLinesScopedByKind()
+    public void Content_List_ReturnsBoundedPerKindInventoryWithExactTotals()
     {
-        string logPath = Path.Combine(_dir, "ci.log");
-        File.WriteAllText(logPath, "ExternalToolExportMarker appears here.");
-        string markdownPath = Path.Combine(_dir, "page.md");
-        File.WriteAllText(markdownPath, "WebToolExportMarker appears here.");
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
-        tool.Content("import", path: logPath);
-        tool.Content(
-            "add_markdown",
-            path: markdownPath,
-            url: "https://example.test/export-tool",
-            display_path: "Tool Export Page");
+        for (int i = 0; i < 5; i++)
+        {
+            string path = Path.Combine(_dir, $"external-{i}.log");
+            File.WriteAllText(path, $"external {i}");
+            tool.Content("import", path: path, display_path: $"external-{i}.log");
+        }
+        for (int i = 0; i < 3; i++)
+        {
+            string path = Path.Combine(_dir, $"web-{i}.md");
+            File.WriteAllText(path, $"web {i}");
+            tool.Content(
+                "add_markdown",
+                path: path,
+                url: $"https://example.test/{i}",
+                display_path: $"web-{i}");
+        }
 
-        string jsonl = tool.Content("export", content_kind: TextContentKind.Web);
+        string json = tool.Content("list", limit: 2, format: "json");
 
-        string line = Assert.Single(jsonl.Split('\n', StringSplitOptions.RemoveEmptyEntries));
-        using JsonDocument doc = JsonDocument.Parse(line);
-        JsonElement row = doc.RootElement;
-        Assert.Equal(ContentCorpusSchema.SchemaVersion, row.GetProperty("schema_version").GetInt32());
-        Assert.Equal(TextContentKind.Web, row.GetProperty("content_kind").GetString());
-        Assert.Equal("https://example.test/export-tool", row.GetProperty("url").GetString());
-        Assert.Equal("Tool Export Page", row.GetProperty("display_path").GetString());
-        Assert.Contains("WebToolExportMarker", row.GetProperty("chunk_text").GetString());
-        Assert.DoesNotContain("ExternalToolExportMarker", jsonl);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(
+            ["schema_version", "per_kind_limit", "total_count", "returned_count", "omitted_count", "kinds"],
+            root.EnumerateObject().Select(static property => property.Name).ToArray());
+        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(8, root.GetProperty("total_count").GetInt32());
+        Assert.Equal(4, root.GetProperty("returned_count").GetInt32());
+        Assert.Equal(4, root.GetProperty("omitted_count").GetInt32());
+        JsonElement[] kinds = root.GetProperty("kinds").EnumerateArray().ToArray();
+        Assert.Equal([TextContentKind.ExternalFile, TextContentKind.Web],
+            kinds.Select(static kind => kind.GetProperty("content_kind").GetString()!).ToArray());
+        Assert.Equal([5, 3], kinds.Select(static kind => kind.GetProperty("total_count").GetInt32()).ToArray());
+        Assert.All(kinds, static kind => Assert.Equal(2, kind.GetProperty("returned_count").GetInt32()));
+        Assert.All(kinds, static kind => Assert.Equal(2, kind.GetProperty("sources").GetArrayLength()));
+        Assert.True(json.Length < 4_000, json);
+    }
+
+    [Fact]
+    public void Content_List_CompactAndJsonStayWithinHardCharacterBudgets()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string escapeHeavy = string.Concat(Enumerable.Repeat("\u0001\"\\", 2_000));
+        for (int i = 0; i < 20; i++)
+        {
+            string externalPath = Path.Combine(_dir, $"bounded-{i}.log");
+            File.WriteAllText(externalPath, "bounded");
+            tool.Content("import", path: externalPath, display_path: escapeHeavy + i);
+
+            string webPath = Path.Combine(_dir, $"bounded-{i}.md");
+            File.WriteAllText(webPath, "bounded");
+            tool.Content(
+                "add_markdown",
+                path: webPath,
+                url: $"https://example.test/{i}/" + escapeHeavy,
+                display_path: escapeHeavy + i);
+        }
+
+        string compact = tool.Content("list", limit: 20);
+        string json = tool.Content("list", limit: 20, format: "json");
+
+        Assert.True(compact.Length <= 16_000, compact.Length.ToString());
+        Assert.True(json.Length <= 48_000, json.Length.ToString());
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(40, doc.RootElement.GetProperty("returned_count").GetInt32());
+    }
+
+    [Fact]
+    public void Content_Shape_EscapeHeavyLinesReturnValidJsonWithinHardCharacterBudget()
+    {
+        string path = Path.Combine(_dir, "shape-escape-heavy.log");
+        string escapeHeavy = string.Concat(Enumerable.Repeat("\u0001\"\\", 2_000));
+        File.WriteAllText(path, string.Join('\n', Enumerable.Repeat(escapeHeavy, 10)));
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        using JsonDocument imported = JsonDocument.Parse(tool.Content("import", path: path, format: "json"));
+        string sourceId = imported.RootElement.GetProperty("source_id").GetString()!;
+
+        string json = tool.Content("shape", source_id: sourceId, format: "json");
+
+        Assert.True(json.Length <= 8_000, json.Length.ToString());
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(2, doc.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(5, doc.RootElement.GetProperty("head").GetArrayLength());
+        Assert.Equal(5, doc.RootElement.GetProperty("tail").GetArrayLength());
+    }
+
+    [Fact]
+    public void Content_Shape_ReturnsBoundedHeadTailAndTextDerivedSeverityCounts()
+    {
+        string path = Path.Combine(_dir, "shape.log");
+        File.WriteAllText(path, """
+            DEBUG preparing
+            INFO connected
+            ordinary line
+            WARN retrying
+            ERROR request failed
+            FATAL shutting down
+            final line
+            """);
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        using JsonDocument imported = JsonDocument.Parse(tool.Content("import", path: path, format: "json"));
+        string sourceId = imported.RootElement.GetProperty("source_id").GetString()!;
+
+        string json = tool.Content("shape", source_id: sourceId, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal("text_derived", root.GetProperty("severity_basis").GetString());
+        Assert.Equal(7, root.GetProperty("line_count").GetInt32());
+        Assert.Equal(5, root.GetProperty("head").GetArrayLength());
+        Assert.Equal(5, root.GetProperty("tail").GetArrayLength());
+        JsonElement severity = root.GetProperty("severity");
+        Assert.Equal(1, severity.GetProperty("fatal").GetInt32());
+        Assert.Equal(1, severity.GetProperty("error").GetInt32());
+        Assert.Equal(1, severity.GetProperty("warning").GetInt32());
+        Assert.Equal(1, severity.GetProperty("info").GetInt32());
+        Assert.Equal(1, severity.GetProperty("debug").GetInt32());
+        Assert.Equal(2, severity.GetProperty("other").GetInt32());
+        Assert.True(json.Length < 8_000, json);
+    }
+
+    [Theory]
+    [InlineData(null, "missing_source_id")]
+    [InlineData("external_file:missing", "source_not_found")]
+    public void Content_Shape_UsesTypedJsonFailures(string? sourceId, string expectedCode)
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        if (sourceId is not null)
+        {
+            string path = Path.Combine(_dir, "shape-diagnostic.log");
+            File.WriteAllText(path, "ready");
+            tool.Content("import", path: path);
+        }
+
+        string json = tool.Content("shape", source_id: sourceId, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(expectedCode, doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
+    public void Content_Shape_AmbiguousDisplayPathUsesTypedJsonFailure()
+    {
+        ContentTool tool = ToolWithImportedSources("shared/shape.log", "shared/shape.log");
+
+        string json = tool.Content("shape", source_id: "shared/shape.log", format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("ambiguous_source", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
+    public void Content_Shape_MissingCorpusUsesTypedJsonFailure()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content("shape", source_id: "external_file:missing", format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("content_corpus_missing", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Theory]
+    [InlineData("read")]
+    [InlineData("shape")]
+    public void Content_ReadAndShapeDiagnosticsStayWithinHardCharacterBudgets(string operation)
+    {
+        ContentTool tool = ToolWithImportedSources("docs/plans/known.log");
+        string requested = "docs/plans/" + string.Concat(Enumerable.Repeat("\u0001\"\\", 10_000));
+
+        string compact = tool.Content(operation, source_id: requested, line: 1);
+        string json = tool.Content(operation, source_id: requested, line: 1, format: "json");
+
+        Assert.True(compact.Length <= 8_000, compact.Length.ToString());
+        Assert.True(json.Length <= 8_000, json.Length.ToString());
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("source_not_found", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
+    public void Content_ExportOperationIsHardRemovedFromMcpSurface()
+    {
+        var method = typeof(ContentTool).GetMethod(nameof(ContentTool.Content))!;
+        string description = method.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), inherit: false)
+            .Cast<System.ComponentModel.DescriptionAttribute>()
+            .Single()
+            .Description;
+
+        string result = new ContentTool(_workspace, new ContentCorpusExternalStore()).Content("export");
+
+        Assert.StartsWith("content failed:", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("export", result, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("export", description, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(method.GetParameters(), static parameter => parameter.Name == "content_workspace_id");
     }
 
     [Fact]

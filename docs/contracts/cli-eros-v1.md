@@ -42,7 +42,7 @@ Current `json_commands` include:
 | `workspace health --json` | Workspace readiness verdict, warnings/actions, sidecar state, extraction-quality aggregates, and telemetry outcome counts. See [`workspace-health-v1.md`](workspace-health-v1.md). |
 | `workspace onboarding --json` | Privacy-safe startup guidance derived from local Miller telemetry: starter commands, hot current-index targets, common misses, and friction. See [`workspace-onboarding-v1.md`](workspace-onboarding-v1.md). |
 | `workspace leader --json` | Indexer-leader diagnostics and optional graceful handoff request status. See [`workspace-leader-json-v1.md`](workspace-leader-json-v1.md). |
-| `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`. |
+| `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`, with exact selection totals. |
 | `workspace refresh --json` | Incremental convergence result for a registered workspace. |
 | `workspace full --json` | Forced full re-index result for a registered workspace. |
 | `refresh --json --wait` | Eros-friendly top-level alias for registered-workspace convergence. Accepts `--workspace-id`, `--workspace`, and `--full`; returns after the synchronous refresh attempt. See [`refresh-wait-v1.md`](refresh-wait-v1.md). |
@@ -64,8 +64,8 @@ Current `json_commands` include:
 | `content import --json` | Import local external text into `content.db`. |
 | `content add-markdown --json` | Import browser/fetched markdown with URL metadata into `content.db`. |
 | `content search --json` | Search content DB rows. |
-| `content read --json` | Read bounded content windows. |
-| `content list --json` | List imported external/web content. |
+| `content read --json` | Read bounded content windows with per-line truncation facts. |
+| `content list --json` | List imported content in the unchanged v1 flat JSON array. Default: `external_file`; `--kind all`: `external_file` then `web`. |
 | `content remove --json` | Remove imported external/web content. |
 | `telemetry export --jsonl` | Export raw Miller telemetry rows for Eros dashboard/history ingestion. |
 | `symbols export --jsonl` | Bulk-export one row per symbol for fleet rollups (counts, kinds, doc coverage, clones). |
@@ -148,7 +148,8 @@ true` in the payload, not on the exit code alone. Exit `3` is reserved for genui
 ## Export feeds
 
 `miller content export [--kind KIND] [--content-workspace-id ID]` emits deterministic JSONL chunk rows for
-semantic ingestion. See `docs/contracts/content-corpus-v1.md` for field-level guarantees.
+semantic ingestion. This is a CLI-only process contract; the MCP `content` tool does not accept `export`.
+See `docs/contracts/content-corpus-v1.md` for field-level guarantees.
 
 Capabilities advertise this feed as:
 
@@ -211,6 +212,9 @@ Read-command JSON is allowed to grow additive recovery fields. Current examples:
   `next_actions`; successful search hits remain source-id driven.
 - `content read --json` parameter/source/window failures return a parseable object with `operation`, `error`,
   `diagnostic_code`, and `next_actions` when Miller can suggest recovery.
+- Successful `content read --json` line objects include `truncated`; the
+  envelope includes `truncated_line_count`. Escape-heavy or very long lines
+  return bounded successful output rather than a diagnostic.
 - `patterns --json` list/no-match output may include `next_actions`; no-match search output may include
   `near_matches`, `empty_reason`, and `active_filters`.
 
@@ -252,6 +256,11 @@ selector, and pass that selector to the read command. If B is not listed, call
 `--workspace-id all` selector is reserved for cross-workspace content/telemetry surfaces such as
 `content search --workspace-id all` and `telemetry export --workspace-id all`; it is not a symbol/code read
 selector.
+
+`workspace list --json` reports `registered`, `matched`, `returned`, `omitted`, `omitted_errors`, `filter`, and
+`limit` beside the `workspaces` array. These totals come directly from registry rows; listing never hydrates a
+workspace index. `filter` and `limit` are `null` when inactive. Compact output applies the default limit of 20 and
+prints the same four primary totals plus the active filter and limit before the returned rows.
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and

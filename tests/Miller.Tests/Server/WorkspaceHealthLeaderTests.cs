@@ -113,6 +113,44 @@ public sealed class WorkspaceHealthLeaderTests
         Assert.Equal(HealthState.Ready, health.State);
     }
 
+    [Fact]
+    public void Create_UnavailableDerivedSidecars_KeepTypedWarningsAndRecoveryActions()
+    {
+        WorkspaceFacts facts = Facts() with
+        {
+            SearchSidecar = new SearchSidecarFacts(
+                "missing",
+                "/repo/.miller/search.db",
+                Revision: null,
+                ExpectedRevision: 5,
+                DocumentCount: null,
+                Error: "search artifact is missing"),
+            ContentCorpus = new ContentCorpusFacts(
+                "corrupt",
+                "/repo/.miller/content.db",
+                SchemaVersion: null,
+                WorkspaceRevision: null,
+                SourceCount: 0,
+                ChunkCount: 0,
+                IndexedSourceBytes: 0,
+                StoredRawBytes: 0,
+                Error: "content artifact is unreadable"),
+        };
+
+        WorkspaceHealthFacts health = Health(facts, leader: null);
+
+        Assert.Contains(health.Warnings, warning =>
+            warning.Code == "search_sidecar" &&
+            warning.Message.Contains("missing", StringComparison.Ordinal));
+        Assert.Contains(health.Warnings, warning =>
+            warning.Code == "content_corpus" &&
+            warning.Message.Contains("corrupt", StringComparison.Ordinal));
+        Assert.Contains(health.RecommendedActions, action =>
+            action.Contains("workspace refresh", StringComparison.Ordinal));
+        Assert.Contains(health.RecommendedActions, action =>
+            action.Contains("workspace full", StringComparison.Ordinal));
+    }
+
     // ---- version-aware leadership warnings (D6): leader_extractor_older_than_artifact ----
 
     [Fact]

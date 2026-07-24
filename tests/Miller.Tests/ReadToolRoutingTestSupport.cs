@@ -5,7 +5,7 @@ using Miller.Server.Workspaces;
 namespace Miller.Tests;
 
 internal sealed class RecordingWorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceSymbolReadProvider, IWorkspaceContentSearchProvider,
       IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
 {
     private readonly WorkspaceReadContext _current;
@@ -106,6 +106,15 @@ internal sealed class RecordingWorkspaceIndexProvider
         return ReadToolRoutingTestSupport.SearchContextFor(ResolveContext(workspaceId));
     }
 
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    {
+        LastWorkspaceId = workspaceId;
+        LastEnsureFresh = ensureFresh;
+        ResolveCount++;
+
+        return ReadToolRoutingTestSupport.SymbolReadContextFor(ResolveContext(workspaceId));
+    }
+
     public WorkspaceContentSearchContext ResolveContentSearch(string? workspaceId, bool ensureFresh)
     {
         LastWorkspaceId = workspaceId;
@@ -196,6 +205,18 @@ internal static class ReadToolRoutingTestSupport
             context.WarningText,
             context.DisplayId);
 
+    public static WorkspaceSymbolReadContext SymbolReadContextFor(WorkspaceReadContext context) =>
+        new(
+            context.Index,
+            context.IndexDbPath,
+            context.WorkspaceId,
+            context.WorkspaceRoot,
+            context.Revision,
+            context.IndexFresh,
+            context.FreshnessStatus,
+            context.WarningText,
+            context.DisplayId);
+
     public static WorkspaceContentSearchContext ContentContextFor(
         IContentSearchIndex index,
         string indexDbPath,
@@ -255,7 +276,7 @@ internal static class ReadToolRoutingTestSupport
 }
 
 internal sealed class HolderWorkspaceIndexProvider
-    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceContentSearchProvider,
+    : IWorkspaceIndexProvider, IWorkspaceSearchProvider, IWorkspaceSymbolReadProvider, IWorkspaceContentSearchProvider,
       IWorkspaceRegionSearchProvider, IWorkspaceTextContentSearchProvider
 {
     private readonly IndexHolder _holder;
@@ -297,6 +318,20 @@ internal sealed class HolderWorkspaceIndexProvider
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         return new WorkspaceSymbolSearchContext(
+            index,
+            _indexDbPath,
+            _workspaceId,
+            _workspaceRoot,
+            revision,
+            IndexFresh: null,
+            FreshnessStatus: "current",
+            WarningText: null);
+    }
+
+    public WorkspaceSymbolReadContext ResolveSymbolRead(string? workspaceId, bool ensureFresh)
+    {
+        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        return new WorkspaceSymbolReadContext(
             index,
             _indexDbPath,
             _workspaceId,

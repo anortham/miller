@@ -145,6 +145,50 @@ internal static class WorkspaceFactsAssembler
         return entries;
     }
 
+    public static WorkspaceListFacts ToListFacts(
+        IReadOnlyList<WorkspaceRegistryRow> rows,
+        Func<WorkspaceRegistryRow, bool> isCurrent,
+        string? filter,
+        int? limit) =>
+        ToListFacts(ToListEntries(rows, isCurrent), filter, limit);
+
+    public static WorkspaceListFacts ToListFacts(
+        IReadOnlyList<WorkspaceListEntry> entries,
+        string? filter,
+        int? limit)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        string? activeFilter = string.IsNullOrWhiteSpace(filter) ? null : filter;
+        int? activeLimit = limit is > 0 ? limit : null;
+        IEnumerable<WorkspaceListEntry> matched = entries
+            .OrderByDescending(static entry => entry.Current)
+            .ThenByDescending(static entry => entry.LastSeenAt);
+        if (activeFilter is not null)
+        {
+            matched = matched.Where(entry =>
+                entry.DisplayId.Contains(activeFilter, StringComparison.OrdinalIgnoreCase) ||
+                entry.Root.Contains(activeFilter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        List<WorkspaceListEntry> matchedEntries = matched.ToList();
+        WorkspaceListEntry[] returnedEntries = activeLimit is { } cap
+            ? [.. matchedEntries.Take(cap)]
+            : [.. matchedEntries];
+        int omittedErrors = matchedEntries
+            .Skip(returnedEntries.Length)
+            .Count(static entry => string.Equals(entry.State, "error", StringComparison.Ordinal));
+        return new WorkspaceListFacts(
+            returnedEntries,
+            entries.Count,
+            matchedEntries.Count,
+            returnedEntries.Length,
+            matchedEntries.Count - returnedEntries.Length,
+            omittedErrors,
+            activeFilter,
+            activeLimit);
+    }
+
     private static WorkspaceFacts MissingIndexFacts(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,

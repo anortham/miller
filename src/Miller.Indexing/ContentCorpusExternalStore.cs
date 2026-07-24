@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Blake3;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
@@ -11,23 +12,36 @@ public sealed class ContentCorpusExternalStore
     public const long DefaultMaxImportBytes = 25 * 1024 * 1024;
     public const int DefaultContextLines = 10;
     public const int MaxReadWindowLines = 200;
+    public const int MaxStreamingLineChars = 64 * 1024;
+    public const int MaxStreamingChunkChars = 1024 * 1024;
 
     private static readonly UTF8Encoding StrictUtf8 =
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly long _defaultMaxImportBytes;
     private readonly TimeSpan? _writeLockTimeout;
+    private readonly Func<string, Stream> _openRead;
 
     public ContentCorpusExternalStore(
         long defaultMaxImportBytes = DefaultMaxImportBytes,
         TimeSpan? writeLockTimeout = null)
+        : this(defaultMaxImportBytes, writeLockTimeout, OpenRead)
+    {
+    }
+
+    internal ContentCorpusExternalStore(
+        long defaultMaxImportBytes,
+        TimeSpan? writeLockTimeout,
+        Func<string, Stream> openRead)
     {
         if (defaultMaxImportBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(defaultMaxImportBytes), "Default max import bytes must be > 0.");
         if (writeLockTimeout is { } timeout && timeout < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(writeLockTimeout), "Write lock timeout must be >= 0.");
+        ArgumentNullException.ThrowIfNull(openRead);
         _defaultMaxImportBytes = defaultMaxImportBytes;
         _writeLockTimeout = writeLockTimeout;
+        _openRead = openRead;
     }
 
     public ExternalContentImportResult Import(
@@ -98,6 +112,20 @@ public sealed class ContentCorpusExternalStore
                 "Pass a larger max_bytes value when this import is intentional.");
         }
 
+        if (maxBytes > _defaultMaxImportBytes)
+        {
+            return ImportFileStreaming(
+                contentDbPath,
+                absFile,
+                contentKind,
+                sourceId,
+                path,
+                url,
+                displayPath,
+                effectiveMaxBytes,
+                info.Length);
+        }
+
         byte[] bytes = File.ReadAllBytes(absFile);
         if (bytes.LongLength > effectiveMaxBytes)
         {
@@ -150,6 +178,114 @@ public sealed class ContentCorpusExternalStore
                 url);
         }
     }
+
+    private ExternalContentImportResult ImportFileStreaming(
+        string contentDbPath,
+        string absFile,
+        string contentKind,
+        string sourceId,
+        string? path,
+        string? url,
+        string? displayPath,
+        long effectiveMaxBytes,
+        long sourceBytes)
+    {
+        string renderedPath = string.IsNullOrWhiteSpace(displayPath) ? absFile : displayPath!;
+        string language = LanguageFor(absFile);
+
+        using (ContentCorpusWriteLock.AcquireFor(contentDbPath, _writeLockTimeout))
+        {
+            using var connection = OpenWritable(contentDbPath);
+            using var tx = connection.BeginTransaction();
+            bool replaced = DeleteSource(connection, sourceId).SourceCount > 0;
+            using var chunks = new StreamingChunkWriter(
+                connection,
+                sourceId,
+                contentKind,
+                path,
+                url,
+                renderedPath,
+                language,
+                sourceBytes);
+            using Stream file = _openRead(absFile);
+            using var hashing = new Blake3Stream(file, dispose: false);
+            using var reader = new StreamReader(
+                hashing,
+                StrictUtf8,
+                detectEncodingFromByteOrderMarks: false,
+                bufferSize: 16 * 1024,
+                leaveOpen: true);
+
+            int lineCount;
+            try
+            {
+                lineCount = StreamNormalizedLines(
+                    reader,
+                    chunks.AddLine,
+                    () =>
+                    {
+                        long currentBytes = file.Position;
+                        if (currentBytes > effectiveMaxBytes)
+                        {
+                            throw new InvalidOperationException(
+                                $"External file is {currentBytes} bytes, which exceeds max_bytes {effectiveMaxBytes}. " +
+                                "Pass a larger max_bytes value when this import is intentional.");
+                        }
+                        if (currentBytes > sourceBytes)
+                            throw new IOException($"External file '{absFile}' changed while it was being imported.");
+                    });
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new InvalidOperationException("External content import supports UTF-8 text files only.", ex);
+            }
+
+            long bytesRead = file.Position;
+            if (bytesRead > effectiveMaxBytes)
+            {
+                throw new InvalidOperationException(
+                    $"External file is {bytesRead} bytes, which exceeds max_bytes {effectiveMaxBytes}. " +
+                    "Pass a larger max_bytes value when this import is intentional.");
+            }
+            if (bytesRead != sourceBytes)
+                throw new IOException($"External file '{absFile}' changed while it was being imported.");
+
+            chunks.Complete();
+            string contentHash = "blake3:" + Convert.ToHexStringLower(hashing.ComputeHash().AsSpan());
+            InsertSourceMetadata(
+                connection,
+                sourceId,
+                contentKind,
+                path,
+                url,
+                renderedPath,
+                language,
+                contentHash,
+                bytesRead,
+                lineCount);
+            UpdateMeta(connection);
+            tx.Commit();
+
+            return new ExternalContentImportResult(
+                sourceId,
+                contentKind,
+                renderedPath,
+                contentHash,
+                bytesRead,
+                chunks.ChunkCount,
+                replaced,
+                url);
+        }
+    }
+
+    private static Stream OpenRead(string path) =>
+        new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 16 * 1024,
+            FileOptions.SequentialScan);
 
     public IReadOnlyList<TextContentSearchHit> Search(
         string contentDbPath,
@@ -208,6 +344,119 @@ public sealed class ContentCorpusExternalStore
         }
 
         return sources;
+    }
+
+    public ExternalContentInventory Inventory(
+        string contentDbPath,
+        string? contentKind,
+        int perKindLimit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        if (perKindLimit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(perKindLimit), "limit must be > 0.");
+
+        string[] kinds = contentKind is null
+            ? [TextContentKind.ExternalFile, TextContentKind.Web]
+            : [contentKind];
+        if (!File.Exists(Path.GetFullPath(contentDbPath)))
+        {
+            return new ExternalContentInventory(
+                perKindLimit,
+                [.. kinds.Select(static kind => new ExternalContentKindInventory(kind, 0, []))]);
+        }
+
+        using var connection = OpenReadOnly(contentDbPath);
+        var inventories = new List<ExternalContentKindInventory>(kinds.Length);
+        foreach (string kind in kinds)
+        {
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM content_sources WHERE content_kind = $kind;";
+            count.Parameters.AddWithValue("$kind", kind);
+            int total = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes, s.url,
+                       s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
+                FROM content_sources s
+                LEFT JOIN content_chunks c ON c.source_id = s.source_id
+                WHERE s.content_kind = $kind
+                GROUP BY s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes,
+                         s.url, s.line_count, s.indexed_at_utc
+                ORDER BY s.display_path, s.source_id
+                LIMIT $limit;
+                """;
+            command.Parameters.AddWithValue("$kind", kind);
+            command.Parameters.AddWithValue("$limit", perKindLimit);
+
+            var sources = new List<ExternalContentSource>(Math.Min(total, perKindLimit));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                sources.Add(ReadSourceRow(reader));
+            inventories.Add(new ExternalContentKindInventory(kind, total, sources));
+        }
+
+        return new ExternalContentInventory(perKindLimit, inventories);
+    }
+
+    public ExternalContentShape Shape(string contentDbPath, string sourceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
+        if (!File.Exists(Path.GetFullPath(contentDbPath)))
+            throw new InvalidOperationException("No content corpus exists. Import a file first.");
+
+        using var connection = OpenReadOnly(contentDbPath);
+        ExternalContentSource source = ReadSource(connection, sourceId);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT line_start, raw_text
+            FROM content_chunks
+            WHERE source_id = $source
+            ORDER BY line_start, chunk_id;
+            """;
+        command.Parameters.AddWithValue("$source", sourceId);
+
+        var head = new List<ExternalContentLine>(ExternalContentShape.EdgeLineLimit);
+        var tail = new Queue<ExternalContentLine>(ExternalContentShape.EdgeLineLimit);
+        var severity = new int[6];
+        int lastLine = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            int lineStart = reader.GetInt32(0);
+            string[] lines = Normalize(reader.GetString(1)).Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                int lineNumber = lineStart + i;
+                if (lineNumber <= lastLine || lineNumber > source.LineCount)
+                    continue;
+                lastLine = lineNumber;
+                var line = new ExternalContentLine(lineNumber, lines[i]);
+                if (head.Count < ExternalContentShape.EdgeLineLimit)
+                    head.Add(line);
+                if (tail.Count == ExternalContentShape.EdgeLineLimit)
+                    tail.Dequeue();
+                tail.Enqueue(line);
+                severity[(int)TextSeverity(lines[i])]++;
+            }
+        }
+
+        return new ExternalContentShape(
+            source.SourceId,
+            source.ContentKind,
+            source.DisplayPath,
+            source.SourceBytes,
+            source.LineCount,
+            head,
+            [.. tail],
+            new ExternalContentSeveritySummary(
+                severity[(int)ExternalContentSeverity.Fatal],
+                severity[(int)ExternalContentSeverity.Error],
+                severity[(int)ExternalContentSeverity.Warning],
+                severity[(int)ExternalContentSeverity.Info],
+                severity[(int)ExternalContentSeverity.Debug],
+                severity[(int)ExternalContentSeverity.Other]));
     }
 
     public ExternalContentReadResult ReadWindow(
@@ -313,11 +562,13 @@ public sealed class ContentCorpusExternalStore
             SELECT source_id FROM content_sources
             WHERE display_path = $display COLLATE NOCASE
               AND content_kind IN ($external, $web)
-            ORDER BY source_id;
+            ORDER BY source_id
+            LIMIT $limit;
             """;
         alias.Parameters.AddWithValue("$display", sourceIdOrDisplayPath);
         alias.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
         alias.Parameters.AddWithValue("$web", TextContentKind.Web);
+        alias.Parameters.AddWithValue("$limit", MaxAliasCandidates);
 
         var candidates = new List<string>();
         using var reader = alias.ExecuteReader();
@@ -505,7 +756,11 @@ public sealed class ContentCorpusExternalStore
         if (!reader.Read())
             throw new KeyNotFoundException($"Content source '{sourceId}' was not found.");
 
-        return new ExternalContentSource(
+        return ReadSourceRow(reader);
+    }
+
+    private static ExternalContentSource ReadSourceRow(SqliteDataReader reader) =>
+        new(
             reader.GetString(0),
             reader.GetString(1),
             reader.GetString(2),
@@ -515,7 +770,277 @@ public sealed class ContentCorpusExternalStore
             reader.GetString(7),
             reader.GetInt32(8),
             reader.IsDBNull(5) ? null : reader.GetString(5));
+
+    private static void InsertSourceMetadata(
+        SqliteConnection connection,
+        string sourceId,
+        string contentKind,
+        string? path,
+        string? url,
+        string displayPath,
+        string language,
+        string contentHash,
+        long sourceBytes,
+        int lineCount)
+    {
+        using var source = connection.CreateCommand();
+        source.CommandText = """
+            INSERT INTO content_sources
+                (source_id, content_kind, workspace_id, workspace_revision, path, url, display_path,
+                 language, content_hash, source_bytes, line_count, is_test, status, indexed_at_utc)
+            VALUES ($id, $kind, NULL, NULL, $path, $url, $display, $language, $hash,
+                    $bytes, $lines, 0, 'active', $indexed);
+            """;
+        source.Parameters.AddWithValue("$id", sourceId);
+        source.Parameters.AddWithValue("$kind", contentKind);
+        source.Parameters.AddWithValue("$path", (object?)path ?? DBNull.Value);
+        source.Parameters.AddWithValue("$url", (object?)url ?? DBNull.Value);
+        source.Parameters.AddWithValue("$display", displayPath);
+        source.Parameters.AddWithValue("$language", language);
+        source.Parameters.AddWithValue("$hash", contentHash);
+        source.Parameters.AddWithValue("$bytes", sourceBytes);
+        source.Parameters.AddWithValue("$lines", lineCount);
+        source.Parameters.AddWithValue("$indexed", DateTimeOffset.UtcNow.ToString("O"));
+        source.ExecuteNonQuery();
     }
+
+    private static int StreamNormalizedLines(
+        TextReader reader,
+        Action<string> accept,
+        Action afterRead)
+    {
+        var line = new StringBuilder();
+        char[] buffer = new char[16 * 1024];
+        bool previousWasCarriageReturn = false;
+        int lineCount = 0;
+        int read;
+        while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            for (int i = 0; i < read; i++)
+            {
+                char ch = buffer[i];
+                if (previousWasCarriageReturn)
+                {
+                    previousWasCarriageReturn = false;
+                    if (ch == '\n')
+                        continue;
+                }
+
+                if (ch is '\r' or '\n')
+                {
+                    accept(line.ToString());
+                    line.Clear();
+                    lineCount++;
+                    previousWasCarriageReturn = ch == '\r';
+                }
+                else
+                {
+                    if (line.Length >= MaxStreamingLineChars)
+                    {
+                        throw new InvalidOperationException(
+                            $"External content logical line exceeds the {MaxStreamingLineChars}-character " +
+                            "streaming import limit. Split the line before importing the file.");
+                    }
+                    line.Append(ch);
+                }
+            }
+            afterRead();
+        }
+
+        accept(line.ToString());
+        return lineCount + 1;
+    }
+
+    private static ExternalContentSeverity TextSeverity(string line)
+    {
+        if (ContainsSeverityWord(line, "fatal") || ContainsSeverityWord(line, "panic"))
+            return ExternalContentSeverity.Fatal;
+        if (ContainsSeverityWord(line, "error") || ContainsSeverityWord(line, "exception")
+            || ContainsSeverityWord(line, "failed") || ContainsSeverityWord(line, "failure"))
+            return ExternalContentSeverity.Error;
+        if (ContainsSeverityWord(line, "warn") || ContainsSeverityWord(line, "warning"))
+            return ExternalContentSeverity.Warning;
+        if (ContainsSeverityWord(line, "info") || ContainsSeverityWord(line, "notice"))
+            return ExternalContentSeverity.Info;
+        if (ContainsSeverityWord(line, "debug") || ContainsSeverityWord(line, "trace"))
+            return ExternalContentSeverity.Debug;
+        return ExternalContentSeverity.Other;
+    }
+
+    private static bool ContainsSeverityWord(string line, string word)
+    {
+        int start = 0;
+        while ((start = line.IndexOf(word, start, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            int end = start + word.Length;
+            bool leftBoundary = start == 0 || !char.IsLetterOrDigit(line[start - 1]);
+            bool rightBoundary = end == line.Length || !char.IsLetterOrDigit(line[end]);
+            if (leftBoundary && rightBoundary)
+                return true;
+            start = end;
+        }
+        return false;
+    }
+
+    private sealed class StreamingChunkWriter : IDisposable
+    {
+        private readonly string _sourceId;
+        private readonly SqliteCommand _chunk;
+        private readonly SqliteParameter _pcChunk;
+        private readonly SqliteParameter _pcLineStart;
+        private readonly SqliteParameter _pcLineEnd;
+        private readonly SqliteParameter _pcByteStart;
+        private readonly SqliteParameter _pcByteEnd;
+        private readonly SqliteParameter _pcRaw;
+        private readonly SqliteParameter _pcDocLen;
+        private readonly SqliteCommand _fts;
+        private readonly SqliteParameter _pfChunk;
+        private readonly SqliteParameter _pfBody;
+        private readonly List<StreamingLine> _lines = new(ContentCorpusChunker.DefaultChunkLines);
+        private readonly List<string> _tokens = new(128);
+        private int _lineCount;
+        private int _lastEmittedLine;
+        private int _bufferedChars;
+        private long _nextByteStart;
+
+        public StreamingChunkWriter(
+            SqliteConnection connection,
+            string sourceId,
+            string contentKind,
+            string? path,
+            string? url,
+            string displayPath,
+            string language,
+            long sourceBytes)
+        {
+            _sourceId = sourceId;
+            _chunk = connection.CreateCommand();
+            _chunk.CommandText = """
+                INSERT INTO content_chunks
+                    (chunk_id, source_id, content_kind, path, url, display_path, language, line_start,
+                     line_end, byte_start, byte_end, raw_text, doc_len, is_test, source_bytes,
+                     containing_symbol_id, containing_symbol_name)
+                VALUES ($chunk, $source, $kind, $path, $url, $display, $language, $line_start, $line_end,
+                        $byte_start, $byte_end, $raw, $doc_len, 0, $source_bytes, NULL, NULL);
+                """;
+            _pcChunk = _chunk.Parameters.Add("$chunk", SqliteType.Text);
+            _chunk.Parameters.AddWithValue("$source", sourceId);
+            _chunk.Parameters.AddWithValue("$kind", contentKind);
+            _chunk.Parameters.AddWithValue("$path", (object?)path ?? DBNull.Value);
+            _chunk.Parameters.AddWithValue("$url", (object?)url ?? DBNull.Value);
+            _chunk.Parameters.AddWithValue("$display", displayPath);
+            _chunk.Parameters.AddWithValue("$language", language);
+            _pcLineStart = _chunk.Parameters.Add("$line_start", SqliteType.Integer);
+            _pcLineEnd = _chunk.Parameters.Add("$line_end", SqliteType.Integer);
+            _pcByteStart = _chunk.Parameters.Add("$byte_start", SqliteType.Integer);
+            _pcByteEnd = _chunk.Parameters.Add("$byte_end", SqliteType.Integer);
+            _pcRaw = _chunk.Parameters.Add("$raw", SqliteType.Text);
+            _pcDocLen = _chunk.Parameters.Add("$doc_len", SqliteType.Integer);
+            _chunk.Parameters.AddWithValue("$source_bytes", sourceBytes);
+
+            _fts = connection.CreateCommand();
+            _fts.CommandText = "INSERT INTO content_fts(chunk_id, body) VALUES ($chunk, $body);";
+            _pfChunk = _fts.Parameters.Add("$chunk", SqliteType.Text);
+            _pfBody = _fts.Parameters.Add("$body", SqliteType.Text);
+        }
+
+        public int ChunkCount { get; private set; }
+
+        public void AddLine(string text)
+        {
+            if (text.Length > MaxStreamingLineChars)
+            {
+                throw new InvalidOperationException(
+                    $"External content logical line exceeds the {MaxStreamingLineChars}-character " +
+                    "streaming import limit. Split the line before importing the file.");
+            }
+            if (_lines.Count > 0 && BufferedCharsWith(text.Length) > MaxStreamingChunkChars)
+            {
+                Emit();
+                RetainOverlapFor(text.Length);
+            }
+
+            _lineCount++;
+            _lines.Add(new StreamingLine(_lineCount, _nextByteStart, text));
+            _bufferedChars += text.Length + (_lines.Count > 1 ? 1 : 0);
+            _nextByteStart += Encoding.UTF8.GetByteCount(text) + 1L;
+            if (_lines.Count < ContentCorpusChunker.DefaultChunkLines)
+                return;
+
+            Emit();
+            RetainOverlapFor(nextLineChars: 0);
+        }
+
+        public void Complete()
+        {
+            if (_lastEmittedLine < _lineCount)
+                Emit();
+        }
+
+        public void Dispose()
+        {
+            _chunk.Dispose();
+            _fts.Dispose();
+        }
+
+        private void Emit()
+        {
+            if (_bufferedChars > MaxStreamingChunkChars)
+            {
+                throw new InvalidOperationException(
+                    $"External content chunk exceeded the {MaxStreamingChunkChars}-character streaming limit.");
+            }
+            StreamingLine first = _lines[0];
+            StreamingLine last = _lines[^1];
+            string text = string.Join('\n', _lines.Select(static line => line.Text));
+            string chunkId = _sourceId + "#" +
+                first.Number.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" +
+                first.ByteStart.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _tokens.Clear();
+            CodeTokenizer.Tokenize(text, _tokens);
+
+            _pcChunk.Value = chunkId;
+            _pcLineStart.Value = first.Number;
+            _pcLineEnd.Value = last.Number;
+            _pcByteStart.Value = first.ByteStart;
+            _pcByteEnd.Value = last.ByteStart + Encoding.UTF8.GetByteCount(last.Text);
+            _pcRaw.Value = text;
+            _pcDocLen.Value = _tokens.Count;
+            _chunk.ExecuteNonQuery();
+
+            _pfChunk.Value = chunkId;
+            _pfBody.Value = string.Join(' ', _tokens);
+            _fts.ExecuteNonQuery();
+            _lastEmittedLine = last.Number;
+            ChunkCount++;
+        }
+
+        private int BufferedCharsWith(int textChars) =>
+            _bufferedChars + (_lines.Count > 0 ? 1 : 0) + textChars;
+
+        private void RetainOverlapFor(int nextLineChars)
+        {
+            int removeCount = Math.Max(0, _lines.Count - ContentCorpusChunker.DefaultOverlapLines);
+            if (removeCount > 0)
+                _lines.RemoveRange(0, removeCount);
+            RecalculateBufferedChars();
+
+            while (_lines.Count > 0 && BufferedCharsWith(nextLineChars) > MaxStreamingChunkChars)
+            {
+                _lines.RemoveAt(0);
+                RecalculateBufferedChars();
+            }
+        }
+
+        private void RecalculateBufferedChars()
+        {
+            _bufferedChars = _lines.Sum(static line => line.Text.Length);
+            if (_lines.Count > 1)
+                _bufferedChars += _lines.Count - 1;
+        }
+    }
+
+    private sealed record StreamingLine(int Number, long ByteStart, string Text);
 
     private static void InsertSource(
         SqliteConnection connection,
@@ -708,6 +1233,55 @@ public sealed record ExternalContentSource(
     string IndexedAtUtc,
     int ChunkCount,
     string? Url = null);
+
+public sealed record ExternalContentKindInventory(
+    string ContentKind,
+    int TotalCount,
+    IReadOnlyList<ExternalContentSource> Sources)
+{
+    public int ReturnedCount => Sources.Count;
+    public int OmittedCount => TotalCount - ReturnedCount;
+}
+
+public sealed record ExternalContentInventory(
+    int PerKindLimit,
+    IReadOnlyList<ExternalContentKindInventory> Kinds)
+{
+    public int TotalCount => Kinds.Sum(static kind => kind.TotalCount);
+    public int ReturnedCount => Kinds.Sum(static kind => kind.ReturnedCount);
+    public int OmittedCount => TotalCount - ReturnedCount;
+}
+
+public enum ExternalContentSeverity
+{
+    Fatal,
+    Error,
+    Warning,
+    Info,
+    Debug,
+    Other,
+}
+
+public sealed record ExternalContentSeveritySummary(
+    int Fatal,
+    int Error,
+    int Warning,
+    int Info,
+    int Debug,
+    int Other);
+
+public sealed record ExternalContentShape(
+    string SourceId,
+    string ContentKind,
+    string DisplayPath,
+    long SourceBytes,
+    int LineCount,
+    IReadOnlyList<ExternalContentLine> Head,
+    IReadOnlyList<ExternalContentLine> Tail,
+    ExternalContentSeveritySummary Severity)
+{
+    public const int EdgeLineLimit = 5;
+}
 
 /// <summary>
 /// A rendered read window. <paramref name="Clamped"/> is true when the requested window exceeded

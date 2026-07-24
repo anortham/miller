@@ -62,11 +62,12 @@ parameters and selectors below are what those short forms omit.
   `rename_symbol`, `insert_before`, `insert_after`, `add_doc`. For localized existing-file edits, `replace_text`
   supports `match_mode=auto|exact|normalized|fuzzy` plus `query`/`anchor`/`line` selectors and match proof.
   Previews a diff unless `apply=true`; stale targets self-heal or tell you to refresh / pass `allow_stale`.
-- **`content`** — import/search/read/list/remove/export external/web text for logs, CI output, reports, dumps, and
-  fetched markdown. `search` returns snippets, `source_id`, and `workspace_id`; `read` returns ≤200-line windows —
-  pass the hit's `source_id` and `workspace_id` when reading cross-workspace hits. Use `content_kind=web` for web
-  reads, or `workspace_id=all` for audits. Empty searches and failed reads include recovery guidance; JSON includes
-  `diagnostic_code` and `next_actions`. `export` is raw JSONL.
+- **`content`** — import/search/read/shape/list/remove external/web text for logs, CI output, reports, dumps, and
+  fetched markdown. `search` returns snippets, `source_id`, and `workspace_id`; `shape` gives a bounded head/tail,
+  line count, and text-derived severity summary; `read` returns ≤200-line windows. Bare `list` reports exact
+  external/web totals and at most 20 rows per kind. Pass the hit's `source_id` and `workspace_id` when reading or
+  shaping cross-workspace hits. Empty searches and failed reads include recovery guidance; JSON includes
+  `diagnostic_code` and `next_actions`. Bulk JSONL export is CLI-only: `miller content export`.
 - **`patterns`** — list, summarize, and search `structural_facts` code-shape facts. Run `patterns()` to see emitted
   ids (not raw AST queries). `operation=list|summary|search`; `query` is search-only. `where=key=value` ANDs when
   repeated or `;`-joined; also `path`, `language`, `group_by`, `facet`, `workspace_id`, `ensure_fresh`. List and

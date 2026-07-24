@@ -121,8 +121,18 @@ public sealed record WorkspaceHealthFacts(
             warnings.Add(new HealthWarning("index_stale", "degraded", "workspace index is stale"));
         if (!string.IsNullOrWhiteSpace(statusFacts.WarningText))
             warnings.Add(new HealthWarning("index_warning", "degraded", statusFacts.WarningText));
-        AddSidecarWarning(warnings, "search_sidecar", statusFacts.SearchSidecar?.State, statusFacts.SearchSidecar?.Error);
-        AddSidecarWarning(warnings, "content_corpus", statusFacts.ContentCorpus?.State, statusFacts.ContentCorpus?.Error);
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "search_sidecar",
+            statusFacts.SearchSidecar?.State,
+            statusFacts.SearchSidecar?.Error);
+        AddSidecarWarning(
+            warnings,
+            recommended,
+            "content_corpus",
+            statusFacts.ContentCorpus?.State,
+            statusFacts.ContentCorpus?.Error);
         AddVectorWarnings(warnings, recommended, statusFacts.Vectors);
 
         AddLeaderWarnings(warnings, recommended, statusFacts, leader);
@@ -262,6 +272,7 @@ public sealed record WorkspaceHealthFacts(
 
     private static void AddSidecarWarning(
         List<HealthWarning> warnings,
+        List<string> recommended,
         string code,
         string? state,
         string? error)
@@ -277,6 +288,15 @@ public sealed record WorkspaceHealthFacts(
             ? "usable_with_warnings"
             : "degraded";
         warnings.Add(new HealthWarning(code, severity, message));
+        if (string.Equals(state, "missing", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(state, "stale", StringComparison.OrdinalIgnoreCase))
+        {
+            recommended.Add($"run workspace refresh to rebuild the {code}");
+        }
+        else
+        {
+            recommended.Add($"run workspace full to replace the {code} after preserving its diagnostics");
+        }
     }
 
     private static void AddVectorWarnings(

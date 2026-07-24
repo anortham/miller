@@ -11,6 +11,10 @@ version 1.
 source-region search, and `content.db` stores raw chunk text for explicit text search, bounded reads,
 external/web imports, and Eros semantic ingestion.
 
+Agent-facing bounded list/shape behavior is versioned separately in
+[`content-mcp-v2.md`](content-mcp-v2.md). Bulk JSONL export is a CLI-only
+process contract.
+
 ## Content kinds
 
 Every source and chunk has exactly one `content_kind`.
@@ -42,7 +46,7 @@ One row per logical source document.
 | `display_path` | `TEXT NOT NULL` | yes | Human-facing path/URL label used in search results. |
 | `language` | `TEXT NOT NULL` | yes | Extracted language or text classifier label. Use empty string only when unknown. |
 | `content_hash` | `TEXT NOT NULL` | yes | BLAKE3 hash for workspace/external bytes, or deterministic hash of imported web text. Include algorithm prefix when available. |
-| `source_bytes` | `INTEGER NOT NULL` | yes | UTF-8 byte count of the full source text used to build chunks. |
+| `source_bytes` | `INTEGER NOT NULL` | yes | UTF-8 byte count of the original source bytes before line-ending normalization. |
 | `line_count` | `INTEGER NOT NULL` | yes | One-based text line count. Empty text counts as one line. |
 | `is_test` | `INTEGER NOT NULL` | yes | `0` or `1`; set from existing Miller test-path heuristics for workspace rows. |
 | `status` | `TEXT NOT NULL` | yes | `active`, `stale`, `deleted`, or `error`. Only `active` rows are searched by default. |
@@ -64,8 +68,8 @@ without reopening large external files or fetched web pages.
 | `language` | `TEXT NOT NULL` | yes | Duplicated source language/classifier label. |
 | `line_start` | `INTEGER NOT NULL` | yes | One-based inclusive start line in the source text. |
 | `line_end` | `INTEGER NOT NULL` | yes | One-based inclusive end line in the source text. |
-| `byte_start` | `INTEGER NOT NULL` | yes | Zero-based inclusive start byte in the source text. |
-| `byte_end` | `INTEGER NOT NULL` | yes | Zero-based exclusive end byte in the source text. |
+| `byte_start` | `INTEGER NOT NULL` | yes | Zero-based inclusive UTF-8 byte offset in the normalized text (`CRLF` and lone `CR` become `LF`). |
+| `byte_end` | `INTEGER NOT NULL` | yes | Zero-based exclusive UTF-8 byte offset in the normalized text (`CRLF` and lone `CR` become `LF`). |
 | `raw_text` | `TEXT NOT NULL` | yes | Chunk text stored as UTF-8 text. |
 | `doc_len` | `INTEGER NOT NULL` | yes | Token count used by Miller ranking. |
 | `is_test` | `INTEGER NOT NULL` | yes | `0` or `1`; duplicated for filtering. |
@@ -135,9 +139,16 @@ Default symbol search must not include `content.db` hits unless a later contract
 
 Default workspace chunking is 160 lines with 20 lines of overlap. A chunk must not exceed the per-source byte cap
 without being split further. Phase 1 workspace files use the existing 1 MiB file cap. Phase 3 external imports use
-a 25 MiB default cap unless the caller explicitly chooses a higher cap.
+a 25 MiB default cap unless the caller explicitly chooses a higher cap. The raised-cap streaming path rejects
+logical lines over 65,536 UTF-16 characters and caps stored raw chunks at 1,048,576 UTF-16 characters. When the
+character cap triggers before the normal line cap, the writer retains as much of the 20-line overlap as fits with
+the next line.
 
-Chunks must preserve line and byte ranges from the original normalized UTF-8 text. Overlap means
+Chunks preserve line and byte ranges in normalized UTF-8 text: `CRLF` and lone
+`CR` line endings become one `LF` byte before offsets are calculated.
+`source_bytes` and `content_hash` still describe the original input bytes, so
+the last `byte_end` can be smaller than `source_bytes` for CRLF input.
+Streaming and non-streaming imports use this same convention. Overlap means
 `stored_raw_bytes` can be larger than `indexed_source_bytes`.
 
 ## Lifecycle rules
@@ -171,8 +182,8 @@ field set.
 | `language` | yes | Language/classifier label. |
 | `line_start` | yes | One-based inclusive line start. |
 | `line_end` | yes | One-based inclusive line end. |
-| `byte_start` | yes | Zero-based inclusive byte start. |
-| `byte_end` | yes | Zero-based exclusive byte end. |
+| `byte_start` | yes | Zero-based inclusive byte start in normalized UTF-8 text. |
+| `byte_end` | yes | Zero-based exclusive byte end in normalized UTF-8 text. |
 | `source_bytes` | yes | Full source byte count. |
 | `content_hash` | yes | Source hash used for deterministic freshness. |
 | `chunk_text` | yes | Raw chunk text. |

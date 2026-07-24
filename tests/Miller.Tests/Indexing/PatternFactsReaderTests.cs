@@ -92,6 +92,39 @@ public sealed class PatternFactsReaderTests
     }
 
     [Fact]
+    public void Summary_DirectoryGroupingCountsMoreThanTenThousandFactsExactly()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 10005
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                'fact-large-' || n, 'file:src/Auth.cs', 'src/features/routes/Auth.cs', 'csharp',
+                'large.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+            FROM seq;
+            """);
+        var reader = new PatternFactsReader();
+
+        IReadOnlyList<PatternSummaryRow> rows = reader.Summary(
+            fx.DbPath,
+            patternId: "large.route.v1",
+            language: null,
+            groupBy: PatternSummaryGroupBy.Directory);
+
+        PatternSummaryRow row = Assert.Single(rows);
+        Assert.Equal("src/features/routes", row.Directory);
+        Assert.Equal(10005, row.Count);
+    }
+
+    [Fact]
     public void Search_MissingStructuralFactsTableThrowsCleanError()
     {
         using var fx = CreatePatternFixture();

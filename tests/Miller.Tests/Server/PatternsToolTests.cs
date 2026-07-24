@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
@@ -11,6 +13,17 @@ namespace Miller.Tests.Server;
 
 public sealed class PatternsToolTests
 {
+    [Fact]
+    public void Patterns_Description_DoesNotFreezeCatalogCounts()
+    {
+        DescriptionAttribute description = typeof(PatternsTool)
+            .GetMethod(nameof(PatternsTool.Patterns))!
+            .GetCustomAttribute<DescriptionAttribute>()!;
+
+        Assert.DoesNotMatch(@"\b\d+\s+pattern ids\b", description.Description);
+        Assert.DoesNotMatch(@"\b\d+\s+languages\b", description.Description);
+    }
+
     private static (string? Op, string MetadataJson, string Outcome) ReadTelemetryOpMetadata(string dbPath)
     {
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -262,6 +275,10 @@ public sealed class PatternsToolTests
         string output = tool.Patterns(operation: "search", query: "zzz-not-a-pattern");
 
         Assert.Contains("No patterns match 'zzz-not-a-pattern'", output);
+        Assert.Contains(
+            "pattern_id_fanout: considered=4 matched=0 returned=0 omitted=0 truncated=false",
+            output,
+            StringComparison.Ordinal);
         Assert.Contains("patterns operation=list", output);
     }
 
@@ -288,9 +305,14 @@ public sealed class PatternsToolTests
 
         string json = tool.Patterns(operation: "search", query: "zzz-not-a-pattern", format: "json");
 
-        using JsonDocument doc = JsonDocument.Parse(json); // must be valid JSON, not plain text
+        using JsonDocument doc = JsonDocument.Parse(json);
         Assert.Equal("search", doc.RootElement.GetProperty("operation").GetString());
         Assert.Equal("zzz-not-a-pattern", doc.RootElement.GetProperty("query").GetString());
+        Assert.Equal(4, doc.RootElement.GetProperty("pattern_ids_considered_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("pattern_ids_matched_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("pattern_ids_returned_count").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("pattern_ids_omitted_count").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("pattern_id_fanout_truncated").GetBoolean());
         Assert.Empty(doc.RootElement.GetProperty("matched_pattern_ids").EnumerateArray());
         Assert.Empty(doc.RootElement.GetProperty("matches").EnumerateArray());
         Assert.Contains("No patterns match", doc.RootElement.GetProperty("note").GetString());
@@ -380,6 +402,111 @@ public sealed class PatternsToolTests
         JsonElement match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
         Assert.Equal("fact-route", match.GetProperty("fact_id").GetString());
         Assert.Equal("src/Auth.cs", match.GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_JsonReportsFanOutTruncation()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 30
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                printf('fact-fanout-%02d', n), 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                printf('fanout.route.%02d.v1', n), 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+            FROM seq;
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(operation: "search", query: "fanout.route", limit: 1, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(34, doc.RootElement.GetProperty("pattern_ids_considered_count").GetInt32());
+        Assert.Equal(30, doc.RootElement.GetProperty("pattern_ids_matched_count").GetInt32());
+        Assert.Equal(25, doc.RootElement.GetProperty("pattern_ids_returned_count").GetInt32());
+        Assert.Equal(5, doc.RootElement.GetProperty("pattern_ids_omitted_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("pattern_id_fanout_truncated").GetBoolean());
+        Assert.Equal(25, doc.RootElement.GetProperty("matched_pattern_ids").GetArrayLength());
+        Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_CompactReportsFanOutTruncation()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 30
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                printf('fact-fanout-%02d', n), 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                printf('fanout.route.%02d.v1', n), 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+            FROM seq;
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "search", query: "fanout.route", limit: 1);
+
+        Assert.Contains(
+            "pattern_id_fanout: considered=34 matched=30 returned=25 omitted=5 truncated=true",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_SummaryJson_DirectoryUsesFullParentPath()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(
+            fx.DbPath,
+            "UPDATE structural_facts SET path = 'src/features/routes/Auth.cs' WHERE structural_fact_id = 'fact-route';");
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(
+            operation: "summary",
+            pattern_id: "aspnet.minimal_api.route.v1",
+            group_by: "directory",
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal("src/features/routes", group.GetProperty("directory").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SummaryJson_TopDirectoryIsExplicit()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(
+            fx.DbPath,
+            "UPDATE structural_facts SET path = 'src/features/routes/Auth.cs' WHERE structural_fact_id = 'fact-route';");
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string json = tool.Patterns(
+            operation: "summary",
+            pattern_id: "aspnet.minimal_api.route.v1",
+            group_by: "top_directory",
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("top_directory", doc.RootElement.GetProperty("group_by").GetString());
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal("src", group.GetProperty("directory").GetString());
     }
 
     [Fact]

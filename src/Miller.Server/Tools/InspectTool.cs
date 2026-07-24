@@ -24,17 +24,14 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class InspectTool
 {
-    private readonly IWorkspaceIndexProvider _workspaceProvider;
-    private readonly IWorkspaceSearchProvider _workspaceSearchProvider;
+    private readonly IWorkspaceSymbolReadProvider _workspaceSymbolReadProvider;
 
     /// <summary>Construct over the live index holder (production / freshness-aware).</summary>
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
-    public InspectTool(IWorkspaceIndexProvider workspaceProvider, IWorkspaceSearchProvider workspaceSearchProvider)
+    public InspectTool(IWorkspaceSymbolReadProvider workspaceSymbolReadProvider)
     {
-        ArgumentNullException.ThrowIfNull(workspaceProvider);
-        ArgumentNullException.ThrowIfNull(workspaceSearchProvider);
-        _workspaceProvider = workspaceProvider;
-        _workspaceSearchProvider = workspaceSearchProvider;
+        ArgumentNullException.ThrowIfNull(workspaceSymbolReadProvider);
+        _workspaceSymbolReadProvider = workspaceSymbolReadProvider;
     }
 
     [McpServerTool(Name = "inspect")]
@@ -66,8 +63,8 @@ public sealed class InspectTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
 
-            WorkspaceSymbolSearchContext context =
-                _workspaceSearchProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+            WorkspaceSymbolReadContext context =
+                _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = RunLookupWithDiagnostics(
                 context.Index,

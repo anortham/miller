@@ -73,6 +73,23 @@ public readonly record struct WorkspaceListEntry(
     string? LastError,
     DateTimeOffset LastSeenAt = default);
 
+public sealed record WorkspaceListFacts(
+    IReadOnlyList<WorkspaceListEntry> Entries,
+    int Registered,
+    int Matched,
+    int Returned,
+    int Omitted,
+    int OmittedErrors,
+    string? Filter,
+    int? Limit);
+
+public enum WorkspaceHealthFormat
+{
+    Compact,
+    Json,
+    Markdown,
+}
+
 /// <summary>
 /// The result of a <c>refresh</c>/<c>full</c> action (M7 decision-3): whether the leader ran a scan, whether the
 /// freshness poll swapped a newer index in, the revision the index now reflects, and an optional HONEST note (set
@@ -737,15 +754,24 @@ public static class WorkspaceRender
     // ---------- health ----------
 
     public static string Health(WorkspaceHealthFacts facts, bool json) =>
-        json ? HealthJson(facts) : HealthCompact(facts);
+        Health(facts, json ? WorkspaceHealthFormat.Json : WorkspaceHealthFormat.Compact);
+
+    public static string Health(WorkspaceHealthFacts facts, WorkspaceHealthFormat format) =>
+        format switch
+        {
+            WorkspaceHealthFormat.Compact => HealthCompact(facts),
+            WorkspaceHealthFormat.Json => HealthJson(facts),
+            WorkspaceHealthFormat.Markdown => HealthMarkdown(facts),
+            _ => throw new ArgumentOutOfRangeException(nameof(format), format, null),
+        };
 
     private static string HealthCompact(WorkspaceHealthFacts facts)
     {
         WorkspaceFacts status = facts.StatusFacts;
         var sb = new StringBuilder();
         sb.Append("# workspace health  ").Append(WorkspaceHealthFacts.StateName(facts.State)).Append('\n');
-        sb.Append("workspace: ").Append(DisplayId(status.Root, status.WorkspaceId, status.DisplayId))
-          .Append("  ").Append(status.Root).Append('\n');
+        sb.Append("workspace: ").Append(HealthCompactValue(DisplayId(status.Root, status.WorkspaceId, status.DisplayId)))
+          .Append("  ").Append(HealthCompactValue(status.Root)).Append('\n');
         sb.Append("index: ").Append(FreshLabel(status))
           .Append(" rev ").Append(status.BuiltRevision.ToString(CultureInfo.InvariantCulture))
           .Append("  symbols ").Append(status.DocumentCount.ToString(CultureInfo.InvariantCulture))
@@ -753,15 +779,16 @@ public static class WorkspaceRender
           .Append("  queue ").Append(status.QueueEmpty ? "empty" : "pending")
           .Append('\n');
         if (facts.Leader is { } leader)
-            sb.Append("leader: ").Append(LeaderLabel(status, leader)).Append('\n');
+            sb.Append("leader: ").Append(HealthCompactValue(LeaderLabel(status, leader))).Append('\n');
         if (status.SearchSidecar is { } sidecar)
-            sb.Append("search_db: ").Append(SearchSidecarLabel(sidecar)).Append('\n');
+            sb.Append("search_db: ").Append(HealthCompactValue(SearchSidecarLabel(sidecar))).Append('\n');
         if (status.ContentCorpus is { } corpus)
-            sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, status.BuiltRevision)).Append('\n');
+            sb.Append("content_db: ")
+              .Append(HealthCompactValue(ContentCorpusLabel(corpus, status.BuiltRevision))).Append('\n');
         if (VectorsLabel(status.Vectors) is { } vectorsLabel)
-            sb.Append("vectors: ").Append(vectorsLabel).Append('\n');
+            sb.Append("vectors: ").Append(HealthCompactValue(vectorsLabel)).Append('\n');
         if (facts.History is { } history)
-            sb.Append("history_db: ").Append(HistorySidecarLabel(history)).Append('\n');
+            sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
           .Append(ParseDiagnosticCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
           .Append(" parse diagnostics  ")
@@ -780,11 +807,35 @@ public static class WorkspaceRender
           .Append(facts.TelemetryHealth.EmptyCount.ToString(CultureInfo.InvariantCulture))
           .Append('\n');
         if (facts.Warnings.Count > 0)
-            sb.Append("warning: ").Append(facts.Warnings[0].Message).Append('\n');
+            sb.Append("warning: ").Append(HealthCompactValue(facts.Warnings[0].Message)).Append('\n');
         if (facts.RecommendedActions.Count > 0)
-            sb.Append("recommended: ").Append(facts.RecommendedActions[0]).Append('\n');
+            sb.Append("recommended: ").Append(HealthCompactValue(facts.RecommendedActions[0])).Append('\n');
+        int omittedRows =
+            facts.Extraction.ParseDiagnostics.Rows.Count +
+            facts.Extraction.CapabilityGaps.Rows.Count +
+            facts.Extraction.LanguageCapabilities.Rows.Count +
+            facts.Extraction.StructuralFacts.Rows.Count +
+            facts.Extraction.ComplexityMetrics.Rows.Count +
+            facts.Extraction.Files.Rows.Count;
+        sb.Append("omitted: groups=6 rows=").Append(omittedRows.ToString(CultureInfo.InvariantCulture))
+          .Append(" warnings=").Append(Math.Max(0, facts.Warnings.Count - 1).ToString(CultureInfo.InvariantCulture))
+          .Append(" actions=").Append(Math.Max(0, facts.RecommendedActions.Count - 1).ToString(CultureInfo.InvariantCulture))
+          .Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
+
+    private const int HealthCompactValueMaxChars = 240;
+
+    private static string HealthCompactValue(string value)
+    {
+        string normalized = value.Replace('\r', ' ').Replace('\n', ' ');
+        return normalized.Length <= HealthCompactValueMaxChars
+            ? normalized
+            : normalized[..(HealthCompactValueMaxChars - 3)] + "...";
+    }
+
+    private static string HealthMarkdown(WorkspaceHealthFacts facts) =>
+        $"{HealthCompact(facts)}\n\n```json\n{HealthJson(facts)}\n```";
 
     // "leader: this process ..." / "pid N vX alive" / "pid N vX NOT RUNNING" / "unknown ..." — who owns index
     // convergence for this workspace, honestly, because it is often NOT the serving process.
@@ -1176,26 +1227,15 @@ public static class WorkspaceRender
     /// </summary>
     public static string List(
         IReadOnlyList<WorkspaceListEntry> entries, bool json, string? filter = null, int? limit = null) =>
-        json ? ListJson(entries, filter, limit ?? 0) : ListCompact(entries, filter, limit ?? DefaultListLimit);
+        List(
+            WorkspaceFactsAssembler.ToListFacts(entries, filter, limit ?? (json ? null : DefaultListLimit)),
+            json);
+
+    public static string List(WorkspaceListFacts facts, bool json) =>
+        json ? ListJson(facts) : ListCompact(facts);
 
     /// <summary>The default number of compact <c>workspace list</c> entries before the omitted-count tail.</summary>
     public const int DefaultListLimit = 20;
-
-    private static bool MatchesFilter(in WorkspaceListEntry entry, string filter) =>
-        entry.DisplayId.Contains(filter, StringComparison.OrdinalIgnoreCase)
-        || entry.Root.Contains(filter, StringComparison.OrdinalIgnoreCase);
-
-    // Current workspace first, then most-recently-seen. LINQ OrderBy is stable, so equal keys keep registry order.
-    private static List<WorkspaceListEntry> OrderAndFilter(
-        IReadOnlyList<WorkspaceListEntry> entries, string? filter)
-    {
-        IEnumerable<WorkspaceListEntry> ordered = entries
-            .OrderByDescending(static e => e.Current)
-            .ThenByDescending(static e => e.LastSeenAt);
-        if (!string.IsNullOrWhiteSpace(filter))
-            ordered = ordered.Where(e => MatchesFilter(e, filter));
-        return ordered.ToList();
-    }
 
     private static string ListCompact(WorkspaceFacts facts)
     {
@@ -1211,36 +1251,41 @@ public static class WorkspaceRender
         return sb.ToString();
     }
 
-    private static string ListCompact(IReadOnlyList<WorkspaceListEntry> entries, string? filter, int limit)
+    private static string ListCompact(WorkspaceListFacts facts)
     {
-        int total = entries.Count;
-        bool hasFilter = !string.IsNullOrWhiteSpace(filter);
-        List<WorkspaceListEntry> matched = OrderAndFilter(entries, filter);
-
         var sb = new StringBuilder();
-
-        // A filter that matches nothing is a helpful line, never an empty string — say so with the total count.
-        if (hasFilter && matched.Count == 0)
-        {
+        if (facts.Filter is not null && facts.Matched == 0)
             sb.Append("# workspaces (0 shown)\n");
-            sb.Append("no workspace matches filter \"").Append(filter).Append("\" — ")
-              .Append(total).Append(" registered; adjust the substring or omit filter");
+        else if (facts.Filter is not null)
+            sb.Append("# workspaces (").Append(facts.Returned).Append(" of ").Append(facts.Matched)
+              .Append(" matched, ").Append(facts.Registered).Append(" registered; filter=\"")
+              .Append(facts.Filter).Append("\")\n");
+        else if (facts.Returned < facts.Registered)
+            sb.Append("# workspaces (").Append(facts.Returned).Append(" of ").Append(facts.Registered).Append(")\n");
+        else
+            sb.Append("# workspaces (").Append(facts.Registered).Append(")\n");
+        sb.Append("totals: registered=").Append(facts.Registered)
+          .Append(" matched=").Append(facts.Matched)
+          .Append(" returned=").Append(facts.Returned)
+          .Append(" omitted=").Append(facts.Omitted)
+          .Append('\n');
+        sb.Append("selection: filter=");
+        if (facts.Filter is null)
+            sb.Append("(none)");
+        else
+            sb.Append('"').Append(facts.Filter).Append('"');
+        sb.Append(" limit=").Append(facts.Limit?.ToString(CultureInfo.InvariantCulture) ?? "(none)")
+          .Append('\n');
+
+        if (facts.Filter is not null && facts.Matched == 0)
+        {
+            sb.Append("no workspace matches filter \"").Append(facts.Filter)
+              .Append("\" — ").Append(facts.Registered)
+              .Append(" registered; adjust the substring or omit filter");
             return sb.ToString();
         }
 
-        int cap = limit <= 0 ? matched.Count : limit;
-        int shown = Math.Min(cap, matched.Count);
-        List<WorkspaceListEntry> omitted = matched.Skip(shown).ToList();
-
-        if (hasFilter)
-            sb.Append("# workspaces (").Append(shown).Append(" of ").Append(matched.Count)
-              .Append(" matched, ").Append(total).Append(" registered; filter=\"").Append(filter).Append("\")\n");
-        else if (shown < total)
-            sb.Append("# workspaces (").Append(shown).Append(" of ").Append(total).Append(")\n");
-        else
-            sb.Append("# workspaces (").Append(total).Append(")\n");
-
-        foreach (WorkspaceListEntry entry in matched.Take(shown))
+        foreach (WorkspaceListEntry entry in facts.Entries)
         {
             sb.Append("* ").Append(entry.DisplayId).Append("  ").Append(entry.Root);
             if (entry.Current)
@@ -1252,13 +1297,11 @@ public static class WorkspaceRender
             sb.Append('\n');
         }
 
-        if (omitted.Count > 0)
+        if (facts.Omitted > 0)
         {
-            sb.Append("… ").Append(omitted.Count).Append(" more — raise limit or pass filter=<substring>\n");
-            // Omitted error-state rows would otherwise be invisible past the cap — surface a discoverable summary.
-            int omittedErrors = omitted.Count(static e => string.Equals(e.State, "error", StringComparison.Ordinal));
-            if (omittedErrors > 0)
-                sb.Append("errors: ").Append(omittedErrors)
+            sb.Append("… ").Append(facts.Omitted).Append(" more — raise limit or pass filter=<substring>\n");
+            if (facts.OmittedErrors > 0)
+                sb.Append("errors: ").Append(facts.OmittedErrors)
                   .Append(" workspace(s) in error state — filter or raise limit to see them\n");
         }
 
@@ -1288,19 +1331,24 @@ public static class WorkspaceRender
         return Utf8(buffer);
     }
 
-    private static string ListJson(IReadOnlyList<WorkspaceListEntry> entries, string? filter, int limit)
+    private static string ListJson(WorkspaceListFacts facts)
     {
-        List<WorkspaceListEntry> matched = OrderAndFilter(entries, filter);
-        // JSON is unlimited by default (existing consumers); a positive limit narrows it.
-        IEnumerable<WorkspaceListEntry> visible = limit > 0 ? matched.Take(limit) : matched;
-
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
         {
             w.WriteStartObject();
+            w.WriteNumber("registered", facts.Registered);
+            w.WriteNumber("matched", facts.Matched);
+            w.WriteNumber("returned", facts.Returned);
+            w.WriteNumber("omitted", facts.Omitted);
+            w.WriteNumber("omitted_errors", facts.OmittedErrors);
+            if (facts.Filter is null) w.WriteNull("filter");
+            else w.WriteString("filter", facts.Filter);
+            if (facts.Limit is { } limit) w.WriteNumber("limit", limit);
+            else w.WriteNull("limit");
             w.WritePropertyName("workspaces");
             w.WriteStartArray();
-            foreach (WorkspaceListEntry entry in visible)
+            foreach (WorkspaceListEntry entry in facts.Entries)
             {
                 w.WriteStartObject();
                 w.WriteString("workspace_id", entry.WorkspaceId);

@@ -270,8 +270,8 @@ scripts/test.ps1 all
   remains the deeper source-text path.
 - **Patterns and structural facts.** The `patterns` MCP/CLI surface reads `structural_facts` emitted by
   `julie-extractors`. Miller may list, group, filter, and render generic `pattern_id` facts, but it must not own
-  parser recognition or raw AST query execution. The current catalog has 194 pattern ids across 36 languages,
-  from ASP.NET routes/htmx/Alpine through SQL DDL/DML shapes, async/await, and JSON/YAML/TOML/
+  parser recognition or raw AST query execution. Runtime `patterns operation=list` output is authoritative for the
+  current catalog, from ASP.NET routes/htmx/Alpine through SQL DDL/DML shapes, async/await, and JSON/YAML/TOML/
   Markdown document structure — keep Miller's surface generic over `pattern_id` rather than special-casing
   examples. When a new fact shape needs extractor support, add it across all supported languages in
   `julie-extractors` first, then consume the stable artifact contract from Miller/Eros.

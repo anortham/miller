@@ -167,10 +167,15 @@ public sealed class WorkspaceTool
         if (telemetry is not null)
             telemetry.Op = (operation ?? "status").ToLowerInvariant();
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+        WorkspaceHealthFormat healthFormat = json
+            ? WorkspaceHealthFormat.Json
+            : string.Equals(format, "markdown", StringComparison.OrdinalIgnoreCase)
+                ? WorkspaceHealthFormat.Markdown
+                : WorkspaceHealthFormat.Compact;
         try
         {
             (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
-                operation, workspace_id, path, port, json, handoff, wait, filter, limit, dry_run);
+                operation, workspace_id, path, port, json, healthFormat, handoff, wait, filter, limit, dry_run);
 
             if (telemetry is not null)
             {
@@ -239,7 +244,8 @@ public sealed class WorkspaceTool
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
     private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? workspaceId, string? path, int? port, bool json, bool handoff, bool wait,
+        string? operation, string? workspaceId, string? path, int? port, bool json,
+        WorkspaceHealthFormat healthFormat, bool handoff, bool wait,
         string? filter = null, int? limit = null, bool dryRun = false)
     {
         switch (operation?.ToLowerInvariant())
@@ -247,7 +253,7 @@ public sealed class WorkspaceTool
             case null or "" or "status":
                 return RenderTargetStatus(workspaceId, path, json);
             case "health":
-                return RenderTargetHealth(workspaceId, path, json);
+                return RenderTargetHealth(workspaceId, path, json, healthFormat);
             case "onboarding":
                 return RenderTargetOnboarding(workspaceId, path, json);
             case "leader":
@@ -281,7 +287,7 @@ public sealed class WorkspaceTool
             ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
             _bootstrap.Snapshot);
 
-    private string RenderHealth(bool json)
+    private string RenderHealth(WorkspaceHealthFormat format)
     {
         WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
             AssembleFacts(),
@@ -290,7 +296,7 @@ public sealed class WorkspaceTool
             WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
             ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
             ReadHistoryStatus(_workspace.ExtractDbPath));
-        return WorkspaceRender.Health(health, json);
+        return WorkspaceRender.Health(health, format);
     }
 
     private string RenderOnboarding(bool json)
@@ -349,14 +355,14 @@ public sealed class WorkspaceTool
     }
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetHealth(
-        string? workspaceId, string? path, bool json)
+        string? workspaceId, string? path, bool json, WorkspaceHealthFormat format)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
         if (target.IsCurrent)
-            return (RenderHealth(json), 1, TelemetryOutcome.Ok);
+            return (RenderHealth(format), 1, TelemetryOutcome.Ok);
 
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
@@ -398,7 +404,7 @@ public sealed class WorkspaceTool
             extraction,
             ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false),
             ReadHistoryStatus(row.IndexDbPath));
-        return (WorkspaceRender.Health(health, json), 1, TelemetryOutcome.Ok);
+        return (WorkspaceRender.Health(health, format), 1, TelemetryOutcome.Ok);
     }
 
     private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetOnboarding(
@@ -537,9 +543,10 @@ public sealed class WorkspaceTool
     private string RenderRegistryList(bool json, string? filter, int? limit)
     {
         IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
-        IReadOnlyList<WorkspaceListEntry> entries =
-            WorkspaceFactsAssembler.ToListEntries(rows, IsCurrentWorkspace);
-        return WorkspaceRender.List(entries, json, filter, limit);
+        int? activeLimit = limit ?? (json ? null : WorkspaceRender.DefaultListLimit);
+        WorkspaceListFacts facts =
+            WorkspaceFactsAssembler.ToListFacts(rows, IsCurrentWorkspace, filter, activeLimit);
+        return WorkspaceRender.List(facts, json);
     }
 
     // Gather the live facts the status/list views render. Reads the holder (index facts), the workspace context

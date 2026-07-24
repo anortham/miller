@@ -905,7 +905,7 @@ public static class CliDispatch
     private static int Content(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count == 0)
-            return Usage(err, "miller content <import|add-markdown|search|read|list|remove|export> [args] [--json]");
+            return Usage(err, "miller content <import|add-markdown|search|read|shape|list|remove|export> [args] [--json]");
 
         string operation = args[0];
         CliOptions o = CliOptions.Parse(args.Skip(1).ToArray(), "json");
@@ -938,45 +938,152 @@ public static class CliDispatch
                 return Usage(err, "miller content search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]");
         }
 
-        var tool = new ContentTool(ctx, new ContentCorpusExternalStore());
-        string output = tool.Content(
-            operation,
-            path: path,
-            query: query,
-            source_id: o.Value("source-id"),
-            url: o.Value("url"),
-            display_path: o.Value("display-path"),
-            content_kind: o.Value("kind", o.Value("content-kind")),
-            content_workspace_id: o.Value("content-workspace-id"),
-            workspace_id: o.Value("workspace-id"),
-            line: o.Has("line") ? o.Int("line", 0) : null,
-            context_lines: o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
-            limit: o.Int("limit", SearchTool.DefaultLimit),
-            max_bytes: LongOption(o, "max-bytes"),
-            format: json ? "json" : "compact");
-
-        if (output.StartsWith("content failed:", StringComparison.Ordinal))
+        var store = new ContentCorpusExternalStore();
+        var tool = new ContentTool(ctx, store);
+        if (string.Equals(operation, "list", StringComparison.OrdinalIgnoreCase))
         {
-            err.WriteLine(output);
+            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+            string? requestedKind = o.Value("kind", o.Value("content-kind"));
+            string? contentKind;
+            try
+            {
+                contentKind = ContentListKind(requestedKind);
+            }
+            catch (InvalidOperationException ex)
+            {
+                err.WriteLine(ContentTool.RenderFailure(
+                    operation.Trim().ToLowerInvariant(),
+                    ex,
+                    json));
+                return 3;
+            }
+            IReadOnlyList<ExternalContentSource> sources = contentKind is null
+                ? [
+                    .. store.List(contentDbPath, TextContentKind.ExternalFile),
+                    .. store.List(contentDbPath, TextContentKind.Web),
+                ]
+                : store.List(contentDbPath, contentKind);
+            WriteOutput(outw, json ? RenderCliContentListJson(sources) : RenderCliContentListCompact(sources));
+            return 0;
+        }
+
+        if (string.Equals(operation, "export", StringComparison.OrdinalIgnoreCase))
+        {
+            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+            string? requestedKind = o.Value("kind", o.Value("content-kind"));
+            if (!string.IsNullOrWhiteSpace(requestedKind))
+            {
+                try
+                {
+                    _ = ContentListKind(requestedKind);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    err.WriteLine(ContentTool.RenderFailure(
+                        operation.Trim().ToLowerInvariant(),
+                        ex,
+                        json));
+                    return 3;
+                }
+            }
+            var reader = new ContentCorpusExportReader();
+            IReadOnlyList<ContentCorpusExportRow> rows = reader.Read(
+                contentDbPath,
+                requestedKind,
+                o.Value("content-workspace-id"));
+            WriteOutput(outw, ContentCorpusExportReader.ToJsonLines(rows));
+            return 0;
+        }
+
+        ContentToolExecutionResult result = tool.Execute(
+            operation,
+            path,
+            query,
+            o.Value("source-id"),
+            o.Value("url"),
+            o.Value("display-path"),
+            o.Value("kind", o.Value("content-kind")),
+            o.Value("workspace-id"),
+            o.Has("line") ? o.Int("line", 0) : null,
+            o.Has("context-lines") ? o.Int("context-lines", ContentCorpusExternalStore.DefaultContextLines) : null,
+            o.Int("limit", SearchTool.DefaultLimit),
+            LongOption(o, "max-bytes"),
+            json ? "json" : "compact");
+
+        if (result.IsError)
+        {
+            err.WriteLine(result.Output);
             return 3;
         }
 
-        WriteOutput(outw, output);
+        WriteOutput(outw, result.Output);
         return 0;
+    }
+
+    private static string? ContentListKind(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? TextContentKind.ExternalFile
+            : value.Trim().ToLowerInvariant() switch
+            {
+                "all" => null,
+                "external" or "external_file" or "file" => TextContentKind.ExternalFile,
+                "source" or "workspace_source" => TextContentKind.WorkspaceSource,
+                "docs" or "doc" or "workspace_docs" => TextContentKind.WorkspaceDocs,
+                "config" or "workspace_config" => TextContentKind.WorkspaceConfig,
+                "web" => TextContentKind.Web,
+                _ => throw new InvalidOperationException(
+                    "content_kind must be all, workspace_source, workspace_docs, workspace_config, external_file, or web."),
+            };
+
+    private static string RenderCliContentListCompact(IReadOnlyList<ExternalContentSource> sources) =>
+        sources.Count == 0
+            ? "No imported content."
+            : string.Join(
+                '\n',
+                sources.Select(static source =>
+                    $"{source.SourceId}  {source.ContentKind}  {source.SourceBytes} bytes  " +
+                    $"{source.ChunkCount} chunks  {source.DisplayPath}"));
+
+    private static string RenderCliContentListJson(IReadOnlyList<ExternalContentSource> sources)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(
+            buffer,
+            new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
+        {
+            writer.WriteStartArray();
+            foreach (ExternalContentSource source in sources)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("source_id", source.SourceId);
+                writer.WriteString("content_kind", source.ContentKind);
+                writer.WriteString("display_path", source.DisplayPath);
+                if (source.Url is null) writer.WriteNull("url");
+                else writer.WriteString("url", source.Url);
+                writer.WriteString("content_hash", source.ContentHash);
+                writer.WriteNumber("source_bytes", source.SourceBytes);
+                writer.WriteNumber("line_count", source.LineCount);
+                writer.WriteNumber("chunk_count", source.ChunkCount);
+                writer.WriteString("indexed_at_utc", source.IndexedAtUtc);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count > 0 && args[0] is "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "list" : args[0].ToLowerInvariant();
         if (operation is "help" or "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
 
         if (operation is not ("list" or "summary" or "summarize" or "search"))
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
 
         IReadOnlyList<string> argTail = (firstTokenIsFlag ? args : args.Skip(1)).ToArray();
         CliOptions o = CliOptions.Parse(argTail, "json");
@@ -2120,6 +2227,11 @@ public static class CliDispatch
         CliOptions o = CliOptions.Parse(args, "json", "full", "markdown");
         string operation = (o.Query.Length > 0 ? o.Query : "status").ToLowerInvariant();
         bool json = o.Has("json");
+        WorkspaceHealthFormat healthFormat = json
+            ? WorkspaceHealthFormat.Json
+            : o.Has("markdown")
+                ? WorkspaceHealthFormat.Markdown
+                : WorkspaceHealthFormat.Compact;
 
         // A help request must NOT fall through to `status` (which opens the registry and stamps a version
         // header). Cover all three spellings: `workspace help` (positional), `workspace --help` (flag, leaves
@@ -2158,7 +2270,7 @@ public static class CliDispatch
             case "status":
                 return WorkspaceStatus(ctx, id, path, json, outw, err);
             case "health":
-                return WorkspaceHealth(ctx, id, path, json, outw, err);
+                return WorkspaceHealth(ctx, id, path, healthFormat, outw, err);
             case "onboarding":
                 return WorkspaceOnboarding(ctx, id, path, json, outw, err);
             case "leader":
@@ -2192,12 +2304,15 @@ public static class CliDispatch
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         IReadOnlyList<WorkspaceRegistryRow> rows = registry.List();
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
-        IReadOnlyList<WorkspaceListEntry> entries = WorkspaceFactsAssembler.ToListEntries(
+        int? activeLimit = limit ?? (json ? null : WorkspaceRender.DefaultListLimit);
+        WorkspaceListFacts facts = WorkspaceFactsAssembler.ToListFacts(
             rows,
             row => currentRow is not null
                 ? string.Equals(row.WorkspaceId, currentRow.WorkspaceId, StringComparison.Ordinal)
-                : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot));
-        outw.WriteLine(WorkspaceRender.List(entries, json, filter, limit));
+                : WorkspaceSafety.IsLiveWorkspace(row.CanonicalRoot, ctx.WorkspaceRoot),
+            filter,
+            activeLimit);
+        outw.WriteLine(WorkspaceRender.List(facts, json));
         return 0;
     }
 
@@ -2262,7 +2377,12 @@ public static class CliDispatch
     }
 
     private static int WorkspaceHealth(
-        WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
+        WorkspaceContext ctx,
+        string? id,
+        string? path,
+        WorkspaceHealthFormat format,
+        TextWriter outw,
+        TextWriter err)
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
@@ -2293,7 +2413,7 @@ public static class CliDispatch
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
                     CliLeaderFacts(row.IndexDbPath),
                     CliHistoryStatus(row.IndexDbPath)),
-                json));
+                format));
             return 0;
         }
 
@@ -2312,7 +2432,7 @@ public static class CliDispatch
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
                     CliLeaderFacts(currentRow.IndexDbPath),
                     CliHistoryStatus(currentRow.IndexDbPath)),
-                json));
+                format));
             return 0;
         }
 
@@ -2332,7 +2452,7 @@ public static class CliDispatch
                 WorkspaceHealthReader.Read(ctx.ExtractDbPath),
                 CliLeaderFacts(ctx.ExtractDbPath),
                 CliHistoryStatus(ctx.ExtractDbPath)),
-            json));
+            format));
         return 0;
     }
 
@@ -3114,7 +3234,7 @@ public static class CliDispatch
                              semantic|hybrid need MILLER_SEMANTIC=on and a serving vector artifact — they fail loudly rather than answering lexically.
           todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
                              [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
-          content <op>       Import/search/read/list/remove/export external and web text in content.db.
+          content <op>       Import/search/read/shape/list/remove/export external and web text in content.db.
                              import <path> [--max-bytes N] [--display-path NAME] [--json]
                              add-markdown <path> --url URL [--display-path NAME] [--json]
                              search <query> [--kind KIND] [--workspace-id all|SELECTOR] [--limit N] [--json]
