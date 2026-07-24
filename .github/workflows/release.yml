@@ -197,7 +197,7 @@ jobs:
             sed -n '1,120p' "${stderr_file}"
             exit 1
           fi
-          for tool in search inspect context impact trace edit content workspace; do
+          for tool in search inspect context impact trace edit content workspace patterns; do
             needle="\"name\":\"${tool}\""
             if [[ "$out" != *"$needle"* ]]; then
               echo "AOT MCP serve smoke failed: ${tool} tool missing"
@@ -282,7 +282,7 @@ jobs:
             Get-Content $stderrFile -ErrorAction SilentlyContinue | Select-Object -First 120
             throw "AOT MCP serve smoke failed: no tools/list response"
           }
-          foreach ($tool in @("search", "inspect", "context", "impact", "trace", "edit", "content", "workspace")) {
+          foreach ($tool in @("search", "inspect", "context", "impact", "trace", "edit", "content", "workspace", "patterns")) {
             if (-not $out.Contains("`"name`":`"$tool`"")) {
               Write-Host "AOT MCP serve smoke failed: $tool tool missing"
               Get-Content $stderrFile -ErrorAction SilentlyContinue | Select-Object -First 120
@@ -419,9 +419,11 @@ jobs:
             tag="v${version}"
             prerelease="${{ inputs.prerelease }}"
           fi
-          echo "RELEASE_TAG=${tag}" >> "${GITHUB_ENV}"
-          echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
-          echo "RELEASE_PRERELEASE=${prerelease}" >> "${GITHUB_ENV}"
+          {
+            echo "RELEASE_TAG=${tag}"
+            echo "RELEASE_VERSION=${version}"
+            echo "RELEASE_PRERELEASE=${prerelease}"
+          } >> "${GITHUB_ENV}"
 
       - name: Create or update GitHub release
         env:

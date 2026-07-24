@@ -12,7 +12,7 @@
 
 ## Claude Review Requirement
 
-The completed audit used one broad Claude review and nine fresh tool-specific Claude reviews. That requirement continues through implementation: a tool is not remediation-complete until a fresh Claude pass inspects that tool's diff, focused tests, contract changes, and evaluator evidence, and the lead classifies every material claim as accepted, corrected, rejected, or unproven against local evidence. The final gate repeats all nine tool-specific reviews and adds one broad architecture/evidence review; a single general review cannot substitute for them.
+The completed audit used one broad Claude review and nine fresh tool-specific Claude reviews. That requirement continues through implementation: a tool is not remediation-complete until a fresh Claude pass inspects that tool's diff, focused tests, contract changes, and visible evaluator evidence only, and the lead classifies every material claim as accepted, corrected, rejected, or unproven against local evidence. The final gate repeats all nine tool-specific reviews and adds one broad architecture/evidence review; a single general review cannot substitute for them.
 
 ## Invariants
 
@@ -41,7 +41,7 @@ The completed audit used one broad Claude review and nine fresh tool-specific Cl
 
 ## Dependency Order
 
-Execute the numbered phases in order: evaluator gap-close, exact symbol-ID reference evidence, typed diagnostics plus deterministic output-budget/continuation contracts, reference consumer and rename migration, shared search ranking/routing, bounded one-call context, risk-ranked impact, remaining-surface cleanup, all-language extractor coverage, RC3 completion, then the sealed paired decision and reviews.
+Execute the numbered phases in order: evaluator gap-close, exact symbol-ID reference evidence, typed diagnostics plus deterministic output-budget/continuation contracts, reference consumer and rename migration, shared search ranking/routing, bounded one-call context, risk-ranked impact, remaining-surface cleanup, all-language extractor coverage, semantic-sidecar completion, then visible calibration, all reviews and package validation, and finally the sealed paired decision.
 
 Search remains before context because context consumes the shared ranking signals. RC3 protocol, package, and platform preflight may begin after Phase 0, but that early lane does not complete Phase 9 or choose the default model. Final BGE-small versus CodeRankEmbed selection remains after the Phase 4 search and Phase 5 context behavior gates pass.
 
@@ -60,13 +60,13 @@ Search remains before context because context consumes the shared ranking signal
 
 ### Work
 
-1. Freeze a capability catalog covering discovery, exact symbol lookup, homonyms, context orientation, callers, callees, call paths, impact/tests, edits, renames, logs, patterns, and workspace recovery; extend the visible calibration corpus and require the operator-owned sealed manifest to satisfy the same coverage contract.
+1. Freeze a capability catalog covering discovery, exact symbol lookup, homonyms, context orientation, callers, callees, call paths, impact/tests, edits, renames, logs, patterns, and workspace recovery; extend the visible calibration corpus and require the external sealed decision manifest to satisfy the same coverage contract.
 2. Record ground-truth symbols, files, canonical reference sites, acceptable and forbidden typed actions, forbidden false positives, and uncertainty expectations.
 3. Score relevance and action efficiency separately: recall/nDCG/MRR/top-1 plus correctness/wrong action/calls/tokens/wall time.
 4. Carry canonical success, empty, correct-refusal, hard-error, and wrong-answer outcomes from the verifier through run artifacts into the pure scorer; keep harness voids outside product outcomes.
 5. Replace product-named execution and scoring branches with neutral baseline/candidate roles backed by identical adapters; product labels remain metadata only.
 6. Add immutable capability-derived subset identity, a non-decisional subset report, and an enforced full-suite final mode.
-7. Keep visible calibration tasks mechanically separate from external, spend-once, aggregate-only sealed decision tasks; never expose sealed prompts, labels, answers, or task rows to the implementation session.
+7. Keep visible calibration tasks mechanically separate from external, spend-once, aggregate-only sealed decision tasks; never expose sealed prompts, labels, answers, or task rows to the implementation session. An optional operator-owned replayable regression corpus is a third, non-decisional category: it is disjoint from the spend-once decision set, returns only privacy-safe aggregates, and cannot produce a decision verdict.
 8. Fix disallowed-tool classification so it is a scored outcome rather than a harness void.
 
 ### Gate
@@ -75,7 +75,7 @@ Search remains before context because context consumes the shared ranking signal
 - Relevance and action reports remain separate and expose every required metric and canonical outcome without private task data.
 - Product labels do not affect verification or scoring, and disallowed-tool/product failures cannot be mistaken for harness voids or correct empty/refusal outcomes.
 - Every later phase can replay an identity-bound visible affected subset; only an identity-complete full run can produce a decision verdict, and the sealed lane refuses subset mode.
-- A full visible baseline records both role adapters under frozen identities. The operator-controlled sealed baseline runs without changing or revealing sealed labels and returns only permitted aggregate evidence.
+- A full visible baseline records both role adapters under frozen identities. Any operator-controlled replayable regression run uses the separate non-decisional corpus without changing or revealing private labels and returns only permitted aggregate evidence.
 
 ## Phase 1: Introduce Exact Reference Evidence
 
@@ -186,7 +186,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - No agent-facing surface calls `ReadReferences(dbPath, name)`.
 - JSON contract tests prove exact/fallback separation.
 - Atomic rollback and freshness recovery tests remain green.
-- Focused sealed tasks show no wrong-target action.
+- Focused visible tasks show no wrong-target action and, when the operator replay corpus exists, its privacy-safe aggregate confirms the same result.
 
 ## Phase 4: Create A Shared Retrieval Reranker And Improve `search`
 
@@ -214,7 +214,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 5. Preserve explicit `symbol`, `file`, `source`, `content`, and region modes.
 6. Add an advanced per-call retrieval override (`auto|lexical|hybrid|semantic`) to the existing search surface; default to automatic policy, and keep process-wide `MILLER_SEMANTIC=off` authoritative.
 7. Preserve semantic RRF as an optional arm after lexical ranking.
-8. Tune weights only from visible calibration tasks, then freeze before sealed replay.
+8. Tune weights only from visible calibration tasks, then freeze before any operator-controlled replay; do not use the Phase 10 spend-once decision set.
 
 ### Gate
 
@@ -257,7 +257,7 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 - p95 stays interactive on the real Miller artifact.
 - Semantic-off behavior is deterministic.
 - No selected candidate is silently omitted.
-- Sealed trajectories reduce redundant follow-up calls without increasing wrong actions.
+- Visible trajectories reduce redundant follow-up calls without increasing wrong actions; private trajectories are never returned to implementation or review sessions.
 
 ## Phase 6: Make `impact` Risk-Ranked And Test-Aware
 
@@ -375,7 +375,7 @@ This lane may begin after Phase 0 while Phases 1–8 continue. It validates RC3 
 
 Begin this lane only after the Phase 4 search and Phase 5 context behavior gates pass, so both models are judged through the retrieval and context behavior they will actually serve.
 
-1. Compare BGE-small and CodeRankEmbed on the exact same sealed search/context tasks.
+1. Compare BGE-small and CodeRankEmbed on the exact same frozen visible search/context tasks. Phase 9 must not consume the spend-once sealed decision set.
 2. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
 3. Choose the default model by agent action efficiency, not embedding benchmark prestige.
 4. Preserve automatic fallback and an explicit zero-work off state.
@@ -392,21 +392,26 @@ Begin this lane only after the Phase 4 search and Phase 5 context behavior gates
 
 ### Work
 
-1. Freeze Miller and Julie candidates.
-2. Run visible calibration, then sealed paired agent tasks.
-3. Compare correctness, wrong actions, relevance, calls, tokens, wall time, and recovery.
-4. Run fast, Scale, Release build, CLI/MCP contract, plugin, and platform package gates.
-5. Run nine fresh Claude implementation reviews, one for each MCP tool, covering its diff, contracts, focused tests, and sealed evaluator rows; classify every claim locally.
-6. Run a separate broad Claude architecture/evidence review after the nine tool passes; it does not replace any of them.
-7. If Miller passes, update the public replacement story and move Julie to maintenance/retirement with a rollback window.
-8. If a gate fails, create a bounded follow-up from the exact failed rows; do not restart architecture or wait by date.
+1. Close Phases 7–9 and every known extractor, semantic-sidecar, platform, and package gap. Add all nine MCP tools to release-package assertions, close evaluator contract ambiguities, define the privacy-safe product-verdict attestation, and prepare conditional Miller migration/replacement and Julie retirement text without publishing it.
+2. Freeze exact Miller and Julie candidates, immutable benchmark snapshots, adapter identities, tool schemas, runtime, selection, and package inputs. No source, docs, prompt, schema, package, or adapter change is allowed after this point.
+3. Run evaluator tests and the complete visible calibration. Visible failures are implementation evidence: fix them, refreeze, and repeat before any sealed spend.
+4. Run nine fresh read-only Claude implementation reviews, one for each MCP tool, covering its diff, contracts, focused tests, and visible evidence only. Claude must never receive sealed prompts, labels, task rows, mappings, answers, evidence, trajectories, or scorer rows.
+5. Run a separate fresh broad Claude architecture/evidence review after all nine tool passes; it does not replace any tool review.
+6. Classify every review claim locally. Apply accepted fixes, rerun the affected review, and restart from the candidate freeze whenever code, contracts, docs, prompts, schemas, packages, or adapter identity changes.
+7. Run fast, Scale, Release build, evaluator, CLI/MCP contract, plugin, sync, Native AOT, and local package gates on the final frozen candidate.
+8. With explicit approval, push the frozen branch and run the package-only four-platform workflow against that exact ref. Download and verify every artifact; do not publish or promote.
+9. With explicit operator and spend-once approval, run the sealed paired decision exactly once. The implementation/review session supplies no private task data and never inspects the operator root.
+10. Accept only the allowlisted safe aggregate plus the approved hash-bound product-verdict attestation. Compare correctness, wrong actions, relevance, calls, tokens, wall time, and recovery from those privacy-safe outputs.
+11. If every gate passes, prepare the already-reviewed candidate for local merge and activate the prepared replacement/retirement documentation. If the sealed gate fails, stop without inspecting private rows or patching under the spent identity.
 
 ### Gate
 
 - Miller wins or ties every required workflow and has no P0/P1 correctness blocker.
 - Julie-only behaviors are either ported, intentionally rejected with evidence, or owned by another component.
 - Every tool-specific Claude implementation pass and the broad final review has a validated disposition record.
-- The release candidate is clean, reproducible, and platform-verified.
+- The release candidate is clean, reproducible, locally verified, and passes the approval-gated four-platform package workflow at the frozen commit.
+- The sealed safe aggregate reports a full-scope pass with zero unresolved voids, and the approved product attestation binds that verdict to Miller without revealing neutral-role mapping or private evidence.
+- Conditional replacement and retirement docs are part of the frozen reviewed candidate; no post-decision source or documentation change alters the packaged identity.
 
 ## Architecture Quality
 
