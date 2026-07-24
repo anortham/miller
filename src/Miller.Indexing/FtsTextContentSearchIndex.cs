@@ -212,7 +212,7 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                     continue;
 
                 BestLine bestLine = BestLineAndSnippet(chunk, coverageTermSet, plan.QueryTokens);
-                if (bestLine.DistinctTermCount < plan.RequiredCoverage)
+                if (bestLine.DistinctTermCount < plan.RequiredLineCoverage)
                     continue;
 
                 if (hasTokenPhrase)

@@ -1802,6 +1802,22 @@ class AgentContractTests(unittest.TestCase):
             ["normalizePathKeyForSafetyCheck"],
             [item["symbol"] for item in dev001["symbol_cited"]],
         )
+        self.assertEqual(
+            ["normalizePathKeyForSafetyCheck", "Windows", "POSIX"],
+            dev001["fact_predicates"][0]["all_terms"],
+        )
+        self.assertTrue(
+            {
+                "1bb0dac1a85e3eebe184db4ed33776bb",
+                "d06c0ca7beb79f3de56a0dd9a37056af",
+            }.issubset(
+                {
+                    action["target"]["symbol_id"]
+                    for action in dev001["acceptable_actions"]
+                    if action["kind"] == "inspect_symbol"
+                }
+            )
+        )
 
         dev002 = tasks["dev-002"]
         self.assertEqual(
@@ -1818,6 +1834,10 @@ class AgentContractTests(unittest.TestCase):
             {"token-baseline", "token baseline"},
             set(dev003["fact_predicates"][0]["any_terms"]),
         )
+        self.assertEqual(
+            ["in-memory", "SQLite"],
+            dev003["fact_predicates"][0]["all_terms"],
+        )
         self.assertIn(
             "b04df60c3f3eeb41efe4e0ee280f9ec2",
             {
@@ -1830,7 +1850,15 @@ class AgentContractTests(unittest.TestCase):
         dev004 = tasks["dev-004"]
         self.assertEqual(3, len(dev004["fact_predicates"]))
         self.assertIn(
-            "b8d481930d1990215014fb72bcb11391",
+            "d7eda59d33e319625f0ef3d05f8e7319",
+            {
+                action["target"]["symbol_id"]
+                for action in dev004["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
+        self.assertIn(
+            "f0228ffa1f8cc6d93563042e072b669d",
             {
                 action["target"]["symbol_id"]
                 for action in dev004["acceptable_actions"]
@@ -1846,6 +1874,14 @@ class AgentContractTests(unittest.TestCase):
                 action["target"]["symbol_id"]
                 for action in dev005["acceptable_actions"]
                 if action["kind"] == "inspect_symbol"
+            },
+        )
+        self.assertIn(
+            "package.json",
+            {
+                action["target"]["path"]
+                for action in dev005["acceptable_actions"]
+                if action["kind"] == "inspect_file"
             },
         )
 
@@ -1954,6 +1990,14 @@ class AgentContractTests(unittest.TestCase):
         dev015 = tasks["dev-015"]
         self.assertTrue(
             any(action["kind"] == "inspect_symbol" for action in dev015["acceptable_actions"])
+        )
+        self.assertIn(
+            ("src/scanner.c", "80cc58e7c48d034967766f777a754058"),
+            {
+                (action["target"].get("path"), action["target"].get("symbol_id"))
+                for action in dev015["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
         )
 
     def test_visible_corpus_labels_resolve_in_declared_frozen_snapshots(self) -> None:

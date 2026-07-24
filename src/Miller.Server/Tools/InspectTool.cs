@@ -701,7 +701,7 @@ public sealed class InspectTool
             w.WriteStartObject();
 
             w.WritePropertyName("symbol");
-            WriteSymbolObject(w, sym, detail);
+            WriteSymbolObject(w, sym, detail, SignatureLimit(sym, depth));
 
             if (depth != InspectDepth.Summary)
             {
@@ -1278,7 +1278,11 @@ public sealed class InspectTool
         w.WriteEndArray();
     }
 
-    private static void WriteSymbolObject(Utf8JsonWriter w, IndexedSymbol s, SymbolDetail? detail)
+    private static void WriteSymbolObject(
+        Utf8JsonWriter w,
+        IndexedSymbol s,
+        SymbolDetail? detail,
+        int signatureMaxLength = ToolRenderLimits.SignatureMaxLength)
     {
         w.WriteStartObject();
         w.WriteString("name", s.Name);
@@ -1288,7 +1292,7 @@ public sealed class InspectTool
         if (s.Signature is null) w.WriteNull("signature");
         else w.WriteString(
             "signature",
-            Truncate(InlineSignature(s.Signature), ToolRenderLimits.SignatureMaxLength));
+            Truncate(InlineSignature(s.Signature), signatureMaxLength));
         w.WriteString("symbol_id", s.SymbolId);
         if (detail is not null)
         {

@@ -14,8 +14,8 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["normalizePathKeyForSafetyCheck", "normalizeWindowsPathKey", "normalizePosixPathKey"],
-          "evidence_anchor_ids": ["anchor-001"]
+          "all_terms": ["normalizePathKeyForSafetyCheck", "Windows", "POSIX"],
+          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
         }
       ],
       "path_cited": [
@@ -40,6 +40,22 @@
           "line_start": 165,
           "line_end": 170,
           "relevance_grade": 3
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "src/workspace.ts",
+          "symbol": "normalizePosixPathKey",
+          "line_start": 155,
+          "line_end": 159,
+          "relevance_grade": 3
+        },
+        {
+          "anchor_id": "anchor-003",
+          "path": "src/workspace.ts",
+          "symbol": "normalizeWindowsPathKey",
+          "line_start": 161,
+          "line_end": 163,
+          "relevance_grade": 3
         }
       ],
       "forbidden_claims": ["uses one case-sensitive normalization path on every platform"],
@@ -59,6 +75,20 @@
           "target": {"symbol_id": "9adead9002cc2e904093605dc305367c"},
           "requirement_group": "rename-normalizer",
           "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "1bb0dac1a85e3eebe184db4ed33776bb"},
+          "requirement_group": "resolve-normalizer",
+          "evidence_anchor_ids": ["anchor-003"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "d06c0ca7beb79f3de56a0dd9a37056af"},
+          "requirement_group": "resolve-normalizer",
+          "evidence_anchor_ids": ["anchor-002"]
         }
       ],
       "forbidden_actions": [
@@ -147,7 +177,7 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["in-memory", "SQLite-vector"],
+          "all_terms": ["in-memory", "SQLite"],
           "any_terms": ["token-baseline", "token baseline"],
           "evidence_anchor_ids": ["anchor-001"]
         }
@@ -282,7 +312,7 @@
         {
           "action_id": "action-002",
           "kind": "inspect_symbol",
-          "target": {"symbol_id": "b8d481930d1990215014fb72bcb11391"},
+          "target": {"symbol_id": "d7eda59d33e319625f0ef3d05f8e7319"},
           "requirement_group": "recover-workspace",
           "evidence_anchor_ids": ["anchor-001"]
         },
@@ -307,6 +337,13 @@
           "action_id": "action-005",
           "kind": "inspect_symbol",
           "target": {"symbol_id": "9a6b168ab9bc297c7bba54a270d9c481"},
+          "requirement_group": "recover-workspace",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-006",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "f0228ffa1f8cc6d93563042e072b669d"},
           "requirement_group": "recover-workspace",
           "evidence_anchor_ids": ["anchor-001"]
         }
@@ -382,6 +419,13 @@
           "action_id": "action-003",
           "kind": "inspect_symbol",
           "target": {"symbol_id": "84b9fb5025910b0190926e5a0c67ea92"},
+          "requirement_group": "find-version-properties",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_file",
+          "target": {"path": "package.json"},
           "requirement_group": "find-version-properties",
           "evidence_anchor_ids": ["anchor-001"]
         }
@@ -1219,6 +1263,15 @@
           "action_id": "action-002",
           "kind": "inspect_symbol",
           "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "requirement_group": "refuse-isolated-abi-rename"
+        },
+        {
+          "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {
+            "path": "src/scanner.c",
+            "symbol_id": "80cc58e7c48d034967766f777a754058"
+          },
           "requirement_group": "refuse-isolated-abi-rename"
         }
       ],

@@ -162,7 +162,7 @@ public sealed class ContentSearchIndex
 
             double score = hasTokenPhrase ? rawScore * TokenPhraseBoost : rawScore;
             BestLineMatch bestLine = BestLineAndSnippet(entry.Lines, coverageTermSet, plan.QueryTokens);
-            if (bestLine.DistinctTermCount < plan.RequiredCoverage)
+            if (bestLine.DistinctTermCount < plan.RequiredLineCoverage)
                 continue;
 
             hits.Add(new ScoredHit(docId,

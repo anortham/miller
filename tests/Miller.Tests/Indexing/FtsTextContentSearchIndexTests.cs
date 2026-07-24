@@ -222,6 +222,37 @@ public sealed class FtsTextContentSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void Search_LongNaturalLanguageQueryMatchesWhenCoverageSpansNearbyLines()
+    {
+        const string query = "captured failing Cargo test stdout fixture failed tests passed ignored";
+        const string sourceText = """
+            Parser fixtures captured verbatim from real cargo output.
+            private const string FailingStdout =
+                "test tests::explicit_boom ... FAILED\n" +
+                "test result: FAILED. 1 passed; 2 failed; 1 ignored";
+            """;
+        var memoryIndex = ContentSearchIndex.Build(
+            [new ContentDocument(0, "tests/CargoTestOutputTests.cs", sourceText)]);
+        Assert.Equal(
+            "tests/CargoTestOutputTests.cs",
+            Assert.Single(memoryIndex.Search(query, limit: 10)).Path);
+
+        using var fx = BuildFixture(
+            ("tests/CargoTestOutputTests.cs", "csharp", true, sourceText));
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 7);
+        var index = FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 7);
+
+        TextContentSearchHit hit = Assert.Single(index.Search(
+            query,
+            TextContentKind.WorkspaceSource,
+            limit: 10,
+            excludeTests: false));
+
+        Assert.Equal("tests/CargoTestOutputTests.cs", hit.Path);
+        Assert.Contains("1 passed; 2 failed; 1 ignored", hit.Snippet);
+    }
+
+    [Fact]
     public void Search_ShortMultiTermQueryStillRequiresAllMeaningfulTerms()
     {
         using var fx = BuildFixture(

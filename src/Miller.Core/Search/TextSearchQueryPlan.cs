@@ -16,13 +16,15 @@ public sealed class TextSearchQueryPlan
         string[] distinctTerms,
         string[] coverageTerms,
         bool requiresTokenPhrase,
-        int requiredCoverage)
+        int requiredCoverage,
+        int requiredLineCoverage)
     {
         QueryTokens = queryTokens;
         DistinctTerms = distinctTerms;
         CoverageTerms = coverageTerms;
         RequiresTokenPhrase = requiresTokenPhrase;
         RequiredCoverage = requiredCoverage;
+        RequiredLineCoverage = requiredLineCoverage;
     }
 
     public IReadOnlyList<string> QueryTokens { get; }
@@ -34,6 +36,8 @@ public sealed class TextSearchQueryPlan
     public bool RequiresTokenPhrase { get; }
 
     public int RequiredCoverage { get; }
+
+    public int RequiredLineCoverage { get; }
 
     public static TextSearchQueryPlan? Create(string query)
     {
@@ -56,13 +60,17 @@ public sealed class TextSearchQueryPlan
         int requiredCoverage = requiresTokenPhrase
             ? coverageTerms.Length
             : RequiredCoverageTermCount(coverageTerms.Length);
+        int requiredLineCoverage = requiresTokenPhrase
+            ? requiredCoverage
+            : Math.Min(requiredCoverage, 4);
 
         return new TextSearchQueryPlan(
             queryTokens.ToArray(),
             distinctTerms.ToArray(),
             coverageTerms,
             requiresTokenPhrase,
-            requiredCoverage);
+            requiredCoverage,
+            requiredLineCoverage);
     }
 
     private static string[] CoverageTermsFor(IReadOnlyList<string> distinctTerms)
