@@ -8,8 +8,12 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
+[CollectionDefinition(nameof(ContextPerformanceCollection), DisableParallelization = true)]
+public sealed class ContextPerformanceCollection;
+
 /// <summary>Proves actionable context and impact behavior over a real extractor artifact.</summary>
 [Trait("Category", "Scale")]
+[Collection(nameof(ContextPerformanceCollection))]
 public sealed class LiveContextImpactTests
 {
     [Fact]

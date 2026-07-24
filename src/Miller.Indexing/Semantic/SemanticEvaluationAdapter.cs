@@ -152,33 +152,42 @@ public sealed class SemanticEvaluationAdapter
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        var payload = new
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
         {
-            schema = Schema,
-            version = Version,
-            arm_id = CodeRankArmId,
-            encoder_fingerprint = MillerSemanticContract.EncoderFingerprint(Encoder),
-            model_id = Encoder.ModelId,
-            model_revision = Encoder.ModelRevision,
-            model_sha256 = Encoder.ModelSha256,
-            dims = Encoder.Dims,
-            pooling = Encoder.Pooling,
-            normalization = Normalization,
-            query_instruction = Encoder.QueryInstruction,
-            document_instruction = Encoder.DocumentInstruction,
-            storage_schema = Encoder.StorageSchema,
-            corpus_generation = GenerationIdentity.CorpusGeneration,
-            fusion_profile = GenerationIdentity.FusionProfile,
-            evaluation_config_sha256 = SourceSha256,
-            producer = new
-            {
-                executable = ProducerExecutable,
-                arguments = ProducerArguments,
-                environment_names = ProducerEnvironment.Keys.Order(StringComparer.Ordinal).ToArray(),
-            },
-        };
+            writer.WriteStartObject();
+            writer.WriteString("schema", Schema);
+            writer.WriteNumber("version", Version);
+            writer.WriteString("arm_id", CodeRankArmId);
+            writer.WriteString("encoder_fingerprint", MillerSemanticContract.EncoderFingerprint(Encoder));
+            writer.WriteString("model_id", Encoder.ModelId);
+            writer.WriteString("model_revision", Encoder.ModelRevision);
+            writer.WriteString("model_sha256", Encoder.ModelSha256);
+            writer.WriteNumber("dims", Encoder.Dims);
+            writer.WriteString("pooling", Encoder.Pooling);
+            writer.WriteString("normalization", Normalization);
+            writer.WriteString("query_instruction", Encoder.QueryInstruction);
+            writer.WriteString("document_instruction", Encoder.DocumentInstruction);
+            writer.WriteString("storage_schema", Encoder.StorageSchema);
+            writer.WriteString("corpus_generation", GenerationIdentity.CorpusGeneration);
+            writer.WriteString("fusion_profile", GenerationIdentity.FusionProfile);
+            writer.WriteString("evaluation_config_sha256", SourceSha256);
+            writer.WriteStartObject("producer");
+            writer.WriteString("executable", ProducerExecutable);
+            writer.WriteStartArray("arguments");
+            foreach (string argument in ProducerArguments)
+                writer.WriteStringValue(argument);
+            writer.WriteEndArray();
+            writer.WriteStartArray("environment_names");
+            foreach (string name in ProducerEnvironment.Keys.Order(StringComparer.Ordinal))
+                writer.WriteStringValue(name);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
 
-        File.WriteAllText(path, JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        stream.WriteByte((byte)'\n');
+        File.WriteAllBytes(path, stream.ToArray());
     }
 
     private static void EnsureProperties(JsonElement value, string objectName, IReadOnlyList<string> allowed)
