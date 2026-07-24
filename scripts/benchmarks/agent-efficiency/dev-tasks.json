@@ -122,6 +122,13 @@
           "target": {"symbol_id": "ebee49b5754d52e765c08aea33c0fd49"},
           "requirement_group": "resolve-factory",
           "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-002",
+          "kind": "assemble_context",
+          "target": {"symbol_id": "ebee49b5754d52e765c08aea33c0fd49"},
+          "requirement_group": "resolve-factory",
+          "evidence_anchor_ids": ["anchor-001"]
         }
       ],
       "forbidden_actions": [],
@@ -253,7 +260,7 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["0.24.0", ".version-bump.json", "five"],
+          "all_terms": ["0.24.0", ".version-bump.json"],
           "evidence_anchor_ids": ["anchor-001", "anchor-002"]
         }
       ],
@@ -370,7 +377,7 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["externals", "tree_sitter_razor_external_scanner_scan", "scan_markup_tag"],
+          "all_terms": ["scan_markup_tag"],
           "evidence_anchor_ids": ["anchor-001", "anchor-002"]
         }
       ],
@@ -389,6 +396,11 @@
       "symbol_cited": [
         {
           "predicate_id": "symbol-001",
+          "symbol": "externals",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "predicate_id": "symbol-002",
           "symbol": "tree_sitter_razor_external_scanner_scan",
           "evidence_anchor_ids": ["anchor-002"]
         }
@@ -459,7 +471,7 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["c_sharp", "LANGUAGE", "tree_sitter_c_sharp", "test_can_load_grammar"],
+          "all_terms": ["c_sharp", "LANGUAGE", "tree_sitter_c_sharp"],
           "evidence_anchor_ids": ["anchor-001", "anchor-002"]
         }
       ],
@@ -475,7 +487,13 @@
           "evidence_anchor_ids": ["anchor-002"]
         }
       ],
-      "symbol_cited": [],
+      "symbol_cited": [
+        {
+          "predicate_id": "symbol-001",
+          "symbol": "test_can_load_grammar",
+          "evidence_anchor_ids": ["anchor-002"]
+        }
+      ],
       "evidence_anchors": [
         {
           "anchor_id": "anchor-001",
@@ -528,7 +546,7 @@
           "predicate_id": "fact-001",
           "source": "answer",
           "all_terms": ["registryPathKey", "comparablePathKey"],
-          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+          "evidence_anchor_ids": ["anchor-002", "anchor-003"]
         }
       ],
       "path_cited": [
@@ -543,13 +561,7 @@
           "evidence_anchor_ids": ["anchor-003"]
         }
       ],
-      "symbol_cited": [
-        {
-          "predicate_id": "symbol-001",
-          "symbol": "normalizePathKeyForSafetyCheck",
-          "evidence_anchor_ids": ["anchor-001"]
-        }
-      ],
+      "symbol_cited": [],
       "evidence_anchors": [
         {
           "anchor_id": "anchor-001",
@@ -584,11 +596,24 @@
           "action_id": "action-001",
           "kind": "trace_callers",
           "target": {"symbol_id": "9adead9002cc2e904093605dc305367c"},
-          "requirement_group": "trace-normalizer",
-          "evidence_anchor_ids": ["anchor-001"]
+          "requirement_group": "trace-normalizer"
         },
         {
           "action_id": "action-002",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "54550753cb9428458163838a7319e831"},
+          "requirement_group": "cite-registry-caller",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "f0228ffa1f8cc6d93563042e072b669d"},
+          "requirement_group": "cite-recovery-caller",
+          "evidence_anchor_ids": ["anchor-003"]
+        },
+        {
+          "action_id": "action-004",
           "kind": "cite_reference_site",
           "target": {
             "reference_site": {
@@ -606,7 +631,7 @@
           "reference_site_ids": ["site-001"]
         },
         {
-          "action_id": "action-003",
+          "action_id": "action-005",
           "kind": "cite_reference_site",
           "target": {
             "reference_site": {
@@ -626,7 +651,7 @@
       ],
       "forbidden_actions": [
         {
-          "action_id": "action-004",
+          "action_id": "action-006",
           "kind": "cite_reference_site",
           "target": {
             "reference_site": {
@@ -682,28 +707,17 @@
           "predicate_id": "fact-001",
           "source": "answer",
           "all_terms": ["tree_sitter_razor_external_scanner_scan", "START_TAG_NAME", "VOID_TAG_NAME", "END_TAG_NAME"],
-          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+          "evidence_anchor_ids": ["anchor-002"]
         }
       ],
       "path_cited": [
         {
           "predicate_id": "path-001",
           "path": "src/scanner.c",
-          "evidence_anchor_ids": ["anchor-001"]
-        },
-        {
-          "predicate_id": "path-002",
-          "path": "src/scanner.c",
           "evidence_anchor_ids": ["anchor-002"]
         }
       ],
-      "symbol_cited": [
-        {
-          "predicate_id": "symbol-001",
-          "symbol": "scan_markup_tag",
-          "evidence_anchor_ids": ["anchor-001"]
-        }
-      ],
+      "symbol_cited": [],
       "evidence_anchors": [
         {
           "anchor_id": "anchor-001",
@@ -730,15 +744,13 @@
           "action_id": "action-001",
           "kind": "trace_callers",
           "target": {"symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"},
-          "requirement_group": "trace-caller",
-          "evidence_anchor_ids": ["anchor-001"]
+          "requirement_group": "trace-production-call"
         },
         {
           "action_id": "action-002",
           "kind": "trace_callees",
           "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
-          "requirement_group": "trace-dispatch",
-          "evidence_anchor_ids": ["anchor-002"]
+          "requirement_group": "trace-production-call"
         },
         {
           "action_id": "action-003",
@@ -747,11 +759,17 @@
             "symbol_id": "80cc58e7c48d034967766f777a754058",
             "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"
           },
-          "requirement_group": "trace-call-path",
-          "evidence_anchor_ids": ["anchor-001", "anchor-002"]
+          "requirement_group": "trace-production-call"
         },
         {
           "action_id": "action-004",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "requirement_group": "read-token-conditions",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-005",
           "kind": "cite_reference_site",
           "target": {
             "reference_site": {
@@ -798,7 +816,7 @@
           "predicate_id": "fact-001",
           "source": "answer",
           "all_terms": ["bindings/node/binding_test.js", "bindings/rust/lib.rs", "test_can_load_grammar"],
-          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+          "evidence_anchor_ids": ["anchor-002", "anchor-003"]
         }
       ],
       "path_cited": [
@@ -813,13 +831,7 @@
           "evidence_anchor_ids": ["anchor-003"]
         }
       ],
-      "symbol_cited": [
-        {
-          "predicate_id": "symbol-001",
-          "symbol": "c_sharp",
-          "evidence_anchor_ids": ["anchor-001"]
-        }
-      ],
+      "symbol_cited": [],
       "evidence_anchors": [
         {
           "anchor_id": "anchor-001",
@@ -880,8 +892,9 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["tests/version-audit.test.mjs", "tests/version-sync.test.mjs", "DRIFT DETECTED"],
-          "evidence_anchor_ids": ["anchor-001", "anchor-002", "anchor-003"]
+          "all_terms": ["tests/version-audit.test.mjs", "tests/version-sync.test.mjs"],
+          "any_terms": ["DRIFT DETECTED", "manifest drift", "drift"],
+          "evidence_anchor_ids": ["anchor-002", "anchor-003"]
         }
       ],
       "path_cited": [
@@ -951,7 +964,7 @@
       "language": "csharp",
       "workflow_class": "docs_config",
       "evidence_critical": false,
-      "prompt": "Read the captured failing Cargo test stdout fixture and report the two failed test names plus the passed, failed, and ignored totals.",
+      "prompt": "Read the captured failing Cargo test stdout fixture embedded in the Cargo test-output parser tests and report the two failed test names plus the passed, failed, and ignored totals.",
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
@@ -1062,11 +1075,17 @@
           "kind": "refuse_unsafe",
           "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
           "requirement_group": "refuse-isolated-abi-rename"
+        },
+        {
+          "action_id": "action-002",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
+          "requirement_group": "refuse-isolated-abi-rename"
         }
       ],
       "forbidden_actions": [
         {
-          "action_id": "action-002",
+          "action_id": "action-003",
           "kind": "propose_rename",
           "target": {"symbol_id": "80cc58e7c48d034967766f777a754058"},
           "reason": "Renaming only the exported scanner entry point breaks its generated-parser ABI contract."

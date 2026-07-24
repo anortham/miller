@@ -271,6 +271,14 @@ class AgentContractTests(unittest.TestCase):
             "For a whole-file inspect_file or assemble_context action, submit the path only",
             guidance,
         )
+        self.assertIn(
+            "For a supported answer use status answered; for a correct empty result use not_found; for a safety refusal use blocked",
+            guidance,
+        )
+        self.assertIn(
+            "A captured-output fixture remains read_log even when it is embedded in source code",
+            guidance,
+        )
         self.assertIn("inspect_file means a file, document, or config fact", guidance)
         self.assertIn("select_tests means tests selected for the task", guidance)
         self.assertIn("read_log means evidence from captured logs or command output", guidance)
@@ -697,6 +705,14 @@ class AgentContractTests(unittest.TestCase):
                             "symbol_id": "python:src/factory.py:create_candidate"
                         },
                         "requirement_group": "outcome",
+                    },
+                    {
+                        "action_id": "action-002",
+                        "kind": "inspect_symbol",
+                        "target": {
+                            "symbol_id": "python:src/factory.py:create_candidate"
+                        },
+                        "requirement_group": "outcome",
                     }
                 ],
                 "forbidden_actions": [],
@@ -743,12 +759,27 @@ class AgentContractTests(unittest.TestCase):
                 {**refusal_answer, "status": "not_found"},
                 root,
             )
-            conflicting_refusal_answer = {
+            grounded_refusal_answer = {
                 **refusal_answer,
                 "actions": [
                     *refusal_answer["actions"],
                     {
                         "kind": "inspect_symbol",
+                        "target": {"symbol_id": "python:src/factory.py:create_candidate"},
+                    },
+                ],
+            }
+            grounded_refusal = verify_answer(
+                refusal_task,
+                grounded_refusal_answer,
+                root,
+            )
+            conflicting_refusal_answer = {
+                **refusal_answer,
+                "actions": [
+                    *refusal_answer["actions"],
+                    {
+                        "kind": "propose_rename",
                         "target": {"symbol_id": "python:src/factory.py:create_candidate"},
                     },
                 ],
@@ -760,6 +791,8 @@ class AgentContractTests(unittest.TestCase):
             )
         self.assertEqual("wrong_answer", wrong_empty.observed_outcome)
         self.assertEqual("wrong_answer", wrong_refusal.observed_outcome)
+        self.assertTrue(grounded_refusal.passed)
+        self.assertEqual("refusal", grounded_refusal.observed_outcome)
         self.assertEqual("wrong_answer", conflicting_refusal.observed_outcome)
         self.assertEqual(1, conflicting_refusal.wrong_action_count)
         self.assertIn("conflicting", "\n".join(conflicting_refusal.failures))
@@ -1745,6 +1778,106 @@ class AgentContractTests(unittest.TestCase):
                 for task in ambiguity_tasks
                 for action in task.acceptable_actions
             )
+        )
+
+    def test_visible_corpus_labels_match_each_requested_semantic_outcome(self) -> None:
+        manifest = json.loads((BENCHMARK_ROOT / "dev-tasks.json").read_text(encoding="utf-8"))
+        tasks = {task["task_id"]: task for task in manifest["tasks"]}
+
+        dev001 = tasks["dev-001"]
+        self.assertEqual(
+            ["normalizePathKeyForSafetyCheck"],
+            [item["symbol"] for item in dev001["symbol_cited"]],
+        )
+
+        dev002 = tasks["dev-002"]
+        self.assertEqual(
+            {"inspect_symbol", "assemble_context"},
+            {action["kind"] for action in dev002["acceptable_actions"]},
+        )
+        self.assertEqual(
+            {"resolve-factory"},
+            {action["requirement_group"] for action in dev002["acceptable_actions"]},
+        )
+
+        dev005 = tasks["dev-005"]
+        self.assertNotIn("five", dev005["fact_predicates"][0]["all_terms"])
+
+        dev007 = tasks["dev-007"]
+        self.assertNotIn("externals", dev007["fact_predicates"][0]["all_terms"])
+        self.assertNotIn(
+            "tree_sitter_razor_external_scanner_scan",
+            dev007["fact_predicates"][0]["all_terms"],
+        )
+        self.assertIn("externals", [item["symbol"] for item in dev007["symbol_cited"]])
+
+        dev008 = tasks["dev-008"]
+        self.assertNotIn("test_can_load_grammar", dev008["fact_predicates"][0]["all_terms"])
+        self.assertEqual(
+            ["test_can_load_grammar"],
+            [item["symbol"] for item in dev008["symbol_cited"]],
+        )
+
+        dev009 = tasks["dev-009"]
+        self.assertEqual([], dev009["symbol_cited"])
+        self.assertEqual(
+            ["anchor-002", "anchor-003"],
+            dev009["fact_predicates"][0]["evidence_anchor_ids"],
+        )
+        self.assertEqual(
+            {
+                "54550753cb9428458163838a7319e831",
+                "f0228ffa1f8cc6d93563042e072b669d",
+            },
+            {
+                action["target"]["symbol_id"]
+                for action in dev009["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
+
+        dev010 = tasks["dev-010"]
+        trace_actions = [
+            action
+            for action in dev010["acceptable_actions"]
+            if action["kind"] in {"trace_callers", "trace_callees", "trace_call_path"}
+        ]
+        self.assertEqual(
+            {"trace-production-call"},
+            {action["requirement_group"] for action in trace_actions},
+        )
+        self.assertTrue(
+            any(
+                action["kind"] == "inspect_symbol"
+                and action["requirement_group"] == "read-token-conditions"
+                for action in dev010["acceptable_actions"]
+            )
+        )
+
+        dev011 = tasks["dev-011"]
+        self.assertEqual([], dev011["symbol_cited"])
+        self.assertEqual(
+            ["anchor-002", "anchor-003"],
+            dev011["fact_predicates"][0]["evidence_anchor_ids"],
+        )
+
+        dev012 = tasks["dev-012"]
+        self.assertEqual(
+            ["anchor-002", "anchor-003"],
+            dev012["fact_predicates"][0]["evidence_anchor_ids"],
+        )
+        self.assertEqual(
+            ["DRIFT DETECTED", "manifest drift", "drift"],
+            dev012["fact_predicates"][0]["any_terms"],
+        )
+
+        dev013 = tasks["dev-013"]
+        self.assertIn("embedded", dev013["prompt"])
+        self.assertEqual("read_log", dev013["acceptable_actions"][0]["kind"])
+
+        dev015 = tasks["dev-015"]
+        self.assertTrue(
+            any(action["kind"] == "inspect_symbol" for action in dev015["acceptable_actions"])
         )
 
     def test_visible_corpus_labels_resolve_in_declared_frozen_snapshots(self) -> None:
