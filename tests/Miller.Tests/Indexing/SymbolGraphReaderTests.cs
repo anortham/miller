@@ -64,7 +64,36 @@ public sealed class SymbolGraphReaderTests
 
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
-        Assert.Contains(edges, e => e.From == ProcessId && e.To == ValidateId && e.Kind == "calls");
+        Assert.Contains(edges, e =>
+            e.From == ProcessId && e.To == ValidateId && e.Kind == "calls" &&
+            e.Source == "relationship" && e.Confidence == 1.0);
+    }
+
+    [Fact]
+    public void Read_TestLinkageMetadata_EmitsExactTypedEdge()
+    {
+        const string sourceId = "51000000000000000000000000000001";
+        const string testId = "51000000000000000000000000000002";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"test_linkage\":{\"symbol_ids\":[\"" + sourceId +
+                        "\"],\"confidence\":0.98}}",
+                },
+            ]);
+
+        GraphEdge edge = Assert.Single(
+            SymbolGraphReader.Read(fx.DbPath, static _ => []),
+            candidate => candidate.From == testId && candidate.To == sourceId);
+
+        Assert.Equal("test_linkage", edge.Kind);
+        Assert.Equal("test_linkage", edge.Source);
+        Assert.Equal(0.98, edge.Confidence);
     }
 
     [Fact]
@@ -80,7 +109,9 @@ public sealed class SymbolGraphReaderTests
 
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
-        Assert.Contains(edges, e => e.From == ProcessId && e.To == ValidateId && e.Kind == "call");
+        Assert.Contains(edges, e =>
+            e.From == ProcessId && e.To == ValidateId && e.Kind == "call" &&
+            e.Source == "identifier_name" && e.Confidence == 0.5);
     }
 
     [Fact]
@@ -196,7 +227,9 @@ public sealed class SymbolGraphReaderTests
 
         var edges = SymbolGraphReader.Read(fx.DbPath, ResolverFor(NameMap));
 
-        Assert.Contains(edges, e => e.From == ProgramId && e.To == FooId && e.Kind == "instantiates");
+        Assert.Contains(edges, e =>
+            e.From == ProgramId && e.To == FooId && e.Kind == "instantiates" &&
+            e.Source == "pending_resolution");
     }
 
     [Fact]

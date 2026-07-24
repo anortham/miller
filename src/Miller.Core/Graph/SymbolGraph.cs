@@ -3,7 +3,7 @@ namespace Miller.Core.Graph;
 /// <summary>One vertex in the dependency graph: a symbol id plus julie's cross-language test flag.</summary>
 /// <param name="Id">The symbol's resolved id (the graph never invents ids; these come from the index).</param>
 /// <param name="IsTest">True when <c>symbols.metadata.is_test</c> marked this symbol a test (verified fact #5).</param>
-public sealed record GraphNode(string Id, bool IsTest);
+public sealed record GraphNode(string Id, bool IsTest, string? Visibility = null);
 
 /// <summary>
 /// One directed dependency edge <c>From → To</c> meaning "<c>From</c> depends on <c>To</c>" (From calls/uses To;
@@ -13,12 +13,33 @@ public sealed record GraphNode(string Id, bool IsTest);
 /// <param name="From">The dependent symbol id (source of the edge).</param>
 /// <param name="To">The depended-upon symbol id (target of the edge).</param>
 /// <param name="Kind">The relationship label, for display only.</param>
-public sealed record GraphEdge(string From, string To, string Kind);
+public sealed record GraphEdge(
+    string From,
+    string To,
+    string Kind,
+    double Confidence = 1.0,
+    string Source = "relationship");
+
+public sealed record GraphNeighbour(
+    string Id,
+    string EdgeKind,
+    double EdgeConfidence,
+    string EdgeSource,
+    int Centrality,
+    string? Visibility);
 
 /// <summary>A symbol reached by <see cref="SymbolGraph.Reach"/>, tagged with its minimum hop distance.</summary>
 /// <param name="Id">The reached symbol's id (never one of the BFS start ids).</param>
 /// <param name="Hop">The shortest number of edges from the nearest start to this node (≥ 1).</param>
-public sealed record ReachedNode(string Id, int Hop);
+public sealed record ReachedNode(
+    string Id,
+    int Hop,
+    string? ReachedVia = null,
+    string? EdgeKind = null,
+    double? EdgeConfidence = null,
+    string? EdgeSource = null,
+    int Centrality = 0,
+    string? Visibility = null);
 
 public sealed record GraphReachResult(
     IReadOnlyList<ReachedNode> Nodes,
@@ -70,19 +91,29 @@ public interface ISymbolGraphReachability
 /// </summary>
 public sealed class SymbolGraph : ISymbolGraphReachability
 {
-    private readonly IReadOnlyDictionary<string, string[]> _dependencies;
-    private readonly IReadOnlyDictionary<string, string[]> _dependents;
+    private readonly IReadOnlyDictionary<string, GraphNeighbour[]> _dependencies;
+    private readonly IReadOnlyDictionary<string, GraphNeighbour[]> _dependents;
+    private readonly IReadOnlyDictionary<string, string[]> _dependencyIds;
+    private readonly IReadOnlyDictionary<string, string[]> _dependentIds;
     private readonly IReadOnlyDictionary<string, bool> _isTest;
 
     private static readonly string[] None = [];
 
     private SymbolGraph(
-        IReadOnlyDictionary<string, string[]> dependencies,
-        IReadOnlyDictionary<string, string[]> dependents,
+        IReadOnlyDictionary<string, GraphNeighbour[]> dependencies,
+        IReadOnlyDictionary<string, GraphNeighbour[]> dependents,
         IReadOnlyDictionary<string, bool> isTest)
     {
         _dependencies = dependencies;
         _dependents = dependents;
+        _dependencyIds = dependencies.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.Select(static neighbour => neighbour.Id).ToArray(),
+            StringComparer.Ordinal);
+        _dependentIds = dependents.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value.Select(static neighbour => neighbour.Id).ToArray(),
+            StringComparer.Ordinal);
         _isTest = isTest;
     }
 
@@ -99,13 +130,17 @@ public sealed class SymbolGraph : ISymbolGraphReachability
         ArgumentNullException.ThrowIfNull(edges);
 
         var isTest = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var visibility = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var node in nodes)
+        {
             isTest[node.Id] = node.IsTest; // last write wins for a duplicated id
+            visibility[node.Id] = node.Visibility;
+        }
 
         // Collect deduped neighbour sets per direction, considering only edges whose BOTH endpoints are known
         // nodes and that are not self-loops.
-        var forward = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-        var reverse = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+        var forward = new Dictionary<string, Dictionary<string, GraphEdge>>(StringComparer.Ordinal);
+        var reverse = new Dictionary<string, Dictionary<string, GraphEdge>>(StringComparer.Ordinal);
 
         foreach (var edge in edges)
         {
@@ -114,29 +149,75 @@ public sealed class SymbolGraph : ISymbolGraphReachability
             if (!isTest.ContainsKey(edge.From) || !isTest.ContainsKey(edge.To))
                 continue; // endpoint not in the node set
 
-            AddNeighbour(forward, edge.From, edge.To);
-            AddNeighbour(reverse, edge.To, edge.From);
+            AddNeighbour(forward, edge.From, edge.To, edge);
+            AddNeighbour(reverse, edge.To, edge.From, edge);
         }
 
-        return new SymbolGraph(Freeze(forward), Freeze(reverse), isTest);
+        return new SymbolGraph(
+            Freeze(forward, forward, reverse, visibility),
+            Freeze(reverse, forward, reverse, visibility),
+            isTest);
     }
 
-    private static void AddNeighbour(Dictionary<string, SortedSet<string>> adjacency, string key, string neighbour)
+    private static void AddNeighbour(
+        Dictionary<string, Dictionary<string, GraphEdge>> adjacency,
+        string key,
+        string neighbour,
+        GraphEdge edge)
     {
-        if (!adjacency.TryGetValue(key, out var set))
+        if (!adjacency.TryGetValue(key, out var neighbours))
         {
-            set = new SortedSet<string>(StringComparer.Ordinal);
-            adjacency[key] = set;
+            neighbours = new Dictionary<string, GraphEdge>(StringComparer.Ordinal);
+            adjacency[key] = neighbours;
         }
-        set.Add(neighbour); // SortedSet dedups and keeps id order
+        if (!neighbours.TryGetValue(neighbour, out GraphEdge? current) || CompareEdge(edge, current) < 0)
+            neighbours[neighbour] = edge;
     }
 
-    private static Dictionary<string, string[]> Freeze(Dictionary<string, SortedSet<string>> adjacency)
+    private static Dictionary<string, GraphNeighbour[]> Freeze(
+        Dictionary<string, Dictionary<string, GraphEdge>> adjacency,
+        Dictionary<string, Dictionary<string, GraphEdge>> forward,
+        Dictionary<string, Dictionary<string, GraphEdge>> reverse,
+        IReadOnlyDictionary<string, string?> visibility)
     {
-        var frozen = new Dictionary<string, string[]>(adjacency.Count, StringComparer.Ordinal);
-        foreach (var (key, set) in adjacency)
-            frozen[key] = [.. set];
+        var frozen = new Dictionary<string, GraphNeighbour[]>(adjacency.Count, StringComparer.Ordinal);
+        foreach (var (key, neighbours) in adjacency)
+        {
+            frozen[key] = neighbours
+                .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => new GraphNeighbour(
+                    pair.Key,
+                    pair.Value.Kind,
+                    pair.Value.Confidence,
+                    pair.Value.Source,
+                    Degree(pair.Key, forward, reverse),
+                    visibility.GetValueOrDefault(pair.Key)))
+                .ToArray();
+        }
         return frozen;
+    }
+
+    private static int Degree(
+        string id,
+        IReadOnlyDictionary<string, Dictionary<string, GraphEdge>> forward,
+        IReadOnlyDictionary<string, Dictionary<string, GraphEdge>> reverse) =>
+        (forward.TryGetValue(id, out var dependencies) ? dependencies.Count : 0) +
+        (reverse.TryGetValue(id, out var dependents) ? dependents.Count : 0);
+
+    private static int CompareEdge(GraphEdge left, GraphEdge right)
+    {
+        int kind = ImpactRanker.RelationshipPriority(left.Kind).CompareTo(
+            ImpactRanker.RelationshipPriority(right.Kind));
+        if (kind != 0)
+            return kind;
+        int source = ImpactRanker.SourcePriority(left.Source).CompareTo(
+            ImpactRanker.SourcePriority(right.Source));
+        if (source != 0)
+            return source;
+        int confidence = right.Confidence.CompareTo(left.Confidence);
+        return confidence != 0
+            ? confidence
+            : StringComparer.Ordinal.Compare(left.Source, right.Source);
     }
 
     /// <summary>
@@ -146,7 +227,9 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     public IReadOnlyList<string> Dependencies(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
-        return _dependencies.TryGetValue(id, out var neighbours) ? neighbours : None;
+        return _dependencyIds.TryGetValue(id, out var neighbours)
+            ? neighbours
+            : None;
     }
 
     /// <summary>
@@ -156,7 +239,9 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     public IReadOnlyList<string> Dependents(string id)
     {
         ArgumentNullException.ThrowIfNull(id);
-        return _dependents.TryGetValue(id, out var neighbours) ? neighbours : None;
+        return _dependentIds.TryGetValue(id, out var neighbours)
+            ? neighbours
+            : None;
     }
 
     /// <summary>True when <paramref name="id"/> is a known node flagged as a test; false otherwise (incl. unknown).</summary>
@@ -192,7 +277,7 @@ public sealed class SymbolGraph : ISymbolGraphReachability
         int maxDepth,
         int limit,
         Direction dir) =>
-        GraphTraversal.ReachWithEvidence(starts, maxDepth, limit, dir, Contains, Neighbours);
+        GraphTraversal.ReachWithEvidence(starts, maxDepth, limit, dir, Contains, NeighbourEvidence);
 
     /// <summary>
     /// The shortest dependency path from <paramref name="from"/> to <paramref name="to"/> as an ordered id list
@@ -217,5 +302,17 @@ public sealed class SymbolGraph : ISymbolGraphReachability
         Direction.Reverse => Dependents(id),
         Direction.Both => Dependencies(id).Concat(Dependents(id)),
         _ => None,
+    };
+
+    private IEnumerable<GraphNeighbour> NeighbourEvidence(string id, Direction dir) => dir switch
+    {
+        Direction.Forward => _dependencies.GetValueOrDefault(id) ?? [],
+        Direction.Reverse => _dependents.GetValueOrDefault(id) ?? [],
+        Direction.Both => (_dependencies.GetValueOrDefault(id) ?? [])
+            .Concat(_dependents.GetValueOrDefault(id) ?? [])
+            .GroupBy(static neighbour => neighbour.Id, StringComparer.Ordinal)
+            .Select(static group => group.OrderBy(
+                neighbour => ImpactRanker.RelationshipPriority(neighbour.EdgeKind)).First()),
+        _ => [],
     };
 }

@@ -1,8 +1,8 @@
 # Miller impact traversal evidence JSON v1 contract
 
-`miller impact --json --from-index-revision <N>` adds a `traversal` object to the index-revision delta envelope.
-It reports whether Miller's bounded reverse traversal exhausted the graph frontier it could see, which changed
-paths seeded that traversal, and which changed paths could not seed it.
+Every result-bearing `impact --json` response includes a `traversal` object. It reports whether Miller's bounded
+reverse traversal exhausted the graph frontier it could see. Changed-path and revision-delta modes also report
+which paths seeded traversal, could not seed it, or were deleted.
 
 > **Scope of an exhausted result:** `status: "exhausted"` is only relative to the reported `seeded_paths` and
 > the current indexed edges. Dynamic dispatch, reflection, configuration, generated code, unresolved references,
@@ -45,7 +45,8 @@ artifact-generation guard, usage errors, and `delta_status` rules.
     "truncated_by_depth": false,
     "truncated_by_limit": false,
     "seeded_paths": ["src/Service.cs"],
-    "unseeded_paths": ["fixtures/sample-data.csv"]
+    "unseeded_paths": ["fixtures/sample-data.csv"],
+    "deleted_paths": ["src/Removed.cs"]
   }
 }
 ```
@@ -71,6 +72,8 @@ artifact-generation guard, usage errors, and `delta_status` rules.
 - `unseeded_paths` (array of strings): changed paths that had no current indexed symbols and therefore did not
   seed traversal. These are separate warnings; they do not make an otherwise exhausted graph traversal cover
   those paths.
+- `deleted_paths` (array of strings): changed paths whose latest revision-journal event in the requested span is
+  deletion. They are not current-file seed failures and are never graph seeds.
 
 ## Status and reason matrix
 
@@ -106,5 +109,8 @@ When `status` is `not_run`, both truncation flags are false, both counts are 0, 
 
 ## Stability
 
-Schema v1 freezes the ten traversal field names and the status/reason pairs above. A breaking change requires a
+Schema v1 freezes the eleven traversal field names and the status/reason pairs above. A breaking change requires a
 new `schema_version` and contract document.
+
+Compact output begins with the same status, reason, effective bounds, counts, and truncation flags. It is capped
+at 6,000 characters and names JSON as the complete machine-readable channel when result rows are omitted.

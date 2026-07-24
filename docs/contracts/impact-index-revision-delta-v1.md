@@ -1,6 +1,7 @@
 # Miller impact index-revision delta JSON v1 contract
 
-`miller impact --json --from-index-revision <N>` returns a typed delta envelope describing every watched,
+`miller impact --json --from-index-revision <N>` and MCP `impact(from_index_revision=N)` return the same typed
+delta envelope describing every watched,
 non-ignored file that changed on disk between a base index revision `N` and Miller's current index revision.
 It is the machine channel Eros continuous testing uses to decide, after Miller's index revision moves, whether a
 poll should skip, narrow, or fall back to a full run — sourced from Miller's own record of per-file change
@@ -31,6 +32,10 @@ The mode is exclusive: combining `--from-index-revision` with a symbol target, `
 `--git`/`--base`/`--staged` is a usage error (exit 2). A missing, negative, or non-integer revision value is a
 usage error (exit 2).
 
+The MCP mode uses `from_index_revision` and optional `from_artifact_id`; it is exclusive with `target`,
+`changed_paths`, `diff`, and `git`. MCP and CLI both prepare the revision snapshot and render it through the
+same impact core.
+
 ## Top-level shape
 
 ```json
@@ -55,7 +60,8 @@ usage error (exit 2).
     "truncated_by_depth": false,
     "truncated_by_limit": false,
     "seeded_paths": ["src/Service.cs"],
-    "unseeded_paths": ["fixtures/sample-data.csv"]
+    "unseeded_paths": ["fixtures/sample-data.csv"],
+    "deleted_paths": ["src/Removed.cs"]
   }
 }
 ```
@@ -86,7 +92,7 @@ usage error (exit 2).
   does not exonerate tests.
 - `traversal` (object): independent bounded graph-execution evidence. It has exactly `status`, `reason`,
   `max_depth`, `limit`, `reached_count`, `returned_count`, `truncated_by_depth`, `truncated_by_limit`,
-  `seeded_paths`, and `unseeded_paths` in v1. See
+  `seeded_paths`, `unseeded_paths`, and `deleted_paths` in v1. See
   [`impact-traversal-evidence-v1.md`](impact-traversal-evidence-v1.md) for every field and valid status/reason pair.
 
 `delta_status` meaning is unchanged by `traversal`: it remains only the changed-path journal completeness signal.
@@ -103,6 +109,10 @@ outside that claim. `unseeded_paths` are separate warnings and are not covered b
 fixture data, config, docs — because the mechanism records what Miller watched changing on disk, not what got
 indexed into the symbol graph. Such a file appears in `changed_paths` even though it contributes nothing to
 `impacted`/`tests`.
+
+`traversal.deleted_paths` contains paths whose latest journal entry in the requested span is `deleted`. Deleted
+paths remain in `changed_paths` but are not misreported as unseeded current files or used as graph seeds. A later
+create/update in the same span makes that path current rather than deleted.
 
 ### R2 — truthful exclusion
 
@@ -154,8 +164,8 @@ describes bounded graph execution over the paths that could seed the current ind
 
 `changed_paths` is computed from julie-extract's per-file change journal (`revision_file_changes`): each row
 stamps a `path` with the `revision_id` it changed at and a `change_kind` of inserted/updated/deleted. The delta is
-`SELECT DISTINCT path WHERE revision_id > from AND revision_id <= to`. Miller keeps no separate journal — the
-extract already is one, so this is a per-file-revision-stamp mechanism, not a snapshot hash-diff.
+the latest row per path in `(from, to]`. Miller keeps no separate journal — the extract already is one, so this
+is a per-file-revision-stamp mechanism, not a snapshot hash-diff.
 
 ## Stability
 

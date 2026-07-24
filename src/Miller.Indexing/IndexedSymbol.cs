@@ -24,7 +24,8 @@ public sealed record IndexedSymbol(
     bool TestContainer = false,
     bool TestLifecycle = false,
     string TestEvidenceStatus = TestRoleEvidence.UnknownStatus,
-    string? TestEvidenceReason = TestRoleEvidence.FileEvidenceUnavailableReason)
+    string? TestEvidenceReason = TestRoleEvidence.FileEvidenceUnavailableReason,
+    string? Visibility = null)
 {
     public TestRoleEvidence TestEvidence =>
         new(IsTest, TestContainer, TestLifecycle, TestEvidenceStatus, TestEvidenceReason);

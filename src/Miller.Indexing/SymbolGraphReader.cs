@@ -48,6 +48,7 @@ public static class SymbolGraphReader
         ReadRelationships(connection, edges);
         ReadResolvedPendingRelationships(connection, edges);
         ReadIdentifiers(connection, resolveName, edges);
+        edges.AddRange(TestLinkageReader.Read(connection));
         return edges;
     }
 
@@ -56,7 +57,7 @@ public static class SymbolGraphReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT from_symbol_id, to_symbol_id, kind
+            SELECT from_symbol_id, to_symbol_id, kind, confidence
             FROM relationships;
             """;
 
@@ -65,6 +66,7 @@ public static class SymbolGraphReader
         int oFrom = reader.GetOrdinal("from_symbol_id");
         int oTo = reader.GetOrdinal("to_symbol_id");
         int oKind = reader.GetOrdinal("kind");
+        int oConfidence = reader.GetOrdinal("confidence");
         while (reader.Read())
         {
             string from = reader.GetString(oFrom); // from_symbol_id NOT NULL
@@ -74,7 +76,7 @@ public static class SymbolGraphReader
             if (string.Equals(from, to, StringComparison.Ordinal))
                 continue; // defensive self-loop drop (the graph drops it too — defense in depth)
 
-            edges.Add(new GraphEdge(from, to, kind));
+            edges.Add(new GraphEdge(from, to, kind, reader.GetDouble(oConfidence), "relationship"));
         }
     }
 
@@ -84,7 +86,8 @@ public static class SymbolGraphReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT pending.from_symbol_id, resolution.target_symbol_id, pending.kind
+            SELECT pending.from_symbol_id, resolution.target_symbol_id, pending.kind,
+                   MIN(pending.confidence, resolution.confidence) AS confidence
             FROM pending_relationships AS pending
             INNER JOIN pending_resolutions AS resolution
                 ON resolution.pending_relationship_id = pending.pending_relationship_id;
@@ -94,6 +97,7 @@ public static class SymbolGraphReader
         int oFrom = reader.GetOrdinal("from_symbol_id");
         int oTo = reader.GetOrdinal("target_symbol_id");
         int oKind = reader.GetOrdinal("kind");
+        int oConfidence = reader.GetOrdinal("confidence");
         while (reader.Read())
         {
             string from = reader.GetString(oFrom);
@@ -101,7 +105,8 @@ public static class SymbolGraphReader
             string kind = reader.GetString(oKind);
 
             if (!string.Equals(from, to, StringComparison.Ordinal))
-                edges.Add(new GraphEdge(from, to, kind));
+                edges.Add(new GraphEdge(
+                    from, to, kind, reader.GetDouble(oConfidence), "pending_resolution"));
         }
     }
 
@@ -112,8 +117,10 @@ public static class SymbolGraphReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT i.name, i.kind, i.containing_symbol_id,
-                   COALESCE(i.target_symbol_id, ir.target_symbol_id) AS resolved_target_symbol_id
+            SELECT i.name, i.kind, i.containing_symbol_id, i.target_symbol_id,
+                   ir.target_symbol_id AS overlay_target_symbol_id,
+                   i.confidence,
+                   ir.confidence AS overlay_confidence
             FROM identifiers i
             LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
             WHERE i.containing_symbol_id IS NOT NULL;
@@ -123,13 +130,18 @@ public static class SymbolGraphReader
         int oName = reader.GetOrdinal("name");
         int oKind = reader.GetOrdinal("kind");
         int oContaining = reader.GetOrdinal("containing_symbol_id");
-        int oResolvedTarget = reader.GetOrdinal("resolved_target_symbol_id");
+        int oDirectTarget = reader.GetOrdinal("target_symbol_id");
+        int oOverlayTarget = reader.GetOrdinal("overlay_target_symbol_id");
+        int oConfidence = reader.GetOrdinal("confidence");
+        int oOverlayConfidence = reader.GetOrdinal("overlay_confidence");
         while (reader.Read())
         {
             string name = reader.GetString(oName);
             string kind = reader.GetString(oKind);
             string from = reader.GetString(oContaining);
-            string? exactTarget = reader.IsDBNull(oResolvedTarget) ? null : reader.GetString(oResolvedTarget);
+            string? directTarget = reader.IsDBNull(oDirectTarget) ? null : reader.GetString(oDirectTarget);
+            string? overlayTarget = reader.IsDBNull(oOverlayTarget) ? null : reader.GetString(oOverlayTarget);
+            string? exactTarget = directTarget ?? overlayTarget;
             IReadOnlyList<string> targets = exactTarget is null
                 ? resolveName(name) ?? Array.Empty<string>()
                 : [exactTarget];
@@ -141,7 +153,17 @@ public static class SymbolGraphReader
                 if (string.Equals(from, to, StringComparison.Ordinal))
                     continue;
 
-                edges.Add(new GraphEdge(from, to, kind));
+                string source = directTarget is not null
+                    ? "identifier_target"
+                    : overlayTarget is not null
+                        ? "identifier_resolution"
+                        : "identifier_name";
+                double confidence = overlayTarget is not null && !reader.IsDBNull(oOverlayConfidence)
+                    ? reader.GetDouble(oOverlayConfidence)
+                    : reader.GetDouble(oConfidence);
+                if (exactTarget is null)
+                    confidence *= 0.5;
+                edges.Add(new GraphEdge(from, to, kind, confidence, source));
             }
         }
     }

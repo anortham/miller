@@ -58,6 +58,106 @@ internal static class GraphTraversal
             reached.Length > effectiveLimit);
     }
 
+    public static GraphReachResult ReachWithEvidence(
+        IEnumerable<string> starts,
+        int maxDepth,
+        int limit,
+        Direction direction,
+        Func<string, bool> contains,
+        Func<string, Direction, IEnumerable<GraphNeighbour>> neighbours)
+    {
+        ArgumentNullException.ThrowIfNull(starts);
+        ArgumentNullException.ThrowIfNull(contains);
+        ArgumentNullException.ThrowIfNull(neighbours);
+
+        int effectiveMaxDepth = Math.Max(0, maxDepth);
+        int effectiveLimit = Math.Max(0, limit);
+        Dictionary<string, ReachedNode> reached = ExploreEvidence(
+            starts, effectiveMaxDepth, direction, contains, neighbours, out bool truncatedByDepth);
+        ReachedNode[] ordered = reached.Values
+            .Where(static node => node.Hop > 0)
+            .OrderBy(static node => node.Hop)
+            .ThenBy(static node => node.Id, StringComparer.Ordinal)
+            .ToArray();
+        return new GraphReachResult(
+            ordered.Take(effectiveLimit).ToArray(),
+            ordered.Length,
+            truncatedByDepth,
+            ordered.Length > effectiveLimit);
+    }
+
+    private static Dictionary<string, ReachedNode> ExploreEvidence(
+        IEnumerable<string> starts,
+        int maxDepth,
+        Direction direction,
+        Func<string, bool> contains,
+        Func<string, Direction, IEnumerable<GraphNeighbour>> neighbours,
+        out bool truncatedByDepth)
+    {
+        truncatedByDepth = false;
+        var reached = new Dictionary<string, ReachedNode>(StringComparer.Ordinal);
+        var frontier = new Queue<string>();
+        foreach (string start in starts)
+        {
+            if (contains(start) && reached.TryAdd(start, new ReachedNode(start, 0)))
+                frontier.Enqueue(start);
+        }
+
+        while (frontier.Count > 0)
+        {
+            string current = frontier.Dequeue();
+            int currentHop = reached[current].Hop;
+            GraphNeighbour[] adjacent = neighbours(current, direction).ToArray();
+            if (currentHop >= maxDepth)
+            {
+                if (!truncatedByDepth && currentHop == maxDepth &&
+                    adjacent.Any(neighbour => !reached.ContainsKey(neighbour.Id)))
+                    truncatedByDepth = true;
+                continue;
+            }
+
+            int nextHop = currentHop + 1;
+            foreach (GraphNeighbour neighbour in adjacent)
+            {
+                var candidate = new ReachedNode(
+                    neighbour.Id,
+                    nextHop,
+                    current,
+                    neighbour.EdgeKind,
+                    neighbour.EdgeConfidence,
+                    neighbour.EdgeSource,
+                    neighbour.Centrality,
+                    neighbour.Visibility);
+                if (!reached.TryGetValue(neighbour.Id, out ReachedNode? existing))
+                {
+                    reached[neighbour.Id] = candidate;
+                    frontier.Enqueue(neighbour.Id);
+                }
+                else if (existing.Hop == nextHop && BetterEvidence(candidate, existing))
+                {
+                    reached[neighbour.Id] = candidate;
+                }
+            }
+        }
+        return reached;
+    }
+
+    private static bool BetterEvidence(ReachedNode candidate, ReachedNode current)
+    {
+        int kind = ImpactRanker.RelationshipPriority(candidate.EdgeKind).CompareTo(
+            ImpactRanker.RelationshipPriority(current.EdgeKind));
+        if (kind != 0)
+            return kind < 0;
+        int source = ImpactRanker.SourcePriority(candidate.EdgeSource).CompareTo(
+            ImpactRanker.SourcePriority(current.EdgeSource));
+        if (source != 0)
+            return source < 0;
+        int confidence = Nullable.Compare(current.EdgeConfidence, candidate.EdgeConfidence);
+        if (confidence != 0)
+            return confidence < 0;
+        return StringComparer.Ordinal.Compare(candidate.ReachedVia, current.ReachedVia) < 0;
+    }
+
     /// <summary>
     /// Bounded BFS from <paramref name="starts"/>, returning every visited id keyed to its minimum hop
     /// (the starts themselves at hop 0). <paramref name="probeDepthTruncation"/> asks the walk to also report

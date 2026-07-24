@@ -28,7 +28,8 @@ public sealed record RevisionDeltaResult(
     long ToRevision,
     string? ArtifactId,
     IReadOnlyList<string> ChangedPaths,
-    string Reason);
+    string Reason,
+    IReadOnlyList<string>? DeletedPaths = null);
 
 /// <summary>
 /// Computes the file delta between a base index revision and the current index revision from julie-extract's own
@@ -106,8 +107,16 @@ public static class RevisionDeltaReader
                 return Unavailable(fromRevision, current, artifactId, "pruned_history");
 
             // The half-open span (from, current] is fully journaled; report every path it touched.
-            IReadOnlyList<string> paths = ReadChangedPaths(conn, fromRevision, current);
-            return new RevisionDeltaResult(RevisionDeltaStatus.Complete, fromRevision, current, artifactId, paths, "complete");
+            (IReadOnlyList<string> paths, IReadOnlyList<string> deletedPaths) =
+                ReadChangedPaths(conn, fromRevision, current);
+            return new RevisionDeltaResult(
+                RevisionDeltaStatus.Complete,
+                fromRevision,
+                current,
+                artifactId,
+                paths,
+                "complete",
+                deletedPaths);
         }
         catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
         {
@@ -118,18 +127,42 @@ public static class RevisionDeltaReader
     }
 
     private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string? artifactId, string reason) =>
-        new(RevisionDeltaStatus.Unavailable, fromRevision, toRevision, artifactId, Array.Empty<string>(), reason);
+        new(
+            RevisionDeltaStatus.Unavailable,
+            fromRevision,
+            toRevision,
+            artifactId,
+            Array.Empty<string>(),
+            reason,
+            Array.Empty<string>());
 
-    private static IReadOnlyList<string> ReadChangedPaths(SqliteConnection conn, long fromRevision, long toRevision)
+    private static (IReadOnlyList<string> Paths, IReadOnlyList<string> DeletedPaths) ReadChangedPaths(
+        SqliteConnection conn,
+        long fromRevision,
+        long toRevision)
     {
         using SqliteCommand cmd = conn.CreateCommand();
         cmd.CommandText =
-            "SELECT DISTINCT path FROM revision_file_changes " +
-            "WHERE revision_id > $from AND revision_id <= $to ORDER BY path;";
+            """
+            WITH ranked AS (
+                SELECT path, change_kind,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY path
+                           ORDER BY revision_id DESC
+                       ) AS position
+                FROM revision_file_changes
+                WHERE revision_id > $from AND revision_id <= $to
+            )
+            SELECT path, change_kind
+            FROM ranked
+            WHERE position = 1
+            ORDER BY path;
+            """;
         cmd.Parameters.AddWithValue("$from", fromRevision);
         cmd.Parameters.AddWithValue("$to", toRevision);
 
         var paths = new List<string>();
+        var deletedPaths = new List<string>();
         using SqliteDataReader reader = cmd.ExecuteReader();
         while (reader.Read())
         {
@@ -137,10 +170,15 @@ public static class RevisionDeltaReader
                 continue;
             string path = reader.GetString(0);
             if (!string.IsNullOrWhiteSpace(path))
+            {
                 paths.Add(path);
+                if (!reader.IsDBNull(1) &&
+                    string.Equals(reader.GetString(1), "deleted", StringComparison.OrdinalIgnoreCase))
+                    deletedPaths.Add(path);
+            }
         }
 
-        return paths;
+        return (paths, deletedPaths);
     }
 
     private static bool TableExists(SqliteConnection conn, string tableName)

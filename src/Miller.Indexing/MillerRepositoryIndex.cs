@@ -172,7 +172,7 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
 
             byDocId[i] = symbol;
             documents[i] = symbol.ToSearchableDocument();
-            nodes[i] = new GraphNode(symbol.SymbolId, symbol.IsTest);
+            nodes[i] = new GraphNode(symbol.SymbolId, symbol.IsTest, symbol.Visibility);
 
             // symbol id is julie's PK — unique. A duplicate would mean a corrupt extract; last-wins is
             // harmless here (the reader already enforces uniqueness via the PK), so just index it.

@@ -15,6 +15,32 @@ and this document's path. Consumers must gate this additive shape independently 
 
 ## Shape
 
+Every reached row also carries the graph or candidate evidence used to rank it:
+
+```json
+{
+  "impact_evidence": {
+    "reached_via_symbol_id": "seed-id",
+    "edge_kind": "test_linkage",
+    "edge_confidence": 0.95,
+    "edge_source": "test_linkage",
+    "tier": "exact",
+    "centrality": 4,
+    "visibility": "public"
+  }
+}
+```
+
+Exact test links are read only when an `is_test` symbol's `metadata_json` contains labeled `test_linkage` or
+`test_coverage` evidence. Supported values are a symbol-id string, an array, or an object containing
+`symbol_id`, `target_symbol_id`, `source_symbol_id`, or `symbol_ids`, with optional `confidence`. The current
+extractor artifact emits neither key, so this tier is honestly dormant unless evidence is present.
+
+After exact graph reachability, Miller may fill remaining result capacity with filename/role candidates such as
+`ServiceTests` for `Service`. Those rows are always labeled `edge_kind: "test_candidate"`,
+`edge_source: "filename_role"`, `tier: "heuristic"`, and confidence `0.35`; they are never blended with exact
+links.
+
 Every object in `impacted[]` and `tests[]` has this nested object in addition to the existing row fields:
 
 ```json
@@ -56,9 +82,10 @@ Usage and note-only error envelopes that do not contain result arrays do not car
 
 ## Compatibility and ownership
 
-- The existing `impacted[]` / `tests[]` membership, order, counts, traversal evidence, and compact text are
-  unchanged. Because the legacy partition uses `is_test`, lifecycle hooks remain in compact `likely tests` and
-  in JSON `tests[]`; check `test_case` before treating a row as a runnable case.
+- Graph results keep hop primary, then rank peers by relationship priority, centrality, visibility, and stable
+  location. Separately labeled filename/role candidates may add likely tests after graph results within `limit`.
+  Lifecycle hooks remain in compact `likely tests` and JSON `tests[]`; check `test_case` before treating a row
+  as a runnable case.
 - Treat positive flags as extractor evidence. Treat false flags, unknown currency, and missing candidates as
   unknown rather than negative proof.
 - Miller owns deterministic extraction consumption, graph reachability, and this candidate presentation. Eros

@@ -179,6 +179,7 @@ public sealed class ImpactToolTests
             {
                 "status", "reason", "max_depth", "limit", "reached_count", "returned_count",
                 "truncated_by_depth", "truncated_by_limit", "seeded_paths", "unseeded_paths",
+                "deleted_paths",
             },
             traversal.EnumerateObject().Select(static property => property.Name));
         return traversal;
@@ -292,15 +293,18 @@ public sealed class ImpactToolTests
 
         Assert.Equal(4, impactedCount);
         Assert.Equal(
+            "# traversal\n" +
+            "status=exhausted reason=complete max_depth=1 limit=100 reached=5 returned=5 truncated_by_depth=False truncated_by_limit=False\n" +
+            "\n" +
             "# impacted (4)\n" +
             "src/Service.cs:\n" +
-            "  :20 Process method hop=1\n" +
-            "  :30 Helper class hop=1\n" +
+            $"  :20 Process method hop=1 via={ValidateId} edge=calls source=relationship\n" +
+            $"  :30 Helper class hop=1 via={ValidateId} edge=uses source=relationship\n" +
             "low_signal hidden: 2 imports/modules (use format=json for full list.)\n" +
             "\n" +
             "# likely tests (1)\n" +
             "tests/ServiceTests.cs:\n" +
-            "  :8 ProcessWorks method hop=1",
+            $"  :8 ProcessWorks method hop=1 via={ValidateId} edge=calls source=relationship",
             output);
         Assert.DoesNotContain("ComponentModel", output);
         Assert.DoesNotContain("Service Module", output);
@@ -329,6 +333,100 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void Run_Json_ExplainsWhyEveryRowIsPresent()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(index, resolver,
+            target: "Validate", changedPaths: null, diff: null, maxDepth: 2, limit: 100, json: true,
+            out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement process = Assert.Single(
+            doc.RootElement.GetProperty("impacted").EnumerateArray(),
+            row => row.GetProperty("name").GetString() == "Process");
+        JsonElement evidence = process.GetProperty("impact_evidence");
+
+        Assert.Equal("calls", evidence.GetProperty("edge_kind").GetString());
+        Assert.Equal("relationship", evidence.GetProperty("edge_source").GetString());
+        Assert.Equal(1.0, evidence.GetProperty("edge_confidence").GetDouble());
+        Assert.Equal(ValidateId, evidence.GetProperty("reached_via_symbol_id").GetString());
+        Assert.Equal("exact", evidence.GetProperty("tier").GetString());
+    }
+
+    [Fact]
+    public void Run_Json_ReportsCompleteTraversalTruncationEvidence()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ImpactTool.Run(
+            index,
+            resolver,
+            target: "Validate",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 2,
+            limit: 1,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = doc.RootElement.GetProperty("traversal");
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("limit", traversal.GetProperty("reason").GetString());
+        Assert.Equal(2, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("limit").GetInt32());
+        Assert.True(traversal.GetProperty("reached_count").GetInt32() > 1);
+        Assert.Equal(1, traversal.GetProperty("returned_count").GetInt32());
+        Assert.False(traversal.GetProperty("truncated_by_depth").GetBoolean());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+    }
+
+    [Fact]
+    public void Run_RanksPeersByRelationshipThenCentralityVisibilityAndLocation()
+    {
+        const string seedId = "40000000000000000000000000000001";
+        const string usesId = "40000000000000000000000000000002";
+        const string privateCallId = "40000000000000000000000000000003";
+        const string publicCallId = "40000000000000000000000000000004";
+        const string centralCallId = "40000000000000000000000000000005";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, seedId, "Seed", "void Seed()", "method", "csharp", "src/Seed.cs", 1, 2, null, false),
+            new IndexedSymbol(1, usesId, "Uses", "void Uses()", "method", "csharp", "src/A.cs", 1, 2, null, false,
+                Visibility: "public"),
+            new IndexedSymbol(2, privateCallId, "PrivateCall", "void PrivateCall()", "method", "csharp", "src/B.cs", 1, 2, null, false,
+                Visibility: "private"),
+            new IndexedSymbol(3, publicCallId, "PublicCall", "void PublicCall()", "method", "csharp", "src/C.cs", 1, 2, null, false,
+                Visibility: "public"),
+            new IndexedSymbol(4, centralCallId, "CentralCall", "void CentralCall()", "method", "csharp", "src/D.cs", 1, 2, null, false,
+                Visibility: "public"),
+            new IndexedSymbol(5, "40000000000000000000000000000006", "Caller", "void Caller()", "method", "csharp", "src/E.cs", 1, 2, null, false),
+        };
+        var edges = new[]
+        {
+            new GraphEdge(usesId, seedId, "uses"),
+            new GraphEdge(privateCallId, seedId, "calls"),
+            new GraphEdge(publicCallId, seedId, "calls"),
+            new GraphEdge(centralCallId, seedId, "calls"),
+            new GraphEdge(symbols[5].SymbolId, centralCallId, "calls"),
+        };
+        var index = MillerRepositoryIndex.Build(symbols, edges);
+
+        string output = ImpactTool.Run(index, new SmartTargetResolver(index),
+            target: "Seed", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true,
+            out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        string?[] names = doc.RootElement.GetProperty("impacted").EnumerateArray()
+            .Select(row => row.GetProperty("name").GetString())
+            .ToArray();
+
+        Assert.Equal(new string?[] { "CentralCall", "PublicCall", "PrivateCall", "Uses" }, names);
+    }
+
+    [Fact]
     public void Run_Compact_CapsLikelyTests_ButJsonKeepsFullList()
     {
         var (index, resolver) = BuildManyLikelyTestsFixture(testCount: 25);
@@ -346,6 +444,54 @@ public sealed class ImpactToolTests
             target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: true, out _, out _);
         using var doc = JsonDocument.Parse(json);
         Assert.Equal(25, doc.RootElement.GetProperty("tests").GetArrayLength());
+    }
+
+    [Fact]
+    public void Run_Compact_HardBoundsChangedPathOutput()
+    {
+        const string seedId = "54000000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(
+                0, seedId, "Seed", "void Seed()", "method", "csharp",
+                "src/Seed.cs", 1, 2, null, false),
+        };
+        var edges = new List<GraphEdge>();
+        for (int i = 1; i <= 100; i++)
+        {
+            string id = i.ToString("x32", System.Globalization.CultureInfo.InvariantCulture);
+            string path = "src/" + new string((char)('a' + i % 26), 180) + $"/Caller{i:D3}.cs";
+            symbols.Add(new IndexedSymbol(
+                i,
+                id,
+                "Caller" + new string('N', 80) + i.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                "void Caller()",
+                "method",
+                "csharp",
+                path,
+                1,
+                2,
+                null,
+                false));
+            edges.Add(new GraphEdge(id, seedId, "calls"));
+        }
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, edges);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: null,
+            changedPaths: ["src/Seed.cs"],
+            diff: null,
+            maxDepth: 1,
+            limit: 100,
+            json: false,
+            out _,
+            out _);
+
+        Assert.True(output.Length <= 6000, $"compact chars: {output.Length}");
+        Assert.Contains("compact output truncated", output);
     }
 
     [Fact]
@@ -404,10 +550,10 @@ public sealed class ImpactToolTests
             target: "Validate", changedPaths: null, diff: null, maxDepth: 1, limit: 100, json: false,
             out int impactedCount, out _);
 
-        // Only Process (the direct dependent) at depth 1; Handle/ProcessWorks are two hops away.
         Assert.Contains("Process", output);
         Assert.DoesNotContain("Handle", output);
-        Assert.DoesNotContain("ProcessWorks", output);
+        Assert.Contains("ProcessWorks", output);
+        Assert.Contains("source=filename_role", output);
         Assert.Equal(1, impactedCount);
     }
 
@@ -611,6 +757,77 @@ public sealed class ImpactToolTests
         Assert.Contains("Handle", output);
         Assert.Contains("ProcessWorks", output);
         Assert.Equal(1, impactedCount);
+    }
+
+    [Fact]
+    public void Run_ChangedPaths_ExcludesLowValueFieldSeeds()
+    {
+        const string methodId = "50000000000000000000000000000001";
+        const string fieldId = "50000000000000000000000000000002";
+        const string methodCallerId = "50000000000000000000000000000003";
+        const string fieldCallerId = "50000000000000000000000000000004";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, methodId, "Execute", "void Execute()", "method", "csharp", "src/Service.cs", 5, 10, null, false),
+            new IndexedSymbol(1, fieldId, "_cache", "Cache _cache", "field", "csharp", "src/Service.cs", 2, 2, null, false),
+            new IndexedSymbol(2, methodCallerId, "Run", "void Run()", "method", "csharp", "src/Caller.cs", 1, 3, null, false),
+            new IndexedSymbol(3, fieldCallerId, "ReadCache", "void ReadCache()", "method", "csharp", "src/Noise.cs", 1, 3, null, false),
+        };
+        var index = MillerRepositoryIndex.Build(symbols,
+        [
+            new GraphEdge(methodCallerId, methodId, "calls"),
+            new GraphEdge(fieldCallerId, fieldId, "references"),
+        ]);
+
+        string output = ImpactTool.Run(index, new SmartTargetResolver(index),
+            target: null, changedPaths: ["src/Service.cs"], diff: null,
+            maxDepth: 1, limit: 100, json: true, out _, out _);
+
+        using var doc = JsonDocument.Parse(output);
+        string?[] names = doc.RootElement.GetProperty("impacted").EnumerateArray()
+            .Select(row => row.GetProperty("name").GetString())
+            .ToArray();
+        Assert.Equal(new string?[] { "Run" }, names);
+    }
+
+    [Fact]
+    public void Run_Target_AddsSeparatelyLabeledFilenameRoleTestCandidate()
+    {
+        const string sourceId = "53000000000000000000000000000001";
+        const string testId = "53000000000000000000000000000002";
+        var index = MillerRepositoryIndex.Build(
+            [
+                new IndexedSymbol(
+                    0, sourceId, "OrderService", "class OrderService", "class", "csharp",
+                    "src/OrderService.cs", 1, 20, null, false),
+                new IndexedSymbol(
+                    1, testId, "CreateOrderWorks", "void CreateOrderWorks()", "method", "csharp",
+                    "tests/OrderServiceTests.cs", 5, 10, null, true),
+                new IndexedSymbol(
+                    2, "53000000000000000000000000000003", "OtherWorks", "void OtherWorks()", "method", "csharp",
+                    "tests/OtherTests.cs", 5, 10, null, true),
+            ],
+            []);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "OrderService",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 2,
+            limit: 100,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement test = Assert.Single(doc.RootElement.GetProperty("tests").EnumerateArray());
+        Assert.Equal(testId, test.GetProperty("symbol_id").GetString());
+        JsonElement evidence = test.GetProperty("impact_evidence");
+        Assert.Equal("heuristic", evidence.GetProperty("tier").GetString());
+        Assert.Equal("filename_role", evidence.GetProperty("edge_source").GetString());
+        Assert.Equal("test_candidate", evidence.GetProperty("edge_kind").GetString());
     }
 
     [Fact]

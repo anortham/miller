@@ -55,8 +55,8 @@ public sealed class SqliteSymbolGraphIndexTests
             direction);
 
         Assert.Equal(
-            expected.Nodes.Select(static n => (n.Id, n.Hop)).ToArray(),
-            actual.Nodes.Select(static n => (n.Id, n.Hop)).ToArray());
+            expected.Nodes,
+            actual.Nodes);
         Assert.Equal(expected.ReachedCount, actual.ReachedCount);
         Assert.Equal(expected.TruncatedByDepth, actual.TruncatedByDepth);
         Assert.Equal(expected.TruncatedByLimit, actual.TruncatedByLimit);
@@ -137,5 +137,36 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Equal(
             repository.Graph.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id),
             sqlite.Reach([CallerId], 1, 10, Direction.Forward).Select(node => node.Id));
+    }
+
+    [Fact]
+    public void ReachWithEvidence_TestLinkageMetadata_MatchesRepositoryGraph()
+    {
+        const string sourceId = "52000000000000000000000000000001";
+        const string testId = "52000000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(sourceId, "Execute", "method", "csharp", "src/Service.cs", "void Execute()", 1, null),
+                new(testId, "ExecuteWorks", "method", "csharp", "tests/ServiceTests.cs", "void ExecuteWorks()", 1, null)
+                {
+                    IsTest = true,
+                    Metadata = "{\"test_coverage\":{\"symbol_id\":\"" + sourceId +
+                        "\",\"confidence\":0.97}}",
+                },
+            ]);
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        GraphReachResult expected = repository.Graph.ReachWithEvidence(
+            [sourceId], 1, 10, Direction.Reverse);
+        GraphReachResult actual = sqlite.ReachWithEvidence(
+            [sourceId], 1, 10, Direction.Reverse);
+
+        Assert.Equal(
+            repository.Graph.Reach([sourceId], 1, 10, Direction.Reverse),
+            sqlite.Reach([sourceId], 1, 10, Direction.Reverse));
+        Assert.Equal(expected.Nodes, actual.Nodes);
     }
 }

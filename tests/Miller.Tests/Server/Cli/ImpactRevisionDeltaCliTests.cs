@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Cli;
+using Miller.Server.Tools;
 using Miller.Tests.Indexing;
 using Microsoft.Data.Sqlite;
 using Xunit;
@@ -116,6 +118,36 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
     }
 
     [Fact]
+    public void Delta_McpAndCli_UseByteEquivalentSharedCore()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: [new JulieDbFixture.RevisionRow(1), new JulieDbFixture.RevisionRow(2)],
+            changes: [new JulieDbFixture.RevisionFileChangeRow(2, "src/Service.cs", "updated")]);
+        var (code, cliOutput, errText) = Run(
+            [
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId,
+            ],
+            Context(fx));
+        MillerRepositoryIndex index = RepositoryIndexLoader.Load(fx.DbPath);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index, fx.DbPath, "current", fx.WorkspaceRoot));
+        string mcpOutput = new ImpactTool(provider).Impact(
+            from_index_revision: 1,
+            from_artifact_id: DefaultArtifactId,
+            format: "json");
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument mcpDocument = JsonDocument.Parse(mcpOutput);
+        Assert.False(
+            mcpDocument.RootElement.TryGetProperty("diagnostic", out JsonElement diagnostic),
+            diagnostic.ValueKind == JsonValueKind.Undefined ? string.Empty : diagnostic.GetRawText());
+        Assert.Equal(cliOutput.TrimEnd(), mcpOutput);
+    }
+
+    [Fact]
     public void Delta_Json_CompleteEmptyDelta_ReportsTraversalNotRunForNoChanges()
     {
         using JulieDbFixture fx = Build(
@@ -139,6 +171,36 @@ public sealed class ImpactRevisionDeltaCliTests : IDisposable
         Assert.Equal("no_changes", traversal.GetProperty("reason").GetString());
         Assert.Equal(1, traversal.GetProperty("max_depth").GetInt32());
         Assert.Equal(1, traversal.GetProperty("limit").GetInt32());
+    }
+
+    [Fact]
+    public void Delta_Json_SeparatesDeletedPathsFromOtherUnseededPaths()
+    {
+        using JulieDbFixture fx = Build(
+            revisions: [new JulieDbFixture.RevisionRow(1), new JulieDbFixture.RevisionRow(2)],
+            changes:
+            [
+                new JulieDbFixture.RevisionFileChangeRow(2, "src/Removed.cs", "deleted"),
+                new JulieDbFixture.RevisionFileChangeRow(2, "config/settings.json", "updated"),
+            ]);
+
+        var (code, outText, errText) = Run(
+            [
+                "impact", "--workspace-id", "current", "--json",
+                "--from-index-revision", "1", "--from-artifact-id", DefaultArtifactId,
+            ],
+            Context(fx));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement traversal = doc.RootElement.GetProperty("traversal");
+        Assert.Equal(
+            ["src/Removed.cs"],
+            traversal.GetProperty("deleted_paths").EnumerateArray().Select(static item => item.GetString()));
+        Assert.Equal(
+            ["config/settings.json"],
+            traversal.GetProperty("unseeded_paths").EnumerateArray().Select(static item => item.GetString()));
     }
 
     [Fact]

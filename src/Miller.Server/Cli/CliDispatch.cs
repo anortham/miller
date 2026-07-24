@@ -2023,32 +2023,34 @@ public static class CliDispatch
 
         string? rawArtifactId = o.Value("from-artifact-id");
         string? fromArtifactId = string.IsNullOrWhiteSpace(rawArtifactId) ? null : rawArtifactId;
-        RevisionDeltaResult delta = RevisionDeltaReader.Read(ctx.ExtractDbPath, fromRevision, fromArtifactId);
-        bool complete = delta.Status == RevisionDeltaStatus.Complete;
-
-        // R2: exclude ignored/tooling paths before they can reach the envelope (defense-in-depth over the journal).
-        IReadOnlyList<string> changedPaths = complete
-            ? ImpactTool.FilterWatchedDeltaPaths(ctx.WorkspaceRoot, delta.ChangedPaths)
-            : Array.Empty<string>();
+        ImpactRevisionDeltaSnapshot snapshot = ImpactTool.PrepareIndexRevisionDelta(
+            workspaceId,
+            ctx.WorkspaceRoot,
+            ctx.ExtractDbPath,
+            fromRevision,
+            fromArtifactId);
 
         ISymbolLookupIndex? index = null;
         SqliteSymbolGraphIndex? graph = null;
         bool indexLoaded = false;
         try
         {
-            // Load the symbol index/graph only when there is a truthful, non-empty delta to analyse — the common
-            // "no source change since last poll" case emits an empty complete envelope without touching the index.
-            if (complete && changedPaths.Count > 0 && TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex loaded))
+            if (snapshot.Complete && snapshot.ChangedPaths.Count > 0 &&
+                TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex loaded))
             {
                 index = loaded;
                 graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
                 indexLoaded = true;
             }
 
-            string output = ImpactTool.RenderIndexRevisionDelta(
-                workspaceId, complete, fromRevision, delta.ToRevision, changedPaths,
-                index, graph, o.Int("max-depth", 2), o.Int("limit", 100), json,
-                delta.ArtifactId, fromArtifactId, delta.Reason, indexAvailable: indexLoaded);
+            string output = ImpactTool.RunIndexRevisionDelta(
+                snapshot,
+                index,
+                graph,
+                o.Int("max-depth", 2),
+                o.Int("limit", 100),
+                json,
+                indexAvailable: indexLoaded);
             outw.WriteLine(output);
             return 0;
         }

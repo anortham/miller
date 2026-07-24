@@ -45,7 +45,7 @@ public static class SqliteSymbolReader
             {evidence.DiagnosticPathsCte}
             SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
                    s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
-                   s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
+                   s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.visibility,
                    {evidence.TestContainer} AS test_container,
                    {evidence.TestLifecycle} AS test_lifecycle,
                    {evidence.FileStatus} AS file_status,
@@ -101,7 +101,7 @@ public static class SqliteSymbolReader
                 ordered AS (
                     SELECT ROW_NUMBER() OVER (ORDER BY s.path, s.start_line, s.symbol_id) - 1 AS doc_id,
                            s.symbol_id, s.name, s.signature, s.kind, s.language, s.path,
-                           s.start_line, s.end_line, s.parent_symbol_id, s.is_test,
+                           s.start_line, s.end_line, s.parent_symbol_id, s.is_test, s.visibility,
                            {evidence.TestContainer} AS test_container,
                            {evidence.TestLifecycle} AS test_lifecycle,
                            {evidence.FileStatus} AS file_status,
@@ -113,7 +113,7 @@ public static class SqliteSymbolReader
                     WHERE s.name IS NOT NULL
                 )
                 SELECT doc_id, symbol_id, name, signature, kind, language, path,
-                       start_line, end_line, parent_symbol_id, is_test,
+                       start_line, end_line, parent_symbol_id, is_test, visibility,
                        test_container, test_lifecycle, file_status,
                        has_file_evidence, has_parse_diagnostics
                 FROM ordered
@@ -142,6 +142,7 @@ public static class SqliteSymbolReader
         int oEndLine = reader.GetOrdinal("end_line");
         int oParent = reader.GetOrdinal("parent_symbol_id");
         int oIsTest = reader.GetOrdinal("is_test");
+        int oVisibility = reader.GetOrdinal("visibility");
         int oTestContainer = reader.GetOrdinal("test_container");
         int oTestLifecycle = reader.GetOrdinal("test_lifecycle");
         int oFileStatus = reader.GetOrdinal("file_status");
@@ -182,7 +183,8 @@ public static class SqliteSymbolReader
                 TestContainer: testEvidence.IsContainer,
                 TestLifecycle: testEvidence.IsLifecycle,
                 TestEvidenceStatus: testEvidence.Status,
-                TestEvidenceReason: testEvidence.Reason));
+                TestEvidenceReason: testEvidence.Reason,
+                Visibility: reader.IsDBNull(oVisibility) ? null : reader.GetString(oVisibility)));
         }
     }
 

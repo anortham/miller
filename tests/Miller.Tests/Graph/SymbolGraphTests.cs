@@ -17,11 +17,33 @@ public sealed class SymbolGraphTests
     private static GraphEdge E(string from, string to, string kind = "calls") => new(from, to, kind);
 
     [Fact]
-    public void GraphNode_RemainsTraversalOnlyIdAndIsTest()
+    public void GraphNode_CarriesVisibilityNeededForImpactPeerRanking()
     {
         Assert.Equal(
-            new[] { "Id", "IsTest" },
+            new[] { "Id", "IsTest", "Visibility" },
             typeof(GraphNode).GetProperties().Select(static property => property.Name));
+    }
+
+    [Fact]
+    public void ReachWithEvidence_PreservesStrongestShortestEdgeAndPredecessor()
+    {
+        var graph = SymbolGraph.Build(
+            [N("seed"), N("via-a"), N("via-b"), N("target")],
+            [
+                new GraphEdge("via-a", "seed", "uses", 0.6, "identifier_name"),
+                new GraphEdge("via-b", "seed", "calls", 1.0, "relationship"),
+                new GraphEdge("target", "via-a", "uses", 0.7, "pending_resolution"),
+                new GraphEdge("target", "via-b", "calls", 0.9, "relationship"),
+            ]);
+
+        ReachedNode target = Assert.Single(
+            graph.ReachWithEvidence(["seed"], 2, 10, Direction.Reverse).Nodes,
+            node => node.Id == "target");
+
+        Assert.Equal("via-b", target.ReachedVia);
+        Assert.Equal("calls", target.EdgeKind);
+        Assert.Equal(0.9, target.EdgeConfidence);
+        Assert.Equal("relationship", target.EdgeSource);
     }
 
     /// <summary>Project a reach result down to the (id, hop) pairs in their returned order.</summary>
