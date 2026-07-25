@@ -1913,7 +1913,7 @@ class AgentContractTests(unittest.TestCase):
             "tree_sitter_razor_external_scanner_scan",
             dev007["fact_predicates"][0]["all_terms"],
         )
-        self.assertIn("_tag_name", [item["symbol"] for item in dev007["symbol_cited"]])
+        self.assertIn("externals", [item["symbol"] for item in dev007["symbol_cited"]])
         self.assertIn("scan_markup_tag", [item["symbol"] for item in dev007["symbol_cited"]])
         self.assertEqual("scan_markup_tag", dev007["evidence_anchors"][1]["symbol"])
         self.assertTrue(
@@ -1927,6 +1927,17 @@ class AgentContractTests(unittest.TestCase):
                     for action in dev007["acceptable_actions"]
                 }
             )
+        )
+        self.assertIn(
+            ("trace_call_path", "80cc58e7c48d034967766f777a754058", "a23c44196ed5ebcb9b34d01916d9c530"),
+            {
+                (
+                    action["kind"],
+                    action["target"].get("symbol_id"),
+                    action["target"].get("target_symbol_id"),
+                )
+                for action in dev007["acceptable_actions"]
+            },
         )
 
         dev008 = tasks["dev-008"]
@@ -2007,6 +2018,14 @@ class AgentContractTests(unittest.TestCase):
                     if action["kind"] == "inspect_symbol"
                 }
             )
+        )
+        self.assertIn(
+            "package.json",
+            {
+                action["target"]["path"]
+                for action in dev011["acceptable_actions"]
+                if action["kind"] == "inspect_file"
+            },
         )
 
         dev012 = tasks["dev-012"]

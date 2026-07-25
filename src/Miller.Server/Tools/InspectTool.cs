@@ -38,7 +38,9 @@ public sealed class InspectTool
     [Description(
         "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
         "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
-        "(the right first symbol read); depth=full adds relation lists and a bounded body page. Use before reading " +
+        "(the right first symbol read); depth=full adds relation lists and a bounded body page. For constants, " +
+        "fields, properties, and variables, the full signature is the authoritative complete declaration and " +
+        "needs no search confirmation. Use before reading " +
         "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
         "reference lists across the repo (use trace mode=refs). Example: inspect target=FullRebuildPromotion " +
         "depth=overview.")]
@@ -462,9 +464,12 @@ public sealed class InspectTool
 
     private static int SignatureLimit(IndexedSymbol symbol, InspectDepth depth) =>
         depth == InspectDepth.Full &&
-        symbol.Kind is "constant" or "variable" or "field" or "property"
+        IsValueDeclaration(symbol)
             ? FullValueDeclarationMaxLength
             : ToolRenderLimits.SignatureMaxLength;
+
+    private static bool IsValueDeclaration(IndexedSymbol symbol) =>
+        symbol.Kind is "constant" or "variable" or "field" or "property";
 
     private static int KindRank(string kind) => kind switch
     {
@@ -707,6 +712,11 @@ public sealed class InspectTool
 
             w.WritePropertyName("symbol");
             WriteSymbolObject(w, sym, detail, SignatureLimit(sym, depth));
+            if (depth == InspectDepth.Full && IsValueDeclaration(sym))
+            {
+                w.WriteBoolean("value_declaration_complete", true);
+                w.WriteString("body_role", "extractor_span_not_declaration");
+            }
 
             if (depth != InspectDepth.Summary)
             {

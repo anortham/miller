@@ -460,6 +460,10 @@ public sealed class InspectToolTests
 
         using JsonDocument document = JsonDocument.Parse(output);
         Assert.Equal(signature, document.RootElement.GetProperty("symbol").GetProperty("signature").GetString());
+        Assert.True(document.RootElement.GetProperty("value_declaration_complete").GetBoolean());
+        Assert.Equal(
+            "extractor_span_not_declaration",
+            document.RootElement.GetProperty("body_role").GetString());
     }
 
     [Fact]

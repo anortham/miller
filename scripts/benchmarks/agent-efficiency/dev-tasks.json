@@ -536,7 +536,7 @@
       "symbol_cited": [
         {
           "predicate_id": "symbol-001",
-          "symbol": "_tag_name",
+          "symbol": "externals",
           "evidence_anchor_ids": ["anchor-001"]
         },
         {
@@ -549,9 +549,9 @@
         {
           "anchor_id": "anchor-001",
           "path": "grammar.js",
-          "symbol": "_tag_name",
-          "line_start": 642,
-          "line_end": 644,
+          "symbol": "externals",
+          "line_start": 22,
+          "line_end": 31,
           "relevance_grade": 3
         },
         {
@@ -560,6 +560,14 @@
           "symbol": "scan_markup_tag",
           "line_start": 164,
           "line_end": 199,
+          "relevance_grade": 3
+        },
+        {
+          "anchor_id": "anchor-003",
+          "path": "src/scanner.c",
+          "symbol": "tree_sitter_razor_external_scanner_scan",
+          "line_start": 357,
+          "line_end": 357,
           "relevance_grade": 3
         }
       ],
@@ -622,6 +630,37 @@
           "requirement_group": "scanner-context",
           "evidence_anchor_ids": ["anchor-002"],
           "reference_site_ids": ["site-001"]
+        },
+        {
+          "action_id": "action-008",
+          "kind": "trace_call_path",
+          "target": {
+            "symbol_id": "80cc58e7c48d034967766f777a754058",
+            "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530"
+          },
+          "requirement_group": "scanner-context",
+          "evidence_anchor_ids": ["anchor-003"]
+        },
+        {
+          "action_id": "action-009",
+          "kind": "cite_reference_site",
+          "target": {
+            "reference_site": {
+              "path": "src/scanner.c",
+              "line_start": 357,
+              "line_end": 357,
+              "column_start": 15,
+              "column_end": 30,
+              "reference_kind": "call",
+              "containing_symbol_id": "80cc58e7c48d034967766f777a754058",
+              "source_symbol_id": "80cc58e7c48d034967766f777a754058",
+              "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
+              "resolution": "exact"
+            }
+          },
+          "requirement_group": "scanner-context",
+          "evidence_anchor_ids": ["anchor-003"],
+          "reference_site_ids": ["site-002"]
         }
       ],
       "forbidden_actions": [
@@ -644,6 +683,19 @@
           "containing_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
           "source_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
           "target_symbol_id": "f7bbebc087f2ed99ee062256b7a61007",
+          "resolution": "exact"
+        },
+        {
+          "site_id": "site-002",
+          "path": "src/scanner.c",
+          "line_start": 357,
+          "line_end": 357,
+          "column_start": 15,
+          "column_end": 30,
+          "reference_kind": "call",
+          "containing_symbol_id": "80cc58e7c48d034967766f777a754058",
+          "source_symbol_id": "80cc58e7c48d034967766f777a754058",
+          "target_symbol_id": "a23c44196ed5ebcb9b34d01916d9c530",
           "resolution": "exact"
         }
       ],
@@ -1027,7 +1079,7 @@
         {
           "predicate_id": "fact-001",
           "source": "answer",
-          "all_terms": ["bindings/node/binding_test.js", "bindings/rust/lib.rs", "test_can_load_grammar"],
+          "all_terms": ["node --test", "cargo test", "test_can_load_grammar"],
           "evidence_anchor_ids": ["anchor-002", "anchor-003"]
         }
       ],
@@ -1067,6 +1119,14 @@
           "line_start": 51,
           "line_end": 59,
           "relevance_grade": 3
+        },
+        {
+          "anchor_id": "anchor-004",
+          "path": "package.json",
+          "symbol": "test",
+          "line_start": 64,
+          "line_end": 64,
+          "relevance_grade": 2
         }
       ],
       "forbidden_claims": ["grammar loading has no focused binding tests"],
@@ -1100,6 +1160,13 @@
           "target": {"symbol_id": "43cacdf7463c28f5388e858745b9e783"},
           "requirement_group": "rust-test",
           "evidence_anchor_ids": ["anchor-003"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "inspect_file",
+          "target": {"path": "package.json"},
+          "requirement_group": "node-test",
+          "evidence_anchor_ids": ["anchor-004"]
         }
       ],
       "forbidden_actions": [],
