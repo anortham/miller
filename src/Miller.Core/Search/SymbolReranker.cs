@@ -26,6 +26,8 @@ public sealed record SymbolRerankResult(
 /// <summary>Deterministic, I/O-free reranking over lexical symbol candidates.</summary>
 public static class SymbolReranker
 {
+    private const int MaxContainerPromotions = 10;
+
     /// <summary>Rerank candidates and retain a complete score explanation for evaluation.</summary>
     public static IReadOnlyList<SymbolRerankResult> Rank(
         string query,
@@ -68,6 +70,31 @@ public static class SymbolReranker
                     finalScore)));
         }
 
+        for (int index = 0; index < results.Count; index++)
+        {
+            SymbolRerankResult result = results[index];
+            double finalScore = result.Features.FinalScore;
+            if (result.Candidate.Origin == SymbolCandidateOrigin.Container)
+            {
+                double? strongestChild = results
+                    .Where(child =>
+                        string.Equals(
+                            child.Candidate.ParentId,
+                            result.Candidate.SymbolId,
+                            StringComparison.Ordinal))
+                    .Select(static child => (double?)child.Features.FinalScore)
+                    .Max();
+                if (strongestChild is { } childScore && finalScore >= childScore)
+                    finalScore = Math.BitDecrement(childScore);
+            }
+
+            results[index] = result with
+            {
+                Candidate = result.Candidate with { RankScore = finalScore },
+                Features = result.Features with { FinalScore = finalScore },
+            };
+        }
+
         results.Sort(static (left, right) =>
         {
             int byScore = right.Features.FinalScore.CompareTo(left.Features.FinalScore);
@@ -107,7 +134,8 @@ public static class SymbolReranker
         foreach (IGrouping<string, SymbolCandidate> group in candidates
                      .Where(static candidate => !string.IsNullOrWhiteSpace(candidate.ParentId))
                      .GroupBy(static candidate => candidate.ParentId!, StringComparer.Ordinal)
-                     .OrderBy(static group => group.Key, StringComparer.Ordinal))
+                     .OrderBy(static group => group.Key, StringComparer.Ordinal)
+                     .Take(MaxContainerPromotions))
         {
             if (directIds.Contains(group.Key))
                 continue;

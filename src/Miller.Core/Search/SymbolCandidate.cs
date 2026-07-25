@@ -26,4 +26,6 @@ public sealed record SymbolCandidate(
     double Score,
     string? Language = null,
     SymbolCandidateOrigin Origin = SymbolCandidateOrigin.Symbol,
-    string? ParentId = null);
+    string? ParentId = null,
+    double? RankScore = null,
+    bool Relaxed = false);

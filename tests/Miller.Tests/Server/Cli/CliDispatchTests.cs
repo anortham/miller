@@ -3895,6 +3895,34 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public async Task ForcedHybridArm_MixedRouteReportsUnsupportedBeforeQueryingVectors()
+    {
+        var port = new StubVectorPort();
+        await using SemanticEmbeddingSession session = NewSemanticSession();
+        var outw = new StringWriter();
+        var err = new StringWriter();
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "auto",
+            regions: null,
+            query: "src/Tools Widget");
+
+        int code = CliDispatch.RunForcedArm(
+            CliSearchArm.Hybrid,
+            TwoSymbolIndex(),
+            route,
+            ArmRequest("src/Tools Widget"),
+            new SemanticSearchArm(ArmRoot, enabled: true, port.Factory, () => session),
+            outw,
+            err);
+
+        Assert.Equal(3, code);
+        Assert.Empty(outw.ToString());
+        Assert.Contains("mixed file/symbol route", err.ToString(), StringComparison.Ordinal);
+        Assert.Contains("--arm lexical", err.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, port.QueryCount);
+    }
+
+    [Fact]
     public async Task ForcedHybridArm_WhenTheArmServesNoNeighbours_RendersLexicalAndExitsZero()
     {
         var port = new StubVectorPort();
@@ -4248,6 +4276,8 @@ public sealed class CliDispatchTests : IDisposable
 
         public IReadOnlyList<VectorMatch> Matches { get; init; } = [];
 
+        public int QueryCount { get; private set; }
+
         public IVectorSearchPort? Factory(string workspaceRoot, out string? unavailableReason)
         {
             if (UnavailableReason is not null)
@@ -4265,8 +4295,11 @@ public sealed class CliDispatchTests : IDisposable
             public SemanticStorageLane Lane { get; } =
                 MillerSemanticContract.ParseStorageSchema(MillerSemanticContract.DefaultEncoder.StorageSchema);
 
-            public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k) =>
-                [.. owner.Matches.Take(k)];
+            public IReadOnlyList<VectorMatch> Search(VectorUnitKind kind, ReadOnlySpan<sbyte> query, int k)
+            {
+                owner.QueryCount++;
+                return [.. owner.Matches.Take(k)];
+            }
 
             public void Dispose()
             {

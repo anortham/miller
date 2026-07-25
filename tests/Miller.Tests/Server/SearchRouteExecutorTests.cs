@@ -218,7 +218,7 @@ public sealed class SearchRouteExecutorTests
     }
 
     [Fact]
-    public void CollectSymbolCandidates_SurfacesUnmatchedParentFromMultipleChildMatches()
+    public void CollectSymbolCandidates_SurfacesUnmatchedParentWithoutDisplacingStrongestChild()
     {
         IndexedSymbol parent = Symbol(
             0,
@@ -266,8 +266,14 @@ public sealed class SearchRouteExecutorTests
             limit: 6,
             excludeTests: null);
 
-        Assert.Equal(parent.SymbolId, candidates.Candidates[0].SymbolId);
-        Assert.Equal(0, candidates.Candidates[0].Score);
+        Assert.Equal(token.SymbolId, candidates.Candidates[0].SymbolId);
+        SymbolCandidate promotedParent = Assert.Single(
+            candidates.Candidates,
+            candidate => candidate.SymbolId == parent.SymbolId);
+        Assert.Equal(0, promotedParent.Score);
+        Assert.True(
+            candidates.Candidates.ToList().IndexOf(promotedParent) >
+            candidates.Candidates.ToList().IndexOf(candidates.Candidates[0]));
     }
 
     [Fact]
@@ -316,9 +322,9 @@ public sealed class SearchRouteExecutorTests
             compact.IndexOf("note: relaxed=or", StringComparison.Ordinal) <
             compact.IndexOf("next:", StringComparison.Ordinal));
         using var document = JsonDocument.Parse(json);
-        Assert.All(
-            document.RootElement.EnumerateArray(),
-            row => Assert.True(row.GetProperty("relaxed").GetBoolean()));
+        JsonElement[] rows = document.RootElement.EnumerateArray().ToArray();
+        Assert.False(rows[0].TryGetProperty("relaxed", out _));
+        Assert.True(rows[1].GetProperty("relaxed").GetBoolean());
     }
 
     [Fact]
@@ -380,6 +386,153 @@ public sealed class SearchRouteExecutorTests
         Assert.Contains(
             document.RootElement.EnumerateArray(),
             row => row.GetProperty("result_type").GetString() == "file");
+    }
+
+    [Fact]
+    public void CollectSymbolCandidates_MixedRouteWithoutFileEvidenceRetriesTheFullQuery()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "auto",
+            regions: null,
+            query: "async/await handler");
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(
+                0,
+                "async-handler",
+                "AsyncAwaitHandler",
+                "src/AsyncAwaitHandler.cs",
+                isTest: false));
+        var request = new SearchRouteExecutionRequest(
+            Query: "async/await handler",
+            Limit: 4,
+            Json: false,
+            ExcludeTests: null);
+
+        SymbolCandidateSet candidates =
+            SearchRouteExecutor.CollectSymbolCandidates(index, route, request);
+        string compact = SearchTool.RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            SearchToolMode.Auto,
+            request.Limit,
+            json: false,
+            out _);
+
+        Assert.False(candidates.Mixed);
+        Assert.True(candidates.MixedFallback);
+        Assert.Equal("async/await handler", index.SearchQueries[^1]);
+        Assert.Contains("mixed split ignored", compact, StringComparison.Ordinal);
+        Assert.Contains("async/await", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderSymbolCandidates_JsonSeparatesRawAndRankScores()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(0, "generated-symbol", "Widget", "generated/Widget.g.cs", isTest: false),
+            Symbol(1, "source-symbol", "Widget", "src/Widget.cs", isTest: false));
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "Widget",
+                Limit: 2,
+                Json: true,
+                ExcludeTests: null));
+
+        string json = SearchTool.RenderSymbolCandidates(
+            candidates,
+            "Widget",
+            SearchToolMode.Symbol,
+            2,
+            json: true,
+            out _);
+
+        using var document = JsonDocument.Parse(json);
+        JsonElement[] rows = document.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(rows[0].GetProperty("score").GetDouble(), rows[1].GetProperty("score").GetDouble());
+        Assert.True(
+            rows[0].GetProperty("rank_score").GetDouble() >
+            rows[1].GetProperty("rank_score").GetDouble());
+    }
+
+    [Fact]
+    public void RenderSymbolCandidates_MixedCompactCarriesDocsAndTruncation()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan(
+            "auto",
+            regions: null,
+            query: "src/Miller.Server/Tools SearchTool");
+        var index = new RecordingSymbolLookupIndex(
+            Symbol(
+                0,
+                "search-tool",
+                "SearchTool",
+                "src/Miller.Server/Tools/SearchTool.cs",
+                isTest: false),
+            Symbol(
+                1,
+                "search-helper",
+                "SearchHelper",
+                "src/Miller.Server/Tools/SearchHelper.cs",
+                isTest: false));
+        var request = new SearchRouteExecutionRequest(
+            Query: "src/Miller.Server/Tools SearchTool",
+            Limit: 1,
+            Json: false,
+            ExcludeTests: null);
+        SymbolCandidateSet candidates =
+            SearchRouteExecutor.CollectSymbolCandidates(index, route, request);
+
+        string compact = SearchTool.RenderSymbolCandidates(
+            candidates,
+            request.Query,
+            SearchToolMode.Auto,
+            request.Limit,
+            json: false,
+            out _,
+            hasDocLookup: ids => ids.ToHashSet(StringComparer.Ordinal),
+            boundAgentOutput: true);
+
+        Assert.Contains("has_doc", compact, StringComparison.Ordinal);
+        Assert.Contains("more", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("raise limit", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderSymbolCandidates_BoundedCompactDoesNotSuggestRaisingLimit()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+        var index = new RecordingSymbolLookupIndex(
+            Enumerable.Range(0, 12)
+                .Select(i => Symbol(
+                    i,
+                    $"symbol-{i}",
+                    $"Widget{i}",
+                    $"src/Widget{i}.cs",
+                    isTest: false))
+                .ToArray());
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "Widget",
+                Limit: 10,
+                Json: false,
+                ExcludeTests: null));
+
+        string compact = SearchTool.RenderSymbolCandidates(
+            candidates,
+            "Widget",
+            SearchToolMode.Symbol,
+            10,
+            json: false,
+            out _,
+            boundAgentOutput: true);
+
+        Assert.Contains("narrow query or filters", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("raise limit", compact, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -549,11 +702,16 @@ public sealed class SearchRouteExecutorTests
 
         public string? LastFileQuery { get; private set; }
 
-        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
-            _symbols
+        public List<string> SearchQueries { get; } = [];
+
+        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or)
+        {
+            SearchQueries.Add(query);
+            return _symbols
                 .Take(limit)
                 .Select(symbol => new SearchHit(symbol.ToSearchableDocument(), 2.0))
                 .ToArray();
+        }
 
         public IndexedSymbol Resolve(int docId) => _symbols.Single(symbol => symbol.DocId == docId);
 

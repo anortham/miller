@@ -90,7 +90,8 @@ internal static class SearchRouteExecutor
             request.ExcludeTests,
             request.FilePattern,
             request.Language,
-            route.FileQuery);
+            route.FileQuery,
+            request.Query);
     }
 
     public static SearchRouteExecutionResult RunSymbols(

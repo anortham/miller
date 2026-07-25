@@ -1166,7 +1166,7 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Run_SymbolJson_RendersExactCompatibilityShape()
+    public void Run_SymbolJson_RendersRawAndRankScores()
     {
         var index = new StubSymbolSearchIndex(
             (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7, "public void Alpha()"), 1.25),
@@ -1178,9 +1178,9 @@ public sealed class SearchToolTests
         Assert.Equal(2, count);
         Assert.Equal(
             "[{\"name\":\"Alpha\",\"kind\":\"method\",\"file\":\"src/Alpha.cs\",\"line\":7," +
-            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"symbol_id\":\"sym-alpha\"}," +
+            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"rank_score\":6.5,\"symbol_id\":\"sym-alpha\"}," +
             "{\"name\":\"Beta\",\"kind\":\"class\",\"file\":\"src/Beta.cs\",\"line\":3," +
-            "\"signature\":null,\"score\":0.5,\"symbol_id\":\"sym-beta\"}]",
+            "\"signature\":null,\"score\":0.5,\"rank_score\":1.75,\"symbol_id\":\"sym-beta\"}]",
             output);
     }
 
@@ -1275,7 +1275,7 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Run_SymbolJson_RemainsByteIdenticalWithoutNudge()
+    public void Run_SymbolJson_RemainsNudgeFree()
     {
         var index = new StubSymbolSearchIndex(
             (Symbol(0, "sym-alpha", "Alpha", "method", "src/Alpha.cs", 7, "public void Alpha()"), 1.25));
@@ -1286,7 +1286,7 @@ public sealed class SearchToolTests
         Assert.DoesNotContain("next:", output);
         Assert.Equal(
             "[{\"name\":\"Alpha\",\"kind\":\"method\",\"file\":\"src/Alpha.cs\",\"line\":7," +
-            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"symbol_id\":\"sym-alpha\"}]",
+            "\"signature\":\"public void Alpha()\",\"score\":1.25,\"rank_score\":6.5,\"symbol_id\":\"sym-alpha\"}]",
             output);
     }
 
@@ -1318,7 +1318,7 @@ public sealed class SearchToolTests
 
         Assert.Contains("Widget5  class  src/Widget5.cs:6", output);
         Assert.DoesNotContain("Widget6", output);
-        Assert.Contains("… 2 more (raise limit)", output);
+        Assert.Contains("… 2 more (narrow query or filters)", output);
     }
 
     [Fact]

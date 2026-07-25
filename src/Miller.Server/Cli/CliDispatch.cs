@@ -814,6 +814,14 @@ public static class CliDispatch
         ArgumentNullException.ThrowIfNull(err);
 
         string wire = WireName(requestedArm);
+        if (route.Mode == SearchToolMode.File || route.Mixed)
+        {
+            string routeName = route.Mixed ? "mixed file/symbol route" : "file route";
+            err.WriteLine(
+                $"--arm {wire} does not support the {routeName}; use --arm lexical.");
+            return 3;
+        }
+
         if (requestedArm is CliSearchArm.Hybrid)
         {
             var forced = new ForcedHybridFusionArm(() => arm);

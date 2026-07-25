@@ -131,9 +131,57 @@ public sealed class SymbolRerankerTests
             input.Candidates,
             containerEvidence: input.ContainerEvidence);
 
-        Assert.Equal(parent.SymbolId, ranked[0].Candidate.SymbolId);
-        Assert.Equal(0, ranked[0].Features.RawScore);
-        Assert.True(ranked[0].Features.ContainerEvidence > 0);
+        int parentIndex = ranked.ToList().FindIndex(row => row.Candidate.SymbolId == parent.SymbolId);
+        int strongestChildIndex = ranked.ToList().FindIndex(row =>
+            row.Candidate.SymbolId != parent.SymbolId &&
+            row.Features.FinalScore == ranked
+                .Where(candidate => candidate.Candidate.SymbolId != parent.SymbolId)
+                .Max(candidate => candidate.Features.FinalScore));
+        Assert.True(parentIndex > strongestChildIndex);
+        Assert.Equal(0, ranked[parentIndex].Features.RawScore);
+        Assert.True(
+            ranked[parentIndex].Features.FinalScore <
+            ranked[strongestChildIndex].Features.FinalScore);
+        Assert.True(ranked[parentIndex].Features.ContainerEvidence > 0);
+    }
+
+    [Fact]
+    public void ExpandContainers_CapsSyntheticParents()
+    {
+        SymbolCandidate[] parents = Enumerable.Range(0, 12)
+            .Select(index => Candidate(
+                100 + index,
+                $"Parent{index}",
+                "class",
+                $"src/Parent{index}.cs",
+                0))
+            .ToArray();
+        SymbolCandidate[] children = parents
+            .SelectMany((parent, index) => new[]
+            {
+                Candidate(
+                    200 + index * 2,
+                    $"First{index}",
+                    "method",
+                    parent.FilePath,
+                    5) with { ParentId = parent.SymbolId },
+                Candidate(
+                    201 + index * 2,
+                    $"Second{index}",
+                    "method",
+                    parent.FilePath,
+                    4) with { ParentId = parent.SymbolId },
+            })
+            .ToArray();
+        var parentById = parents.ToDictionary(parent => parent.SymbolId, StringComparer.Ordinal);
+
+        SymbolRerankInput input = SymbolReranker.ExpandContainers(
+            "first second choices",
+            children,
+            symbolId => parentById.GetValueOrDefault(symbolId));
+
+        Assert.Equal(children.Length + 10, input.Candidates.Count);
+        Assert.Equal(10, input.ContainerEvidence.Count);
     }
 
     private static SymbolCandidate Candidate(

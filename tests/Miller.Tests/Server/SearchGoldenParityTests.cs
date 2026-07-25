@@ -97,7 +97,7 @@ public sealed class SearchGoldenParityTests
         new(
             "symbol-exact-json",
             "GetUser", SearchToolMode.Symbol, 6, true,
-            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":12.444753393701339,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\"}]",
+            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":12.444753393701339,\"rank_score\":19.69475339370134,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"rank_score\":3.0697656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"rank_score\":3.0240173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"rank_score\":2.6453700113641156,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\"}]",
             4),
         new(
             "symbol-auto-compact",
@@ -112,7 +112,7 @@ public sealed class SearchGoldenParityTests
         new(
             "phrase-text-json",
             "get user by id", SearchToolMode.Text, 6, true,
-            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":6.098686861112545,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\",\"relaxed\":true},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\",\"relaxed\":true},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\",\"relaxed\":true},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\",\"relaxed\":true}]",
+            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":6.098686861112545,\"rank_score\":7.348686861112545,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\",\"relaxed\":true},{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1.8197656511737126,\"rank_score\":3.0697656511737126,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\",\"relaxed\":true},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1.7740173526805187,\"rank_score\":3.0240173526805187,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\",\"relaxed\":true},{\"name\":\"getHTTPResponseCode\",\"kind\":\"method\",\"file\":\"http/Server.go\",\"line\":25,\"signature\":\"func (s *Server) getHTTPResponseCode() int\",\"score\":1.8953700113641159,\"rank_score\":2.6453700113641156,\"symbol_id\":\"4455667788990a1b2c3d4e5f60112233\",\"relaxed\":true}]",
             4),
         new(
             "file-mode-compact",
@@ -122,7 +122,7 @@ public sealed class SearchGoldenParityTests
         new(
             "file-mode-json",
             "auth/UserService.cs", SearchToolMode.File, 6, true,
-            "[{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":1,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"}]",
+            "[{\"name\":\"UserService\",\"kind\":\"class\",\"file\":\"auth/UserService.cs\",\"line\":1,\"signature\":\"public class UserService\",\"score\":1,\"rank_score\":1,\"symbol_id\":\"a1b2c3d4e5f600112233445566778899\"},{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":1,\"rank_score\":1,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"},{\"name\":\"DeleteUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":12,\"signature\":null,\"score\":1,\"rank_score\":1,\"symbol_id\":\"c3d4e5f6001122334455667788990a1b\"}]",
             3),
         new(
             "filtered-file-pattern-compact",
@@ -147,7 +147,7 @@ public sealed class SearchGoldenParityTests
         new(
             "limit-edge-one-json",
             "user", SearchToolMode.Symbol, 1, true,
-            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":1.9723546964584648,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"}]",
+            "[{\"name\":\"GetUser\",\"kind\":\"method\",\"file\":\"auth/UserService.cs\",\"line\":5,\"signature\":\"public User GetUser(int id)\",\"score\":1.9723546964584648,\"rank_score\":3.222354696458465,\"symbol_id\":\"b2c3d4e5f6001122334455667788990a\"}]",
             1),
         new(
             "empty-result-compact",

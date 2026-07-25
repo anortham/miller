@@ -135,7 +135,10 @@ internal sealed record SymbolCandidateSet(
     ToolSearchFilters Filters,
     SymbolVisibilityPolicy? Visibility = null,
     bool Relaxed = false,
-    bool Mixed = false);
+    bool Mixed = false,
+    bool MixedFallback = false,
+    string? MixedFileQuery = null,
+    string? MixedSymbolQuery = null);
 
 /// <summary>
 /// The visibility predicate candidate generation applied, carried forward so another retrieval arm can admit
@@ -1364,7 +1367,8 @@ public sealed class SearchTool
         bool? excludeTests,
         string? filePattern = null,
         string? language = null,
-        string? mixedFileQuery = null)
+        string? mixedFileQuery = null,
+        string? mixedOriginalQuery = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -1414,12 +1418,18 @@ public sealed class SearchTool
             if (!rerank)
                 return candidates;
 
+            IReadOnlyDictionary<string, IndexedSymbol> parents = SymbolLookupBatch.FindBySymbolIds(
+                index,
+                candidates
+                    .Where(static candidate => !string.IsNullOrWhiteSpace(candidate.ParentId))
+                    .Select(static candidate => candidate.ParentId!)
+                    .Distinct(StringComparer.Ordinal));
             SymbolRerankInput input = SymbolReranker.ExpandContainers(
                 query,
                 candidates,
                 parentId =>
                 {
-                    if (index.FindBySymbolId(parentId) is not { } parent ||
+                    if (!parents.TryGetValue(parentId, out IndexedSymbol? parent) ||
                         hideTests && IsTestPath.IsTest(parent) ||
                         hideLowSignalKinds && IsLowSignalKind(parent.Kind) ||
                         !filters.Allows(parent.FilePath, parent.Language))
@@ -1458,7 +1468,9 @@ public sealed class SearchTool
             if (decision.FallbackMode is { } fallbackMode)
             {
                 Fetch(fallbackMode);
-                IReadOnlyList<SymbolCandidate> fallback = CurrentCandidates(rerank: true);
+                IReadOnlyList<SymbolCandidate> fallback = CurrentCandidates(rerank: true)
+                    .Select(static candidate => candidate with { Relaxed = true })
+                    .ToArray();
                 orderedCandidates = SearchRelaxation.Merge(
                     strict,
                     fallback,
@@ -1500,6 +1512,25 @@ public sealed class SearchTool
                 }
             }
 
+            if (fileCandidates.Count == 0 &&
+                !string.IsNullOrWhiteSpace(mixedOriginalQuery))
+            {
+                SymbolCandidateSet fullQuery = CollectSymbolCandidates(
+                    index,
+                    mixedOriginalQuery,
+                    mode,
+                    limit,
+                    excludeTests,
+                    filePattern,
+                    language);
+                return fullQuery with
+                {
+                    MixedFallback = true,
+                    MixedFileQuery = mixedFileQuery,
+                    MixedSymbolQuery = query,
+                };
+            }
+
             var mixedCandidates = new List<SymbolCandidate>(
                 orderedCandidates.Count + fileCandidates.Count);
             if (orderedCandidates.Count > 0)
@@ -1524,7 +1555,10 @@ public sealed class SearchTool
             filters,
             new SymbolVisibilityPolicy(hideTests, hideLowSignalKinds, filters),
             relaxed,
-            mixed);
+            mixed,
+            MixedFallback: false,
+            MixedFileQuery: mixed ? mixedFileQuery : null,
+            MixedSymbolQuery: mixed ? query : null);
 
         void AddIfVisible(IndexedSymbol symbol, double score)
         {
@@ -1631,16 +1665,47 @@ public sealed class SearchTool
                 page,
                 hasDocSymbolIds,
                 fusion,
-                candidates.Relaxed,
                 candidates.Mixed,
                 exactMiss,
-                boundAgentOutput);
+                boundAgentOutput,
+                candidates.MixedFallback,
+                candidates.MixedFileQuery,
+                candidates.MixedSymbolQuery);
         if (candidates.FileMode)
-            return RenderFileCompact(kept, page, total, compactBanner, hasDocSymbolIds);
+            return RenderFileCompact(
+                kept,
+                page,
+                total,
+                compactBanner,
+                hasDocSymbolIds,
+                boundAgentOutput);
 
         string compact = candidates.Mixed
-            ? RenderMixedCompact(kept, page, compactBanner)
-            : RenderCompact(kept, page, total, query, compactBanner, hasDocSymbolIds);
+            ? RenderMixedCompact(
+                kept,
+                page,
+                total,
+                compactBanner,
+                hasDocSymbolIds,
+                boundAgentOutput,
+                candidates.MixedFileQuery,
+                candidates.MixedSymbolQuery)
+            : RenderCompact(
+                kept,
+                page,
+                total,
+                query,
+                compactBanner,
+                hasDocSymbolIds,
+                boundAgentOutput);
+        if (candidates.MixedFallback)
+        {
+            compact = PrefixMixedSplitNote(
+                compact,
+                candidates.MixedFileQuery,
+                candidates.MixedSymbolQuery,
+                fallback: true);
+        }
         if (exactMiss)
             compact = PrefixExactMiss(compact, compactBanner, query);
         if (candidates.Relaxed)
@@ -3842,11 +3907,22 @@ public sealed class SearchTool
         int total,
         string query,
         string? compactBanner,
-        IReadOnlySet<string>? hasDocSymbolIds)
+        IReadOnlySet<string>? hasDocSymbolIds,
+        bool boundAgentOutput)
     {
         int definitionIndex = FindPromotableDefinitionIndex(kept, page, query);
         if (definitionIndex >= 0)
-            return RenderDefinitionCompact(kept, page, total, definitionIndex, query, compactBanner, hasDocSymbolIds);
+        {
+            return RenderDefinitionCompact(
+                kept,
+                page,
+                total,
+                definitionIndex,
+                query,
+                compactBanner,
+                hasDocSymbolIds,
+                boundAgentOutput);
+        }
 
         var groups = new List<(string FilePath, List<SymbolCandidate> Symbols)>();
         for (int i = 0; i < page; i++)
@@ -3892,8 +3968,7 @@ public sealed class SearchTool
             }
         }
         int remainder = total - page;
-        if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        AppendRemainder(sb, remainder, boundAgentOutput);
         return sb.ToString();
     }
 
@@ -3973,7 +4048,12 @@ public sealed class SearchTool
     private static string RenderMixedCompact(
         IReadOnlyList<SymbolCandidate> kept,
         int page,
-        string? compactBanner)
+        int total,
+        string? compactBanner,
+        IReadOnlySet<string>? hasDocSymbolIds,
+        bool boundAgentOutput,
+        string? fileQuery,
+        string? symbolQuery)
     {
         SymbolCandidate[] symbols = kept
             .Take(page)
@@ -3986,6 +4066,11 @@ public sealed class SearchTool
         var builder = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactBanner))
             builder.Append(compactBanner).Append('\n');
+        builder.Append(PrefixMixedSplitNote(
+            string.Empty,
+            fileQuery,
+            symbolQuery,
+            fallback: false));
         if (symbols.Length > 0)
         {
             builder.Append("Symbol matches:").Append('\n');
@@ -3999,6 +4084,8 @@ public sealed class SearchTool
                     .Append(symbol.FilePath)
                     .Append(':')
                     .Append(symbol.StartLine);
+                if (hasDocSymbolIds?.Contains(symbol.SymbolId) == true)
+                    builder.Append("  has_doc");
                 if (!string.IsNullOrWhiteSpace(symbol.Signature))
                 {
                     builder.Append('\n')
@@ -4017,6 +4104,7 @@ public sealed class SearchTool
                 builder.Append("  ").Append(file.FilePath).Append('\n');
         }
         TrimTrailingNewlines(builder);
+        AppendRemainder(builder, total - page, boundAgentOutput);
         return builder.ToString();
     }
 
@@ -4025,7 +4113,8 @@ public sealed class SearchTool
         int page,
         int total,
         string? compactBanner,
-        IReadOnlySet<string>? hasDocSymbolIds)
+        IReadOnlySet<string>? hasDocSymbolIds,
+        bool boundAgentOutput)
     {
         var groups = new List<(string FilePath, List<SymbolCandidate> Symbols)>();
         for (int i = 0; i < page; i++)
@@ -4059,8 +4148,7 @@ public sealed class SearchTool
 
         TrimTrailingNewlines(sb);
         int remainder = total - page;
-        if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        AppendRemainder(sb, remainder, boundAgentOutput);
         return sb.ToString();
     }
 
@@ -4087,7 +4175,8 @@ public sealed class SearchTool
         int definitionIndex,
         string query,
         string? compactBanner,
-        IReadOnlySet<string>? hasDocSymbolIds)
+        IReadOnlySet<string>? hasDocSymbolIds,
+        bool boundAgentOutput)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(compactBanner))
@@ -4112,8 +4201,7 @@ public sealed class SearchTool
 
         TrimTrailingNewlines(sb);
         int remainder = total - page;
-        if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+        AppendRemainder(sb, remainder, boundAgentOutput);
         return sb.ToString();
     }
 
@@ -4244,20 +4332,45 @@ public sealed class SearchTool
             sb.Length--;
     }
 
+    private static void AppendRemainder(StringBuilder sb, int remainder, bool boundAgentOutput)
+    {
+        if (remainder <= 0)
+            return;
+
+        sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
+            .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
+            .Append(')');
+    }
+
+    private static string PrefixMixedSplitNote(
+        string compact,
+        string? fileQuery,
+        string? symbolQuery,
+        bool fallback)
+    {
+        string note = fallback
+            ? $"note: mixed split ignored — no file matched '{fileQuery}'; searched full query."
+            : $"route: mixed file='{fileQuery}' symbol='{symbolQuery}'";
+        return string.IsNullOrEmpty(compact)
+            ? note + "\n"
+            : note + "\n" + compact;
+    }
+
     /// <summary>
-    /// Rows are the lexical shape plus, on a fused run only, the additive provenance a caller needs to explain
-    /// an ordering it did not expect. <c>score</c> keeps meaning the lexical score in every mode, and a
-    /// lexical-only run writes no fusion keys at all, so its bytes are unchanged.
+    /// Rows keep <c>score</c> as the retrieval backend's raw lexical score and expose <c>rank_score</c> as the
+    /// score that determined served order. A fused run adds its arm-specific provenance separately.
     /// </summary>
     private static string RenderJson(
         IReadOnlyList<SymbolCandidate> kept,
         int page,
         IReadOnlySet<string>? hasDocSymbolIds,
         IReadOnlyDictionary<string, FusedCandidate>? fusion = null,
-        bool relaxed = false,
         bool mixed = false,
         bool exactMiss = false,
-        bool boundAgentOutput = false)
+        bool boundAgentOutput = false,
+        bool mixedFallback = false,
+        string? mixedFileQuery = null,
+        string? mixedSymbolQuery = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4278,6 +4391,7 @@ public sealed class SearchTool
                         ? Truncate(s.Signature, ToolRenderLimits.SignatureMaxLength)
                         : s.Signature);
                 writer.WriteNumber("score", s.Score);
+                writer.WriteNumber("rank_score", s.RankScore ?? s.Score);
                 writer.WriteString("symbol_id", s.SymbolId);
                 if (mixed)
                 {
@@ -4285,8 +4399,15 @@ public sealed class SearchTool
                         "result_type",
                         s.Origin == SymbolCandidateOrigin.File ? "file" : "symbol");
                 }
-                if (relaxed)
+                if (s.Relaxed)
                     writer.WriteBoolean("relaxed", true);
+                if (mixed || mixedFallback)
+                {
+                    writer.WriteString("mixed_file_query", mixedFileQuery);
+                    writer.WriteString("mixed_symbol_query", mixedSymbolQuery);
+                    if (mixedFallback)
+                        writer.WriteBoolean("mixed_split_fallback", true);
+                }
                 if (exactMiss)
                     writer.WriteBoolean("exact_match", false);
                 if (fusion is not null && fusion.TryGetValue(s.SymbolId, out FusedCandidate? fused))
