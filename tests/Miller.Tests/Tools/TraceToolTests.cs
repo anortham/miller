@@ -159,14 +159,41 @@ public sealed class TraceToolTests
         string target = new('x', 500);
 
         using var document = JsonDocument.Parse(tool.Trace(target, mode: "path", to: "Alpha", format: "json"));
-        string call = document.RootElement
-            .GetProperty("diagnostic")
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        string call = diagnostic
             .GetProperty("next_actions")[0]
             .GetProperty("call")
             .GetString()!;
 
+        Assert.Equal("unresolved_target", diagnostic.GetProperty("code").GetString());
         Assert.DoesNotContain(new string('x', 161), call, StringComparison.Ordinal);
         Assert.Contains(new string('x', 160), call, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Trace_ResolvedEmptyPathDiagnostic_DoesNotSuggestResolvingTarget()
+    {
+        var index = BuildSymbolIndex(
+            new[]
+            {
+                ("a", "Alpha", "method", "src/A.cs", 1),
+                ("b", "Beta", "method", "src/B.cs", 1),
+            },
+            Array.Empty<(string, string)>());
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new TraceTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Trace("Alpha", mode: "path", to: "Beta", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        string[] calls = diagnostic.GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Equal("no_path", diagnostic.GetProperty("code").GetString());
+        Assert.DoesNotContain(calls, call => call.Contains("search(query=\"Alpha\")", StringComparison.Ordinal));
+        Assert.Contains(calls, call => call.Contains("trace(target=\"Alpha\", mode=\"refs\")", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -543,6 +570,66 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Refs_Compact_DisclosesHomonymFallbackSafetyWithoutCandidateRows()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var evidence = new ReferenceEvidenceSet(
+            [
+                new ReferenceEvidence(
+                    "a",
+                    null,
+                    "src/Caller.cs",
+                    10,
+                    1,
+                    10,
+                    6,
+                    100,
+                    105,
+                    ReferenceKind.Call,
+                    "call",
+                    ReferenceEvidenceSource.IdentifierDirect,
+                    null,
+                    1,
+                    ReferenceResolutionStatus.Exact),
+            ],
+            [],
+            new ReferenceEvidenceCoverage(
+                1,
+                1,
+                1,
+                0,
+                0,
+                2,
+                false,
+                false,
+                ReferenceFallbackStatus.SuppressedAmbiguousName));
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 20,
+            fullFormat: false,
+            json: false,
+            referenceKind: null,
+            includeDefinition: false,
+            readReferenceEvidence: (_, _) => evidence,
+            out _,
+            out _);
+
+        Assert.Contains(
+            "same-name fallback is disabled because the target name is ambiguous",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Refs_Json_UsesArtifactBoundStatelessContinuationAboveOutputBudget()
     {
         var index = BuildSymbolIndex(
@@ -611,6 +698,28 @@ public sealed class TraceToolTests
             out _);
         using var firstDocument = JsonDocument.Parse(first);
         string token = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+
+        string compact = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 30,
+            fullFormat: false,
+            json: false,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPage,
+            workspaceId: "workspace",
+            snapshot,
+            continuation: null,
+            out _,
+            out _);
+
+        Assert.Contains("workspace_id=\"workspace\"", compact, StringComparison.Ordinal);
 
         string second = TraceTool.Run(
             index,
@@ -800,8 +909,6 @@ public sealed class TraceToolTests
     [Fact]
     public void Refs_Compact_UnresolvableContainingRendersNoInSegment()
     {
-        // The containing id points at a symbol absent from the index (e.g. cross-file/unindexed): drop it
-        // entirely — a bare 32-hex id is unusable in compact output.
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
@@ -820,6 +927,64 @@ public sealed class TraceToolTests
         Assert.Contains("src/Caller.cs:10  call", outp);
         Assert.DoesNotContain("in=", outp);
         Assert.DoesNotContain("deadbeef", outp);
+    }
+
+    [Fact]
+    public void Refs_Compact_MissingLineDoesNotFabricateLineZero()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        var evidence = new ReferenceEvidenceSet(
+            [
+                new ReferenceEvidence(
+                    "a",
+                    null,
+                    "src/Unknown.cs",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    ReferenceKind.Call,
+                    "call",
+                    ReferenceEvidenceSource.IdentifierDirect,
+                    null,
+                    1,
+                    ReferenceResolutionStatus.Exact),
+            ],
+            [],
+            new ReferenceEvidenceCoverage(
+                1,
+                1,
+                1,
+                0,
+                0,
+                1,
+                false,
+                false,
+                ReferenceFallbackStatus.NoCandidates));
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 20,
+            fullFormat: false,
+            json: false,
+            referenceKind: null,
+            includeDefinition: false,
+            readReferenceEvidence: (_, _) => evidence,
+            out _,
+            out _);
+
+        Assert.Contains("src/Unknown.cs  call", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Unknown.cs:0", output, StringComparison.Ordinal);
     }
 
     [Fact]

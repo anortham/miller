@@ -66,6 +66,33 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
+    public void Read_SameNameConstructorAndImportSymbols_DoNotSuppressFallback()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Widget", "class", "csharp", "src/Widget.cs", "class Widget", 1, null),
+                new(SecondTargetId, "Widget", "constructor", "csharp", "src/Widget.cs", "Widget()", 3, FirstTargetId),
+                new(FirstCallerId, "Widget", "import", "typescript", "src/client.ts", "import { Widget }", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-fallback", "Widget", "type_usage", "csharp", "src/Consumer.cs", 10, null),
+            ]);
+
+        ReferenceEvidenceSet result = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            FirstTargetId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        ReferenceEvidence fallback = Assert.Single(result.Fallback);
+        Assert.Equal("src/Consumer.cs", fallback.FilePath);
+        Assert.Equal(1, result.Coverage.SameNameDefinitionCount);
+        Assert.Equal(ReferenceFallbackStatus.Available, result.Coverage.FallbackStatus);
+    }
+
+    [Fact]
     public void Read_DirectOverlayRelationshipAndPendingRowsAtOneSite_AreCanonicalizedAndDeduplicated()
     {
         var identifier = new JulieDbFixture.IdentifierRow(

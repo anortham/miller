@@ -109,7 +109,7 @@ public sealed class TraceTool
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             string normalizedMode = NormalizeMode(mode);
             ToolDiagnostic? diagnostic =
-                emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target) : null;
+                emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target, to) : null;
 
             if (telemetry is not null)
             {
@@ -200,29 +200,67 @@ public sealed class TraceTool
     private static string NormalizeMode(string? mode) =>
         string.IsNullOrWhiteSpace(mode) ? ModeRefs : mode.Trim().ToLowerInvariant();
 
-    private static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target)
+    private static ToolDiagnostic TraceEmptyDiagnostic(string mode, string output, string target, string? to)
     {
         if (mode is not (ModePath or ModeRefs or ModeBridge))
             return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
 
-        string code = mode switch
+        bool ambiguous = output.Contains("Multiple candidates", StringComparison.Ordinal);
+        bool unresolved =
+            ambiguous ||
+            output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("is a file", StringComparison.OrdinalIgnoreCase) ||
+            output.Contains("target symbol is required", StringComparison.OrdinalIgnoreCase);
+        if (unresolved)
         {
-            ModePath => "no_path",
-            ModeRefs => "no_references",
-            ModeBridge => "no_bridge_path",
-            _ when output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-                   output.Contains("Multiple candidates", StringComparison.Ordinal) => "unresolved_target",
-            _ => "no_trace_edges",
-        };
-        var actions = new[]
+            var actions = new[]
+            {
+                new ToolDiagnosticAction(
+                    $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\")",
+                    "resolve a concrete trace target"),
+            };
+            return ambiguous
+                ? ToolDiagnostic.Ambiguity("unresolved_target", "Trace target is ambiguous.", actions)
+                : ToolDiagnostic.ExpectedEmpty("unresolved_target", "Trace target could not be resolved.", actions);
+        }
+
+        ToolDiagnosticAction sourceRefs = new(
+            $"trace(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", mode=\"refs\")",
+            "check extracted identifier references from the resolved target");
+        ToolDiagnosticAction sourceSearch = new(
+            $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", mode=\"source\")",
+            "look for source text links not represented in the graph");
+        if (mode == ModeRefs)
         {
-            new ToolDiagnosticAction(
-                $"search(query=\"{ToolDiagnosticText.EscapeCallArgument(target)}\")",
-                "resolve a concrete trace target"),
-        };
-        return output.Contains("Multiple candidates", StringComparison.Ordinal)
-            ? ToolDiagnostic.Ambiguity(code, "Trace target is ambiguous.", actions)
-            : ToolDiagnostic.ExpectedEmpty(code, "Trace produced no edges.", actions);
+            return ToolDiagnostic.ExpectedEmpty(
+                "no_references",
+                "Trace produced no references.",
+                [
+                    sourceSearch,
+                    new ToolDiagnosticAction(
+                        $"inspect(target=\"{ToolDiagnosticText.EscapeCallArgument(target)}\", depth=\"full\")",
+                        "inspect callers and callees from the symbol graph"),
+                ]);
+        }
+
+        if (mode == ModeBridge)
+        {
+            return ToolDiagnostic.ExpectedEmpty(
+                "no_bridge_path",
+                "Trace produced no bridge path.",
+                [sourceRefs, sourceSearch]);
+        }
+
+        var pathActions = new List<ToolDiagnosticAction> { sourceRefs };
+        if (!string.IsNullOrWhiteSpace(to) &&
+            !string.Equals(target.Trim(), to.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            pathActions.Add(new ToolDiagnosticAction(
+                $"trace(target=\"{ToolDiagnosticText.EscapeCallArgument(to)}\", mode=\"refs\")",
+                "check extracted identifier references from the resolved destination"));
+        }
+        pathActions.Add(sourceSearch);
+        return ToolDiagnostic.ExpectedEmpty("no_path", "Trace produced no dependency path.", pathActions);
     }
 
     private static string LimitBucket(int limit) => limit switch
@@ -645,8 +683,7 @@ public sealed class TraceTool
                 FallbackTruncated = candidateMoreFallback,
             };
             bool candidateFallbackSuppressed =
-                evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName &&
-                evidence.Coverage.FallbackAvailable > 0;
+                evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName;
             int candidateServableAvailable =
                 evidence.Coverage.ExactAvailable +
                 (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available
@@ -663,7 +700,7 @@ public sealed class TraceTool
                 : candidateLimitTruncated
                     ? "reference trace truncated by limit."
                     : candidateFallbackSuppressed
-                        ? "Unresolved same-name matches were suppressed because the target name is ambiguous."
+                        ? FallbackSuppressionNote(evidence.Coverage)
                         : null;
             string? candidateDiagnosticCode = candidateContinuation is not null
                 ? "output_page_truncated"
@@ -738,7 +775,7 @@ public sealed class TraceTool
         {
             resultNote = RefsEmptyHint(targetSymbol.Name, normalizedKind);
             if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName)
-                resultNote += " Unresolved same-name matches were suppressed because the target name is ambiguous.";
+                resultNote += " " + FallbackSuppressionNote(evidence.Coverage);
             diagnosticCode = "no_references";
             resultNextActions = RefsEmptyNextActions(targetSymbol.Name);
         }
@@ -747,10 +784,9 @@ public sealed class TraceTool
             resultNote = "reference page truncated by the 16 KiB output budget; continue with the returned token.";
             diagnosticCode = "output_page_truncated";
         }
-        else if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName &&
-                 evidence.Coverage.FallbackAvailable > 0)
+        else if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName)
         {
-            resultNote = "Unresolved same-name matches were suppressed because the target name is ambiguous.";
+            resultNote = FallbackSuppressionNote(evidence.Coverage);
             diagnosticCode = "fallback_suppressed_ambiguous_name";
         }
         else if (evidence.Coverage.ExactTruncated ||
@@ -815,6 +851,7 @@ public sealed class TraceTool
                     $"trace target=\"{targetSymbol.SymbolId}\" mode=refs limit={limit}" +
                     (normalizedKind is null ? "" : $" reference_kind={normalizedKind}") +
                     (includeDefinition ? "" : " include_definition=false") +
+                    $" workspace_id=\"{EscapeShellishArgument(workspaceId)}\"" +
                     $" continuation=\"{EscapeShellishArgument(nextContinuation)}\"",
                     "continue exact/fallback reference evidence")).Append('\n');
             }
@@ -825,11 +862,18 @@ public sealed class TraceTool
         return sb.ToString().TrimEnd('\n');
     }
 
+    private static string FallbackSuppressionNote(ReferenceEvidenceCoverage coverage) =>
+        coverage.FallbackAvailable > 0
+            ? "Unresolved same-name matches were suppressed because the target name is ambiguous."
+            : "Unresolved same-name fallback is disabled because the target name is ambiguous.";
+
     private static string ReferenceLine(ISymbolLookupIndex index, ReferenceEvidence reference)
     {
         var sb = new StringBuilder();
-        sb.Append(reference.FilePath).Append(':').Append(reference.StartLine ?? 0)
-          .Append("  ").Append(reference.SourceKind);
+        sb.Append(reference.FilePath);
+        if (reference.StartLine is { } startLine)
+            sb.Append(':').Append(startLine);
+        sb.Append("  ").Append(reference.SourceKind);
         if (reference.ContainingSymbolId is { } containingId &&
             index.FindBySymbolId(containingId) is { } containing)
             sb.Append("  in=").Append(containing.Name);

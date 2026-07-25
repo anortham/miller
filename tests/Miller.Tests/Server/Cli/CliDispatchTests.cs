@@ -2648,6 +2648,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Trace_Refs_Json_InvalidContinuationReturnsTypedRefusal()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            new[] { "trace", "GetUser", "--mode", "refs", "--continuation", "invalid", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Empty(errText);
+        using var doc = JsonDocument.Parse(outText);
+        JsonElement root = doc.RootElement;
+        Assert.Equal("trace", root.GetProperty("tool").GetString());
+        Assert.Equal("refusal", root.GetProperty("diagnostic").GetProperty("class").GetString());
+        Assert.Equal("continuation_invalid", root.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Trace_ScopeFlag_IsAccepted()
     {
         using var fx = JulieDbFixture.CreateForInspect();

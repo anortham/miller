@@ -289,7 +289,7 @@ Accepted signature-only output, weak seed scoring, semantic-disconnection, adapt
 
 ### Recommendation
 
-Keep `refs`, `path`, and `bridge`. Rebuild refs over the shared evidence module. Add a path-kind contract with call-like default and broad dependency override, render edge kinds and confidence, and support multi-target ambiguity without false attribution. Deprecate `auto` after `inspect` and exact refs cover its workflows. Do not add semantic-similar symbols to a reference answer.
+Keep `refs`, `path`, and `bridge`. Rebuild refs over the shared evidence module. Add a path-kind contract with call-like default and broad dependency override, render edge kinds and confidence, and support multi-target ambiguity without false attribution. Remove `auto` after `inspect` and exact refs cover its workflows. Do not add semantic-similar symbols to a reference answer.
 
 ### Acceptance
 
@@ -302,6 +302,19 @@ Keep `refs`, `path`, and `bridge`. Rebuild refs over the shared evidence module.
 ### Claude Disposition
 
 Accepted the exact-reference, confidence, path-kind, ambiguity, and redundant-auto findings. Corrected Claude's proposed `graph.Dependents(seed)` implementation: the graph alone lacks reference-site spans and enough provenance, so the fix belongs in a DB-backed evidence reader, with the graph consuming its normalized edges where appropriate.
+
+### Phase 3 Remediation Disposition
+
+Completed 2026-07-25. `trace refs` now consumes exact symbol-ID evidence, keeps unresolved fallback separate,
+deduplicates site evidence, suppresses only genuine competing definitions, and discloses homonym fallback
+safety even when no fallback rows exist. MCP and CLI continuations are artifact-bound; compact continuation
+hints retain `workspace_id`; refusal JSON is typed; resolved-empty traces recommend evidence recovery rather
+than re-resolving an already resolved target; compact rows omit an unknown line instead of fabricating `:0`.
+The v1 `references` compatibility array remains because
+[`../contracts/trace-json-v1.md`](../contracts/trace-json-v1.md) publishes it alongside
+`exact_references` and `fallback_references`; live Eros source does not currently consume the Trace arrays,
+but deleting a published field would still break other v1 consumers. Focused Trace, CLI Trace, and reference
+reader verification passed 115 tests.
 
 ## Tool Pass 5: `impact`
 

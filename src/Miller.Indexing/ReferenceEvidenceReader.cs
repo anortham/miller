@@ -36,7 +36,7 @@ public static class ReferenceEvidenceReader
         int exactAvailable = exact.Count;
         var boundedExact = exact.Skip(query.ExactOffset).Take(query.Bounds.ExactLimit).ToArray();
 
-        int sameNameDefinitionCount = CountDefinitions(connection, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, targetSymbolId, targetName);
         var fallbackRows = FilterKind(ReadFallback(connection, targetSymbolId, targetName), query.Kind);
         var fallbackCandidates = Deduplicate(fallbackRows);
         IReadOnlyList<ReferenceEvidence> fallback;
@@ -186,11 +186,17 @@ public static class ReferenceEvidenceReader
         }
     }
 
-    private static int CountDefinitions(SqliteConnection connection, string name)
+    private static int CountDefinitions(SqliteConnection connection, string targetSymbolId, string name)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = $name;";
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM symbols
+            WHERE name = $name
+              AND (symbol_id = $target OR kind NOT IN ('constructor', 'import'));
+            """;
         command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$target", targetSymbolId);
         return Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
     }
 

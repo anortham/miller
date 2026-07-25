@@ -2201,14 +2201,36 @@ public static class CliDispatch
         bool json = o.Has("json");
         string? referenceKind = o.Value("reference-kind", o.Value("kind"));
         bool includeDefinition = BoolOption(o, "include-definition", fallback: true) && !o.Has("no-definition");
-        if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
+            if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
+                    return 3;
+
+                var fullResolver = new SmartTargetResolver(fullIndex);
+                string bridgeOutput = TraceTool.Run(
+                    fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
+                    depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
+                    referenceKind, includeDefinition,
+                    (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+                    ctx.WorkspaceId ?? "current",
+                    string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
+                        ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                        : null,
+                    o.Value("continuation"),
+                    out _, out _);
+                outw.WriteLine(bridgeOutput);
+                return 0;
+            }
+
+            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
                 return 3;
 
-            var fullResolver = new SmartTargetResolver(fullIndex);
-            string bridgeOutput = TraceTool.Run(
-                fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
+            using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
+            var resolver = new SmartTargetResolver(index);
+            string output = TraceTool.RunGraph(
+                index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
                 depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
                 referenceKind, includeDefinition,
                 (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
@@ -2218,28 +2240,19 @@ public static class CliDispatch
                     : null,
                 o.Value("continuation"),
                 out _, out _);
-            outw.WriteLine(bridgeOutput);
+            outw.WriteLine(output);
             return 0;
         }
-
-        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
-            return 3;
-
-        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
-        var resolver = new SmartTargetResolver(index);
-        string output = TraceTool.RunGraph(
-            index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-            depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
-            referenceKind, includeDefinition,
-            (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
-            ctx.WorkspaceId ?? "current",
-            string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
-                ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
-                : null,
-            o.Value("continuation"),
-            out _, out _);
-        outw.WriteLine(output);
-        return 0;
+        catch (ToolDiagnosticException ex) when (
+            ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
+        {
+            string rendered = ToolDiagnosticRenderer.Render("trace", ex.Diagnostic, json);
+            if (json)
+                outw.WriteLine(rendered);
+            else
+                err.WriteLine(rendered);
+            return 2;
+        }
     }
 
     // ---------- workspace verb ----------
