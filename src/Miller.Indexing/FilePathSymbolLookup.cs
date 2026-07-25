@@ -12,30 +12,14 @@ internal static class FilePathSymbolLookup
         if (limit < 1)
             return Array.Empty<IndexedSymbol>();
 
-        string normalizedQuery = query.Trim().Replace('\\', '/');
-        var rankedPaths = new List<(string Path, int Rank)>();
-        foreach (string path in byFilePath.Keys)
-        {
-            string fileName = LastPathSegment(path);
-            int rank = Rank(path, fileName, normalizedQuery);
-            if (rank >= 0)
-                rankedPaths.Add((path, rank));
-        }
+        IReadOnlyList<string> rankedPaths = FindFilePathsByFragment(byFilePath, query, int.MaxValue);
 
         if (rankedPaths.Count == 0)
             return Array.Empty<IndexedSymbol>();
 
-        rankedPaths.Sort(static (a, b) =>
-        {
-            int byRank = a.Rank.CompareTo(b.Rank);
-            if (byRank != 0) return byRank;
-            int byLength = a.Path.Length.CompareTo(b.Path.Length);
-            return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
-        });
-
         var results = new List<IndexedSymbol>(limit);
         var pathsWithRemainder = new List<string>();
-        foreach (var (path, _) in rankedPaths)
+        foreach (string path in rankedPaths)
         {
             List<IndexedSymbol> symbols = byFilePath[path];
             if (symbols.Count == 0)
@@ -60,6 +44,39 @@ internal static class FilePathSymbolLookup
         }
 
         return results;
+    }
+
+    public static IReadOnlyList<string> FindFilePathsByFragment(
+        IReadOnlyDictionary<string, List<IndexedSymbol>> byFilePath,
+        string query,
+        int limit)
+    {
+        ArgumentNullException.ThrowIfNull(byFilePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        if (limit < 1)
+            return Array.Empty<string>();
+
+        string normalizedQuery = query.Trim().Replace('\\', '/');
+        var rankedPaths = new List<(string Path, int Rank)>();
+        foreach (string path in byFilePath.Keys)
+        {
+            string fileName = LastPathSegment(path);
+            int rank = Rank(path, fileName, normalizedQuery);
+            if (rank >= 0)
+                rankedPaths.Add((path, rank));
+        }
+
+        rankedPaths.Sort(static (a, b) =>
+        {
+            int byRank = a.Rank.CompareTo(b.Rank);
+            if (byRank != 0) return byRank;
+            int byLength = a.Path.Length.CompareTo(b.Path.Length);
+            return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
+        });
+        return rankedPaths
+            .Take(limit)
+            .Select(static candidate => candidate.Path)
+            .ToArray();
     }
 
     private static int Rank(string path, string fileName, string query)

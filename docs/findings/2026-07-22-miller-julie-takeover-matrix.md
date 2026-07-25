@@ -344,6 +344,70 @@ Keep the in-memory reverse graph and no-arg diff workflow. Normalize graph edges
 
 Accepted ranking, test-linkage, exact-identifier, revision, and provenance gaps. Corrected ranking to keep hop as the primary safety signal; centrality must rank peers, not bury direct callers behind distant hubs. Left real `reference_score` value and test-linkage coverage unproven pending artifact data.
 
+### Phase 6 Remediation Disposition
+
+Completed 2026-07-25. Normal and revision-delta Impact now share one bounded traversal/ranking core.
+Risk ranking runs before the public result cap; graph rows and filename-role candidates have truthful,
+disjoint returned counts; any post-rank omission prevents `exhausted/complete`; maximum depth and result
+limit are clamped to 5 and 1,000; and resolved-empty diagnostics provide file-search/refresh recovery.
+
+The first optimization attempt materialized the full graph and was rejected because it reversed the
+documented large-repo read-path improvement. The retained SQLite graph batches BFS levels, frontier
+proof, and centrality/visibility hydration while preserving exact evidence parity. It also now includes
+Blazor component dependency edges, closing a CLI/MCP graph mismatch. Focused Impact, graph, bridge, and
+Blazor verification passed 141 tests. Live dogfood reduced one-file Impact from 36.80 seconds to 1.10
+seconds warm and six-file Impact from more than 90 seconds to 1.89 seconds at 77–82 MB RSS; details and
+the stale OpenClaw replay constraint are recorded in
+[`2026-07-25-impact-readpath-performance.md`](2026-07-25-impact-readpath-performance.md).
+
+The next Claude pass found nine batch-path and truthfulness defects. The accepted repairs cap frontier
+queries, bound/clear traversal caches, normalize nullable and dual-resolution confidence, make the
+pre-window order storage-neutral, stop attributing missing lookup rows and non-candidate filename scans
+to the result cap, delete the unreachable scalar SQL copy, restore file-search recovery for diff/git
+inputs, and remove duplicate supplemental hydration. Claude's proposed separate frontier-existence SQL
+was corrected to a short-circuiting chunked call through the single batch edge policy, avoiding a second
+edge-semantics implementation.
+
+The follow-up confirmed those nine repairs and found five final gaps. Miller now enumerates matching
+paths before hydrating and bounding filename-role candidates, treats any graph or heuristic omission as
+`truncated_by_limit`, keeps frontier proof out of the evidence cache in 100-ID chunks, removes the
+redundant SQL result sort, and drives the shared ranking core end to end over the CLI SQLite graph in
+tests. The measured latency evidence is explicitly attributed to `miller impact`; MCP uses the resident
+in-memory graph.
+
+The final follow-up removed the obsolete 64-candidate ceiling, whose separate safety bound could be
+misreported as public-limit truncation, and made diff-path diagnostic parsing conditional on an actual
+empty result. Candidate expansion remains bounded by the ranked input and public result cap.
+
+The next check found that the MCP wrapper used the non-test KPI to decide whether the whole result was
+empty. It now tracks total returned rows separately, so populated tests-only results cannot carry a
+contradictory `no_impacted_symbols` diagnostic.
+
+The following review tightened that split: mixed changed-path recovery now names the proven unseeded
+path rather than the first supplied path, and telemetry `result_count` uses the full returned envelope
+so `outcome=ok` cannot coexist with a misleading zero count for tests-only results.
+
+The final diagnostic repair replaces rendered-text classification with typed execution reasons,
+classifies partially seeded empty closures as `no_dependents`, and carries real returned/visited
+counts through revision-delta telemetry. Duplicate diff-note control flow was removed.
+
+The last actionability check made mixed-path recovery positively assert the unseeded-path search and
+refresh calls, aligned the public core documentation with the two-stage candidate-window/ranking
+design, and extended telemetry buckets across the reachable 1–1,000 result limit.
+
+The last check removed seeded-path fallback from recovery actions and corrected the `nodesVisited`
+contract to its graph-only pre-window meaning. File-search/refresh recovery now requires an
+execution-proven unseeded path.
+
+The final recovery check anchors no-dependents Trace actions on an exact resolved seed symbol when the
+original Impact target is a file, avoiding a guaranteed Trace refusal while retaining file inspection.
+Blank or whitespace optional targets use the same normalization as input routing and cannot suppress
+unseeded-path recovery.
+
+The Phase 6 Claude loop closed with `verdict=clean` and no findings. Exact-state verification passed
+190 focused tests, 4,891 fast tests with 2 environment skips, 91 Scale tests with 3 configured
+sidecar/platform skips, Release build 0/0, and clean diff hygiene.
+
 ## Tool Pass 6: `edit`
 
 ### Findings

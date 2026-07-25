@@ -140,4 +140,17 @@ public sealed class SymbolLookupTablesTests
 
         Assert.Equal(["Alpha", "Gamma"], hits.Select(static hit => hit.Name).ToArray());
     }
+
+    [Fact]
+    public void FindFilePathsByFragment_ReturnsEachRankedPathOnce()
+    {
+        var t = Build(
+            Sym(0, "a", "Alpha", "src/a/mod.rs"),
+            Sym(1, "b", "Beta", "src/a/mod.rs"),
+            Sym(2, "c", "Gamma", "src/b/mod.rs"));
+
+        IReadOnlyList<string> paths = t.FindFilePathsByFragment("mod.rs", limit: 10);
+
+        Assert.Equal(["src/a/mod.rs", "src/b/mod.rs"], paths);
+    }
 }

@@ -171,6 +171,7 @@ public sealed class FtsSymbolSearchIndexTests : IDisposable
         Assert.Equal("core/Cache.cs", index.ResolveIndexedFilePath("Cache.cs"));
         Assert.Contains(".cs", index.KnownExtensions);
         Assert.NotEmpty(index.FindByFilePathFragment("UserService", limit: 10));
+        Assert.Equal(["auth/UserService.cs"], index.FindFilePathsByFragment("UserService", limit: 10));
     }
 
     [Fact]

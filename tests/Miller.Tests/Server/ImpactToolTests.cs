@@ -206,6 +206,23 @@ public sealed class ImpactToolTests
         return (string)cmd.ExecuteScalar()!;
     }
 
+    private static (string Outcome, int ResultCount) ReadTelemetryOutcomeAndResultCount(string telemetryDb)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryDb,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT outcome, result_count FROM tool_telemetry WHERE tool = 'impact';";
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return (reader.GetString(0), reader.GetInt32(1));
+    }
+
     // ---- reverse-closure correctness + test partition ----
 
     [Fact]
@@ -425,6 +442,167 @@ public sealed class ImpactToolTests
             .ToArray();
 
         Assert.Equal(new string?[] { "CentralCall", "PublicCall", "PrivateCall", "Uses" }, names);
+    }
+
+    [Fact]
+    public void Run_AppliesLimitAfterRiskRanking()
+    {
+        const string seedId = "41000000000000000000000000000001";
+        const string importId = "41000000000000000000000000000002";
+        const string callId = "41000000000000000000000000000003";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, seedId, "Seed", "void Seed()", "method", "csharp", "src/Seed.cs", 1, 2, null, false),
+            new IndexedSymbol(1, importId, "ImportConsumer", "void ImportConsumer()", "method", "csharp", "src/A.cs", 1, 2, null, false),
+            new IndexedSymbol(2, callId, "CallConsumer", "void CallConsumer()", "method", "csharp", "src/Z.cs", 1, 2, null, false),
+        };
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [
+                new GraphEdge(importId, seedId, "import"),
+                new GraphEdge(callId, seedId, "call"),
+            ]);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Seed",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 1,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement impacted = Assert.Single(doc.RootElement.GetProperty("impacted").EnumerateArray());
+        Assert.Equal("CallConsumer", impacted.GetProperty("name").GetString());
+        Assert.True(Traversal(doc.RootElement).GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal(2, Traversal(doc.RootElement).GetProperty("reached_count").GetInt32());
+    }
+
+    [Fact]
+    public void Run_UnresolvableGraphNodeDoesNotClaimResultLimitTruncation()
+    {
+        const string seedId = "47000000000000000000000000000001";
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(
+            [
+                new IndexedSymbol(
+                    0, seedId, "Seed", "void Seed()", "method", "csharp",
+                    "src/Seed.cs", 1, 2, null, false),
+            ],
+            []);
+        var graph = new StaticReachGraph(new GraphReachResult(
+            [new ReachedNode("missing-symbol", 1, seedId, "calls", 1.0, "relationship")],
+            1,
+            false,
+            false));
+
+        string output = ImpactTool.Run(
+            index,
+            graph,
+            new SmartTargetResolver(index),
+            target: "Seed",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 10,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
+        Assert.Equal("complete", traversal.GetProperty("reason").GetString());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+    }
+
+    [Fact]
+    public void Run_PostRankLimitReportsReturnedGraphAndDroppedCandidateCounts()
+    {
+        const string seedId = "42000000000000000000000000000001";
+        const string firstCallId = "42000000000000000000000000000002";
+        const string secondCallId = "42000000000000000000000000000003";
+        const string candidateId = "42000000000000000000000000000004";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, seedId, "Parser", "void Parser()", "method", "csharp", "src/Parser.cs", 1, 2, null, false),
+            new IndexedSymbol(1, firstCallId, "FirstCall", "void FirstCall()", "method", "csharp", "src/First.cs", 1, 2, null, false),
+            new IndexedSymbol(2, secondCallId, "SecondCall", "void SecondCall()", "method", "csharp", "src/Second.cs", 1, 2, null, false),
+            new IndexedSymbol(3, candidateId, "ParserTests", "void ParserTests()", "method", "csharp", "tests/ParserTests.cs", 1, 2, null, true),
+        };
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [
+                new GraphEdge(firstCallId, seedId, "call"),
+                new GraphEdge(secondCallId, seedId, "call"),
+            ]);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Parser",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 2,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(2, traversal.GetProperty("returned_count").GetInt32());
+        Assert.Equal(2, traversal.GetProperty("graph_returned_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.True(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("limit", traversal.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Run_PostRankCandidateDisplacementReportsDroppedGraphRow()
+    {
+        const string seedId = "43000000000000000000000000000001";
+        const string directId = "43000000000000000000000000000002";
+        const string indirectId = "43000000000000000000000000000003";
+        const string candidateId = "43000000000000000000000000000004";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, seedId, "Parser", "void Parser()", "method", "csharp", "src/Parser.cs", 1, 2, null, false),
+            new IndexedSymbol(1, directId, "Direct", "void Direct()", "method", "csharp", "src/Direct.cs", 1, 2, null, false),
+            new IndexedSymbol(2, indirectId, "Indirect", "void Indirect()", "method", "csharp", "src/Indirect.cs", 1, 2, null, false),
+            new IndexedSymbol(3, candidateId, "ParserTests", "void ParserTests()", "method", "csharp", "tests/ParserTests.cs", 1, 2, null, true),
+        };
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [
+                new GraphEdge(directId, seedId, "call"),
+                new GraphEdge(indirectId, directId, "call"),
+            ]);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Parser",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 2,
+            limit: 2,
+            json: true,
+            out _,
+            out _);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(doc.RootElement);
+        Assert.Equal(2, traversal.GetProperty("reached_count").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("graph_returned_count").GetInt32());
+        Assert.Equal(1, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -677,6 +855,32 @@ public sealed class ImpactToolTests
         Assert.Equal(
             "The resolved symbols have no indexed downstream dependents.",
             diagnostic.GetProperty("message").GetString());
+        string[] calls = diagnostic.GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+        Assert.DoesNotContain(calls, call => call.Contains("search(query=\"Lonely\")", StringComparison.Ordinal));
+        Assert.Contains(calls, call => call.Contains("trace(target=\"Lonely\", mode=\"refs\")", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Impact_FileTargetWithoutDependents_TracesAResolvedSeedSymbol()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Impact(target: "src/Other.cs", format: "json"));
+        string[] calls = document.RootElement.GetProperty("diagnostic").GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Contains($"trace(target=\"{LonelyId}\", mode=\"refs\")", calls);
+        Assert.DoesNotContain("trace(target=\"src/Other.cs\", mode=\"refs\")", calls);
+        Assert.Contains("inspect(target=\"src/Other.cs\", depth=\"full\")", calls);
     }
 
     [Fact]
@@ -952,6 +1156,164 @@ public sealed class ImpactToolTests
         Assert.True(traversal.GetProperty("test_candidates_truncated").GetBoolean());
     }
 
+    [Fact]
+    public void Run_Target_FilenameCandidatesAreHydratedAfterPathFiltering()
+    {
+        const string sourceId = "53200000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(
+                0, sourceId, "Parser", "class Parser", "class", "csharp",
+                "src/Parser.cs", 1, 200, null, false),
+        };
+        symbols.AddRange(Enumerable.Range(0, 70).Select(index => new IndexedSymbol(
+            index + 1,
+            $"532{index + 2:00000000000000000000000000000}",
+            $"Helper{index}",
+            $"void Helper{index}()",
+            "method",
+            "csharp",
+            "src/Parser.cs",
+            index + 2,
+            index + 2,
+            null,
+            false)));
+        symbols.AddRange(Enumerable.Range(0, 65).Select(index => new IndexedSymbol(
+            index + 71,
+            $"533{index + 1:00000000000000000000000000000}",
+            $"ParserWorks{index}",
+            $"void ParserWorks{index}()",
+            "method",
+            "csharp",
+            "tests/ParserTests.cs",
+            index + 1,
+            index + 1,
+            null,
+            true)));
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, []);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Parser",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 100,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal(65, document.RootElement.GetProperty("tests").GetArrayLength());
+        Assert.Equal(65, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.False(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+        Assert.False(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void Impact_TestsOnlyResultDoesNotEmitEmptyDiagnostic()
+    {
+        const string sourceId = "53500000000000000000000000000001";
+        const string testId = "53500000000000000000000000000002";
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(
+            [
+                new IndexedSymbol(
+                    0, sourceId, "Parser", "class Parser", "class", "csharp",
+                    "src/Parser.cs", 1, 20, null, false),
+                new IndexedSymbol(
+                    1, testId, "ParserWorks", "void ParserWorks()", "method", "csharp",
+                    "tests/ParserTests.cs", 1, 5, null, true),
+            ],
+            []);
+        string directory =
+            Path.Combine(Path.GetTempPath(), "miller-impact-tests-only-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string telemetryDb = Path.Combine(directory, "telemetry.db");
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", directory));
+        var tool = new ImpactTool(provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", directory))
+            {
+                using var scope = ledger.Measure("impact", op: null);
+                using var document =
+                    JsonDocument.Parse(tool.Impact(
+                        target: "Parser",
+                        max_depth: int.MaxValue,
+                        limit: int.MaxValue,
+                        format: "json"));
+                Assert.Single(document.RootElement.GetProperty("tests").EnumerateArray());
+                Assert.False(document.RootElement.TryGetProperty("diagnostic", out _));
+            }
+
+            Assert.Equal(("ok", 1), ReadTelemetryOutcomeAndResultCount(telemetryDb));
+            using var metadata = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.Equal("3-5", metadata.RootElement.GetProperty("max_depth_bucket").GetString());
+            Assert.Equal("501-1000", metadata.RootElement.GetProperty("limit_bucket").GetString());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Run_SqliteGraph_UsesTheSameRankedWindowAndTruthfulCounts()
+    {
+        const string seedId = "53400000000000000000000000000001";
+        const string firstCallerId = "53400000000000000000000000000002";
+        const string secondCallerId = "53400000000000000000000000000003";
+        const string testId = "53400000000000000000000000000004";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(seedId, "Parser", "method", "csharp", "src/Parser.cs", "void Parser()", 1, null),
+                new(firstCallerId, "FirstCaller", "method", "csharp", "src/First.cs", "void FirstCaller()", 1, null),
+                new(secondCallerId, "SecondCaller", "method", "csharp", "src/Second.cs", "void SecondCaller()", 1, null),
+                new(testId, "ParserWorks", "method", "csharp", "tests/ParserTests.cs", "void ParserWorks()", 1, null)
+                {
+                    IsTest = true,
+                },
+            ],
+            relationships:
+            [
+                new("relationship-first", firstCallerId, seedId, "call"),
+                new("relationship-second", secondCallerId, seedId, "call"),
+            ]);
+        MillerRepositoryIndex index = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var graph = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        string output = ImpactTool.Run(
+            index,
+            graph,
+            new SmartTargetResolver(index),
+            target: "Parser",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 2,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal(2, traversal.GetProperty("returned_count").GetInt32());
+        Assert.Equal(2, traversal.GetProperty("graph_returned_count").GetInt32());
+        Assert.Equal(0, traversal.GetProperty("test_candidate_count").GetInt32());
+        Assert.True(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+        Assert.True(traversal.GetProperty("truncated_by_limit").GetBoolean());
+        Assert.Equal("truncated", traversal.GetProperty("status").GetString());
+        Assert.Equal("limit", traversal.GetProperty("reason").GetString());
+    }
+
     [Theory]
     [InlineData("go", "src/parser.go", "tests/parser_test.go")]
     [InlineData("rust", "src/parser.rs", "tests/parser_tests.rs")]
@@ -1065,6 +1427,183 @@ public sealed class ImpactToolTests
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    [Fact]
+    public void Impact_ChangedPathWithoutSymbols_OffersFileSearchAndRefresh()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Impact(changed_paths: ["does/not/exist.cs"], format: "json"));
+        string[] calls = document.RootElement.GetProperty("diagnostic").GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Contains("search(query=\"does/not/exist.cs\", mode=\"file\")", calls);
+        Assert.Contains("workspace(operation=\"refresh\")", calls);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void Impact_BlankTargetWithChangedPath_UsesTheUnseededPathForRecovery(string target)
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Impact(
+            target: target,
+            changed_paths: ["does/not/exist.cs"],
+            format: "json"));
+        string[] calls = document.RootElement.GetProperty("diagnostic").GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Contains("search(query=\"does/not/exist.cs\", mode=\"file\")", calls);
+        Assert.Contains("workspace(operation=\"refresh\")", calls);
+    }
+
+    [Fact]
+    public void Impact_DiffWithoutSymbols_OffersFileSearchAndRefresh()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+        const string diff =
+            """
+            diff --git a/docs/missing.md b/docs/missing.md
+            --- a/docs/missing.md
+            +++ b/docs/missing.md
+            @@ -1 +1 @@
+            -old
+            +new
+            """;
+
+        using var document = JsonDocument.Parse(tool.Impact(diff: diff, format: "json"));
+        string[] calls = document.RootElement.GetProperty("diagnostic").GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Contains("search(query=\"docs/missing.md\", mode=\"file\")", calls);
+        Assert.Contains("workspace(operation=\"refresh\")", calls);
+    }
+
+    [Fact]
+    public void Impact_MixedChangedPaths_DiagnosticTargetsTheUnseededPath()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Impact(
+            changed_paths: ["src/Other.cs", "does/not/exist.cs"],
+            format: "json"));
+        string[] calls = document.RootElement.GetProperty("diagnostic").GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Equal(
+            "no_dependents",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Contains("search(query=\"does/not/exist.cs\", mode=\"file\")", calls);
+        Assert.Contains("workspace(operation=\"refresh\")", calls);
+        Assert.DoesNotContain("search(query=\"src/Other.cs\", mode=\"file\")", calls);
+    }
+
+    [Fact]
+    public void Impact_AllSeededChangedPathWithoutDependentsDoesNotOfferFileRecovery()
+    {
+        var (index, _) = BuildFixture();
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new ImpactTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Impact(changed_paths: ["src/Other.cs"], format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        string[] calls = diagnostic.GetProperty("next_actions")
+            .EnumerateArray()
+            .Select(action => action.GetProperty("call").GetString()!)
+            .ToArray();
+
+        Assert.Equal("no_dependents", diagnostic.GetProperty("code").GetString());
+        Assert.Empty(calls);
+    }
+
+    [Fact]
+    public void Run_ManyNonCandidateFilenameMatchesRemainExhausted()
+    {
+        const string seedId = "45000000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, seedId, "Execute", "void Execute()", "method", "csharp",
+                "src/Service.cs", 1, 2, null, false),
+        };
+        symbols.AddRange(Enumerable.Range(0, 70).Select(index => new IndexedSymbol(
+            index + 1,
+            $"45{index + 2:000000000000000000000000000000}",
+            $"Helper{index}",
+            $"void Helper{index}()",
+            "method",
+            "csharp",
+            $"src/ServiceHelper{index:00}.cs",
+            1,
+            2,
+            null,
+            false)));
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(symbols, []);
+
+        string output = ImpactTool.Run(
+            index,
+            new SmartTargetResolver(index),
+            target: "Execute",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 10,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal("exhausted", traversal.GetProperty("status").GetString());
+        Assert.Equal("complete", traversal.GetProperty("reason").GetString());
+        Assert.False(traversal.GetProperty("test_candidates_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void Run_ClampsMaximumTraversalBounds()
+    {
+        var (index, resolver) = BuildFixture();
+        string output = ImpactTool.Run(
+            index,
+            resolver,
+            target: "Validate",
+            changedPaths: null,
+            diff: null,
+            maxDepth: int.MaxValue,
+            limit: int.MaxValue,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal(5, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(1000, traversal.GetProperty("limit").GetInt32());
     }
 
     // ---- diff leg ----
@@ -1637,6 +2176,19 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void RenderIndexRevisionDelta_ClampsMaximumTraversalBounds()
+    {
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "current", complete: true, 4, 4, Array.Empty<string>(),
+            index: null, graph: null, maxDepth: int.MaxValue, limit: int.MaxValue, json: true);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement traversal = Traversal(document.RootElement);
+        Assert.Equal(5, traversal.GetProperty("max_depth").GetInt32());
+        Assert.Equal(1000, traversal.GetProperty("limit").GetInt32());
+    }
+
+    [Fact]
     public void RenderIndexRevisionDelta_UnavailableDelta_ReportsDeltaUnavailable()
     {
         string output = ImpactTool.RenderIndexRevisionDelta(
@@ -1727,6 +2279,80 @@ public sealed class ImpactToolTests
     }
 
     [Fact]
+    public void RunIndexRevisionDeltaExecution_PreservesReturnedAndVisitedCounts()
+    {
+        MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
+        var snapshot = new ImpactRevisionDeltaSnapshot(
+            "current",
+            true,
+            1,
+            2,
+            "artifact",
+            "artifact",
+            "complete",
+            ["src/Seed.cs"],
+            []);
+
+        ImpactTool.ImpactExecution execution = ImpactTool.RunIndexRevisionDeltaExecution(
+            snapshot,
+            index,
+            index.Graph,
+            maxDepth: 5,
+            limit: 100,
+            json: true,
+            indexAvailable: true);
+
+        using var document = JsonDocument.Parse(execution.Output);
+        Assert.Equal(
+            document.RootElement.GetProperty("impacted").GetArrayLength() +
+            document.RootElement.GetProperty("tests").GetArrayLength(),
+            execution.ReturnedCount);
+        Assert.Equal(
+            Traversal(document.RootElement).GetProperty("reached_count").GetInt32(),
+            execution.NodesVisited);
+        Assert.True(execution.ReturnedCount > 0);
+        Assert.True(execution.NodesVisited > 0);
+    }
+
+    [Fact]
+    public void RenderIndexRevisionDelta_AppliesLimitAfterRiskRanking()
+    {
+        const string seedId = "44000000000000000000000000000001";
+        const string importId = "44000000000000000000000000000002";
+        const string callId = "44000000000000000000000000000003";
+        var symbols = new[]
+        {
+            new IndexedSymbol(0, seedId, "Seed", "void Seed()", "method", "csharp", "src/Seed.cs", 1, 2, null, false),
+            new IndexedSymbol(1, importId, "ImportConsumer", "void ImportConsumer()", "method", "csharp", "src/A.cs", 1, 2, null, false),
+            new IndexedSymbol(2, callId, "CallConsumer", "void CallConsumer()", "method", "csharp", "src/Z.cs", 1, 2, null, false),
+        };
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [
+                new GraphEdge(importId, seedId, "import"),
+                new GraphEdge(callId, seedId, "call"),
+            ]);
+
+        string output = ImpactTool.RenderIndexRevisionDelta(
+            "ws",
+            complete: true,
+            fromRevision: 1,
+            toRevision: 2,
+            changedPaths: ["src/Seed.cs"],
+            index,
+            index.Graph,
+            maxDepth: 1,
+            limit: 1,
+            json: true);
+
+        using var doc = JsonDocument.Parse(output);
+        JsonElement impacted = Assert.Single(doc.RootElement.GetProperty("impacted").EnumerateArray());
+        Assert.Equal("CallConsumer", impacted.GetProperty("name").GetString());
+        Assert.Equal(2, Traversal(doc.RootElement).GetProperty("reached_count").GetInt32());
+        Assert.True(Traversal(doc.RootElement).GetProperty("truncated_by_limit").GetBoolean());
+    }
+
+    [Fact]
     public void RenderIndexRevisionDelta_LimitBoundary_ReportsPreLimitCount()
     {
         MillerRepositoryIndex index = BuildTraversalEvidenceFixture();
@@ -1772,6 +2398,18 @@ public sealed class ImpactToolTests
             _requests.Add(request);
             return _results.Count == 0 ? GitDiffResult.Ok("") : _results.Dequeue();
         }
+    }
+
+    private sealed class StaticReachGraph(GraphReachResult result) : ISymbolGraphReachability
+    {
+        public GraphReachResult ReachWithEvidence(
+            IEnumerable<string> starts,
+            int maxDepth,
+            int limit,
+            Direction dir) =>
+            result;
+
+        public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) => null;
     }
 
     private static void AssertTestEvidenceScope(JsonElement root)

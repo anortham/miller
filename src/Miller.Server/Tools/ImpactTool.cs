@@ -50,6 +50,11 @@ public sealed class ImpactTool
     private const int CompactLikelyTestsLimit = 20;
     private const int CompactImpactedLimit = 40;
     private const int CompactOutputMaxChars = 6000;
+    private const int MaximumDepth = 5;
+    private const int MaximumLimit = 1000;
+    private const int MinimumRankingCandidates = 500;
+    private const int MaximumRankingCandidates = 2000;
+    private const int RankingCandidateMultiplier = 8;
 
     private readonly IWorkspaceIndexProvider _workspaceProvider;
     private readonly IGitDiffReader _gitDiffReader;
@@ -95,9 +100,9 @@ public sealed class ImpactTool
         long? from_index_revision = null,
         [Description("Artifact generation id paired with from_index_revision; mismatches return an unavailable delta.")]
         string? from_artifact_id = null,
-        [Description("Reverse-reachability radius (how many hops of dependents to follow). Default 2.")]
+        [Description("Reverse-reachability radius (how many hops of dependents to follow), clamped to 1-5. Default 2.")]
         int max_depth = 2,
-        [Description("Max impacted symbols to return. Default 100.")] int limit = 100,
+        [Description("Max impacted symbols to return, clamped to 1-1000. Default 100.")] int limit = 100,
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
@@ -107,6 +112,8 @@ public sealed class ImpactTool
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
+            max_depth = NormalizeDepth(max_depth);
+            limit = NormalizeLimit(limit);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -172,7 +179,11 @@ public sealed class ImpactTool
 
             string output;
             int impactedCount;
+            int returnedCount;
             int nodesVisited;
+            IReadOnlyList<string> unseededPaths;
+            ImpactEmptyReason? emptyReason;
+            string? diagnosticTraceTarget;
             bool revisionDelta = from_index_revision.HasValue;
             if (revisionDelta)
             {
@@ -182,7 +193,7 @@ public sealed class ImpactTool
                     context.IndexDbPath,
                     from_index_revision!.Value,
                     from_artifact_id);
-                output = RunIndexRevisionDelta(
+                ImpactExecution execution = RunIndexRevisionDeltaExecution(
                     snapshot,
                     context.Index,
                     context.Index.Graph,
@@ -190,24 +201,54 @@ public sealed class ImpactTool
                     limit,
                     json,
                     indexAvailable: true);
-                impactedCount = 0;
-                nodesVisited = 0;
+                output = execution.Output;
+                impactedCount = execution.ImpactedCount;
+                returnedCount = execution.ReturnedCount;
+                nodesVisited = execution.NodesVisited;
+                unseededPaths = execution.UnseededPaths;
+                emptyReason = execution.EmptyReason;
+                diagnosticTraceTarget = execution.DiagnosticTraceTarget;
             }
             else if (emptyGitDiff)
             {
                 output = Note(json, "No impact — git diff is empty.");
                 impactedCount = 0;
+                returnedCount = 0;
                 nodesVisited = 0;
+                unseededPaths = [];
+                emptyReason = ImpactEmptyReason.EmptyGitDiff;
+                diagnosticTraceTarget = null;
             }
             else
             {
-                output = Run(context.Index, context.Resolver,
-                    target, changed_paths, diff, max_depth, limit, json,
-                    out impactedCount, out nodesVisited);
+                ImpactExecution execution = RunCore(
+                    context.Index,
+                    context.Index.Graph,
+                    context.Resolver,
+                    target,
+                    changed_paths,
+                    diff,
+                    max_depth,
+                    limit,
+                    json);
+                output = execution.Output;
+                impactedCount = execution.ImpactedCount;
+                returnedCount = execution.ReturnedCount;
+                nodesVisited = execution.NodesVisited;
+                unseededPaths = execution.UnseededPaths;
+                emptyReason = execution.EmptyReason;
+                diagnosticTraceTarget = execution.DiagnosticTraceTarget;
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
-            ToolDiagnostic? diagnostic =
-                !revisionDelta && impactedCount == 0 ? ImpactEmptyDiagnostic(output, target) : null;
+            ToolDiagnostic? diagnostic = null;
+            if (!revisionDelta && returnedCount == 0)
+            {
+                diagnostic = ImpactEmptyDiagnostic(
+                    emptyReason ?? ImpactEmptyReason.NoImpactedSymbols,
+                    target,
+                    unseededPaths.FirstOrDefault(),
+                    diagnosticTraceTarget);
+            }
 
             if (telemetry is not null)
             {
@@ -221,7 +262,7 @@ public sealed class ImpactTool
                     ? from_index_revision.GetValueOrDefault().ToString(
                         System.Globalization.CultureInfo.InvariantCulture)
                     : TargetForTelemetry(target, changed_paths, diff, useGitDiff, @base, staged));
-                telemetry.ResultCount = impactedCount;
+                telemetry.ResultCount = returnedCount;
                 // D10 work proxy (bytes_examined ≈ nodes visited): the reverse-reachability set the BFS produced.
                 telemetry.BytesExamined = nodesVisited;
                 telemetry.Outcome = diagnostic is null ? TelemetryOutcome.Ok : TelemetryOutcome.Empty;
@@ -281,27 +322,51 @@ public sealed class ImpactTool
         return string.IsNullOrWhiteSpace(diff) ? "missing_input" : "diff";
     }
 
-    private static ToolDiagnostic ImpactEmptyDiagnostic(string output, string? target)
+    private static ToolDiagnostic ImpactEmptyDiagnostic(
+        ImpactEmptyReason reason,
+        string? target,
+        string? changedPath,
+        string? diagnosticTraceTarget)
     {
-        string code;
-        if (output.Contains("git diff is empty", StringComparison.Ordinal))
-            code = "empty_git_diff";
-        else if (output.Contains("No indexed symbols matched", StringComparison.Ordinal))
-            code = "no_seed_symbols";
-        else if (output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-                 output.Contains("Multiple candidates", StringComparison.Ordinal))
-            code = "unresolved_target";
-        else if (output.Contains("Resolved seed symbols:", StringComparison.Ordinal))
-            code = "no_dependents";
-        else
-            code = "no_impacted_symbols";
+        string code = reason switch
+        {
+            ImpactEmptyReason.EmptyGitDiff => "empty_git_diff",
+            ImpactEmptyReason.NoSeedSymbols => "no_seed_symbols",
+            ImpactEmptyReason.UnresolvedTarget => "unresolved_target",
+            ImpactEmptyReason.AmbiguousTarget => "unresolved_target",
+            ImpactEmptyReason.NoDependents => "no_dependents",
+            _ => "no_impacted_symbols",
+        };
 
-        IReadOnlyList<ToolDiagnosticAction> actions = string.IsNullOrWhiteSpace(target)
-            ? Array.Empty<ToolDiagnosticAction>()
-            : [new ToolDiagnosticAction(
-                $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
-                "resolve an exact impact seed")];
-        return output.Contains("Multiple candidates", StringComparison.Ordinal)
+        string? actionTarget = string.IsNullOrWhiteSpace(target) ? changedPath : target;
+        IReadOnlyList<ToolDiagnosticAction> actions = code switch
+        {
+            "no_seed_symbols" => ChangedPathRecoveryActions(actionTarget),
+            "no_dependents" when
+                string.IsNullOrWhiteSpace(target) && !string.IsNullOrWhiteSpace(changedPath) =>
+                ChangedPathRecoveryActions(actionTarget),
+            _ when string.IsNullOrWhiteSpace(actionTarget) => Array.Empty<ToolDiagnosticAction>(),
+            _ => code switch
+            {
+                "unresolved_target" =>
+                [
+                    new ToolDiagnosticAction(
+                        $"search(query=\"{EscapeDiagnosticTarget(target!)}\")",
+                        "resolve an exact impact seed"),
+                ],
+                "no_dependents" =>
+                [
+                    new ToolDiagnosticAction(
+                        $"trace(target=\"{EscapeDiagnosticTarget(diagnosticTraceTarget ?? target!)}\", mode=\"refs\")",
+                        "check exact inbound reference evidence"),
+                    new ToolDiagnosticAction(
+                        $"inspect(target=\"{EscapeDiagnosticTarget(target!)}\", depth=\"full\")",
+                        "inspect the resolved symbol and its graph relations"),
+                ],
+                _ => Array.Empty<ToolDiagnosticAction>(),
+            },
+        };
+        return reason == ImpactEmptyReason.AmbiguousTarget
             ? ToolDiagnostic.Ambiguity(code, "Impact target is ambiguous.", actions)
             : ToolDiagnostic.ExpectedEmpty(code, code switch
             {
@@ -312,6 +377,24 @@ public sealed class ImpactTool
                 _ => "Impact produced no affected symbols.",
             }, actions);
     }
+
+    private static IReadOnlyList<ToolDiagnosticAction> ChangedPathRecoveryActions(string? path) =>
+        string.IsNullOrWhiteSpace(path)
+            ?
+            [
+                new ToolDiagnosticAction(
+                    "workspace(operation=\"refresh\")",
+                    "refresh changed files before retrying impact"),
+            ]
+            :
+            [
+                new ToolDiagnosticAction(
+                    $"search(query=\"{EscapeDiagnosticTarget(path)}\", mode=\"file\")",
+                    "confirm the indexed file path"),
+                new ToolDiagnosticAction(
+                    "workspace(operation=\"refresh\")",
+                    "refresh changed files before retrying impact"),
+            ];
 
     private static string EscapeDiagnosticTarget(string target)
     {
@@ -326,7 +409,9 @@ public sealed class ImpactTool
         <= 25 => "11-25",
         <= 50 => "26-50",
         <= 100 => "51-100",
-        _ => "101+",
+        <= 250 => "101-250",
+        <= 500 => "251-500",
+        _ => "501-1000",
     };
 
     private static string DepthBucket(int depth) => depth switch
@@ -334,19 +419,29 @@ public sealed class ImpactTool
         <= 0 => "0",
         1 => "1",
         2 => "2",
-        <= 5 => "3-5",
-        _ => "6+",
+        _ => "3-5",
     };
+
+    private static int NormalizeDepth(int depth) => Math.Clamp(depth, 1, MaximumDepth);
+
+    private static int NormalizeLimit(int limit) => Math.Clamp(limit, 1, MaximumLimit);
+
+    private static int RankingCandidateLimit(int limit)
+    {
+        long scaled = Math.Max(MinimumRankingCandidates, (long)limit * RankingCandidateMultiplier);
+        return Math.Max(limit, (int)Math.Min(MaximumRankingCandidates, scaled));
+    }
 
     /// <summary>
     /// The pure execution core (no MCP/DI/telemetry; no DB — the graph is in-memory). Resolves the seed symbols
-    /// per D5, runs a bounded REVERSE reachability to <paramref name="maxDepth"/> capped at <paramref name="limit"/>,
-    /// partitions the reached nodes into impacted symbols vs likely tests, and renders compact or json with
-    /// provenance (file group, <c>:line name kind hop=N</c>). <paramref name="impactedCount"/> is the number of
-    /// non-test impacted symbols (the result-count KPI); a usage error / not-found / empty closure yields 0.
-    /// <paramref name="nodesVisited"/> is the size of the reverse-reachability set the BFS produced (impacted +
-    /// likely tests, before the partition) — the D10 <c>bytes_examined ≈ nodes visited</c> work proxy; the guard /
-    /// not-found / empty-closure paths leave it 0.
+    /// per D5, runs REVERSE reachability to <paramref name="maxDepth"/> over a storage-neutral candidate window
+    /// of at least <c>max(500, limit * 8)</c> rows capped at 2,000, risk-ranks that window, and applies
+    /// <paramref name="limit"/>. It partitions the selected nodes into impacted symbols vs likely tests and
+    /// renders compact or json with provenance. <paramref name="impactedCount"/> is the number of
+    /// non-test impacted symbols; a usage error / not-found / empty closure yields 0.
+    /// <paramref name="nodesVisited"/> is <c>reached_count</c>: the pre-window count of non-seed graph nodes the
+    /// reverse BFS produced. It excludes labeled heuristic test candidates and is independent of the post-rank
+    /// result limit; guard, not-found, and no-seed paths leave it 0.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="index"/> or <paramref name="resolver"/> is null.</exception>
     public static string Run(
@@ -366,12 +461,31 @@ public sealed class ImpactTool
         int maxDepth, int limit, bool json,
         out int impactedCount, out int nodesVisited)
     {
+        ImpactExecution execution = RunCore(
+            index,
+            graph,
+            resolver,
+            target,
+            changedPaths,
+            diff,
+            maxDepth,
+            limit,
+            json);
+        impactedCount = execution.ImpactedCount;
+        nodesVisited = execution.NodesVisited;
+        return execution.Output;
+    }
+
+    private static ImpactExecution RunCore(
+        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
+        string? target, IReadOnlyList<string>? changedPaths, string? diff,
+        int maxDepth, int limit, bool json)
+    {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resolver);
-        if (maxDepth < 1) maxDepth = 1;
-        if (limit < 1) limit = 1;
-        nodesVisited = 0;
+        maxDepth = NormalizeDepth(maxDepth);
+        limit = NormalizeLimit(limit);
 
         // --- exactly-one-input guard (D1): zero or more than one → a clear usage note, never an exception. ---
         int provided =
@@ -379,23 +493,35 @@ public sealed class ImpactTool
             (changedPaths is { Count: > 0 } ? 1 : 0) +
             (string.IsNullOrEmpty(diff) ? 0 : 1);
         if (provided != 1)
-        {
-            impactedCount = 0;
-            return Usage(json);
-        }
+            return new ImpactExecution(
+                Usage(json), 0, 0, 0, [], ImpactEmptyReason.NoImpactedSymbols);
 
         var seedIds = new List<string>();
         var seededPaths = new List<string>();
         var unseededPaths = new List<string>();
         string? note = null;
+        bool targetWasFile = false;
 
         if (!string.IsNullOrWhiteSpace(target))
         {
-            if (!SeedFromTarget(index, resolver, target, seedIds, out string? targetNote))
+            if (!SeedFromTarget(
+                    index,
+                    resolver,
+                    target,
+                    seedIds,
+                    out string? targetNote,
+                    out targetWasFile))
             {
-                impactedCount = 0;
                 string message = targetNote ?? "impact: unresolved target.";
-                return json ? Note(json: true, message) : message;
+                return new ImpactExecution(
+                    json ? Note(json: true, message) : message,
+                    0,
+                    0,
+                    0,
+                    [],
+                    message.Contains("Multiple candidates", StringComparison.Ordinal)
+                        ? ImpactEmptyReason.AmbiguousTarget
+                        : ImpactEmptyReason.UnresolvedTarget);
             }
             note = targetNote;
         }
@@ -421,57 +547,51 @@ public sealed class ImpactTool
 
         if (seedIds.Count == 0)
         {
-            impactedCount = 0;
             var noSeedTraversal = new ImpactTraversal(
                 [], [], null, seededPaths, unseededPaths, [],
                 0, false,
                 "not_run", "no_seeds");
-            return json
+            string output = json
                 ? RenderJson(noSeedTraversal, note, maxDepth, limit)
                 : RenderCompact(noSeedTraversal, note, maxDepth, limit);
+            return new ImpactExecution(
+                output,
+                0,
+                0,
+                0,
+                unseededPaths,
+                ImpactEmptyReason.NoSeedSymbols);
         }
 
-        GraphReachResult graphResult =
-            graph.ReachWithEvidence(seedIds, maxDepth, limit, Direction.Reverse);
-        nodesVisited = graphResult.ReachedCount;
-        TestCandidateExpansion expansion = AddHeuristicTestCandidates(
-            index, seedIds, graphResult.Nodes, limit);
-        IReadOnlyList<ReachedNode> reachedNodes = expansion.Nodes;
-        if (seedIds.Count > 0 && reachedNodes.Count == 0 && note is null)
+        RankedImpactResult rankedImpact =
+            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit);
+        if (rankedImpact.Impacted.Count == 0 && rankedImpact.Tests.Count == 0 && note is null)
             note = NoDependentsNote(index, seedIds);
 
-        var impacted = new List<Reached>();
-        var tests = new List<Reached>();
-        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reachedNodes.Select(static node => node.Id));
-        var ranked = ImpactRanker.Rank(reachedNodes
-            .Where(node => symbolsById.ContainsKey(node.Id))
-            .Select(node =>
-            {
-                IndexedSymbol symbol = symbolsById[node.Id];
-                return new ImpactRankSignal(node, symbol.FilePath, symbol.StartLine, symbol.Name, symbol.SymbolId);
-            }));
-        foreach (ImpactRankSignal candidate in ranked)
-        {
-            IndexedSymbol symbol = symbolsById[candidate.SymbolId];
-            (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, candidate.Evidence));
-        }
-
-        impactedCount = impacted.Count;
-        (string status, string reason) = TraversalDisposition(graphResult);
         var traversal = new ImpactTraversal(
-            impacted,
-            tests,
-            graphResult,
+            rankedImpact.Impacted,
+            rankedImpact.Tests,
+            rankedImpact.Graph,
             seededPaths,
             unseededPaths,
             [],
-            expansion.CandidateCount,
-            expansion.Truncated,
-            status,
-            reason);
-        return json
+            rankedImpact.ReturnedTestCandidateCount,
+            rankedImpact.TestCandidatesTruncated,
+            rankedImpact.Status,
+            rankedImpact.Reason);
+        string rendered = json
             ? RenderJson(traversal, note, maxDepth, limit)
             : RenderCompact(traversal, note, maxDepth, limit);
+        return new ImpactExecution(
+            rendered,
+            rankedImpact.Impacted.Count,
+            rankedImpact.Impacted.Count + rankedImpact.Tests.Count,
+            rankedImpact.Graph.ReachedCount,
+            unseededPaths,
+            rankedImpact.Impacted.Count + rankedImpact.Tests.Count == 0
+                ? ImpactEmptyReason.NoDependents
+                : null,
+            targetWasFile ? seedIds.FirstOrDefault() : target);
     }
 
     // ---------- index-revision delta (CT revision-delta contract R0–R2) ----------
@@ -542,8 +662,27 @@ public sealed class ImpactTool
         bool json,
         bool indexAvailable)
     {
+        return RunIndexRevisionDeltaExecution(
+            snapshot,
+            index,
+            graph,
+            maxDepth,
+            limit,
+            json,
+            indexAvailable).Output;
+    }
+
+    internal static ImpactExecution RunIndexRevisionDeltaExecution(
+        ImpactRevisionDeltaSnapshot snapshot,
+        ISymbolLookupIndex? index,
+        ISymbolGraphReachability? graph,
+        int maxDepth,
+        int limit,
+        bool json,
+        bool indexAvailable)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        return RenderIndexRevisionDelta(
+        return RenderIndexRevisionDeltaExecution(
             snapshot.WorkspaceId,
             snapshot.Complete,
             snapshot.FromRevision,
@@ -587,9 +726,44 @@ public sealed class ImpactTool
         bool indexAvailable = true,
         IReadOnlyList<string>? deletedPaths = null)
     {
+        return RenderIndexRevisionDeltaExecution(
+            workspaceId,
+            complete,
+            fromRevision,
+            toRevision,
+            changedPaths,
+            index,
+            graph,
+            maxDepth,
+            limit,
+            json,
+            artifactId,
+            fromArtifactId,
+            deltaReason,
+            indexAvailable,
+            deletedPaths).Output;
+    }
+
+    private static ImpactExecution RenderIndexRevisionDeltaExecution(
+        string workspaceId,
+        bool complete,
+        long fromRevision,
+        long toRevision,
+        IReadOnlyList<string> changedPaths,
+        ISymbolLookupIndex? index,
+        ISymbolGraphReachability? graph,
+        int maxDepth,
+        int limit,
+        bool json,
+        string? artifactId,
+        string? fromArtifactId,
+        string deltaReason,
+        bool indexAvailable,
+        IReadOnlyList<string>? deletedPaths)
+    {
         ArgumentNullException.ThrowIfNull(changedPaths);
-        if (maxDepth < 1) maxDepth = 1;
-        if (limit < 1) limit = 1;
+        maxDepth = NormalizeDepth(maxDepth);
+        limit = NormalizeLimit(limit);
         IReadOnlyList<string> paths = complete ? changedPaths : Array.Empty<string>();
         IReadOnlyList<string> deleted = complete
             ? deletedPaths ?? Array.Empty<string>()
@@ -605,18 +779,23 @@ public sealed class ImpactTool
         else
             traversal = ReachFromChangedPaths(index, graph, paths, deleted, maxDepth, limit);
 
-        return json
+        string output = json
             ? RenderDeltaJson(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId,
                 deltaReason, paths, maxDepth, limit, traversal)
             : RenderDeltaCompact(workspaceId, complete, fromRevision, toRevision, artifactId, fromArtifactId,
                 deltaReason, paths, maxDepth, limit, traversal);
+        return new ImpactExecution(
+            output,
+            traversal.Impacted.Count,
+            traversal.Impacted.Count + traversal.Tests.Count,
+            traversal.Graph?.ReachedCount ?? 0,
+            traversal.UnseededPaths,
+            null);
 
         static ImpactTraversal NotRun(string reason, IReadOnlyList<string> deleted) =>
             new([], [], null, [], [], deleted, 0, false, "not_run", reason);
     }
 
-    // Seed every changed path's symbols, then partition the bounded reverse-reachability set into impacted symbols
-    // vs likely tests — the SAME core Run uses for a changed-paths impact query (D3/D5), just without the notes.
     private static ImpactTraversal ReachFromChangedPaths(
         ISymbolLookupIndex index, ISymbolGraphReachability graph,
         IReadOnlyList<string> changedPaths,
@@ -638,43 +817,91 @@ public sealed class ImpactTool
                 unseededPaths.Add(path);
         }
 
-        var impacted = new List<Reached>();
-        var tests = new List<Reached>();
         if (seedIds.Count == 0)
             return new(
-                impacted, tests, null, seededPaths, unseededPaths, deletedPaths,
+                [], [], null, seededPaths, unseededPaths, deletedPaths,
                 0, false,
                 "not_run", "no_seeds");
 
-        GraphReachResult graphResult = graph.ReachWithEvidence(seedIds, maxDepth, limit, Direction.Reverse);
+        RankedImpactResult rankedImpact =
+            TraverseAndRankImpact(index, graph, seedIds, maxDepth, limit);
+        return new(
+            rankedImpact.Impacted,
+            rankedImpact.Tests,
+            rankedImpact.Graph,
+            seededPaths,
+            unseededPaths,
+            deletedPaths,
+            rankedImpact.ReturnedTestCandidateCount,
+            rankedImpact.TestCandidatesTruncated,
+            rankedImpact.Status,
+            rankedImpact.Reason);
+    }
+
+    private static RankedImpactResult TraverseAndRankImpact(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        IReadOnlyList<string> seedIds,
+        int maxDepth,
+        int limit)
+    {
+        int candidateLimit = RankingCandidateLimit(limit);
+        GraphReachResult graphResult =
+            graph.ReachWithEvidence(seedIds, maxDepth, candidateLimit, Direction.Reverse);
         TestCandidateExpansion expansion = AddHeuristicTestCandidates(
-            index, seedIds, graphResult.Nodes, limit);
-        IReadOnlyList<ReachedNode> reachedNodes = expansion.Nodes;
-        var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, reachedNodes.Select(static node => node.Id));
-        var ranked = ImpactRanker.Rank(reachedNodes
+            index, seedIds, graphResult.Nodes, graphResult.Nodes.Count + limit);
+        var symbolsById =
+            SymbolLookupBatch.FindBySymbolIds(index, expansion.Nodes.Select(static node => node.Id));
+        ImpactRankSignal[] selected = ImpactRanker.Rank(expansion.Nodes
             .Where(node => symbolsById.ContainsKey(node.Id))
             .Select(node =>
             {
                 IndexedSymbol symbol = symbolsById[node.Id];
                 return new ImpactRankSignal(node, symbol.FilePath, symbol.StartLine, symbol.Name, symbol.SymbolId);
-            }));
-        foreach (ImpactRankSignal candidate in ranked)
+            }))
+            .Take(limit)
+            .ToArray();
+
+        var impacted = new List<Reached>();
+        var tests = new List<Reached>();
+        foreach (ImpactRankSignal candidate in selected)
         {
             IndexedSymbol symbol = symbolsById[candidate.SymbolId];
             (symbol.IsTest ? tests : impacted).Add(new Reached(symbol, candidate.Evidence));
         }
 
-        (string status, string reason) = TraversalDisposition(graphResult);
-        return new(
-            impacted, tests, graphResult, seededPaths, unseededPaths, deletedPaths,
-            expansion.CandidateCount, expansion.Truncated,
-            status, reason);
+        int returnedTestCandidateCount = selected.Count(static candidate =>
+            string.Equals(candidate.Evidence.EdgeSource, "filename_role", StringComparison.Ordinal));
+        int returnedGraphCount = selected.Length - returnedTestCandidateCount;
+        int resolvableGraphRows = graphResult.Nodes.Count(node => symbolsById.ContainsKey(node.Id));
+        bool testCandidatesTruncated =
+            expansion.Truncated || expansion.CandidateCount > returnedTestCandidateCount;
+        GraphReachResult truthfulGraph = graphResult with
+        {
+            TruncatedByLimit =
+                graphResult.TruncatedByLimit ||
+                resolvableGraphRows > returnedGraphCount ||
+                testCandidatesTruncated,
+        };
+        (string status, string reason) =
+            TraversalDisposition(truthfulGraph, testCandidatesTruncated);
+        return new RankedImpactResult(
+            impacted,
+            tests,
+            truthfulGraph,
+            returnedTestCandidateCount,
+            testCandidatesTruncated,
+            status,
+            reason);
     }
 
-    private static (string Status, string Reason) TraversalDisposition(GraphReachResult graphResult)
+    private static (string Status, string Reason) TraversalDisposition(
+        GraphReachResult graphResult,
+        bool testCandidatesTruncated)
     {
-        string status = graphResult.Exhausted ? "exhausted" : "truncated";
-        string reason = (graphResult.TruncatedByDepth, graphResult.TruncatedByLimit) switch
+        bool truncatedByLimit = graphResult.TruncatedByLimit || testCandidatesTruncated;
+        string status = graphResult.TruncatedByDepth || truncatedByLimit ? "truncated" : "exhausted";
+        string reason = (graphResult.TruncatedByDepth, truncatedByLimit) switch
         {
             (true, true) => "depth_and_limit",
             (true, false) => "depth",
@@ -690,10 +917,8 @@ public sealed class ImpactTool
         IReadOnlyList<ReachedNode> graphNodes,
         int limit)
     {
-        const int scanLimit = 64;
         var combined = graphNodes.ToList();
         int candidateCount = 0;
-        bool truncated = false;
         var seen = new HashSet<string>(
             seedIds.Concat(graphNodes.Select(static node => node.Id)),
             StringComparer.Ordinal);
@@ -709,12 +934,13 @@ public sealed class ImpactTool
             if (string.IsNullOrWhiteSpace(stem) || !seenStems.Add(stem))
                 continue;
 
-            IReadOnlyList<IndexedSymbol> scanned = index.FindByFilePathFragment(stem, scanLimit + 1);
-            if (scanned.Count > scanLimit)
-                truncated = true;
-            foreach (IndexedSymbol candidate in scanned.Take(scanLimit)
+            IReadOnlyList<string> candidatePaths = index
+                .FindFilePathsByFragment(stem, int.MaxValue)
+                .Where(path => IsFilenameRoleCandidate(stem, path))
+                .ToArray();
+            foreach (IndexedSymbol candidate in candidatePaths
+                         .SelectMany(index.FindByFilePath)
                          .Where(static symbol => symbol.IsTest)
-                         .Where(symbol => IsFilenameRoleCandidate(stem, symbol.FilePath))
                          .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
                          .ThenBy(static symbol => symbol.StartLine)
                          .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal))
@@ -735,7 +961,7 @@ public sealed class ImpactTool
                 candidateCount++;
             }
         }
-        return new(combined, candidateCount, truncated);
+        return new(combined, candidateCount, false);
     }
 
     private static bool IsFilenameRoleCandidate(string sourceStem, string candidatePath)
@@ -912,16 +1138,42 @@ public sealed class ImpactTool
         int CandidateCount,
         bool Truncated);
 
+    private sealed record RankedImpactResult(
+        IReadOnlyList<Reached> Impacted,
+        IReadOnlyList<Reached> Tests,
+        GraphReachResult Graph,
+        int ReturnedTestCandidateCount,
+        bool TestCandidatesTruncated,
+        string Status,
+        string Reason);
+
+    internal enum ImpactEmptyReason
+    {
+        EmptyGitDiff,
+        NoSeedSymbols,
+        UnresolvedTarget,
+        AmbiguousTarget,
+        NoDependents,
+        NoImpactedSymbols,
+    }
+
+    internal sealed record ImpactExecution(
+        string Output,
+        int ImpactedCount,
+        int ReturnedCount,
+        int NodesVisited,
+        IReadOnlyList<string> UnseededPaths,
+        ImpactEmptyReason? EmptyReason,
+        string? DiagnosticTraceTarget = null);
+
     // ---------- seed resolution ----------
 
-    // Resolve a target into seed ids. Returns false (with a rendered message) on a hard failure (not-found /
-    // ambiguous); true on success (seedIds populated, possibly empty if a file has no symbols). A file target
-    // never fails hard — an unknown file simply seeds nothing and falls through to the "nothing depends" note.
     private static bool SeedFromTarget(
         ISymbolLookupIndex index, SmartTargetResolver resolver, string target,
-        List<string> seedIds, out string? note)
+        List<string> seedIds, out string? note, out bool targetWasFile)
     {
         note = null;
+        targetWasFile = false;
         var resolution = resolver.Resolve(target);
         switch (resolution)
         {
@@ -930,11 +1182,11 @@ public sealed class ImpactTool
                 return true;
 
             case TargetResolution.File file:
+                targetWasFile = true;
                 SeedFromFile(index, file.Path, seedIds);
                 return true;
 
             case TargetResolution.Candidates cands:
-                // Ambiguous name — never pick-first; ask the caller to disambiguate (mirrors inspect).
                 note = RenderCandidatesNote(cands.Matches);
                 return false;
 
@@ -1017,13 +1269,11 @@ public sealed class ImpactTool
             seededPaths.Add(file.Path);
         }
 
-        if (seedIds.Count == 0 && unseededPaths.Count > 0)
-            return NoSeedSymbolsNote("diff file(s)", unseededPaths);
         if (degradedFiles.Count > 0)
             return "note: no line-precise span matched in " + string.Join(", ", degradedFiles) +
                    " — seeded the whole file(s).";
         if (unseededPaths.Count > 0)
-            return "note: no indexed symbols matched diff file(s): " + string.Join(", ", unseededPaths) + ".";
+            return NoSeedSymbolsNote("diff file(s)", unseededPaths);
         return null;
     }
 

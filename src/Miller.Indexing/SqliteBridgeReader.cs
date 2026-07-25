@@ -61,6 +61,18 @@ public static class SqliteBridgeReader
         return new BridgeData(typeArguments, literals, annotations, dbSetProperties, structuralFacts, literalSites);
     }
 
+    internal static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(
+        string dbPath,
+        IReadOnlyList<string> patternIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(patternIds);
+
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+        return ReadStructuralFacts(connection, patternIds);
+    }
+
     // ---- type_arguments ---------------------------------------------------------------------------------------
 
     private static IReadOnlyList<TypeArgument> ReadTypeArguments(SqliteConnection connection)
@@ -231,12 +243,18 @@ public static class SqliteBridgeReader
 
     // ---- structural_facts -------------------------------------------------------------------------------------
 
-    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(SqliteConnection connection)
+    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(SqliteConnection connection) =>
+        ReadStructuralFacts(connection, BridgeStructuralPatterns.BridgeFactPatternIds);
+
+    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(
+        SqliteConnection connection,
+        IReadOnlyList<string> patternIds)
     {
         if (!TableExists(connection, "structural_facts"))
             return [];
+        if (patternIds.Count == 0)
+            return [];
 
-        var patternIds = BridgeStructuralPatterns.BridgeFactPatternIds;
         var placeholders = string.Join(", ", patternIds.Select((_, index) => "$pattern" + index));
 
         using var command = connection.CreateCommand();

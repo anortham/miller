@@ -135,6 +135,65 @@ public sealed class GraphTraversalTests
     }
 
     [Fact]
+    public void ReachWithEvidence_UsesOneBatchNeighbourLookupPerDepth()
+    {
+        var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);
+        var batches = new List<string[]>();
+        var forward = new Dictionary<string, GraphNeighbour[]>(StringComparer.Ordinal)
+        {
+            ["a"] = [new("b", "calls", 1.0, "test", 0, null), new("c", "calls", 1.0, "test", 0, null)],
+            ["b"] = [new("d", "calls", 1.0, "test", 0, null)],
+            ["c"] = [new("e", "calls", 1.0, "test", 0, null)],
+        };
+
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
+            ["a"],
+            maxDepth: 2,
+            limit: 10,
+            Direction.Forward,
+            known.Contains,
+            static (_, _) => throw new InvalidOperationException("scalar lookup should not run"),
+            batchNeighbours: (ids, _) =>
+            {
+                batches.Add(ids.ToArray());
+                return ids.ToDictionary(
+                    static id => id,
+                    id => (IReadOnlyList<GraphNeighbour>)forward.GetValueOrDefault(id, []),
+                    StringComparer.Ordinal);
+            },
+            hasUnseenNeighbours: static (_, _, _) => false);
+
+        Assert.Equal(["b", "c", "d", "e"], result.Nodes.Select(static node => node.Id));
+        Assert.Equal([["a"], ["b", "c"]], batches);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_PreliminaryWindowDoesNotUseLateHydratedRankSignals()
+    {
+        var known = new HashSet<string>(StringComparer.Ordinal) { "seed" };
+        var neighbours = Enumerable.Range(0, 501)
+            .Select(index => new GraphNeighbour(
+                $"node-{index:000}",
+                "calls",
+                1.0,
+                "relationship",
+                index == 500 ? 100 : 0,
+                index == 500 ? "public" : "private"))
+            .ToArray();
+        known.UnionWith(neighbours.Select(static neighbour => neighbour.Id));
+
+        GraphReachResult result = GraphTraversal.ReachWithEvidence(
+            ["seed"],
+            maxDepth: 1,
+            limit: 500,
+            Direction.Forward,
+            known.Contains,
+            (id, _) => id == "seed" ? neighbours : []);
+
+        Assert.DoesNotContain(result.Nodes, node => node.Id == "node-500");
+    }
+
+    [Fact]
     public void ReachAndReachWithEvidence_AgreeOnTheReachedNodes()
     {
         var known = new HashSet<string>(["a", "b", "c", "d", "e"], StringComparer.Ordinal);

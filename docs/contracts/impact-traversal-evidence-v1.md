@@ -60,21 +60,22 @@ artifact-generation guard, usage errors, and `delta_status` rules.
   below.
 - `reason` (string): exactly `complete`, `depth`, `limit`, `depth_and_limit`, `delta_unavailable`, `no_changes`,
   `index_unavailable`, or `no_seeds`.
-- `max_depth` (integer): the effective reverse-traversal depth bound. Values below 1 are normalized to 1.
+- `max_depth` (integer): the effective reverse-traversal depth bound. Values are normalized to the inclusive
+  range 1 through 5.
 - `limit` (integer): the effective cap on all rows returned for `impacted[]` plus `tests[]`. Values below 1
-  are normalized to 1.
-- `reached_count` (integer): total non-seed graph nodes reached before the `limit` prefix is applied. It is 0 when
-  traversal was not run.
+  are normalized to 1 and values above 1,000 are normalized to 1,000.
+- `reached_count` (integer): total non-seed graph nodes reached before risk ranking and `limit` are applied. It is
+  0 when traversal was not run.
 - `returned_count` (integer): all rows actually rendered across `impacted[]` and `tests[]` after the limit and
   indexed-symbol lookup, including labeled heuristic test candidates.
 - `graph_returned_count` (integer): the subset of `returned_count` reached through indexed graph evidence.
 - `test_candidate_count` (integer): the subset of `returned_count` added by the labeled filename/role heuristic.
 - `test_candidates_truncated` (boolean): true when the result limit omitted at least one observed heuristic
-  candidate or the bounded candidate lookup reached its scan ceiling, so more candidates may exist.
+  candidate.
 - `truncated_by_depth` (boolean): true when a node at `max_depth` had an unseen indexed neighbour, so deeper
   traversal was omitted.
-- `truncated_by_limit` (boolean): true when graph `reached_count` exceeded `limit`; heuristic truncation is
-  reported separately by `test_candidates_truncated`.
+- `truncated_by_limit` (boolean): true when the result cap omitted at least one reached graph row or observed
+  heuristic test candidate. Heuristic truncation is also reported separately by `test_candidates_truncated`.
 - `seeded_paths` (array of strings): changed paths with one or more current indexed symbols used as traversal
   seeds. Exhaustion is relative only to these paths.
 - `unseeded_paths` (array of strings): changed paths that had no current indexed symbols and therefore did not
@@ -83,16 +84,29 @@ artifact-generation guard, usage errors, and `delta_status` rules.
 - `deleted_paths` (array of strings): changed paths whose latest revision-journal event in the requested span is
   deletion. They are not current-file seed failures and are never graph seeds.
 
+The graph is traversed to the requested depth before the result cap is applied. Miller selects a preliminary
+storage-neutral candidate window of at least `max(500, limit * 8)` graph rows, capped at 2,000, ordered by hop,
+relationship priority, evidence-source priority, confidence, and symbol id. It then hydrates centrality and
+visibility and ranks that window plus labeled heuristic test candidates by hop, relationship priority,
+centrality, visibility, and deterministic source location before applying `limit`. `reached_count` still
+reports the full pre-window graph count, and either truncation signal prevents an omitted row from being
+presented as an exhausted result.
+
+Filename-role expansion enumerates matching paths before loading their symbols, filters for recognized
+test-role paths and extractor-labeled test symbols, and stops only when the bounded ranking input has
+enough candidates to fill the public result cap. Source-file symbol density therefore cannot hide
+candidates from a matching test file.
+
 ## Status and reason matrix
 
 Only these pairs are valid:
 
 | `status` | `reason` | Meaning |
 |---|---|---|
-| `exhausted` | `complete` | Traversal found no unseen neighbour beyond the reported seeded paths within the current indexed edges, and the result was not cut by `limit`. This is the scoped claim described above, not whole-program completeness. |
+| `exhausted` | `complete` | Traversal found no unseen neighbour beyond the reported seeded paths within the current indexed edges, and neither graph nor heuristic candidates were omitted. This is the scoped claim described above, not whole-program completeness. |
 | `truncated` | `depth` | An unseen indexed neighbour existed beyond `max_depth`; the limit did not truncate the result. |
-| `truncated` | `limit` | More graph nodes were reached than `limit`; the depth bound did not leave an unseen indexed neighbour. |
-| `truncated` | `depth_and_limit` | Both the depth boundary and result limit truncated the traversal. |
+| `truncated` | `limit` | The result cap omitted graph or observed heuristic candidates; the depth bound did not leave an unseen indexed neighbour. |
+| `truncated` | `depth_and_limit` | Both the depth boundary and the result cap truncated the traversal. |
 | `not_run` | `delta_unavailable` | `delta_status` is `unavailable`; no changed-path traversal was attempted. |
 | `not_run` | `no_changes` | The delta is complete but `changed_paths` is empty. |
 | `not_run` | `index_unavailable` | Changed paths exist, but no usable current symbol index/graph was available. |

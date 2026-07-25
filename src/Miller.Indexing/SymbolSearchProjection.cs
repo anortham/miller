@@ -49,6 +49,9 @@ public sealed class SymbolSearchProjection : ISymbolLookupIndex
     public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
         _tables.FindByFilePathFragment(query, limit);
 
+    public IReadOnlyList<string> FindFilePathsByFragment(string query, int limit) =>
+        _tables.FindFilePathsByFragment(query, limit);
+
     public bool IsIndexedFilePath(string path) => _tables.IsIndexedFilePath(path);
 
     public string? ResolveIndexedFilePath(string target) => _tables.ResolveIndexedFilePath(target);

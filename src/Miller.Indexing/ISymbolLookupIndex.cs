@@ -14,6 +14,13 @@ public interface ISymbolLookupIndex : ISymbolSearchIndex
 
     IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit);
 
+    IReadOnlyList<string> FindFilePathsByFragment(string query, int limit) =>
+        FindByFilePathFragment(query, limit)
+            .Select(static symbol => symbol.FilePath)
+            .Distinct(StringComparer.Ordinal)
+            .Take(limit)
+            .ToArray();
+
     bool IsIndexedFilePath(string path);
 
     string? ResolveIndexedFilePath(string target);

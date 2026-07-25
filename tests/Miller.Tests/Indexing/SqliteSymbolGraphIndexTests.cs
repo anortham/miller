@@ -78,6 +78,57 @@ public sealed class SqliteSymbolGraphIndexTests
     }
 
     [Fact]
+    public void ReachWithEvidence_MatchesRepositoryGraphForBlazorComponentEdge()
+    {
+        const string pageId = "41000000000000000000000000000001";
+        const string widgetId = "41000000000000000000000000000002";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    pageId, "Page", "class", "razor", "Pages/Page.razor",
+                    "public partial class Page", 1, null)
+                {
+                    Metadata = """{"type":"razor-component","qualifiedName":"Pages.Page"}""",
+                },
+                new JulieDbFixture.SymbolRow(
+                    widgetId, "Widget", "class", "razor", "Shared/Widget.razor",
+                    "public partial class Widget", 1, null)
+                {
+                    Metadata = """{"type":"razor-component","qualifiedName":"Shared.Widget"}""",
+                },
+            ]);
+        fixture.AddStructuralFact(
+            "blazor-reference",
+            null,
+            "Pages/Page.razor",
+            language: "razor",
+            patternId: BridgeStructuralPatterns.BlazorComponentReference,
+            captureName: "component_reference",
+            nodeKind: "markup_element");
+        fixture.ExecuteWrite(
+            """
+            UPDATE structural_facts
+            SET metadata_json =
+                '{"tag":"Widget","containing_component":"Page","namespace_context":["Shared"],"generic_arguments":[]}'
+            WHERE structural_fact_id = 'blazor-reference';
+            """);
+
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+        GraphReachResult expected =
+            repository.Graph.ReachWithEvidence([widgetId], 1, 10, Direction.Reverse);
+        GraphReachResult actual =
+            sqlite.ReachWithEvidence([widgetId], 1, 10, Direction.Reverse);
+
+        Assert.Equal(expected.Nodes, actual.Nodes);
+        Assert.Equal(expected.ReachedCount, actual.ReachedCount);
+        Assert.Equal(expected.TruncatedByDepth, actual.TruncatedByDepth);
+        Assert.Equal(expected.TruncatedByLimit, actual.TruncatedByLimit);
+    }
+
+    [Fact]
     public void Reach_ResolvedHomonym_MatchesExactFirstRepositoryGraphInBothDirections()
     {
         using var fixture = JulieDbFixture.Create(
@@ -106,6 +157,106 @@ public sealed class SqliteSymbolGraphIndexTests
         Assert.Equal(
             repository.Graph.Reach([SecondTargetId], 1, 10, Direction.Reverse).Select(node => node.Id),
             sqlite.Reach([SecondTargetId], 1, 10, Direction.Reverse).Select(node => node.Id));
+    }
+
+    [Fact]
+    public void ReachWithEvidence_NullOverlayConfidenceFallsBackToIdentifierConfidence()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(CallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-run-null-confidence", "Run", "call", "csharp", "src/Caller.cs", 10, CallerId),
+            ]);
+        fixture.AddIdentifierResolution("identifier-run-null-confidence", FirstTargetId);
+        fixture.ExecuteWrite(
+            """
+            UPDATE identifier_resolutions
+            SET confidence = NULL
+            WHERE identifier_id = 'identifier-run-null-confidence';
+            """);
+
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        Assert.Equal(
+            repository.Graph.ReachWithEvidence([FirstTargetId], 1, 10, Direction.Reverse).Nodes,
+            sqlite.ReachWithEvidence([FirstTargetId], 1, 10, Direction.Reverse).Nodes);
+    }
+
+    [Fact]
+    public void ReachWithEvidence_DirectTargetWithOverlayUsesOverlayConfidenceInBothDirections()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(CallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+            ],
+            identifiers:
+            [
+                new("identifier-run-dual", "Run", "call", "csharp", "src/Caller.cs", 10, CallerId)
+                {
+                    TargetSymbolId = FirstTargetId,
+                },
+            ]);
+        fixture.AddIdentifierResolution("identifier-run-dual", FirstTargetId, confidence: 0.25);
+
+        MillerRepositoryIndex repository = RepositoryIndexLoader.Load(fixture.DbPath);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        foreach (Direction direction in new[] { Direction.Forward, Direction.Reverse })
+        {
+            string seed = direction == Direction.Forward ? CallerId : FirstTargetId;
+            Assert.Equal(
+                repository.Graph.ReachWithEvidence([seed], 1, 10, direction).Nodes,
+                sqlite.ReachWithEvidence([seed], 1, 10, direction).Nodes);
+        }
+    }
+
+    [Fact]
+    public void ReachWithEvidence_WideFrontierCompletesAcrossSqlBatches()
+    {
+        const string seedId = "46000000000000000000000000000001";
+        JulieDbFixture.SymbolRow[] callers = Enumerable.Range(0, 1201)
+            .Select(index => new JulieDbFixture.SymbolRow(
+                $"46{index + 2:000000000000000000000000000000}",
+                $"Caller{index}",
+                "method",
+                "csharp",
+                $"src/Caller{index}.cs",
+                $"void Caller{index}()",
+                1,
+                null))
+            .ToArray();
+        JulieDbFixture.RelationshipRow[] relationships = callers
+            .Select((caller, index) => new JulieDbFixture.RelationshipRow(
+                $"relationship-{index}",
+                caller.Id,
+                seedId,
+                "calls"))
+            .ToArray();
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(seedId, "Seed", "method", "csharp", "src/Seed.cs", "void Seed()", 1, null),
+                .. callers,
+            ],
+            relationships: relationships);
+        using var sqlite = new SqliteSymbolGraphIndex(fixture.DbPath);
+
+        GraphReachResult result =
+            sqlite.ReachWithEvidence([seedId], 1, 2000, Direction.Reverse);
+
+        Assert.Equal(1201, result.ReachedCount);
+        Assert.Equal(1201, result.Nodes.Count);
     }
 
     [Fact]

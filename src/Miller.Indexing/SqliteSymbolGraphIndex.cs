@@ -9,16 +9,19 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposable
 {
+    private const int MaximumBatchIds = 500;
+    private const int FrontierProofBatchIds = 100;
+    private const int MaximumEvidenceCacheEntries = 4000;
     private static readonly IReadOnlyList<string> Empty = Array.Empty<string>();
 
     private readonly string _dbPath;
     private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<string>> _neighbourCache = new();
-    private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphEdge>> _edgeCache = new();
+    private readonly Dictionary<(string Id, Direction Direction), IReadOnlyList<GraphNeighbour>>
+        _evidenceCache = new();
     private readonly Dictionary<string, bool> _symbolExistsCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> _symbolNameCache = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string?> _symbolVisibilityCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IReadOnlyList<string>> _nameResolutionCache = new(StringComparer.Ordinal);
-    private IReadOnlyList<GraphEdge>? _testLinkageEdges;
+    private IReadOnlyList<GraphEdge>? _supplementalEdges;
     private Microsoft.Data.Sqlite.SqliteConnection? _connection;
 
     public SqliteSymbolGraphIndex(string dbPath)
@@ -35,11 +38,116 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         IEnumerable<string> starts,
         int maxDepth,
         int limit,
-        Direction dir) =>
-        GraphTraversal.ReachWithEvidence(starts, maxDepth, limit, dir, Contains, NeighbourEvidence);
+        Direction dir)
+    {
+        _evidenceCache.Clear();
+        try
+        {
+            GraphReachResult result =
+                GraphTraversal.ReachWithEvidence(
+                    starts,
+                    maxDepth,
+                    limit,
+                    dir,
+                    Contains,
+                    null,
+                    (ids, direction) => BatchNeighbourEvidence(ids, direction),
+                    HasUnseenNeighbours);
+            return result with { Nodes = EnrichImpactEvidence(result.Nodes) };
+        }
+        finally
+        {
+            _evidenceCache.Clear();
+        }
+    }
 
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
         GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);
+
+    private IReadOnlyList<ReachedNode> EnrichImpactEvidence(IReadOnlyList<ReachedNode> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        var neighboursById = nodes.ToDictionary(
+            static node => node.Id,
+            static _ => new HashSet<(string Neighbour, Direction Direction)>(),
+            StringComparer.Ordinal);
+        var visibilityById = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        foreach (ReachedNode[] batch in nodes.Chunk(MaximumBatchIds))
+            ReadImpactEvidenceBatch(batch, neighboursById, visibilityById);
+
+        return nodes
+            .Select(node => node with
+            {
+                Centrality = neighboursById[node.Id].Count,
+                Visibility = visibilityById.GetValueOrDefault(node.Id),
+            })
+            .ToArray();
+    }
+
+    private bool HasUnseenNeighbours(
+        IReadOnlyList<string> frontier,
+        IReadOnlySet<string> reached,
+        Direction direction)
+    {
+        if (frontier.Count == 0)
+            return false;
+
+        foreach (string[] batch in frontier.Chunk(FrontierProofBatchIds))
+        {
+            IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> adjacent =
+                BatchNeighbourEvidence(batch, direction, cacheResults: false);
+            if (adjacent.Values.SelectMany(static neighbours => neighbours).Any(neighbour =>
+                    !reached.Contains(neighbour.Id)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void ReadImpactEvidenceBatch(
+        IReadOnlyList<ReachedNode> nodes,
+        IReadOnlyDictionary<string, HashSet<(string Neighbour, Direction Direction)>> neighboursById,
+        IDictionary<string, string?> visibilityById)
+    {
+        if (nodes.Count == 0)
+            return;
+
+        string[] ids = nodes.Select(static node => node.Id).ToArray();
+        foreach (Direction direction in new[] { Direction.Forward, Direction.Reverse })
+        {
+            IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> adjacent =
+                BatchNeighbourEvidence(ids, direction);
+            foreach ((string id, IReadOnlyList<GraphNeighbour> neighbours) in adjacent)
+            {
+                foreach (GraphNeighbour neighbour in neighbours)
+                    neighboursById[id].Add((neighbour.Id, direction));
+            }
+        }
+
+        string values = string.Join(", ", Enumerable.Range(0, ids.Length).Select(index => $"($id{index})"));
+        using var command = Connection.CreateCommand();
+        command.CommandText = $"""
+            WITH candidates(id) AS (VALUES {values})
+            SELECT candidates.id, symbols.visibility
+            FROM candidates
+            JOIN symbols ON symbols.symbol_id = candidates.id
+            ORDER BY candidates.id;
+            """;
+        for (int index = 0; index < ids.Length; index++)
+            command.Parameters.AddWithValue($"$id{index}", ids[index]);
+
+        using var reader = command.ExecuteReader();
+        int idOrdinal = reader.GetOrdinal("id");
+        int visibilityOrdinal = reader.GetOrdinal("visibility");
+        while (reader.Read())
+        {
+            string id = reader.GetString(idOrdinal);
+            visibilityById[id] =
+                reader.IsDBNull(visibilityOrdinal) ? null : reader.GetString(visibilityOrdinal);
+        }
+    }
 
     private bool Contains(string id) => SymbolExists(id);
 
@@ -66,252 +174,240 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         return loaded;
     }
 
-    private IEnumerable<GraphNeighbour> NeighbourEvidence(string id, Direction direction)
+    private IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> BatchNeighbourEvidence(
+        IReadOnlyList<string> ids,
+        Direction direction,
+        bool cacheResults = true)
     {
-        IEnumerable<GraphEdge> edges = direction switch
+        if (ids.Count > MaximumBatchIds)
         {
-            Direction.Forward => Edges(id, Direction.Forward),
-            Direction.Reverse => Edges(id, Direction.Reverse),
-            Direction.Both => Edges(id, Direction.Forward)
-                .Concat(Edges(id, Direction.Reverse))
-                .GroupBy(edge => NeighbourId(edge, id), StringComparer.Ordinal)
-                .Select(group => group.OrderBy(static edge => edge, EdgeComparer).First()),
-            _ => [],
-        };
-
-        return edges.Select(edge =>
-        {
-            string neighbourId = NeighbourId(edge, id);
-            return new GraphNeighbour(
-                neighbourId,
-                edge.Kind,
-                edge.Confidence,
-                edge.Source,
-                Degree(neighbourId),
-                SymbolVisibility(neighbourId));
-        });
-    }
-
-    private IReadOnlyList<GraphEdge> Edges(string id, Direction direction)
-    {
-        var key = (id, direction);
-        if (_edgeCache.TryGetValue(key, out IReadOnlyList<GraphEdge>? cached))
-            return cached;
-
-        IReadOnlyList<GraphEdge> loaded = direction switch
-        {
-            Direction.Forward => LoadDependencyEdges(id),
-            Direction.Reverse => LoadDependentEdges(id),
-            _ => [],
-        };
-        _edgeCache[key] = loaded;
-        return loaded;
-    }
-
-    private IReadOnlyList<GraphEdge> LoadDependencyEdges(string id)
-    {
-        if (!Contains(id))
-            return [];
-
-        var edges = new Dictionary<string, GraphEdge>(StringComparer.Ordinal);
-        ReadEdges(
-            """
-            SELECT r.to_symbol_id AS neighbour_id, r.kind, r.confidence
-            FROM relationships r
-            JOIN symbols s ON s.symbol_id = r.to_symbol_id
-            WHERE r.from_symbol_id = $id;
-            """,
-            id,
-            (neighbour, kind, confidence) =>
-                AddEdge(edges, id, neighbour, new GraphEdge(id, neighbour, kind, confidence, "relationship")));
-        ReadEdges(
-            """
-            SELECT pr.target_symbol_id AS neighbour_id, p.kind,
-                   MIN(p.confidence, pr.confidence) AS confidence
-            FROM pending_relationships p
-            JOIN pending_resolutions pr
-              ON pr.pending_relationship_id = p.pending_relationship_id
-            JOIN symbols s ON s.symbol_id = pr.target_symbol_id
-            WHERE p.from_symbol_id = $id;
-            """,
-            id,
-            (neighbour, kind, confidence) =>
-                AddEdge(edges, id, neighbour, new GraphEdge(id, neighbour, kind, confidence, "pending_resolution")));
-
-        using var command = Connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT i.name, i.kind, i.target_symbol_id,
-                   ir.target_symbol_id AS overlay_target_symbol_id,
-                   i.confidence, ir.confidence AS overlay_confidence
-            FROM identifiers i
-            LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-            LEFT JOIN symbols target
-              ON target.symbol_id = COALESCE(i.target_symbol_id, ir.target_symbol_id)
-            WHERE i.containing_symbol_id = $id
-              AND (
-                  COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
-                  OR target.symbol_id IS NOT NULL
-              );
-            """;
-        command.Parameters.AddWithValue("$id", id);
-        using var reader = command.ExecuteReader();
-        int oName = reader.GetOrdinal("name");
-        int oKind = reader.GetOrdinal("kind");
-        int oDirect = reader.GetOrdinal("target_symbol_id");
-        int oOverlay = reader.GetOrdinal("overlay_target_symbol_id");
-        int oConfidence = reader.GetOrdinal("confidence");
-        int oOverlayConfidence = reader.GetOrdinal("overlay_confidence");
-        while (reader.Read())
-        {
-            string? direct = reader.IsDBNull(oDirect) ? null : reader.GetString(oDirect);
-            string? overlay = reader.IsDBNull(oOverlay) ? null : reader.GetString(oOverlay);
-            string? exact = direct ?? overlay;
-            IReadOnlyList<string> targets = exact is null
-                ? ResolveNameIds(reader.GetString(oName))
-                : [exact];
-            if (exact is null && targets.Count != 1)
-                continue;
-
-            string source = direct is not null
-                ? "identifier_target"
-                : overlay is not null
-                    ? "identifier_resolution"
-                    : "identifier_name";
-            double confidence = overlay is not null && !reader.IsDBNull(oOverlayConfidence)
-                ? reader.GetDouble(oOverlayConfidence)
-                : reader.GetDouble(oConfidence);
-            if (exact is null)
-                confidence *= 0.5;
-            foreach (string target in targets)
+            var batched = new Dictionary<string, IReadOnlyList<GraphNeighbour>>(StringComparer.Ordinal);
+            foreach (string[] batch in ids.Chunk(MaximumBatchIds))
             {
-                AddEdge(edges, id, target, new GraphEdge(
-                    id, target, reader.GetString(oKind), confidence, source));
+                foreach ((string id, IReadOnlyList<GraphNeighbour> neighbours) in
+                         BatchNeighbourEvidence(batch, direction, cacheResults))
+                {
+                    batched[id] = neighbours;
+                }
             }
+            return batched;
         }
 
-        foreach (GraphEdge edge in TestLinkageEdges())
+        string[] missingIds = direction == Direction.Both || !cacheResults
+            ? ids.ToArray()
+            : ids.Where(id => !_evidenceCache.ContainsKey((id, direction))).ToArray();
+        if (missingIds.Length == 0)
         {
-            if (string.Equals(edge.From, id, StringComparison.Ordinal) && Contains(edge.To))
-                AddEdge(edges, id, edge.To, edge);
+            return ids.ToDictionary(
+                static id => id,
+                id => _evidenceCache[(id, direction)],
+                StringComparer.Ordinal);
         }
 
-        return OrderedEdges(edges);
-    }
+        var edgesById = missingIds.ToDictionary(
+            static id => id,
+            static _ => new Dictionary<string, GraphEdge>(StringComparer.Ordinal),
+            StringComparer.Ordinal);
 
-    private IReadOnlyList<GraphEdge> LoadDependentEdges(string id)
-    {
-        string? targetName = SymbolName(id);
-        if (targetName is null)
-            return [];
-
-        var edges = new Dictionary<string, GraphEdge>(StringComparer.Ordinal);
-        ReadEdges(
-            """
-            SELECT r.from_symbol_id AS neighbour_id, r.kind, r.confidence
-            FROM relationships r
-            JOIN symbols s ON s.symbol_id = r.from_symbol_id
-            WHERE r.to_symbol_id = $id;
-            """,
-            id,
-            (neighbour, kind, confidence) =>
-                AddEdge(edges, id, neighbour, new GraphEdge(neighbour, id, kind, confidence, "relationship")));
-        ReadEdges(
-            """
-            SELECT p.from_symbol_id AS neighbour_id, p.kind,
-                   MIN(p.confidence, pr.confidence) AS confidence
-            FROM pending_relationships p
-            JOIN pending_resolutions pr
-              ON pr.pending_relationship_id = p.pending_relationship_id
-            JOIN symbols s ON s.symbol_id = p.from_symbol_id
-            WHERE pr.target_symbol_id = $id;
-            """,
-            id,
-            (neighbour, kind, confidence) =>
-                AddEdge(edges, id, neighbour, new GraphEdge(neighbour, id, kind, confidence, "pending_resolution")));
-
+        string values = string.Join(
+            ", ",
+            Enumerable.Range(0, missingIds.Length).Select(index => $"($id{index})"));
         using (var command = Connection.CreateCommand())
         {
-            command.CommandText =
-                """
-                SELECT i.containing_symbol_id, i.kind, i.target_symbol_id,
-                       ir.target_symbol_id AS overlay_target_symbol_id,
-                       i.confidence, ir.confidence AS overlay_confidence
-                FROM identifiers i
-                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE COALESCE(i.target_symbol_id, ir.target_symbol_id) = $id;
+            command.CommandText = $"""
+                WITH candidates(id) AS (VALUES {values}),
+                selected_edges(current_id, from_id, to_id, kind, confidence, source) AS (
+                    SELECT candidates.id, r.from_symbol_id, r.to_symbol_id,
+                           r.kind, r.confidence, 'relationship'
+                    FROM candidates
+                    JOIN relationships r ON r.from_symbol_id = candidates.id
+                    JOIN symbols target_symbol ON target_symbol.symbol_id = r.to_symbol_id
+                    WHERE $forward = 1
+                    UNION ALL
+                    SELECT candidates.id, r.from_symbol_id, r.to_symbol_id,
+                           r.kind, r.confidence, 'relationship'
+                    FROM candidates
+                    JOIN relationships r ON r.to_symbol_id = candidates.id
+                    JOIN symbols source_symbol ON source_symbol.symbol_id = r.from_symbol_id
+                    WHERE $reverse = 1
+                    UNION ALL
+                    SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
+                           MIN(p.confidence, pr.confidence), 'pending_resolution'
+                    FROM candidates
+                    JOIN pending_relationships p ON p.from_symbol_id = candidates.id
+                    JOIN pending_resolutions pr
+                      ON pr.pending_relationship_id = p.pending_relationship_id
+                    JOIN symbols target_symbol ON target_symbol.symbol_id = pr.target_symbol_id
+                    WHERE $forward = 1
+                    UNION ALL
+                    SELECT candidates.id, p.from_symbol_id, pr.target_symbol_id, p.kind,
+                           MIN(p.confidence, pr.confidence), 'pending_resolution'
+                    FROM candidates
+                    JOIN pending_resolutions pr ON pr.target_symbol_id = candidates.id
+                    JOIN pending_relationships p
+                      ON p.pending_relationship_id = pr.pending_relationship_id
+                    JOIN symbols source_symbol ON source_symbol.symbol_id = p.from_symbol_id
+                    WHERE $reverse = 1
+                    UNION ALL
+                    SELECT candidates.id,
+                           i.containing_symbol_id,
+                           COALESCE(i.target_symbol_id, ir.target_symbol_id),
+                           i.kind,
+                           CASE
+                               WHEN ir.target_symbol_id IS NOT NULL AND ir.confidence IS NOT NULL
+                                   THEN ir.confidence
+                               ELSE i.confidence
+                           END,
+                           CASE
+                               WHEN i.target_symbol_id IS NOT NULL THEN 'identifier_target'
+                               ELSE 'identifier_resolution'
+                           END
+                    FROM candidates
+                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
+                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                    JOIN symbols target_symbol
+                      ON target_symbol.symbol_id = COALESCE(i.target_symbol_id, ir.target_symbol_id)
+                    WHERE $forward = 1
+                    UNION ALL
+                    SELECT candidates.id, i.containing_symbol_id, i.target_symbol_id,
+                           i.kind,
+                           CASE
+                               WHEN ir.target_symbol_id IS NOT NULL AND ir.confidence IS NOT NULL
+                                   THEN ir.confidence
+                               ELSE i.confidence
+                           END,
+                           'identifier_target'
+                    FROM candidates
+                    JOIN identifiers i ON i.target_symbol_id = candidates.id
+                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
+                    WHERE $reverse = 1
+                    UNION ALL
+                    SELECT candidates.id, i.containing_symbol_id, ir.target_symbol_id,
+                           i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_resolution'
+                    FROM candidates
+                    JOIN identifier_resolutions ir ON ir.target_symbol_id = candidates.id
+                    JOIN identifiers i ON i.identifier_id = ir.identifier_id
+                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
+                    WHERE $reverse = 1 AND i.target_symbol_id IS NULL
+                    UNION ALL
+                    SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
+                           i.kind, i.confidence * 0.5, 'identifier_name'
+                    FROM candidates
+                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
+                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                    JOIN symbols target_symbol ON target_symbol.name = i.name
+                    WHERE $forward = 1
+                      AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM symbols duplicate
+                          WHERE duplicate.name = i.name
+                            AND duplicate.symbol_id <> target_symbol.symbol_id
+                      )
+                    UNION ALL
+                    SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
+                           i.kind, i.confidence * 0.5, 'identifier_name'
+                    FROM candidates
+                    JOIN symbols target_symbol ON target_symbol.symbol_id = candidates.id
+                    JOIN identifiers i ON i.name = target_symbol.name
+                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
+                    WHERE $reverse = 1
+                      AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM symbols duplicate
+                          WHERE duplicate.name = target_symbol.name
+                            AND duplicate.symbol_id <> target_symbol.symbol_id
+                      )
+                )
+                SELECT current_id, from_id, to_id, kind, confidence, source
+                FROM selected_edges
+                WHERE from_id <> to_id;
                 """;
-            command.Parameters.AddWithValue("$id", id);
+            for (int index = 0; index < missingIds.Length; index++)
+                command.Parameters.AddWithValue($"$id{index}", missingIds[index]);
+            command.Parameters.AddWithValue(
+                "$forward",
+                direction is Direction.Forward or Direction.Both ? 1 : 0);
+            command.Parameters.AddWithValue(
+                "$reverse",
+                direction is Direction.Reverse or Direction.Both ? 1 : 0);
+
             using var reader = command.ExecuteReader();
-            int oFrom = reader.GetOrdinal("containing_symbol_id");
-            int oKind = reader.GetOrdinal("kind");
-            int oDirect = reader.GetOrdinal("target_symbol_id");
-            int oOverlay = reader.GetOrdinal("overlay_target_symbol_id");
-            int oConfidence = reader.GetOrdinal("confidence");
-            int oOverlayConfidence = reader.GetOrdinal("overlay_confidence");
+            int currentOrdinal = reader.GetOrdinal("current_id");
+            int fromOrdinal = reader.GetOrdinal("from_id");
+            int toOrdinal = reader.GetOrdinal("to_id");
+            int kindOrdinal = reader.GetOrdinal("kind");
+            int confidenceOrdinal = reader.GetOrdinal("confidence");
+            int sourceOrdinal = reader.GetOrdinal("source");
             while (reader.Read())
             {
-                string from = reader.GetString(oFrom);
-                bool direct = !reader.IsDBNull(oDirect);
-                bool overlay = !reader.IsDBNull(oOverlay);
-                string source = direct ? "identifier_target" : "identifier_resolution";
-                double confidence = overlay && !reader.IsDBNull(oOverlayConfidence)
-                    ? reader.GetDouble(oOverlayConfidence)
-                    : reader.GetDouble(oConfidence);
-                AddEdge(edges, id, from, new GraphEdge(
-                    from, id, reader.GetString(oKind), confidence, source));
+                string current = reader.GetString(currentOrdinal);
+                string from = reader.GetString(fromOrdinal);
+                string to = reader.GetString(toOrdinal);
+                string neighbour = string.Equals(from, current, StringComparison.Ordinal) ? to : from;
+                AddEdge(
+                    edgesById[current],
+                    current,
+                    neighbour,
+                    new GraphEdge(
+                        from,
+                        to,
+                        reader.GetString(kindOrdinal),
+                        reader.GetDouble(confidenceOrdinal),
+                        reader.GetString(sourceOrdinal)));
             }
         }
 
-        if (ResolveNameIds(targetName).Count == 1)
+        foreach (GraphEdge edge in SupplementalEdges())
         {
-            using var command = Connection.CreateCommand();
-            command.CommandText =
-                """
-                SELECT i.containing_symbol_id, i.kind, i.confidence
-                FROM identifiers i
-                LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE i.name = $name
-                  AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL;
-                """;
-            command.Parameters.AddWithValue("$name", targetName);
-            using var reader = command.ExecuteReader();
-            int oFrom = reader.GetOrdinal("containing_symbol_id");
-            int oKind = reader.GetOrdinal("kind");
-            int oConfidence = reader.GetOrdinal("confidence");
-            while (reader.Read())
+            if (direction is Direction.Forward or Direction.Both &&
+                edgesById.TryGetValue(edge.From, out Dictionary<string, GraphEdge>? forward) &&
+                Contains(edge.To))
             {
-                string from = reader.GetString(oFrom);
-                AddEdge(edges, id, from, new GraphEdge(
-                    from, id, reader.GetString(oKind), reader.GetDouble(oConfidence) * 0.5, "identifier_name"));
+                AddEdge(forward, edge.From, edge.To, edge);
+            }
+            if (direction is Direction.Reverse or Direction.Both &&
+                edgesById.TryGetValue(edge.To, out Dictionary<string, GraphEdge>? reverse) &&
+                Contains(edge.From))
+            {
+                AddEdge(reverse, edge.To, edge.From, edge);
             }
         }
 
-        foreach (GraphEdge edge in TestLinkageEdges())
+        IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> loaded = edgesById.ToDictionary(
+            static pair => pair.Key,
+            pair => (IReadOnlyList<GraphNeighbour>)OrderedEdges(pair.Value)
+                .Select(edge =>
+                {
+                    string neighbour = NeighbourId(edge, pair.Key);
+                    return new GraphNeighbour(
+                        neighbour,
+                        edge.Kind,
+                        edge.Confidence,
+                        edge.Source,
+                        0,
+                        null);
+                })
+                .ToArray(),
+            StringComparer.Ordinal);
+        if (direction != Direction.Both && cacheResults)
         {
-            if (string.Equals(edge.To, id, StringComparison.Ordinal))
-                AddEdge(edges, id, edge.From, edge);
+            foreach ((string id, IReadOnlyList<GraphNeighbour> neighbours) in loaded)
+            {
+                if (_evidenceCache.Count < MaximumEvidenceCacheEntries)
+                    _evidenceCache[(id, direction)] = neighbours;
+            }
+            return ids.ToDictionary(
+                static id => id,
+                id => _evidenceCache.TryGetValue((id, direction), out var cached)
+                    ? cached
+                    : loaded[id],
+                StringComparer.Ordinal);
         }
-
-        return OrderedEdges(edges);
-    }
-
-    private void ReadEdges(
-        string sql,
-        string id,
-        Action<string, string, double> add)
-    {
-        using var command = Connection.CreateCommand();
-        command.CommandText = sql;
-        command.Parameters.AddWithValue("$id", id);
-        using var reader = command.ExecuteReader();
-        int oNeighbour = reader.GetOrdinal("neighbour_id");
-        int oKind = reader.GetOrdinal("kind");
-        int oConfidence = reader.GetOrdinal("confidence");
-        while (reader.Read())
-            add(reader.GetString(oNeighbour), reader.GetString(oKind), reader.GetDouble(oConfidence));
+        return loaded;
     }
 
     private static void AddEdge(
@@ -331,9 +427,6 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         edges.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
             .Select(static pair => pair.Value)
             .ToArray();
-
-    private static readonly IComparer<GraphEdge> EdgeComparer =
-        Comparer<GraphEdge>.Create(CompareEdges);
 
     private static int CompareEdges(GraphEdge left, GraphEdge right)
     {
@@ -360,11 +453,16 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     private static string NeighbourId(GraphEdge edge, string currentId) =>
         string.Equals(edge.From, currentId, StringComparison.Ordinal) ? edge.To : edge.From;
 
-    private int Degree(string id) =>
-        Dependencies(id).Count + Dependents(id).Count;
-
-    private IReadOnlyList<GraphEdge> TestLinkageEdges() =>
-        _testLinkageEdges ??= TestLinkageReader.Read(Connection);
+    private IReadOnlyList<GraphEdge> SupplementalEdges() =>
+        _supplementalEdges ??=
+        [
+            .. TestLinkageReader.Read(Connection),
+            .. BlazorComponentGraphReader.Read(
+                _dbPath,
+                SqliteBridgeReader.ReadStructuralFacts(
+                    _dbPath,
+                    [BridgeStructuralPatterns.BlazorComponentReference])),
+        ];
 
     private IReadOnlyList<string> LoadDependencies(string id)
     {
@@ -432,7 +530,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
             }
         }
 
-        foreach (GraphEdge edge in TestLinkageEdges())
+        foreach (GraphEdge edge in SupplementalEdges())
         {
             if (string.Equals(edge.From, id, StringComparison.Ordinal) && Contains(edge.To))
                 AddCandidate(ids, id, edge.To);
@@ -511,7 +609,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 AddCandidate(ids, id, reader.GetString(0));
         }
 
-        foreach (GraphEdge edge in TestLinkageEdges())
+        foreach (GraphEdge edge in SupplementalEdges())
         {
             if (string.Equals(edge.To, id, StringComparison.Ordinal))
                 AddCandidate(ids, id, edge.From);
@@ -558,21 +656,6 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         string? name = command.ExecuteScalar() as string;
         _symbolNameCache[id] = name;
         return name;
-    }
-
-    private string? SymbolVisibility(string id)
-    {
-        if (_symbolVisibilityCache.TryGetValue(id, out string? cached))
-            return cached;
-
-        using var command = Connection.CreateCommand();
-        command.CommandText = "SELECT visibility FROM symbols WHERE symbol_id = $id LIMIT 1;";
-        command.Parameters.AddWithValue("$id", id);
-        object? value = command.ExecuteScalar();
-        string? visibility = value is null or DBNull ? null : Convert.ToString(
-            value, System.Globalization.CultureInfo.InvariantCulture);
-        _symbolVisibilityCache[id] = visibility;
-        return visibility;
     }
 
     private IReadOnlyList<string> ResolveNameIds(string name)

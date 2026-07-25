@@ -64,19 +64,33 @@ internal static class GraphTraversal
         int limit,
         Direction direction,
         Func<string, bool> contains,
-        Func<string, Direction, IEnumerable<GraphNeighbour>> neighbours)
+        Func<string, Direction, IEnumerable<GraphNeighbour>>? neighbours,
+        Func<IReadOnlyList<string>, Direction, IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>>>?
+            batchNeighbours = null,
+        Func<IReadOnlyList<string>, IReadOnlySet<string>, Direction, bool>? hasUnseenNeighbours = null)
     {
         ArgumentNullException.ThrowIfNull(starts);
         ArgumentNullException.ThrowIfNull(contains);
-        ArgumentNullException.ThrowIfNull(neighbours);
+        if (neighbours is null && batchNeighbours is null)
+            throw new ArgumentNullException(nameof(neighbours));
 
         int effectiveMaxDepth = Math.Max(0, maxDepth);
         int effectiveLimit = Math.Max(0, limit);
         Dictionary<string, ReachedNode> reached = ExploreEvidence(
-            starts, effectiveMaxDepth, direction, contains, neighbours, out bool truncatedByDepth);
+            starts,
+            effectiveMaxDepth,
+            direction,
+            contains,
+            neighbours,
+            batchNeighbours,
+            hasUnseenNeighbours,
+            out bool truncatedByDepth);
         ReachedNode[] ordered = reached.Values
             .Where(static node => node.Hop > 0)
             .OrderBy(static node => node.Hop)
+            .ThenBy(static node => ImpactRanker.RelationshipPriority(node.EdgeKind))
+            .ThenBy(static node => ImpactRanker.SourcePriority(node.EdgeSource))
+            .ThenByDescending(static node => node.EdgeConfidence)
             .ThenBy(static node => node.Id, StringComparer.Ordinal)
             .ToArray();
         return new GraphReachResult(
@@ -91,53 +105,78 @@ internal static class GraphTraversal
         int maxDepth,
         Direction direction,
         Func<string, bool> contains,
-        Func<string, Direction, IEnumerable<GraphNeighbour>> neighbours,
+        Func<string, Direction, IEnumerable<GraphNeighbour>>? neighbours,
+        Func<IReadOnlyList<string>, Direction, IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>>>?
+            batchNeighbours,
+        Func<IReadOnlyList<string>, IReadOnlySet<string>, Direction, bool>? hasUnseenNeighbours,
         out bool truncatedByDepth)
     {
-        truncatedByDepth = false;
         var reached = new Dictionary<string, ReachedNode>(StringComparer.Ordinal);
-        var frontier = new Queue<string>();
+        var frontier = new List<string>();
         foreach (string start in starts)
         {
             if (contains(start) && reached.TryAdd(start, new ReachedNode(start, 0)))
-                frontier.Enqueue(start);
+                frontier.Add(start);
         }
 
-        while (frontier.Count > 0)
+        int currentHop = 0;
+        while (frontier.Count > 0 && currentHop < maxDepth)
         {
-            string current = frontier.Dequeue();
-            int currentHop = reached[current].Hop;
-            if (currentHop >= maxDepth)
-            {
-                if (!truncatedByDepth && currentHop == maxDepth &&
-                    neighbours(current, direction).Any(neighbour => !reached.ContainsKey(neighbour.Id)))
-                    truncatedByDepth = true;
-                continue;
-            }
-
-            GraphNeighbour[] adjacent = neighbours(current, direction).ToArray();
+            IReadOnlyDictionary<string, IReadOnlyList<GraphNeighbour>> adjacentById =
+                batchNeighbours is null
+                    ? frontier.ToDictionary(
+                        static id => id,
+                        id => (IReadOnlyList<GraphNeighbour>)neighbours!(id, direction).ToArray(),
+                        StringComparer.Ordinal)
+                    : batchNeighbours(frontier, direction);
+            var nextFrontier = new List<string>();
             int nextHop = currentHop + 1;
-            foreach (GraphNeighbour neighbour in adjacent)
+            foreach (string current in frontier)
             {
-                var candidate = new ReachedNode(
-                    neighbour.Id,
-                    nextHop,
-                    current,
-                    neighbour.EdgeKind,
-                    neighbour.EdgeConfidence,
-                    neighbour.EdgeSource,
-                    neighbour.Centrality,
-                    neighbour.Visibility);
-                if (!reached.TryGetValue(neighbour.Id, out ReachedNode? existing))
+                IReadOnlyList<GraphNeighbour> adjacent =
+                    adjacentById.GetValueOrDefault(current, []);
+                foreach (GraphNeighbour neighbour in adjacent)
                 {
-                    reached[neighbour.Id] = candidate;
-                    frontier.Enqueue(neighbour.Id);
-                }
-                else if (existing.Hop == nextHop && BetterEvidence(candidate, existing))
-                {
-                    reached[neighbour.Id] = candidate;
+                    var candidate = new ReachedNode(
+                        neighbour.Id,
+                        nextHop,
+                        current,
+                        neighbour.EdgeKind,
+                        neighbour.EdgeConfidence,
+                        neighbour.EdgeSource,
+                        neighbour.Centrality,
+                        neighbour.Visibility);
+                    if (!reached.TryGetValue(neighbour.Id, out ReachedNode? existing))
+                    {
+                        reached[neighbour.Id] = candidate;
+                        nextFrontier.Add(neighbour.Id);
+                    }
+                    else if (existing.Hop == nextHop && BetterEvidence(candidate, existing))
+                    {
+                        reached[neighbour.Id] = candidate;
+                    }
                 }
             }
+            frontier = nextFrontier;
+            currentHop = nextHop;
+        }
+
+        IReadOnlySet<string> reachedIds = reached.Keys.ToHashSet(StringComparer.Ordinal);
+        if (hasUnseenNeighbours is not null)
+        {
+            truncatedByDepth = hasUnseenNeighbours(frontier, reachedIds, direction);
+        }
+        else if (batchNeighbours is not null)
+        {
+            truncatedByDepth = batchNeighbours(frontier, direction)
+                .Values
+                .SelectMany(static adjacent => adjacent)
+                .Any(neighbour => !reachedIds.Contains(neighbour.Id));
+        }
+        else
+        {
+            truncatedByDepth = frontier.Any(current =>
+                neighbours!(current, direction).Any(neighbour => !reachedIds.Contains(neighbour.Id)));
         }
         return reached;
     }

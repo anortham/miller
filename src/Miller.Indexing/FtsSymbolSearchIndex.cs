@@ -422,27 +422,11 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         if (limit < 1)
             return Array.Empty<IndexedSymbol>();
 
-        string normalizedQuery = query.Trim().Replace('\\', '/');
-        var rankedPaths = new List<(string Path, int Rank)>();
-        foreach (string path in _paths.Value)
-        {
-            string fileName = LastPathSegment(path);
-            int rank = RankPath(path, fileName, normalizedQuery);
-            if (rank >= 0)
-                rankedPaths.Add((path, rank));
-        }
-
-        rankedPaths.Sort(static (a, b) =>
-        {
-            int byRank = a.Rank.CompareTo(b.Rank);
-            if (byRank != 0) return byRank;
-            int byLength = a.Path.Length.CompareTo(b.Path.Length);
-            return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
-        });
+        IReadOnlyList<string> rankedPaths = FindFilePathsByFragment(query, int.MaxValue);
 
         var results = new List<IndexedSymbol>(limit);
         var pathsWithRemainder = new List<IReadOnlyList<IndexedSymbol>>();
-        foreach ((string path, _) in rankedPaths)
+        foreach (string path in rankedPaths)
         {
             IReadOnlyList<IndexedSymbol> symbols = FindByFilePath(path);
             if (symbols.Count == 0)
@@ -466,6 +450,35 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         }
 
         return results;
+    }
+
+    public IReadOnlyList<string> FindFilePathsByFragment(string query, int limit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        if (limit < 1)
+            return Array.Empty<string>();
+
+        string normalizedQuery = query.Trim().Replace('\\', '/');
+        var rankedPaths = new List<(string Path, int Rank)>();
+        foreach (string path in _paths.Value)
+        {
+            string fileName = LastPathSegment(path);
+            int rank = RankPath(path, fileName, normalizedQuery);
+            if (rank >= 0)
+                rankedPaths.Add((path, rank));
+        }
+
+        rankedPaths.Sort(static (a, b) =>
+        {
+            int byRank = a.Rank.CompareTo(b.Rank);
+            if (byRank != 0) return byRank;
+            int byLength = a.Path.Length.CompareTo(b.Path.Length);
+            return byLength != 0 ? byLength : string.CompareOrdinal(a.Path, b.Path);
+        });
+        return rankedPaths
+            .Take(limit)
+            .Select(static candidate => candidate.Path)
+            .ToArray();
     }
 
     public bool IsIndexedFilePath(string path)

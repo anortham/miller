@@ -138,6 +138,9 @@ public sealed class SymbolLookupTables
     public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
         FilePathSymbolLookup.FindByFilePathFragment(_byFilePath, query, limit);
 
+    public IReadOnlyList<string> FindFilePathsByFragment(string query, int limit) =>
+        FilePathSymbolLookup.FindFilePathsByFragment(_byFilePath, query, limit);
+
     public bool IsIndexedFilePath(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
