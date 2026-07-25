@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -16,6 +17,16 @@ public sealed class PatternsTool
     public const int DefaultLimit = 50;
     public const int MaxLimit = 500;
     public const int MaxQueryPatternIds = 25;
+    public const int MaxMetadataFilters = 16;
+    private const int MinCompactCollectionRowBytes = 5;
+    private const int MinJsonCollectionRowBytes = 48;
+    private const int MaxPatternIdEncodedBytes = 512;
+    private const int MaxQueryEncodedBytes = 1_000;
+    private const int MaxLanguageEncodedBytes = 128;
+    private const int MaxPathEncodedBytes = 2_048;
+    private const int MaxWhereEncodedBytes = 2_048;
+    private const int MaxFacetEncodedBytes = 256;
+    private static readonly JavaScriptEncoder PatternJsonEncoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
     private static readonly string[] MetadataPriority =
     [
         "verb",
@@ -65,13 +76,13 @@ public sealed class PatternsTool
         "pattern_id=aspnet.minimal_api.route.v1; patterns operation=search query=route.")]
     public string Patterns(
         [Description("list|summary|search. Default list.")] string? operation = "list",
-        [Description("Pattern id. Required for search unless query is given; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,
-        [Description("Free-text search over observed pattern IDs when pattern_id is omitted. Reports exact fan-out counts and searches at most 25 matched IDs. Ignored when pattern_id is supplied. Example: route.")] string? query = null,
+        [Description("Pattern id, max 512 encoded bytes. Required for search unless query is given; optional for summary/list. Example: htmx.attribute.v1.")] string? pattern_id = null,
+        [Description("Free-text search over observed pattern IDs, max 1,000 encoded bytes. Reports exact fan-out counts and searches at most 25 matched IDs. Example: route.")] string? query = null,
         [Description("Language filter such as csharp, html, or razor. Optional.")] string? language = null,
         [Description("Workspace-relative glob filter, e.g. Views/**. Optional.")] string? path = null,
-        [Description("Top-level metadata equality filter as key=value. Repeatable on CLI; MCP accepts key=value or semicolon-separated AND filters. Requires pattern_id or query for search.")] string? where = null,
+        [Description("Top-level metadata equality filter as key=value. Accepts up to 16 semicolon-separated AND filters; repeat --where on CLI. Requires pattern_id or query for search.")] string? where = null,
         [Description("summary grouping: language_pattern_capture|file|directory|top_directory. Default language_pattern_capture.")] string? group_by = null,
-        [Description("Optional summary metadata facet key.")] string? facet = null,
+        [Description("Optional summary metadata facet key using letters, digits, underscore, or hyphen.")] string? facet = null,
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh selected workspace before reading. Defaults true when workspace_id is supplied.")] bool? ensure_fresh = null,
         [Description("Max search results. Default 50, maximum 500.")] int limit = DefaultLimit,
@@ -83,6 +94,11 @@ public sealed class PatternsTool
         {
             bool refresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
+            string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            int outputBudget = ToolOutputBudget.PatternsMcpMaxBytes
+                - ToolOutputBudget.PatternsMcpDiagnosticReserveBytes;
+            if (banner is not null)
+                outputBudget -= Encoding.UTF8.GetByteCount(banner) + 1;
 
             PatternToolResult result = Run(
                 _reader,
@@ -97,7 +113,7 @@ public sealed class PatternsTool
                 facet,
                 limit,
                 json,
-                ToolOutputBudget.PatternsMcpMaxBytes);
+                outputBudget);
             ToolDiagnostic? diagnostic = result.ResultCount == 0
                 ? ToolDiagnostic.ExpectedEmpty(
                     result.EmptyReason ?? "no_facts",
@@ -122,7 +138,6 @@ public sealed class PatternsTool
                 telemetry.SetMetadata("limit_bucket", LimitBucket(limit));
             }
 
-            string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = ReadToolWorkspaceRouting.PrefixCompact(result.Output, banner);
             if (diagnostic is not null)
             {
@@ -133,7 +148,9 @@ public sealed class PatternsTool
                     json,
                     telemetry);
             }
-            return output;
+            return ToolOutputBudget.RequireWithinByteBudget(
+                output,
+                ToolOutputBudget.PatternsMcpMaxBytes);
         }
         catch (Exception ex)
         {
@@ -163,19 +180,39 @@ public sealed class PatternsTool
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         string op = NormalizeOperation(operation);
+        ValidateInputLength(patternId, "pattern_id", MaxPatternIdEncodedBytes);
+        ValidateInputLength(query, "query", MaxQueryEncodedBytes);
+        ValidateInputLength(language, "language", MaxLanguageEncodedBytes);
+        ValidateInputLength(path, "path", MaxPathEncodedBytes);
+        ValidateInputLength(where, "where", MaxWhereEncodedBytes);
+        ValidateInputLength(facet, "facet", MaxFacetEncodedBytes);
+        ValidateFacet(facet);
         if ((op is "list" or "summary") && !string.IsNullOrWhiteSpace(query))
             throw InvalidRequest("patterns query is only supported for search.");
 
         IReadOnlyList<PatternMetadataFilter> metadataFilters = ParseWhereFilters(where);
-        if (metadataFilters.Count > 0 && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
+        if (op == "search"
+            && metadataFilters.Count > 0
+            && string.IsNullOrWhiteSpace(patternId)
+            && string.IsNullOrWhiteSpace(query))
             throw InvalidRequest("patterns where requires pattern_id or query.");
 
         PatternSummaryGroupBy summaryGroupBy = ParseSummaryGroupBy(groupBy);
 
         return op switch
         {
-            "list" => List(reader, dbPath, patternId, language, path, metadataFilters, json),
-            "summary" => Summary(reader, dbPath, patternId, language, path, metadataFilters, summaryGroupBy, facet, json),
+            "list" => List(reader, dbPath, patternId, language, path, metadataFilters, json, outputByteBudget),
+            "summary" => Summary(
+                reader,
+                dbPath,
+                patternId,
+                language,
+                path,
+                metadataFilters,
+                summaryGroupBy,
+                facet,
+                json,
+                outputByteBudget),
             "search" => SearchDispatch(
                 reader,
                 dbPath,
@@ -189,6 +226,35 @@ public sealed class PatternsTool
                 outputByteBudget),
             _ => throw InvalidRequest("patterns operation must be list, summary, or search."),
         };
+    }
+
+    private static void ValidateInputLength(string? value, string parameterName, int maxEncodedBytes)
+    {
+        if (string.IsNullOrEmpty(value))
+            return;
+
+        int encodedBytes = JsonEncodedText.Encode(value.AsSpan(), PatternJsonEncoder).EncodedUtf8Bytes.Length;
+        if (encodedBytes > maxEncodedBytes)
+        {
+            throw InvalidRequest(
+                $"patterns {parameterName} exceeds the {maxEncodedBytes}-byte encoded input limit.");
+        }
+    }
+
+    private static void ValidateFacet(string? facet)
+    {
+        if (string.IsNullOrWhiteSpace(facet))
+            return;
+
+        try
+        {
+            new PatternMetadataFilter(facet, string.Empty).Validate();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            throw InvalidRequest(
+                "patterns facet key must contain only letters, digits, underscore, or hyphen.");
+        }
     }
 
     private static PatternToolResult SearchDispatch(
@@ -235,10 +301,17 @@ public sealed class PatternsTool
         if (string.IsNullOrWhiteSpace(where))
             return Array.Empty<PatternMetadataFilter>();
 
-        return where
+        PatternMetadataFilter[] filters = where
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(ParseSingleWhere)
             .ToArray();
+        if (filters.Length > MaxMetadataFilters)
+        {
+            throw InvalidRequest(
+                $"patterns where accepts at most {MaxMetadataFilters} metadata filters.");
+        }
+
+        return filters;
     }
 
     private static PatternMetadataFilter ParseSingleWhere(string where)
@@ -287,29 +360,48 @@ public sealed class PatternsTool
         string? language,
         string? path,
         IReadOnlyList<PatternMetadataFilter> metadataFilters,
-        bool json)
+        bool json,
+        int? outputByteBudget)
     {
-        IReadOnlyList<PatternListRow> rows;
-        if (string.IsNullOrWhiteSpace(path) && metadataFilters.Count == 0 && string.IsNullOrWhiteSpace(patternId))
-        {
-            rows = reader.List(dbPath, language);
-        }
-        else
-        {
-            rows = reader.Matches(dbPath, patternId, language, path, metadataFilters)
-                .GroupBy(static row => row.PatternId, StringComparer.Ordinal)
-                .OrderBy(static group => group.Key, StringComparer.Ordinal)
-                .Select(static group => new PatternListRow(
-                    group.Key,
-                    Label: group.Key,
-                    Languages: group.Select(static row => row.Language).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray(),
-                    Captures: group.Select(static row => row.CaptureName).Distinct(StringComparer.Ordinal).OrderBy(static value => value, StringComparer.Ordinal).ToArray(),
-                    Count: group.LongCount(),
-                    Catalog: "observed"))
-                .ToArray();
-        }
+        IReadOnlyList<PatternListRow> rows = reader.List(
+            dbPath,
+            patternId,
+            language,
+            path,
+            metadataFilters.Count == 0 ? null : metadataFilters);
 
-        return new PatternToolResult(json ? RenderListJson(rows) : RenderListCompact(rows), rows.Count);
+        IReadOnlyList<PatternListRow> renderRows = outputByteBudget is null
+            ? rows
+            : rows
+                .OrderByDescending(static row => row.Count)
+                .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
+                .ToArray();
+        string Render(IReadOnlyList<PatternListRow> retained, int _) =>
+            json
+                ? RenderListJson(
+                    retained,
+                    ListNextActions(retained),
+                    path,
+                    language,
+                    metadataFilters,
+                    rows.Count,
+                    rows.Count - retained.Count)
+                : RenderListCompact(
+                    retained,
+                    ListNextActions(retained),
+                    path,
+                    language,
+                    metadataFilters,
+                    rows.Count,
+                    rows.Count - retained.Count);
+        string output = outputByteBudget is { } maxBytes
+            ? ToolOutputBudget.RenderPrefixWithinByteBudget(
+                renderRows,
+                maxBytes,
+                Render,
+                MaxMcpCollectionRenderCandidates(maxBytes, json))
+            : Render(renderRows, 0);
+        return new PatternToolResult(output, rows.Count);
     }
 
     private static PatternToolResult Summary(
@@ -321,7 +413,8 @@ public sealed class PatternsTool
         IReadOnlyList<PatternMetadataFilter> metadataFilters,
         PatternSummaryGroupBy groupBy,
         string? facet,
-        bool json)
+        bool json,
+        int? outputByteBudget)
     {
         IReadOnlyList<PatternSummaryRow> rows = reader.Summary(
             dbPath,
@@ -332,8 +425,51 @@ public sealed class PatternsTool
             groupBy,
             facet);
 
-        return new PatternToolResult(json ? RenderSummaryJson(rows, groupBy, facet) : RenderSummaryCompact(rows, groupBy, facet), rows.Count);
+        IReadOnlyList<PatternSummaryRow> renderRows = outputByteBudget is null
+            ? rows
+            : rows
+                .OrderByDescending(static row => row.Count)
+                .ThenBy(static row => row.Language, StringComparer.Ordinal)
+                .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
+                .ThenBy(static row => row.CaptureName, StringComparer.Ordinal)
+                .ThenBy(static row => row.Path, StringComparer.Ordinal)
+                .ThenBy(static row => row.Directory, StringComparer.Ordinal)
+                .ThenBy(static row => row.FacetValue, StringComparer.Ordinal)
+                .ToArray();
+        string Render(IReadOnlyList<PatternSummaryRow> retained, int _) =>
+            json
+                ? RenderSummaryJson(
+                    retained,
+                    groupBy,
+                    facet,
+                    path,
+                    language,
+                    metadataFilters,
+                    rows.Count,
+                    rows.Count - retained.Count)
+                : RenderSummaryCompact(
+                    retained,
+                    groupBy,
+                    facet,
+                    path,
+                    language,
+                    metadataFilters,
+                    rows.Count,
+                    rows.Count - retained.Count);
+        string output = outputByteBudget is { } maxBytes
+            ? ToolOutputBudget.RenderPrefixWithinByteBudget(
+                renderRows,
+                maxBytes,
+                Render,
+                MaxMcpCollectionRenderCandidates(maxBytes, json))
+            : Render(renderRows, 0);
+        return new PatternToolResult(output, rows.Count);
     }
+
+    private static int MaxMcpCollectionRenderCandidates(int maxBytes, bool json) =>
+        Math.Max(
+            1,
+            maxBytes / (json ? MinJsonCollectionRowBytes : MinCompactCollectionRowBytes));
 
     private static PatternToolResult Search(
         PatternFactsReader reader,
@@ -347,27 +483,27 @@ public sealed class PatternsTool
         int? outputByteBudget)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
-        PatternMatchRow[] rows = reader.Search(
+        PatternExactSearchResult searchResult = reader.SearchExactWithContext(
             dbPath,
             patternId,
             language,
             path,
             metadataFilters.Count == 0 ? null : metadataFilters,
-            boundedLimit).ToArray();
+            boundedLimit);
+        PatternMatchResult matches = searchResult.Matches;
+        long totalCount = matches.TotalCount;
+        IReadOnlyList<PatternMatchRow> rows = matches.Rows;
 
-        bool patternExists = rows.Length > 0
-            || reader.EnumerateMatches(dbPath, patternId, language: null, pathGlob: null, metadataFilters: null, limit: 1).Any();
-        bool filteredOut = rows.Length == 0
+        bool patternExists = searchResult.PatternExists;
+        bool filteredOut = rows.Count == 0
             && patternExists
             && (!string.IsNullOrWhiteSpace(path) || !string.IsNullOrWhiteSpace(language) || metadataFilters.Count > 0);
-        IReadOnlyList<string> suggestions = rows.Length == 0 && !filteredOut
-            ? SuggestPatternIds(reader, dbPath, patternId, language)
+        IReadOnlyList<string> suggestions = rows.Count == 0 && !filteredOut
+            ? SuggestPatternIds(searchResult.SuggestionPatternIds, patternId)
             : [];
         string emptyReason = PatternEmptyReason(
-            hasPatternId: true,
             patternExists,
             filteredOut,
-            metadataFilters.Count > 0,
             querySearch: false);
 
         string Render(IReadOnlyList<PatternMatchRow> retained, int omitted) =>
@@ -381,23 +517,22 @@ public sealed class PatternsTool
                     language,
                     metadataFilters,
                     emptyReason,
-                    rows.Length,
-                    omitted)
+                    totalCount,
+                    totalCount - retained.Count)
                 : RenderSearchCompact(
                     patternId,
                     retained,
-                    metadataFilters.Count == 1 ? metadataFilters[0] : null,
                     suggestions,
                     filteredOut,
                     path,
                     language,
-                    metadataFilters.Count == 1 ? metadataFilters[0] : null,
-                    rows.Length,
-                    omitted);
+                    metadataFilters,
+                    totalCount,
+                    totalCount - retained.Count);
         string output = outputByteBudget is { } maxBytes
             ? ToolOutputBudget.RenderPrefixWithinByteBudget(rows, maxBytes, Render)
             : Render(rows, 0);
-        return new PatternToolResult(output, rows.Length, emptyReason);
+        return new PatternToolResult(output, rows.Count, emptyReason);
     }
 
     private static PatternToolResult SearchByQuery(
@@ -412,24 +547,26 @@ public sealed class PatternsTool
         int? outputByteBudget)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
-        PatternListRow[] consideredPatternIds = reader.List(dbPath).ToArray();
-        PatternListRow[] matchedPatternIds = consideredPatternIds
-            .Where(row => row.PatternId.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(static row => row.Count)
-            .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
-            .ToArray();
-        string[] returnedPatternIds = matchedPatternIds
-            .Take(MaxQueryPatternIds)
-            .Select(static row => row.PatternId)
-            .ToArray();
+        bool hasActiveFilters = !string.IsNullOrWhiteSpace(path)
+            || !string.IsNullOrWhiteSpace(language)
+            || metadataFilters.Count > 0;
+        PatternQueryMatchResult queryResult = reader.SearchByQueryWithCount(
+            dbPath,
+            query,
+            language,
+            path,
+            metadataFilters.Count == 0 ? null : metadataFilters,
+            boundedLimit,
+            MaxQueryPatternIds);
+        IReadOnlyList<string> returnedPatternIds = queryResult.ReturnedPatternIds;
         var fanout = new PatternQueryFanout(
-            consideredPatternIds.Length,
-            matchedPatternIds.Length,
+            queryResult.ConsideredPatternIds.Count,
+            queryResult.MatchedPatternCount,
             returnedPatternIds);
 
         if (fanout.MatchedCount == 0)
         {
-            IReadOnlyList<string> nearMatches = SuggestPatternIds(reader, dbPath, query, language);
+            IReadOnlyList<string> nearMatches = SuggestPatternIds(queryResult.SuggestionPatternIds, query);
             const string emptyReason = "query_no_match";
             if (json)
             {
@@ -443,6 +580,7 @@ public sealed class PatternsTool
                     writer.WriteString("empty_reason", emptyReason);
                     WriteQueryFanoutJson(writer, fanout);
                     WriteStringArray(writer, "matched_pattern_ids", Array.Empty<string>());
+                    WriteMatchCountsJson(writer, totalCount: 0, returnedCount: 0, omittedCount: 0);
                     WriteStringArray(writer, "near_matches", nearMatches);
                     WriteActiveFiltersJson(writer, path, language, metadataFilters);
                     writer.WriteStartArray("matches");
@@ -452,35 +590,32 @@ public sealed class PatternsTool
                     WriteNextActions(writer, QueryNoMatchNextActions(nearMatches));
                     writer.WriteEndObject();
                 }
-                return new PatternToolResult(Encoding.UTF8.GetString(buffer.WrittenSpan), 0, emptyReason);
+                string noMatchOutput = Encoding.UTF8.GetString(buffer.WrittenSpan);
+                if (outputByteBudget is { } noMatchMaxBytes)
+                {
+                    noMatchOutput = ToolOutputBudget.RequireWithinByteBudget(
+                        noMatchOutput,
+                        noMatchMaxBytes);
+                }
+                return new PatternToolResult(noMatchOutput, 0, emptyReason);
             }
 
-            string hint = RenderQueryNoMatchCompact(query, fanout, nearMatches);
+            string hint = RenderQueryNoMatchCompact(
+                query,
+                fanout,
+                nearMatches,
+                path,
+                language,
+                metadataFilters);
+            if (outputByteBudget is { } maxCompactBytes)
+                hint = ToolOutputBudget.RequireWithinByteBudget(hint, maxCompactBytes);
             return new PatternToolResult(hint, 0, emptyReason);
         }
 
-        var combined = new List<PatternMatchRow>(capacity: Math.Min(boundedLimit * returnedPatternIds.Length, MaxLimit * MaxQueryPatternIds));
-        foreach (PatternMatchRow row in reader.EnumerateMatches(
-                     dbPath,
-                     returnedPatternIds,
-                     language,
-                     path,
-                     metadataFilters.Count == 0 ? null : metadataFilters,
-                     boundedLimit))
-        {
-            combined.Add(row);
-        }
-
-        PatternMatchRow[] rows = combined
-            .OrderBy(static row => row.Path, StringComparer.Ordinal)
-            .ThenBy(static row => row.Span.StartByte)
-            .ThenBy(static row => row.FactId, StringComparer.Ordinal)
-            .Take(boundedLimit)
-            .ToArray();
-        bool hasActiveFilters = !string.IsNullOrWhiteSpace(path)
-            || !string.IsNullOrWhiteSpace(language)
-            || metadataFilters.Count > 0;
-        string? resultEmptyReason = rows.Length == 0
+        PatternMatchResult matches = queryResult.Matches;
+        long totalCount = matches.TotalCount;
+        IReadOnlyList<PatternMatchRow> rows = matches.Rows;
+        string? resultEmptyReason = rows.Count == 0
             ? hasActiveFilters ? "filtered_out" : "no_facts"
             : null;
 
@@ -494,28 +629,43 @@ public sealed class PatternsTool
                     language,
                     metadataFilters,
                     resultEmptyReason,
-                    rows.Length,
-                    omitted)
+                    totalCount,
+                    totalCount - retained.Count)
                 : RenderSearchCompactForQuery(
                     query,
                     fanout,
                     retained,
-                    metadataFilters.Count == 1 ? metadataFilters[0] : null,
-                    rows.Length,
-                    omitted);
+                    path,
+                    language,
+                    metadataFilters,
+                    resultEmptyReason,
+                    totalCount,
+                    totalCount - retained.Count);
         string output = outputByteBudget is { } maxBytes
             ? ToolOutputBudget.RenderPrefixWithinByteBudget(rows, maxBytes, Render)
             : Render(rows, 0);
-        return new PatternToolResult(output, rows.Length, resultEmptyReason);
+        return new PatternToolResult(output, rows.Count, resultEmptyReason);
     }
 
-    private static string RenderListCompact(IReadOnlyList<PatternListRow> rows)
+    private static string RenderListCompact(
+        IReadOnlyList<PatternListRow> rows,
+        IReadOnlyList<PatternNextAction> nextActions,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        int totalCount,
+        int omittedCount)
     {
-        if (rows.Count == 0)
-            return "No patterns.";
+        string activeFilters = ActiveFiltersCompact(path, language, metadataFilters);
+        if (totalCount == 0)
+            return activeFilters.Length == 0
+                ? "No patterns."
+                : $"No patterns.{Environment.NewLine}active filters: {activeFilters}";
 
         var sb = new StringBuilder();
         sb.AppendLine("# patterns");
+        if (activeFilters.Length > 0)
+            sb.Append("active filters: ").AppendLine(activeFilters);
         sb.AppendLine("pattern_id\tcount\tlanguages\tcaptures");
         foreach (PatternListRow row in rows)
         {
@@ -525,20 +675,38 @@ public sealed class PatternsTool
               .Append(string.Join(",", row.Captures))
               .AppendLine();
         }
-        AppendNextActions(sb, ListNextActions(rows));
+        AppendCollectionTruncationCompact(sb, "patterns", totalCount, rows.Count, omittedCount);
+        AppendNextActions(sb, nextActions);
         return sb.ToString().TrimEnd();
     }
 
     private static string RenderSummaryCompact(
         IReadOnlyList<PatternSummaryRow> rows,
         PatternSummaryGroupBy groupBy,
-        string? facet)
+        string? facet,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        int totalCount,
+        int omittedCount)
     {
-        if (rows.Count == 0)
-            return "No pattern groups.";
+        string activeFilters = ActiveFiltersCompact(path, language, metadataFilters);
+        if (totalCount == 0)
+        {
+            var empty = new StringBuilder("No pattern groups.");
+            if (activeFilters.Length > 0)
+                empty.AppendLine().Append("active filters: ").Append(activeFilters);
+            if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
+                empty.AppendLine().Append("group_by=").Append(SummaryGroupByName(groupBy));
+            if (!string.IsNullOrWhiteSpace(facet))
+                empty.AppendLine().Append("facet=").Append(facet.Trim());
+            return empty.ToString();
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine("# patterns summary");
+        if (activeFilters.Length > 0)
+            sb.Append("active filters: ").AppendLine(activeFilters);
         if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
             sb.Append("group_by=").Append(SummaryGroupByName(groupBy)).AppendLine();
         if (!string.IsNullOrWhiteSpace(facet))
@@ -567,37 +735,62 @@ public sealed class PatternsTool
             sb.Append(row.Count)
               .AppendLine();
         }
+        AppendCollectionTruncationCompact(sb, "groups", totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
+    }
+
+    private static void AppendCollectionTruncationCompact(
+        StringBuilder builder,
+        string label,
+        int totalCount,
+        int returnedCount,
+        int omittedCount)
+    {
+        if (omittedCount <= 0)
+            return;
+
+        builder.Append(label).Append(": total=").Append(totalCount)
+            .Append(" returned=").Append(returnedCount)
+            .Append(" omitted=").Append(omittedCount)
+            .Append(" truncated=true")
+            .AppendLine();
+        builder.Append(label == "patterns"
+                ? "next: refine pattern_id, language, or path to narrow the result."
+                : "next: refine pattern_id, language, path, where, or grouping to narrow the result.")
+            .AppendLine();
     }
 
     private static string RenderSearchCompact(
         string patternId,
         IReadOnlyList<PatternMatchRow> rows,
-        PatternMetadataFilter? metadataFilter,
         IReadOnlyList<string> suggestions,
         bool filteredOut,
         string? path,
         string? language,
-        PatternMetadataFilter? activeMetadataFilter,
-        int totalCount,
-        int omittedCount)
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        long totalCount,
+        long omittedCount)
     {
         if (rows.Count == 0 && omittedCount == 0)
         {
             if (filteredOut)
-                return RenderFilteredOutCompact(patternId, path, language, activeMetadataFilter);
+                return RenderFilteredOutCompact(patternId, path, language, metadataFilters);
             if (suggestions.Count == 0)
                 return $"No matches for {patternId}.";
 
             var empty = new StringBuilder();
             empty.Append("No matches for ").Append(patternId).AppendLine(".");
-            empty.Append("Suggestions: ").Append(string.Join(", ", suggestions));
-            return empty.ToString();
+            empty.Append("Suggestions: ").AppendLine(string.Join(", ", suggestions));
+            AppendNextActions(empty, QueryNoMatchNextActions(suggestions));
+            return empty.ToString().TrimEnd();
         }
 
         var sb = new StringBuilder();
         sb.Append("# patterns search ").AppendLine(patternId);
-        AppendMatchGroups(sb, rows, metadataFilter);
+        string activeFilters = ActiveFiltersCompact(path, language, metadataFilters);
+        if (activeFilters.Length > 0)
+            sb.Append("active filters: ").AppendLine(activeFilters);
+        AppendMatchGroups(sb, rows, metadataFilters);
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
     }
@@ -606,24 +799,47 @@ public sealed class PatternsTool
         string query,
         PatternQueryFanout fanout,
         IReadOnlyList<PatternMatchRow> rows,
-        PatternMetadataFilter? metadataFilter,
-        int totalCount,
-        int omittedCount)
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        string? emptyReason,
+        long totalCount,
+        long omittedCount)
     {
         var sb = new StringBuilder();
         sb.Append("# patterns search query='").Append(query).AppendLine("'");
         AppendQueryFanoutCompact(sb, fanout);
         sb.Append("matched_pattern_ids: ").Append(string.Join(", ", fanout.ReturnedPatternIds)).AppendLine();
-        AppendMatchGroups(sb, rows, metadataFilter);
+        string filters = ActiveFiltersCompact(path, language, metadataFilters);
+        if (rows.Count == 0 && omittedCount == 0)
+        {
+            if (string.Equals(emptyReason, "filtered_out", StringComparison.Ordinal))
+            {
+                sb.Append("No facts for matched pattern IDs after filters");
+                if (filters.Length > 0)
+                    sb.Append(": ").Append(filters);
+                sb.AppendLine(".");
+            }
+            else
+            {
+                sb.AppendLine("No facts for matched pattern IDs.");
+            }
+        }
+        else
+        {
+            if (filters.Length > 0)
+                sb.Append("active filters: ").AppendLine(filters);
+            AppendMatchGroups(sb, rows, metadataFilters);
+        }
         AppendMatchTruncationCompact(sb, totalCount, rows.Count, omittedCount);
         return sb.ToString().TrimEnd();
     }
 
     private static void AppendMatchTruncationCompact(
         StringBuilder builder,
-        int totalCount,
+        long totalCount,
         int returnedCount,
-        int omittedCount)
+        long omittedCount)
     {
         if (omittedCount <= 0)
             return;
@@ -641,13 +857,19 @@ public sealed class PatternsTool
     private static string RenderQueryNoMatchCompact(
         string query,
         PatternQueryFanout fanout,
-        IReadOnlyList<string> nearMatches)
+        IReadOnlyList<string> nearMatches,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
         var sb = new StringBuilder();
         sb.Append("No patterns match '").Append(query).AppendLine("'. Try `patterns operation=list` to see observed pattern_id values.");
         AppendQueryFanoutCompact(sb, fanout);
         if (nearMatches.Count > 0)
             sb.Append("near matches: ").AppendLine(string.Join(", ", nearMatches));
+        string filters = ActiveFiltersCompact(path, language, metadataFilters);
+        if (filters.Length > 0)
+            sb.Append("active filters: ").AppendLine(filters);
         AppendNextActions(sb, QueryNoMatchNextActions(nearMatches));
         return sb.ToString().TrimEnd();
     }
@@ -656,9 +878,9 @@ public sealed class PatternsTool
         string patternId,
         string? path,
         string? language,
-        PatternMetadataFilter? metadataFilter)
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
-        string filters = ActiveFiltersCompact(path, language, metadataFilter);
+        string filters = ActiveFiltersCompact(path, language, metadataFilters);
         var sb = new StringBuilder();
         sb.Append("No matches for ").Append(patternId).Append(" after filters");
         if (!string.IsNullOrWhiteSpace(filters))
@@ -669,14 +891,17 @@ public sealed class PatternsTool
         return sb.ToString().TrimEnd();
     }
 
-    private static string ActiveFiltersCompact(string? path, string? language, PatternMetadataFilter? metadataFilter)
+    private static string ActiveFiltersCompact(
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
-        var filters = new List<string>(capacity: 3);
+        var filters = new List<string>(capacity: 2 + metadataFilters.Count);
         if (!string.IsNullOrWhiteSpace(language))
             filters.Add("language=" + language.Trim());
         if (!string.IsNullOrWhiteSpace(path))
             filters.Add("path=" + path.Trim());
-        if (metadataFilter is not null)
+        foreach (PatternMetadataFilter metadataFilter in metadataFilters)
             filters.Add("where=" + metadataFilter.Key + "=" + metadataFilter.Value);
         return string.Join(", ", filters);
     }
@@ -810,14 +1035,31 @@ public sealed class PatternsTool
             writer.WritePropertyName("args");
             writer.WriteStartObject();
             foreach (KeyValuePair<string, string> arg in action.Args)
-                writer.WriteString(arg.Key, arg.Value);
+            {
+                if (string.Equals(arg.Key, "limit", StringComparison.Ordinal)
+                    && int.TryParse(
+                        arg.Value,
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out int limit))
+                {
+                    writer.WriteNumber(arg.Key, limit);
+                }
+                else
+                {
+                    writer.WriteString(arg.Key, arg.Value);
+                }
+            }
             writer.WriteEndObject();
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
     }
 
-    private static void AppendMatchGroups(StringBuilder sb, IReadOnlyList<PatternMatchRow> rows, PatternMetadataFilter? metadataFilter)
+    private static void AppendMatchGroups(
+        StringBuilder sb,
+        IReadOnlyList<PatternMatchRow> rows,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
         foreach (IGrouping<string, PatternMatchRow> group in rows.GroupBy(static row => row.Path, StringComparer.Ordinal))
         {
@@ -831,7 +1073,7 @@ public sealed class PatternsTool
                   .Append(' ')
                   .Append(row.PatternId);
 
-                string metadata = MetadataCompact(row, metadataFilter);
+                string metadata = MetadataCompact(row, metadataFilters);
                 if (metadata.Length > 0)
                     sb.Append(" metadata=").Append(metadata);
 
@@ -840,7 +1082,14 @@ public sealed class PatternsTool
         }
     }
 
-    private static string RenderListJson(IReadOnlyList<PatternListRow> rows)
+    private static string RenderListJson(
+        IReadOnlyList<PatternListRow> rows,
+        IReadOnlyList<PatternNextAction> nextActions,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        int totalCount,
+        int omittedCount)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -848,6 +1097,8 @@ public sealed class PatternsTool
             writer.WriteStartObject();
             writer.WriteNumber("schema_version", 1);
             writer.WriteString("operation", "list");
+            WriteActiveFiltersJson(writer, path, language, metadataFilters);
+            WriteCollectionCountsJson(writer, "patterns", totalCount, rows.Count, omittedCount);
             writer.WriteStartArray("patterns");
             foreach (PatternListRow row in rows)
             {
@@ -868,7 +1119,8 @@ public sealed class PatternsTool
             }
             writer.WriteEndArray();
             writer.WritePropertyName("next_actions");
-            WriteNextActions(writer, ListNextActions(rows));
+            WriteNextActions(writer, nextActions);
+            WriteCollectionTruncationJson(writer, "patterns", omittedCount);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -877,7 +1129,12 @@ public sealed class PatternsTool
     private static string RenderSummaryJson(
         IReadOnlyList<PatternSummaryRow> rows,
         PatternSummaryGroupBy groupBy,
-        string? facet)
+        string? facet,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters,
+        int totalCount,
+        int omittedCount)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -885,10 +1142,12 @@ public sealed class PatternsTool
             writer.WriteStartObject();
             writer.WriteNumber("schema_version", 1);
             writer.WriteString("operation", "summary");
+            WriteActiveFiltersJson(writer, path, language, metadataFilters);
             if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
                 writer.WriteString("group_by", SummaryGroupByName(groupBy));
             if (!string.IsNullOrWhiteSpace(facet))
                 writer.WriteString("facet", facet.Trim());
+            WriteCollectionCountsJson(writer, "groups", totalCount, rows.Count, omittedCount);
             writer.WriteStartArray("groups");
             foreach (PatternSummaryRow row in rows)
             {
@@ -906,6 +1165,7 @@ public sealed class PatternsTool
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
+            WriteCollectionTruncationJson(writer, "groups", omittedCount);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -920,8 +1180,8 @@ public sealed class PatternsTool
         string? language,
         IReadOnlyList<PatternMetadataFilter> metadataFilters,
         string? emptyReason,
-        int totalCount,
-        int omittedCount)
+        long totalCount,
+        long omittedCount)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -931,11 +1191,11 @@ public sealed class PatternsTool
             writer.WriteString("operation", "search");
             writer.WriteString("pattern_id", patternId);
             WriteMatchCountsJson(writer, totalCount, rows.Count, omittedCount);
+            WriteActiveFiltersJson(writer, path, language, metadataFilters);
             if (rows.Count == 0 && omittedCount == 0)
             {
                 if (!string.IsNullOrWhiteSpace(emptyReason))
                     writer.WriteString("empty_reason", emptyReason);
-                WriteActiveFiltersJson(writer, path, language, metadataFilters);
                 WriteStringArray(writer, "near_matches", suggestions);
                 if (filteredOut)
                 {
@@ -946,13 +1206,22 @@ public sealed class PatternsTool
                 else if (suggestions.Count > 0)
                 {
                     writer.WriteString("note", $"No matches for {patternId}.");
+                    writer.WritePropertyName("next_actions");
+                    WriteNextActions(writer, QueryNoMatchNextActions(suggestions));
                 }
             }
             writer.WriteStartArray("matches");
             foreach (PatternMatchRow row in rows)
                 WriteMatchJson(writer, row);
             writer.WriteEndArray();
-            WriteMatchTruncationJson(writer, omittedCount);
+            WriteMatchTruncationJson(
+                writer,
+                omittedCount,
+                "pattern_id",
+                patternId,
+                path,
+                language,
+                metadataFilters);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -966,8 +1235,8 @@ public sealed class PatternsTool
         string? language,
         IReadOnlyList<PatternMetadataFilter> metadataFilters,
         string? emptyReason,
-        int totalCount,
-        int omittedCount)
+        long totalCount,
+        long omittedCount)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (Utf8JsonWriter writer = NewWriter(buffer))
@@ -993,7 +1262,14 @@ public sealed class PatternsTool
                 WriteMatchJson(writer, row);
             }
             writer.WriteEndArray();
-            WriteMatchTruncationJson(writer, omittedCount);
+            WriteMatchTruncationJson(
+                writer,
+                omittedCount,
+                "query",
+                query,
+                path,
+                language,
+                metadataFilters);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -1001,9 +1277,9 @@ public sealed class PatternsTool
 
     private static void WriteMatchCountsJson(
         Utf8JsonWriter writer,
-        int totalCount,
+        long totalCount,
         int returnedCount,
-        int omittedCount)
+        long omittedCount)
     {
         writer.WriteNumber("matches_total_count", totalCount);
         writer.WriteNumber("matches_returned_count", returnedCount);
@@ -1011,22 +1287,69 @@ public sealed class PatternsTool
         writer.WriteBoolean("matches_truncated", omittedCount > 0);
     }
 
-    private static void WriteMatchTruncationJson(Utf8JsonWriter writer, int omittedCount)
+    private static void WriteCollectionCountsJson(
+        Utf8JsonWriter writer,
+        string prefix,
+        int totalCount,
+        int returnedCount,
+        int omittedCount)
+    {
+        writer.WriteNumber(prefix + "_total_count", totalCount);
+        writer.WriteNumber(prefix + "_returned_count", returnedCount);
+        writer.WriteNumber(prefix + "_omitted_count", omittedCount);
+        writer.WriteBoolean(prefix + "_truncated", omittedCount > 0);
+    }
+
+    private static void WriteCollectionTruncationJson(Utf8JsonWriter writer, string label, int omittedCount)
     {
         if (omittedCount <= 0)
             return;
 
-        writer.WriteString("note", "Result rows were bounded for MCP output. Refine path, language, or where.");
+        writer.WriteString(
+            "note",
+            label == "patterns"
+                ? "Rows were bounded by the MCP output budget. Refine pattern_id, language, or path."
+                : "Rows were bounded by the MCP output budget. Refine pattern_id, language, path, where, or grouping.");
+    }
+
+    private static void WriteMatchTruncationJson(
+        Utf8JsonWriter writer,
+        long omittedCount,
+        string targetKey,
+        string targetValue,
+        string? path,
+        string? language,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
+    {
+        if (omittedCount <= 0)
+            return;
+
+        writer.WriteString("note", "Result rows were bounded by limit or the MCP output budget. Request one row or refine path, language, or where.");
         writer.WritePropertyName("next_actions");
+        var args = new List<KeyValuePair<string, string>>
+        {
+            new("operation", "search"),
+            new(targetKey, targetValue),
+        };
+        if (!string.IsNullOrWhiteSpace(language))
+            args.Add(new("language", language.Trim()));
+        if (!string.IsNullOrWhiteSpace(path))
+            args.Add(new("path", path.Trim()));
+        if (metadataFilters.Count > 0)
+        {
+            args.Add(new(
+                "where",
+                string.Join(
+                    ';',
+                    metadataFilters.Select(static filter => filter.Key + "=" + filter.Value))));
+        }
+        args.Add(new("limit", "1"));
         WriteNextActions(
             writer,
-            [
-                NextAction(
-                    "patterns",
-                    "refine the structural-fact query",
-                    ("operation", "search"),
-                    ("where", "<metadata-key>=<value>")),
-            ]);
+            [new PatternNextAction(
+                "patterns",
+                "request one result from the same filtered population",
+                args)]);
     }
 
     private static void WriteMatchJson(Utf8JsonWriter writer, PatternMatchRow row)
@@ -1088,22 +1411,25 @@ public sealed class PatternsTool
         writer.WriteBoolean("pattern_id_fanout_truncated", fanout.Truncated);
     }
 
-    private static string MetadataCompact(PatternMatchRow row, PatternMetadataFilter? metadataFilter)
+    private static string MetadataCompact(
+        PatternMatchRow row,
+        IReadOnlyList<PatternMetadataFilter> metadataFilters)
     {
         if (row.MetadataError is not null)
             return "error";
         if (row.Metadata.ValueKind != JsonValueKind.Object)
             return string.Empty;
 
+        int selectedLimit = Math.Max(4, metadataFilters.Count);
         var selected = new List<(string Name, JsonElement Value)>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        if (metadataFilter is not null)
+        foreach (PatternMetadataFilter metadataFilter in metadataFilters)
             Add(metadataFilter.Key);
         foreach (string key in MetadataPriority)
             Add(key);
         foreach (JsonProperty property in row.Metadata.EnumerateObject())
         {
-            if (selected.Count >= 4)
+            if (selected.Count >= selectedLimit)
                 break;
             if (seen.Add(property.Name))
                 selected.Add((property.Name, property.Value));
@@ -1115,7 +1441,7 @@ public sealed class PatternsTool
 
         void Add(string key)
         {
-            if (selected.Count >= 4 || !seen.Add(key))
+            if (selected.Count >= selectedLimit || !seen.Add(key))
                 return;
             if (row.Metadata.TryGetProperty(key, out JsonElement value))
                 selected.Add((key, value));
@@ -1123,17 +1449,15 @@ public sealed class PatternsTool
     }
 
     private static IReadOnlyList<string> SuggestPatternIds(
-        PatternFactsReader reader,
-        string dbPath,
-        string patternId,
-        string? language)
+        IEnumerable<string> patternIds,
+        string patternId)
     {
         string[] queryTokens = PatternTokens(patternId);
         if (queryTokens.Length == 0)
             return [];
 
-        return reader.List(dbPath, language)
-            .Select(row => (row.PatternId, Score: PatternSuggestionScore(queryTokens, row.PatternId)))
+        return patternIds
+            .Select(candidate => (PatternId: candidate, Score: PatternSuggestionScore(queryTokens, candidate)))
             .Where(candidate => candidate.Score > 0)
             .OrderByDescending(static candidate => candidate.Score)
             .ThenBy(static candidate => candidate.PatternId, StringComparer.Ordinal)
@@ -1304,25 +1628,21 @@ public sealed class PatternsTool
     }
 
     private static string PatternEmptyReason(
-        bool hasPatternId,
         bool patternExists,
         bool filteredOut,
-        bool hasMetadataFilter,
         bool querySearch)
     {
         if (querySearch)
             return "query_no_match";
         if (filteredOut)
             return "filtered_out";
-        if (hasPatternId && !patternExists)
+        if (!patternExists)
             return "no_such_pattern_id";
-        if (hasMetadataFilter)
-            return "no_metadata_match";
         return "no_facts";
     }
 
     private static Utf8JsonWriter NewWriter(ArrayBufferWriter<byte> buffer) =>
-        new(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        new(buffer, new JsonWriterOptions { Encoder = PatternJsonEncoder });
 }
 
 internal readonly record struct PatternToolResult(string Output, int ResultCount, string? EmptyReason = null);

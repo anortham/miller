@@ -1282,6 +1282,58 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Patterns_ListJson_StaysExhaustiveBeyondMcpByteBudget()
+    {
+        using var fx = DbWithPatterns();
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            Exec(connection, """
+                WITH RECURSIVE seq(n) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT n + 1 FROM seq WHERE n < 300
+                )
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                SELECT
+                    printf('fact-cli-list-%03d', n), 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                    printf('generated.cli.long_pattern_identifier_%03d.v1', n), 'generated_capture',
+                    'invocation_expression', 'sym-auth',
+                    n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+                FROM seq;
+                """);
+        }
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "list", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        Assert.True(Encoding.UTF8.GetByteCount(outText) > ToolOutputBudget.PatternsMcpMaxBytes);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(302, doc.RootElement.GetProperty("patterns_total_count").GetInt32());
+        Assert.Equal(302, doc.RootElement.GetProperty("patterns_returned_count").GetInt32());
+        Assert.False(doc.RootElement.GetProperty("patterns_truncated").GetBoolean());
+        string[] generatedIds = doc.RootElement.GetProperty("patterns").EnumerateArray()
+            .Select(static row => row.GetProperty("pattern_id").GetString()!)
+            .Where(static id => id.StartsWith("generated.cli.", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(
+            Enumerable.Range(1, 300)
+                .Select(static n => $"generated.cli.long_pattern_identifier_{n:000}.v1"),
+            generatedIds);
+    }
+
+    [Fact]
     public void Patterns_JsonWithoutOperation_DefaultsToList()
     {
         using var fx = DbWithPatterns();
@@ -1325,6 +1377,54 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Patterns_SummaryJson_AllowsWhereWithoutPatternTarget()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "summary", "--where", "name=hx-get", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement group = Assert.Single(doc.RootElement.GetProperty("groups").EnumerateArray());
+        Assert.Equal("htmx.attribute.v1", group.GetProperty("pattern_id").GetString());
+        Assert.Equal(1, group.GetProperty("count").GetInt64());
+    }
+
+    [Fact]
+    public void Patterns_ListJson_AllowsWhereWithoutPatternTarget()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "list", "--where", "name=hx-get", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        JsonElement pattern = Assert.Single(doc.RootElement.GetProperty("patterns").EnumerateArray());
+        Assert.Equal("htmx.attribute.v1", pattern.GetProperty("pattern_id").GetString());
+        Assert.Equal(1, pattern.GetProperty("count").GetInt64());
+    }
+
+    [Fact]
+    public void Patterns_Summary_InvalidFacet_IsUsageExitTwo()
+    {
+        using var fx = DbWithPatterns();
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "summary", "--facet", "xml:lang", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, code);
+        Assert.Empty(outText);
+        Assert.Contains("facet key", errText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Patterns_SearchWithoutPattern_IsUsageErrorExitTwo()
     {
         using var fx = DbWithPatterns();
@@ -1335,6 +1435,23 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(2, code);
         Assert.Contains("miller patterns search", errText);
+    }
+
+    [Fact]
+    public void Patterns_SearchWithoutPattern_UsesOneUsageContractWithOrWithoutWhere()
+    {
+        using var fx = DbWithPatterns();
+
+        var (plainCode, _, plainError) = Run(
+            new[] { "patterns", "search", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+        var (filteredCode, _, filteredError) = Run(
+            new[] { "patterns", "search", "--where", "name=hx-get", "--json" },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(2, plainCode);
+        Assert.Equal(2, filteredCode);
+        Assert.Equal(plainError, filteredError);
     }
 
     [Theory]

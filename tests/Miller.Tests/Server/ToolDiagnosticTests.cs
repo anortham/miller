@@ -77,6 +77,18 @@ public sealed class ToolDiagnosticTests
             document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
     }
 
+    [Fact]
+    public void Attach_JsonDoesNotExpandSafeUnicodeOrHtmlCharacters()
+    {
+        var diagnostic = ToolDiagnostic.ExpectedEmpty("no_results", "No results matched.");
+        const string payload = """{"query":"&<>+é","results":[]}""";
+
+        string output = ToolDiagnosticRenderer.Attach("search", payload, diagnostic, json: true);
+
+        Assert.Contains("\"query\":\"&<>+é\"", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(typeof(IncompatibleExtractException), "schema_incompatible", ToolDiagnosticClass.Corruption)]
     [InlineData(typeof(UnauthorizedAccessException), "permission_denied", ToolDiagnosticClass.Unavailable)]

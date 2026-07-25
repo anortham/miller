@@ -72,6 +72,103 @@ public sealed class PatternFactsReaderTests
     }
 
     [Fact]
+    public void SearchWithCount_UsesOneFullFilteredPopulationForSqlAndFallbackGlobs()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+
+        PatternMatchResult allHtmx = reader.SearchWithCount(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: null,
+            pathGlob: null,
+            metadataFilters: null,
+            limit: 2);
+        PatternMatchResult fallbackGlob = reader.SearchWithCount(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: null,
+            pathGlob: "*/Orders.cshtml",
+            metadataFilters: [new PatternMetadataFilter("name", "hx-trigger")],
+            limit: 2);
+        PatternMatchResult multiplePatterns = reader.SearchWithCount(
+            fx.DbPath,
+            ["htmx.attribute.v1", "future.custom_pattern.v1"],
+            language: null,
+            pathGlob: null,
+            metadataFilters: null,
+            limit: 2);
+        IReadOnlyDictionary<string, long> groupedFallback = reader.CountMatchesByPatternId(
+            fx.DbPath,
+            ["htmx.attribute.v1", "future.custom_pattern.v1"],
+            language: null,
+            pathGlob: "*/Orders.cshtml",
+            metadataFilters: null);
+
+        Assert.Equal(4, allHtmx.TotalCount);
+        Assert.Equal(2, allHtmx.Rows.Count);
+        Assert.Equal(1, fallbackGlob.TotalCount);
+        Assert.Equal("fact-hx-trigger", Assert.Single(fallbackGlob.Rows).FactId);
+        Assert.Equal(5, multiplePatterns.TotalCount);
+        Assert.Equal(2, multiplePatterns.Rows.Count);
+        Assert.Equal(2, groupedFallback["htmx.attribute.v1"]);
+        Assert.DoesNotContain("future.custom_pattern.v1", groupedFallback);
+    }
+
+    [Fact]
+    public void SearchExactWithContext_ReturnsMatchesExistenceAndScopedSuggestionsFromOneRead()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+
+        PatternExactSearchResult filtered = reader.SearchExactWithContext(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: "csharp",
+            pathGlob: null,
+            metadataFilters: null,
+            limit: 2);
+        PatternExactSearchResult missing = reader.SearchExactWithContext(
+            fx.DbPath,
+            patternId: "aspnet.minimal_api.routex.v1",
+            language: "razor",
+            pathGlob: null,
+            metadataFilters: null,
+            limit: 2);
+
+        Assert.True(filtered.PatternExists);
+        Assert.Equal(0, filtered.Matches.TotalCount);
+        Assert.False(missing.PatternExists);
+        Assert.Equal(
+            new[] { "htmx.attribute.v1" },
+            missing.SuggestionPatternIds);
+    }
+
+    [Fact]
+    public void SearchByQueryWithCount_ReturnsFanoutAndMatchesFromOneRead()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+
+        PatternQueryMatchResult result = reader.SearchByQueryWithCount(
+            fx.DbPath,
+            query: "attribute",
+            language: null,
+            pathGlob: null,
+            metadataFilters: null,
+            limit: 2,
+            maxPatternIds: 25);
+
+        Assert.Equal(
+            new[] { "future.custom_pattern.v1", "htmx.attribute.v1" },
+            result.ConsideredPatternIds);
+        Assert.Equal(1, result.MatchedPatternCount);
+        Assert.Equal(new[] { "htmx.attribute.v1" }, result.ReturnedPatternIds);
+        Assert.Equal(4, result.Matches.TotalCount);
+        Assert.Equal(2, result.Matches.Rows.Count);
+    }
+
+    [Fact]
     public void Summary_GroupsByLanguagePatternAndCapture()
     {
         using var fx = CreatePatternFixture();

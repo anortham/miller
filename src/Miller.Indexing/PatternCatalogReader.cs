@@ -20,10 +20,19 @@ public sealed class PatternCatalogReader
             return new Dictionary<string, PatternCatalogEntry>(StringComparer.Ordinal);
         }
 
-        if (!TableExists(connection, "pattern_catalog"))
+        return Read(connection, transaction: null);
+    }
+
+    internal IReadOnlyDictionary<string, PatternCatalogEntry> Read(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction? transaction)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (!TableExists(connection, transaction, "pattern_catalog"))
             return new Dictionary<string, PatternCatalogEntry>(StringComparer.Ordinal);
 
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT pattern_id, label, description, tags_json, expected_metadata_keys_json
             FROM pattern_catalog
@@ -46,9 +55,13 @@ public sealed class PatternCatalogReader
         return entries;
     }
 
-    private static bool TableExists(Microsoft.Data.Sqlite.SqliteConnection connection, string tableName)
+    private static bool TableExists(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction? transaction,
+        string tableName)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
         command.Parameters.AddWithValue("$name", tableName);
         object? result = command.ExecuteScalar();

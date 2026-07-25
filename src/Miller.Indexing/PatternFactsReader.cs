@@ -21,48 +21,75 @@ public sealed class PatternFactsReader
         _catalogReader = catalogReader;
     }
 
-    public IReadOnlyList<PatternListRow> List(string dbPath, string? language = null)
+    public IReadOnlyList<PatternListRow> List(string dbPath, string? language = null) =>
+        List(dbPath, patternId: null, language, pathGlob: null, metadataFilters: null);
+
+    public IReadOnlyList<PatternListRow> List(
+        string dbPath,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ValidateFilters(metadataFilters);
 
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        using SqliteTransaction transaction = connection.BeginTransaction();
         using SqliteCommand command = connection.CreateCommand();
-        var where = new List<string>();
-        if (!string.IsNullOrWhiteSpace(language))
-        {
-            where.Add("language = $language");
-            command.Parameters.AddWithValue("$language", language.Trim());
-        }
-
-        command.CommandText = $"""
-            SELECT pattern_id, language, capture_name, COUNT(*) AS count
-            FROM structural_facts
-            {WhereClause(where)}
-            GROUP BY pattern_id, language, capture_name
-            ORDER BY pattern_id, language, capture_name;
-            """;
-
-        IReadOnlyDictionary<string, PatternCatalogEntry> catalog = _catalogReader.Read(dbPath);
+        command.Transaction = transaction;
+        List<string> where = AddSearchFilters(
+            command,
+            patternId,
+            language,
+            pathGlob,
+            metadataFilters,
+            out bool pathInSql);
         var grouped = new Dictionary<string, PatternListAccumulator>(StringComparer.Ordinal);
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
+        if (pathInSql)
         {
-            string patternId = reader.GetString(0);
-            if (!grouped.TryGetValue(patternId, out PatternListAccumulator? acc))
+            command.CommandText = $"""
+                SELECT pattern_id, language, capture_name, COUNT(*) AS count
+                FROM structural_facts
+                {WhereClause(where)}
+                GROUP BY pattern_id, language, capture_name
+                ORDER BY pattern_id, language, capture_name;
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                acc = new PatternListAccumulator(patternId);
-                grouped.Add(patternId, acc);
+                AddListCount(
+                    grouped,
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3));
             }
-
-            acc.Languages.Add(reader.GetString(1));
-            acc.Captures.Add(reader.GetString(2));
-            acc.Count += reader.GetInt64(3);
+        }
+        else
+        {
+            command.CommandText = $"""
+                SELECT pattern_id, language, capture_name, path
+                FROM structural_facts
+                {WhereClause(where)};
+                """;
+            Func<string, bool> pathMatches = PatternPathGlobMatcher.Compile(pathGlob);
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!pathMatches(reader.GetString(3)))
+                    continue;
+                AddListCount(grouped, reader.GetString(0), reader.GetString(1), reader.GetString(2), 1);
+            }
         }
 
-        return grouped.Values
+        IReadOnlyDictionary<string, PatternCatalogEntry> catalog = _catalogReader.Read(connection, transaction);
+        PatternListRow[] result = grouped.Values
             .OrderBy(static row => row.PatternId, StringComparer.Ordinal)
             .Select(row => ToListRow(row, catalog))
             .ToArray();
+        transaction.Commit();
+        return result;
     }
 
     public IReadOnlyList<PatternSummaryRow> Summary(
@@ -75,39 +102,8 @@ public sealed class PatternFactsReader
         string? facetKey = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
-
-        if (groupBy == PatternSummaryGroupBy.LanguagePatternCapture
-            && string.IsNullOrWhiteSpace(pathGlob)
-            && (metadataFilters is null || metadataFilters.Count == 0)
-            && string.IsNullOrWhiteSpace(facetKey))
-        {
-            using SqliteConnection connection = OpenStructuralFacts(dbPath);
-            using SqliteCommand command = connection.CreateCommand();
-            List<string> where = AddFactFilters(command, patternId, language);
-
-            command.CommandText = $"""
-                SELECT language, pattern_id, capture_name, COUNT(*) AS count
-                FROM structural_facts
-                {WhereClause(where)}
-                GROUP BY language, pattern_id, capture_name
-                ORDER BY language, pattern_id, capture_name;
-                """;
-
-            var rows = new List<PatternSummaryRow>();
-            using SqliteDataReader reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                rows.Add(new PatternSummaryRow(
-                    Language: reader.GetString(0),
-                    PatternId: reader.GetString(1),
-                    CaptureName: reader.GetString(2),
-                    Count: reader.GetInt64(3)));
-            }
-
-            return rows;
-        }
-
-        return SummaryFromMatches(dbPath, patternId, language, pathGlob, metadataFilters, groupBy, facetKey);
+        ValidateFilters(metadataFilters);
+        return ReadSummary(dbPath, patternId, language, pathGlob, metadataFilters, groupBy, facetKey);
     }
 
     public IReadOnlyList<PatternMatchRow> Search(
@@ -136,7 +132,7 @@ public sealed class PatternFactsReader
         int limit)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
-        return Matches(dbPath, patternId, language, pathGlob, metadataFilters, limit);
+        return SearchWithCount(dbPath, patternId, language, pathGlob, metadataFilters, limit).Rows;
     }
 
     public IReadOnlyList<PatternMatchRow> Matches(
@@ -155,6 +151,309 @@ public sealed class PatternFactsReader
         IReadOnlyList<PatternMetadataFilter>? metadataFilters,
         int? limit = null) =>
         EnumerateMatches(dbPath, patternId, language, pathGlob, metadataFilters, limit).ToArray();
+
+    public PatternMatchResult SearchWithCount(
+        string dbPath,
+        string patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int limit) =>
+        SearchExactWithContext(
+            dbPath,
+            patternId,
+            language,
+            pathGlob,
+            metadataFilters,
+            limit).Matches;
+
+    public PatternExactSearchResult SearchExactWithContext(
+        string dbPath,
+        string patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int limit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
+        ValidateFilters(metadataFilters);
+
+        int boundedLimit = Math.Clamp(limit, 1, 500);
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        PatternMatchResult matches = SearchWithCount(
+            connection,
+            transaction,
+            [patternId],
+            language,
+            pathGlob,
+            metadataFilters,
+            boundedLimit);
+        bool patternExists = matches.TotalCount > 0;
+        IReadOnlyList<string> suggestionPatternIds = [];
+        if (!patternExists)
+        {
+            using SqliteCommand observedCommand = connection.CreateCommand();
+            observedCommand.Transaction = transaction;
+            observedCommand.CommandText = """
+                SELECT pattern_id,
+                       MAX(CASE WHEN $language IS NULL OR language = $language THEN 1 ELSE 0 END)
+                FROM structural_facts
+                GROUP BY pattern_id
+                ORDER BY pattern_id;
+                """;
+            observedCommand.Parameters.AddWithValue(
+                "$language",
+                string.IsNullOrWhiteSpace(language) ? DBNull.Value : language.Trim());
+            var scoped = new List<string>();
+            using SqliteDataReader observedReader = observedCommand.ExecuteReader();
+            while (observedReader.Read())
+            {
+                string observedPatternId = observedReader.GetString(0);
+                patternExists |= string.Equals(observedPatternId, patternId, StringComparison.Ordinal);
+                if (observedReader.GetInt64(1) != 0)
+                    scoped.Add(observedPatternId);
+            }
+            suggestionPatternIds = scoped;
+        }
+        transaction.Commit();
+        return new PatternExactSearchResult(matches, patternExists, suggestionPatternIds);
+    }
+
+    public PatternMatchResult SearchWithCount(
+        string dbPath,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int limit)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(patternIds);
+        ValidateFilters(metadataFilters);
+
+        foreach (string patternId in patternIds)
+            ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
+        if (patternIds.Count == 0)
+            return new PatternMatchResult(0, []);
+
+        int boundedLimit = Math.Clamp(limit, 1, 500);
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        int paramIndex = 0;
+        List<string> where = AddFactFilters(command, patternIds, language);
+        bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref paramIndex);
+        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+            || PatternMetadataSql.TryAddMetadataFilters(command, where, metadataFilters, ref paramIndex);
+        if (metadataFilters is { Count: > 0 } && !metadataInSql)
+            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+        PatternMatchResult result = ReadMatchesWithCount(command, where, pathGlob, pathInSql, boundedLimit);
+        transaction.Commit();
+        return result;
+    }
+
+    public IReadOnlyDictionary<string, long> CountMatchesByPatternId(
+        string dbPath,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(patternIds);
+        ValidateFilters(metadataFilters);
+        foreach (string patternId in patternIds)
+            ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
+
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        return CountMatchesByPatternId(
+            connection,
+            transaction: null,
+            patternIds,
+            language,
+            pathGlob,
+            metadataFilters);
+    }
+
+    public PatternQueryMatchResult SearchByQueryWithCount(
+        string dbPath,
+        string query,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int limit,
+        int maxPatternIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ValidateFilters(metadataFilters);
+        if (maxPatternIds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxPatternIds));
+
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        using SqliteTransaction transaction = connection.BeginTransaction();
+        using SqliteCommand observedCommand = connection.CreateCommand();
+        observedCommand.Transaction = transaction;
+        observedCommand.CommandText = """
+            SELECT pattern_id, COUNT(*)
+            FROM structural_facts
+            GROUP BY pattern_id
+            ORDER BY pattern_id;
+            """;
+        var observed = new List<PatternIdCount>();
+        using (SqliteDataReader observedReader = observedCommand.ExecuteReader())
+        {
+            while (observedReader.Read())
+                observed.Add(new PatternIdCount(observedReader.GetString(0), observedReader.GetInt64(1)));
+        }
+        PatternIdCount[] matched = observed
+            .Where(row => row.PatternId.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        string[] suggestionPatternIds = observed.Select(static row => row.PatternId).ToArray();
+        if (matched.Length == 0 && !string.IsNullOrWhiteSpace(language))
+        {
+            using SqliteCommand suggestionCommand = connection.CreateCommand();
+            suggestionCommand.Transaction = transaction;
+            suggestionCommand.CommandText = """
+                SELECT pattern_id
+                FROM structural_facts
+                WHERE language = $language
+                GROUP BY pattern_id
+                ORDER BY pattern_id;
+                """;
+            suggestionCommand.Parameters.AddWithValue("$language", language.Trim());
+            var scoped = new List<string>();
+            using SqliteDataReader suggestionReader = suggestionCommand.ExecuteReader();
+            while (suggestionReader.Read())
+                scoped.Add(suggestionReader.GetString(0));
+            suggestionPatternIds = scoped.ToArray();
+        }
+        bool hasActiveFilters = !string.IsNullOrWhiteSpace(pathGlob)
+            || !string.IsNullOrWhiteSpace(language)
+            || metadataFilters is { Count: > 0 };
+        IReadOnlyDictionary<string, long> filteredCounts = hasActiveFilters && matched.Length > maxPatternIds
+            ? CountMatchesByPatternId(
+                connection,
+                transaction,
+                matched.Select(static row => row.PatternId).ToArray(),
+                language,
+                pathGlob,
+                metadataFilters)
+            : new Dictionary<string, long>(StringComparer.Ordinal);
+        string[] returnedPatternIds = matched
+            .OrderByDescending(row => filteredCounts.GetValueOrDefault(row.PatternId))
+            .ThenByDescending(static row => row.Count)
+            .ThenBy(static row => row.PatternId, StringComparer.Ordinal)
+            .Take(maxPatternIds)
+            .Select(static row => row.PatternId)
+            .ToArray();
+        PatternMatchResult matches = returnedPatternIds.Length == 0
+            ? new PatternMatchResult(0, [])
+            : SearchWithCount(
+                connection,
+                transaction,
+                returnedPatternIds,
+                language,
+                pathGlob,
+                metadataFilters,
+                Math.Clamp(limit, 1, 500));
+        transaction.Commit();
+
+        return new PatternQueryMatchResult(
+            observed.Select(static row => row.PatternId).ToArray(),
+            suggestionPatternIds,
+            matched.Length,
+            returnedPatternIds,
+            matches);
+    }
+
+    private static IReadOnlyDictionary<string, long> CountMatchesByPatternId(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters)
+    {
+        var counts = new Dictionary<string, long>(StringComparer.Ordinal);
+        if (patternIds.Count == 0)
+            return counts;
+
+        foreach (string[] patternIdBatch in patternIds.Chunk(500))
+        {
+            using SqliteCommand command = connection.CreateCommand();
+            command.Transaction = transaction;
+            int paramIndex = 0;
+            List<string> where = AddFactFilters(command, patternIdBatch, language);
+            bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+                || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref paramIndex);
+            bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+                || PatternMetadataSql.TryAddMetadataFilters(command, where, metadataFilters, ref paramIndex);
+            if (metadataFilters is { Count: > 0 } && !metadataInSql)
+                throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+            if (pathInSql)
+            {
+                command.CommandText = $"""
+                    SELECT pattern_id, COUNT(*)
+                    FROM structural_facts
+                    {WhereClause(where)}
+                    GROUP BY pattern_id;
+                    """;
+                using SqliteDataReader reader = command.ExecuteReader();
+                while (reader.Read())
+                    counts[reader.GetString(0)] = reader.GetInt64(1);
+                continue;
+            }
+
+            command.CommandText = $"""
+                SELECT pattern_id, path
+                FROM structural_facts
+                {WhereClause(where)};
+                """;
+            Func<string, bool> pathMatches = PatternPathGlobMatcher.Compile(pathGlob);
+            using SqliteDataReader fallbackReader = command.ExecuteReader();
+            while (fallbackReader.Read())
+            {
+                if (!pathMatches(fallbackReader.GetString(1)))
+                    continue;
+
+                string patternId = fallbackReader.GetString(0);
+                counts.TryGetValue(patternId, out long count);
+                counts[patternId] = count + 1;
+            }
+        }
+
+        return counts;
+    }
+
+    private static PatternMatchResult SearchWithCount(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int boundedLimit)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        int paramIndex = 0;
+        List<string> where = AddFactFilters(command, patternIds, language);
+        bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref paramIndex);
+        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+            || PatternMetadataSql.TryAddMetadataFilters(command, where, metadataFilters, ref paramIndex);
+        if (metadataFilters is { Count: > 0 } && !metadataInSql)
+            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+        return ReadMatchesWithCount(command, where, pathGlob, pathInSql, boundedLimit);
+    }
 
     public IEnumerable<PatternMatchRow> EnumerateMatches(
         string dbPath,
@@ -189,36 +488,6 @@ public sealed class PatternFactsReader
         }
     }
 
-    public IEnumerable<PatternMatchRow> EnumerateMatches(
-        string dbPath,
-        IReadOnlyList<string> patternIds,
-        string? language,
-        string? pathGlob,
-        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
-        int? limitPerPattern = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
-        ArgumentNullException.ThrowIfNull(patternIds);
-        ValidateFilters(metadataFilters);
-
-        int? boundedLimit = limitPerPattern is null ? null : Math.Clamp(limitPerPattern.Value, 1, 500);
-        using SqliteConnection connection = OpenStructuralFacts(dbPath);
-        foreach (string patternId in patternIds)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
-            foreach (PatternMatchRow row in EnumerateMatches(
-                         connection,
-                         patternId,
-                         language,
-                         pathGlob,
-                         metadataFilters,
-                         boundedLimit))
-            {
-                yield return row;
-            }
-        }
-    }
-
     private static IEnumerable<PatternMatchRow> EnumerateMatches(
         SqliteConnection connection,
         string? patternId,
@@ -228,20 +497,15 @@ public sealed class PatternFactsReader
         int? boundedLimit)
     {
         using SqliteCommand command = connection.CreateCommand();
-        int paramIndex = 0;
-        List<string> where = AddFactFilters(command, patternId, language, ref paramIndex);
+        List<string> where = AddSearchFilters(
+            command,
+            patternId,
+            language,
+            pathGlob,
+            metadataFilters,
+            out bool pathInSql);
 
-        bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
-            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref paramIndex);
-
-        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
-            || PatternMetadataSql.TryAddMetadataFilters(command, where, metadataFilters, ref paramIndex);
-
-        if (metadataFilters is { Count: > 0 } && !metadataInSql)
-            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
-
-        bool filtersFullyInSql = pathInSql && metadataInSql;
-        string limitClause = boundedLimit is null || !filtersFullyInSql ? string.Empty : $" LIMIT {boundedLimit.Value}";
+        string limitClause = boundedLimit is null || !pathInSql ? string.Empty : $" LIMIT {boundedLimit.Value}";
         command.CommandText = $"""
             SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
                    containing_symbol_id, start_line, start_column, end_line, end_column,
@@ -253,17 +517,13 @@ public sealed class PatternFactsReader
             """;
 
         int emitted = 0;
+        Func<string, bool>? pathMatches = pathInSql ? null : PatternPathGlobMatcher.Compile(pathGlob);
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
-            PatternMatchRow row = ReadMatch(reader);
-            if (!pathInSql && !PatternPathGlobMatcher.IsMatch(row.Path, pathGlob!))
+            if (pathMatches is not null && !pathMatches(reader.GetString(3)))
                 continue;
-            if (!metadataInSql && metadataFilters is not null)
-            {
-                if (!MetadataMatchesAll(row, metadataFilters))
-                    continue;
-            }
+            PatternMatchRow row = ReadMatch(reader);
 
             yield return row;
             emitted++;
@@ -272,7 +532,123 @@ public sealed class PatternFactsReader
         }
     }
 
-    private IReadOnlyList<PatternSummaryRow> SummaryFromMatches(
+    private static PatternMatchResult ReadMatchesWithCount(
+        SqliteCommand command,
+        IReadOnlyList<string> where,
+        string? pathGlob,
+        bool pathInSql,
+        int boundedLimit)
+    {
+        if (pathInSql)
+        {
+            command.CommandText = $"""
+                WITH page AS (
+                    SELECT structural_fact_id, path, start_byte, COUNT(*) OVER() AS total_count
+                    FROM structural_facts
+                    {WhereClause(where)}
+                    ORDER BY path, start_byte, structural_fact_id
+                    LIMIT {boundedLimit}
+                )
+                SELECT fact.structural_fact_id, fact.pattern_id, fact.language, fact.path,
+                       fact.capture_name, fact.node_kind, fact.containing_symbol_id,
+                       fact.start_line, fact.start_column, fact.end_line, fact.end_column,
+                       fact.start_byte, fact.end_byte, fact.confidence, fact.metadata_json,
+                       page.total_count
+                FROM page
+                JOIN structural_facts AS fact ON fact.structural_fact_id = page.structural_fact_id
+                ORDER BY page.path, page.start_byte, page.structural_fact_id;
+                """;
+
+            long totalCount = 0;
+            var rows = new List<PatternMatchRow>(boundedLimit);
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                totalCount = reader.GetInt64(15);
+                rows.Add(ReadMatch(reader));
+            }
+            return new PatternMatchResult(totalCount, rows);
+        }
+
+        command.CommandText = $"""
+            SELECT structural_fact_id, path, start_byte
+            FROM structural_facts
+            {WhereClause(where)}
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+        long fallbackTotalCount = 0;
+        var retainedIds = new List<string>(boundedLimit);
+        Func<string, bool> pathMatches = PatternPathGlobMatcher.Compile(pathGlob);
+        using (SqliteDataReader reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                if (!pathMatches(reader.GetString(1)))
+                    continue;
+
+                fallbackTotalCount++;
+                if (retainedIds.Count < boundedLimit)
+                    retainedIds.Add(reader.GetString(0));
+            }
+        }
+
+        if (retainedIds.Count == 0)
+            return new PatternMatchResult(fallbackTotalCount, []);
+
+        SqliteConnection connection = command.Connection
+            ?? throw new InvalidOperationException("patterns fallback query has no SQLite connection.");
+        using SqliteCommand payload = connection.CreateCommand();
+        payload.Transaction = command.Transaction;
+        var idParams = new string[retainedIds.Count];
+        for (int i = 0; i < retainedIds.Count; i++)
+        {
+            idParams[i] = $"$retained_{i}";
+            payload.Parameters.AddWithValue(idParams[i], retainedIds[i]);
+        }
+        payload.CommandText = $"""
+            SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                   containing_symbol_id, start_line, start_column, end_line, end_column,
+                   start_byte, end_byte, confidence, metadata_json
+            FROM structural_facts
+            WHERE structural_fact_id IN ({string.Join(", ", idParams)});
+            """;
+        var rowsById = new Dictionary<string, PatternMatchRow>(StringComparer.Ordinal);
+        using (SqliteDataReader reader = payload.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                PatternMatchRow row = ReadMatch(reader);
+                rowsById.Add(row.FactId, row);
+            }
+        }
+
+        return new PatternMatchResult(
+            fallbackTotalCount,
+            retainedIds.Select(id => rowsById[id]).ToArray());
+    }
+
+    private static List<string> AddSearchFilters(
+        SqliteCommand command,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        out bool pathInSql)
+    {
+        int paramIndex = 0;
+        List<string> where = AddFactFilters(command, patternId, language, ref paramIndex);
+        pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref paramIndex);
+        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+            || PatternMetadataSql.TryAddMetadataFilters(command, where, metadataFilters, ref paramIndex);
+
+        if (metadataFilters is { Count: > 0 } && !metadataInSql)
+            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+        return where;
+    }
+
+    private static IReadOnlyList<PatternSummaryRow> ReadSummary(
         string dbPath,
         string? patternId,
         string? language,
@@ -281,100 +657,148 @@ public sealed class PatternFactsReader
         PatternSummaryGroupBy groupBy,
         string? facetKey)
     {
-        IEnumerable<PatternMatchRow> rows = EnumerateMatches(
-            dbPath,
+        using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        using SqliteCommand command = connection.CreateCommand();
+        List<string> where = AddSearchFilters(
+            command,
             patternId,
             language,
             pathGlob,
             metadataFilters,
-            limit: null);
+            out bool pathInSql);
 
+        string facetExpression = "NULL";
         if (!string.IsNullOrWhiteSpace(facetKey))
         {
-            return rows
-                .Select(row => new
-                {
-                    Group = BuildSummaryGroup(row, groupBy),
-                    Facet = ReadFacetValue(row, facetKey.Trim()),
-                })
-                .Where(static item => item.Facet is not null)
-                .GroupBy(item => new
-                {
-                    item.Group.Language,
-                    item.Group.PatternId,
-                    item.Group.CaptureName,
-                    item.Group.Path,
-                    item.Group.Directory,
-                    Facet = item.Facet!,
-                })
-                .OrderBy(static group => group.Key.Language, StringComparer.Ordinal)
-                .ThenBy(static group => group.Key.PatternId, StringComparer.Ordinal)
-                .ThenBy(static group => group.Key.CaptureName, StringComparer.Ordinal)
-                .ThenBy(static group => group.Key.Path, StringComparer.Ordinal)
-                .ThenBy(static group => group.Key.Directory, StringComparer.Ordinal)
-                .ThenBy(static group => group.Key.Facet, StringComparer.Ordinal)
-                .Select(static group => new PatternSummaryRow(
-                    Language: group.Key.Language,
-                    PatternId: group.Key.PatternId,
-                    CaptureName: group.Key.CaptureName,
-                    Count: group.LongCount(),
-                    Path: group.Key.Path,
-                    Directory: group.Key.Directory,
-                    FacetValue: group.Key.Facet))
-                .ToArray();
+            if (!PatternMetadataSql.TryBuildJsonPath(facetKey, out string jsonPath))
+                throw new InvalidOperationException("patterns facet key contains unsupported characters.");
+            command.Parameters.AddWithValue("$facet_path", jsonPath);
+            where.Add("""
+                metadata_json IS NOT NULL
+                AND json_valid(metadata_json)
+                AND json_type(metadata_json, $facet_path) IS NOT NULL
+                """);
+            facetExpression = """
+                CASE json_type(metadata_json, $facet_path)
+                    WHEN 'true' THEN 'true'
+                    WHEN 'false' THEN 'false'
+                    WHEN 'null' THEN 'null'
+                    ELSE CAST(json_extract(metadata_json, $facet_path) AS TEXT)
+                END
+                """;
         }
 
-        return rows
-            .GroupBy(row => BuildSummaryGroup(row, groupBy))
-            .OrderBy(static group => group.Key.Language, StringComparer.Ordinal)
-            .ThenBy(static group => group.Key.PatternId, StringComparer.Ordinal)
-            .ThenBy(static group => group.Key.CaptureName, StringComparer.Ordinal)
-            .ThenBy(static group => group.Key.Path, StringComparer.Ordinal)
-            .ThenBy(static group => group.Key.Directory, StringComparer.Ordinal)
-            .Select(static group => new PatternSummaryRow(
-                group.Key.Language,
-                group.Key.PatternId,
-                group.Key.CaptureName,
-                group.LongCount(),
-                group.Key.Path,
-                group.Key.Directory))
+        bool groupByPath = groupBy != PatternSummaryGroupBy.LanguagePatternCapture;
+        bool selectPath = !pathInSql || groupByPath;
+        bool hasFacet = !string.IsNullOrWhiteSpace(facetKey);
+        string grouping = pathInSql
+            ? "GROUP BY language, pattern_id, capture_name"
+              + (groupByPath ? ", path" : string.Empty)
+              + (hasFacet ? ", facet_value" : string.Empty)
+            : string.Empty;
+        command.CommandText = $"""
+            SELECT language, pattern_id, capture_name, {(selectPath ? "path" : "NULL")} AS path,
+                   {facetExpression} AS facet_value,
+                   {(pathInSql ? "COUNT(*)" : "1")} AS count
+            FROM structural_facts
+            {WhereClause(where)}
+            {grouping};
+            """;
+
+        var groups = new Dictionary<SummaryGroupKey, long>();
+        Func<string, bool>? pathMatches = pathInSql ? null : PatternPathGlobMatcher.Compile(pathGlob);
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            string path = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+            if (pathMatches is not null && !pathMatches(path))
+                continue;
+
+            string? facetValue = reader.IsDBNull(4) ? null : reader.GetString(4);
+            SummaryGroupKey key = SummaryKey(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                path,
+                facetValue,
+                groupBy);
+            groups.TryGetValue(key, out long count);
+            groups[key] = count + reader.GetInt64(5);
+        }
+
+        return groups
+            .OrderBy(static pair => pair.Key.Language, StringComparer.Ordinal)
+            .ThenBy(static pair => pair.Key.PatternId, StringComparer.Ordinal)
+            .ThenBy(static pair => pair.Key.CaptureName, StringComparer.Ordinal)
+            .ThenBy(static pair => pair.Key.Path, StringComparer.Ordinal)
+            .ThenBy(static pair => pair.Key.Directory, StringComparer.Ordinal)
+            .ThenBy(static pair => pair.Key.FacetValue, StringComparer.Ordinal)
+            .Select(static pair => new PatternSummaryRow(
+                pair.Key.Language,
+                pair.Key.PatternId,
+                pair.Key.CaptureName,
+                pair.Value,
+                pair.Key.Path,
+                pair.Key.Directory,
+                pair.Key.FacetValue))
             .ToArray();
     }
 
-    private static SummaryGroupKey BuildSummaryGroup(PatternMatchRow row, PatternSummaryGroupBy groupBy) =>
+    private static SummaryGroupKey SummaryKey(
+        string language,
+        string patternId,
+        string captureName,
+        string path,
+        string? facetValue,
+        PatternSummaryGroupBy groupBy) =>
         groupBy switch
         {
             PatternSummaryGroupBy.File => new SummaryGroupKey(
-                row.Language,
-                row.PatternId,
-                row.CaptureName,
-                Path: row.Path,
-                Directory: null),
+                language,
+                patternId,
+                captureName,
+                Path: path,
+                Directory: null,
+                facetValue),
             PatternSummaryGroupBy.Directory => new SummaryGroupKey(
-                row.Language,
-                row.PatternId,
-                row.CaptureName,
+                language,
+                patternId,
+                captureName,
                 Path: null,
-                Directory: PatternDirectory.FromPath(row.Path)),
+                Directory: PatternDirectory.FromPath(path),
+                facetValue),
             PatternSummaryGroupBy.TopDirectory => new SummaryGroupKey(
-                row.Language,
-                row.PatternId,
-                row.CaptureName,
+                language,
+                patternId,
+                captureName,
                 Path: null,
-                Directory: PatternDirectory.TopFromPath(row.Path)),
-            _ => new SummaryGroupKey(row.Language, row.PatternId, row.CaptureName, Path: null, Directory: null),
+                Directory: PatternDirectory.TopFromPath(path),
+                facetValue),
+            _ => new SummaryGroupKey(
+                language,
+                patternId,
+                captureName,
+                Path: null,
+                Directory: null,
+                facetValue),
         };
 
-    private static string? ReadFacetValue(PatternMatchRow row, string facetKey)
+    private static void AddListCount(
+        IDictionary<string, PatternListAccumulator> grouped,
+        string patternId,
+        string language,
+        string captureName,
+        long count)
     {
-        if (row.MetadataError is not null || row.Metadata.ValueKind != JsonValueKind.Object)
-            return null;
-        if (!row.Metadata.TryGetProperty(facetKey, out JsonElement value))
-            return null;
+        if (!grouped.TryGetValue(patternId, out PatternListAccumulator? accumulator))
+        {
+            accumulator = new PatternListAccumulator(patternId);
+            grouped.Add(patternId, accumulator);
+        }
 
-        return value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : value.GetRawText();
+        accumulator.Languages.Add(language);
+        accumulator.Captures.Add(captureName);
+        accumulator.Count += count;
     }
 
     private static PatternListRow ToListRow(
@@ -484,6 +908,30 @@ public sealed class PatternFactsReader
         return where;
     }
 
+    private static List<string> AddFactFilters(
+        SqliteCommand command,
+        IReadOnlyList<string> patternIds,
+        string? language)
+    {
+        var where = new List<string>();
+        var patternParameters = new string[patternIds.Count];
+        for (int i = 0; i < patternIds.Count; i++)
+        {
+            string parameter = "$pattern_id_" + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            patternParameters[i] = parameter;
+            command.Parameters.AddWithValue(parameter, patternIds[i].Trim());
+        }
+        where.Add("pattern_id IN (" + string.Join(", ", patternParameters) + ")");
+
+        if (!string.IsNullOrWhiteSpace(language))
+        {
+            where.Add("language = $language");
+            command.Parameters.AddWithValue("$language", language.Trim());
+        }
+
+        return where;
+    }
+
     private static string WhereClause(IReadOnlyCollection<string> where) =>
         where.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", where);
 
@@ -529,30 +977,6 @@ public sealed class PatternFactsReader
             MetadataError: metadataError);
     }
 
-    private static bool MetadataMatchesAll(PatternMatchRow row, IReadOnlyList<PatternMetadataFilter> filters)
-    {
-        foreach (PatternMetadataFilter filter in filters)
-        {
-            if (!MetadataMatches(row, filter))
-                return false;
-        }
-
-        return true;
-    }
-
-    private static bool MetadataMatches(PatternMatchRow row, PatternMetadataFilter filter)
-    {
-        if (row.MetadataError is not null || row.Metadata.ValueKind != JsonValueKind.Object)
-            return false;
-        if (!row.Metadata.TryGetProperty(filter.Key, out JsonElement value))
-            return false;
-
-        string actual = value.ValueKind == JsonValueKind.String
-            ? value.GetString() ?? string.Empty
-            : value.GetRawText();
-        return string.Equals(actual, filter.Value, StringComparison.Ordinal);
-    }
-
     private static void ValidateFilters(IReadOnlyList<PatternMetadataFilter>? metadataFilters)
     {
         if (metadataFilters is null)
@@ -573,12 +997,15 @@ public sealed class PatternFactsReader
         public long Count { get; set; }
     }
 
+    private sealed record PatternIdCount(string PatternId, long Count);
+
     private sealed record SummaryGroupKey(
         string Language,
         string PatternId,
         string CaptureName,
         string? Path,
-        string? Directory);
+        string? Directory,
+        string? FacetValue);
 }
 
 public enum PatternSummaryGroupBy
@@ -622,6 +1049,22 @@ public sealed record PatternMatchRow(
     string? MetadataJson,
     JsonElement Metadata,
     string? MetadataError);
+
+public sealed record PatternMatchResult(
+    long TotalCount,
+    IReadOnlyList<PatternMatchRow> Rows);
+
+public sealed record PatternExactSearchResult(
+    PatternMatchResult Matches,
+    bool PatternExists,
+    IReadOnlyList<string> SuggestionPatternIds);
+
+public sealed record PatternQueryMatchResult(
+    IReadOnlyList<string> ConsideredPatternIds,
+    IReadOnlyList<string> SuggestionPatternIds,
+    int MatchedPatternCount,
+    IReadOnlyList<string> ReturnedPatternIds,
+    PatternMatchResult Matches);
 
 public sealed record PatternSpan(
     int StartLine,

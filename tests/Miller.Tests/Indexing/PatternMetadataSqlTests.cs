@@ -121,6 +121,53 @@ public sealed class PatternMetadataSqlTests
         Assert.Equal("fact-null-name", Assert.Single(rows).FactId);
     }
 
+    [Theory]
+    [InlineData("enabled", "true", "fact-metadata-true")]
+    [InlineData("enabled", "false", "fact-metadata-false")]
+    [InlineData("count", "42", "fact-metadata-number")]
+    [InlineData("payload", "{\"x\":1}", "fact-metadata-object")]
+    [InlineData("payload", "[1,2]", "fact-metadata-array")]
+    public void Search_MetadataSqlPreservesJsonScalarAndRawValueSemantics(
+        string key,
+        string value,
+        string expectedFactId)
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-metadata-true', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'metadata.values.v1', 'value', 'attribute', 'sym-orders',
+                 10, 1, 10, 10, 100, 109, 1.0, '{"enabled":true}'),
+                ('fact-metadata-false', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'metadata.values.v1', 'value', 'attribute', 'sym-orders',
+                 11, 1, 11, 10, 110, 119, 1.0, '{"enabled":false}'),
+                ('fact-metadata-number', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'metadata.values.v1', 'value', 'attribute', 'sym-orders',
+                 12, 1, 12, 10, 120, 129, 1.0, '{"count":42}'),
+                ('fact-metadata-object', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'metadata.values.v1', 'value', 'attribute', 'sym-orders',
+                 13, 1, 13, 10, 130, 139, 1.0, '{"payload":{"x":1}}'),
+                ('fact-metadata-array', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'metadata.values.v1', 'value', 'attribute', 'sym-orders',
+                 14, 1, 14, 10, 140, 149, 1.0, '{"payload":[1,2]}');
+            """);
+        var reader = new PatternFactsReader();
+
+        IReadOnlyList<PatternMatchRow> rows = reader.Search(
+            fx.DbPath,
+            patternId: "metadata.values.v1",
+            language: null,
+            pathGlob: null,
+            metadataFilters: [new PatternMetadataFilter(key, value)],
+            limit: 50);
+
+        Assert.Equal(expectedFactId, Assert.Single(rows).FactId);
+    }
+
     [Fact]
     public void List_AppliesCatalogOverlayWhenTablePresent()
     {
@@ -132,10 +179,74 @@ public sealed class PatternMetadataSqlTests
         var reader = new PatternFactsReader();
 
         PatternListRow row = Assert.Single(reader.List(fx.DbPath), item => item.PatternId == "htmx.attribute.v1");
+        PatternListRow filtered = Assert.Single(reader.List(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: "razor",
+            pathGlob: "Views/*.cshtml",
+            metadataFilters: [new PatternMetadataFilter("name", "hx-get")]));
         Assert.Equal("htmx attribute", row.Label);
         Assert.Equal("known", row.Catalog);
         Assert.Equal("An htmx attribute usage", row.Description);
         Assert.Equal(new[] { "htmx", "html" }, row.Tags);
+        Assert.Equal("htmx attribute", filtered.Label);
+        Assert.Equal(1, filtered.Count);
+    }
+
+    [Fact]
+    public void Summary_FacetPreservesJsonValueSemanticsAndSkipsMalformedRows()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-facet-number', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 2, 1, 2, 10, 25, 34, 1.0, '{"facet":42}'),
+                ('fact-facet-number-duplicate', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 3, 1, 3, 10, 35, 44, 1.0, '{"facet":42}'),
+                ('fact-facet-bool', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 4, 1, 4, 10, 45, 54, 1.0, '{"facet":true}'),
+                ('fact-facet-null', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 5, 1, 5, 10, 55, 64, 1.0, '{"facet":null}'),
+                ('fact-facet-object', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 6, 1, 6, 10, 65, 74, 1.0, '{"facet":{"nested":1}}'),
+                ('fact-facet-malformed', 'file:Views/Orders.cshtml', 'Views/Orders.cshtml', 'razor',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-orders',
+                 7, 1, 7, 10, 75, 84, 1.0, '{bad-json');
+            """);
+        var reader = new PatternFactsReader();
+
+        IReadOnlyList<PatternSummaryRow> fallbackRows = reader.Summary(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: null,
+            pathGlob: "Views/*.cshtml",
+            metadataFilters: null,
+            groupBy: PatternSummaryGroupBy.File,
+            facetKey: "facet");
+        IReadOnlyList<PatternSummaryRow> sqlRows = reader.Summary(
+            fx.DbPath,
+            patternId: "htmx.attribute.v1",
+            language: null,
+            pathGlob: "Views/Orders.cshtml",
+            metadataFilters: null,
+            groupBy: PatternSummaryGroupBy.File,
+            facetKey: "facet");
+
+        Assert.Equal(
+            new[] { "42", "null", "true", "{\"nested\":1}" },
+            fallbackRows.Select(static row => row.FacetValue).ToArray());
+        Assert.Equal(2, fallbackRows[0].Count);
+        Assert.All(fallbackRows.Skip(1), static row => Assert.Equal(1, row.Count));
+        Assert.Equal(fallbackRows, sqlRows);
     }
 
     [Fact]

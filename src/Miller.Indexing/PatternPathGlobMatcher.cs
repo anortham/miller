@@ -8,13 +8,14 @@ namespace Miller.Indexing;
 /// </summary>
 internal static class PatternPathGlobMatcher
 {
-    public static bool IsMatch(string path, string pathGlob)
+    public static Func<string, bool> Compile(string? pathGlob)
     {
         if (string.IsNullOrWhiteSpace(pathGlob))
-            return true;
+            return static _ => true;
 
         string normalized = pathGlob.Replace('\\', '/').Trim();
-        return new GlobMatcher(normalized).IsMatch(path);
+        var matcher = new GlobMatcher(normalized);
+        return matcher.IsMatch;
     }
 
     private sealed class GlobMatcher

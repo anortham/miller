@@ -47,6 +47,39 @@ public sealed class ToolContinuationTests
         Assert.Equal(text, first.Text + second.Text);
     }
 
+    [Fact]
+    public void RenderPrefixWithinByteBudget_NeverRendersPastCandidateLimit()
+    {
+        int[] items = Enumerable.Range(1, 50_000).ToArray();
+        int largestRenderedCount = 0;
+
+        string output = ToolOutputBudget.RenderPrefixWithinByteBudget(
+            items,
+            maxBytes: 128,
+            (retained, omitted) =>
+            {
+                largestRenderedCount = Math.Max(largestRenderedCount, retained.Count);
+                return $"{string.Join(',', retained)}|omitted={omitted}";
+            },
+            maxCandidateItems: 32);
+
+        Assert.InRange(largestRenderedCount, 1, 32);
+        Assert.True(Encoding.UTF8.GetByteCount(output) <= 128);
+        Assert.EndsWith("|omitted=49968", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RequireWithinByteBudget_RefusesOversizedMetadata()
+    {
+        Assert.Equal("within", ToolOutputBudget.RequireWithinByteBudget("within", 6));
+
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(
+            () => ToolOutputBudget.RequireWithinByteBudget("too large", 4));
+
+        Assert.Equal("output_metadata_too_large", exception.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
+    }
+
     [Theory]
     [InlineData("workspace", "continuation_workspace_mismatch")]
     [InlineData("symbol", "continuation_symbol_mismatch")]

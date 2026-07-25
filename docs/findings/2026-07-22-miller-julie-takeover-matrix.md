@@ -491,6 +491,34 @@ Keep `patterns` unchanged in shape. Surface matched-pattern truncation, name the
 
 Accepted Miller's advantage and its query/directory/error gaps. Rejected Claude's request to create a patterns contract because `docs/contracts/patterns-json-v1.md` already exists. The artifact schema and catalog population remain subject to real-extract parity checks.
 
+### 2026-07-25 Remediation Re-audit
+
+The initial Phase 7 implementation fixed fan-out disclosure and directory semantics but still counted only
+retained search rows, allowed successful list and summary responses far beyond the MCP budget, selected
+alphabetical prefixes that could hide the most useful rows, and materialized full filtered fact populations.
+The corrected implementation now:
+
+- reports exact full-population search, pattern, and group coverage;
+- shares one SQLite transaction for exact search counts, retained rows, existence, and suggestions;
+- applies the 12 KiB MCP budget to search, list, and summary, including workspace banners;
+- ranks bounded MCP list and summary prefixes by count while keeping CLI output exhaustive;
+- reads list aggregation and catalog overlays in one transaction;
+- aggregates in SQL or through lightweight streaming without materializing full match objects;
+- compiles fallback path globs once and scans fallback populations once;
+- selects filtered query fan-out by filtered fact population when more than 25 IDs match;
+- reads free-text fan-out selection and match retrieval through one SQLite transaction;
+- windows exact-search identity/order columns before joining retained payload rows;
+- accepts documented target-free summary `where` filters and emits operation-valid narrowing guidance;
+- preserves active filters, grouping, facets, and filtered truncation recovery across compact and JSON;
+- returns concrete recovery actions for exact-ID typos and typed numeric action arguments;
+- consolidates all active compact and JSON semantics in `patterns-json-v1.md` and removes the duplicate contract.
+
+Live Miller dogfood returned exact counts over 38,060 exact matches and 45,310 free-text-query facts, summarized
+52,240 facts into 1,343 file groups in 0.28 seconds, and reduced a pathological glob fallback from 29.68 seconds
+to 0.30 seconds. A non-SQL glob returned all 72 matching facts in 0.12 seconds through the lightweight fallback.
+Julie still aggregates only its limited prefix and observes at most 10,000 rows for list, so
+there is no Julie behavior left to port for this tool.
+
 ## Tool Pass 9: `workspace`
 
 ### Findings

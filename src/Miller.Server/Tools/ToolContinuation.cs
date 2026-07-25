@@ -37,6 +37,7 @@ public static partial class ToolOutputBudget
     public const int WorkspaceOnboardingMcpRowLimit = 3;
     public const int InspectFullBodyMaxBytes = 4 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
+    public const int PatternsMcpDiagnosticReserveBytes = 1024;
     public const int WorkspaceHealthMcpMaxBytes = 12 * 1024;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -87,29 +88,40 @@ public static partial class ToolOutputBudget
     public static string RenderPrefixWithinByteBudget<T>(
         IReadOnlyList<T> items,
         int maxBytes,
-        Func<IReadOnlyList<T>, int, string> renderer)
+        Func<IReadOnlyList<T>, int, string> renderer,
+        int maxCandidateItems = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(renderer);
         if (maxBytes < 1)
             throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Output budget must be positive.");
+        if (maxCandidateItems < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxCandidateItems),
+                maxCandidateItems,
+                "Candidate limit must be positive.");
+        }
 
-        string full = renderer(items, 0);
+        int candidateCount = Math.Min(items.Count, maxCandidateItems);
+        IReadOnlyList<T> candidates = candidateCount == items.Count
+            ? items
+            : items.Take(candidateCount).ToArray();
+        string full = renderer(candidates, items.Count - candidateCount);
         if (Encoding.UTF8.GetByteCount(full) <= maxBytes)
             return full;
 
-        T[] retained = items.ToArray();
+        T[] retained = candidates.ToArray();
         int low = 0;
         int high = retained.Length;
-        string best = renderer(Array.Empty<T>(), retained.Length);
-        if (Encoding.UTF8.GetByteCount(best) > maxBytes)
-            throw new InvalidOperationException("Output metadata exceeds the configured byte budget.");
+        string best = renderer(Array.Empty<T>(), items.Count);
+        RequireWithinByteBudget(best, maxBytes);
 
         while (low <= high)
         {
             int count = low + ((high - low) / 2);
             var prefix = new ArraySegment<T>(retained, 0, count);
-            string output = renderer(prefix, retained.Length - count);
+            string output = renderer(prefix, items.Count - count);
             if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
             {
                 best = output;
@@ -122,6 +134,21 @@ public static partial class ToolOutputBudget
         }
 
         return best;
+    }
+
+    public static string RequireWithinByteBudget(string output, int maxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (maxBytes < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Output budget must be positive.");
+        if (Encoding.UTF8.GetByteCount(output) > maxBytes)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "output_metadata_too_large",
+                "Output metadata exceeds the configured byte budget; narrow the request inputs."));
+        }
+
+        return output;
     }
 
     public static string EncodeReferenceCursor(

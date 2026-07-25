@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Miller.Server.Telemetry;
@@ -155,5 +156,6 @@ public static class ToolDiagnosticRenderer
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 }

@@ -1114,8 +1114,6 @@ public static class CliDispatch
                 return 2;
             }
 
-            if (string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
-                return Usage(err, "miller patterns search --pattern ID | --query TEXT [--where key=value] [--json]");
         }
 
         if (operation == "search" && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))

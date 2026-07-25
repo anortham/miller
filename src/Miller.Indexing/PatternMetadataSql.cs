@@ -43,26 +43,12 @@ internal static class PatternMetadataSql
         where.Add($"""
             metadata_json IS NOT NULL
             AND json_valid(metadata_json)
-            AND json_type(metadata_json, {pathParam}) IS NOT NULL
-            AND (
-              (json_type(metadata_json, {pathParam}) = 'text'
-               AND json_extract(metadata_json, {pathParam}) = {valueParam})
-              OR
-              (json_type(metadata_json, {pathParam}) = 'true'
-               AND {valueParam} = 'true')
-              OR
-              (json_type(metadata_json, {pathParam}) = 'false'
-               AND {valueParam} = 'false')
-              OR
-              (json_type(metadata_json, {pathParam}) = 'null'
-               AND {valueParam} = 'null')
-              OR
-              (json_type(metadata_json, {pathParam}) IN ('integer', 'real')
-               AND CAST(json_extract(metadata_json, {pathParam}) AS TEXT) = {valueParam})
-              OR
-              (json_type(metadata_json, {pathParam}) IN ('object', 'array')
-               AND json_extract(metadata_json, {pathParam}) = {valueParam})
-            )
+            AND CASE json_type(metadata_json, {pathParam})
+                WHEN 'true' THEN 'true'
+                WHEN 'false' THEN 'false'
+                WHEN 'null' THEN 'null'
+                ELSE CAST(json_extract(metadata_json, {pathParam}) AS TEXT)
+            END = {valueParam}
             """);
 
         return true;
