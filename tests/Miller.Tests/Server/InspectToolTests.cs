@@ -273,6 +273,64 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_FileSummary_McpCompact_DoesNotSuggestRaisingClampedLimit()
+    {
+        var rows = Enumerable.Range(0, 30)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"{i + 1:x32}",
+                $"Member{i}",
+                "method",
+                "csharp",
+                "src/Many.cs",
+                $"void Member{i}()",
+                i + 1,
+                null))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-many", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("src/Many.cs", limit: 100);
+
+        Assert.DoesNotContain("raise limit", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("narrow with kind=", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Inspect_FileSummary_McpCompact_LowSignalOnlyFileDoesNotEmitNoSymbolsDiagnostic()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "a1000000000000000000000000000001",
+                    "System",
+                    "import",
+                    "csharp",
+                    "src/Imports.cs",
+                    "using System;",
+                    1,
+                    null),
+            ]);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-imports", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("src/Imports.cs");
+
+        Assert.Contains("low_signal hidden: 1 import", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("no_file_symbols", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("No indexed symbols matched", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_FileSummary_Json_PrioritizesDefinitionsAndReportsOmittedChildren()
     {
         JulieDbFixture.SymbolRow[] imports = Enumerable.Range(0, 12)
@@ -464,6 +522,86 @@ public sealed class InspectToolTests
         Assert.Equal(
             "extractor_span_not_declaration",
             document.RootElement.GetProperty("body_role").GetString());
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Json_LongValueDeclarationReportsIncomplete()
+    {
+        string signature = "private const string Payload = \"" + new string('x', 5000) + "\"";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "c1000000000000000000000000000001",
+                    "Payload",
+                    "constant",
+                    "csharp",
+                    "tests/Fixture.cs",
+                    signature,
+                    5,
+                    null),
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "Payload",
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        Assert.False(document.RootElement.GetProperty("value_declaration_complete").GetBoolean());
+        Assert.NotEqual(
+            signature,
+            document.RootElement.GetProperty("symbol").GetProperty("signature").GetString());
+    }
+
+    [Fact]
+    public void Run_SymbolFull_Json_CompleteValueDeclarationPreservesWhitespace()
+    {
+        const string signature = "private const string Payload =\n    \"first\";";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "c2000000000000000000000000000001",
+                    "Payload",
+                    "constant",
+                    "csharp",
+                    "tests/Fixture.cs",
+                    signature,
+                    5,
+                    null),
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "Payload",
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        Assert.True(document.RootElement.GetProperty("value_declaration_complete").GetBoolean());
+        Assert.Equal(
+            signature,
+            document.RootElement.GetProperty("symbol").GetProperty("signature").GetString());
     }
 
     [Fact]
@@ -759,6 +897,47 @@ public sealed class InspectToolTests
         Assert.Equal(
             "Caller",
             Assert.Single(document.RootElement.GetProperty("callers").EnumerateArray()).GetString());
+    }
+
+    [Fact]
+    public void Run_SymbolFull_CallersAreOrderedBySourceLocation()
+    {
+        const string targetId = "aa000000000000000000000000000031";
+        const string callerAId = "ff000000000000000000000000000032";
+        const string callerZId = "00000000000000000000000000000033";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(callerAId, "CallerA", "method", "csharp", "src/A.cs", "void CallerA()", 10, null),
+                new(callerZId, "CallerZ", "method", "csharp", "src/Z.cs", "void CallerZ()", 20, null),
+            ],
+            identifiers:
+            [
+                new("identifier-a", "Run", "call", "csharp", "src/A.cs", 10, callerAId)
+                    { TargetSymbolId = targetId },
+                new("identifier-z", "Run", "call", "csharp", "src/Z.cs", 20, callerZId)
+                    { TargetSymbolId = targetId },
+            ]);
+        var (index, resolver) = Build(fixture);
+
+        string compact = InspectTool.Run(
+            index,
+            resolver,
+            fixture.DbPath,
+            fixture.WorkspaceRoot,
+            targetId,
+            depth: "full",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+
+        Assert.True(
+            compact.IndexOf("CallerA", StringComparison.Ordinal) <
+            compact.IndexOf("CallerZ", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1140,6 +1319,21 @@ public sealed class InspectToolTests
 
         Assert.Contains("... 1 more refs", output);
         Assert.EndsWith("next: trace target=\"Hot\" mode=refs limit=51 — full reference list", output);
+    }
+
+    [Fact]
+    public void Inspect_SymbolFull_McpRefsTruncated_AppendsTraceHintWithoutDepthAdvice()
+    {
+        using var fx = HotSymbolFixture(refCount: 51, isTest: false);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-hot", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("Hot", depth: "full");
+
+        Assert.DoesNotContain("use depth=full", output, StringComparison.Ordinal);
+        Assert.Contains("next: trace", output, StringComparison.Ordinal);
     }
 
     [Fact]

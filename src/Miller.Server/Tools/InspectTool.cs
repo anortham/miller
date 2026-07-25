@@ -39,8 +39,8 @@ public sealed class InspectTool
         "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
         "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
         "(the right first symbol read); depth=full adds relation lists and a bounded body page. For constants, " +
-        "fields, properties, and variables, the full signature is the authoritative complete declaration and " +
-        "needs no search confirmation. Use before reading " +
+        "fields, properties, and variables, a full result with value_declaration_complete=true is authoritative " +
+        "and needs no search confirmation. Use before reading " +
         "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
         "reference lists across the repo (use trace mode=refs). Example: inspect target=FullRebuildPromotion " +
         "depth=overview.")]
@@ -254,8 +254,16 @@ public sealed class InspectTool
         switch (resolution)
         {
             case TargetResolution.File file:
-                string fileOutput = RenderFile(index, file.Path, kind, limit, json, out resultCount);
-                if (resultCount == 0)
+                string fileOutput = RenderFile(
+                    index,
+                    file.Path,
+                    kind,
+                    limit,
+                    json,
+                    boundAgentOutput,
+                    out resultCount,
+                    out int matchedCount);
+                if (matchedCount == 0)
                 {
                     diagnostic = ToolDiagnostic.ExpectedEmpty(
                         "no_file_symbols",
@@ -359,12 +367,20 @@ public sealed class InspectTool
     // ---------- file listing ----------
 
     private static string RenderFile(
-        ISymbolLookupIndex index, string path, string? kind, int limit, bool json, out int resultCount)
+        ISymbolLookupIndex index,
+        string path,
+        string? kind,
+        int limit,
+        bool json,
+        bool boundAgentOutput,
+        out int resultCount,
+        out int matchedCount)
     {
         IEnumerable<IndexedSymbol> symbols = index.FindByFilePath(path);
         if (!string.IsNullOrWhiteSpace(kind))
             symbols = symbols.Where(s => string.Equals(s.Kind, kind, StringComparison.OrdinalIgnoreCase));
         var all = symbols.ToList();
+        matchedCount = all.Count;
 
         if (all.Count == 0)
         {
@@ -413,7 +429,11 @@ public sealed class InspectTool
         AppendFileSymbolGroups(sb, visible.Take(compactPage));
         int remainder = visible.Count - compactPage;
         if (remainder > 0)
-            sb.Append("… ").Append(remainder).Append(" more (raise limit)\n");
+        {
+            sb.Append("… ").Append(remainder).Append(" more (")
+                .Append(boundAgentOutput ? "narrow with kind=<symbol-kind>" : "raise limit")
+                .Append(")\n");
+        }
         if (string.IsNullOrWhiteSpace(kind))
             AppendHiddenLowSignalNote(sb, all);
         return sb.ToString().TrimEnd('\n');
@@ -471,6 +491,10 @@ public sealed class InspectTool
     private static bool IsValueDeclaration(IndexedSymbol symbol) =>
         symbol.Kind is "constant" or "variable" or "field" or "property";
 
+    private static bool IsCompleteValueDeclaration(IndexedSymbol symbol) =>
+        symbol.Signature is not null &&
+        symbol.Signature.Length <= FullValueDeclarationMaxLength;
+
     private static int KindRank(string kind) => kind switch
     {
         "class" or "interface" or "struct" or "record" or "enum" or "type" => 0,
@@ -520,6 +544,12 @@ public sealed class InspectTool
         sb.Append(sym.FilePath).Append(':').Append(sym.StartLine).Append('\n');
         if (SignatureAddsInfo(sym))
             sb.Append(Truncate(sym.Signature!, SignatureLimit(sym, depth))).Append('\n');
+        if (depth == InspectDepth.Full && IsValueDeclaration(sym))
+        {
+            sb.Append("value_declaration_complete: ")
+                .Append(IsCompleteValueDeclaration(sym) ? "true" : "false")
+                .Append('\n');
+        }
         if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
             sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
@@ -565,7 +595,12 @@ public sealed class InspectTool
         {
             sb.Append("\n## references\n");
             AppendGroupedReferences(sb, refs.Take(relationLimit));
-            AppendOmittedLine(sb, referenceEvidence.Coverage.ExactAvailable, relationLimit, "refs");
+            AppendOmittedLine(
+                sb,
+                referenceEvidence.Coverage.ExactAvailable,
+                relationLimit,
+                "refs",
+                depth == InspectDepth.Overview ? "use depth=full" : "use trace mode=refs");
         }
 
         if (referenceEvidence.Fallback.Count > 0)
@@ -576,7 +611,8 @@ public sealed class InspectTool
                 sb,
                 referenceEvidence.Coverage.FallbackAvailable,
                 relationLimit,
-                "fallback refs");
+                "fallback refs",
+                depth == InspectDepth.Overview ? "use depth=full" : "use trace mode=refs");
         }
         else if (referenceEvidence.Coverage.FallbackStatus ==
                  ReferenceFallbackStatus.SuppressedAmbiguousName &&
@@ -590,26 +626,36 @@ public sealed class InspectTool
         var callers = ResolveContainingSymbols(
             index,
             referenceEvidence.ExactCallerSymbolIds,
-            refs);
+            refs,
+            relationLimit);
         if (callers.Count > 0)
         {
             sb.Append("\n## callers\n");
-            foreach (var c in callers.Take(relationLimit))
+            foreach (var c in callers)
                 sb.Append(c.Name).Append("  ").Append(c.FilePath).Append(':').Append(c.StartLine).Append('\n');
-            AppendOmittedLine(sb, callers.Count, relationLimit, "callers");
+            AppendOmittedLine(
+                sb,
+                referenceEvidence.ExactCallerSymbolIds.Count,
+                relationLimit,
+                "callers");
         }
 
         var referencedBy = ResolveContainingSymbols(
             index,
             referenceEvidence.ExactReferencedBySymbolIds,
-            refs);
+            refs,
+            relationLimit);
         if (referencedBy.Count > 0)
         {
             sb.Append("\n## referenced_by\n");
-            foreach (var reference in referencedBy.Take(relationLimit))
+            foreach (var reference in referencedBy)
                 sb.Append(reference.Name).Append("  ").Append(reference.FilePath).Append(':')
                     .Append(reference.StartLine).Append('\n');
-            AppendOmittedLine(sb, referencedBy.Count, relationLimit, "referenced_by");
+            AppendOmittedLine(
+                sb,
+                referenceEvidence.ExactReferencedBySymbolIds.Count,
+                relationLimit,
+                "referenced_by");
         }
 
         OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
@@ -673,8 +719,9 @@ public sealed class InspectTool
             sb.Append(bodyPage.Text);
         }
 
-        bool refsTruncatedAtRefLimit =
-            relationLimit == RefLimit && referenceEvidence.Coverage.ExactAvailable > relationLimit;
+        bool refsTruncated =
+            depth == InspectDepth.Full &&
+            referenceEvidence.Coverage.ExactAvailable > relationLimit;
         string callName = EscapeCallString(sym.Name);
         if (bodyPage is { Truncated: true, Continuation: not null })
         {
@@ -682,7 +729,7 @@ public sealed class InspectTool
                 $"inspect target=\"{sym.SymbolId}\" depth=full continuation=\"{bodyPage.Continuation}\"",
                 $"continue body at byte {bodyPage.EndOffset}"));
         }
-        else if (refsTruncatedAtRefLimit)
+        else if (refsTruncated)
             sb.Append('\n').Append(NextStepHint.Render(
                 $"trace target=\"{callName}\" mode=refs limit={referenceEvidence.Coverage.ExactAvailable}",
                 "full reference list"));
@@ -711,10 +758,16 @@ public sealed class InspectTool
             w.WriteStartObject();
 
             w.WritePropertyName("symbol");
-            WriteSymbolObject(w, sym, detail, SignatureLimit(sym, depth));
-            if (depth == InspectDepth.Full && IsValueDeclaration(sym))
+            bool isFullValueDeclaration = depth == InspectDepth.Full && IsValueDeclaration(sym);
+            WriteSymbolObject(
+                w,
+                sym,
+                detail,
+                SignatureLimit(sym, depth),
+                preserveSignatureWhitespace: isFullValueDeclaration);
+            if (isFullValueDeclaration)
             {
-                w.WriteBoolean("value_declaration_complete", true);
+                w.WriteBoolean("value_declaration_complete", IsCompleteValueDeclaration(sym));
                 w.WriteString("body_role", "extractor_span_not_declaration");
             }
 
@@ -775,7 +828,8 @@ public sealed class InspectTool
                 foreach (var c in ResolveContainingSymbols(
                              index,
                              referenceEvidence.ExactCallerSymbolIds,
-                             refs).Take(relationLimit))
+                             refs,
+                             relationLimit))
                     w.WriteStringValue(c.Name);
                 w.WriteEndArray();
 
@@ -784,7 +838,8 @@ public sealed class InspectTool
                 foreach (var reference in ResolveContainingSymbols(
                              index,
                              referenceEvidence.ExactReferencedBySymbolIds,
-                             refs).Take(relationLimit))
+                             refs,
+                             relationLimit))
                     w.WriteStringValue(reference.Name);
                 w.WriteEndArray();
 
@@ -917,10 +972,16 @@ public sealed class InspectTool
     private static string EscapeDiagnosticTarget(string value) =>
         ToolDiagnosticText.EscapeCallArgument(value);
 
-    private static void AppendOmittedLine(StringBuilder sb, int total, int visible, string label)
+    private static void AppendOmittedLine(
+        StringBuilder sb,
+        int total,
+        int visible,
+        string label,
+        string recovery = "use depth=full")
     {
         if (total > visible)
-            sb.Append("... ").Append(total - visible).Append(" more ").Append(label).Append(" (use depth=full)\n");
+            sb.Append("... ").Append(total - visible).Append(" more ").Append(label)
+                .Append(" (").Append(recovery).Append(")\n");
     }
 
     private static void AppendGroupedReferences(StringBuilder sb, IEnumerable<ReferenceEvidence> refs)
@@ -1017,10 +1078,23 @@ public sealed class InspectTool
     private static List<ContainingSymbol> ResolveContainingSymbols(
         ISymbolLookupIndex index,
         IReadOnlyList<string> symbolIds,
-        IReadOnlyList<ReferenceEvidence> displayedReferences)
+        IReadOnlyList<ReferenceEvidence> displayedReferences,
+        int limit)
     {
-        var result = new List<ContainingSymbol>(symbolIds.Count);
-        foreach (string containingId in symbolIds)
+        var allowedIds = symbolIds.ToHashSet(StringComparer.Ordinal);
+        string[] selectedIds = displayedReferences
+            .Where(reference =>
+                reference.ContainingSymbolId is { } containingId &&
+                allowedIds.Contains(containingId))
+            .OrderBy(static reference => reference.FilePath, StringComparer.Ordinal)
+            .ThenBy(static reference => reference.StartLine)
+            .Select(static reference => reference.ContainingSymbolId!)
+            .Concat(symbolIds)
+            .Distinct(StringComparer.Ordinal)
+            .Take(limit)
+            .ToArray();
+        var result = new List<ContainingSymbol>(selectedIds.Length);
+        foreach (string containingId in selectedIds)
         {
             IndexedSymbol? symbol = index.FindBySymbolId(containingId);
             if (symbol is not null)
@@ -1041,7 +1115,11 @@ public sealed class InspectTool
                 reference?.FilePath ?? string.Empty,
                 reference?.StartLine ?? 0));
         }
-        return result;
+        return result
+            .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
+            .ThenBy(static symbol => symbol.StartLine)
+            .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch
@@ -1297,7 +1375,8 @@ public sealed class InspectTool
         Utf8JsonWriter w,
         IndexedSymbol s,
         SymbolDetail? detail,
-        int signatureMaxLength = ToolRenderLimits.SignatureMaxLength)
+        int signatureMaxLength = ToolRenderLimits.SignatureMaxLength,
+        bool preserveSignatureWhitespace = false)
     {
         w.WriteStartObject();
         w.WriteString("name", s.Name);
@@ -1307,7 +1386,9 @@ public sealed class InspectTool
         if (s.Signature is null) w.WriteNull("signature");
         else w.WriteString(
             "signature",
-            Truncate(InlineSignature(s.Signature), signatureMaxLength));
+            Truncate(
+                preserveSignatureWhitespace ? s.Signature : InlineSignature(s.Signature),
+                signatureMaxLength));
         w.WriteString("symbol_id", s.SymbolId);
         if (detail is not null)
         {
