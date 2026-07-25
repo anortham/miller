@@ -1974,17 +1974,21 @@ public static class CliDispatch
         string[]? editedFiles = OptionValues(o.Value("edited-files"));
         string? failingTest = o.Value("failing-test");
         string? stackTrace = o.Value("stack-trace");
+        int tokenBudget = o.Int("token-budget", 2000);
+        bool json = o.Has("json");
+        int selectedCount;
+        int candidatesExamined;
         string output;
         if (string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase))
         {
             output = ContextTool.RunReferenceAwareActionable(
-                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
+                index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
                     entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
                     readBody: symbol => ContextTool.ReadPivotBody(
                         ctx.ExtractDbPath,
                         ctx.WorkspaceRoot,
                         symbol),
-                    referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json: o.Has("json"),
+                    referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json,
                     readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
                         ctx.ExtractDbPath,
                         symbol.SymbolId,
@@ -2002,23 +2006,33 @@ public static class CliDispatch
                     symbols,
                     excludeTests,
                     ContextTool.ContentChunksPerSymbol),
-                out _, out _);
+                out selectedCount, out candidatesExamined);
         }
         else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
         {
             output = ContextTool.RunActionable(
-                index, graph, resolver, query: o.Query, tokenBudget: o.Int("token-budget", 2000), maxHops: o.Int("max-hops", 1),
+                index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
                 entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
                 readBody: symbol => ContextTool.ReadPivotBody(
                     ctx.ExtractDbPath,
                     ctx.WorkspaceRoot,
                     symbol),
-                json: o.Has("json"), out _, out _);
+                json, out selectedCount, out candidatesExamined);
         }
         else
         {
             err.WriteLine("reference-mode must be off or usage.");
             return 2;
+        }
+        if (selectedCount == 0)
+        {
+            ToolDiagnostic diagnostic = ContextTool.EmptyDiagnostic(
+                o.Query,
+                tokenBudget,
+                candidatesExamined,
+                entrySymbols,
+                int.MaxValue);
+            output = ToolDiagnosticRenderer.Attach("context", output, diagnostic, json);
         }
         outw.WriteLine(output);
         return 0;

@@ -185,6 +185,12 @@ public sealed class ContextToolTests
         if (json)
         {
             using var document = JsonDocument.Parse(output);
+            if (selectedCount == 0 &&
+                !document.RootElement.TryGetProperty("bundle", out _))
+            {
+                Assert.Equal("{}", output);
+                return;
+            }
             Assert.Equal(selectedCount, document.RootElement.GetProperty("bundle").GetArrayLength());
         }
         else if (selectedCount == 0)
@@ -570,6 +576,7 @@ public sealed class ContextToolTests
         Assert.True(first.TryGetProperty("reason", out _));
         Assert.Equal(0, first.GetProperty("hop").GetInt32());
         Assert.Equal("partial", root.GetProperty("disposition").GetProperty("status").GetString());
+        Assert.NotEmpty(root.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]
@@ -904,6 +911,10 @@ public sealed class ContextToolTests
             item.GetProperty("reason").GetString() == "dependency"
             && item.GetProperty("target_symbol_id").GetString() == ControllerId
             && item.GetProperty("resolution_status").GetString() == "exact");
+        Assert.Equal(
+            "partial",
+            doc.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+        Assert.NotEmpty(doc.RootElement.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]
@@ -926,6 +937,11 @@ public sealed class ContextToolTests
         Assert.Contains("role=pivot", output);
         Assert.Contains("reason=possible_reference confidence=fallback", output);
         Assert.Contains("resolution=fallback source=name_fallback", output);
+        Assert.Contains("## next inspect", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "inspect(target=\"OrderService\", scope=\"src/OrderService.cs\", depth=\"overview\")",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -955,6 +971,57 @@ public sealed class ContextToolTests
         Assert.DoesNotContain("tests/OrderServiceTests.cs", output);
         Assert.Contains("web/OrderController.cs", output);
         Assert.Contains("src/OrderService.cs", output);
+    }
+
+    [Fact]
+    public void RunReferenceAware_ExcludeTestsFiltersSymbolsByPath()
+    {
+        var symbol = new IndexedSymbol(
+            0,
+            "00000000000000000000000000000302",
+            "PathOnlyTest",
+            "class PathOnlyTest",
+            "class",
+            "csharp",
+            "tests/PathOnlyTest.cs",
+            1,
+            20,
+            null,
+            IsTest: false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunReferenceAwareActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 1000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: [new ContextTool.ContextSemanticSeed(symbol, 1, 0.91)],
+            readBody: null,
+            referenceDepth: 0,
+            excludeTests: true,
+            json: true,
+            readReferenceEvidence: _ => new ReferenceEvidenceSet(
+                [],
+                [],
+                new ReferenceEvidenceCoverage(
+                    0, 0, 0, 0, 0, 0, false, false, ReferenceFallbackStatus.NoCandidates)),
+            readOutgoingEvidence: _ => new OutgoingReferenceEvidenceSet(
+                [],
+                [],
+                new OutgoingReferenceEvidenceCoverage(0, 0, 0, 0, 0, false, false)),
+            readContentChunks: (_, _) => [],
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Empty(document.RootElement.GetProperty("bundle").EnumerateArray());
     }
 
     [Fact]
@@ -1148,6 +1215,27 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_LowBudgetCrossWorkspaceResponseKeepsBanner()
+    {
+        var currentIndex = EmptyIndex();
+        var targetIndex = EmptyIndex();
+        string currentRoot = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
+        string targetRoot = Path.Combine(Path.GetTempPath(), "miller-target-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(currentIndex, "current.db", "current-ws", currentRoot),
+            ("target-ws", ReadToolRoutingTestSupport.ContextFor(targetIndex, "target.db", "target-ws", targetRoot)));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "MissingEntry",
+            token_budget: 32,
+            workspace_id: "target-ws");
+
+        Assert.StartsWith("workspace: target-ws", output, StringComparison.Ordinal);
+        Assert.True(TokenEstimator.Count(output) <= 32);
+    }
+
+    [Fact]
     public void Context_EditedFileAnchorBeatsUnrelatedExactQueryHit()
     {
         var (index, _) = BuildFixture();
@@ -1271,6 +1359,39 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunActionable_RescueOnlyPivotBodyRemainsPartial()
+    {
+        var (index, resolver) = BuildFixture();
+        IndexedSymbol repo = Assert.Single(index.FindByName("OrderRepo"));
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: [new ContextTool.ContextSemanticSeed(repo, 1, 0.91)],
+            readBody: symbol => symbol.Name == "OrderRepo"
+                ? ExtractReader.BodyReadResult.Available("class OrderRepo { }")
+                : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement implementation = Assert.Single(
+            document.RootElement.GetProperty("bundle").EnumerateArray(),
+            item => item.TryGetProperty("body", out _));
+        Assert.Equal("semantic_rank_1", implementation.GetProperty("reason").GetString());
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
     public void RunActionable_IncludesNearbyFileNeighbourWithoutAGraphEdge()
     {
         IndexedSymbol[] symbols =
@@ -1376,7 +1497,9 @@ public sealed class ContextToolTests
                 .GetProperty("anchor_diagnostics")[0]
                 .GetProperty("reason")
                 .GetString());
-        Assert.NotEmpty(document.RootElement.GetProperty("next_actions").EnumerateArray());
+        Assert.False(document.RootElement.TryGetProperty("next_actions", out _));
+        Assert.NotEmpty(
+            document.RootElement.GetProperty("diagnostic").GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]
@@ -1444,6 +1567,62 @@ public sealed class ContextToolTests
 
         Assert.NotEqual("{}", output);
         Assert.True(TokenEstimator.Count(output) <= ToolOutputBudget.ContextMcpMaxTokens);
+    }
+
+    [Fact]
+    public void Context_BudgetExcludedCandidatesUseBudgetDiagnostic()
+    {
+        var symbol = new IndexedSymbol(
+            0,
+            "00000000000000000000000000000301",
+            "OversizedEntry",
+            "class OversizedEntry<" + new string('T', 2000) + ">",
+            "class",
+            "csharp",
+            "src/" + new string('p', 2000) + ".cs",
+            1,
+            20,
+            null,
+            false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            token_budget: 300,
+            max_hops: 0,
+            entry_symbols: ["MissingEntry", "OversizedEntry"],
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal(
+            "context_budget_exhausted",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        JsonElement ignored = Assert.Single(
+            document.RootElement.GetProperty("anchor_diagnostics").EnumerateArray());
+        Assert.Equal("MissingEntry", ignored.GetProperty("value").GetString());
+        Assert.Equal("not_found", ignored.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Context_ZeroJsonBudgetReturnsCanonicalEmptyObject()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "OrderService",
+            token_budget: 0,
+            entry_symbols: ["OrderService"],
+            format: "json");
+
+        Assert.Equal("{}", output);
     }
 
     [Fact]
@@ -1517,13 +1696,78 @@ public sealed class ContextToolTests
                 UnavailableReason: null));
         var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
 
-        string output = tool.Context("durable persistence boundary", format: "json");
+        string output = tool.Context(
+            "durable persistence boundary",
+            max_hops: 0,
+            format: "json");
 
         using var document = JsonDocument.Parse(output);
         JsonElement first = document.RootElement.GetProperty("bundle")[0];
         Assert.Equal("OrderRepo", first.GetProperty("name").GetString());
         Assert.Equal("semantic_rank_1", first.GetProperty("reason").GetString());
         Assert.Equal(1, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Context_SemanticSeedsRespectTestPaths()
+    {
+        var symbol = new IndexedSymbol(
+            0,
+            "00000000000000000000000000000303",
+            "PathOnlyTest",
+            "class PathOnlyTest",
+            "class",
+            "csharp",
+            "tests/PathOnlyTest.cs",
+            1,
+            20,
+            null,
+            IsTest: false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(symbol.SymbolId, null, symbol.FilePath, 1, 0.91)],
+                UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
+
+        string output = tool.Context(
+            "durable persistence boundary",
+            exclude_tests: true,
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Empty(document.RootElement.GetProperty("bundle").EnumerateArray());
+    }
+
+    [Fact]
+    public void Context_SemanticSeedConsumptionHonorsRequestedBound()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        SemanticHit[] hits =
+        [
+            .. Enumerable.Range(1, 10)
+                .Select(rank => new SemanticHit(RepoId, null, "src/OrderRepo.cs", rank, 0.91)),
+            new SemanticHit(ServiceId, null, "src/OrderService.cs", 11, 0.90),
+        ];
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(hits, UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
+
+        string output = tool.Context(
+            "durable persistence boundary",
+            max_hops: 0,
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement bundle = document.RootElement.GetProperty("bundle");
+        Assert.Contains(bundle.EnumerateArray(), item => item.GetProperty("name").GetString() == "OrderRepo");
+        Assert.DoesNotContain(bundle.EnumerateArray(), item => item.GetProperty("name").GetString() == "OrderService");
     }
 
     [Fact]

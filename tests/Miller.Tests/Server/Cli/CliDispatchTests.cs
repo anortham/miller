@@ -2297,6 +2297,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Context_NoPivotsUsesOneTypedRecoveryChannel()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+
+        var (code, outText, errText) = Run(
+            ["context", "DefinitelyMissingPivot", "--json"],
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using var document = JsonDocument.Parse(outText);
+        Assert.False(document.RootElement.TryGetProperty("next_actions", out _));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("no_context_symbols", diagnostic.GetProperty("code").GetString());
+        Assert.NotEmpty(diagnostic.GetProperty("next_actions").EnumerateArray());
+    }
+
+    [Fact]
     public void Context_UsesSymbolProjectionAndSqliteGraphWithoutFullGraphLoad()
     {
         using var fx = JulieDbFixture.CreateForInspect();

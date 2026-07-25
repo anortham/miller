@@ -94,10 +94,17 @@ public sealed partial class ContextTool
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
+            if (token_budget <= 0)
+                return json ? "{}" : string.Empty;
+
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
+            int bundleTokenBudget = Math.Max(
+                0,
+                effectiveTokenBudget -
+                (compactBanner is null ? 0 : (int)TokenEstimator.Count(compactBanner + '\n')));
             int selectedCount;
             int candidatesExamined;
             string output;
@@ -114,7 +121,7 @@ public sealed partial class ContextTool
                         context.Index.Graph,
                         context.Resolver,
                         query,
-                        effectiveTokenBudget,
+                        bundleTokenBudget,
                         max_hops,
                         entry_symbols,
                         edited_files,
@@ -134,7 +141,7 @@ public sealed partial class ContextTool
                         context.Index.Graph,
                         context.Resolver,
                         query,
-                        effectiveTokenBudget,
+                        bundleTokenBudget,
                         max_hops,
                         entry_symbols,
                         edited_files,
@@ -165,14 +172,16 @@ public sealed partial class ContextTool
                     throw new ArgumentOutOfRangeException(nameof(reference_mode));
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
-            ToolDiagnostic? diagnostic = selectedCount == 0
-                ? ToolDiagnostic.ExpectedEmpty(
-                    "no_context_symbols",
-                    "No context symbols matched the supplied evidence.",
-                    [new ToolDiagnosticAction(
-                        $"search(query=\"{EscapeDiagnosticQuery(query)}\")",
-                        "find a concrete entry symbol")])
-                : null;
+            ToolDiagnostic? diagnostic = null;
+            if (selectedCount == 0)
+            {
+                diagnostic = EmptyDiagnostic(
+                    query,
+                    effectiveTokenBudget,
+                    candidatesExamined,
+                    entry_symbols,
+                    ToolOutputBudget.ContextMcpMaxTokens);
+            }
 
             if (telemetry is not null)
             {
@@ -219,6 +228,40 @@ public sealed partial class ContextTool
                 Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens),
                 json);
         }
+    }
+
+    internal static ToolDiagnostic EmptyDiagnostic(
+        string query,
+        int tokenBudget,
+        int candidatesExamined,
+        IReadOnlyList<string>? entrySymbols,
+        int maxTokenBudget)
+    {
+        string recoveryQuery = entrySymbols?
+            .FirstOrDefault(static entry => !string.IsNullOrWhiteSpace(entry)) ?? query;
+        if (candidatesExamined == 0)
+        {
+            return ToolDiagnostic.ExpectedEmpty(
+                "no_context_symbols",
+                "No context symbols matched the supplied evidence.",
+                [new ToolDiagnosticAction(
+                    $"search(query=\"{EscapeDiagnosticQuery(recoveryQuery)}\")",
+                    "find a concrete entry symbol")]);
+        }
+
+        long requestedNextBudget = Math.Max((long)tokenBudget + 256, (long)tokenBudget * 2);
+        int nextBudget = (int)Math.Min(maxTokenBudget, requestedNextBudget);
+        return ToolDiagnostic.ExpectedEmpty(
+            "context_budget_exhausted",
+            "Context candidates matched, but none fit token_budget.",
+            [
+                new ToolDiagnosticAction(
+                    $"context(query=\"{EscapeDiagnosticQuery(query)}\", token_budget={nextBudget})",
+                    "retry with more room"),
+                new ToolDiagnosticAction(
+                    $"search(query=\"{EscapeDiagnosticQuery(recoveryQuery)}\", mode=\"symbol\")",
+                    "narrow to one exact entry symbol"),
+            ]);
     }
 
     private const int SearchSeedLimit = 10;
@@ -300,12 +343,12 @@ public sealed partial class ContextTool
 
         var seeds = new List<ContextSemanticSeed>(result.Hits.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (SemanticHit hit in result.Hits)
+        foreach (SemanticHit hit in result.Hits.Take(SearchSeedLimit))
         {
             if (hit.SymbolId is not { } symbolId ||
                 !seen.Add(symbolId) ||
                 context.Index.FindBySymbolId(symbolId) is not { } symbol ||
-                excludeTests && symbol.IsTest)
+                excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)))
             {
                 continue;
             }
@@ -395,7 +438,7 @@ public sealed partial class ContextTool
         if (candidates.Count == 0)
         {
             selectedCount = 0;
-            return RenderNoPivots(query, anchorDiagnostics, tokenBudget, json);
+            return RenderNoPivots(anchorDiagnostics, tokenBudget, json);
         }
 
         var packCandidates = new List<PackCandidate<Candidate>>(candidates.Count);
@@ -500,7 +543,7 @@ public sealed partial class ContextTool
         if (candidates.Count == 0)
         {
             selectedCount = 0;
-            return RenderNoPivots(query, anchorDiagnostics, tokenBudget, json);
+            return RenderNoPivots(anchorDiagnostics, tokenBudget, json);
         }
 
         IReadOnlyList<ReferenceContextItem> items = BuildReferenceItems(
@@ -620,24 +663,33 @@ public sealed partial class ContextTool
             return string.Empty;
         if (TokenEstimator.Count(output) <= tokenBudget)
             return output;
-        return json && TokenEstimator.Count("{}") <= tokenBudget ? "{}" : string.Empty;
+        if (json)
+            return TokenEstimator.Count("{}") <= tokenBudget ? "{}" : string.Empty;
+
+        int lineEnd = output.LastIndexOf('\n');
+        while (lineEnd >= 0)
+        {
+            string prefix = output[..lineEnd];
+            if (TokenEstimator.Count(prefix) <= tokenBudget)
+                return prefix;
+            lineEnd = output.LastIndexOf('\n', lineEnd - 1);
+        }
+        return TokenEstimator.Count("…") <= tokenBudget ? "…" : string.Empty;
     }
 
     private static string RenderNoPivots(
-        string query,
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         int tokenBudget,
         bool json)
     {
-        string searchQuery = string.IsNullOrWhiteSpace(query) ? "<symbol or phrase>" : query;
-        string nextCall = $"search query=\"{EscapeCallString(searchQuery)}\" mode=auto";
         string output;
         if (!json)
         {
-            var builder = new StringBuilder("No pivots — nothing to anchor on.\n");
+            var builder = new StringBuilder("No pivots — nothing to anchor on.");
+            if (anchorDiagnostics.Count > 0)
+                builder.Append('\n');
             AppendAnchorDiagnosticsCompact(builder, anchorDiagnostics);
-            builder.Append("Next: ").Append(nextCall);
-            output = builder.ToString();
+            output = builder.ToString().TrimEnd('\n');
         }
         else
         {
@@ -655,13 +707,6 @@ public sealed partial class ContextTool
                 WriteDispositionJson(
                     writer,
                     new ContextEvidenceDisposition("insufficient", "no_pivot_resolved"));
-                writer.WritePropertyName("next_actions");
-                writer.WriteStartArray();
-                writer.WriteStartObject();
-                writer.WriteString("call", nextCall);
-                writer.WriteString("reason", "find a concrete pivot");
-                writer.WriteEndObject();
-                writer.WriteEndArray();
                 writer.WriteEndObject();
             }
             output = Encoding.UTF8.GetString(buffer.WrittenSpan);
@@ -793,7 +838,8 @@ public sealed partial class ContextTool
                 SearchToolMode.Symbol,
                 SearchSeedLimit,
                 excludeTests: null);
-            for (int rank = 0; rank < retrieved.Candidates.Count; rank++)
+            int retrievedCount = Math.Min(retrieved.Candidates.Count, SearchSeedLimit);
+            for (int rank = 0; rank < retrievedCount; rank++)
             {
                 SymbolCandidate candidate = retrieved.Candidates[rank];
                 if (index.FindBySymbolId(candidate.SymbolId) is { } symbol && IsQueryPivot(symbol))
@@ -816,7 +862,8 @@ public sealed partial class ContextTool
                     SearchToolMode.Symbol,
                     limit: 6,
                     excludeTests: null);
-                for (int rank = 0; rank < termCandidates.Candidates.Count; rank++)
+                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
+                for (int rank = 0; rank < termCandidateCount; rank++)
                 {
                     SymbolCandidate candidate = termCandidates.Candidates[rank];
                     if (index.FindBySymbolId(candidate.SymbolId) is { } symbol && IsQueryPivot(symbol))
@@ -1303,7 +1350,9 @@ public sealed partial class ContextTool
         var items = new List<ReferenceContextItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var usableCandidates = candidates
-            .Where(candidate => !excludeTests || !candidate.Symbol.IsTest)
+            .Where(candidate =>
+                !excludeTests ||
+                !(candidate.Symbol.IsTest || IsTestPath.Check(candidate.Symbol.FilePath)))
             .ToArray();
 
         foreach (Candidate candidate in usableCandidates)
@@ -1535,7 +1584,20 @@ public sealed partial class ContextTool
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics)
     {
         if (selected.Count == 0)
-            return "No evidence fit token_budget.";
+        {
+            var empty = new StringBuilder("No evidence fit token_budget.");
+            if (anchorDiagnostics.Count == 0)
+                return empty.ToString();
+            empty.Append('\n');
+            AppendAnchorDiagnosticsCompact(empty, anchorDiagnostics);
+            ContextEvidenceDisposition emptyDisposition = DispositionFor(selected);
+            empty.Append("## disposition\n")
+                .Append("evidence=")
+                .Append(emptyDisposition.Status)
+                .Append("  reason=")
+                .Append(emptyDisposition.Reason);
+            return empty.ToString();
+        }
 
         var pivots = new List<Candidate>();
         var neighbours = new List<Candidate>();
@@ -1623,8 +1685,11 @@ public sealed partial class ContextTool
     }
 
     private static string NextInspectLine(IndexedSymbol symbol) =>
-        "inspect(target=\"" + EscapeCallString(symbol.Name) +
-        "\", scope=\"" + EscapeCallString(symbol.FilePath) +
+        NextInspectLine(symbol.Name, symbol.FilePath);
+
+    private static string NextInspectLine(string name, string filePath) =>
+        "inspect(target=\"" + EscapeCallString(name) +
+        "\", scope=\"" + EscapeCallString(filePath) +
         "\", depth=\"overview\")";
 
     private static string EscapeCallString(string value) =>
@@ -1699,10 +1764,28 @@ public sealed partial class ContextTool
                 w.WriteEndObject();
             }
             w.WriteEndArray();
-            if (selected.Count > 0)
+            WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
+            ContextEvidenceDisposition disposition = DispositionFor(selected);
+            WriteDispositionJson(w, disposition);
+            if (disposition.Status != "sufficient")
             {
-                WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
-                WriteDispositionJson(w, DispositionFor(selected));
+                Candidate[] pivots = selected
+                    .Where(static candidate => candidate.IsPivot)
+                    .Take(NextInspectCount)
+                    .ToArray();
+                if (pivots.Length > 0)
+                {
+                    w.WritePropertyName("next_actions");
+                    w.WriteStartArray();
+                    foreach (Candidate pivot in pivots)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("call", NextInspectLine(pivot.Symbol));
+                        w.WriteString("reason", "inspect a pivot implementation");
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
             }
             w.WriteEndObject();
         }
@@ -1872,7 +1955,20 @@ public sealed partial class ContextTool
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics)
     {
         if (selected.Count == 0)
-            return "No evidence fit token_budget.";
+        {
+            var empty = new StringBuilder("No evidence fit token_budget.");
+            if (anchorDiagnostics.Count == 0)
+                return empty.ToString();
+            empty.Append('\n');
+            AppendAnchorDiagnosticsCompact(empty, anchorDiagnostics);
+            ContextEvidenceDisposition emptyDisposition = DispositionForReference(selected);
+            empty.Append("## disposition\n")
+                .Append("evidence=")
+                .Append(emptyDisposition.Status)
+                .Append("  reason=")
+                .Append(emptyDisposition.Reason);
+            return empty.ToString();
+        }
 
         var sb = new StringBuilder();
         sb.Append("# context bundle (").Append(selected.Count).Append(")\n");
@@ -1901,6 +1997,19 @@ public sealed partial class ContextTool
             .Append("  reason=")
             .Append(disposition.Reason)
             .Append('\n');
+        if (disposition.Status != "sufficient")
+        {
+            ReferenceContextItem[] pivots = selected
+                .Where(static item => item.ItemType == "symbol" && item.Role == "pivot")
+                .Take(NextInspectCount)
+                .ToArray();
+            if (pivots.Length > 0)
+            {
+                sb.Append("## next inspect\n");
+                foreach (ReferenceContextItem pivot in pivots)
+                    sb.Append(NextInspectLine(pivot.Name, pivot.File)).Append('\n');
+            }
+        }
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -1969,10 +2078,28 @@ public sealed partial class ContextTool
                 w.WriteEndObject();
             }
             w.WriteEndArray();
-            if (selected.Count > 0)
+            WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
+            ContextEvidenceDisposition disposition = DispositionForReference(selected);
+            WriteDispositionJson(w, disposition);
+            if (disposition.Status != "sufficient")
             {
-                WriteAnchorDiagnosticsJson(w, anchorDiagnostics);
-                WriteDispositionJson(w, DispositionForReference(selected));
+                ReferenceContextItem[] pivots = selected
+                    .Where(static item => item.ItemType == "symbol" && item.Role == "pivot")
+                    .Take(NextInspectCount)
+                    .ToArray();
+                if (pivots.Length > 0)
+                {
+                    w.WritePropertyName("next_actions");
+                    w.WriteStartArray();
+                    foreach (ReferenceContextItem pivot in pivots)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("call", NextInspectLine(pivot.Name, pivot.File));
+                        w.WriteString("reason", "inspect a pivot implementation");
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                }
             }
             w.WriteEndObject();
         }
@@ -2023,7 +2150,10 @@ public sealed partial class ContextTool
 
     private static ContextEvidenceDisposition DispositionFor(IReadOnlyList<Candidate> selected)
     {
-        if (selected.Any(static candidate => candidate.IsPivot && candidate.Body is not null))
+        if (selected.Any(static candidate =>
+                candidate.IsPivot &&
+                candidate.Body is not null &&
+                IsAuthoritativeImplementationReason(candidate.Reason)))
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
         if (selected.Any(static candidate => candidate.IsPivot))
             return new ContextEvidenceDisposition("partial", "pivot_signature_only");
@@ -2033,7 +2163,9 @@ public sealed partial class ContextTool
     private static ContextEvidenceDisposition DispositionForReference(
         IReadOnlyList<ReferenceContextItem> selected)
     {
-        if (selected.Any(static item => item.ItemType == "implementation"))
+        if (selected.Any(static item =>
+                item.ItemType == "implementation" &&
+                IsAuthoritativeImplementationReason(item.AnchorReason)))
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
         if (selected.Any(static item => item.ItemType == "content_chunk" && item.Confidence == "exact"))
             return new ContextEvidenceDisposition("sufficient", "exact_containing_content_present");
@@ -2041,6 +2173,15 @@ public sealed partial class ContextTool
             return new ContextEvidenceDisposition("partial", "symbol_and_relation_evidence_only");
         return new ContextEvidenceDisposition("insufficient", "no_pivot_rendered");
     }
+
+    private static bool IsAuthoritativeImplementationReason(string? reason) =>
+        reason is "entry_symbol" or
+            "entry_file" or
+            "edited_file" or
+            "failing_test" or
+            "stack_frame" or
+            "stack_symbol" ||
+        reason?.StartsWith("query_rank_", StringComparison.Ordinal) == true;
 
     private static void WriteDispositionJson(
         Utf8JsonWriter writer,

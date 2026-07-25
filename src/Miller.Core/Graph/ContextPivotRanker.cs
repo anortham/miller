@@ -67,6 +67,7 @@ public static class ContextPivotRanker
         var selectedIds = new HashSet<string>(StringComparer.Ordinal);
         var diversityKeys = new HashSet<string>(StringComparer.Ordinal);
         var files = new HashSet<string>(StringComparer.Ordinal);
+        var diversityKeyFiles = new HashSet<(string DiversityKey, string FilePath)>();
         var fileCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         int diverseFileTarget = Math.Max(1, (limit + 1) / 2);
         AddWhere(static (pivot, _) => pivot.IsPinned, limit);
@@ -82,6 +83,8 @@ public static class ContextPivotRanker
             limit);
         AddWhere(static (pivot, state) =>
             (!pivot.IsTest || !state.HasTest) &&
+            (pivot.FilePath is null ||
+             !state.KeyFiles.Contains((pivot.DiversityKey, pivot.FilePath))) &&
             (pivot.FilePath is null || state.FileCounts.GetValueOrDefault(pivot.FilePath) < 2),
             limit);
         AddWhere(static (_, _) => true, limit);
@@ -91,6 +94,7 @@ public static class ContextPivotRanker
             Func<ContextPivot, (
                 HashSet<string> Keys,
                 HashSet<string> Files,
+                HashSet<(string DiversityKey, string FilePath)> KeyFiles,
                 Dictionary<string, int> FileCounts,
                 bool HasTest), bool> predicate,
             int phaseLimit)
@@ -102,7 +106,11 @@ public static class ContextPivotRanker
                 if (selectedIds.Contains(pivot.SymbolId) ||
                     !predicate(
                         pivot,
-                        (diversityKeys, files, fileCounts, selected.Any(static item => item.IsTest))))
+                        (diversityKeys,
+                            files,
+                            diversityKeyFiles,
+                            fileCounts,
+                            selected.Any(static item => item.IsTest))))
                 {
                     continue;
                 }
@@ -112,6 +120,7 @@ public static class ContextPivotRanker
                 if (pivot.FilePath is not null)
                 {
                     files.Add(pivot.FilePath);
+                    diversityKeyFiles.Add((pivot.DiversityKey, pivot.FilePath));
                     fileCounts[pivot.FilePath] = fileCounts.GetValueOrDefault(pivot.FilePath) + 1;
                 }
             }

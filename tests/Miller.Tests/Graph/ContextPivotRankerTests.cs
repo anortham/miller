@@ -108,4 +108,20 @@ public sealed class ContextPivotRankerTests
             ["rust-test", "python-binding", "rust-language", "node-binding"],
             ranked.Select(static pivot => pivot.SymbolId));
     }
+
+    [Fact]
+    public void Rank_DefersDuplicateNameAndFileUntilFinalFallback()
+    {
+        ContextPivot[] ranked = [.. ContextPivotRanker.Rank(
+            [
+                new ContextPivotSignal("first", 1, 10, 20, 1, DiversityKey: "load", FilePath: "shared.cs"),
+                new ContextPivotSignal("duplicate", 2, 9, 20, 2, DiversityKey: "load", FilePath: "shared.cs"),
+                new ContextPivotSignal("other-file", 3, 8, 20, 3, DiversityKey: "load", FilePath: "other.cs"),
+            ],
+            3)];
+
+        Assert.Equal(
+            ["first", "other-file", "duplicate"],
+            ranked.Select(static pivot => pivot.SymbolId));
+    }
 }
