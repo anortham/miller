@@ -302,13 +302,19 @@ internal static class DashboardEndpoints
             try
             {
                 using WorkspaceRegistry registry = WorkspaceRegistry.Open(registryDbPath);
-                WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(registry, workspaceId, liveRoot: null);
+                WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+                    registry,
+                    workspaceId,
+                    liveRoot: null,
+                    protectedMillerDir: Path.GetDirectoryName(registryDbPath));
                 code = result.Result switch
                 {
                     WorkspaceRemoveResult.Outcome.Removed when result.IndexDirDeleted => "removed",
                     WorkspaceRemoveResult.Outcome.Removed => "removed-registration",
                     WorkspaceRemoveResult.Outcome.RefusedLive => "remove-refused-live",
                     WorkspaceRemoveResult.Outcome.RefusedInUse => "remove-refused-in-use",
+                    WorkspaceRemoveResult.Outcome.RefusedSensitive => "remove-refused-sensitive",
+                    WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => "remove-refused-invalid-registration",
                     _ => "remove-not-found",
                 };
                 detail = result.Root ?? workspaceId;

@@ -19,6 +19,8 @@ public sealed record ToolOutputPage(
     bool Truncated,
     string? Continuation);
 
+public readonly record struct BoundedPrefixRender(string Output, int RetainedCount);
+
 public sealed record ToolReferenceContinuationIdentity(
     string WorkspaceId,
     string SymbolId,
@@ -39,7 +41,8 @@ public static partial class ToolOutputBudget
     public const int ContentMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
-    public const int WorkspaceHealthMcpMaxBytes = 12 * 1024;
+    public const int WorkspaceMcpMaxBytes = 12 * 1024;
+    public const int WorkspaceHealthMcpMaxBytes = WorkspaceMcpMaxBytes;
 
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
@@ -90,6 +93,13 @@ public static partial class ToolOutputBudget
         IReadOnlyList<T> items,
         int maxBytes,
         Func<IReadOnlyList<T>, int, string> renderer,
+        int maxCandidateItems = int.MaxValue) =>
+        RenderPrefixWithinByteBudgetWithCount(items, maxBytes, renderer, maxCandidateItems).Output;
+
+    public static BoundedPrefixRender RenderPrefixWithinByteBudgetWithCount<T>(
+        IReadOnlyList<T> items,
+        int maxBytes,
+        Func<IReadOnlyList<T>, int, string> renderer,
         int maxCandidateItems = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(items);
@@ -110,12 +120,13 @@ public static partial class ToolOutputBudget
             : items.Take(candidateCount).ToArray();
         string full = renderer(candidates, items.Count - candidateCount);
         if (Encoding.UTF8.GetByteCount(full) <= maxBytes)
-            return full;
+            return new BoundedPrefixRender(full, candidateCount);
 
         T[] retained = candidates.ToArray();
         int low = 0;
         int high = retained.Length;
         string best = renderer(Array.Empty<T>(), items.Count);
+        int bestCount = 0;
         RequireWithinByteBudget(best, maxBytes);
 
         while (low <= high)
@@ -126,6 +137,7 @@ public static partial class ToolOutputBudget
             if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
             {
                 best = output;
+                bestCount = count;
                 low = count + 1;
             }
             else
@@ -134,7 +146,7 @@ public static partial class ToolOutputBudget
             }
         }
 
-        return best;
+        return new BoundedPrefixRender(best, bestCount);
     }
 
     public static string RequireWithinByteBudget(string output, int maxBytes)

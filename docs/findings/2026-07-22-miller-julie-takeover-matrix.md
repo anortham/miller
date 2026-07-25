@@ -581,6 +581,29 @@ Keep fixed process binding and one `workspace` tool. Add aggregate totals to `li
 
 Accepted Miller's lifecycle advantage and Julie's aggregate/session-switch differences. Corrected the missing session switch from a defect to an unproven tradeoff because silent rebinding conflicts with Miller's process model. Added locally observed sidecar-failure coupling that Claude flagged only as an uncertainty.
 
+### 2026-07-25 Remediation Re-audit
+
+The initial Phase 7 implementation bounded compact health and separated symbol reads from the search sidecar, but
+the fresh Workspace pass found nine remaining correctness, safety, and truthfulness defects. The corrected
+implementation now:
+
+- resolves all removal through one registered-target safety core and validates the derived index directory;
+- refuses live, sensitive, machine-global, corrupt-path, unregistered, and write-locked deletion targets;
+- exposes only bounded compact and summary JSON health through MCP, with exhaustive JSON/markdown CLI-only;
+- aggregates onboarding in SQLite under one transaction and reports exact totals/omissions;
+- reads the registry once for list, reports exact missing-root totals, and returns typed empty outcomes;
+- emits actionable typed diagnostics for missing roots and invalid operation-specific parameters;
+- includes leader and extractor/artifact version facts in selected-workspace status;
+- labels unavailable compact health sections instead of presenting healthy-looking zeroes;
+- applies one 12 KiB ceiling across every MCP workspace operation.
+
+Julie behavior worth porting was limited to root-existence inventory, registered-only removal, and typed blocked
+state. Mutable session switching, list-time cleanup, unbounded list output, and broad destructive hints remain
+intentionally rejected. Detailed evidence and Claude dispositions are recorded in
+[`2026-07-25-workspace-correctness-safety-and-bounds.md`](2026-07-25-workspace-correctness-safety-and-bounds.md).
+The implementation review loop closed with `verdict=clean` after 537 focused
+Workspace, CLI, renderer, telemetry, removal, continuation, and dashboard tests passed.
+
 ## Cross-Cutting Findings
 
 ### P1-BUDGET-001: Row Limits Are Not Output Budgets

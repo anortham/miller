@@ -60,7 +60,8 @@ retained as deprecated aliases; agents discover only the current Miller surface.
 2. Run `workspace status`, then `workspace refresh`.
 3. Run `workspace health` and resolve any not-ready, stale, corrupt, or extractor-version diagnostic.
 4. Use `workspace list` to confirm registered roots. Cross-workspace reads stay in the current session and pass
-   the other workspace's selector through `workspace_id`.
+   the other workspace's selector through `workspace_id`. Missing roots are labeled directly; preview their
+   registry cleanup with `workspace prune --dry-run`.
 
 Miller writes `.miller/symbols.db`, `search.db`, `content.db`, optional `vectors.db`, and related local sidecars.
 It does not reuse `.julie/`, and it does not delete that directory. A full rebuild extracts into a separate
@@ -92,6 +93,10 @@ and is not a production surface or default.
 ## Deliberate Differences
 
 - Miller does not provide a mutable session-wide workspace switch. Use explicit `workspace_id` selectors.
+- MCP workspace health is a bounded compact or summary-JSON report. Use `miller workspace health --json` or
+  `--markdown` when exhaustive extraction rows are required.
+- Workspace removal accepts only registered targets and refuses live, sensitive, machine-global, corrupt-path,
+  or write-locked directories.
 - Miller does not expose content export through MCP. Use the CLI/JSONL contract so an agent call cannot flood its
   context.
 - Miller does not preserve `trace auto`; bounded callers/callees live in `inspect`, while refs, paths, and

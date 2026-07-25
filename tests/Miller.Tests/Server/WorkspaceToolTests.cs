@@ -50,6 +50,7 @@ public sealed class WorkspaceToolTests : IDisposable
     {
         string dir = Path.Combine(Path.GetTempPath(), $"miller-wstool-{label}-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
+        dir = PathCanonicalizer.CanonicalizeRoot(dir);
         _tempDirs.Add(dir);
         return dir;
     }
@@ -438,16 +439,15 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Health_Markdown_KeepsTheCompleteMachineReadableDetail()
+    public void Health_Markdown_RefusesAndPointsToTheExhaustiveCli()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
 
-        string markdown = tool.Workspace(operation: "health", format: "markdown");
+        string output = tool.Workspace(operation: "health", format: "markdown");
 
-        Assert.Contains("```json", markdown);
-        Assert.Contains("\"extraction_quality\"", markdown);
-        Assert.Contains("\"recommended_actions\"", markdown);
+        Assert.Contains("diagnostic_code=invalid_format", output, StringComparison.Ordinal);
+        Assert.Contains("CLI-only", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -519,7 +519,28 @@ public sealed class WorkspaceToolTests : IDisposable
             row.GetProperty("workspace_id").GetString() == OtherWs
             && !row.GetProperty("current").GetBoolean()
             && row.GetProperty("state").GetString() == "ready"
-            && row.GetProperty("last_revision").GetInt64() == 9);
+            && row.GetProperty("last_revision").GetInt64() == 9
+            && !row.GetProperty("root_missing").GetBoolean());
+    }
+
+    [Fact]
+    public void List_Json_ReportsMissingRootsWithoutOpeningTheirIndexes()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SeedOtherWorkspaces(harness, count: 2, baseSeenAt: DateTimeOffset.UtcNow.AddDays(-1));
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "list", format: "json"));
+        JsonElement root = doc.RootElement;
+        JsonElement[] missing = root.GetProperty("workspaces")
+            .EnumerateArray()
+            .Where(static row => row.GetProperty("root_missing").GetBoolean())
+            .ToArray();
+
+        Assert.Equal(2, root.GetProperty("registered_missing").GetInt32());
+        Assert.Equal(2, root.GetProperty("matched_missing").GetInt32());
+        Assert.Equal(2, root.GetProperty("returned_missing").GetInt32());
+        Assert.Equal(2, missing.Length);
     }
 
     // Seed N registered non-current rows with ascending last-seen stamps (i=1 oldest .. i=N newest) so the
@@ -591,6 +612,22 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void List_EmptyRegistrySuggestsOpeningAWorkspace()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: null);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: null);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "list", format: "json"));
+
+        JsonElement diagnostic = doc.RootElement.GetProperty("diagnostic");
+        Assert.Equal("workspace_list_empty", diagnostic.GetProperty("code").GetString());
+        Assert.Contains(
+            "workspace(operation=\"open\"",
+            diagnostic.GetProperty("next_actions")[0].GetProperty("call").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void List_Compact_OmittedErrorStateProducesErrorSummary()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
@@ -607,7 +644,7 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void List_Json_UnlimitedByDefaultAndAddsLastSeenAt()
+    public void List_Json_UsesTheAgentDefaultLimitAndAddsLastSeenAt()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
@@ -616,13 +653,54 @@ public sealed class WorkspaceToolTests : IDisposable
         using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "list", format: "json"));
         var rows = doc.RootElement.GetProperty("workspaces").EnumerateArray().ToArray();
 
-        Assert.Equal(26, rows.Length); // JSON is unlimited without an explicit limit
+        Assert.Equal(20, rows.Length);
+        Assert.Equal(26, doc.RootElement.GetProperty("registered").GetInt32());
+        Assert.Equal(6, doc.RootElement.GetProperty("omitted").GetInt32());
         // Additive last_seen_at present and ISO-8601 parseable on every row.
         foreach (JsonElement row in rows)
             Assert.True(DateTimeOffset.TryParse(
                 row.GetProperty("last_seen_at").GetString(), out _));
         // Current workspace is ordered first.
         Assert.True(rows[0].GetProperty("current").GetBoolean());
+    }
+
+    [Fact]
+    public void List_Json_LongRowsStayWithinTheWorkspaceBudgetAndReportExactOmissions()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        for (int i = 0; i < 100; i++)
+        {
+            string root = "/seed/" + new string('x', 700) + i.ToString("D3");
+            string workspaceId = $"ws-long-{i:D3}";
+            harness.Registry.UpsertSeen(
+                workspaceId,
+                $"long-{i:D3}",
+                root,
+                root + "/.miller/symbols.db",
+                WorkspaceRegistryState.Ready);
+            harness.Registry.MarkError(workspaceId, new string('e', 700));
+        }
+
+        string output;
+        using (TelemetryScope scope = harness.Ledger.Measure("workspace", op: null))
+        {
+            output = harness.Tool.Workspace(operation: "list", format: "json", limit: 100);
+            using var measured = JsonDocument.Parse(output);
+            Assert.Equal(
+                measured.RootElement.GetProperty("returned").GetInt32(),
+                scope.ResultCount);
+        }
+
+        Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.WorkspaceMcpMaxBytes);
+        using var doc = JsonDocument.Parse(output);
+        JsonElement rootElement = doc.RootElement;
+        int returned = rootElement.GetProperty("returned").GetInt32();
+        Assert.InRange(returned, 1, 99);
+        Assert.Equal(101, rootElement.GetProperty("registered").GetInt32());
+        Assert.Equal(101 - returned, rootElement.GetProperty("omitted").GetInt32());
+        Assert.Equal(returned, rootElement.GetProperty("workspaces").GetArrayLength());
+        Assert.False(rootElement.TryGetProperty("diagnostic", out _));
     }
 
     [Fact]
@@ -696,6 +774,10 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("index").GetProperty("document_count").GetInt64() > 0);
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
         Assert.Equal("ready", doc.RootElement.GetProperty("index").GetProperty("freshness_status").GetString());
+        JsonElement leader = doc.RootElement.GetProperty("indexer_leader");
+        Assert.Equal(JsonValueKind.Object, leader.ValueKind);
+        Assert.True(leader.TryGetProperty("own_extractor_version", out _));
+        Assert.True(leader.TryGetProperty("artifact_extractor_version", out _));
     }
 
     [Fact]
@@ -797,6 +879,58 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Status_ByWorkspaceId_MissingIndexDbReturnsUnavailableDiagnostic()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("status-missing-diagnostic");
+        string missingDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, missingDb, WorkspaceRegistryState.Ready);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "status",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal(
+            "workspace_index_unavailable",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Status_CurrentWorkspaceMissingIndexReturnsUnavailableDiagnostic()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        File.Delete(fx.DbPath);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "status", format: "json"));
+
+        Assert.Equal(
+            "workspace_index_unavailable",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Status_CurrentWorkspaceUnreadableIndexReturnsUnavailableDiagnostic()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        SqliteConnection.ClearAllPools();
+        File.WriteAllText(fx.DbPath, "not a sqlite database");
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(operation: "status", format: "json"));
+
+        Assert.Equal("unreadable_index", doc.RootElement
+            .GetProperty("index")
+            .GetProperty("freshness_status")
+            .GetString());
+        Assert.Equal(
+            "workspace_index_unavailable",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Status_ByPath_ResolvesRegisteredWorkspaceByCanonicalRoot()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
@@ -857,15 +991,14 @@ public sealed class WorkspaceToolTests : IDisposable
 
         using var doc = JsonDocument.Parse(harness.Tool.Workspace(
             operation: "health",
-            format: "json",
-            detail: "full"));
+            format: "json"));
         JsonElement root = doc.RootElement;
 
         Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
         Assert.Equal(Ws, root.GetProperty("workspace").GetProperty("workspace_id").GetString());
-        Assert.Equal(1, root.GetProperty("telemetry").GetProperty("outcomes").GetProperty("error_count").GetInt64());
+        Assert.Equal(1, root.GetProperty("telemetry").GetProperty("error_count").GetInt64());
         Assert.Equal(2, root.GetProperty("extraction_quality")
-            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
+            .GetProperty("parse_diagnostic_count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
     }
 
@@ -911,6 +1044,25 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Leader_MissingSelectedIndexReturnsUnavailableDiagnostic()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
+        string otherRoot = NewTempDir("leader-missing-index");
+        string missingDb = Path.Combine(otherRoot, ".miller", "symbols.db");
+        harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, missingDb, WorkspaceRegistryState.Ready);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "leader",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal(
+            "workspace_index_unavailable",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Onboarding_CurrentWorkspace_RendersTelemetryGuidanceAndRecoveredTargets()
     {
         using var fx = JulieDbFixture.CreateForInspect();
@@ -934,6 +1086,37 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Onboarding_WithoutTelemetryRemainsASuccessfulColdStartReport()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 1, workspaceId: Ws);
+
+        using var doc = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "onboarding", format: "json"));
+
+        Assert.Equal(0, doc.RootElement.GetProperty("telemetry").GetProperty("total_calls").GetInt64());
+        Assert.False(doc.RootElement.TryGetProperty("diagnostic", out _));
+    }
+
+    [Fact]
+    public void Onboarding_MissingTelemetryDatabaseReturnsUnavailableDiagnostic()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 1, workspaceId: Ws);
+        string telemetryDb = harness.Ledger.DbPath;
+        harness.Ledger.Dispose();
+        SqliteConnection.ClearAllPools();
+        File.Delete(telemetryDb);
+
+        using var doc = JsonDocument.Parse(
+            harness.Tool.Workspace(operation: "onboarding", format: "json"));
+
+        Assert.Equal(
+            "workspace_onboarding_telemetry_unavailable",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Health_ByWorkspaceId_ReadsRegisteredFactsWithoutHydratingFullIndex()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
@@ -948,13 +1131,12 @@ public sealed class WorkspaceToolTests : IDisposable
         using var doc = JsonDocument.Parse(harness.Tool.Workspace(
             operation: "health",
             workspace_id: OtherWs,
-            format: "json",
-            detail: "full"));
+            format: "json"));
 
         Assert.Equal(OtherWs, doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
         Assert.Equal(9, doc.RootElement.GetProperty("index").GetProperty("built_revision").GetInt64());
         Assert.Equal(2, doc.RootElement.GetProperty("extraction_quality")
-            .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
+            .GetProperty("parse_diagnostic_count").GetInt64());
     }
 
     [Fact]
@@ -1222,6 +1404,18 @@ public sealed class WorkspaceToolTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Workspace_DoesNotPersistAnUnvalidatedOperation()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, ledger, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var scope = ledger.Measure("workspace", op: null);
+        tool.Workspace(operation: new string('x', 33));
+
+        Assert.Null(scope.Op);
+    }
+
     // ---- dashboard ----
 
     [Fact]
@@ -1304,7 +1498,7 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Remove_NonLiveWorkspaceWithMillerDir_DeletesIt()
+    public void Remove_UnregisteredPathWithMillerDirRefusesImplicitDeletion()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
         WorkspaceToolHarness harness = BuildHarness(
@@ -1319,8 +1513,8 @@ public sealed class WorkspaceToolTests : IDisposable
 
         string output = harness.Tool.Workspace(operation: "remove", path: other);
 
-        Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
-        Assert.False(Directory.Exists(otherMiller)); // actually deleted
+        Assert.Contains("not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(otherMiller));
     }
 
     [Fact]
@@ -1345,6 +1539,43 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("removed", output, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(otherMiller));
         Assert.Null(harness.Registry.Get(OtherWs));
+    }
+
+    [Fact]
+    public void Remove_RegisteredWorkspaceWithMismatchedIndexPathRefusesWithoutDeleting()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            acquireLock: _ => new NoopLease());
+        string registeredRoot = NewTempDir("remove-corrupt-registry-root");
+        string victimRoot = NewTempDir("remove-corrupt-registry-victim");
+        string victimMiller = Path.Combine(victimRoot, ".miller");
+        string victimDb = Path.Combine(victimMiller, "symbols.db");
+        Directory.CreateDirectory(victimMiller);
+        File.WriteAllText(victimDb, "do not delete");
+        harness.Registry.UpsertSeen(
+            OtherWs,
+            "other-111111111111",
+            registeredRoot,
+            victimDb,
+            WorkspaceRegistryState.Ready);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "remove",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal(
+            "workspace_remove_invalid_registration",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Equal(
+            "refused_invalid_registration",
+            doc.RootElement.GetProperty("result").GetString());
+        Assert.True(File.Exists(victimDb));
+        Assert.NotNull(harness.Registry.Get(OtherWs));
     }
 
     [Fact]
@@ -1598,6 +1829,37 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_RegisteredWorkspaceFailureKeepsActionFactsAndAttachesTypedFailure()
+    {
+        using var current = CreateSynth(revision: 4, workspaceId: Ws);
+        using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
+        WorkspaceToolHarness harness = BuildHarness(
+            current,
+            builtRevision: 4,
+            workspaceId: Ws,
+            crossWorkspaceScan: (_, _, _) => throw new IOException("extract unavailable"));
+        string otherRoot = Path.GetDirectoryName(other.DbPath)!;
+        harness.Registry.UpsertSeen(
+            OtherWs,
+            "other-111111111111",
+            otherRoot,
+            other.DbPath,
+            WorkspaceRegistryState.Ready);
+        harness.Registry.MarkScanned(OtherWs, revision: 9);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "refresh",
+            workspace_id: OtherWs,
+            format: "json"));
+
+        Assert.Equal("failed", doc.RootElement.GetProperty("status").GetString());
+        JsonElement diagnostic = doc.RootElement.GetProperty("diagnostic");
+        Assert.Equal("workspace_refresh_failed", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("unavailable", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("error", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
     public void Full_RegisteredWorkspacePath_UsesForceScanThroughCrossWorkspaceRefreshService()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
@@ -1713,6 +1975,95 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Equal("unsupported_operation", diagnostic.GetProperty("code").GetString());
         Assert.Equal("unsupported", diagnostic.GetProperty("class").GetString());
         Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public void UnknownOperation_WithPathStillReturnsUnsupportedOperation()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var doc = JsonDocument.Parse(tool.Workspace(
+            operation: "delete",
+            path: root,
+            format: "json"));
+
+        Assert.Equal(
+            "unsupported_operation",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void InvalidFormat_ReturnsTypedRefusalInsteadOfSilentlyUsingCompact()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        string output = tool.Workspace(format: "yaml");
+
+        Assert.Contains("diagnostic_code=invalid_format", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("# workspace status", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConflictingWorkspaceSelectors_ReturnTypedJsonRefusal()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var doc = JsonDocument.Parse(tool.Workspace(
+            operation: "status",
+            workspace_id: Ws,
+            path: root,
+            format: "json"));
+
+        Assert.Equal(
+            "conflicting_workspace_selectors",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(101)]
+    public void List_InvalidAgentLimit_ReturnsTypedJsonRefusal(int limit)
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+
+        using var doc = JsonDocument.Parse(tool.Workspace(
+            operation: "list",
+            format: "json",
+            limit: limit));
+
+        Assert.Equal(
+            "invalid_list_limit",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Dashboard_InvalidPortRefusesBeforeLaunching()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var launcher = new RecordingDashboardLauncher(new DashboardLaunchResult(
+            DashboardLaunchOutcome.Started,
+            new Uri("http://127.0.0.1:4977/"),
+            ProcessId: 42,
+            Message: "started"));
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            dashboardLauncher: launcher);
+
+        using var doc = JsonDocument.Parse(harness.Tool.Workspace(
+            operation: "dashboard",
+            format: "json",
+            port: 70000));
+
+        Assert.Equal(
+            "invalid_dashboard_port",
+            doc.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Empty(launcher.Requests);
     }
 
     [Fact]

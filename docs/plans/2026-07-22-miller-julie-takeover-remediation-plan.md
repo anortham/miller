@@ -320,9 +320,12 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 **Files:** `WorkspaceTool.cs`, `WorkspaceRender.cs`, `WorkspaceFactsAssembler.cs`, workspace contract/tests.
 
 1. Add registry totals to list without hydrating full indexes.
-2. Bound compact health; retain complete JSON/markdown.
+2. Bound all MCP workspace output; keep compact and summary JSON in MCP, with exhaustive JSON/markdown CLI-only.
 3. Allow non-search reads to serve a fresh `symbols.db` while reporting unrelated sidecar convergence failures as typed warnings.
 4. Preserve fixed binding and version-aware leadership.
+5. Report missing roots directly in list, validate every operation parameter, and route all removals through one
+   registered-target safety core.
+6. Aggregate onboarding telemetry in SQLite and report exact totals/omissions for every bounded section.
 
 ### Gate
 

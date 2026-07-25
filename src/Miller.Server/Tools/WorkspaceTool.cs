@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
@@ -12,22 +13,8 @@ using ModelContextProtocol.Server;
 namespace Miller.Server.Tools;
 
 /// <summary>
-/// The <c>workspace</c> tool (miller-toolbox.md §7, M7 decision-1): admin / index lifecycle. It defaults to
-/// <c>status</c> (the 80% call — workspace identity + index facts + the telemetry tool-breakdown), and exposes
-/// <c>refresh</c>/<c>full</c> (reconcile / from-scratch rebuild, routed through the single-writer leader so two
-/// Miller instances never both <c>extract scan</c>), <c>list</c> (the current workspace — Miller serves ONE per
-/// process; a multi-workspace registry is eros/commercial-tier, decision-1), <c>open(path)</c> (PRIME a path's
-/// index via an extract scan so a future Miller there is warm — NOT a live switch), <c>remove(path)</c>
-/// (delete a workspace's <c>.miller</c> index dir, REFUSING the live one), and <c>dashboard</c> (start/reuse the
-/// local loopback transparency dashboard from an MCP session).
-///
-/// <para>The pure renderers (<see cref="WorkspaceRender"/>) and the remove-safety predicate
-/// (<see cref="WorkspaceSafety"/>) carry the formatting + safety logic and are unit-tested; this class
-/// orchestrates the live singletons (the holder, the indexer leader, the freshness poller, the extract runner)
-/// and the telemetry shell. Every operation reports HONESTLY what happened — a non-leader that cannot force a
-/// scan, a scan failure, a refused remove — never a faked success. Mirrors the other tools' shape:
-/// ctor-injected singletons, a thin <see cref="Workspace"/> dispatch with typed diagnostics, and telemetry via
-/// <see cref="TelemetryContext.Current"/>.</para>
+/// Provides bounded workspace status, lifecycle, registry, health, onboarding, leadership, and dashboard
+/// operations while keeping the serving process bound to one workspace.
 /// </summary>
 [McpServerToolType]
 public sealed class WorkspaceTool
@@ -151,7 +138,8 @@ public sealed class WorkspaceTool
         string? workspace_id = null,
         [Description("A workspace root path. Required for open; optional for status/health/onboarding/refresh/full/remove.")]
         string? path = null,
-        [Description("Output format: compact|json|markdown. Default compact.")] string format = "compact",
+        [Description("Output format: compact|json. Exhaustive health JSON/markdown stays CLI-only. Default compact.")]
+        string format = "compact",
         [Description("Dashboard launch port. Used only with operation=dashboard when no dashboard is already running.")]
         int? port = null,
         [Description("For operation=leader, queue an explicit graceful leadership handoff request.")]
@@ -160,115 +148,274 @@ public sealed class WorkspaceTool
         bool wait = false,
         [Description("operation=list only: case-insensitive substring filter on display id or root, applied before the cap. Default null (no filter).")]
         string? filter = null,
-        [Description("operation=list only: max compact entries before the omitted-count tail. Default 20; <=0 unlimited. JSON is unlimited unless set to a positive value.")]
+        [Description("operation=list only: max entries before the exact omitted-count tail. Range 1-100; default 20.")]
         int? limit = null,
         [Description("operation=prune only: list candidates without removing registry rows. Default false.")]
-        bool dry_run = false,
-        [Description("operation=health with format=json only: summary|full. Default summary; full includes every extraction-quality row.")]
-        string detail = "summary")
+        bool dry_run = false)
     {
         var telemetry = TelemetryContext.Current;
-        // D7: stamp the operation sub-axis onto the ambient scope so the central filter's row records
-        // op=<operation> (status/refresh/full/list/open/remove) instead of NULL — workspace is in the
-        // tool-breakdown WITH its per-operation axis. Normalised to lowercase to match the dispatch keys.
-        if (telemetry is not null)
-            telemetry.Op = (operation ?? "status").ToLowerInvariant();
-        bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
-        WorkspaceHealthFormat healthFormat = json
-            ? string.Equals(detail, "full", StringComparison.OrdinalIgnoreCase)
-                ? WorkspaceHealthFormat.Json
-                : WorkspaceHealthFormat.JsonSummary
-            : string.Equals(format, "markdown", StringComparison.OrdinalIgnoreCase)
-                ? WorkspaceHealthFormat.Markdown
-                : WorkspaceHealthFormat.Compact;
+        string normalizedOperation = NormalizeOperation(operation);
+        bool json = string.Equals(format?.Trim(), "json", StringComparison.OrdinalIgnoreCase);
         try
         {
-            (string output, int resultCount, TelemetryOutcome outcome) = Dispatch(
-                operation, workspace_id, path, port, json, healthFormat, handoff, wait, filter, limit, dry_run);
+            ValidateRequest(
+                normalizedOperation,
+                workspace_id,
+                path,
+                format,
+                port,
+                handoff,
+                wait,
+                filter,
+                limit,
+                dry_run);
+            if (telemetry is not null)
+                telemetry.Op = normalizedOperation;
+            WorkspaceOperationResult result = Dispatch(
+                normalizedOperation,
+                workspace_id,
+                path,
+                port,
+                json,
+                handoff,
+                wait,
+                filter,
+                limit,
+                dry_run);
 
             if (telemetry is not null)
             {
-                telemetry.ResultCount = resultCount;
-                telemetry.Outcome = outcome;
+                telemetry.ResultCount = result.ResultCount;
+                telemetry.Outcome = result.Outcome;
             }
-            if (outcome is TelemetryOutcome.Empty or TelemetryOutcome.Error)
+            string output = result.Output;
+            ToolDiagnostic? diagnostic = result.Diagnostic;
+            if (diagnostic is null && result.Outcome is TelemetryOutcome.Empty or TelemetryOutcome.Error)
             {
-                output = ToolDiagnosticRenderer.Attach(
-                    "workspace",
-                    output,
-                    WorkspaceDiagnostic(operation, outcome, output),
-                    json,
-                    telemetry);
+                diagnostic = WorkspaceDiagnostic(normalizedOperation, result.Outcome);
             }
-            return output;
+            if (diagnostic is not null)
+                output = ToolDiagnosticRenderer.Attach("workspace", output, diagnostic, json, telemetry);
+            return EnforceMcpBudget(output, normalizedOperation, json, telemetry);
         }
         catch (Exception ex)
         {
             ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+            {
                 telemetry?.SetError(ex);
-            _logger.LogError(ex, "workspace {Operation} failed.", operation);
-            return ToolDiagnosticRenderer.Render(
+                _logger.LogError(ex, "workspace {Operation} failed.", operation);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "workspace {Operation} was not executed: {Message}",
+                    operation,
+                    diagnostic.Message);
+            }
+            string output = ToolDiagnosticRenderer.Render(
                 "workspace",
                 diagnostic,
                 json,
                 telemetry);
+            return EnforceMcpBudget(output, normalizedOperation, json, telemetry);
         }
     }
 
     private static ToolDiagnostic WorkspaceDiagnostic(
-        string? operation,
-        TelemetryOutcome outcome,
-        string output)
+        string operation,
+        TelemetryOutcome outcome)
     {
-        string op = string.IsNullOrWhiteSpace(operation) ? "status" : operation.Trim().ToLowerInvariant();
         if (outcome == TelemetryOutcome.Error)
             return ToolDiagnostic.Unavailable(
-                $"workspace_{op}_failed",
-                $"Workspace operation '{op}' could not complete.");
+                $"workspace_{operation}_failed",
+                $"Workspace operation '{operation}' could not complete.");
 
-        bool supported = op is "status" or "health" or "onboarding" or "leader" or "list" or
-            "refresh" or "full" or "open" or "remove" or "prune" or "dashboard";
-        bool refused = output.Contains("refus", StringComparison.OrdinalIgnoreCase) ||
-            output.Contains(" requires ", StringComparison.OrdinalIgnoreCase) ||
-            (op == "open" &&
-             (output.Contains("does not prime", StringComparison.OrdinalIgnoreCase) ||
-              output.Contains("not priming", StringComparison.OrdinalIgnoreCase)));
-        if (supported && refused)
+        return ToolDiagnostic.ExpectedEmpty(
+            $"workspace_{operation}_empty",
+            $"Workspace operation '{operation}' returned no result.");
+    }
+
+    private static string NormalizeOperation(string? operation) =>
+        string.IsNullOrWhiteSpace(operation)
+            ? "status"
+            : operation.Trim().ToLowerInvariant();
+
+    private static void ValidateRequest(
+        string operation,
+        string? workspaceId,
+        string? path,
+        string? format,
+        int? port,
+        bool handoff,
+        bool wait,
+        string? filter,
+        int? limit,
+        bool dryRun)
+    {
+        ValidateLength(operation, 32, "operation");
+        if (!IsSupportedOperation(operation))
+            throw new ToolDiagnosticException(UnsupportedOperationDiagnostic(operation));
+
+        ValidateLength(workspaceId, 512, "workspace_id");
+        ValidateLength(path, 4096, "path");
+        ValidateLength(filter, 256, "filter");
+
+        string normalizedFormat = string.IsNullOrWhiteSpace(format)
+            ? "compact"
+            : format.Trim().ToLowerInvariant();
+        if (normalizedFormat is not ("compact" or "json"))
         {
-            return ToolDiagnostic.Refusal(
-                $"workspace_{op}_refused",
-                $"Workspace operation '{op}' was refused by a safety or input constraint.");
+            throw Refusal(
+                "invalid_format",
+                "Workspace MCP output format must be compact or json. Exhaustive health JSON and markdown are CLI-only.");
         }
-        return supported
-            ? ToolDiagnostic.ExpectedEmpty(
-                $"workspace_{op}_empty",
-                $"Workspace operation '{op}' returned no result.")
-            : ToolDiagnostic.Unsupported(
-                "unsupported_operation",
-                $"Workspace operation '{op}' is not supported.",
-                [new ToolDiagnosticAction("workspace(operation=\"status\")", "show current workspace status")]);
+
+        if (!string.IsNullOrWhiteSpace(workspaceId) && !string.IsNullOrWhiteSpace(path))
+        {
+            throw Refusal(
+                "conflicting_workspace_selectors",
+                "Pass either workspace_id or path, not both.");
+        }
+
+        bool supportsWorkspaceId = operation is
+            "status" or "health" or "onboarding" or "leader" or "refresh" or "full" or "remove";
+        bool supportsPath = operation is
+            "status" or "health" or "onboarding" or "leader" or "refresh" or "full" or "open" or "remove";
+        if (!supportsWorkspaceId && !string.IsNullOrWhiteSpace(workspaceId))
+            throw Refusal("workspace_id_not_supported", $"workspace_id is not valid for operation '{operation}'.");
+        if (!supportsPath && !string.IsNullOrWhiteSpace(path))
+            throw Refusal("path_not_supported", $"path is not valid for operation '{operation}'.");
+
+        if (operation == "list")
+        {
+            if (limit is < 1 or > 100)
+                throw Refusal("invalid_list_limit", "workspace list limit must be between 1 and 100.");
+        }
+        else
+        {
+            if (limit is not null)
+                throw Refusal("limit_not_supported", $"limit is not valid for operation '{operation}'.");
+            if (!string.IsNullOrWhiteSpace(filter))
+                throw Refusal("filter_not_supported", $"filter is not valid for operation '{operation}'.");
+        }
+
+        if (operation == "dashboard")
+        {
+            if (port is < 1 or > 65535)
+                throw Refusal("invalid_dashboard_port", "Dashboard port must be between 1 and 65535.");
+        }
+        else if (port is not null)
+        {
+            throw Refusal("port_not_supported", $"port is not valid for operation '{operation}'.");
+        }
+
+        if (operation == "leader")
+        {
+            if (wait && !handoff)
+                throw Refusal("invalid_leader_wait", "wait=true requires handoff=true.");
+        }
+        else if (handoff || wait)
+        {
+            throw Refusal(
+                "leader_options_not_supported",
+                $"handoff and wait are not valid for operation '{operation}'.");
+        }
+
+        if (operation != "prune" && dryRun)
+            throw Refusal("dry_run_not_supported", $"dry_run is not valid for operation '{operation}'.");
+    }
+
+    private static bool IsSupportedOperation(string operation) =>
+        operation is
+            "status" or "refresh" or "full" or "list" or "open" or "remove" or "prune" or
+            "health" or "onboarding" or "leader" or "dashboard";
+
+    private static ToolDiagnostic UnsupportedOperationDiagnostic(string operation) =>
+        ToolDiagnostic.Unsupported(
+            "unsupported_operation",
+            $"Unknown workspace operation '{operation}'.",
+            [new ToolDiagnosticAction(
+                "workspace(operation=\"status\")",
+                "show current workspace status")]);
+
+    private static void ValidateLength(string? value, int maxLength, string name)
+    {
+        if (value is not null && value.Length > maxLength)
+            throw Refusal("input_too_long", $"{name} exceeds the {maxLength}-character workspace input limit.");
+    }
+
+    private static ToolDiagnosticException Refusal(string code, string message) =>
+        new(ToolDiagnostic.Refusal(code, message));
+
+    private static string EnforceMcpBudget(
+        string output,
+        string operation,
+        bool json,
+        TelemetryScope? telemetry)
+    {
+        if (Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.WorkspaceMcpMaxBytes)
+            return output;
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.Refusal(
+            "workspace_output_budget_exceeded",
+            $"Workspace operation '{operation}' exceeded the 12 KiB MCP response budget.",
+            operation switch
+            {
+                "list" =>
+                [new ToolDiagnosticAction(
+                    "workspace(operation=\"list\", limit=10, filter=\"<substring>\")",
+                    "narrow the registry rows")],
+                "health" =>
+                [new ToolDiagnosticAction(
+                    "miller workspace health --json",
+                    "read the exhaustive report through the CLI")],
+                _ =>
+                [new ToolDiagnosticAction(
+                    "workspace(operation=\"status\")",
+                    "return to the bounded workspace summary")],
+            });
+        return ToolDiagnosticRenderer.Render("workspace", diagnostic, json, telemetry);
+    }
+
+    private static WorkspaceOperationResult HealthResult(WorkspaceHealthFacts health, bool json)
+    {
+        bool unavailable = health.State == HealthState.Unavailable;
+        return new WorkspaceOperationResult(
+            WorkspaceRender.Health(
+                health,
+                json ? WorkspaceHealthFormat.JsonSummary : WorkspaceHealthFormat.Compact),
+            unavailable ? 0 : 1,
+            unavailable ? TelemetryOutcome.Error : TelemetryOutcome.Ok,
+            unavailable
+                ? ToolDiagnostic.Unavailable(
+                    "workspace_health_unavailable",
+                    "Workspace health could not establish a readable index.",
+                    [new ToolDiagnosticAction(
+                        "workspace(operation=\"list\")",
+                        "inspect the registered workspace state")])
+                : null);
     }
 
     // The pure-ish dispatch: route the operation to its handler, returning the rendered output, a result count
     // (for the telemetry KPI), and the outcome. An unknown operation is a usage note (Empty, not an error).
-    private (string output, int resultCount, TelemetryOutcome outcome) Dispatch(
-        string? operation, string? workspaceId, string? path, int? port, bool json,
-        WorkspaceHealthFormat healthFormat, bool handoff, bool wait,
+    private WorkspaceOperationResult Dispatch(
+        string operation, string? workspaceId, string? path, int? port, bool json,
+        bool handoff, bool wait,
         string? filter = null, int? limit = null, bool dryRun = false)
     {
-        switch (operation?.ToLowerInvariant())
+        switch (operation)
         {
-            case null or "" or "status":
+            case "status":
                 return RenderTargetStatus(workspaceId, path, json);
             case "health":
-                return RenderTargetHealth(workspaceId, path, json, healthFormat);
+                return RenderTargetHealth(workspaceId, path, json);
             case "onboarding":
                 return RenderTargetOnboarding(workspaceId, path, json);
             case "leader":
                 return RenderTargetLeader(workspaceId, path, json, handoff, wait);
             case "list":
-                return (RenderRegistryList(json, filter, limit), _registry.List().Count, TelemetryOutcome.Ok);
+                return RenderRegistryList(json, filter, limit);
             case "refresh":
                 return RenderTargetAction("refresh", workspaceId, path, force: false, json);
             case "full":
@@ -282,33 +429,28 @@ public sealed class WorkspaceTool
             case "dashboard":
                 return Dashboard(port, json);
             default:
-                return (UsageNote(operation!, json), 0, TelemetryOutcome.Empty);
+                return new WorkspaceOperationResult(
+                    UsageNote(operation, json),
+                    0,
+                    TelemetryOutcome.Empty,
+                    UnsupportedOperationDiagnostic(operation));
         }
     }
 
     // ---------- status / list facts ----------
 
-    private string RenderStatus(bool json) =>
-        WorkspaceRender.Status(
-            AssembleFacts(),
-            _ledger.Summarize(),
-            json,
-            ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
-            _bootstrap.Snapshot);
-
-    private string RenderHealth(WorkspaceHealthFormat format)
+    private WorkspaceHealthFacts ReadCurrentHealth()
     {
-        WorkspaceHealthFacts health = WorkspaceHealthFacts.Create(
+        return WorkspaceHealthFacts.Create(
             AssembleFacts(),
             _ledger.Summarize(),
             _ledger.SummarizeOutcomes(),
             WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
             ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
             ReadHistoryStatus(_workspace.ExtractDbPath));
-        return WorkspaceRender.Health(health, format);
     }
 
-    private string RenderOnboarding(bool json)
+    private WorkspaceOperationResult RenderCurrentOnboarding(bool json)
     {
         WorkspaceFacts facts = AssembleFacts();
         WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
@@ -316,10 +458,7 @@ public sealed class WorkspaceTool
             _ledger.DbPath,
             facts.WorkspaceId,
             facts.DbPath);
-        return WorkspaceRender.Onboarding(
-            onboarding,
-            json,
-            ToolOutputBudget.WorkspaceOnboardingMcpRowLimit);
+        return OnboardingResult(onboarding, json);
     }
 
     // Leader facts enriched with the version-aware-leadership view (D6): the recorded identity + liveness, this
@@ -339,7 +478,7 @@ public sealed class WorkspaceTool
             OwnVerdict = ownWorkspace ? _indexer.EligibilityVerdict : null,
         };
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetStatus(
+    private WorkspaceOperationResult RenderTargetStatus(
         string? workspaceId, string? path, bool json)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
@@ -347,7 +486,18 @@ public sealed class WorkspaceTool
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
         if (target.IsCurrent)
-            return (RenderStatus(json), 1, TelemetryOutcome.Ok);
+        {
+            WorkspaceFacts currentFacts = AssembleFacts();
+            return StatusResult(
+                WorkspaceRender.Status(
+                    currentFacts,
+                    _ledger.Summarize(),
+                    json,
+                    ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
+                    _bootstrap.Snapshot),
+                currentFacts,
+                "workspace(operation=\"health\")");
+        }
 
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
@@ -359,22 +509,49 @@ public sealed class WorkspaceTool
             WorkspaceRegisteredFactsProfile.McpStatus,
             _sidecar,
             _contentSidecar);
-        TelemetryOutcome outcome = string.Equals(facts.FreshnessStatus, "missing_index", StringComparison.Ordinal)
-            ? TelemetryOutcome.Empty
-            : TelemetryOutcome.Ok;
-        return (WorkspaceRender.Status(facts, _ledger.SummarizeForWorkspace(row.WorkspaceId), json),
-            1, outcome);
+        LeaderHealthFacts leader = ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false);
+        return StatusResult(
+            WorkspaceRender.Status(
+                facts,
+                _ledger.SummarizeForWorkspace(row.WorkspaceId),
+                json,
+                leader),
+            facts,
+            "workspace(operation=\"health\", workspace_id=\"" + row.DisplayId + "\")");
     }
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetHealth(
-        string? workspaceId, string? path, bool json, WorkspaceHealthFormat format)
+    private static WorkspaceOperationResult StatusResult(
+        string output,
+        WorkspaceFacts facts,
+        string healthAction)
+    {
+        bool unavailable = facts.FreshnessStatus is "missing_index" or "unreadable_index";
+        return new WorkspaceOperationResult(
+            output,
+            unavailable ? 0 : 1,
+            unavailable ? TelemetryOutcome.Error : TelemetryOutcome.Ok,
+            unavailable
+                ? ToolDiagnostic.Unavailable(
+                    "workspace_index_unavailable",
+                    "The workspace index is missing or unreadable.",
+                    [new ToolDiagnosticAction(
+                        healthAction,
+                        "inspect the workspace artifacts")])
+                : null);
+    }
+
+    private WorkspaceOperationResult RenderTargetHealth(
+        string? workspaceId, string? path, bool json)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
         if (target.IsCurrent)
-            return (RenderHealth(format), 1, TelemetryOutcome.Ok);
+        {
+            WorkspaceHealthFacts currentHealth = ReadCurrentHealth();
+            return HealthResult(currentHealth, json);
+        }
 
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
@@ -416,10 +593,10 @@ public sealed class WorkspaceTool
             extraction,
             ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false),
             ReadHistoryStatus(row.IndexDbPath));
-        return (WorkspaceRender.Health(health, format), 1, TelemetryOutcome.Ok);
+        return HealthResult(health, json);
     }
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetOnboarding(
+    private WorkspaceOperationResult RenderTargetOnboarding(
         string? workspaceId, string? path, bool json)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
@@ -427,7 +604,7 @@ public sealed class WorkspaceTool
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
         if (target.IsCurrent)
-            return (RenderOnboarding(json), 1, TelemetryOutcome.Ok);
+            return RenderCurrentOnboarding(json);
 
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
@@ -443,19 +620,32 @@ public sealed class WorkspaceTool
             _ledger.DbPath,
             row.WorkspaceId,
             row.IndexDbPath);
-        TelemetryOutcome outcome = onboarding.Telemetry.TotalCalls == 0
-            ? TelemetryOutcome.Empty
-            : TelemetryOutcome.Ok;
-        return (
+        return OnboardingResult(onboarding, json);
+    }
+
+    private static WorkspaceOperationResult OnboardingResult(
+        WorkspaceOnboardingFacts onboarding,
+        bool json)
+    {
+        bool unavailable = !onboarding.Telemetry.Available;
+        return new WorkspaceOperationResult(
             WorkspaceRender.Onboarding(
                 onboarding,
                 json,
                 ToolOutputBudget.WorkspaceOnboardingMcpRowLimit),
-            1,
-            outcome);
+            unavailable ? 0 : 1,
+            unavailable ? TelemetryOutcome.Error : TelemetryOutcome.Ok,
+            unavailable
+                ? ToolDiagnostic.Unavailable(
+                    "workspace_onboarding_telemetry_unavailable",
+                    "Workspace onboarding telemetry is unavailable.",
+                    [new ToolDiagnosticAction(
+                        "workspace(operation=\"status\")",
+                        "inspect the workspace and telemetry state")])
+                : null);
     }
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetLeader(
+    private WorkspaceOperationResult RenderTargetLeader(
         string? workspaceId, string? path, bool json, bool handoff, bool wait)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
@@ -516,7 +706,12 @@ public sealed class WorkspaceTool
             HandoffObserved: observed,
             HandoffRequestId: receipt?.RequestId,
             HandoffNote: handoffNote);
-        return (WorkspaceRender.Leader(result, json), 1, TelemetryOutcome.Ok);
+        return StatusResult(
+            WorkspaceRender.Leader(result, json),
+            facts,
+            target.IsCurrent
+                ? "workspace(operation=\"health\")"
+                : "workspace(operation=\"health\", workspace_id=\"" + facts.DisplayId + "\")");
     }
 
     private static string RecommendationForLeader(WorkspaceFacts facts, LeaderHealthFacts leader, bool handoffRequested)
@@ -558,13 +753,35 @@ public sealed class WorkspaceTool
         return false;
     }
 
-    private string RenderRegistryList(bool json, string? filter, int? limit)
+    private WorkspaceOperationResult RenderRegistryList(bool json, string? filter, int? limit)
     {
         IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
-        int? activeLimit = limit ?? (json ? null : WorkspaceRender.DefaultListLimit);
+        int activeLimit = limit ?? WorkspaceRender.DefaultListLimit;
         WorkspaceListFacts facts =
             WorkspaceFactsAssembler.ToListFacts(rows, IsCurrentWorkspace, filter, activeLimit);
-        return WorkspaceRender.List(facts, json);
+        BoundedPrefixRender bounded = WorkspaceRender.ListWithinBudget(
+            facts,
+            json,
+            ToolOutputBudget.WorkspaceMcpMaxBytes);
+        return new WorkspaceOperationResult(
+            bounded.Output,
+            bounded.RetainedCount,
+            facts.Matched == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok,
+            facts.Matched == 0
+                ? string.IsNullOrWhiteSpace(filter)
+                    ? ToolDiagnostic.ExpectedEmpty(
+                        "workspace_list_empty",
+                        "No workspaces are registered.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"open\", path=\"<project-root>\")",
+                            "register and prime a workspace")])
+                    : ToolDiagnostic.ExpectedEmpty(
+                        "workspace_list_no_matches",
+                        "No registered workspace matched the filter.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"list\")",
+                            "list registered workspaces without a filter")])
+                : null);
     }
 
     // Gather the live facts the status/list views render. Reads the holder (index facts), the workspace context
@@ -572,6 +789,8 @@ public sealed class WorkspaceTool
     private WorkspaceFacts AssembleFacts()
     {
         var (index, builtRevision) = _holder.Snapshot();
+        (string diskStatus, string? diskWarning) = CurrentIndexDiskStatus();
+        bool indexAvailable = diskStatus == "current";
         return new WorkspaceFacts(
             Root: _workspace.WorkspaceRoot,
             WorkspaceId: _workspace.WorkspaceId,
@@ -581,10 +800,11 @@ public sealed class WorkspaceTool
             KnownExtensionsCount: index.KnownExtensions.Count,
             BuiltRevision: builtRevision,
             LatestObservedRevision: _freshness.LatestObservedRevision,
-            IndexFresh: _freshProbe.Compute(),
+            IndexFresh: indexAvailable ? _freshProbe.Compute() : false,
             QueueEmpty: _indexer.QueueEmpty,
             ArtifactId: CurrentArtifactId(),
-            FreshnessStatus: "current",
+            FreshnessStatus: diskStatus,
+            WarningText: diskWarning,
             DisplayId: CurrentDisplayId(),
             ServerVersion: MillerVersion.Current,
             ServerProcessId: Environment.ProcessId,
@@ -593,6 +813,26 @@ public sealed class WorkspaceTool
             Vectors: WorkspaceFactsAssembler.WithPendingFiles(
                 _vectors.Inspect(_workspace.WorkspaceRoot),
                 _workspace.ExtractDbPath));
+    }
+
+    private (string Status, string? Warning) CurrentIndexDiskStatus()
+    {
+        if (!File.Exists(_workspace.ExtractDbPath))
+            return ("missing_index", $"Workspace index DB not found: {_workspace.ExtractDbPath}");
+
+        try
+        {
+            using var reader = new FreshnessReader(_workspace.ExtractDbPath);
+            _ = reader.LatestRevision();
+            return ("current", null);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or IOException or InvalidOperationException or SqliteException)
+        {
+            return (
+                "unreadable_index",
+                $"Could not read workspace index DB '{_workspace.ExtractDbPath}': {ex.Message}");
+        }
     }
 
     private string? CurrentArtifactId()
@@ -618,7 +858,7 @@ public sealed class WorkspaceTool
     // immediate poll+swap; a non-leader cannot scan (the M3 single-writer guard), so it only polls+swaps to pick
     // up the leader's writes and reports HONESTLY that it could not force a scan here. Either path ends with the
     // in-memory index current without waiting for the 2s loop tick.
-    private string RenderAction(string operation, bool force, bool json)
+    private WorkspaceOperationResult RenderAction(string operation, bool force, bool json)
     {
         string? artifactIdBeforeScan = CurrentArtifactId();
         ScanOutcome scan = _indexer.TryScanAsLeader(force);
@@ -652,10 +892,36 @@ public sealed class WorkspaceTool
             poll.Revision,
             note,
             ArtifactId: CurrentArtifactId() ?? artifactIdBeforeScan);
-        return WorkspaceRender.Action(result, json);
+        return scan.Result switch
+        {
+            ScanOutcome.Kind.Failed => new WorkspaceOperationResult(
+                WorkspaceRender.Action(result, json),
+                0,
+                TelemetryOutcome.Error,
+                ToolDiagnostic.Unavailable(
+                    $"workspace_{operation}_failed",
+                    $"The current workspace {operation} scan failed.",
+                    [new ToolDiagnosticAction(
+                        "workspace(operation=\"health\")",
+                        "inspect the current workspace before retrying")])),
+            ScanOutcome.Kind.NotLeader => new WorkspaceOperationResult(
+                WorkspaceRender.Action(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    $"workspace_{operation}_not_leader",
+                    $"This Miller process is not the indexer leader and did not run the {operation} scan.",
+                    [new ToolDiagnosticAction(
+                        "workspace(operation=\"leader\")",
+                        "inspect or gracefully hand off indexer leadership")])),
+            _ => new WorkspaceOperationResult(
+                WorkspaceRender.Action(result, json),
+                1,
+                TelemetryOutcome.Ok),
+        };
     }
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RenderTargetAction(
+    private WorkspaceOperationResult RenderTargetAction(
         string operation, string? workspaceId, string? path, bool force, bool json)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
@@ -663,7 +929,7 @@ public sealed class WorkspaceTool
             return (Note(note, json), 0, TelemetryOutcome.Empty);
 
         if (target.IsCurrent)
-            return (RenderAction(operation, force, json), 1, TelemetryOutcome.Ok);
+            return RenderAction(operation, force, json);
 
         WorkspaceRefreshResult refresh = _crossWorkspaceRefresh.Refresh(target.WorkspaceId, force);
         WorkspaceRegistryRow row = target.Row
@@ -692,7 +958,60 @@ public sealed class WorkspaceTool
             ScanDurationMs: (long?)refresh.ScanDuration?.TotalMilliseconds,
             DurationMs: (long?)refresh.TotalDuration?.TotalMilliseconds,
             ArtifactId: artifactId);
-        return (WorkspaceRender.Action(result, json), 1, TelemetryOutcome.Ok);
+        return refresh.Status switch
+        {
+            WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    1,
+                    TelemetryOutcome.Ok),
+            WorkspaceRefreshStatus.LockBusy =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    0,
+                    TelemetryOutcome.Empty,
+                    ToolDiagnostic.Refusal(
+                        $"workspace_{operation}_lock_busy",
+                        $"The selected workspace {operation} did not run because another process holds the writer lock.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"leader\", workspace_id=\"" + refresh.WorkspaceId + "\")",
+                            "inspect the live workspace leader")])),
+            WorkspaceRefreshStatus.IneligibleExtractor =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    0,
+                    TelemetryOutcome.Empty,
+                    ToolDiagnostic.Refusal(
+                        $"workspace_{operation}_extractor_ineligible",
+                        $"The selected workspace {operation} was refused because this extractor cannot rewrite the artifact.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"leader\", workspace_id=\"" + refresh.WorkspaceId + "\")",
+                            "inspect extractor leadership compatibility")])),
+            WorkspaceRefreshStatus.MissingRoot or WorkspaceRefreshStatus.MissingIndex =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    0,
+                    TelemetryOutcome.Error,
+                    ToolDiagnostic.Unavailable(
+                        $"workspace_{operation}_{refresh.StatusText}",
+                        $"The selected workspace {operation} could not run because its root or index is unavailable.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"list\")",
+                            "inspect registered workspace state")])),
+            WorkspaceRefreshStatus.Failed =>
+                new WorkspaceOperationResult(
+                    WorkspaceRender.Action(result, json),
+                    0,
+                    TelemetryOutcome.Error,
+                    ToolDiagnostic.Unavailable(
+                        $"workspace_{operation}_failed",
+                        $"The selected workspace {operation} failed.",
+                        [new ToolDiagnosticAction(
+                            "workspace(operation=\"health\", workspace_id=\"" + refresh.WorkspaceId + "\")",
+                            "inspect the selected workspace artifacts")])),
+            _ => throw new InvalidOperationException(
+                $"Unknown workspace refresh status '{refresh.Status}'."),
+        };
     }
 
     // ---------- open (prime) ----------
@@ -701,10 +1020,18 @@ public sealed class WorkspaceTool
     // warm. NOT a live switch — the served index/watcher/telemetry stay bound to this process's CWD. The scan
     // writes under `<path>/.miller/symbols.db`, the M2 convention. The path's root is canonicalized so julie's
     // inside-root check passes (verified-fact 4), exactly as the bootstrap does.
-    private (string output, int resultCount, TelemetryOutcome outcome) Open(string? path, bool json)
+    private WorkspaceOperationResult Open(string? path, bool json)
     {
         if (string.IsNullOrWhiteSpace(path))
-            return (UsageNote("open", json), 0, TelemetryOutcome.Empty);
+        {
+            return new WorkspaceOperationResult(
+                UsageNote("open", json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_open_path_required",
+                    "workspace open requires a project path."));
+        }
 
         // A non-null but non-existent target is a clean not-found, not a tool failure. Guard here so
         // PathCanonicalizer.CanonicalizeRoot's DirectoryNotFoundException cannot become a hard diagnostic.
@@ -712,7 +1039,13 @@ public sealed class WorkspaceTool
         {
             string note = $"cannot prime: no directory at '{path}'.";
             string output = json ? ServerJson.Note(note) : note;
-            return (output, 0, TelemetryOutcome.Empty);
+            return new WorkspaceOperationResult(
+                output,
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.ExpectedEmpty(
+                    "workspace_open_path_missing",
+                    "The requested workspace path does not exist."));
         }
 
         // Canonicalize (symlink-resolved) BEFORE the safety checks so a symlink whose target is a sensitive root
@@ -729,7 +1062,13 @@ public sealed class WorkspaceTool
                 $"refusing to prime sensitive system path '{canonicalRoot}': choose a project " +
                 "directory or pass a narrower path.";
             string output = json ? ServerJson.Note(note) : note;
-            return (output, 0, TelemetryOutcome.Empty);
+            return new WorkspaceOperationResult(
+                output,
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_open_refused",
+                    "The requested path is a sensitive system root."));
         }
 
         // SAFETY (decision-2/3/8): refuse to prime the LIVE workspace. open() runs a direct `extract scan`
@@ -746,7 +1085,13 @@ public sealed class WorkspaceTool
                 "index. Use workspace(operation=\"refresh\") (or \"full\" to force a rebuild) — they reconcile " +
                 "it through the indexer leader, keeping every write on the single-writer path.";
             string output = json ? ServerJson.Note(note) : note;
-            return (output, 0, TelemetryOutcome.Empty);
+            return new WorkspaceOperationResult(
+                output,
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_open_refused",
+                    "The requested path is already served by this Miller process."));
         }
 
         string millerDir = Path.Combine(canonicalRoot, ".miller");
@@ -767,7 +1112,13 @@ public sealed class WorkspaceTool
                 $"a Miller instance is already serving '{canonicalRoot}' (it holds the writer lock and keeps " +
                 "that index fresh) — not priming it. A Miller launched there will use the live index directly.";
             string served = json ? ServerJson.Note(note) : note;
-            return (served, 0, TelemetryOutcome.Empty);
+            return new WorkspaceOperationResult(
+                served,
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_open_refused",
+                    "Another Miller writer is already serving the requested path."));
         }
 
         // force:false — a prime is a from-current scan (julie creates the DB on the first scan of a fresh root,
@@ -834,7 +1185,13 @@ public sealed class WorkspaceTool
             result.Pruned.Select(e => new WorkspacePruneEntry(e.WorkspaceId, e.DisplayId, e.Root)).ToArray(),
             result.Kept);
         int count = result.Pruned.Count;
-        return (WorkspaceRender.Prune(rendered, json), count, count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty);
+        return (
+            WorkspaceRender.PruneWithinBudget(
+                rendered,
+                json,
+                ToolOutputBudget.WorkspaceMcpMaxBytes),
+            count,
+            count > 0 ? TelemetryOutcome.Ok : TelemetryOutcome.Empty);
     }
 
     // ---------- remove ----------
@@ -842,130 +1199,97 @@ public sealed class WorkspaceTool
     // Delete a workspace's `.miller` index dir (decision-1/8). SAFETY: refuse the live workspace (it is in use —
     // a half-delete would corrupt the index this process is serving). A path with no `.miller` dir is a clean
     // not-found (not an error). The is-live decision is the pure WorkspaceSafety predicate (unit-tested).
-    private (string output, int resultCount, TelemetryOutcome outcome) Remove(
+    private WorkspaceOperationResult Remove(
         string? workspaceId, string? path, bool json)
     {
         if (string.IsNullOrWhiteSpace(workspaceId) && string.IsNullOrWhiteSpace(path))
-            return (UsageNote("remove", json), 0, TelemetryOutcome.Empty);
+        {
+            return new WorkspaceOperationResult(
+                UsageNote("remove", json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_selector_required",
+                    "workspace remove requires workspace_id or a registered workspace path."));
+        }
 
+        WorkspaceRemoveResult result;
         if (!string.IsNullOrWhiteSpace(workspaceId))
         {
             TargetWorkspace target = ResolveTarget(workspaceId, path: null);
             if (target.UnknownNote is { } note)
                 return (Note(note, json), 0, TelemetryOutcome.Empty);
 
-            return RemoveResolvedTarget(target, json);
+            result = target.IsCurrent
+                ? WorkspaceRemoveResult.RefusedLive(
+                    Path.GetDirectoryName(_workspace.ExtractDbPath)!,
+                    _workspace.WorkspaceId,
+                    _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot)
+                : WorkspaceRemoval.RemoveById(
+                    _registry,
+                    target.WorkspaceId,
+                    _workspace.WorkspaceRoot,
+                    Path.GetDirectoryName(_workspace.RegistryDbPath),
+                    _acquireWriterLock);
         }
-
-        if (WorkspaceSafety.IsLiveWorkspace(path!, _workspace.WorkspaceRoot))
-            return RefuseLiveRemove(json);
-
-        TargetWorkspace pathTarget = ResolveTarget(workspaceId: null, path);
-        if (pathTarget.UnknownNote is null)
-            return RemoveResolvedTarget(pathTarget, json);
-
-        IReadOnlyList<WorkspaceRegistryRow> rows = _registry.List();
-        WorkspaceRegistryRow? stale =
-            WorkspaceRegistryRootMatcher.FindByPossiblyMissingPath(rows, path!);
-        if (stale is not null)
-            return RemoveResolvedTarget(TargetWorkspace.Registered(stale, IsCurrentWorkspace(stale)), json);
-
-        // Backward-compatible cleanup path: allow deleting an unregistered local .miller dir by path. Unknown
-        // workspace guidance still applies to targeted registry operations; remove can clean stale local indexes.
-        string millerDir = Path.Combine(Path.GetFullPath(path!), ".miller");
-        if (!Directory.Exists(millerDir))
+        else
         {
-            var notFound = WorkspaceRemoveResult.NotFound(millerDir);
-            return (WorkspaceRender.Remove(notFound, json), 0, TelemetryOutcome.Empty);
+            result = WorkspaceRemoval.RemoveByPath(
+                _registry,
+                path!,
+                _workspace.WorkspaceRoot,
+                Path.GetDirectoryName(_workspace.RegistryDbPath),
+                _acquireWriterLock);
         }
 
-        WorkspaceWriteLeases? leases = WorkspaceWriteLeases.TryAcquireForRemove(millerDir, _acquireWriterLock);
-        if (leases is null)
-        {
-            var refused = WorkspaceRemoveResult.RefusedInUse(millerDir);
-            return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
-        }
-        // Delete the index data while HOLDING all three workspace-local write leases (indexer → content →
-        // history) so no other instance — nor a CLI content import / history append that holds only the sidecar
-        // lock — can start writing here mid-delete. Only the held lock files are skipped (a FileShare.None handle
-        // blocks deleting the open file on Windows); after release, the leftover lock files + empty dir are
-        // removed best-effort — a writer that sneaks in after release finds an already-empty index and rebuilds.
-        try
-        {
-            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
-        }
-        finally
-        {
-            leases.Dispose();
-        }
-
-        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
-        _logger.LogInformation("workspace remove: deleted index dir {Dir}.", millerDir);
-        var removed = WorkspaceRemoveResult.Removed(millerDir);
-        return (WorkspaceRender.Remove(removed, json), 1, TelemetryOutcome.Ok);
+        return RemoveResult(result, json);
     }
 
-    private (string output, int resultCount, TelemetryOutcome outcome) RemoveResolvedTarget(
-        TargetWorkspace target, bool json)
-    {
-        if (target.IsCurrent)
-            return RefuseLiveRemove(json);
-
-        WorkspaceRegistryRow row = target.Row
-            ?? throw new InvalidOperationException("Registered workspace target is missing its registry row.");
-        string millerDir = Path.GetDirectoryName(row.IndexDbPath)
-            ?? throw new InvalidOperationException(
-                $"Cannot determine the .miller directory for index DB path '{row.IndexDbPath}'.");
-
-        if (!Directory.Exists(millerDir))
+    private static WorkspaceOperationResult RemoveResult(WorkspaceRemoveResult result, bool json) =>
+        result.Result switch
         {
-            _registry.Remove(row.WorkspaceId);
-            _logger.LogInformation(
-                "workspace remove: unregistered {WorkspaceId}; index dir {Dir} was already missing.",
-                row.WorkspaceId, millerDir);
-            var staleRemoved = WorkspaceRemoveResult.Removed(
-                millerDir,
-                row.WorkspaceId,
-                row.CanonicalRoot,
-                indexDirDeleted: false);
-            return (WorkspaceRender.Remove(staleRemoved, json), 1, TelemetryOutcome.Ok);
-        }
-
-        WorkspaceWriteLeases? leases = WorkspaceWriteLeases.TryAcquireForRemove(millerDir, _acquireWriterLock);
-        if (leases is null)
-        {
-            var refused = WorkspaceRemoveResult.RefusedInUse(millerDir, row.WorkspaceId, row.CanonicalRoot);
-            return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
-        }
-        // Delete index data under all three held leases (indexer → content → history), then best-effort remove
-        // the lock files + empty dir after release. See the path-only Remove branch for the full rationale.
-        try
-        {
-            SingleWriterLock.DeleteContentsExceptLock(millerDir, WorkspaceWriteLeases.SidecarLockFileNames);
-        }
-        finally
-        {
-            leases.Dispose();
-        }
-
-        SingleWriterLock.TryDeleteEmptiedDir(millerDir);
-        _registry.Remove(row.WorkspaceId);
-        _logger.LogInformation(
-            "workspace remove: unregistered {WorkspaceId} and deleted index dir {Dir}.",
-            row.WorkspaceId, millerDir);
-        var removed = WorkspaceRemoveResult.Removed(millerDir, row.WorkspaceId, row.CanonicalRoot);
-        return (WorkspaceRender.Remove(removed, json), 1, TelemetryOutcome.Ok);
-    }
-
-    private (string output, int resultCount, TelemetryOutcome outcome) RefuseLiveRemove(bool json)
-    {
-        string liveMillerDir = Path.GetDirectoryName(_workspace.ExtractDbPath)!;
-        var refused = WorkspaceRemoveResult.RefusedLive(
-            liveMillerDir,
-            _workspace.WorkspaceId,
-            _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
-        return (WorkspaceRender.Remove(refused, json), 0, TelemetryOutcome.Empty);
-    }
+            WorkspaceRemoveResult.Outcome.Removed => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                1,
+                TelemetryOutcome.Ok),
+            WorkspaceRemoveResult.Outcome.NotFound => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.ExpectedEmpty(
+                    "workspace_remove_not_found",
+                    "No registered workspace index matched the removal target.")),
+            WorkspaceRemoveResult.Outcome.RefusedLive => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_live",
+                    "The workspace removal target is served by this Miller process.")),
+            WorkspaceRemoveResult.Outcome.RefusedInUse => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_in_use",
+                    "Another Miller writer is using the workspace removal target.")),
+            WorkspaceRemoveResult.Outcome.RefusedSensitive => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_sensitive",
+                    "The workspace removal target is a sensitive or machine-global Miller directory.")),
+            WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => new WorkspaceOperationResult(
+                WorkspaceRender.Remove(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    "workspace_remove_invalid_registration",
+                    "The workspace registry entry does not map to its canonical index directory.")),
+            _ => throw new InvalidOperationException(
+                $"Unknown workspace removal outcome '{result.Result}'."),
+        };
 
     private TargetWorkspace ResolveTarget(string? workspaceId, string? path)
     {
@@ -1051,7 +1375,17 @@ public sealed class WorkspaceTool
         {
             string error = $"Workspace root not found: {row.CanonicalRoot}";
             _registry.MarkMissing(row.WorkspaceId, error);
-            throw new DirectoryNotFoundException(error);
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "workspace_root_missing",
+                "The selected registered workspace root no longer exists.",
+                [
+                    new ToolDiagnosticAction(
+                        "workspace(operation=\"prune\", dry_run=true)",
+                        "preview stale registry cleanup"),
+                    new ToolDiagnosticAction(
+                        "workspace(operation=\"remove\", workspace_id=\"" + row.DisplayId + "\")",
+                        "remove the stale registry entry"),
+                ]));
         }
 
         try
@@ -1061,7 +1395,9 @@ public sealed class WorkspaceTool
         catch (InvalidOperationException ex)
         {
             _registry.MarkError(row.WorkspaceId, ex.Message);
-            throw;
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "sensitive_workspace_root",
+                "The selected registry row points at a sensitive system root."));
         }
     }
 
@@ -1071,6 +1407,17 @@ public sealed class WorkspaceTool
 
     private static string Note(string message, bool json) =>
         json ? ServerJson.Note(message) : message;
+
+    private readonly record struct WorkspaceOperationResult(
+        string Output,
+        int ResultCount,
+        TelemetryOutcome Outcome,
+        ToolDiagnostic? Diagnostic = null)
+    {
+        public static implicit operator WorkspaceOperationResult(
+            (string Output, int ResultCount, TelemetryOutcome Outcome) value) =>
+            new(value.Output, value.ResultCount, value.Outcome);
+    }
 
     private sealed record TargetWorkspace(
         bool IsCurrent,

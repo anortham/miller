@@ -64,6 +64,86 @@ public sealed class TelemetryOnboardingReaderTests : IDisposable
         Assert.Contains(facts.TargetHashes, row => row.TargetHash == getUserHash && row.Calls == 2);
         Assert.Contains(facts.CommonMisses, row => row.Tool == "search" && row.Reason == "no_symbol_hits" && row.Calls == 1);
         Assert.Contains(facts.Friction, row => row.Tool == "context" && row.Calls == 1 && row.AvgMs >= 900);
+        Assert.Equal(3, facts.ToolMixTotal);
+        Assert.Equal(1, facts.SuccessfulFlowsTotal);
+        Assert.Equal(1, facts.TargetHashesTotal);
+        Assert.Equal(1, facts.CommonMissesTotal);
+        Assert.Equal(3, facts.FrictionTotal);
+    }
+
+    [Fact]
+    public void Read_LimitBoundsRowsAndPreservesExactSectionTotals()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-a"))
+        {
+        }
+
+        for (int i = 0; i < 5; i++)
+        {
+            Insert(
+                $"2026-06-23T10:00:{i * 10:D2}.000Z",
+                $"tool-{i}",
+                $"op-{i}",
+                "ws-a",
+                "ok",
+                10 + i,
+                1,
+                100 + i,
+                20 + i,
+                Sha256Hex($"target-{i}"));
+        }
+
+        TelemetryOnboardingFacts facts =
+            TelemetryOnboardingReader.Read(_dbPath, "ws-a", windowDays: 30, limit: 2);
+
+        Assert.Equal(2, facts.ToolMix.Count);
+        Assert.Equal(5, facts.ToolMixTotal);
+        Assert.Equal(2, facts.SuccessfulFlows.Count);
+        Assert.Equal(4, facts.SuccessfulFlowsTotal);
+        Assert.Equal(2, facts.TargetHashes.Count);
+        Assert.Equal(5, facts.TargetHashesTotal);
+        Assert.Equal(2, facts.Friction.Count);
+        Assert.Equal(5, facts.FrictionTotal);
+    }
+
+    [Fact]
+    public void Read_InvalidOrNonTextMetadataFallsBackToOutcomeReason()
+    {
+        using (TelemetryLedger.Open(_dbPath, workspaceId: "ws-a"))
+        {
+        }
+        Insert(
+            "2026-06-23T10:00:00.000Z",
+            "search",
+            "auto",
+            "ws-a",
+            "empty",
+            10,
+            0,
+            10,
+            2,
+            null,
+            "{not-json");
+        Insert(
+            "2026-06-23T10:00:01.000Z",
+            "search",
+            "auto",
+            "ws-a",
+            "empty",
+            11,
+            0,
+            10,
+            2,
+            null,
+            """{"empty_reason":123}""");
+
+        TelemetryOnboardingFacts facts = TelemetryOnboardingReader.Read(_dbPath, "ws-a");
+
+        Assert.True(facts.Available);
+        TelemetryMiss miss = Assert.Single(facts.CommonMisses);
+        Assert.Equal("empty", miss.Reason);
+        Assert.Equal(2, miss.Calls);
+        Assert.Equal(1, facts.CommonMissesTotal);
     }
 
     private void Insert(

@@ -139,7 +139,8 @@ internal static class WorkspaceFactsAssembler
                 LastRevision: row.LastRevision,
                 Current: isCurrent(row),
                 LastError: row.LastError,
-                LastSeenAt: row.LastSeenAt));
+                LastSeenAt: row.LastSeenAt,
+                RootMissing: !Directory.Exists(row.CanonicalRoot)));
         }
 
         return entries;
@@ -186,7 +187,10 @@ internal static class WorkspaceFactsAssembler
             matchedEntries.Count - returnedEntries.Length,
             omittedErrors,
             activeFilter,
-            activeLimit);
+            activeLimit,
+            RegisteredMissing: entries.Count(static entry => entry.RootMissing),
+            MatchedMissing: matchedEntries.Count(static entry => entry.RootMissing),
+            ReturnedMissing: returnedEntries.Count(static entry => entry.RootMissing));
     }
 
     private static WorkspaceFacts MissingIndexFacts(

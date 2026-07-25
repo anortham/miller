@@ -34,17 +34,25 @@ public sealed class WorkspaceRemovalTests : IDisposable
     private (string Root, string MillerDir) MakeWorkspace(string name)
     {
         string root = Path.Combine(_dir, name);
+        Directory.CreateDirectory(Path.Combine(root, ".miller"));
+        root = PathCanonicalizer.CanonicalizeRoot(root);
         string millerDir = Path.Combine(root, ".miller");
-        Directory.CreateDirectory(millerDir);
         File.WriteAllText(Path.Combine(millerDir, "symbols.db"), "stand-in index");
         return (root, millerDir);
     }
 
     private WorkspaceRegistry OpenRegistry() => WorkspaceRegistry.Open(_registryDb);
 
-    private static void Register(WorkspaceRegistry registry, string id, string display, string root) =>
-        registry.UpsertSeen(id, display, root, Path.Combine(root, ".miller", "symbols.db"),
+    private static void Register(WorkspaceRegistry registry, string id, string display, string root)
+    {
+        string registeredRoot = Directory.Exists(root) ? PathCanonicalizer.CanonicalizeRoot(root) : root;
+        registry.UpsertSeen(
+            id,
+            display,
+            registeredRoot,
+            Path.Combine(registeredRoot, ".miller", "symbols.db"),
             WorkspaceRegistryState.Ready);
+    }
 
     // ---------- RemoveById ----------
 
@@ -134,6 +142,93 @@ public sealed class WorkspaceRemovalTests : IDisposable
         Assert.False(Directory.Exists(millerDir));
     }
 
+    [Fact]
+    public void RemoveById_RegistryIndexPathOutsideWorkspaceRefusesWithoutDeleting()
+    {
+        string registeredRoot = Path.Combine(_dir, "registered-root");
+        Directory.CreateDirectory(registeredRoot);
+        registeredRoot = PathCanonicalizer.CanonicalizeRoot(registeredRoot);
+        var (_, victimMillerDir) = MakeWorkspace("victim-root");
+        string victimDb = Path.Combine(victimMillerDir, "symbols.db");
+        using WorkspaceRegistry registry = OpenRegistry();
+        registry.UpsertSeen(
+            "ws-corrupt-00000001",
+            "corrupt-disp",
+            registeredRoot,
+            victimDb,
+            WorkspaceRegistryState.Ready);
+
+        WorkspaceRemoveResult result =
+            WorkspaceRemoval.RemoveById(registry, "corrupt-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration, result.Result);
+        Assert.True(File.Exists(victimDb));
+        Assert.NotNull(registry.Get("ws-corrupt-00000001"));
+    }
+
+    [Fact]
+    public void RemoveById_SymlinkedRegisteredMillerDirectoryRefusesWithoutDeletingTarget()
+    {
+        string registeredRoot = Path.Combine(_dir, "registered-root");
+        Directory.CreateDirectory(registeredRoot);
+        var (_, victimMillerDir) = MakeWorkspace("victim-root");
+        string registeredMillerDir = Path.Combine(registeredRoot, ".miller");
+        if (!TryCreateDirectoryLink(registeredMillerDir, victimMillerDir))
+            return;
+
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-symlink-00000001", "symlink-disp", registeredRoot);
+
+        WorkspaceRemoveResult result =
+            WorkspaceRemoval.RemoveById(registry, "symlink-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration, result.Result);
+        Assert.True(File.Exists(Path.Combine(victimMillerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-symlink-00000001"));
+    }
+
+    [Fact]
+    public void RemoveById_SymlinkedRegisteredRootRefusesWithoutDeletingTarget()
+    {
+        var (victimRoot, victimMillerDir) = MakeWorkspace("victim-root");
+        string registeredRoot = Path.Combine(_dir, "registered-root-link");
+        if (!TryCreateDirectoryLink(registeredRoot, victimRoot))
+            return;
+
+        using WorkspaceRegistry registry = OpenRegistry();
+        registry.UpsertSeen(
+            "ws-root-symlink-0001",
+            "root-symlink-disp",
+            registeredRoot,
+            Path.Combine(registeredRoot, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        WorkspaceRemoveResult result =
+            WorkspaceRemoval.RemoveById(registry, "root-symlink-disp", liveRoot: null);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration, result.Result);
+        Assert.True(File.Exists(Path.Combine(victimMillerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-root-symlink-0001"));
+    }
+
+    [Fact]
+    public void RemoveById_ProtectedMillerDirectoryRefusesWithoutDeleting()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-protected");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-protected-000001", "protected-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveById(
+            registry,
+            "protected-disp",
+            liveRoot: null,
+            protectedMillerDir: millerDir);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedSensitive, result.Result);
+        Assert.True(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-protected-000001"));
+    }
+
     // ---------- RemoveByPath ----------
 
     [Fact]
@@ -151,15 +246,34 @@ public sealed class WorkspaceRemovalTests : IDisposable
     }
 
     [Fact]
-    public void RemoveByPath_UnregisteredDirWithMillerData_DeletesLocally()
+    public void RemoveByPath_ProtectedMillerDirectoryRefusesWithoutDeleting()
+    {
+        var (root, millerDir) = MakeWorkspace("ws-bypath-protected");
+        using WorkspaceRegistry registry = OpenRegistry();
+        Register(registry, "ws-bypath-protected-1", "bypath-protected-disp", root);
+
+        WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(
+            registry,
+            root,
+            liveRoot: null,
+            protectedMillerDir: millerDir);
+
+        Assert.Equal(WorkspaceRemoveResult.Outcome.RefusedSensitive, result.Result);
+        Assert.True(File.Exists(Path.Combine(millerDir, "symbols.db")));
+        Assert.NotNull(registry.Get("ws-bypath-protected-1"));
+    }
+
+    [Fact]
+    public void RemoveByPath_UnregisteredDirWithMillerDataRefusesImplicitDeletion()
     {
         var (root, millerDir) = MakeWorkspace("ws-unregistered");
         using WorkspaceRegistry registry = OpenRegistry();
 
         WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(registry, root, liveRoot: null);
 
-        Assert.Equal(WorkspaceRemoveResult.Outcome.Removed, result.Result);
-        Assert.False(Directory.Exists(millerDir));
+        Assert.Equal(WorkspaceRemoveResult.Outcome.NotFound, result.Result);
+        Assert.True(Directory.Exists(millerDir));
+        Assert.Contains("no registered workspace", WorkspaceRender.Remove(result, json: false));
     }
 
     [Fact]
@@ -186,5 +300,19 @@ public sealed class WorkspaceRemovalTests : IDisposable
         WorkspaceRemoveResult result = WorkspaceRemoval.RemoveByPath(registry, goneRoot, liveRoot: null);
 
         Assert.Equal(WorkspaceRemoveResult.Outcome.NotFound, result.Result);
+    }
+
+    private static bool TryCreateDirectoryLink(string linkPath, string targetPath)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return false;
+        }
     }
 }

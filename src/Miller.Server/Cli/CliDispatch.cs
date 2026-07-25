@@ -2369,15 +2369,17 @@ public static class CliDispatch
                 err.WriteLine(ex.Message);
                 return 2;
             }
-            outw.WriteLine(WorkspaceRender.Status(
-                WorkspaceFactsAssembler.FromRegisteredRow(
+            WorkspaceFacts selectedFacts = WorkspaceFactsAssembler.FromRegisteredRow(
                     registry,
                     row,
                     WorkspaceRegisteredFactsProfile.CliStatus,
                     sidecar,
-                    contentSidecar),
+                    contentSidecar);
+            outw.WriteLine(WorkspaceRender.Status(
+                selectedFacts,
                 TelemetrySummary.Empty,
-                json));
+                json,
+                CliLeaderFacts(selectedFacts.DbPath)));
             return 0;
         }
 
@@ -2385,15 +2387,17 @@ public static class CliDispatch
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
-            outw.WriteLine(WorkspaceRender.Status(
-                WorkspaceFactsAssembler.FromRegisteredRow(
+            WorkspaceFacts currentFacts = WorkspaceFactsAssembler.FromRegisteredRow(
                     registry,
                     currentRow,
                     WorkspaceRegisteredFactsProfile.CliStatus,
                     sidecar,
-                    contentSidecar),
+                    contentSidecar);
+            outw.WriteLine(WorkspaceRender.Status(
+                currentFacts,
                 TelemetrySummary.Empty,
-                json));
+                json,
+                CliLeaderFacts(currentFacts.DbPath)));
             return 0;
         }
 
@@ -2405,7 +2409,11 @@ public static class CliDispatch
             indexFacts,
             sidecar,
             contentSidecar);
-        outw.WriteLine(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json));
+        outw.WriteLine(WorkspaceRender.Status(
+            facts,
+            TelemetrySummary.Empty,
+            json,
+            CliLeaderFacts(facts.DbPath)));
         return 0;
     }
 
@@ -3014,7 +3022,11 @@ public static class CliDispatch
         {
             try
             {
-                result = WorkspaceRemoval.RemoveById(registry, id!, liveRoot: null);
+                result = WorkspaceRemoval.RemoveById(
+                    registry,
+                    id!,
+                    liveRoot: null,
+                    protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath));
             }
             catch (KeyNotFoundException ex)
             {
@@ -3024,7 +3036,11 @@ public static class CliDispatch
         }
         else
         {
-            result = WorkspaceRemoval.RemoveByPath(registry, path!, liveRoot: null);
+            result = WorkspaceRemoval.RemoveByPath(
+                registry,
+                path!,
+                liveRoot: null,
+                protectedMillerDir: Path.GetDirectoryName(ctx.RegistryDbPath));
         }
 
         outw.WriteLine(WorkspaceRender.Remove(result, json));
@@ -3050,13 +3066,15 @@ public static class CliDispatch
         _ => 1,
     };
 
-    // Map a remove outcome to a process exit code. Removed and NotFound are both success (the index dir is gone
-    // — NotFound is an idempotent no-op); a refusal (another writer holds the lock, or the live workspace) did
-    // NOT delete, so it is an operational failure (3) a CI teardown must see.
+    // Removed and NotFound are successful command outcomes; NotFound is an idempotent no-op and may leave an
+    // unregistered .miller directory untouched. Every refusal preserves the registry row and index data.
     internal static int RemoveExitCode(WorkspaceRemoveResult.Outcome outcome) => outcome switch
     {
         WorkspaceRemoveResult.Outcome.Removed or WorkspaceRemoveResult.Outcome.NotFound => 0,
-        WorkspaceRemoveResult.Outcome.RefusedInUse or WorkspaceRemoveResult.Outcome.RefusedLive => 3,
+        WorkspaceRemoveResult.Outcome.RefusedInUse
+            or WorkspaceRemoveResult.Outcome.RefusedLive
+            or WorkspaceRemoveResult.Outcome.RefusedSensitive
+            or WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => 3,
         _ => 1,
     };
 

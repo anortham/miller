@@ -8,15 +8,16 @@ quality, security status, semantic search quality, or enterprise readiness.
 
 - `compact` is hard-bounded to at most 14 lines, and each dynamic value is flattened to one line and capped at
   240 characters. It renders aggregate quality counts, the first warning, and the first recommended action. Its
-  final `omitted` line reports all six hidden extraction-detail groups, their exact grouped-row total, and the
-  exact warning/action counts not rendered.
-- CLI `--json` and MCP `format="json", detail="full"` are complete and follow the shape below; no extraction
-  rows, warnings, or actions are capped.
-- MCP `format="json"` defaults to `detail="summary"`, a 12 KiB agent-facing report. It preserves the verdict,
+  final `omitted` line reports the number of available extraction-detail groups hidden as `groups`, the number
+  whose source was unavailable as `unavailable`, their exact grouped-row total, and the exact warning/action
+  counts not rendered.
+- CLI `--json` is complete and follows the shape below; no extraction rows, warnings, or actions are capped.
+- MCP `format="json"` is a 12 KiB agent-facing summary. It preserves the verdict,
   workspace identity, actionable index and sidecar state, extraction section availability and exact row counts,
-  telemetry outcome counts, and bounded warnings/actions. `detail="full"` is the explicit exhaustive path.
-- `markdown` is available from the CLI with `--markdown` and from MCP with `format="markdown"`. It contains the
-  compact summary followed by the complete JSON report in a fenced block.
+  telemetry outcome counts, and bounded warnings/actions. Exhaustive JSON stays CLI-only so an MCP call cannot
+  flood agent context.
+- CLI `--markdown` contains the compact summary followed by the complete JSON report in a fenced block. MCP
+  accepts only `format="compact"` or `format="json"`.
 
 ## Top-level shape
 
@@ -43,7 +44,7 @@ The MCP summary adds `detail: "summary"`. Its extraction sections report `availa
 instead of copying every grouped row. `warnings` and `recommended_actions` return at most three entries each,
 with `warnings_total_count`, `warnings_omitted_count`, `recommended_actions_total_count`, and
 `recommended_actions_omitted_count` preserving exact coverage. `next_action` points to
-`workspace(operation="health", format="json", detail="full")`.
+`miller workspace health --json`.
 
 ## Sections
 
@@ -122,4 +123,5 @@ visibly when its required `search.db` is missing, stale, or corrupt.
 The health path must not hydrate the full repository index. It reads cheap status facts, sidecar metadata,
 telemetry aggregates, and grouped SQLite counts from `symbols.db`. Parser-backed structural facts and complexity
 metrics are reported as primitive extractor facts only; Miller does not assign quality scores, risk thresholds, or
-commercial dashboard labels in this contract.
+commercial dashboard labels in this contract. All grouped extraction reads use one SQLite read transaction so
+section counts and availability describe one artifact snapshot.

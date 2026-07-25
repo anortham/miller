@@ -42,12 +42,12 @@ Current `json_commands` include:
 | `workspace health --json` | Workspace readiness verdict, warnings/actions, sidecar state, extraction-quality aggregates, and telemetry outcome counts. See [`workspace-health-v1.md`](workspace-health-v1.md). |
 | `workspace onboarding --json` | Privacy-safe startup guidance derived from local Miller telemetry: starter commands, hot current-index targets, common misses, and friction. See [`workspace-onboarding-v1.md`](workspace-onboarding-v1.md). |
 | `workspace leader --json` | Indexer-leader diagnostics and optional graceful handoff request status. See [`workspace-leader-json-v1.md`](workspace-leader-json-v1.md). |
-| `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`, with exact selection totals. |
+| `workspace list --json` | Registered workspaces from `~/.miller/workspaces.db`, with exact selection and missing-root totals. |
 | `workspace refresh --json` | Incremental convergence result for a registered workspace. |
 | `workspace full --json` | Forced full re-index result for a registered workspace. |
 | `refresh --json --wait` | Eros-friendly top-level alias for registered-workspace convergence. Accepts `--workspace-id`, `--workspace`, and `--full`; returns after the synchronous refresh attempt. See [`refresh-wait-v1.md`](refresh-wait-v1.md). |
 | `workspace open --json` | Register and index a workspace from the CLI. |
-| `workspace remove --json` | Delete a workspace `.miller` index directory and unregister it. |
+| `workspace remove --json` | Delete a registered workspace `.miller` index directory and unregister it. |
 | `search --json` | Symbol/default search, marker audits, or explicit content/source/external/web/all-text search results. |
 | `todos --json` | CLI compatibility alias for bounded TODO/FIXME/HACK/XXX marker audits over comment/doc-comment source regions. |
 | `inspect --json` | File/symbol summary or full inspect result. |
@@ -263,10 +263,19 @@ selector, and pass that selector to the read command. If B is not listed, call
 `content search --workspace-id all` and `telemetry export --workspace-id all`; it is not a symbol/code read
 selector.
 
-`workspace list --json` reports `registered`, `matched`, `returned`, `omitted`, `omitted_errors`, `filter`, and
-`limit` beside the `workspaces` array. These totals come directly from registry rows; listing never hydrates a
-workspace index. `filter` and `limit` are `null` when inactive. Compact output applies the default limit of 20 and
-prints the same four primary totals plus the active filter and limit before the returned rows.
+`workspace list --json` reports `registered`, `matched`, `returned`, `omitted`, `omitted_errors`,
+`registered_missing`, `matched_missing`, `returned_missing`, `filter`, and `limit` beside the `workspaces` array.
+Every row includes `root_missing`. These totals come from one registry read plus root-existence checks; listing
+never opens a workspace index. The exact missing-root totals require one synchronous existence probe per
+registered row, including rows omitted by the output limit. `filter` and `limit` are `null` when inactive.
+Compact output applies the default limit of 20 and prints the same primary totals plus the active filter and
+limit before the returned rows.
+
+`workspace remove` resolves a registered selector or registered root before deleting. An existing but
+unregistered `.miller` directory returns `not_found` and is left untouched. The live workspace, sensitive roots,
+the machine-global Miller directory, corrupt registry paths, and any workspace holding a write lease are refused
+without deletion. The JSON `result` vocabulary is `removed`, `not_found`, `refused_live`, `refused_in_use`,
+`refused_sensitive`, and `refused_invalid_registration`; a refusal never unregisters the row or deletes data.
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and

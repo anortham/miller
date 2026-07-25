@@ -19,15 +19,34 @@ It is generic to any Miller-indexed repo and does not write `CLAUDE.md`, `AGENTS
   "workspace": {},
   "telemetry": {},
   "start_here": [],
+  "start_here_total_count": 0,
+  "start_here_omitted_count": 0,
   "tool_mix": [],
+  "tool_mix_total_count": 0,
+  "tool_mix_omitted_count": 0,
   "successful_flows": [],
+  "successful_flows_total_count": 0,
+  "successful_flows_omitted_count": 0,
   "hot_targets": [],
+  "hot_targets_total_count": 0,
+  "hot_targets_omitted_count": 0,
   "common_misses": [],
+  "common_misses_total_count": 0,
+  "common_misses_omitted_count": 0,
   "friction": [],
+  "friction_total_count": 0,
+  "friction_omitted_count": 0,
   "instruction_notes": [],
+  "instruction_notes_total_count": 0,
+  "instruction_notes_omitted_count": 0,
   "privacy": {}
 }
 ```
+
+Every array section has adjacent `*_total_count` and `*_omitted_count` fields. Totals describe the complete
+scoped aggregate; omissions are exact even when SQL or the MCP row limit returns only a prefix. MCP JSON also
+includes `agent_row_limit`. The telemetry reader computes every aggregate and total inside one SQLite read
+transaction instead of loading the full telemetry window into memory.
 
 ## Required fields
 
@@ -89,6 +108,8 @@ It is generic to any Miller-indexed repo and does not write `CLAUDE.md`, `AGENTS
 - `raw_queries_stored`: always `false`.
 - `raw_targets_stored`: always `false`.
 - `notes`: privacy notes. Target hashes are matched only against the current local index; unresolved hashes are not emitted.
+- `notes_total_count`: exact privacy-note count.
+- `notes_omitted_count`: always `0`; privacy notes are never truncated by the agent row limit.
 
 ## Privacy and stability
 

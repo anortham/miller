@@ -71,7 +71,8 @@ public readonly record struct WorkspaceListEntry(
     long? LastRevision,
     bool Current,
     string? LastError,
-    DateTimeOffset LastSeenAt = default);
+    DateTimeOffset LastSeenAt = default,
+    bool RootMissing = false);
 
 public sealed record WorkspaceListFacts(
     IReadOnlyList<WorkspaceListEntry> Entries,
@@ -81,7 +82,10 @@ public sealed record WorkspaceListFacts(
     int Omitted,
     int OmittedErrors,
     string? Filter,
-    int? Limit);
+    int? Limit,
+    int RegisteredMissing = 0,
+    int MatchedMissing = 0,
+    int ReturnedMissing = 0);
 
 public enum WorkspaceHealthFormat
 {
@@ -157,9 +161,7 @@ public readonly record struct WorkspaceOpenResult(
     string? WarningText = null);
 
 /// <summary>
-/// The result of a <c>remove(path)</c> (M7 decision-1/8): the <c>.miller</c> index dir was deleted, the deletion
-/// was REFUSED because the path is the live workspace (in use), or there was no <c>.miller</c> dir to remove
-/// (not an error — a clean no-op). <see cref="MillerDir"/> is the resolved <c>.miller</c> path the result concerns.
+/// Result of a registered workspace removal attempt.
 /// </summary>
 public readonly record struct WorkspaceRemoveResult(
     WorkspaceRemoveResult.Outcome Result,
@@ -168,7 +170,7 @@ public readonly record struct WorkspaceRemoveResult(
     string? Root = null,
     bool IndexDirDeleted = false)
 {
-    /// <summary>The three honest outcomes of a remove.</summary>
+    /// <summary>Removal outcome.</summary>
     public enum Outcome
     {
         /// <summary>The <c>.miller</c> index dir was deleted.</summary>
@@ -180,7 +182,13 @@ public readonly record struct WorkspaceRemoveResult(
         /// <summary>Refused: another process holds the target workspace writer lock.</summary>
         RefusedInUse,
 
-        /// <summary>No <c>.miller</c> dir existed at the path — nothing to remove (a clean no-op, not an error).</summary>
+        /// <summary>Refused: the target is a sensitive or machine-global Miller directory.</summary>
+        RefusedSensitive,
+
+        /// <summary>Refused: the registry row does not map to its canonical workspace index path.</summary>
+        RefusedInvalidRegistration,
+
+        /// <summary>No registered workspace matched the requested target.</summary>
         NotFound,
     }
 
@@ -200,7 +208,19 @@ public readonly record struct WorkspaceRemoveResult(
     public static WorkspaceRemoveResult RefusedInUse(string millerDir, string? workspaceId = null, string? root = null) =>
         new(Outcome.RefusedInUse, millerDir, workspaceId, root);
 
-    /// <summary>No <c>.miller</c> dir to remove (clean no-op).</summary>
+    public static WorkspaceRemoveResult RefusedSensitive(
+        string millerDir,
+        string? workspaceId = null,
+        string? root = null) =>
+        new(Outcome.RefusedSensitive, millerDir, workspaceId, root);
+
+    public static WorkspaceRemoveResult RefusedInvalidRegistration(
+        string millerDir,
+        string? workspaceId = null,
+        string? root = null) =>
+        new(Outcome.RefusedInvalidRegistration, millerDir, workspaceId, root);
+
+    /// <summary>No registered workspace matched the target.</summary>
     public static WorkspaceRemoveResult NotFound(string millerDir, string? workspaceId = null, string? root = null) =>
         new(Outcome.NotFound, millerDir, workspaceId, root);
 }
@@ -793,13 +813,16 @@ public static class WorkspaceRender
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
           .Append(ParseDiagnosticCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
-          .Append(" parse diagnostics  ")
+          .Append(" parse diagnostics").Append(AvailabilitySuffix(facts.Extraction.ParseDiagnostics))
+          .Append("  ")
           .Append(OpenCapabilityGapCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
-          .Append(" open capability gaps  ")
+          .Append(" open capability gaps").Append(AvailabilitySuffix(facts.Extraction.CapabilityGaps))
+          .Append("  ")
           .Append(StructuralFactCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
-          .Append(" structural facts  ")
+          .Append(" structural facts").Append(AvailabilitySuffix(facts.Extraction.StructuralFacts))
+          .Append("  ")
           .Append(ComplexityMetricCount(facts.Extraction).ToString(CultureInfo.InvariantCulture))
-          .Append(" complexity metrics")
+          .Append(" complexity metrics").Append(AvailabilitySuffix(facts.Extraction.ComplexityMetrics))
           .Append('\n');
         sb.Append("telemetry: ")
           .Append(facts.TelemetryHealth.TotalCalls.ToString(CultureInfo.InvariantCulture))
@@ -819,12 +842,28 @@ public static class WorkspaceRender
             facts.Extraction.StructuralFacts.Rows.Count +
             facts.Extraction.ComplexityMetrics.Rows.Count +
             facts.Extraction.Files.Rows.Count;
-        sb.Append("omitted: groups=6 rows=").Append(omittedRows.ToString(CultureInfo.InvariantCulture))
+        int unavailableGroups = HealthSections(facts.Extraction).Count(static available => !available);
+        sb.Append("omitted: groups=").Append(6 - unavailableGroups)
+          .Append(" unavailable=").Append(unavailableGroups)
+          .Append(" rows=").Append(omittedRows.ToString(CultureInfo.InvariantCulture))
           .Append(" warnings=").Append(Math.Max(0, facts.Warnings.Count - 1).ToString(CultureInfo.InvariantCulture))
           .Append(" actions=").Append(Math.Max(0, facts.RecommendedActions.Count - 1).ToString(CultureInfo.InvariantCulture))
           .Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static string AvailabilitySuffix<TRow>(HealthFactSection<TRow> section) =>
+        section.Available ? string.Empty : " (unavailable)";
+
+    private static IReadOnlyList<bool> HealthSections(WorkspaceExtractionHealthFacts facts) =>
+    [
+        facts.ParseDiagnostics.Available,
+        facts.CapabilityGaps.Available,
+        facts.LanguageCapabilities.Available,
+        facts.StructuralFacts.Available,
+        facts.ComplexityMetrics.Available,
+        facts.Files.Available,
+    ];
 
     private const int HealthCompactValueMaxChars = 240;
 
@@ -1074,6 +1113,9 @@ public static class WorkspaceRender
             writer.WriteEndObject();
 
             writer.WriteNumber("warnings_total_count", facts.Warnings.Count);
+            writer.WriteNumber(
+                "warnings_omitted_count",
+                Math.Max(0, facts.Warnings.Count - 3));
             writer.WriteStartArray("warnings");
             foreach (HealthWarning warning in facts.Warnings.Take(3))
             {
@@ -1086,13 +1128,14 @@ public static class WorkspaceRender
             writer.WriteEndArray();
 
             writer.WriteNumber("recommended_actions_total_count", facts.RecommendedActions.Count);
+            writer.WriteNumber(
+                "recommended_actions_omitted_count",
+                Math.Max(0, facts.RecommendedActions.Count - 3));
             writer.WriteStartArray("recommended_actions");
             foreach (string action in facts.RecommendedActions.Take(3))
                 writer.WriteStringValue(HealthCompactValue(action));
             writer.WriteEndArray();
-            writer.WriteString(
-                "full_detail",
-                "Use workspace operation=health format=json detail=full or `miller workspace health --json`.");
+            writer.WriteString("next_action", "Run `miller workspace health --json` for exhaustive detail.");
             writer.WriteEndObject();
         }
 
@@ -1332,9 +1375,7 @@ public static class WorkspaceRender
     // ---------- list ----------
 
     /// <summary>
-    /// Render the list view. Miller serves ONE workspace per process (a multi-workspace registry is
-    /// eros/commercial-tier — decision-1), so the list is the CURRENT workspace, honestly labelled so it is not
-    /// mistaken for a multi-entry registry.
+    /// Render the legacy single-workspace list view.
     /// </summary>
     public static string List(WorkspaceFacts facts, bool json) =>
         json ? ListJson(facts) : ListCompact(facts);
@@ -1353,6 +1394,26 @@ public static class WorkspaceRender
 
     public static string List(WorkspaceListFacts facts, bool json) =>
         json ? ListJson(facts) : ListCompact(facts);
+
+    public static BoundedPrefixRender ListWithinBudget(WorkspaceListFacts facts, bool json, int maxBytes) =>
+        ToolOutputBudget.RenderPrefixWithinByteBudgetWithCount(
+            facts.Entries,
+            maxBytes,
+            (retained, omittedByBudget) =>
+                List(
+                    facts with
+                    {
+                        Entries = retained,
+                        Returned = retained.Count,
+                        Omitted = facts.Omitted + omittedByBudget,
+                        OmittedErrors = facts.OmittedErrors +
+                            facts.Entries
+                                .Skip(retained.Count)
+                                .Count(static entry =>
+                                    string.Equals(entry.State, "error", StringComparison.Ordinal)),
+                        ReturnedMissing = retained.Count(static entry => entry.RootMissing),
+                    },
+                    json));
 
     /// <summary>The default number of compact <c>workspace list</c> entries before the omitted-count tail.</summary>
     public const int DefaultListLimit = 20;
@@ -1388,6 +1449,8 @@ public static class WorkspaceRender
           .Append(" matched=").Append(facts.Matched)
           .Append(" returned=").Append(facts.Returned)
           .Append(" omitted=").Append(facts.Omitted)
+          .Append(" registered_missing=").Append(facts.RegisteredMissing)
+          .Append(" matched_missing=").Append(facts.MatchedMissing)
           .Append('\n');
         sb.Append("selection: filter=");
         if (facts.Filter is null)
@@ -1411,6 +1474,7 @@ public static class WorkspaceRender
             if (entry.Current)
                 sb.Append("  [current]");
             sb.Append("  state: ").Append(entry.State)
+              .Append(entry.RootMissing ? " (root missing)" : string.Empty)
               .Append("  rev: ").Append(entry.LastRevision?.ToString() ?? "(unknown)");
             if (!string.IsNullOrEmpty(entry.LastError))
                 sb.Append('\n').Append("  error: ").Append(entry.LastError);
@@ -1423,6 +1487,11 @@ public static class WorkspaceRender
             if (facts.OmittedErrors > 0)
                 sb.Append("errors: ").Append(facts.OmittedErrors)
                   .Append(" workspace(s) in error state — filter or raise limit to see them\n");
+        }
+        if (facts.MatchedMissing > 0)
+        {
+            sb.Append("missing roots: ").Append(facts.MatchedMissing)
+              .Append(" — preview registry cleanup with a prune dry run\n");
         }
 
         return sb.ToString().TrimEnd('\n');
@@ -1462,6 +1531,9 @@ public static class WorkspaceRender
             w.WriteNumber("returned", facts.Returned);
             w.WriteNumber("omitted", facts.Omitted);
             w.WriteNumber("omitted_errors", facts.OmittedErrors);
+            w.WriteNumber("registered_missing", facts.RegisteredMissing);
+            w.WriteNumber("matched_missing", facts.MatchedMissing);
+            w.WriteNumber("returned_missing", facts.ReturnedMissing);
             if (facts.Filter is null) w.WriteNull("filter");
             else w.WriteString("filter", facts.Filter);
             if (facts.Limit is { } limit) w.WriteNumber("limit", limit);
@@ -1479,6 +1551,7 @@ public static class WorkspaceRender
                 if (entry.LastRevision is { } revision) w.WriteNumber("last_revision", revision);
                 else w.WriteNull("last_revision");
                 w.WriteBoolean("current", entry.Current);
+                w.WriteBoolean("root_missing", entry.RootMissing);
                 if (entry.LastError is null) w.WriteNull("last_error");
                 else w.WriteString("last_error", entry.LastError);
                 // Additive: ISO-8601 recency stamp (round-trip "o" format) used for ordering.
@@ -1521,12 +1594,13 @@ public static class WorkspaceRender
             sb.Append("  error ").Append(facts.Telemetry.Error);
         sb.Append('\n');
 
-        AppendLines(sb, "start here", facts.StartHere.Take(rowLimit).ToArray());
+        IReadOnlyList<string> startHere = facts.StartHere.Take(rowLimit).ToArray();
+        AppendLines(sb, "start here", startHere);
 
         if (facts.Telemetry.ToolMix.Count > 0)
         {
             sb.Append("tool mix:\n");
-            foreach (TelemetryToolMix row in facts.Telemetry.ToolMix.Take(Math.Min(5, rowLimit)))
+            foreach (TelemetryToolMix row in facts.Telemetry.ToolMix.Take(rowLimit))
                 sb.Append("- ").Append(OnboardingLabel(row.Tool, row.Op)).Append("  calls ")
                     .Append(row.Calls.ToString(CultureInfo.InvariantCulture))
                     .Append("  empty ").Append(row.EmptyCount.ToString(CultureInfo.InvariantCulture))
@@ -1537,7 +1611,7 @@ public static class WorkspaceRender
         if (facts.Telemetry.SuccessfulFlows.Count > 0)
         {
             sb.Append("successful flows:\n");
-            foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(Math.Min(5, rowLimit)))
+            foreach (TelemetryFlow flow in facts.Telemetry.SuccessfulFlows.Take(rowLimit))
                 sb.Append("- ").Append(flow.From).Append(" -> ").Append(flow.To)
                     .Append(" (").Append(flow.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
         }
@@ -1545,12 +1619,13 @@ public static class WorkspaceRender
         if (facts.HotTargets.Count > 0)
         {
             sb.Append("hot targets:\n");
-            // Resolved targets carry a per-row label worth a line; unresolved hashes convey nothing
-            // individually, so collapse however many there are into one aggregate line.
-            List<RecoveredTargetHash> resolved = facts.HotTargets.Where(static t => !IsUnresolvedTarget(t)).ToList();
-            List<RecoveredTargetHash> unresolved = facts.HotTargets.Where(static t => IsUnresolvedTarget(t)).ToList();
+            RecoveredTargetHash[] returnedTargets = facts.HotTargets.Take(rowLimit).ToArray();
+            List<RecoveredTargetHash> resolved =
+                returnedTargets.Where(static target => !IsUnresolvedTarget(target)).ToList();
+            List<RecoveredTargetHash> unresolved =
+                returnedTargets.Where(static target => IsUnresolvedTarget(target)).ToList();
 
-            foreach (RecoveredTargetHash target in resolved.Take(Math.Min(5, rowLimit)))
+            foreach (RecoveredTargetHash target in resolved)
                 sb.Append("- ").Append(TargetLabel(target)).Append("  ")
                     .Append(target.Confidence).Append("  calls ")
                     .Append(target.Calls.ToString(CultureInfo.InvariantCulture))
@@ -1573,14 +1648,59 @@ public static class WorkspaceRender
         if (facts.Telemetry.CommonMisses.Count > 0)
         {
             sb.Append("common misses:\n");
-            foreach (TelemetryMiss miss in facts.Telemetry.CommonMisses.Take(Math.Min(5, rowLimit)))
+            foreach (TelemetryMiss miss in facts.Telemetry.CommonMisses.Take(rowLimit))
                 sb.Append("- ").Append(OnboardingLabel(miss.Tool, miss.Op)).Append("  ")
                     .Append(miss.Reason).Append(" (")
                     .Append(miss.Calls.ToString(CultureInfo.InvariantCulture)).Append(")\n");
         }
 
-        AppendLines(sb, "instruction notes", facts.InstructionNotes.Take(rowLimit).ToArray());
-        AppendLines(sb, "privacy", facts.PrivacyNotes.Take(rowLimit).ToArray());
+        if (facts.Telemetry.Friction.Count > 0)
+        {
+            sb.Append("friction:\n");
+            foreach (TelemetryFriction row in facts.Telemetry.Friction.Take(rowLimit))
+                sb.Append("- ").Append(OnboardingLabel(row.Tool, row.Op))
+                    .Append("  errors ").Append(row.ErrorCount.ToString(CultureInfo.InvariantCulture))
+                    .Append("  empty ").Append(row.EmptyCount.ToString(CultureInfo.InvariantCulture))
+                    .Append("  p95 ").Append(row.P95Ms.ToString(CultureInfo.InvariantCulture)).Append("ms")
+                    .Append("  bytes ").Append(row.BytesReturned.ToString(CultureInfo.InvariantCulture))
+                    .Append('\n');
+        }
+
+        IReadOnlyList<string> instructionNotes = facts.InstructionNotes.Take(rowLimit).ToArray();
+        AppendLines(sb, "instruction notes", instructionNotes);
+        AppendLines(sb, "privacy", facts.PrivacyNotes);
+
+        var omissions = new List<string>();
+        AddOmission(omissions, "start here", facts.StartHere.Count, startHere.Count);
+        AddOmission(
+            omissions,
+            "tool mix",
+            ExactTotal(facts.Telemetry.ToolMixTotal, facts.Telemetry.ToolMix.Count),
+            Math.Min(facts.Telemetry.ToolMix.Count, rowLimit));
+        AddOmission(
+            omissions,
+            "successful flows",
+            ExactTotal(facts.Telemetry.SuccessfulFlowsTotal, facts.Telemetry.SuccessfulFlows.Count),
+            Math.Min(facts.Telemetry.SuccessfulFlows.Count, rowLimit));
+        AddOmission(
+            omissions,
+            "hot targets",
+            ExactTotal(facts.Telemetry.TargetHashesTotal, facts.HotTargets.Count),
+            Math.Min(facts.HotTargets.Count, rowLimit));
+        AddOmission(
+            omissions,
+            "common misses",
+            ExactTotal(facts.Telemetry.CommonMissesTotal, facts.Telemetry.CommonMisses.Count),
+            Math.Min(facts.Telemetry.CommonMisses.Count, rowLimit));
+        AddOmission(
+            omissions,
+            "friction",
+            ExactTotal(facts.Telemetry.FrictionTotal, facts.Telemetry.Friction.Count),
+            Math.Min(facts.Telemetry.Friction.Count, rowLimit));
+        AddOmission(omissions, "instruction notes", facts.InstructionNotes.Count, instructionNotes.Count);
+        if (omissions.Count > 0)
+            sb.Append("omitted: ").AppendJoin("; ", omissions).Append('\n');
+
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -1616,26 +1736,83 @@ public static class WorkspaceRender
             else w.WriteString("error", facts.Telemetry.Error);
             w.WriteEndObject();
 
-            WriteStringArray(w, "start_here", facts.StartHere.Take(rowLimit).ToArray());
-            WriteToolMixJson(w, facts.Telemetry.ToolMix.Take(rowLimit).ToArray());
-            WriteFlowsJson(w, facts.Telemetry.SuccessfulFlows.Take(rowLimit).ToArray());
-            WriteHotTargetsJson(w, facts.HotTargets.Take(rowLimit).ToArray());
-            WriteMissesJson(w, facts.Telemetry.CommonMisses.Take(rowLimit).ToArray());
-            WriteFrictionJson(w, facts.Telemetry.Friction.Take(rowLimit).ToArray());
+            string[] startHere = facts.StartHere.Take(rowLimit).ToArray();
+            TelemetryToolMix[] toolMix = facts.Telemetry.ToolMix.Take(rowLimit).ToArray();
+            TelemetryFlow[] successfulFlows = facts.Telemetry.SuccessfulFlows.Take(rowLimit).ToArray();
+            RecoveredTargetHash[] hotTargets = facts.HotTargets.Take(rowLimit).ToArray();
+            TelemetryMiss[] commonMisses = facts.Telemetry.CommonMisses.Take(rowLimit).ToArray();
+            TelemetryFriction[] friction = facts.Telemetry.Friction.Take(rowLimit).ToArray();
+            string[] instructionNotes = facts.InstructionNotes.Take(rowLimit).ToArray();
+
+            WriteStringArray(w, "start_here", startHere);
+            WriteCountMetadata(w, "start_here", facts.StartHere.Count, startHere.Length);
+            WriteToolMixJson(w, toolMix);
+            WriteCountMetadata(
+                w,
+                "tool_mix",
+                ExactTotal(facts.Telemetry.ToolMixTotal, facts.Telemetry.ToolMix.Count),
+                toolMix.Length);
+            WriteFlowsJson(w, successfulFlows);
+            WriteCountMetadata(
+                w,
+                "successful_flows",
+                ExactTotal(facts.Telemetry.SuccessfulFlowsTotal, facts.Telemetry.SuccessfulFlows.Count),
+                successfulFlows.Length);
+            WriteHotTargetsJson(w, hotTargets);
+            WriteCountMetadata(
+                w,
+                "hot_targets",
+                ExactTotal(facts.Telemetry.TargetHashesTotal, facts.HotTargets.Count),
+                hotTargets.Length);
+            WriteMissesJson(w, commonMisses);
+            WriteCountMetadata(
+                w,
+                "common_misses",
+                ExactTotal(facts.Telemetry.CommonMissesTotal, facts.Telemetry.CommonMisses.Count),
+                commonMisses.Length);
+            WriteFrictionJson(w, friction);
+            WriteCountMetadata(
+                w,
+                "friction",
+                ExactTotal(facts.Telemetry.FrictionTotal, facts.Telemetry.Friction.Count),
+                friction.Length);
             WriteStringArray(
                 w,
                 "instruction_notes",
-                facts.InstructionNotes.Take(rowLimit).ToArray());
+                instructionNotes);
+            WriteCountMetadata(
+                w,
+                "instruction_notes",
+                facts.InstructionNotes.Count,
+                instructionNotes.Length);
 
             w.WritePropertyName("privacy");
             w.WriteStartObject();
             w.WriteBoolean("raw_queries_stored", false);
             w.WriteBoolean("raw_targets_stored", false);
-            WriteStringArray(w, "notes", facts.PrivacyNotes.Take(rowLimit).ToArray());
+            WriteStringArray(w, "notes", facts.PrivacyNotes);
+            w.WriteNumber("notes_total_count", facts.PrivacyNotes.Count);
+            w.WriteNumber("notes_omitted_count", 0);
             w.WriteEndObject();
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static int ExactTotal(int reportedTotal, int returnedCount) =>
+        Math.Max(reportedTotal, returnedCount);
+
+    private static void AddOmission(List<string> omissions, string label, int total, int returned)
+    {
+        int omitted = Math.Max(0, total - returned);
+        if (omitted > 0)
+            omissions.Add($"{label} {omitted.ToString(CultureInfo.InvariantCulture)}");
+    }
+
+    private static void WriteCountMetadata(Utf8JsonWriter w, string name, int total, int returned)
+    {
+        w.WriteNumber($"{name}_total_count", total);
+        w.WriteNumber($"{name}_omitted_count", Math.Max(0, total - returned));
     }
 
     private static void WriteToolMixJson(Utf8JsonWriter w, IReadOnlyList<TelemetryToolMix> rows)
@@ -1950,8 +2127,12 @@ public static class WorkspaceRender
             "Stop that Miller first, or remove a different workspace.",
         WorkspaceRemoveResult.Outcome.RefusedInUse =>
             $"refused: {result.MillerDir} is in use by another Miller writer. Stop that Miller first.",
+        WorkspaceRemoveResult.Outcome.RefusedSensitive =>
+            "refused: the requested removal target is a sensitive or machine-global Miller directory.",
+        WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration =>
+            "refused: the registry entry does not map to its canonical workspace index directory.",
         WorkspaceRemoveResult.Outcome.NotFound =>
-            $"not found: no index dir at {result.MillerDir} — nothing to remove (not an error).",
+            $"not found: no registered workspace matches {result.Root ?? result.MillerDir} — nothing removed.",
         _ => $"remove: unrecognised outcome for {result.MillerDir}.",
     };
 
@@ -1966,6 +2147,8 @@ public static class WorkspaceRender
                 WorkspaceRemoveResult.Outcome.Removed => "removed",
                 WorkspaceRemoveResult.Outcome.RefusedLive => "refused_live",
                 WorkspaceRemoveResult.Outcome.RefusedInUse => "refused_in_use",
+                WorkspaceRemoveResult.Outcome.RefusedSensitive => "refused_sensitive",
+                WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration => "refused_invalid_registration",
                 WorkspaceRemoveResult.Outcome.NotFound => "not_found",
                 _ => "unknown",
             });
@@ -1987,6 +2170,14 @@ public static class WorkspaceRender
     public static string Prune(WorkspacePruneResult result, bool json) =>
         json ? PruneJson(result) : PruneCompact(result);
 
+    public static string PruneWithinBudget(WorkspacePruneResult result, bool json, int maxBytes) =>
+        json
+            ? ToolOutputBudget.RenderPrefixWithinByteBudget(
+                result.Pruned,
+                maxBytes,
+                (retained, omitted) => PruneJson(result, retained, omitted))
+            : PruneCompact(result);
+
     private const int PruneCompactExampleCap = 10;
 
     private static string PruneCompact(WorkspacePruneResult result)
@@ -2001,15 +2192,24 @@ public static class WorkspaceRender
         return string.Join('\n', lines);
     }
 
-    private static string PruneJson(WorkspacePruneResult result)
+    private static string PruneJson(WorkspacePruneResult result) =>
+        PruneJson(result, result.Pruned, omitted: 0);
+
+    private static string PruneJson(
+        WorkspacePruneResult result,
+        IReadOnlyList<WorkspacePruneEntry> retained,
+        int omitted)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var w = NewWriter(buffer))
         {
             w.WriteStartObject();
             w.WriteBoolean("dry_run", result.DryRun);
+            w.WriteNumber("pruned_total", result.Pruned.Count);
+            w.WriteNumber("returned", retained.Count);
+            w.WriteNumber("omitted", omitted);
             w.WriteStartArray("pruned");
-            foreach (WorkspacePruneEntry entry in result.Pruned)
+            foreach (WorkspacePruneEntry entry in retained)
             {
                 w.WriteStartObject();
                 w.WriteString("workspace_id", entry.WorkspaceId);

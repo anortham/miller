@@ -586,7 +586,10 @@ What these prove:
   and full graph hydration; onboarding adds a read-only telemetry summary plus current-index target recovery.
 - `workspace leader` reports leader identity/liveness and can request graceful handoff without killing processes.
 - `workspace onboarding` turns local telemetry into starter commands, hot current-index targets, common misses,
-  and friction signals. Telemetry stores target hashes, not raw queries or raw target text.
+  and friction signals with exact omission counts. Telemetry stores target hashes, not raw queries or raw target
+  text.
+- `workspace list` marks missing roots without opening their indexes. `workspace remove` deletes only a
+  registered target and refuses live, sensitive, machine-global, corrupt-path, or write-locked targets.
 - Symbol search stays narrow and structural (`name + signature`). Docs/config use `--mode content`; source
   bodies and imported text use the explicit content corpus modes.
 - `patterns --json` discovers extractor-recognized code-shape facts across the full pattern catalog (framework

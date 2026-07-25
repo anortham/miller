@@ -209,6 +209,9 @@
         "removed-registration" => $"Removed registration {Subject} — no index data was on disk.",
         "remove-refused-in-use" => $"Remove refused — {Subject} is in use by another Miller process.",
         "remove-refused-live" => $"Remove refused — {Subject} is a live workspace.",
+        "remove-refused-sensitive" => $"Remove refused — {Subject} is a sensitive or machine-global Miller directory.",
+        "remove-refused-invalid-registration" =>
+            $"Remove refused — {Subject} has an invalid registry-to-index path mapping.",
         "remove-not-found" => $"No registered workspace matched {Subject}.",
         "remove-error" => $"Remove failed: {NoticeDetail}",
         "pruned" => PrunedMessage,
@@ -216,7 +219,12 @@
     };
 
     private bool NoticeIsError =>
-        Notice is "remove-refused-in-use" or "remove-refused-live" or "remove-not-found" or "remove-error";
+        Notice is "remove-refused-in-use"
+            or "remove-refused-live"
+            or "remove-refused-sensitive"
+            or "remove-refused-invalid-registration"
+            or "remove-not-found"
+            or "remove-error";
 
     private string Subject => string.IsNullOrWhiteSpace(NoticeDetail) ? "the workspace" : NoticeDetail!;
 

@@ -94,10 +94,9 @@ public sealed record WorkspaceOnboardingFacts(
             telemetry,
             hotTargets.OrderByDescending(static row => row.Calls)
                 .ThenBy(static row => row.Confidence, StringComparer.Ordinal)
-                .Take(10)
                 .ToArray(),
-            startHere.Distinct(StringComparer.Ordinal).Take(5).ToArray(),
-            notes.Distinct(StringComparer.Ordinal).Take(5).ToArray(),
+            startHere.Distinct(StringComparer.Ordinal).ToArray(),
+            notes.Distinct(StringComparer.Ordinal).ToArray(),
             privacy);
     }
 }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
@@ -199,6 +200,9 @@ public sealed class WorkspaceToolPruneTests : IDisposable
 
         Assert.False(doc.RootElement.GetProperty("dry_run").GetBoolean());
         Assert.Equal(2, doc.RootElement.GetProperty("kept").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("pruned_total").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("returned").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("omitted").GetInt32());
         JsonElement pruned = doc.RootElement.GetProperty("pruned");
         Assert.Equal(JsonValueKind.Array, pruned.ValueKind);
         Assert.Equal(1, pruned.GetArrayLength());
@@ -218,6 +222,39 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("dry_run").GetBoolean());
         Assert.Equal(1, doc.RootElement.GetProperty("pruned").GetArrayLength());
         Assert.NotNull(registry.Get(MissingWs));
+    }
+
+    [Fact]
+    public void Prune_JsonLongRowsStayWithinBudgetAndReportExactOmissions()
+    {
+        (WorkspaceTool tool, _, _) = BuildTool((reg, _, _, _) =>
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                string workspaceId = $"ws-prune-long-{i:D3}";
+                string root = Path.Combine(
+                    NewTempDir($"long-{i}"),
+                    new string('x', 180),
+                    "gone");
+                reg.UpsertSeen(
+                    workspaceId,
+                    $"long-{i:D3}-" + new string('d', 180),
+                    Path.GetFullPath(root),
+                    Path.Combine(root, ".miller", "symbols.db"),
+                    WorkspaceRegistryState.Stale);
+            }
+        });
+
+        string output = tool.Workspace(operation: "prune", format: "json", dry_run: true);
+
+        Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.WorkspaceMcpMaxBytes);
+        using var doc = JsonDocument.Parse(output);
+        int total = doc.RootElement.GetProperty("pruned_total").GetInt32();
+        int returned = doc.RootElement.GetProperty("returned").GetInt32();
+        Assert.Equal(101, total);
+        Assert.InRange(returned, 1, 100);
+        Assert.Equal(total - returned, doc.RootElement.GetProperty("omitted").GetInt32());
+        Assert.Equal(returned, doc.RootElement.GetProperty("pruned").GetArrayLength());
     }
 
     [Fact]

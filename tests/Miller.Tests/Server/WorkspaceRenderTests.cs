@@ -329,11 +329,71 @@ public sealed class WorkspaceRenderTests
     [Fact]
     public void Onboarding_Json_AgentRowLimitBoundsTelemetrySections()
     {
-        using var doc = JsonDocument.Parse(
-            WorkspaceRender.Onboarding(OnboardingFacts(), json: true, rowLimit: 2));
+        WorkspaceOnboardingFacts facts = OnboardingFacts();
+        facts = facts with
+        {
+            Telemetry = facts.Telemetry with
+            {
+                ToolMixTotal = 7,
+                SuccessfulFlowsTotal = 4,
+                TargetHashesTotal = 5,
+                CommonMissesTotal = 3,
+                FrictionTotal = 6,
+            },
+        };
+        using var doc = JsonDocument.Parse(WorkspaceRender.Onboarding(facts, json: true, rowLimit: 2));
+        JsonElement root = doc.RootElement;
 
-        Assert.Equal(2, doc.RootElement.GetProperty("tool_mix").GetArrayLength());
-        Assert.True(Encoding.UTF8.GetByteCount(doc.RootElement.GetRawText()) < 6 * 1024);
+        Assert.Equal(2, root.GetProperty("tool_mix").GetArrayLength());
+        Assert.Equal(7, root.GetProperty("tool_mix_total_count").GetInt32());
+        Assert.Equal(5, root.GetProperty("tool_mix_omitted_count").GetInt32());
+        Assert.Equal(4, root.GetProperty("successful_flows_total_count").GetInt32());
+        Assert.Equal(3, root.GetProperty("successful_flows_omitted_count").GetInt32());
+        Assert.Equal(5, root.GetProperty("hot_targets_total_count").GetInt32());
+        Assert.Equal(4, root.GetProperty("hot_targets_omitted_count").GetInt32());
+        Assert.Equal(3, root.GetProperty("common_misses_total_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("common_misses_omitted_count").GetInt32());
+        Assert.Equal(6, root.GetProperty("friction_total_count").GetInt32());
+        Assert.Equal(5, root.GetProperty("friction_omitted_count").GetInt32());
+        Assert.Equal(
+            facts.StartHere.Count - root.GetProperty("start_here").GetArrayLength(),
+            root.GetProperty("start_here_omitted_count").GetInt32());
+        Assert.Equal(
+            facts.InstructionNotes.Count - root.GetProperty("instruction_notes").GetArrayLength(),
+            root.GetProperty("instruction_notes_omitted_count").GetInt32());
+        JsonElement privacy = root.GetProperty("privacy");
+        Assert.Equal(facts.PrivacyNotes.Count, privacy.GetProperty("notes").GetArrayLength());
+        Assert.Equal(facts.PrivacyNotes.Count, privacy.GetProperty("notes_total_count").GetInt32());
+        Assert.Equal(0, privacy.GetProperty("notes_omitted_count").GetInt32());
+        Assert.True(Encoding.UTF8.GetByteCount(root.GetRawText()) < 6 * 1024);
+    }
+
+    [Fact]
+    public void Onboarding_Compact_ReportsExactOmissionsAndKeepsPrivacyComplete()
+    {
+        WorkspaceOnboardingFacts facts = OnboardingFacts();
+        facts = facts with
+        {
+            Telemetry = facts.Telemetry with
+            {
+                ToolMixTotal = 7,
+                SuccessfulFlowsTotal = 4,
+                TargetHashesTotal = 5,
+                CommonMissesTotal = 3,
+                FrictionTotal = 6,
+            },
+        };
+
+        string text = WorkspaceRender.Onboarding(facts, json: false, rowLimit: 1);
+
+        Assert.Contains("omitted:", text);
+        Assert.Contains("tool mix 6", text);
+        Assert.Contains("successful flows 3", text);
+        Assert.Contains("hot targets 4", text);
+        Assert.Contains("common misses 2", text);
+        Assert.Contains("friction 5", text);
+        foreach (string privacyNote in facts.PrivacyNotes)
+            Assert.Contains(privacyNote, text);
     }
 
     [Fact]
@@ -672,7 +732,7 @@ public sealed class WorkspaceRenderTests
 
         string compact = WorkspaceRender.Health(health, WorkspaceHealthFormat.Compact);
 
-        Assert.Contains("omitted: groups=6 rows=6 warnings=2 actions=2", compact);
+        Assert.Contains("omitted: groups=6 unavailable=0 rows=6 warnings=2 actions=2", compact);
         Assert.Contains("first warning", compact);
         Assert.Contains("first action", compact);
         Assert.DoesNotContain("second warning", compact);
@@ -680,6 +740,36 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain(new string('x', 241), compact);
         Assert.DoesNotContain(new string('y', 241), compact);
         Assert.True(compact.Split('\n').Length <= 14);
+    }
+
+    [Fact]
+    public void Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros()
+    {
+        const string error = "extract table unavailable";
+        var extraction = new WorkspaceExtractionHealthFacts(
+            HealthFactSection<ParseDiagnosticGroup>.Unavailable(error),
+            HealthFactSection<CapabilityGapGroup>.Unavailable(error),
+            HealthFactSection<LanguageCapabilitySummary>.Unavailable(error),
+            HealthFactSection<StructuralFactGroup>.Unavailable(error),
+            HealthFactSection<ComplexityMetricGroup>.Unavailable(error),
+            HealthFactSection<FileStatusGroup>.Unavailable(error));
+        var health = new WorkspaceHealthFacts(
+            Facts(),
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(0, 0, 0),
+            extraction,
+            [],
+            [],
+            HealthState.Unavailable,
+            error);
+
+        string compact = WorkspaceRender.Health(health, WorkspaceHealthFormat.Compact);
+
+        Assert.Contains("0 parse diagnostics (unavailable)", compact);
+        Assert.Contains("0 open capability gaps (unavailable)", compact);
+        Assert.Contains("0 structural facts (unavailable)", compact);
+        Assert.Contains("0 complexity metrics (unavailable)", compact);
+        Assert.Contains("omitted: groups=0 unavailable=6", compact);
     }
 
     [Fact]
@@ -800,8 +890,44 @@ public sealed class WorkspaceRenderTests
             root.GetProperty("extraction_quality").GetProperty("open_capability_gap_count").GetInt64());
         Assert.Equal("first", root.GetProperty("warnings")[0].GetProperty("code").GetString());
         Assert.Equal("first action", root.GetProperty("recommended_actions")[0].GetString());
+        Assert.Equal(2, root.GetProperty("warnings_total_count").GetInt32());
+        Assert.Equal(0, root.GetProperty("warnings_omitted_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("recommended_actions_total_count").GetInt32());
+        Assert.Equal(0, root.GetProperty("recommended_actions_omitted_count").GetInt32());
+        Assert.Contains(
+            "miller workspace health --json",
+            root.GetProperty("next_action").GetString(),
+            StringComparison.Ordinal);
         Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.WorkspaceHealthMcpMaxBytes);
         Assert.False(root.GetProperty("extraction_quality").TryGetProperty("language_capabilities", out _));
+    }
+
+    [Fact]
+    public void Health_JsonSummary_ReportsExactWarningAndActionOmissions()
+    {
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts(),
+            Telemetry: Telemetry,
+            TelemetryHealth: new TelemetryHealthFacts(OkCount: 5, EmptyCount: 1, ErrorCount: 2),
+            Extraction: ExtractionHealth(),
+            Warnings:
+            [
+                new HealthWarning("one", "degraded", "one"),
+                new HealthWarning("two", "degraded", "two"),
+                new HealthWarning("three", "degraded", "three"),
+                new HealthWarning("four", "degraded", "four"),
+            ],
+            RecommendedActions: ["one", "two", "three", "four", "five"],
+            State: HealthState.Degraded,
+            Summary: "workspace readable but degraded");
+
+        using var json = JsonDocument.Parse(
+            WorkspaceRender.Health(health, WorkspaceHealthFormat.JsonSummary));
+
+        Assert.Equal(4, json.RootElement.GetProperty("warnings_total_count").GetInt32());
+        Assert.Equal(1, json.RootElement.GetProperty("warnings_omitted_count").GetInt32());
+        Assert.Equal(5, json.RootElement.GetProperty("recommended_actions_total_count").GetInt32());
+        Assert.Equal(2, json.RootElement.GetProperty("recommended_actions_omitted_count").GetInt32());
     }
 
     [Fact]
@@ -934,6 +1060,29 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain("/repo/other/.miller/symbols.db", text);
         Assert.Contains("[current]", text);
         Assert.Contains("state: ready", text);
+    }
+
+    [Fact]
+    public void List_Compact_MissingRootsUsesSurfaceNeutralPruneGuidance()
+    {
+        var rows = new[]
+        {
+            new WorkspaceListEntry(
+                WorkspaceId: "ws-missing",
+                DisplayId: "missing-111111111111",
+                Root: "/repo/missing",
+                DbPath: "/repo/missing/.miller/symbols.db",
+                State: "missing",
+                LastRevision: null,
+                Current: false,
+                LastError: "root missing",
+                RootMissing: true),
+        };
+
+        string text = WorkspaceRender.List(rows, json: false);
+
+        Assert.Contains("preview registry cleanup with a prune dry run", text);
+        Assert.DoesNotContain("workspace(operation=", text, StringComparison.Ordinal);
     }
 
     [Fact]

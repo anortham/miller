@@ -54,7 +54,8 @@ public sealed class LiveWorkspaceTests : IDisposable
     // first scan. The indexer starts non-leader (no ops published); a test that needs the leader path publishes
     // real extract ops bound to the sandbox.
     private (WorkspaceTool tool, IndexerService indexer, IndexHolder holder, TelemetryLedger ledger,
-             string root, string dbPath, JulieExtractRunner runner) BuildLiveTool(string binary)
+             string root, string dbPath, JulieExtractRunner runner, WorkspaceRegistry registry)
+        BuildLiveTool(string binary)
     {
         string root = NewTempDir("root");
         Directory.CreateDirectory(Path.Combine(root, "src"));
@@ -125,7 +126,7 @@ public sealed class LiveWorkspaceTests : IDisposable
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
             NullLogger<WorkspaceTool>.Instance);
-        return (tool, indexer, holder, ledger, root, dbPath, runner);
+        return (tool, indexer, holder, ledger, root, dbPath, runner, registry);
     }
 
     [Fact]
@@ -133,7 +134,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, holder, ledger, root, _, _) = BuildLiveTool(binary!);
+        var (tool, _, holder, ledger, root, _, _, _) = BuildLiveTool(binary!);
         Assert.True(holder.Current.DocumentCount > 0); // the real scan extracted symbols
 
         // Record a few real telemetry rows so the breakdown is non-empty.
@@ -155,7 +156,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, indexer, holder, _, root, dbPath, runner) = BuildLiveTool(binary!);
+        var (tool, indexer, holder, _, root, dbPath, runner, _) = BuildLiveTool(binary!);
 
         // Become the indexer leader with REAL extract ops bound to this sandbox (mirrors production's publish once
         // leadership is won), so `full` runs an actual `extract scan --force` through the subprocess.
@@ -182,7 +183,7 @@ public sealed class LiveWorkspaceTests : IDisposable
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, _, _, _, _, _) = BuildLiveTool(binary!);
+        var (tool, _, _, _, _, _, _, _) = BuildLiveTool(binary!);
 
         // A SECOND, independent repo with no .miller yet.
         string other = NewTempDir("prime-target");
@@ -199,11 +200,11 @@ public sealed class LiveWorkspaceTests : IDisposable
     }
 
     [Fact]
-    public void Remove_DeletesNonLiveMillerDir_ButRefusesTheLiveOne()
+    public void Remove_DeletesRegisteredNonLiveMillerDir_ButRefusesTheLiveOne()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
 
-        var (tool, _, _, _, root, _, _) = BuildLiveTool(binary!);
+        var (tool, _, _, _, root, _, _, registry) = BuildLiveTool(binary!);
 
         // --- the live workspace is refused (its .miller is in use) ---
         string liveMiller = Path.Combine(PathCanonicalizer.CanonicalizeRoot(root), ".miller");
@@ -215,9 +216,18 @@ public sealed class LiveWorkspaceTests : IDisposable
 
         // --- a different, non-live workspace IS removed ---
         string other = NewTempDir("removable");
-        string otherMiller = Path.Combine(other, ".miller");
+        string canonicalOther = PathCanonicalizer.CanonicalizeRoot(other);
+        string otherMiller = Path.Combine(canonicalOther, ".miller");
         Directory.CreateDirectory(otherMiller);
-        File.WriteAllText(Path.Combine(otherMiller, "symbols.db"), "stub");
+        string otherDb = Path.Combine(otherMiller, "symbols.db");
+        File.WriteAllText(otherDb, "stub");
+        string otherWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalOther);
+        registry.UpsertSeen(
+            otherWorkspaceId,
+            WorkspaceId.Display(canonicalOther, otherWorkspaceId),
+            canonicalOther,
+            otherDb,
+            WorkspaceRegistryState.Ready);
 
         string removed = tool.Workspace(operation: "remove", path: other);
         Assert.Contains("removed", removed, StringComparison.OrdinalIgnoreCase);

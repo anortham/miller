@@ -16,7 +16,7 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 ```json
 {
   "workspace": {},
-  "indexer_leader": null,
+  "indexer_leader": {},
   "index": {},
   "telemetry": {}
 }
@@ -34,6 +34,18 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 - `role`: renderable role label, such as `leader`, `reader`, or an ineligibility-qualified reader role.
 - `server_version`: Miller build version, or `null`.
 - `server_pid`: process ID, or `null`.
+
+`indexer_leader` (or `null` when leader facts were not gathered):
+
+- `this_process`: whether the responding process is the workspace's indexer leader.
+- `pid`, `version`, `process_path`, `started_at`, `extractor_version`: the recorded leader identity, each
+  `null` when no identity is recorded.
+- `alive`: liveness of the recorded leader process, or `null` without an identity.
+- `own_extractor_version`: the responding process's bundled extractor version. The one-shot CLI reports
+  `null` because it does not probe or launch the extractor for a read command.
+- `artifact_extractor_version`: the extractor version recorded in the index artifact, or `null`.
+- `own_eligibility`: `{ "eligible": bool, "reason": string }` for a live server process, or `null` when the
+  caller did not gather its leadership verdict.
 
 `index`:
 

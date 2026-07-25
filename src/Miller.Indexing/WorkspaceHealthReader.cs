@@ -16,39 +16,48 @@ public static class WorkspaceHealthReader
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
+        using SqliteTransaction transaction = connection.BeginTransaction();
 
         return new WorkspaceExtractionHealthFacts(
-            ParseDiagnostics: ReadSection(connection, "parse_diagnostics", ReadParseDiagnostics),
-            CapabilityGaps: ReadSection(connection, "language_capability_gaps", ReadCapabilityGaps),
-            LanguageCapabilities: ReadSection(connection, "language_capabilities", ReadLanguageCapabilities),
-            StructuralFacts: ReadSection(connection, "structural_facts", ReadStructuralFacts),
-            ComplexityMetrics: ReadSection(connection, "complexity_metrics", ReadComplexityMetrics),
-            Files: ReadSection(connection, "files", ReadFileStatuses));
+            ParseDiagnostics: ReadSection(connection, transaction, "parse_diagnostics", ReadParseDiagnostics),
+            CapabilityGaps: ReadSection(connection, transaction, "language_capability_gaps", ReadCapabilityGaps),
+            LanguageCapabilities: ReadSection(connection, transaction, "language_capabilities", ReadLanguageCapabilities),
+            StructuralFacts: ReadSection(connection, transaction, "structural_facts", ReadStructuralFacts),
+            ComplexityMetrics: ReadSection(connection, transaction, "complexity_metrics", ReadComplexityMetrics),
+            Files: ReadSection(connection, transaction, "files", ReadFileStatuses));
     }
 
     private static HealthFactSection<T> ReadSection<T>(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         string tableName,
-        Func<SqliteConnection, IReadOnlyList<T>> read)
+        Func<SqliteConnection, SqliteTransaction, IReadOnlyList<T>> read)
     {
-        if (!TableExists(connection, tableName))
+        if (!TableExists(connection, transaction, tableName))
             return HealthFactSection<T>.Unavailable($"table '{tableName}' is missing");
 
-        return HealthFactSection<T>.FromRows(read(connection));
+        return HealthFactSection<T>.FromRows(read(connection, transaction));
     }
 
-    private static bool TableExists(SqliteConnection connection, string tableName)
+    private static bool TableExists(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tableName)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
         command.Parameters.AddWithValue("$name", tableName);
         object? result = command.ExecuteScalar();
         return result is not null and not DBNull;
     }
 
-    private static IReadOnlyList<ParseDiagnosticGroup> ReadParseDiagnostics(SqliteConnection connection)
+    private static IReadOnlyList<ParseDiagnosticGroup> ReadParseDiagnostics(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT language, kind, COUNT(*) AS count
             FROM parse_diagnostics
@@ -68,9 +77,12 @@ public static class WorkspaceHealthReader
         return rows;
     }
 
-    private static IReadOnlyList<CapabilityGapGroup> ReadCapabilityGaps(SqliteConnection connection)
+    private static IReadOnlyList<CapabilityGapGroup> ReadCapabilityGaps(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT language, capability, status, COUNT(*) AS count
             FROM language_capability_gaps
@@ -91,9 +103,12 @@ public static class WorkspaceHealthReader
         return rows;
     }
 
-    private static IReadOnlyList<LanguageCapabilitySummary> ReadLanguageCapabilities(SqliteConnection connection)
+    private static IReadOnlyList<LanguageCapabilitySummary> ReadLanguageCapabilities(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT language,
                    target_symbols, actual_symbols,
@@ -193,9 +208,12 @@ public static class WorkspaceHealthReader
         return entries;
     }
 
-    private static IReadOnlyList<FileStatusGroup> ReadFileStatuses(SqliteConnection connection)
+    private static IReadOnlyList<FileStatusGroup> ReadFileStatuses(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT COALESCE(language, ''), status, COUNT(*) AS count
             FROM files
@@ -215,9 +233,12 @@ public static class WorkspaceHealthReader
         return rows;
     }
 
-    private static IReadOnlyList<StructuralFactGroup> ReadStructuralFacts(SqliteConnection connection)
+    private static IReadOnlyList<StructuralFactGroup> ReadStructuralFacts(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT language, pattern_id, capture_name, COUNT(*) AS count
             FROM structural_facts
@@ -238,9 +259,12 @@ public static class WorkspaceHealthReader
         return rows;
     }
 
-    private static IReadOnlyList<ComplexityMetricGroup> ReadComplexityMetrics(SqliteConnection connection)
+    private static IReadOnlyList<ComplexityMetricGroup> ReadComplexityMetrics(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT language,
                    scope,

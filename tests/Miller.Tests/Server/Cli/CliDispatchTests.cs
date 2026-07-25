@@ -3062,6 +3062,10 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(
             "target-ws",
             doc.RootElement.GetProperty("workspace").GetProperty("workspace_id").GetString());
+        JsonElement leader = doc.RootElement.GetProperty("indexer_leader");
+        Assert.Equal(JsonValueKind.Object, leader.ValueKind);
+        Assert.True(leader.TryGetProperty("own_extractor_version", out _));
+        Assert.True(leader.TryGetProperty("artifact_extractor_version", out _));
     }
 
     [Fact]
@@ -3336,12 +3340,14 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void WorkspaceRemove_ByPath_DeletesMillerDir()
+    public void WorkspaceRemove_ByRegisteredPath_DeletesMillerDir()
     {
         string sub = Path.Combine(_dir, "ws-bypath");
         string millerDir = Path.Combine(sub, ".miller");
         Directory.CreateDirectory(millerDir);
-        File.WriteAllText(Path.Combine(millerDir, "symbols.db"), "x"); // a stand-in index file
+        string symbolsDb = Path.Combine(millerDir, "symbols.db");
+        File.WriteAllText(symbolsDb, "x");
+        SeedRegisteredWorkspace("ws-bypath-0000000", "bypath-disp", sub, symbolsDb);
 
         var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub },
             Context(Path.Combine(_dir, "symbols.db")));
@@ -3371,9 +3377,7 @@ public sealed class CliDispatchTests : IDisposable
         string millerDir = Path.Combine(sub, ".miller");
         Directory.CreateDirectory(millerDir);
         const string id = "ws-byid-00000000";
-        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
-            registry.UpsertSeen(id, "byid-disp", sub, Path.Combine(millerDir, "symbols.db"),
-                WorkspaceRegistryState.Ready);
+        SeedRegisteredWorkspace(id, "byid-disp", sub, Path.Combine(millerDir, "symbols.db"));
         SqliteConnection.ClearAllPools();
 
         var (code, outText, _) = Run(new[] { "workspace", "remove", "--id", "byid-disp" },
@@ -3384,6 +3388,34 @@ public sealed class CliDispatchTests : IDisposable
         Assert.False(Directory.Exists(millerDir));
         using WorkspaceRegistry check = WorkspaceRegistry.Open(_registryDb);
         Assert.Null(check.Get(id));
+    }
+
+    [Fact]
+    public void WorkspaceRemove_ById_MismatchedRegistryPathRefusesExitThree()
+    {
+        string registeredRoot = Path.Combine(_dir, "ws-corrupt-registration");
+        Directory.CreateDirectory(registeredRoot);
+        string victimMillerDir = Path.Combine(_dir, "victim", ".miller");
+        Directory.CreateDirectory(victimMillerDir);
+        string victimDb = Path.Combine(victimMillerDir, "symbols.db");
+        File.WriteAllText(victimDb, "do not delete");
+        SeedRegisteredWorkspace(
+            "ws-corrupt-0000000",
+            "corrupt-disp",
+            registeredRoot,
+            victimDb);
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "remove", "--id", "corrupt-disp", "--json" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(3, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(
+            "refused_invalid_registration",
+            doc.RootElement.GetProperty("result").GetString());
+        Assert.True(File.Exists(victimDb));
     }
 
     [Fact]
@@ -3433,11 +3465,47 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceList_JsonWithoutLimitReturnsEveryRegisteredRow()
+    {
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            for (int i = 1; i <= 25; i++)
+            {
+                string root = $"/repo/seed-{i:D2}";
+                registry.UpsertSeen(
+                    $"ws-seed-{i:D2}",
+                    $"seed-{i:D2}-disp",
+                    root,
+                    root + "/.miller/symbols.db",
+                    WorkspaceRegistryState.Ready);
+            }
+        }
+        SqliteConnection.ClearAllPools();
+
+        var (code, outText, errText) = Run(
+            new[] { "workspace", "list", "--json" },
+            Context(Path.Combine(_dir, "symbols.db")));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument doc = JsonDocument.Parse(outText);
+        Assert.Equal(25, doc.RootElement.GetProperty("workspaces").GetArrayLength());
+        Assert.Equal(25, doc.RootElement.GetProperty("returned").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("omitted").GetInt32());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("limit").ValueKind);
+    }
+
+    [Fact]
     public void WorkspaceRemove_LockHeldByAnotherWriter_RefusedExitThree()
     {
         string sub = Path.Combine(_dir, "ws-locked");
         string millerDir = Path.Combine(sub, ".miller");
         Directory.CreateDirectory(millerDir);
+        SeedRegisteredWorkspace(
+            "ws-locked-00000000",
+            "locked-disp",
+            sub,
+            Path.Combine(millerDir, "symbols.db"));
 
         using (SingleWriterLock? lease = SingleWriterLock.TryAcquire(millerDir))
         {
@@ -3462,6 +3530,11 @@ public sealed class CliDispatchTests : IDisposable
         Directory.CreateDirectory(millerDir);
         string contentDb = Path.Combine(millerDir, "content.db");
         File.WriteAllText(contentDb, "content-corpus");
+        SeedRegisteredWorkspace(
+            "ws-content-busy-00",
+            "content-busy-disp",
+            sub,
+            Path.Combine(millerDir, "symbols.db"));
 
         using (ContentCorpusWriteLock heldContent =
             ContentCorpusWriteLock.AcquireFor(contentDb, TimeSpan.FromSeconds(30)))
@@ -3487,6 +3560,11 @@ public sealed class CliDispatchTests : IDisposable
         Directory.CreateDirectory(millerDir);
         string historyDb = Path.Combine(millerDir, "history.db");
         File.WriteAllText(historyDb, "metric-history");
+        SeedRegisteredWorkspace(
+            "ws-history-busy-00",
+            "history-busy-disp",
+            sub,
+            Path.Combine(millerDir, "symbols.db"));
 
         using (MetricHistoryWriteLock heldHistory =
             MetricHistoryWriteLock.AcquireFor(historyDb, TimeSpan.FromSeconds(30)))
@@ -3607,7 +3685,13 @@ public sealed class CliDispatchTests : IDisposable
     public void WorkspaceRemove_ByPath_Json_EmitsResultObject()
     {
         string sub = Path.Combine(_dir, "ws-json");
-        Directory.CreateDirectory(Path.Combine(sub, ".miller"));
+        string millerDir = Path.Combine(sub, ".miller");
+        Directory.CreateDirectory(millerDir);
+        SeedRegisteredWorkspace(
+            "ws-json-0000000000",
+            "json-disp",
+            sub,
+            Path.Combine(millerDir, "symbols.db"));
 
         var (code, outText, _) = Run(new[] { "workspace", "remove", "--path", sub, "--json" },
             Context(Path.Combine(_dir, "symbols.db")));
@@ -3622,6 +3706,8 @@ public sealed class CliDispatchTests : IDisposable
     [InlineData(WorkspaceRemoveResult.Outcome.NotFound, 0)]
     [InlineData(WorkspaceRemoveResult.Outcome.RefusedInUse, 3)]
     [InlineData(WorkspaceRemoveResult.Outcome.RefusedLive, 3)]
+    [InlineData(WorkspaceRemoveResult.Outcome.RefusedSensitive, 3)]
+    [InlineData(WorkspaceRemoveResult.Outcome.RefusedInvalidRegistration, 3)]
     public void RemoveExitCode_MapsOutcomesToCodes(WorkspaceRemoveResult.Outcome outcome, int expected) =>
         Assert.Equal(expected, CliDispatch.RemoveExitCode(outcome));
 
@@ -3636,6 +3722,13 @@ public sealed class CliDispatchTests : IDisposable
 
     private void SeedRegisteredWorkspace(string workspaceId, string displayId, string root, string dbPath)
     {
+        if (Directory.Exists(root))
+        {
+            string relativeDbPath = Path.GetRelativePath(root, dbPath);
+            root = PathCanonicalizer.CanonicalizeRoot(root);
+            dbPath = Path.GetFullPath(Path.Combine(root, relativeDbPath));
+        }
+
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb);
         registry.UpsertSeen(workspaceId, displayId, root, dbPath, WorkspaceRegistryState.Ready);
         registry.MarkScanned(workspaceId, revision: 1);

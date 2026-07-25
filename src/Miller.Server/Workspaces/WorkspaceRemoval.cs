@@ -4,23 +4,8 @@ using Miller.Server.Tools;
 namespace Miller.Server.Workspaces;
 
 /// <summary>
-/// The shared removal core behind the CLI <c>workspace remove</c> verb and the dashboard's
-/// <c>POST /workspace/remove</c> endpoint: resolve the registration, delete its <c>.miller</c> index dir
-/// under all three workspace write leases, and unregister the row — or refuse honestly. Extracted from
-/// <c>CliDispatch.WorkspaceRemove</c>/<c>RemoveMillerDir</c> so both callers share one behavior:
-/// <list type="bullet">
-/// <item>selector resolution via <see cref="WorkspaceRegistrySelector"/> (<see cref="RemoveById"/> throws
-/// <see cref="KeyNotFoundException"/> on no match — each caller renders its own usage/not-found surface);</item>
-/// <item>the gone-root best-effort prune (R4) for <see cref="RemoveByPath"/> — a deleted repo can still be
-/// unregistered even though its path no longer canonicalizes;</item>
-/// <item>the live-root refusal (<see cref="WorkspaceSafety.IsLiveWorkspace"/>), applied only when the caller
-/// supplies a non-null <paramref name="liveRoot"/> — the one-shot CLI and the dashboard serve no workspace
-/// in-process and pass <c>null</c>;</item>
-/// <item>the unconditional in-use refusal: the delete happens while HOLDING the indexer, content, and history
-/// write leases (<see cref="WorkspaceWriteLeases.TryAcquireForRemove"/>), so no Miller process — including a
-/// CLI content import or history append that holds a sidecar lock WITHOUT the indexer lock — can be writing
-/// this index mid-delete. Any lease unavailable ⇒ refuse, delete nothing.</item>
-/// </list>
+/// Removes registered workspace data under all workspace write leases.
+/// Live, sensitive, machine-global, corrupt-path, unregistered, and in-use targets are never deleted.
 /// </summary>
 public static class WorkspaceRemoval
 {
@@ -28,20 +13,41 @@ public static class WorkspaceRemoval
     /// Remove by registry selector (display id, unique prefix, full id, or registered root path).
     /// </summary>
     /// <exception cref="KeyNotFoundException">No registry row matched <paramref name="selector"/>.</exception>
-    public static WorkspaceRemoveResult RemoveById(WorkspaceRegistry registry, string selector, string? liveRoot)
+    public static WorkspaceRemoveResult RemoveById(
+        WorkspaceRegistry registry,
+        string selector,
+        string? liveRoot,
+        string? protectedMillerDir = null,
+        Func<string, IDisposable?>? acquireWriterLock = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
 
         WorkspaceRegistryRow row = WorkspaceRegistrySelector.Resolve(registry, selector);
-        string millerDir = Path.GetDirectoryName(row.IndexDbPath)
-            ?? throw new InvalidOperationException(
-                $"Cannot determine the .miller directory for index DB path '{row.IndexDbPath}'.");
-        return Remove(registry, row.WorkspaceId, row.CanonicalRoot, millerDir, liveRoot);
+        if (!TryRegisteredMillerDir(row, out string millerDir))
+        {
+            return WorkspaceRemoveResult.RefusedInvalidRegistration(
+                millerDir,
+                row.WorkspaceId,
+                row.CanonicalRoot);
+        }
+        return Remove(
+            registry,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            millerDir,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock);
     }
 
     /// <summary>Remove by workspace root path (the dir that CONTAINS the <c>.miller</c> index dir).</summary>
-    public static WorkspaceRemoveResult RemoveByPath(WorkspaceRegistry registry, string path, string? liveRoot)
+    public static WorkspaceRemoveResult RemoveByPath(
+        WorkspaceRegistry registry,
+        string path,
+        string? liveRoot,
+        string? protectedMillerDir = null,
+        Func<string, IDisposable?>? acquireWriterLock = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -61,24 +67,57 @@ public static class WorkspaceRemoval
                 goneMillerDir, stale.WorkspaceId, stale.CanonicalRoot, indexDirDeleted: false);
         }
 
-        // Existing dir: canonicalize and match a registry row (ordinal canonical root, like the server's
-        // FindByCanonicalRoot), falling back to a local .miller cleanup when no row is registered.
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fullPath);
         WorkspaceRegistryRow? match = WorkspaceRegistryRootMatcher.FindByRoot(registry.List(), canonicalRoot);
-        string millerDir = match is { } m
-            ? Path.GetDirectoryName(m.IndexDbPath) ?? Path.Combine(canonicalRoot, ".miller")
-            : Path.Combine(canonicalRoot, ".miller");
-        return Remove(registry, match?.WorkspaceId, match?.CanonicalRoot ?? canonicalRoot, millerDir, liveRoot);
+        if (match is null)
+            return WorkspaceRemoveResult.NotFound(Path.Combine(canonicalRoot, ".miller"), root: canonicalRoot);
+        if (liveRoot is not null && WorkspaceSafety.IsLiveWorkspace(match.CanonicalRoot, liveRoot))
+        {
+            return WorkspaceRemoveResult.RefusedLive(
+                Path.Combine(match.CanonicalRoot, ".miller"),
+                match.WorkspaceId,
+                match.CanonicalRoot);
+        }
+
+        if (!TryRegisteredMillerDir(match, out string registeredMillerDir))
+        {
+            return WorkspaceRemoveResult.RefusedInvalidRegistration(
+                registeredMillerDir,
+                match.WorkspaceId,
+                match.CanonicalRoot);
+        }
+
+        return Remove(
+            registry,
+            match.WorkspaceId,
+            match.CanonicalRoot,
+            registeredMillerDir,
+            liveRoot,
+            protectedMillerDir,
+            acquireWriterLock);
     }
 
-    // Delete one `.miller` dir under the cross-process writer lock. Live root ⇒ refused (only when the caller
-    // serves one); missing dir ⇒ a clean not-found (prune any stale row); lock held by another writer ⇒ refused,
-    // NOT deleted; otherwise delete + unregister.
     private static WorkspaceRemoveResult Remove(
-        WorkspaceRegistry registry, string? workspaceId, string? root, string millerDir, string? liveRoot)
+        WorkspaceRegistry registry,
+        string? workspaceId,
+        string? root,
+        string millerDir,
+        string? liveRoot,
+        string? protectedMillerDir,
+        Func<string, IDisposable?>? acquireWriterLock)
     {
         if (liveRoot is not null && root is not null && WorkspaceSafety.IsLiveWorkspace(root, liveRoot))
             return WorkspaceRemoveResult.RefusedLive(millerDir, workspaceId, root);
+        if (root is not null &&
+            WorkspaceRootSafety.IsSensitiveRoot(root, WorkspaceRootSafety.SensitiveRootCandidates()))
+        {
+            return WorkspaceRemoveResult.RefusedSensitive(millerDir, workspaceId, root);
+        }
+        if (!string.IsNullOrWhiteSpace(protectedMillerDir) &&
+            SamePath(millerDir, protectedMillerDir))
+        {
+            return WorkspaceRemoveResult.RefusedSensitive(millerDir, workspaceId, root);
+        }
 
         if (!Directory.Exists(millerDir))
         {
@@ -95,7 +134,9 @@ public static class WorkspaceRemoval
         // deleted on Windows); after release, the leftover lock files + empty dir are removed best-effort — a
         // writer that sneaks in after release finds an already-empty index and does a clean rebuild.
         using (WorkspaceWriteLeases? leases =
-            WorkspaceWriteLeases.TryAcquireForRemove(millerDir, SingleWriterLock.TryAcquire))
+            WorkspaceWriteLeases.TryAcquireForRemove(
+                millerDir,
+                acquireWriterLock ?? SingleWriterLock.TryAcquire))
         {
             if (leases is null)
                 return WorkspaceRemoveResult.RefusedInUse(millerDir, workspaceId, root);
@@ -107,4 +148,44 @@ public static class WorkspaceRemoval
             registry.Remove(workspaceId);
         return WorkspaceRemoveResult.Removed(millerDir, workspaceId, root);
     }
+
+    internal static bool TryRegisteredMillerDir(WorkspaceRegistryRow row, out string millerDir)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        millerDir = row.CanonicalRoot;
+        try
+        {
+            millerDir = Path.Combine(row.CanonicalRoot, ".miller");
+            string expectedDb = Path.GetFullPath(Path.Combine(millerDir, "symbols.db"));
+            string actualDb = Path.GetFullPath(row.IndexDbPath);
+            if (!SamePath(actualDb, expectedDb))
+                return false;
+
+            millerDir = Path.GetDirectoryName(expectedDb) ?? millerDir;
+            if (Directory.Exists(row.CanonicalRoot) &&
+                !SamePath(PathCanonicalizer.CanonicalizeRoot(row.CanonicalRoot), row.CanonicalRoot))
+            {
+                return false;
+            }
+            if (Directory.Exists(millerDir) &&
+                !SamePath(PathCanonicalizer.CanonicalizeRoot(millerDir), millerDir))
+            {
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool SamePath(string left, string right) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
 }

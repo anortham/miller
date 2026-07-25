@@ -1517,7 +1517,24 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Contains("/repo/a", refused);
         Assert.Contains("in use", refused);
 
-        // An unrecognised code renders nothing (the notice rides a query param anyone can craft).
+        string sensitive = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "remove-refused-sensitive",
+            ["NoticeDetail"] = "/repo/global",
+        });
+        Assert.Contains("error-notice", sensitive);
+        Assert.Contains("sensitive or machine-global", sensitive);
+
+        string invalidRegistration = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
+        {
+            ["Index"] = SampleWorkspaceIndex(),
+            ["Notice"] = "remove-refused-invalid-registration",
+            ["NoticeDetail"] = "/repo/corrupt",
+        });
+        Assert.Contains("error-notice", invalidRegistration);
+        Assert.Contains("invalid registry-to-index path mapping", invalidRegistration);
+
         string unknown = await RenderComponentAsync<WorkspaceIndex>(new Dictionary<string, object?>
         {
             ["Index"] = SampleWorkspaceIndex(),

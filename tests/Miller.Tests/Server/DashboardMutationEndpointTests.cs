@@ -437,6 +437,13 @@ public sealed class DashboardMutationEndpointTests : IDisposable
 
     private void Register(string workspaceId, string displayId, string root, string indexDbPath)
     {
+        if (Directory.Exists(root))
+        {
+            string relativeIndexPath = Path.GetRelativePath(root, indexDbPath);
+            root = PathCanonicalizer.CanonicalizeRoot(root);
+            indexDbPath = Path.GetFullPath(Path.Combine(root, relativeIndexPath));
+        }
+
         using var registry = WorkspaceRegistry.Open(_paths.RegistryDbPath);
         registry.UpsertSeen(
             workspaceId,

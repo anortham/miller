@@ -69,6 +69,26 @@ public sealed class ToolContinuationTests
     }
 
     [Fact]
+    public void RenderPrefixWithinByteBudgetWithCount_ReportsTheSelectedPrefix()
+    {
+        int[] items = Enumerable.Range(1, 100).ToArray();
+
+        BoundedPrefixRender result = ToolOutputBudget.RenderPrefixWithinByteBudgetWithCount(
+            items,
+            maxBytes: 64,
+            (retained, omitted) => $"{string.Join(',', retained)}|omitted={omitted}");
+
+        Assert.InRange(result.RetainedCount, 1, 99);
+        Assert.Equal(
+            result.RetainedCount,
+            result.Output[..result.Output.IndexOf('|')]
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Length);
+        Assert.EndsWith($"|omitted={100 - result.RetainedCount}", result.Output, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(result.Output) <= 64);
+    }
+
+    [Fact]
     public void RequireWithinByteBudget_RefusesOversizedMetadata()
     {
         Assert.Equal("within", ToolOutputBudget.RequireWithinByteBudget("within", 6));

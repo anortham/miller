@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 
@@ -16,7 +15,12 @@ public sealed record TelemetryOnboardingFacts(
     IReadOnlyList<TargetHashFrequency> TargetHashes,
     IReadOnlyList<TelemetryMiss> CommonMisses,
     IReadOnlyList<TelemetryFriction> Friction,
-    string? Error)
+    string? Error,
+    int ToolMixTotal = 0,
+    int SuccessfulFlowsTotal = 0,
+    int TargetHashesTotal = 0,
+    int CommonMissesTotal = 0,
+    int FrictionTotal = 0)
 {
     public static TelemetryOnboardingFacts Unavailable(string state, string? error = null) => new(
         Available: false,
@@ -85,28 +89,45 @@ public static class TelemetryOnboardingReader
             if (!HasTelemetryTable(connection))
                 return TelemetryOnboardingFacts.Unavailable("missing_telemetry_table");
 
-            string? windowEnd = ReadMaxTimestamp(connection, workspaceId);
+            using SqliteTransaction transaction = connection.BeginTransaction();
+            string? windowEnd = ReadMaxTimestamp(connection, transaction, workspaceId);
             if (string.IsNullOrWhiteSpace(windowEnd))
                 return EmptyAvailable("sparse");
 
             string cutoff = ComputeCutoff(windowEnd, windowDays);
-            List<TelemetryEvent> events = ReadEvents(connection, workspaceId, cutoff);
-            if (events.Count == 0)
+            WindowSummary window = ReadWindowSummary(connection, transaction, workspaceId, cutoff);
+            if (window.TotalCalls == 0)
                 return EmptyAvailable("sparse");
 
-            string state = events.Count >= 3 ? "ready" : "sparse";
+            int boundedLimit = Math.Clamp(limit, 1, 100);
+            BoundedRows<TelemetryToolMix> toolMix =
+                ReadToolMix(connection, transaction, workspaceId, cutoff, boundedLimit);
+            BoundedRows<TelemetryFlow> flows =
+                ReadFlows(connection, transaction, workspaceId, cutoff, boundedLimit);
+            BoundedRows<TargetHashFrequency> targets =
+                ReadTargetHashes(connection, transaction, workspaceId, cutoff, boundedLimit);
+            BoundedRows<TelemetryMiss> misses =
+                ReadMisses(connection, transaction, workspaceId, cutoff, boundedLimit);
+            BoundedRows<TelemetryFriction> friction =
+                ReadFriction(connection, transaction, workspaceId, cutoff, boundedLimit);
+            string state = window.TotalCalls >= 3 ? "ready" : "sparse";
             return new TelemetryOnboardingFacts(
                 Available: true,
                 State: state,
-                TotalCalls: events.Count,
-                WindowStartTs: events[0].Ts,
-                WindowEndTs: events[^1].Ts,
-                ToolMix: ToolMix(events, limit),
-                SuccessfulFlows: Flows(events, limit),
-                TargetHashes: TargetHashes(events, limit),
-                CommonMisses: Misses(events, limit),
-                Friction: Friction(events, limit),
-                Error: null);
+                TotalCalls: window.TotalCalls,
+                WindowStartTs: window.StartTs,
+                WindowEndTs: window.EndTs,
+                ToolMix: toolMix.Rows,
+                SuccessfulFlows: flows.Rows,
+                TargetHashes: targets.Rows,
+                CommonMisses: misses.Rows,
+                Friction: friction.Rows,
+                Error: null,
+                ToolMixTotal: toolMix.Total,
+                SuccessfulFlowsTotal: flows.Total,
+                TargetHashesTotal: targets.Total,
+                CommonMissesTotal: misses.Total,
+                FrictionTotal: friction.Total);
         }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -134,9 +155,13 @@ public static class TelemetryOnboardingReader
         return command.ExecuteScalar() is not null;
     }
 
-    private static string? ReadMaxTimestamp(SqliteConnection connection, string? workspaceId)
+    private static string? ReadMaxTimestamp(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT MAX(ts) FROM tool_telemetry WHERE workspace_id IS $ws;";
         command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         object? value = command.ExecuteScalar();
@@ -156,206 +181,360 @@ public static class TelemetryOnboardingReader
         return parsed.AddDays(-boundedDays).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
     }
 
-    private static List<TelemetryEvent> ReadEvents(SqliteConnection connection, string? workspaceId, string cutoff)
+    private static WindowSummary ReadWindowSummary(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
-            SELECT ts, tool, op, outcome, error_kind, result_count, duration_ms,
-                   bytes_returned, est_tokens, target_hash, metadata_json
+            SELECT COUNT(*), MIN(ts), MAX(ts)
             FROM tool_telemetry
             WHERE workspace_id IS $ws
-              AND ($cutoff = '' OR ts >= $cutoff)
-            ORDER BY ts, id;
+              AND ($cutoff = '' OR ts >= $cutoff);
             """;
         command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
         command.Parameters.AddWithValue("$cutoff", cutoff);
 
-        var events = new List<TelemetryEvent>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+            return new WindowSummary(0, null, null);
+        return new WindowSummary(
+            reader.GetInt64(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2));
+    }
+
+    private static BoundedRows<TelemetryToolMix> ReadToolMix(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit)
+    {
+        using SqliteCommand command = ScopedCommand(
+            connection,
+            transaction,
+            workspaceId,
+            cutoff,
+            limit,
+            """
+            WITH scoped AS (
+                SELECT id, tool, op, outcome, duration_ms,
+                       COALESCE(result_count, 0) AS result_count,
+                       bytes_returned, COALESCE(est_tokens, 0) AS est_tokens
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                  AND ($cutoff = '' OR ts >= $cutoff)
+            ),
+            ranked AS (
+                SELECT *,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY tool, op
+                           ORDER BY duration_ms, id) AS duration_rank,
+                       COUNT(*) OVER (PARTITION BY tool, op) AS duration_count
+                FROM scoped
+            ),
+            grouped AS (
+                SELECT tool, op,
+                       COUNT(*) AS calls,
+                       SUM(outcome = 'ok') AS ok_count,
+                       SUM(outcome = 'empty') AS empty_count,
+                       SUM(outcome = 'error') AS error_count,
+                       AVG(duration_ms) AS avg_ms,
+                       MAX(CASE
+                           WHEN duration_rank = ((duration_count * 95 + 99) / 100)
+                           THEN duration_ms
+                       END) AS p95_ms,
+                       MAX(duration_ms) AS max_ms,
+                       SUM(result_count) AS result_count,
+                       SUM(bytes_returned) AS bytes_returned,
+                       SUM(est_tokens) AS est_tokens
+                FROM ranked
+                GROUP BY tool, op
+            )
+            SELECT *, COUNT(*) OVER () AS total_groups
+            FROM grouped
+            ORDER BY calls DESC, p95_ms DESC, tool, op
+            LIMIT $limit;
+            """);
+
+        var rows = new List<TelemetryToolMix>();
+        int total = 0;
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
-            events.Add(new TelemetryEvent(
-                Ts: reader.GetString(0),
-                Tool: reader.GetString(1),
-                Op: reader.IsDBNull(2) ? null : reader.GetString(2),
-                Outcome: reader.GetString(3),
-                ErrorKind: reader.IsDBNull(4) ? null : reader.GetString(4),
-                ResultCount: reader.IsDBNull(5) ? null : reader.GetInt64(5),
-                DurationMs: reader.GetInt64(6),
-                BytesReturned: reader.GetInt64(7),
-                EstTokens: reader.IsDBNull(8) ? 0 : reader.GetInt64(8),
-                TargetHash: reader.IsDBNull(9) ? null : reader.GetString(9),
-                MetadataJson: reader.IsDBNull(10) ? "{}" : reader.GetString(10)));
+            total = checked((int)reader.GetInt64(12));
+            rows.Add(new TelemetryToolMix(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetInt64(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetDouble(6),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetInt64(9),
+                reader.GetInt64(10),
+                reader.GetInt64(11)));
         }
-        return events;
+        return new BoundedRows<TelemetryToolMix>(rows, total);
     }
 
-    private static IReadOnlyList<TelemetryToolMix> ToolMix(List<TelemetryEvent> events, int limit) =>
-        events.GroupBy(static row => (row.Tool, row.Op))
-            .Select(group =>
-            {
-                long calls = group.LongCount();
-                return new TelemetryToolMix(
-                    group.Key.Tool,
-                    group.Key.Op,
-                    calls,
-                    OkCount: group.LongCount(static row => row.Outcome == "ok"),
-                    EmptyCount: group.LongCount(static row => row.Outcome == "empty"),
-                    ErrorCount: group.LongCount(static row => row.Outcome == "error"),
-                    AvgMs: group.Average(static row => row.DurationMs),
-                    P95Ms: P95(group.Select(static row => row.DurationMs)),
-                    MaxMs: group.Max(static row => row.DurationMs),
-                    ResultCount: group.Sum(static row => row.ResultCount ?? 0),
-                    BytesReturned: group.Sum(static row => row.BytesReturned),
-                    EstTokens: group.Sum(static row => row.EstTokens));
-            })
-            .OrderByDescending(static row => row.Calls)
-            .ThenByDescending(static row => row.P95Ms)
-            .ThenBy(static row => row.Tool, StringComparer.Ordinal)
-            .ThenBy(static row => row.Op, StringComparer.Ordinal)
-            .Take(Math.Max(1, limit))
-            .ToArray();
-
-    private static IReadOnlyList<TelemetryFlow> Flows(List<TelemetryEvent> events, int limit)
+    private static BoundedRows<TelemetryFlow> ReadFlows(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit)
     {
-        var counts = new Dictionary<(string From, string To), long>();
-        for (int i = 0; i + 1 < events.Count; i++)
+        using SqliteCommand command = ScopedCommand(
+            connection,
+            transaction,
+            workspaceId,
+            cutoff,
+            limit,
+            """
+            WITH scoped AS (
+                SELECT id, ts, tool, op, outcome
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                  AND ($cutoff = '' OR ts >= $cutoff)
+            ),
+            paired AS (
+                SELECT ts, tool, op, outcome,
+                       LAG(ts) OVER (ORDER BY ts, id) AS previous_ts,
+                       LAG(tool) OVER (ORDER BY ts, id) AS previous_tool,
+                       LAG(op) OVER (ORDER BY ts, id) AS previous_op,
+                       LAG(outcome) OVER (ORDER BY ts, id) AS previous_outcome
+                FROM scoped
+            ),
+            grouped AS (
+                SELECT CASE
+                           WHEN previous_op IS NULL OR TRIM(previous_op) = '' THEN previous_tool
+                           ELSE previous_tool || ':' || previous_op
+                       END AS from_label,
+                       CASE
+                           WHEN op IS NULL OR TRIM(op) = '' THEN tool
+                           ELSE tool || ':' || op
+                       END AS to_label,
+                       COUNT(*) AS calls
+                FROM paired
+                WHERE previous_outcome = 'ok'
+                  AND outcome = 'ok'
+                  AND (julianday(ts) - julianday(previous_ts)) * 86400.0 BETWEEN 0 AND 300
+                GROUP BY from_label, to_label
+            )
+            SELECT *, COUNT(*) OVER () AS total_groups
+            FROM grouped
+            ORDER BY calls DESC, from_label, to_label
+            LIMIT $limit;
+            """);
+
+        var rows = new List<TelemetryFlow>();
+        int total = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
         {
-            TelemetryEvent current = events[i];
-            TelemetryEvent next = events[i + 1];
-            if (current.Outcome != "ok" || next.Outcome != "ok")
-                continue;
-            if (!WithinFlowWindow(current.Ts, next.Ts))
-                continue;
-
-            var key = (Label(current.Tool, current.Op), Label(next.Tool, next.Op));
-            counts[key] = counts.TryGetValue(key, out long existing) ? existing + 1 : 1;
+            total = checked((int)reader.GetInt64(3));
+            rows.Add(new TelemetryFlow(reader.GetString(0), reader.GetString(1), reader.GetInt64(2)));
         }
-
-        return counts.Select(row => new TelemetryFlow(row.Key.From, row.Key.To, row.Value))
-            .OrderByDescending(static row => row.Calls)
-            .ThenBy(static row => row.From, StringComparer.Ordinal)
-            .ThenBy(static row => row.To, StringComparer.Ordinal)
-            .Take(Math.Max(1, limit))
-            .ToArray();
+        return new BoundedRows<TelemetryFlow>(rows, total);
     }
 
-    private static IReadOnlyList<TargetHashFrequency> TargetHashes(List<TelemetryEvent> events, int limit) =>
-        events.Where(static row => !string.IsNullOrWhiteSpace(row.TargetHash))
-            .GroupBy(static row => row.TargetHash!, StringComparer.Ordinal)
-            .Select(static group => new TargetHashFrequency(group.Key, group.LongCount()))
-            .OrderByDescending(static row => row.Calls)
-            .ThenBy(static row => row.TargetHash, StringComparer.Ordinal)
-            .Take(Math.Max(1, limit))
-            .ToArray();
-
-    private static IReadOnlyList<TelemetryMiss> Misses(List<TelemetryEvent> events, int limit) =>
-        events.Where(static row => row.Outcome is "empty" or "error")
-            .Select(static row => (row.Tool, row.Op, Reason: MissReason(row)))
-            .GroupBy(static row => (row.Tool, row.Op, row.Reason))
-            .Select(static group => new TelemetryMiss(group.Key.Tool, group.Key.Op, group.Key.Reason, group.LongCount()))
-            .OrderByDescending(static row => row.Calls)
-            .ThenBy(static row => row.Tool, StringComparer.Ordinal)
-            .ThenBy(static row => row.Reason, StringComparer.Ordinal)
-            .Take(Math.Max(1, limit))
-            .ToArray();
-
-    private static IReadOnlyList<TelemetryFriction> Friction(List<TelemetryEvent> events, int limit) =>
-        events.GroupBy(static row => (row.Tool, row.Op))
-            .Select(group =>
-            {
-                long calls = group.LongCount();
-                return new TelemetryFriction(
-                    group.Key.Tool,
-                    group.Key.Op,
-                    calls,
-                    AvgMs: group.Average(static row => row.DurationMs),
-                    P95Ms: P95(group.Select(static row => row.DurationMs)),
-                    MaxMs: group.Max(static row => row.DurationMs),
-                    BytesReturned: group.Sum(static row => row.BytesReturned),
-                    EstTokens: group.Sum(static row => row.EstTokens),
-                    EmptyCount: group.LongCount(static row => row.Outcome == "empty"),
-                    ErrorCount: group.LongCount(static row => row.Outcome == "error"));
-            })
-            .OrderByDescending(static row => row.ErrorCount)
-            .ThenByDescending(static row => row.EmptyCount)
-            .ThenByDescending(static row => row.P95Ms)
-            .ThenByDescending(static row => row.BytesReturned)
-            .ThenBy(static row => row.Tool, StringComparer.Ordinal)
-            .Take(Math.Max(1, limit))
-            .ToArray();
-
-    private static bool WithinFlowWindow(string fromTs, string toTs)
+    private static BoundedRows<TargetHashFrequency> ReadTargetHashes(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit)
     {
-        if (!DateTimeOffset.TryParse(
-                fromTs,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out DateTimeOffset from))
-            return false;
-        if (!DateTimeOffset.TryParse(
-                toTs,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out DateTimeOffset to))
-            return false;
+        using SqliteCommand command = ScopedCommand(
+            connection,
+            transaction,
+            workspaceId,
+            cutoff,
+            limit,
+            """
+            WITH grouped AS (
+                SELECT target_hash, COUNT(*) AS calls
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND target_hash IS NOT NULL
+                  AND TRIM(target_hash) <> ''
+                GROUP BY target_hash
+            )
+            SELECT *, COUNT(*) OVER () AS total_groups
+            FROM grouped
+            ORDER BY calls DESC, target_hash
+            LIMIT $limit;
+            """);
 
-        double seconds = (to - from).TotalSeconds;
-        return seconds is >= 0 and <= 300;
-    }
-
-    private static long P95(IEnumerable<long> values)
-    {
-        long[] sorted = values.Order().ToArray();
-        if (sorted.Length == 0)
-            return 0;
-        int index = (int)Math.Ceiling(sorted.Length * 0.95) - 1;
-        return sorted[Math.Clamp(index, 0, sorted.Length - 1)];
-    }
-
-    private static string Label(string tool, string? op) =>
-        string.IsNullOrWhiteSpace(op) ? tool : tool + ":" + op;
-
-    private static string MissReason(TelemetryEvent row)
-    {
-        string? fromJson = MetadataString(row.MetadataJson, "empty_reason")
-            ?? MetadataString(row.MetadataJson, "error_reason")
-            ?? MetadataString(row.MetadataJson, "reason");
-        if (!string.IsNullOrWhiteSpace(fromJson))
-            return fromJson;
-        if (!string.IsNullOrWhiteSpace(row.ErrorKind))
-            return row.ErrorKind;
-        return row.Outcome;
-    }
-
-    private static string? MetadataString(string metadataJson, string propertyName)
-    {
-        try
+        var rows = new List<TargetHashFrequency>();
+        int total = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
         {
-            using JsonDocument document = JsonDocument.Parse(metadataJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-                return null;
-            return document.RootElement.TryGetProperty(propertyName, out JsonElement value) &&
-                   value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
+            total = checked((int)reader.GetInt64(2));
+            rows.Add(new TargetHashFrequency(reader.GetString(0), reader.GetInt64(1)));
         }
-        catch (JsonException)
-        {
-            return null;
-        }
+        return new BoundedRows<TargetHashFrequency>(rows, total);
     }
 
-    private sealed record TelemetryEvent(
-        string Ts,
-        string Tool,
-        string? Op,
-        string Outcome,
-        string? ErrorKind,
-        long? ResultCount,
-        long DurationMs,
-        long BytesReturned,
-        long EstTokens,
-        string? TargetHash,
-        string MetadataJson);
+    private static BoundedRows<TelemetryMiss> ReadMisses(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit)
+    {
+        using SqliteCommand command = ScopedCommand(
+            connection,
+            transaction,
+            workspaceId,
+            cutoff,
+            limit,
+            """
+            WITH scoped AS (
+                SELECT tool, op,
+                       CAST(COALESCE(
+                           CASE WHEN json_valid(metadata_json)
+                                     AND json_type(metadata_json, '$.empty_reason') = 'text'
+                                THEN json_extract(metadata_json, '$.empty_reason') END,
+                           CASE WHEN json_valid(metadata_json)
+                                     AND json_type(metadata_json, '$.error_reason') = 'text'
+                                THEN json_extract(metadata_json, '$.error_reason') END,
+                           CASE WHEN json_valid(metadata_json)
+                                     AND json_type(metadata_json, '$.reason') = 'text'
+                                THEN json_extract(metadata_json, '$.reason') END,
+                           NULLIF(error_kind, ''),
+                           outcome) AS TEXT) AS reason
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                  AND ($cutoff = '' OR ts >= $cutoff)
+                  AND outcome IN ('empty', 'error')
+            ),
+            grouped AS (
+                SELECT tool, op, reason, COUNT(*) AS calls
+                FROM scoped
+                GROUP BY tool, op, reason
+            )
+            SELECT *, COUNT(*) OVER () AS total_groups
+            FROM grouped
+            ORDER BY calls DESC, tool, reason, op
+            LIMIT $limit;
+            """);
+
+        var rows = new List<TelemetryMiss>();
+        int total = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            total = checked((int)reader.GetInt64(4));
+            rows.Add(new TelemetryMiss(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3)));
+        }
+        return new BoundedRows<TelemetryMiss>(rows, total);
+    }
+
+    private static BoundedRows<TelemetryFriction> ReadFriction(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit)
+    {
+        using SqliteCommand command = ScopedCommand(
+            connection,
+            transaction,
+            workspaceId,
+            cutoff,
+            limit,
+            """
+            WITH scoped AS (
+                SELECT id, tool, op, outcome, duration_ms,
+                       bytes_returned, COALESCE(est_tokens, 0) AS est_tokens
+                FROM tool_telemetry
+                WHERE workspace_id IS $ws
+                  AND ($cutoff = '' OR ts >= $cutoff)
+            ),
+            ranked AS (
+                SELECT *,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY tool, op
+                           ORDER BY duration_ms, id) AS duration_rank,
+                       COUNT(*) OVER (PARTITION BY tool, op) AS duration_count
+                FROM scoped
+            ),
+            grouped AS (
+                SELECT tool, op,
+                       COUNT(*) AS calls,
+                       AVG(duration_ms) AS avg_ms,
+                       MAX(CASE
+                           WHEN duration_rank = ((duration_count * 95 + 99) / 100)
+                           THEN duration_ms
+                       END) AS p95_ms,
+                       MAX(duration_ms) AS max_ms,
+                       SUM(bytes_returned) AS bytes_returned,
+                       SUM(est_tokens) AS est_tokens,
+                       SUM(outcome = 'empty') AS empty_count,
+                       SUM(outcome = 'error') AS error_count
+                FROM ranked
+                GROUP BY tool, op
+            )
+            SELECT *, COUNT(*) OVER () AS total_groups
+            FROM grouped
+            ORDER BY error_count DESC, empty_count DESC, p95_ms DESC,
+                     bytes_returned DESC, tool, op
+            LIMIT $limit;
+            """);
+
+        var rows = new List<TelemetryFriction>();
+        int total = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            total = checked((int)reader.GetInt64(10));
+            rows.Add(new TelemetryFriction(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetDouble(3),
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetInt64(6),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetInt64(9)));
+        }
+        return new BoundedRows<TelemetryFriction>(rows, total);
+    }
+
+    private static SqliteCommand ScopedCommand(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string? workspaceId,
+        string cutoff,
+        int limit,
+        string sql)
+    {
+        SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$ws", (object?)workspaceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$cutoff", cutoff);
+        command.Parameters.AddWithValue("$limit", limit);
+        return command;
+    }
+
+    private sealed record WindowSummary(long TotalCalls, string? StartTs, string? EndTs);
+
+    private sealed record BoundedRows<T>(IReadOnlyList<T> Rows, int Total);
 }
