@@ -17,4 +17,5 @@ public sealed record TextContentSearchHit(
     string Snippet,
     long SourceBytes,
     string? ContainingSymbolId,
-    string? ContainingSymbolName);
+    string? ContainingSymbolName,
+    string? ContentHash = null);

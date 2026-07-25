@@ -131,6 +131,7 @@ public sealed class ContentToolTests : IDisposable
         Assert.DoesNotContain("SecretToken42", importJson);
         using JsonDocument importedDoc = JsonDocument.Parse(importJson);
         string sourceId = importedDoc.RootElement.GetProperty("source_id").GetString()!;
+        string contentHash = importedDoc.RootElement.GetProperty("content_hash").GetString()!;
         Assert.Equal(TextContentKind.ExternalFile, importedDoc.RootElement.GetProperty("content_kind").GetString());
         Assert.True(importedDoc.RootElement.GetProperty("source_bytes").GetInt64() > 0);
 
@@ -144,6 +145,18 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("2: SecretToken42 failed in integration", read);
         Assert.DoesNotContain("build started", read);
         Assert.DoesNotContain("build finished", read);
+
+        using JsonDocument searchDoc = JsonDocument.Parse(
+            tool.Content("search", query: "SecretToken42", limit: 5, format: "json"));
+        Assert.Equal(
+            contentHash,
+            searchDoc.RootElement.GetProperty("results")[0].GetProperty("content_hash").GetString());
+        using JsonDocument readDoc = JsonDocument.Parse(
+            tool.Content("read", source_id: sourceId, line: 2, context_lines: 0, format: "json"));
+        Assert.Equal(contentHash, readDoc.RootElement.GetProperty("content_hash").GetString());
+        using JsonDocument shapeDoc = JsonDocument.Parse(
+            tool.Content("shape", source_id: sourceId, format: "json"));
+        Assert.Equal(contentHash, shapeDoc.RootElement.GetProperty("content_hash").GetString());
 
         string listJson = tool.Content("list", format: "json");
         using JsonDocument listDoc = JsonDocument.Parse(listJson);
@@ -421,7 +434,7 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
-    public void Content_SearchGroupedCompact_LeavesSearchJsonUnchanged()
+    public void Content_SearchJson_UsesBoundedVersionedEnvelope()
     {
         ContentTool tool = ToolWithNeedleSource("logs/app.log", 5, 350);
         string sourceId = ImportedSourceId(tool, "logs/app.log");
@@ -429,8 +442,9 @@ public sealed class ContentToolTests : IDisposable
         string json = tool.Content("search", query: "GroupNeedle", limit: 10, format: "json");
 
         using JsonDocument doc = JsonDocument.Parse(json);
-        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
-        JsonElement[] results = doc.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+        Assert.Equal(3, doc.RootElement.GetProperty("schema_version").GetInt32());
+        JsonElement[] results = doc.RootElement.GetProperty("results").EnumerateArray().ToArray();
         Assert.Equal(2, results.Length);
         foreach (JsonElement result in results)
         {
@@ -443,8 +457,8 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(
             new[]
             {
-                "source_id", "chunk_id", "content_kind", "display_path", "url",
-                "line", "line_start", "line_end", "score", "snippet", "source_bytes",
+                "source_id", "chunk_id", "content_kind", "display_path", "path", "url",
+                "line", "line_start", "line_end", "score", "snippet", "source_bytes", "content_hash",
             },
             results[0].EnumerateObject().Select(static p => p.Name).ToArray());
     }
@@ -519,6 +533,22 @@ public sealed class ContentToolTests : IDisposable
         Assert.DoesNotContain("window clamped", read, StringComparison.Ordinal);
         Assert.Equal((1, 1), RenderedRange(read));
         Assert.Contains("1: line 1", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Read_RejectsContextThatCouldOverflowWindowArithmetic()
+    {
+        ContentTool tool = ToolWithNumberedSource(5, "tiny/five.txt");
+
+        string json = tool.Content(
+            "read",
+            source_id: "tiny/five.txt",
+            line: 1,
+            context_lines: int.MaxValue,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("invalid_context_lines", doc.RootElement.GetProperty("diagnostic_code").GetString());
     }
 
     [Fact]
@@ -616,6 +646,17 @@ public sealed class ContentToolTests : IDisposable
         int[] jsonLines = root.GetProperty("lines").EnumerateArray()
             .Select(l => l.GetProperty("line").GetInt32()).ToArray();
         Assert.Equal(Enumerable.Range(start, end - start + 1).ToArray(), jsonLines);
+        Assert.True(root.GetProperty("store_window_clamped").GetBoolean());
+        Assert.True(root.GetProperty("output_truncated").GetBoolean());
+        Assert.True(root.GetProperty("omitted_after").GetInt32() > 0);
+        JsonElement action = Assert.Single(root.GetProperty("next_actions").EnumerateArray());
+        JsonElement args = action.GetProperty("args");
+        string continuation = tool.Content(
+            "read",
+            source_id: args.GetProperty("source_id").GetString(),
+            line: args.GetProperty("line").GetInt32(),
+            context_lines: args.GetProperty("context_lines").GetInt32());
+        Assert.Equal(end + 1, RenderedRange(continuation).Start);
     }
 
     [Fact]
@@ -628,7 +669,13 @@ public sealed class ContentToolTests : IDisposable
         Assert.DoesNotContain("window clamped", json, StringComparison.Ordinal);
         using JsonDocument doc = JsonDocument.Parse(json);
         Assert.Equal(
-            new[] { "source_id", "display_path", "line_start", "line_end", "truncated_line_count", "lines" },
+            new[]
+            {
+                "schema_version", "operation", "source_id", "display_path", "content_hash", "requested_line",
+                "context_lines", "source_line_count", "store_window_clamped", "line_start", "line_end",
+                "returned_count", "omitted_before", "omitted_after", "output_truncated", "lines",
+                "truncated_line_count", "next_actions",
+            },
             doc.RootElement.EnumerateObject().Select(static p => p.Name).ToArray());
     }
 
@@ -647,9 +694,50 @@ public sealed class ContentToolTests : IDisposable
             context_lines: 0);
 
         Assert.DoesNotContain("content read failed:", output, StringComparison.Ordinal);
-        Assert.InRange(output.Length, 1, 48_000);
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.ContentMcpMaxBytes);
         Assert.Contains("read truncated_lines=1", output, StringComparison.Ordinal);
         Assert.EndsWith("…", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_Search_DefaultCapHugeLine_StaysWithinMcpByteBudget()
+    {
+        string logPath = Path.Combine(_dir, "huge-search-line.log");
+        File.WriteAllText(
+            logPath,
+            "connection refused " + new string('x', 400_000));
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        tool.Content("import", path: logPath, display_path: "huge-search-line.log");
+
+        string compact = tool.Content("search", query: "connection refused");
+        string json = tool.Content("search", query: "connection refused", format: "json");
+
+        Assert.True(
+            Encoding.UTF8.GetByteCount(compact) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(compact).ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(json).ToString());
+        using JsonDocument document = JsonDocument.Parse(json);
+        Assert.Equal(3, document.RootElement.GetProperty("schema_version").GetInt32());
+        JsonElement hit = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(hit.GetProperty("snippet").GetString()!) <= 1_024);
+    }
+
+    [Fact]
+    public void Content_Search_RejectsLimitAboveExecutionCap()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content(
+            "search",
+            query: "needle",
+            limit: ContentTool.MaxSearchLimit + 1,
+            format: "json");
+
+        using JsonDocument document = JsonDocument.Parse(json);
+        Assert.Equal("invalid_limit", document.RootElement.GetProperty("diagnostic_code").GetString());
     }
 
     [Fact]
@@ -704,9 +792,9 @@ public sealed class ContentToolTests : IDisposable
             new string('x', 50_000),
             format: "json");
 
-        Assert.InRange(output.Length, 1, 8_000);
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.ContentMcpMaxBytes);
         using JsonDocument doc = JsonDocument.Parse(output);
-        Assert.Equal("content_error", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("input_too_large", doc.RootElement.GetProperty("diagnostic_code").GetString());
         Assert.EndsWith("…", doc.RootElement.GetProperty("operation").GetString(), StringComparison.Ordinal);
     }
 
@@ -735,13 +823,43 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
-    public void Content_SearchKindAll_DefaultsToExternalFileForSearch()
+    public void Content_SearchKindAll_SearchesEveryContentKind()
     {
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+        string logPath = Path.Combine(_dir, "all-kind.log");
+        string webPath = Path.Combine(_dir, "all-kind.md");
+        File.WriteAllText(logPath, "AllKindsNeedle external");
+        File.WriteAllText(webPath, "AllKindsNeedle web");
+        tool.Content("import", path: logPath);
+        tool.Content("add_markdown", path: webPath, url: "https://example.test/all-kinds");
 
-        string output = tool.Content("search", query: "MissingSecretValue", content_kind: "all", limit: 1);
+        string output = tool.Content(
+            "search",
+            query: "AllKindsNeedle",
+            content_kind: "all",
+            limit: 10,
+            format: "json");
 
-        Assert.Contains("external_file", output, StringComparison.Ordinal);
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal("all", doc.RootElement.GetProperty("content_kind").GetString());
+        string?[] kinds = doc.RootElement.GetProperty("results").EnumerateArray()
+            .Select(static row => row.GetProperty("content_kind").GetString())
+            .ToArray();
+        Assert.Contains(TextContentKind.ExternalFile, kinds);
+        Assert.Contains(TextContentKind.Web, kinds);
+    }
+
+    [Fact]
+    public void Content_Search_LabelsLimitPlusOneCoverageAsAProbe()
+    {
+        ContentTool tool = ToolWithImportedSources("one.log", "two.log", "three.log", "four.log");
+
+        string json = tool.Content("search", query: "alpha", limit: 2, format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(3, doc.RootElement.GetProperty("probed_candidate_count").GetInt32());
+        Assert.Equal(1, doc.RootElement.GetProperty("probed_result_limit_omitted_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("more_may_exist").GetBoolean());
     }
 
     [Fact]
@@ -1046,10 +1164,28 @@ public sealed class ContentToolTests : IDisposable
         JsonElement root = doc.RootElement;
 
         Assert.Equal(
-            new[] { "operation", "error", "diagnostic_code", "content_kind", "results", "next_actions" },
+            new[]
+            {
+                "schema_version",
+                "operation",
+                "query",
+                "content_kind",
+                "requested_limit",
+                "probed_candidate_count",
+                "returned_count",
+                "probed_result_limit_omitted_count",
+                "output_omitted_count",
+                "output_truncated",
+                "more_may_exist",
+                "degraded_workspace_count",
+                "diagnostic_code",
+                "degraded_workspaces",
+                "degraded_workspaces_omitted_count",
+                "results",
+                "next_actions",
+            },
             root.EnumerateObject().Select(static property => property.Name).ToArray());
         Assert.Equal("search", root.GetProperty("operation").GetString());
-        Assert.Equal("No results.", root.GetProperty("error").GetString());
         Assert.Equal("no_results", root.GetProperty("diagnostic_code").GetString());
         Assert.Equal("workspace_docs", root.GetProperty("content_kind").GetString());
         Assert.Empty(root.GetProperty("results").EnumerateArray());
@@ -1138,7 +1274,7 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(
             ["schema_version", "per_kind_limit", "total_count", "returned_count", "omitted_count", "kinds"],
             root.EnumerateObject().Select(static property => property.Name).ToArray());
-        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(3, root.GetProperty("schema_version").GetInt32());
         Assert.Equal(8, root.GetProperty("total_count").GetInt32());
         Assert.Equal(4, root.GetProperty("returned_count").GetInt32());
         Assert.Equal(4, root.GetProperty("omitted_count").GetInt32());
@@ -1155,7 +1291,7 @@ public sealed class ContentToolTests : IDisposable
     public void Content_List_CompactAndJsonStayWithinHardCharacterBudgets()
     {
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
-        string escapeHeavy = string.Concat(Enumerable.Repeat("\u0001\"\\", 2_000));
+        string escapeHeavy = string.Concat(Enumerable.Repeat("\u0001\"\\", 400));
         for (int i = 0; i < 20; i++)
         {
             string externalPath = Path.Combine(_dir, $"bounded-{i}.log");
@@ -1174,10 +1310,15 @@ public sealed class ContentToolTests : IDisposable
         string compact = tool.Content("list", limit: 20);
         string json = tool.Content("list", limit: 20, format: "json");
 
-        Assert.True(compact.Length <= 16_000, compact.Length.ToString());
-        Assert.True(json.Length <= 48_000, json.Length.ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(compact) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(compact).ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(json).ToString());
         using JsonDocument doc = JsonDocument.Parse(json);
-        Assert.Equal(40, doc.RootElement.GetProperty("returned_count").GetInt32());
+        Assert.InRange(doc.RootElement.GetProperty("returned_count").GetInt32(), 1, 39);
+        Assert.InRange(doc.RootElement.GetProperty("omitted_count").GetInt32(), 1, 39);
     }
 
     [Fact]
@@ -1192,9 +1333,11 @@ public sealed class ContentToolTests : IDisposable
 
         string json = tool.Content("shape", source_id: sourceId, format: "json");
 
-        Assert.True(json.Length <= 8_000, json.Length.ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(json).ToString());
         using JsonDocument doc = JsonDocument.Parse(json);
-        Assert.Equal(2, doc.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(3, doc.RootElement.GetProperty("schema_version").GetInt32());
         Assert.Equal(5, doc.RootElement.GetProperty("head").GetArrayLength());
         Assert.Equal(5, doc.RootElement.GetProperty("tail").GetArrayLength());
     }
@@ -1220,7 +1363,7 @@ public sealed class ContentToolTests : IDisposable
 
         using JsonDocument doc = JsonDocument.Parse(json);
         JsonElement root = doc.RootElement;
-        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.Equal(3, root.GetProperty("schema_version").GetInt32());
         Assert.Equal("text_derived", root.GetProperty("severity_basis").GetString());
         Assert.Equal(7, root.GetProperty("line_count").GetInt32());
         Assert.Equal(5, root.GetProperty("head").GetArrayLength());
@@ -1232,7 +1375,7 @@ public sealed class ContentToolTests : IDisposable
         Assert.Equal(1, severity.GetProperty("info").GetInt32());
         Assert.Equal(1, severity.GetProperty("debug").GetInt32());
         Assert.Equal(2, severity.GetProperty("other").GetInt32());
-        Assert.True(json.Length < 8_000, json);
+        Assert.True(Encoding.UTF8.GetByteCount(json) < ToolOutputBudget.ContentMcpMaxBytes, json);
     }
 
     [Theory]
@@ -1287,10 +1430,30 @@ public sealed class ContentToolTests : IDisposable
         string compact = tool.Content(operation, source_id: requested, line: 1);
         string json = tool.Content(operation, source_id: requested, line: 1, format: "json");
 
-        Assert.True(compact.Length <= 8_000, compact.Length.ToString());
-        Assert.True(json.Length <= 8_000, json.Length.ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(compact) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(compact).ToString());
+        Assert.True(
+            Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(json).ToString());
         using JsonDocument doc = JsonDocument.Parse(json);
-        Assert.Equal("source_not_found", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("input_too_large", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
+    public void Content_FailureRecoveryActionsMatchTheFailedOperation()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        using JsonDocument import = JsonDocument.Parse(tool.Content("import", format: "json"));
+        Assert.Equal("missing_path", import.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Empty(import.RootElement.GetProperty("next_actions").EnumerateArray());
+
+        using JsonDocument remove = JsonDocument.Parse(tool.Content("remove", format: "json"));
+        Assert.Equal("missing_source_id", remove.RootElement.GetProperty("diagnostic_code").GetString());
+        JsonElement action = Assert.Single(remove.RootElement.GetProperty("next_actions").EnumerateArray());
+        Assert.Equal("list", action.GetProperty("args").GetProperty("operation").GetString());
+        Assert.False(action.GetProperty("args").TryGetProperty("query", out _));
     }
 
     [Fact]
@@ -1320,12 +1483,24 @@ public sealed class ContentToolTests : IDisposable
         string alphaSymbols = Path.Combine(alphaRoot, ".miller", "symbols.db");
         string betaSymbols = Path.Combine(betaRoot, ".miller", "symbols.db");
         string alphaLog = Path.Combine(alphaRoot, "alpha.log");
+        string alphaSecondLog = Path.Combine(alphaRoot, "alpha-second.log");
         string betaLog = Path.Combine(betaRoot, "beta.log");
+        string betaSecondLog = Path.Combine(betaRoot, "beta-second.log");
         File.WriteAllText(alphaLog, "CrossWorkspaceNeedle in alpha.");
+        File.WriteAllText(alphaSecondLog, "CrossWorkspaceNeedle in alpha second.");
         File.WriteAllText(betaLog, "CrossWorkspaceNeedle in beta.");
+        File.WriteAllText(betaSecondLog, "CrossWorkspaceNeedle in beta second.");
         var store = new ContentCorpusExternalStore();
         store.Import(ContentCorpusSidecar.ContentDbPathFor(alphaSymbols), alphaLog, displayPath: "alpha.log");
+        store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(alphaSymbols),
+            alphaSecondLog,
+            displayPath: "alpha-second.log");
         store.Import(ContentCorpusSidecar.ContentDbPathFor(betaSymbols), betaLog, displayPath: "beta.log");
+        store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(betaSymbols),
+            betaSecondLog,
+            displayPath: "beta-second.log");
         using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
         {
             registry.UpsertSeen("ws-alpha", "alpha", alphaRoot, alphaSymbols);
@@ -1355,11 +1530,16 @@ public sealed class ContentToolTests : IDisposable
             "search",
             query: "CrossWorkspaceNeedle",
             workspace_id: "all",
-            limit: 10,
+            limit: 3,
             format: "json");
         using JsonDocument doc = JsonDocument.Parse(json);
-        JsonElement[] rows = doc.RootElement.EnumerateArray().ToArray();
-        Assert.Equal(2, rows.Length);
+        JsonElement[] rows = doc.RootElement.GetProperty("results").EnumerateArray().ToArray();
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(
+            2,
+            rows.Take(2).Select(static row => row.GetProperty("workspace_id").GetString()).Distinct().Count());
+        Assert.Equal(1, doc.RootElement.GetProperty("probed_result_limit_omitted_count").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("more_may_exist").GetBoolean());
         Assert.Contains(rows, row =>
             row.GetProperty("workspace_id").GetString() == "ws-alpha"
             && row.GetProperty("display_id").GetString() == "alpha"
@@ -1394,7 +1574,7 @@ public sealed class ContentToolTests : IDisposable
             limit: 10,
             format: "json");
         using JsonDocument doc = JsonDocument.Parse(json);
-        JsonElement hit = Assert.Single(doc.RootElement.EnumerateArray());
+        JsonElement hit = Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
         string sourceId = hit.GetProperty("source_id").GetString()!;
         int line = hit.GetProperty("line").GetInt32();
         string workspaceId = hit.GetProperty("workspace_id").GetString()!;
@@ -1448,7 +1628,7 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
-    public void Content_SearchRegisteredWorkspaceSource_FailsWhenContentDbIsStale()
+    public void Content_SearchAll_IsolatesStaleWorkspaceFailure()
     {
         const string sourceText = """
             public class Api
@@ -1481,10 +1661,30 @@ public sealed class ContentToolTests : IDisposable
             fixture.WorkspaceRoot,
             workspaceId: "ws-stale",
             revision: 1);
+        using var healthyFixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)
+            {
+                EndLine = 7,
+            }],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = sourceText,
+            },
+            revisions: [new JulieDbFixture.RevisionRow(1)]);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(healthyFixture.DbPath),
+            healthyFixture.DbPath,
+            healthyFixture.WorkspaceRoot,
+            workspaceId: "ws-healthy",
+            revision: 1);
         using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
         {
             registry.UpsertSeen("ws-stale", "stale", fixture.WorkspaceRoot, fixture.DbPath);
             registry.MarkScanned("ws-stale", revision: 2);
+            registry.UpsertSeen("ws-healthy", "healthy", healthyFixture.WorkspaceRoot, healthyFixture.DbPath);
+            registry.MarkScanned("ws-healthy", revision: 1);
         }
         var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
 
@@ -1494,9 +1694,156 @@ public sealed class ContentToolTests : IDisposable
             content_kind: TextContentKind.WorkspaceSource,
             workspace_id: "all");
 
-        Assert.StartsWith("content failed:", output, StringComparison.Ordinal);
+        Assert.Contains("healthy (ws-healthy)", output, StringComparison.Ordinal);
+        Assert.Contains("StaleWorkspaceSourceMarker", output, StringComparison.Ordinal);
+        Assert.Contains("workspace_warning: stale", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=content_corpus_stale", output, StringComparison.Ordinal);
         Assert.Contains("is stale", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("expected 2", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchCurrentWorkspace_RejectsStaleWorkspaceCorpus()
+    {
+        const string sourceText = """
+            public class Api
+            {
+                public void Handle()
+                {
+                    throw new InvalidOperationException("CurrentWorkspaceStaleMarker");
+                }
+            }
+            """;
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)
+            {
+                EndLine = 7,
+            }],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = sourceText,
+            },
+            revisions:
+            [
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2),
+            ]);
+        Directory.CreateDirectory(Path.GetDirectoryName(_workspace.ExtractDbPath)!);
+        File.Copy(fixture.DbPath, _workspace.ExtractDbPath);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath),
+            _workspace.ExtractDbPath,
+            fixture.WorkspaceRoot,
+            workspaceId: _workspace.WorkspaceId!,
+            revision: 1);
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string output = tool.Content(
+            "search",
+            query: "CurrentWorkspaceStaleMarker",
+            content_kind: TextContentKind.WorkspaceSource,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal("content_corpus_stale", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("expected 2", doc.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Content_SearchAll_BoundsAndCountsDegradedWorkspaceDetails()
+    {
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                string root = Path.Combine(_dir, $"missing-workspace-{i}-" + new string('x', 180));
+                Directory.CreateDirectory(root);
+                string index = Path.Combine(root, ".miller", "symbols.db");
+                string workspaceId = $"missing-{i}-" + new string('a', 80);
+                registry.UpsertSeen(workspaceId, $"missing-{i}-" + new string('b', 180), root, index);
+                registry.MarkScanned(workspaceId, revision: 1);
+            }
+        }
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string compact = tool.Content(
+            "search",
+            query: "MissingAcrossEveryWorkspace",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all");
+        string json = tool.Content(
+            "search",
+            query: "MissingAcrossEveryWorkspace",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "all",
+            format: "json");
+
+        Assert.Contains("search incomplete:", compact, StringComparison.Ordinal);
+        Assert.Contains("workspace_warning:", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("content search failed:", compact, StringComparison.Ordinal);
+        Assert.True(
+            Encoding.UTF8.GetByteCount(json) <= ToolOutputBudget.ContentMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(json).ToString());
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal(10, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        Assert.Equal(3, doc.RootElement.GetProperty("degraded_workspaces").GetArrayLength());
+        Assert.Equal(7, doc.RootElement.GetProperty("degraded_workspaces_omitted_count").GetInt32());
+        Assert.Equal("workspace_search_incomplete", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        JsonElement action = Assert.Single(doc.RootElement.GetProperty("next_actions").EnumerateArray());
+        Assert.Equal("workspace", action.GetProperty("tool").GetString());
+        Assert.Equal("refresh", action.GetProperty("args").GetProperty("operation").GetString());
+    }
+
+    [Fact]
+    public void Content_SearchCurrentWorkspace_DoesNotServeWorkspaceCorpusWithoutSymbolsDb()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym-api", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string>
+            {
+                ["src/Api.cs"] = "public class Api { }",
+            },
+            revisions: [new JulieDbFixture.RevisionRow(1)]);
+        Directory.CreateDirectory(Path.GetDirectoryName(_workspace.ExtractDbPath)!);
+        File.Copy(fixture.DbPath, _workspace.ExtractDbPath);
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath),
+            _workspace.ExtractDbPath,
+            fixture.WorkspaceRoot,
+            workspaceId: _workspace.WorkspaceId!,
+            revision: 1);
+        File.Delete(_workspace.ExtractDbPath);
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        string json = tool.Content(
+            "search",
+            query: "Api",
+            content_kind: TextContentKind.WorkspaceSource,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(json);
+        Assert.Equal("content_corpus_missing", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Contains("freshness cannot be verified", doc.RootElement.GetProperty("error").GetString());
+
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-missing-index", "missing-index", _dir, _workspace.ExtractDbPath);
+            registry.MarkScanned("ws-missing-index", revision: 1);
+        }
+        string selected = tool.Content(
+            "search",
+            query: "Api",
+            content_kind: TextContentKind.WorkspaceSource,
+            workspace_id: "ws-missing-index",
+            format: "json");
+        using JsonDocument selectedDoc = JsonDocument.Parse(selected);
+        Assert.Equal(
+            "content_corpus_missing",
+            selectedDoc.RootElement.GetProperty("diagnostic_code").GetString());
     }
 
     [Fact]
@@ -1546,7 +1893,7 @@ public sealed class ContentToolTests : IDisposable
             workspace_id: "source",
             format: "json");
         using JsonDocument doc = JsonDocument.Parse(json);
-        JsonElement hit = Assert.Single(doc.RootElement.EnumerateArray());
+        JsonElement hit = Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
         string sourceId = hit.GetProperty("source_id").GetString()!;
         int line = hit.GetProperty("line").GetInt32();
 

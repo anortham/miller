@@ -36,7 +36,7 @@ bulk export:
   streaming and non-streaming imports, including CRLF inputs.
 
 The active MCP contract is
-[`content-mcp-v2.md`](../contracts/content-mcp-v2.md). The content corpus and
+[`content-mcp-v3.md`](../contracts/content-mcp-v3.md). The content corpus and
 CLI export schemas remain in
 [`content-corpus-v1.md`](../contracts/content-corpus-v1.md) and
 [`cli-eros-v1.md`](../contracts/cli-eros-v1.md).

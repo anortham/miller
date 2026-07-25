@@ -8,6 +8,39 @@ namespace Miller.Indexing;
 
 public sealed class ContentCorpusExportReader
 {
+    private const string ExportQuery = """
+        SELECT m.schema_version,
+               s.workspace_id,
+               s.workspace_revision,
+               c.source_id,
+               c.chunk_id,
+               c.content_kind,
+               c.path,
+               c.url,
+               c.display_path,
+               c.language,
+               c.line_start,
+               c.line_end,
+               c.byte_start,
+               c.byte_end,
+               c.source_bytes,
+               s.content_hash,
+               c.raw_text,
+               c.doc_len,
+               c.is_test,
+               c.containing_symbol_id,
+               c.containing_symbol_name,
+               s.status,
+               s.indexed_at_utc
+        FROM content_chunks c
+        JOIN content_sources s ON s.source_id = c.source_id
+        CROSS JOIN content_meta m
+        WHERE s.status = 'active'
+          AND ($kind IS NULL OR c.content_kind = $kind)
+          AND ($workspace IS NULL OR s.workspace_id = $workspace)
+        ORDER BY c.content_kind, c.display_path, c.line_start, c.chunk_id;
+        """;
+
     public IReadOnlyList<ContentCorpusExportRow> Read(
         string contentDbPath,
         string? contentKind = null,
@@ -22,38 +55,7 @@ public sealed class ContentCorpusExportReader
 
         using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT m.schema_version,
-                   s.workspace_id,
-                   s.workspace_revision,
-                   c.source_id,
-                   c.chunk_id,
-                   c.content_kind,
-                   c.path,
-                   c.url,
-                   c.display_path,
-                   c.language,
-                   c.line_start,
-                   c.line_end,
-                   c.byte_start,
-                   c.byte_end,
-                   c.source_bytes,
-                   s.content_hash,
-                   c.raw_text,
-                   c.doc_len,
-                   c.is_test,
-                   c.containing_symbol_id,
-                   c.containing_symbol_name,
-                   s.status,
-                   s.indexed_at_utc
-            FROM content_chunks c
-            JOIN content_sources s ON s.source_id = c.source_id
-            CROSS JOIN content_meta m
-            WHERE s.status = 'active'
-              AND ($kind IS NULL OR c.content_kind = $kind)
-              AND ($workspace IS NULL OR s.workspace_id = $workspace)
-            ORDER BY c.content_kind, c.display_path, c.line_start, c.chunk_id;
-            """;
+        command.CommandText = ExportQuery;
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
 
@@ -61,34 +63,7 @@ public sealed class ContentCorpusExportReader
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            int schemaVersion = reader.GetInt32(0);
-            if (schemaVersion != ContentCorpusSchema.SchemaVersion)
-                throw new InvalidOperationException($"content.db schema_version {schemaVersion} is not supported.");
-
-            rows.Add(new ContentCorpusExportRow(
-                schemaVersion,
-                reader.IsDBNull(1) ? null : reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetInt64(2),
-                reader.GetString(3),
-                reader.GetString(4),
-                reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7),
-                reader.GetString(8),
-                reader.GetString(9),
-                reader.GetInt32(10),
-                reader.GetInt32(11),
-                reader.GetInt64(12),
-                reader.GetInt64(13),
-                reader.GetInt64(14),
-                reader.GetString(15),
-                reader.GetString(16),
-                reader.GetInt32(17),
-                reader.GetInt32(18) != 0,
-                reader.IsDBNull(19) ? null : reader.GetString(19),
-                reader.IsDBNull(20) ? null : reader.GetString(20),
-                reader.GetString(21),
-                reader.GetString(22)));
+            rows.Add(ReadRow(reader));
         }
 
         return rows;
@@ -99,6 +74,36 @@ public sealed class ContentCorpusExportReader
         string? contentKind = null,
         string? workspaceId = null) =>
         ToJsonLines(Read(contentDbPath, contentKind, workspaceId));
+
+    public long WriteJsonLines(
+        string contentDbPath,
+        TextWriter output,
+        string? contentKind = null,
+        string? workspaceId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentNullException.ThrowIfNull(output);
+        if (!File.Exists(Path.GetFullPath(contentDbPath)))
+            return 0;
+
+        string? kind = NormalizeKind(contentKind);
+        string? workspace = string.IsNullOrWhiteSpace(workspaceId) ? null : workspaceId.Trim();
+        using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = ExportQuery;
+        command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
+
+        long count = 0;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            output.Write(ToJson(ReadRow(reader)));
+            output.Write('\n');
+            count++;
+        }
+        return count;
+    }
 
     public static string ToJsonLines(IReadOnlyList<ContentCorpusExportRow> rows)
     {
@@ -146,6 +151,38 @@ public sealed class ContentCorpusExportReader
         }
 
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static ContentCorpusExportRow ReadRow(SqliteDataReader reader)
+    {
+        int schemaVersion = reader.GetInt32(0);
+        if (schemaVersion != ContentCorpusSchema.SchemaVersion)
+            throw new InvalidOperationException($"content.db schema_version {schemaVersion} is not supported.");
+
+        return new ContentCorpusExportRow(
+            schemaVersion,
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetInt64(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.GetString(8),
+            reader.GetString(9),
+            reader.GetInt32(10),
+            reader.GetInt32(11),
+            reader.GetInt64(12),
+            reader.GetInt64(13),
+            reader.GetInt64(14),
+            reader.GetString(15),
+            reader.GetString(16),
+            reader.GetInt32(17),
+            reader.GetInt32(18) != 0,
+            reader.IsDBNull(19) ? null : reader.GetString(19),
+            reader.IsDBNull(20) ? null : reader.GetString(20),
+            reader.GetString(21),
+            reader.GetString(22));
     }
 
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)

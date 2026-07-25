@@ -38,9 +38,14 @@ public sealed class ContentCorpusExportReaderTests : IDisposable
 
         string first = reader.ExportJsonLines(_contentDbPath);
         string second = reader.ExportJsonLines(_contentDbPath);
+        using var streamed = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        streamed.NewLine = "\r\n";
+        long streamedCount = reader.WriteJsonLines(_contentDbPath, streamed);
 
         Assert.Equal(first, second);
         JsonElement[] rows = ParseLines(first);
+        Assert.Equal(first, streamed.ToString());
+        Assert.Equal(rows.Length, streamedCount);
         Assert.Contains(rows, row => row.GetProperty("content_kind").GetString() == TextContentKind.WorkspaceSource);
         Assert.Contains(rows, row => row.GetProperty("content_kind").GetString() == TextContentKind.Web);
         Assert.Equal(rows.Select(row => row.GetProperty("content_kind").GetString()).Order(StringComparer.Ordinal),

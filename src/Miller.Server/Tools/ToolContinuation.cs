@@ -36,6 +36,7 @@ public static partial class ToolOutputBudget
     public const int ContextMcpMaxTokens = 2400;
     public const int WorkspaceOnboardingMcpRowLimit = 3;
     public const int InspectFullBodyMaxBytes = 4 * 1024;
+    public const int ContentMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
     public const int WorkspaceHealthMcpMaxBytes = 12 * 1024;

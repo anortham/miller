@@ -3,7 +3,7 @@ id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
 status: active
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-24T22:16:06.425Z
+updated: 2026-07-25T21:05:18.774Z
 tags:
   - miller
   - julie
@@ -20,20 +20,20 @@ Make Miller strictly better than Julie at getting an agent the evidence it needs
 
 ## Current state
 
-- Takeover Phases 0-9 and extractor 2.17.0 plus semantic sidecar RC4 prerequisites are complete on `codex/miller-julie-takeover`.
-- Commit `90178c8f` fixes two genuine fifth-calibration Miller defects: context now selects callable definitions over same-span export aliases, and full compact inspect preserves long value declarations.
-- The working tree completes the exact fifth-run label audit and one additional product fix. Task-faithful replay now passes dev003/004/005/007(all reps)/008/009(reps 1-2)/011; dev009 rep 3 remains correctly rejected for unrelated downstream tracing, and dev012 remains a genuine old-runtime budget failure.
-- Bounded JSON file inspection caused dev012 by returning imports first and hiding the focused test functions. It now ranks definitions before low-signal rows and reports total, returned, omitted, and truncated child counts.
-- Evaluator Python 104 and fast Miller 4,832 pass on the current working tree. No sealed data has been inspected.
+- The current takeover branch is `codex/miller-julie-takeover` in `/Users/murphy/source/miller/.worktrees/miller-julie-takeover`.
+- Search, inspect/edit, context, trace, impact, patterns, and Content deep-remediation milestones are complete. Content is checkpointed and ready to commit: universal 12 KiB MCP bounds, revision-safe/failure-isolated search, bounded FTS hydration, drift hashes, truthful continuation/diagnostics, and streaming CLI JSONL. Its iterative Claude review ended clean.
+- The next tool phase is Workspace. After Workspace, repeat all nine tool-specific Claude reviews plus one broad review, fix every accepted finding, and rerun affected reviews until clean.
+- No sealed data has been inspected. Julie remains read-only and has an unrelated active session.
 
 ## Next sequence
 
-1. Checkpoint and commit the verified visible-label audit plus relevance-ordered bounded file inspection.
-2. Rebuild the exact AOT runtime and hash-bound runtime identity and run a complete sixth visible calibration; disposition exact trajectories and repeat until relevance, correctness, efficiency, and action all pass.
-3. Run nine fresh tool-specific Claude reviews plus one broad Claude review; fix accepted findings and rerun affected reviews until clean.
-4. Run final evaluator, retrieval, plugin, mirror, fast, Scale, Release, AOT, and local package-smoke gates; reconcile every Miller worktree.
-5. Request only unavoidable approval boundaries for GitHub-hosted four-platform package validation and the spend-once sealed decision. Do not push, publish, release, merge local main, or modify Julie without approval.
-6. Present the clean exact commit ready for local merge to main.
+1. Commit the verified Content milestone including its Goldfish checkpoint.
+2. Deep-audit and remediate Workspace against the matrix/plan and Julie workflow; complete the required Claude review loop.
+3. Update the matrix, contracts, findings, and current docs so the nine-tool takeover evidence is complete.
+4. Run nine fresh tool-specific Claude reviews plus one broad Claude review; fix accepted findings and rerun affected reviews until clean.
+5. Run final evaluator, retrieval, plugin, mirror, fast, Scale, Release, AOT, and local package-smoke gates; reconcile every Miller worktree.
+6. Request only unavoidable approval boundaries for GitHub-hosted four-platform package validation and the spend-once sealed decision. Do not push, publish, release, merge local main, or modify Julie without approval.
+7. Present the clean exact commit ready for approved local merge to main.
 
 ## Constraints
 
@@ -48,4 +48,5 @@ Make Miller strictly better than Julie at getting an agent the evidence it needs
 
 - `docs/findings/2026-07-22-miller-julie-takeover-matrix.md`
 - `docs/plans/2026-07-22-miller-julie-takeover-remediation-plan.md`
+- `docs/findings/2026-07-25-content-correctness-and-bounds.md`
 - `.razorback/sdd/takeover-phase-10-readiness-audit.md`

@@ -16,6 +16,7 @@ internal readonly record struct ContentToolExecutionResult(string Output, bool I
 [McpServerToolType]
 public sealed class ContentTool
 {
+    public const int MaxSearchLimit = 100;
     private readonly WorkspaceContext _workspace;
     private readonly ContentCorpusExternalStore _store;
 
@@ -28,6 +29,21 @@ public sealed class ContentTool
         string ContentDbPath,
         string? WorkspaceId,
         string WorkspaceRoot);
+
+    private sealed record WorkspaceSearchFailure(
+        string WorkspaceId,
+        string DisplayId,
+        string DiagnosticCode,
+        string Message);
+
+    private sealed record ContentSearchCoverage(
+        int RequestedLimit,
+        int ProbedCandidateCount,
+        int ProbedResultLimitOmittedCount,
+        bool MoreMayExist,
+        IReadOnlyList<WorkspaceSearchFailure> Failures);
+
+    private sealed record ContentInventoryRow(string ContentKind, ExternalContentSource Source);
 
     public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
     {
@@ -55,8 +71,8 @@ public sealed class ContentTool
         [Description("Content kind for search/list. Search defaults external_file; bare list inventories external_file and web.")] string? content_kind = null,
         [Description("Workspace selector for search/read. Use all only for registered workspace search. Optional.")] string? workspace_id = null,
         [Description("1-based center line for operation=read.")] int? line = null,
-        [Description("Context lines before/after the read line. Default 10. A window over 200 lines (MaxReadWindowLines) is clamped to 200, keeping the requested line; compact output then names the next line to continue from.")] int? context_lines = null,
-        [Description("Max search results, or returned list rows per kind. List is capped at 20 per kind. Default 6.")] int limit = SearchTool.DefaultLimit,
+        [Description("Context lines before/after the read line (0–1,000,000). Default 10. A window over 200 lines is clamped to 200, keeping the requested line; output reports continuation.")] int? context_lines = null,
+        [Description("Max search results (1–100), or returned list rows per kind. List is capped at 20 per kind. Default 6.")] int limit = SearchTool.DefaultLimit,
         [Description("Max import bytes. Required to intentionally import files over the default cap.")] long? max_bytes = null,
         [Description("Output format: compact|json. Default compact.")] string format = "compact")
     {
@@ -73,7 +89,8 @@ public sealed class ContentTool
             context_lines,
             limit,
             max_bytes,
-            format).Output;
+            format,
+            ToolOutputBudget.ContentMcpMaxBytes).Output;
     }
 
     internal ContentToolExecutionResult Execute(
@@ -89,27 +106,43 @@ public sealed class ContentTool
         int? contextLines,
         int limit,
         long? maxBytes,
-        string format)
+        string format,
+        int? outputByteBudget = null)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         string op = string.IsNullOrWhiteSpace(operation) ? "list" : operation.Trim().ToLowerInvariant();
         try
         {
+            ValidateInputs(operation, path, query, sourceId, url, displayPath, contentKind, workspaceId, format);
             string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
             if (telemetry is not null)
                 telemetry.Op = op;
 
             string output = op switch
             {
-                "import" or "add" => Import(contentDbPath, path, maxBytes, displayPath, json, telemetry),
+                "import" or "add" => Import(
+                    contentDbPath, path, maxBytes, displayPath, json, telemetry, outputByteBudget),
                 "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown" =>
-                    AddMarkdown(contentDbPath, path, url, maxBytes, displayPath, json, telemetry),
-                "search" => Search(contentDbPath, query, ContentKindOrDefault(contentKind, TextContentKind.ExternalFile), limit, workspaceId, json, telemetry),
-                "read" => Read(contentDbPath, sourceId, workspaceId, line, contextLines, json, telemetry),
-                "shape" => Shape(contentDbPath, sourceId, workspaceId, json, telemetry),
-                "list" => List(contentDbPath, OptionalContentKind(contentKind), limit, json, telemetry),
-                "remove" or "delete" => Remove(contentDbPath, sourceId, json, telemetry),
+                    AddMarkdown(
+                        contentDbPath, path, url, maxBytes, displayPath, json, telemetry, outputByteBudget),
+                "search" => Search(
+                    contentDbPath,
+                    query,
+                    SearchContentKindOrDefault(contentKind),
+                    limit,
+                    workspaceId,
+                    json,
+                    telemetry,
+                    outputByteBudget),
+                "read" => Read(
+                    contentDbPath, sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
+                "shape" => Shape(
+                    contentDbPath, sourceId, workspaceId, json, telemetry, outputByteBudget),
+                "list" => List(
+                    contentDbPath, OptionalContentKind(contentKind), limit, json, telemetry, outputByteBudget),
+                "remove" or "delete" => Remove(
+                    contentDbPath, sourceId, json, telemetry, outputByteBudget),
                 _ => throw new InvalidOperationException("content operation must be import, add_markdown, search, read, shape, list, or remove."),
             };
             return new ContentToolExecutionResult(output, IsError: false);
@@ -124,30 +157,44 @@ public sealed class ContentTool
                 telemetry.SetMetadata("diagnostic_code", diagnosticCode);
                 telemetry.SetErrorCategory(diagnosticCode);
             }
-            string output = RenderFailure(op, ex, diagnosticCode, json, sourceId);
+            string output = RenderFailure(op, ex, diagnosticCode, json, sourceId, outputByteBudget);
             return new ContentToolExecutionResult(output, IsError: true);
         }
     }
 
     internal static string RenderFailure(string operation, Exception ex, bool json) =>
-        RenderFailure(operation, ex, ContentDiagnosticCode(operation, ex), json, sourceId: null);
+        RenderFailure(
+            operation,
+            ex,
+            ContentDiagnosticCode(operation, ex),
+            json,
+            sourceId: null,
+            outputByteBudget: null);
 
     private static string RenderFailure(
         string operation,
         Exception ex,
         string diagnosticCode,
         bool json,
-        string? sourceId) =>
-        json
-            ? RenderDiagnosticJson(operation, ex.Message, diagnosticCode, ReadRecoveryNextActions(sourceId))
-            : RenderDiagnosticCompact(operation, ex.Message, diagnosticCode, ReadRecoveryNextActions(sourceId));
+        string? sourceId,
+        int? outputByteBudget)
+    {
+        IReadOnlyList<ContentNextAction> actions = FailureNextActions(operation, diagnosticCode, sourceId);
+        string output = json
+            ? RenderDiagnosticJson(operation, ex.Message, diagnosticCode, actions)
+            : RenderDiagnosticCompact(operation, ex.Message, diagnosticCode, actions);
+        return outputByteBudget is null
+            ? output
+            : RequireContentMcpBudget(output, outputByteBudget.Value, operation);
+    }
 
     private string Shape(
         string contentDbPath,
         string? sourceId,
         string? workspaceId,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content shape requires source_id.");
@@ -172,7 +219,9 @@ public sealed class ContentTool
         }
 
         string output = json ? RenderShapeJson(result) : RenderShapeCompact(result);
-        return EnsureOutputBudget(output, 8_000, "shape");
+        return outputByteBudget is null
+            ? EnsureOutputBudget(output, 8_000, "shape")
+            : RequireContentMcpBudget(output, outputByteBudget.Value, "shape");
     }
 
     private string Import(
@@ -181,7 +230,8 @@ public sealed class ContentTool
         long? maxBytes,
         string? displayPath,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new InvalidOperationException("content import requires path.");
@@ -195,7 +245,10 @@ public sealed class ContentTool
             telemetry.Outcome = TelemetryOutcome.Ok;
         }
 
-        return json ? RenderImportJson(result) : RenderImportCompact(result);
+        string output = json ? RenderImportJson(result) : RenderImportCompact(result);
+        return outputByteBudget is null
+            ? output
+            : RequireContentMcpBudget(output, outputByteBudget.Value, "import");
     }
 
     private string AddMarkdown(
@@ -205,7 +258,8 @@ public sealed class ContentTool
         long? maxBytes,
         string? displayPath,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new InvalidOperationException("content add_markdown requires path.");
@@ -221,67 +275,197 @@ public sealed class ContentTool
             telemetry.Outcome = TelemetryOutcome.Ok;
         }
 
-        return json ? RenderImportJson(result) : RenderImportCompact(result);
+        string output = json ? RenderImportJson(result) : RenderImportCompact(result);
+        return outputByteBudget is null
+            ? output
+            : RequireContentMcpBudget(output, outputByteBudget.Value, "add_markdown");
     }
 
     private string Search(
         string contentDbPath,
         string? query,
-        string contentKind,
+        string? contentKind,
         int limit,
         string? workspaceId,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(query))
             throw new InvalidOperationException("content search requires query.");
-        if (limit < 1) limit = 1;
+        if (outputByteBudget is not null && (limit < 1 || limit > MaxSearchLimit))
+            throw new InvalidOperationException($"content search limit must be between 1 and {MaxSearchLimit}.");
+        if (outputByteBudget is null && limit < 1)
+            limit = 1;
+        string contentKindLabel = contentKind ?? "all";
         if (telemetry is not null)
-            SetContentSearchTelemetryShape(telemetry, contentKind, json, limit, workspaceId);
+            SetContentSearchTelemetryShape(telemetry, contentKindLabel, json, limit, workspaceId);
 
         if (!string.IsNullOrWhiteSpace(workspaceId))
-            return SearchWorkspaces(query, contentKind, limit, workspaceId, json, telemetry);
+            return SearchWorkspaces(
+                query,
+                contentKind,
+                limit,
+                workspaceId,
+                json,
+                telemetry,
+                outputByteBudget);
 
-        IReadOnlyList<TextContentSearchHit> hits = _store.Search(contentDbPath, query, contentKind, limit);
+        var failures = new List<WorkspaceSearchFailure>();
+        int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
+        IReadOnlyList<TextContentSearchHit> candidates = contentKind is null
+            ? SearchCurrentAllContent(contentDbPath, query, probeLimit, failures)
+            : SearchCurrentContent(contentDbPath, query, contentKind, probeLimit);
+        bool moreMayExist = candidates.Count > limit;
+        TextContentSearchHit[] hits = candidates.Take(limit).ToArray();
+        var coverage = new ContentSearchCoverage(
+            limit,
+            candidates.Count,
+            Math.Max(0, candidates.Count - hits.Length),
+            moreMayExist,
+            failures);
         if (telemetry is not null)
         {
             telemetry.SetTarget(query);
-            telemetry.ResultCount = hits.Count;
+            telemetry.ResultCount = hits.Length;
             telemetry.SourceBytes = hits
                 .GroupBy(static hit => hit.SourceId, StringComparer.Ordinal)
                 .Sum(static group => group.Max(static hit => hit.SourceBytes));
-            telemetry.Outcome = hits.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
-            if (hits.Count == 0)
-                SetContentSearchEmptyTelemetry(telemetry, query, contentKind);
+            telemetry.Outcome = hits.Length == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
+            if (hits.Length == 0)
+            {
+                if (failures.Count > 0)
+                    SetContentSearchIncompleteTelemetry(telemetry);
+                else
+                    SetContentSearchEmptyTelemetry(telemetry, query, contentKindLabel);
+            }
+            telemetry.SetMetadata("degraded_workspace_count", failures.Count);
         }
 
-        return json ? RenderSearchJson(hits, query, contentKind) : RenderSearchCompact(hits, query, contentKind);
+        if (outputByteBudget is null)
+        {
+            if (failures.Count > 0)
+            {
+                return json
+                    ? RenderMcpSearchJson(hits, query, contentKindLabel, coverage, outputOmittedCount: 0)
+                    : RenderMcpSearchCompact(hits, query, contentKindLabel, coverage, outputOmittedCount: 0);
+            }
+            return json
+                ? RenderSearchJson(hits, query, contentKindLabel)
+                : RenderSearchCompact(hits, query, contentKindLabel);
+        }
+        return RenderMcpSearch(hits, query, contentKindLabel, coverage, json, outputByteBudget.Value);
+    }
+
+    private IReadOnlyList<TextContentSearchHit> SearchCurrentContent(
+        string contentDbPath,
+        string query,
+        string contentKind,
+        int limit)
+    {
+        if (!IsWorkspaceContentKind(contentKind))
+            return _store.Search(contentDbPath, query, contentKind, limit);
+
+        if (!File.Exists(contentDbPath))
+            return [];
+
+        if (!File.Exists(_workspace.ExtractDbPath))
+            throw new InvalidOperationException("Workspace symbols.db not found; content corpus freshness cannot be verified.");
+
+        long expectedRevision;
+        using (var freshness = new FreshnessReader(_workspace.ExtractDbPath))
+            expectedRevision = freshness.LatestRevision();
+        return FtsTextContentSearchIndex
+            .Open(contentDbPath, expectedRevision)
+            .Search(query, contentKind, limit, excludeTests: false);
+    }
+
+    private IReadOnlyList<TextContentSearchHit> SearchCurrentAllContent(
+        string contentDbPath,
+        string query,
+        int limit,
+        ICollection<WorkspaceSearchFailure> failures)
+    {
+        var groups = new List<IReadOnlyList<TextContentSearchHit>>
+        {
+            SearchCurrentContent(contentDbPath, query, TextContentKind.ExternalFile, limit),
+            SearchCurrentContent(contentDbPath, query, TextContentKind.Web, limit),
+        };
+        try
+        {
+            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceSource, limit));
+            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceDocs, limit));
+            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceConfig, limit));
+        }
+        catch (Exception ex)
+        {
+            failures.Add(new WorkspaceSearchFailure(
+                _workspace.WorkspaceId ?? "current",
+                "current",
+                ContentDiagnosticCode("search", ex),
+                ex.Message));
+        }
+
+        return InterleaveByKind(groups, limit);
     }
 
     private string SearchWorkspaces(
         string query,
-        string contentKind,
+        string? contentKind,
         int limit,
         string workspaceId,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
+        string contentKindLabel = contentKind ?? "all";
+        int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
         IReadOnlyList<WorkspaceRegistryRow> workspaces = ResolveContentSearchWorkspaces(workspaceId);
+        bool isolateFailures = string.Equals(workspaceId, "all", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workspaceId, "registered", StringComparison.OrdinalIgnoreCase);
         var hits = new List<WorkspaceContentSearchHit>();
+        var failures = new List<WorkspaceSearchFailure>();
+        bool moreMayExist = false;
         foreach (WorkspaceRegistryRow row in workspaces)
         {
             string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
-            foreach (TextContentSearchHit hit in SearchWorkspaceContent(row, contentDbPath, query, contentKind, limit))
-                hits.Add(new WorkspaceContentSearchHit(row, hit));
+            try
+            {
+                IReadOnlyList<TextContentSearchHit> local = SearchWorkspaceContent(
+                    row,
+                    contentDbPath,
+                    query,
+                    contentKind,
+                    probeLimit);
+                moreMayExist |= local.Count > limit;
+                for (int localRank = 0; localRank < local.Count; localRank++)
+                    hits.Add(new WorkspaceContentSearchHit(row, local[localRank], localRank));
+            }
+            catch (Exception ex) when (isolateFailures)
+            {
+                failures.Add(new WorkspaceSearchFailure(
+                    row.WorkspaceId,
+                    row.DisplayId,
+                    ContentDiagnosticCode("search", ex),
+                    ex.Message));
+            }
         }
+        moreMayExist |= hits.Count > limit;
 
         var page = hits
-            .OrderByDescending(static hit => hit.Hit.Score)
+            .OrderBy(static hit => hit.LocalRank)
             .ThenBy(static hit => hit.Workspace.DisplayId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static hit => hit.Workspace.WorkspaceId, StringComparer.Ordinal)
             .ThenBy(static hit => hit.Hit.DisplayPath, StringComparer.Ordinal)
             .ThenBy(static hit => hit.Hit.Line)
             .Take(limit)
             .ToArray();
+        var coverage = new ContentSearchCoverage(
+            limit,
+            hits.Count,
+            Math.Max(0, hits.Count - page.Length),
+            moreMayExist,
+            failures);
 
         if (telemetry is not null)
         {
@@ -292,21 +476,62 @@ public sealed class ContentTool
                 .Sum(static group => group.Max(static hit => hit.Hit.SourceBytes));
             telemetry.Outcome = page.Length == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
             if (page.Length == 0)
-                SetContentSearchEmptyTelemetry(telemetry, query, contentKind);
+            {
+                if (failures.Count > 0)
+                    SetContentSearchIncompleteTelemetry(telemetry);
+                else
+                    SetContentSearchEmptyTelemetry(telemetry, query, contentKindLabel);
+            }
+            telemetry.SetMetadata("degraded_workspace_count", failures.Count);
         }
 
+        if (outputByteBudget is not null)
+        {
+            return RenderMcpWorkspaceSearch(
+                page,
+                query,
+                contentKindLabel,
+                workspaceId,
+                coverage,
+                json,
+                outputByteBudget.Value);
+        }
+        if (failures.Count > 0)
+        {
+            return json
+                ? RenderMcpWorkspaceSearchJson(
+                    page,
+                    query,
+                    contentKindLabel,
+                    workspaceId,
+                    coverage,
+                    outputOmittedCount: 0)
+                : RenderMcpWorkspaceSearchCompact(
+                    page,
+                    query,
+                    contentKindLabel,
+                    coverage,
+                    outputOmittedCount: 0);
+        }
         return json
-            ? RenderWorkspaceSearchJson(page, query, contentKind)
-            : RenderWorkspaceSearchCompact(page, query, contentKind);
+            ? RenderWorkspaceSearchJson(page, query, contentKindLabel)
+            : RenderWorkspaceSearchCompact(page, query, contentKindLabel);
     }
 
     private IReadOnlyList<TextContentSearchHit> SearchWorkspaceContent(
         WorkspaceRegistryRow row,
         string contentDbPath,
         string query,
-        string contentKind,
+        string? contentKind,
         int limit)
     {
+        if (contentKind is null)
+        {
+            return InterleaveByKind(
+                SearchableContentKinds.Select(
+                    kind => SearchWorkspaceContent(row, contentDbPath, query, kind, limit)),
+                limit);
+        }
         if (!IsWorkspaceContentKind(contentKind))
             return _store.Search(contentDbPath, query, contentKind, limit);
 
@@ -318,19 +543,50 @@ public sealed class ContentTool
 
     private static long ExpectedWorkspaceRevision(WorkspaceRegistryRow row)
     {
-        if (File.Exists(row.IndexDbPath))
-        {
-            using var freshness = new FreshnessReader(row.IndexDbPath);
-            return freshness.LatestRevision();
-        }
+        if (!File.Exists(row.IndexDbPath))
+            throw new InvalidOperationException("Workspace symbols.db not found; content corpus freshness cannot be verified.");
 
-        return row.LastRevision ?? 0L;
+        using var freshness = new FreshnessReader(row.IndexDbPath);
+        return freshness.LatestRevision();
     }
 
     private static bool IsWorkspaceContentKind(string contentKind) =>
         string.Equals(contentKind, TextContentKind.WorkspaceSource, StringComparison.Ordinal)
         || string.Equals(contentKind, TextContentKind.WorkspaceDocs, StringComparison.Ordinal)
         || string.Equals(contentKind, TextContentKind.WorkspaceConfig, StringComparison.Ordinal);
+
+    private static readonly string[] SearchableContentKinds =
+    [
+        TextContentKind.WorkspaceSource,
+        TextContentKind.WorkspaceDocs,
+        TextContentKind.WorkspaceConfig,
+        TextContentKind.ExternalFile,
+        TextContentKind.Web,
+    ];
+
+    private static IReadOnlyList<TextContentSearchHit> InterleaveByKind(
+        IEnumerable<IReadOnlyList<TextContentSearchHit>> groups,
+        int limit)
+    {
+        IReadOnlyList<TextContentSearchHit>[] materialized = groups.ToArray();
+        var results = new List<TextContentSearchHit>(Math.Min(limit, 1_024));
+        for (int rank = 0; results.Count < limit; rank++)
+        {
+            bool added = false;
+            foreach (IReadOnlyList<TextContentSearchHit> group in materialized)
+            {
+                if (rank >= group.Count)
+                    continue;
+                results.Add(group[rank]);
+                added = true;
+                if (results.Count == limit)
+                    break;
+            }
+            if (!added)
+                break;
+        }
+        return results;
+    }
 
     private string Read(
         string contentDbPath,
@@ -339,7 +595,8 @@ public sealed class ContentTool
         int? line,
         int? contextLines,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content read requires source_id.");
@@ -368,7 +625,16 @@ public sealed class ContentTool
             telemetry.Outcome = result.Lines.Count == 0 ? TelemetryOutcome.Empty : TelemetryOutcome.Ok;
         }
 
-        return json ? RenderReadJson(result) : RenderReadCompact(result, effectiveContextLines);
+        if (outputByteBudget is null)
+            return json
+                ? RenderReadJson(result, line.Value, effectiveContextLines)
+                : RenderReadCompact(result, line.Value, effectiveContextLines);
+        return RenderMcpRead(
+            result,
+            line.Value,
+            effectiveContextLines,
+            json,
+            outputByteBudget.Value);
     }
 
     private string ResolveReadSourceId(string contentDbPath, string sourceId)
@@ -522,7 +788,8 @@ public sealed class ContentTool
         string? contentKind,
         int limit,
         bool json,
-        TelemetryScope? telemetry)
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (limit <= 0)
             throw new InvalidOperationException("content list limit must be > 0.");
@@ -540,11 +807,18 @@ public sealed class ContentTool
                 telemetry.SetEmptyReason("no_imported_content");
         }
 
+        if (outputByteBudget is not null)
+            return RenderMcpList(inventory, json, outputByteBudget.Value);
         string output = json ? RenderListJson(inventory) : RenderListCompact(inventory);
         return EnsureOutputBudget(output, json ? 48_000 : 16_000, "list");
     }
 
-    private string Remove(string contentDbPath, string? sourceId, bool json, TelemetryScope? telemetry)
+    private string Remove(
+        string contentDbPath,
+        string? sourceId,
+        bool json,
+        TelemetryScope? telemetry,
+        int? outputByteBudget)
     {
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content remove requires source_id.");
@@ -559,7 +833,10 @@ public sealed class ContentTool
                 telemetry.SetEmptyReason("source_not_found");
         }
 
-        return json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
+        string output = json ? RenderRemoveJson(result) : RenderRemoveCompact(result);
+        return outputByteBudget is null
+            ? output
+            : RequireContentMcpBudget(output, outputByteBudget.Value, "remove");
     }
 
     private IReadOnlyList<WorkspaceRegistryRow> ResolveContentSearchWorkspaces(string workspaceId)
@@ -597,8 +874,8 @@ public sealed class ContentTool
         return [WorkspaceRegistrySelector.Resolve(registry, selector)];
     }
 
-    private static string ContentKindOrDefault(string? value, string fallback) =>
-        OptionalContentKind(value) ?? fallback;
+    private static string? SearchContentKindOrDefault(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? TextContentKind.ExternalFile : OptionalContentKind(value);
 
     private static void SetContentSearchTelemetryShape(
         TelemetryScope telemetry,
@@ -620,6 +897,12 @@ public sealed class ContentTool
         telemetry.SetEmptyReason("no_content_hits");
         telemetry.SetMetadata("query_shape", queryShape);
         telemetry.SetMetadata("empty_diagnosis", SearchTool.EmptyDiagnosisForContentSearch(contentKind, queryShape));
+    }
+
+    private static void SetContentSearchIncompleteTelemetry(TelemetryScope telemetry)
+    {
+        telemetry.SetEmptyReason("workspace_search_incomplete");
+        telemetry.SetMetadata("empty_diagnosis", "workspace_search_incomplete");
     }
 
     private static string LimitBucket(int limit) => limit switch
@@ -653,11 +936,47 @@ public sealed class ContentTool
         };
     }
 
+    private static void ValidateInputs(
+        string? operation,
+        string? path,
+        string? query,
+        string? sourceId,
+        string? url,
+        string? displayPath,
+        string? contentKind,
+        string? workspaceId,
+        string? format)
+    {
+        ValidateInput("operation", operation, 64);
+        ValidateInput("path", path, 4_096);
+        ValidateInput("query", query, 2_048);
+        ValidateInput("source_id", sourceId, 1_024);
+        ValidateInput("url", url, 2_048);
+        ValidateInput("display_path", displayPath, 2_048);
+        ValidateInput("content_kind", contentKind, 128);
+        ValidateInput("workspace_id", workspaceId, 1_024);
+        ValidateInput("format", format, 32);
+        if (!string.Equals(format, "compact", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("content format must be compact or json.");
+        }
+    }
+
+    private static void ValidateInput(string name, string? value, int maxBytes)
+    {
+        if (value is not null && Encoding.UTF8.GetByteCount(value) > maxBytes)
+            throw new InvalidOperationException($"content input {name} exceeds the {maxBytes}-byte limit.");
+    }
+
     private static string RenderImportCompact(ExternalContentImportResult result) =>
         $"{(result.Replaced ? "replaced" : "imported")} {result.ContentKind}\n" +
-        $"source_id: {result.SourceId}\n" +
-        $"display_path: {result.DisplayPath}\n" +
-        (string.IsNullOrWhiteSpace(result.Url) ? "" : $"url: {result.Url}\n") +
+        $"source_id: {TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes)}\n" +
+        $"display_path: {TruncateUtf8(result.DisplayPath, MaxImportDisplayPathBytes)}\n" +
+        (string.IsNullOrWhiteSpace(result.Url)
+            ? ""
+            : $"url: {TruncateUtf8(result.Url, MaxImportUrlBytes)}\n") +
+        $"content_hash: {result.ContentHash}\n" +
         $"source_bytes: {result.SourceBytes}\n" +
         $"chunks: {result.ChunkCount}";
 
@@ -736,7 +1055,196 @@ public sealed class ContentTool
             + " workspace_id=" + first.Workspace.WorkspaceId;
     }
 
-    private static string RenderReadCompact(ExternalContentReadResult result, int contextLines)
+    private static string RenderMcpSearch(
+        IReadOnlyList<TextContentSearchHit> hits,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage,
+        bool json,
+        int outputByteBudget)
+    {
+        string Render(IReadOnlyList<TextContentSearchHit> retained, int omitted) =>
+            json
+                ? RenderMcpSearchJson(retained, query, contentKind, coverage, omitted)
+                : RenderMcpSearchCompact(retained, query, contentKind, coverage, omitted);
+        return ToolOutputBudget.RenderPrefixWithinByteBudget(hits, outputByteBudget, Render);
+    }
+
+    private static string RenderMcpWorkspaceSearch(
+        IReadOnlyList<WorkspaceContentSearchHit> hits,
+        string query,
+        string contentKind,
+        string workspaceId,
+        ContentSearchCoverage coverage,
+        bool json,
+        int outputByteBudget)
+    {
+        string Render(IReadOnlyList<WorkspaceContentSearchHit> retained, int omitted) =>
+            json
+                ? RenderMcpWorkspaceSearchJson(retained, query, contentKind, workspaceId, coverage, omitted)
+                : RenderMcpWorkspaceSearchCompact(retained, query, contentKind, coverage, omitted);
+        return ToolOutputBudget.RenderPrefixWithinByteBudget(hits, outputByteBudget, Render);
+    }
+
+    private static string RenderMcpSearchCompact(
+        IReadOnlyList<TextContentSearchHit> hits,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage,
+        int outputOmittedCount)
+    {
+        var output = new StringBuilder();
+        if (hits.Count == 0
+            && coverage.ProbedCandidateCount == 0
+            && coverage.Failures.Count == 0)
+        {
+            output.Append(RenderNoResultsCompact("search", query, contentKind));
+        }
+        else
+        {
+            AppendSearchCoverageCompact(output, coverage, hits.Count, outputOmittedCount);
+            if (hits.Count == 0)
+            {
+                output.AppendLine().Append(
+                    coverage.Failures.Count > 0
+                        ? "search incomplete: one or more selected workspaces could not be searched"
+                        : "results omitted by output budget; narrow the query or lower limit");
+            }
+            else
+            {
+                foreach (IGrouping<string, TextContentSearchHit> group in GroupBySource(hits))
+                {
+                    TextContentSearchHit head = group.First();
+                    output.AppendLine()
+                        .Append(TruncateUtf8(head.DisplayPath, MaxSearchDisplayPathBytes))
+                        .Append("  ").Append(head.ContentKind)
+                        .Append("  source_id=").Append(TruncateUtf8(head.SourceId, MaxSearchSourceIdBytes));
+                    AppendBoundedHitRows(output, group, "  ");
+                }
+
+                TextContentSearchHit first = hits[0];
+                output.AppendLine().AppendLine()
+                    .Append("read: content read source_id=")
+                    .Append(TruncateUtf8(first.SourceId, MaxSearchSourceIdBytes))
+                    .Append(" line=").Append(first.Line);
+            }
+        }
+        AppendWorkspaceFailuresCompact(output, coverage.Failures);
+        return output.ToString().TrimEnd();
+    }
+
+    private static string RenderMcpWorkspaceSearchCompact(
+        IReadOnlyList<WorkspaceContentSearchHit> hits,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage,
+        int outputOmittedCount)
+    {
+        var output = new StringBuilder();
+        if (hits.Count == 0
+            && coverage.ProbedCandidateCount == 0
+            && coverage.Failures.Count == 0)
+        {
+            output.Append(RenderNoResultsCompact("search", query, contentKind));
+        }
+        else
+        {
+            AppendSearchCoverageCompact(output, coverage, hits.Count, outputOmittedCount);
+            if (hits.Count == 0)
+            {
+                output.AppendLine().Append(
+                    coverage.Failures.Count > 0
+                        ? "search incomplete: one or more selected workspaces could not be searched"
+                        : "results omitted by output budget; narrow the query or lower limit");
+            }
+            else
+            {
+                foreach (IGrouping<string, WorkspaceContentSearchHit> workspaceGroup in
+                         hits.GroupBy(static hit => hit.Workspace.WorkspaceId, StringComparer.Ordinal))
+                {
+                    WorkspaceRegistryRow workspace = workspaceGroup.First().Workspace;
+                    output.AppendLine()
+                        .Append(TruncateUtf8(workspace.DisplayId, MaxSearchDisplayPathBytes))
+                        .Append(" (").Append(TruncateUtf8(workspace.WorkspaceId, MaxSearchSourceIdBytes)).Append(')');
+                    foreach (IGrouping<string, TextContentSearchHit> sourceGroup in
+                             GroupBySource([.. workspaceGroup.Select(static hit => hit.Hit)]))
+                    {
+                        TextContentSearchHit head = sourceGroup.First();
+                        output.AppendLine().Append("  ")
+                            .Append(TruncateUtf8(head.DisplayPath, MaxSearchDisplayPathBytes))
+                            .Append("  ").Append(head.ContentKind)
+                            .Append("  source_id=").Append(TruncateUtf8(head.SourceId, MaxSearchSourceIdBytes));
+                        AppendBoundedHitRows(output, sourceGroup, "    ");
+                    }
+                }
+
+                WorkspaceContentSearchHit first = hits[0];
+                output.AppendLine().AppendLine()
+                    .Append("read: content read source_id=")
+                    .Append(TruncateUtf8(first.Hit.SourceId, MaxSearchSourceIdBytes))
+                    .Append(" line=").Append(first.Hit.Line)
+                    .Append(" workspace_id=")
+                    .Append(TruncateUtf8(first.Workspace.WorkspaceId, MaxSearchSourceIdBytes));
+            }
+        }
+        AppendWorkspaceFailuresCompact(output, coverage.Failures);
+        return output.ToString().TrimEnd();
+    }
+
+    private static void AppendSearchCoverageCompact(
+        StringBuilder output,
+        ContentSearchCoverage coverage,
+        int returnedCount,
+        int outputOmittedCount)
+    {
+        output.Append("content search: returned=").Append(returnedCount)
+            .Append(" probed_candidates=").Append(coverage.ProbedCandidateCount)
+            .Append(" more_may_exist=").Append(coverage.MoreMayExist ? "true" : "false");
+        if (coverage.ProbedResultLimitOmittedCount > 0)
+            output.Append(" probed_limit_omitted=").Append(coverage.ProbedResultLimitOmittedCount);
+        if (outputOmittedCount > 0)
+            output.Append(" output_omitted=").Append(outputOmittedCount);
+        if (coverage.Failures.Count > 0)
+            output.Append(" degraded_workspaces=").Append(coverage.Failures.Count);
+    }
+
+    private static void AppendBoundedHitRows(
+        StringBuilder output,
+        IEnumerable<TextContentSearchHit> hits,
+        string indent)
+    {
+        foreach (TextContentSearchHit hit in hits)
+        {
+            string[] snippetLines = hit.Snippet.Split('\n');
+            output.AppendLine().Append(indent).Append(':').Append(hit.Line).Append("  ")
+                .Append(TruncateUtf8(snippetLines[0], MaxSearchSnippetLineBytes));
+            string continuation = indent + new string(' ', hit.Line.ToString().Length + 3);
+            for (int i = 1; i < snippetLines.Length && i < MaxSearchSnippetLines; i++)
+                output.AppendLine().Append(continuation)
+                    .Append(TruncateUtf8(snippetLines[i], MaxSearchSnippetLineBytes));
+        }
+    }
+
+    private static void AppendWorkspaceFailuresCompact(
+        StringBuilder output,
+        IReadOnlyList<WorkspaceSearchFailure> failures)
+    {
+        foreach (WorkspaceSearchFailure failure in failures.Take(MaxWorkspaceFailures))
+        {
+            output.AppendLine()
+                .Append("workspace_warning: ")
+                .Append(TruncateUtf8(failure.DisplayId, MaxSearchDisplayPathBytes))
+                .Append(" diagnostic_code=").Append(failure.DiagnosticCode)
+                .Append(" message=").Append(TruncateUtf8(failure.Message, MaxWorkspaceFailureMessageBytes));
+        }
+        if (failures.Count > MaxWorkspaceFailures)
+            output.AppendLine().Append("workspace_warnings_omitted=").Append(failures.Count - MaxWorkspaceFailures);
+    }
+
+    private static string RenderReadCompact(
+        ExternalContentReadResult result,
+        int requestedLine,
+        int contextLines)
     {
         var lines = result.Lines
             .Select(static line =>
@@ -747,19 +1255,31 @@ public sealed class ContentTool
             .ToArray();
         int truncatedLineCount = lines.Count(static line => line.Truncated);
         var sb = new StringBuilder();
-        if (result.Clamped && result.LineEnd < result.SourceLineCount)
+        if (result.Clamped)
         {
-            int requestedLines = (2 * contextLines) + 1;
-            // The next window's start is itself clamped to centre − (MaxReadWindowLines − 1), so advancing the
-            // centre by more than that would step over unread lines instead of resuming at LineEnd + 1; a centre
-            // past the last line would be rejected outright, so the final hop lands on the last line and overlaps.
+            long requestedLines = (2L * contextLines) + 1;
+            int requestedStart = checked((int)Math.Max(1L, (long)requestedLine - contextLines));
+            int requestedEnd = checked((int)Math.Min(result.SourceLineCount, (long)requestedLine + contextLines));
+            int omittedBefore = Math.Max(0, result.LineStart - requestedStart);
+            int omittedAfter = Math.Max(0, requestedEnd - result.LineEnd);
             int advance = Math.Min(contextLines, ContentCorpusExternalStore.MaxReadWindowLines - 1);
-            int nextCenter = Math.Min(result.SourceLineCount, result.LineEnd + advance + 1);
-            sb.Append("window clamped to ").Append(ContentCorpusExternalStore.MaxReadWindowLines)
-              .Append(" lines (requested ").Append(requestedLines)
-              .Append(") — continue with line=").Append(nextCenter)
-              .Append(" context_lines=").Append(contextLines)
-              .Append('\n');
+            if (omittedAfter > 0)
+            {
+                sb.Append("window clamped to ").Append(ContentCorpusExternalStore.MaxReadWindowLines)
+                  .Append(" lines (requested ").Append(requestedLines).Append(')');
+                int nextCenter = Math.Min(result.SourceLineCount, result.LineEnd + advance + 1);
+                sb.Append(" — continue with line=").Append(nextCenter)
+                  .Append(" context_lines=").Append(contextLines);
+            }
+            else
+            {
+                sb.Append("window ended at source boundary after clamping to ")
+                  .Append(ContentCorpusExternalStore.MaxReadWindowLines)
+                  .Append(" lines (requested ").Append(requestedLines).Append(')');
+            }
+            sb.Append(" omitted_before=").Append(omittedBefore)
+              .Append(" omitted_after=").Append(omittedAfter);
+            sb.Append('\n');
         }
 
         if (truncatedLineCount > 0)
@@ -769,7 +1289,8 @@ public sealed class ContentTool
               .Append('\n');
         }
 
-        sb.Append(SearchTool.Truncate(result.DisplayPath, MaxReadDisplayPathUnits))
+        sb.Append("content_hash=").Append(result.ContentHash).Append('\n')
+          .Append(SearchTool.Truncate(result.DisplayPath, MaxReadDisplayPathUnits))
           .Append(':').Append(result.LineStart).Append('-').Append(result.LineEnd);
         foreach (RenderedReadLine line in lines)
             sb.Append('\n').Append("    ").Append(line.LineNumber).Append(": ").Append(line.Text);
@@ -778,11 +1299,148 @@ public sealed class ContentTool
 
     private sealed record RenderedReadLine(int LineNumber, string Text, bool Truncated);
 
+    private static string RenderMcpRead(
+        ExternalContentReadResult result,
+        int requestedLine,
+        int contextLines,
+        bool json,
+        int maxBytes)
+    {
+        ExternalContentLine[] ordered = result.Lines.OrderBy(static line => line.LineNumber).ToArray();
+        var retained = ordered.ToList();
+        int requestedStart = checked((int)Math.Max(1L, (long)requestedLine - contextLines));
+        int requestedEnd = checked((int)Math.Min(result.SourceLineCount, (long)requestedLine + contextLines));
+        int storeOmittedBefore = Math.Max(0, result.LineStart - requestedStart);
+        int storeOmittedAfter = Math.Max(0, requestedEnd - result.LineEnd);
+
+        while (true)
+        {
+            int outputOmittedBefore = retained.Count == 0
+                ? ordered.Length
+                : ordered.Count(line => line.LineNumber < retained[0].LineNumber);
+            int outputOmittedAfter = retained.Count == 0
+                ? 0
+                : ordered.Count(line => line.LineNumber > retained[^1].LineNumber);
+            int omittedBefore = storeOmittedBefore + outputOmittedBefore;
+            int omittedAfter = storeOmittedAfter + outputOmittedAfter;
+            string output = json
+                ? RenderMcpReadJson(result, retained, requestedLine, contextLines, omittedBefore, omittedAfter)
+                : RenderMcpReadCompact(
+                    result,
+                    retained,
+                    requestedLine,
+                    contextLines,
+                    omittedBefore,
+                    omittedAfter,
+                    outputOmittedBefore,
+                    outputOmittedAfter);
+            if (Encoding.UTF8.GetByteCount(output) <= maxBytes)
+                return output;
+            if (retained.Count <= 1)
+                return RequireContentMcpBudget(output, maxBytes, "read");
+
+            int firstDistance = Math.Abs(retained[0].LineNumber - requestedLine);
+            int lastDistance = Math.Abs(retained[^1].LineNumber - requestedLine);
+            retained.RemoveAt(firstDistance > lastDistance ? 0 : retained.Count - 1);
+        }
+    }
+
+    private static string RenderMcpReadCompact(
+        ExternalContentReadResult result,
+        IReadOnlyList<ExternalContentLine> lines,
+        int requestedLine,
+        int contextLines,
+        int omittedBefore,
+        int omittedAfter,
+        int outputOmittedBefore,
+        int outputOmittedAfter)
+    {
+        if (outputOmittedBefore == 0 && outputOmittedAfter == 0)
+            return RenderReadCompact(result, requestedLine, contextLines);
+
+        var output = new StringBuilder();
+        output.Append("content read: returned=").Append(lines.Count)
+            .Append(" omitted_before=").Append(omittedBefore)
+            .Append(" omitted_after=").Append(omittedAfter)
+            .Append(" store_window_clamped=").Append(result.Clamped ? "true" : "false")
+            .Append(" requested_line=").Append(requestedLine)
+            .Append(" context_lines=").Append(contextLines)
+            .Append('\n')
+            .Append("source_id=").Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+            .Append('\n')
+            .Append("content_hash=").Append(result.ContentHash)
+            .Append('\n')
+            .Append(TruncateUtf8(result.DisplayPath, MaxSearchDisplayPathBytes));
+        if (lines.Count > 0)
+            output.Append(':').Append(lines[0].LineNumber).Append('-').Append(lines[^1].LineNumber);
+        foreach (ExternalContentLine line in lines)
+        {
+            output.Append('\n').Append("    ").Append(line.LineNumber).Append(": ")
+                .Append(TruncateUtf8(line.Text, MaxMcpReadLineBytes));
+        }
+        AppendReadContinuationCompact(output, result, lines, omittedBefore, omittedAfter);
+        return output.ToString();
+    }
+
+    private static void AppendReadContinuationCompact(
+        StringBuilder output,
+        ExternalContentReadResult result,
+        IReadOnlyList<ExternalContentLine> lines,
+        int omittedBefore,
+        int omittedAfter)
+    {
+        if (lines.Count == 0)
+            return;
+        if (omittedAfter > 0)
+        {
+            (int line, int contextLines) = ForwardContinuation(
+                result.SourceLineCount,
+                lines[^1].LineNumber + 1);
+            output.Append('\n').Append("next: content read source_id=")
+                .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+                .Append(" line=").Append(line)
+                .Append(" context_lines=").Append(contextLines);
+        }
+        else if (omittedBefore > 0)
+        {
+            (int line, int contextLines) = BackwardContinuation(lines[0].LineNumber - 1);
+            output.Append('\n').Append("previous: content read source_id=")
+                .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+                .Append(" line=").Append(line)
+                .Append(" context_lines=").Append(contextLines);
+        }
+    }
+
+    private static (int Line, int ContextLines) ForwardContinuation(int sourceLineCount, int firstOmittedLine)
+    {
+        int contextLines = Math.Min(25, Math.Max(0, (sourceLineCount - firstOmittedLine) / 2));
+        return (firstOmittedLine + contextLines, contextLines);
+    }
+
+    private static (int Line, int ContextLines) BackwardContinuation(int lastOmittedLine)
+    {
+        int contextLines = Math.Min(25, Math.Max(0, (lastOmittedLine - 1) / 2));
+        return (lastOmittedLine - contextLines, contextLines);
+    }
+
     private const int MaxInventoryDisplayPathChars = 240;
     private const int MaxInventoryUrlChars = 240;
+    private const int MaxImportDisplayPathBytes = 1_024;
+    private const int MaxImportUrlBytes = 1_024;
+    private const int MaxSearchQueryBytes = 512;
+    private const int MaxSearchSourceIdBytes = 256;
+    private const int MaxSearchDisplayPathBytes = 240;
+    private const int MaxSearchWorkspaceRootBytes = 512;
+    private const int MaxSearchUrlBytes = 240;
+    private const int MaxSearchSnippetBytes = 1_024;
+    private const int MaxSearchSnippetLineBytes = 320;
+    private const int MaxSearchSnippetLines = 5;
+    private const int MaxWorkspaceFailureMessageBytes = 256;
+    private const int MaxWorkspaceFailures = 3;
     private const int MaxShapeLineChars = 240;
     private const int MaxReadDisplayPathUnits = 240;
     private const int MaxReadLineUnits = 160;
+    private const int MaxMcpReadLineBytes = 160;
     private const int MaxDiagnosticOutputChars = 8_000;
     private const int MaxDiagnosticErrorChars = 2_000;
     private const int MaxDiagnosticFallbackErrorChars = 1_000;
@@ -826,6 +1484,40 @@ public sealed class ContentTool
         return value[..best] + "…";
     }
 
+    private static string TruncateUtf8(string value, int maxBytes)
+    {
+        if (Encoding.UTF8.GetByteCount(value) <= maxBytes)
+            return value;
+
+        int ellipsisBytes = Encoding.UTF8.GetByteCount("…");
+        int availableBytes = Math.Max(0, maxBytes - ellipsisBytes);
+        int low = 0;
+        int high = value.Length;
+        int best = 0;
+        while (low <= high)
+        {
+            int midpoint = low + ((high - low) / 2);
+            int candidate = midpoint;
+            if (candidate < value.Length && candidate > 0
+                && char.IsHighSurrogate(value[candidate - 1]) && char.IsLowSurrogate(value[candidate]))
+            {
+                candidate--;
+            }
+
+            if (Encoding.UTF8.GetByteCount(value.AsSpan(0, candidate)) <= availableBytes)
+            {
+                best = candidate;
+                low = midpoint + 1;
+            }
+            else
+            {
+                high = midpoint - 1;
+            }
+        }
+
+        return value[..best] + "…";
+    }
+
     private static string EnsureOutputBudget(string output, int maxChars, string operation)
     {
         if (output.Length > maxChars)
@@ -834,6 +1526,20 @@ public sealed class ContentTool
                 $"content {operation} output exceeded its {maxChars}-character contract.");
         }
         return output;
+    }
+
+    private static string RequireContentMcpBudget(string output, int maxBytes, string operation)
+    {
+        try
+        {
+            return ToolOutputBudget.RequireWithinByteBudget(output, maxBytes);
+        }
+        catch (ToolDiagnosticException ex)
+        {
+            throw new InvalidOperationException(
+                $"content {operation} output metadata exceeds the {maxBytes}-byte MCP limit.",
+                ex);
+        }
     }
 
     private static string RenderListCompact(ExternalContentInventory inventory)
@@ -867,6 +1573,7 @@ public sealed class ContentTool
             $"content shape: {SearchTool.Truncate(shape.DisplayPath, MaxInventoryDisplayPathChars)}",
             $"source_id: {shape.SourceId}",
             $"content_kind: {shape.ContentKind}",
+            $"content_hash: {shape.ContentHash}",
             $"source_bytes: {shape.SourceBytes}",
             $"line_count: {shape.LineCount}",
             $"severity (text-derived): fatal={shape.Severity.Fatal} error={shape.Severity.Error} " +
@@ -992,10 +1699,22 @@ public sealed class ContentTool
     private static string ContentDiagnosticCode(string operation, Exception ex)
     {
         string message = ex.Message;
+        if (message.Contains("content input ", StringComparison.OrdinalIgnoreCase))
+            return "input_too_large";
+        if (message.Contains("format must be", StringComparison.OrdinalIgnoreCase))
+            return "invalid_format";
         if (string.Equals(operation, "search", StringComparison.Ordinal))
         {
             if (message.Contains("requires query", StringComparison.OrdinalIgnoreCase))
                 return "missing_query";
+            if (message.Contains("limit must be", StringComparison.OrdinalIgnoreCase))
+                return "invalid_limit";
+            if (message.Contains(" is stale:", StringComparison.OrdinalIgnoreCase))
+                return "content_corpus_stale";
+            if (message.Contains("content.db not found", StringComparison.OrdinalIgnoreCase))
+                return "content_corpus_missing";
+            if (message.Contains("symbols.db not found", StringComparison.OrdinalIgnoreCase))
+                return "content_corpus_missing";
             return "search_error";
         }
 
@@ -1020,6 +1739,46 @@ public sealed class ContentTool
             if (ex is ArgumentOutOfRangeException && message.Contains("line", StringComparison.OrdinalIgnoreCase))
                 return "invalid_line";
             return string.Equals(operation, "shape", StringComparison.Ordinal) ? "shape_error" : "read_error";
+        }
+
+        if (operation is "import" or "add")
+        {
+            if (message.Contains("requires path", StringComparison.OrdinalIgnoreCase))
+                return "missing_path";
+            if (message.Contains("exceeds max_bytes", StringComparison.OrdinalIgnoreCase))
+                return "import_too_large";
+            if (message.Contains("UTF-8", StringComparison.OrdinalIgnoreCase))
+                return "invalid_utf8";
+            return "import_error";
+        }
+
+        if (operation is "add_markdown" or "add-markdown" or "import_markdown" or "import-markdown")
+        {
+            if (message.Contains("requires path", StringComparison.OrdinalIgnoreCase))
+                return "missing_path";
+            if (message.Contains("requires url", StringComparison.OrdinalIgnoreCase))
+                return "missing_url";
+            if (message.Contains("exceeds max_bytes", StringComparison.OrdinalIgnoreCase))
+                return "import_too_large";
+            if (message.Contains("UTF-8", StringComparison.OrdinalIgnoreCase))
+                return "invalid_utf8";
+            return "import_error";
+        }
+
+        if (string.Equals(operation, "list", StringComparison.Ordinal))
+        {
+            if (message.Contains("limit must be", StringComparison.OrdinalIgnoreCase))
+                return "invalid_limit";
+            if (message.Contains("content_kind must be", StringComparison.OrdinalIgnoreCase))
+                return "invalid_content_kind";
+            return "list_error";
+        }
+
+        if (operation is "remove" or "delete")
+        {
+            if (message.Contains("requires source_id", StringComparison.OrdinalIgnoreCase))
+                return "missing_source_id";
+            return "remove_error";
         }
 
         return "content_error";
@@ -1067,6 +1826,42 @@ public sealed class ContentTool
         ];
     }
 
+    private static IReadOnlyList<ContentNextAction> FailureNextActions(
+        string operation,
+        string diagnosticCode,
+        string? sourceId)
+    {
+        if (operation is "read" or "shape"
+            && diagnosticCode is "source_not_found" or "ambiguous_source" or "content_corpus_missing")
+        {
+            return ReadRecoveryNextActions(sourceId);
+        }
+
+        if (operation is "remove" or "delete"
+            && diagnosticCode is "source_not_found" or "missing_source_id")
+        {
+            return
+            [
+                NextAction(
+                    "content",
+                    "list imported sources and choose an exact source_id",
+                    ("operation", "list"),
+                    ("content_kind", "external_file")),
+            ];
+        }
+
+        if (string.Equals(operation, "search", StringComparison.Ordinal)
+            && diagnosticCode is "content_corpus_stale" or "content_corpus_missing")
+        {
+            return
+            [
+                NextAction("workspace", "refresh the selected workspace corpus", ("operation", "refresh")),
+            ];
+        }
+
+        return [];
+    }
+
     private static ContentNextAction NextAction(string tool, string reason, params (string Key, string Value)[] args) =>
         new(tool, reason, args.Select(static arg => new KeyValuePair<string, string>(arg.Key, arg.Value)).ToArray());
 
@@ -1111,11 +1906,11 @@ public sealed class ContentTool
         using (var writer = JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteString("source_id", result.SourceId);
+            writer.WriteString("source_id", TruncateForJson(result.SourceId, MaxSearchSourceIdBytes));
             writer.WriteString("content_kind", result.ContentKind);
-            writer.WriteString("display_path", result.DisplayPath);
+            writer.WriteString("display_path", TruncateForJson(result.DisplayPath, MaxImportDisplayPathBytes));
             if (result.Url is null) writer.WriteNull("url");
-            else writer.WriteString("url", result.Url);
+            else writer.WriteString("url", TruncateForJson(result.Url, MaxImportUrlBytes));
             writer.WriteString("content_hash", result.ContentHash);
             writer.WriteNumber("source_bytes", result.SourceBytes);
             writer.WriteNumber("chunk_count", result.ChunkCount);
@@ -1181,6 +1976,225 @@ public sealed class ContentTool
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderMcpSearchJson(
+        IReadOnlyList<TextContentSearchHit> hits,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage,
+        int outputOmittedCount)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            WriteSearchEnvelopeStart(
+                writer,
+                query,
+                contentKind,
+                coverage,
+                hits.Count,
+                outputOmittedCount);
+            writer.WriteStartArray("results");
+            foreach (TextContentSearchHit hit in hits)
+                WriteMcpSearchHit(writer, hit);
+            writer.WriteEndArray();
+            WriteSearchNextActions(
+                writer,
+                hits.Count == 0 ? null : hits[0],
+                workspaceId: null,
+                query,
+                contentKind,
+                coverage);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string RenderMcpWorkspaceSearchJson(
+        IReadOnlyList<WorkspaceContentSearchHit> hits,
+        string query,
+        string contentKind,
+        string searchWorkspaceId,
+        ContentSearchCoverage coverage,
+        int outputOmittedCount)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            WriteSearchEnvelopeStart(
+                writer,
+                query,
+                contentKind,
+                coverage,
+                hits.Count,
+                outputOmittedCount);
+            writer.WriteStartArray("results");
+            foreach (WorkspaceContentSearchHit workspaceHit in hits)
+            {
+                writer.WriteStartObject();
+                writer.WriteString(
+                    "workspace_id",
+                    TruncateForJson(workspaceHit.Workspace.WorkspaceId, MaxSearchSourceIdBytes));
+                writer.WriteString(
+                    "display_id",
+                    TruncateForJson(workspaceHit.Workspace.DisplayId, MaxSearchDisplayPathBytes));
+                writer.WriteString(
+                    "workspace_root",
+                    TruncateForJson(workspaceHit.Workspace.CanonicalRoot, MaxSearchWorkspaceRootBytes));
+                WriteMcpSearchHitProperties(writer, workspaceHit.Hit);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            WorkspaceContentSearchHit? first = hits.Count == 0 ? null : hits[0];
+            WriteSearchNextActions(
+                writer,
+                first?.Hit,
+                first?.Workspace.WorkspaceId ?? searchWorkspaceId,
+                query,
+                contentKind,
+                coverage);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteSearchEnvelopeStart(
+        Utf8JsonWriter writer,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage,
+        int returnedCount,
+        int outputOmittedCount)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("schema_version", 3);
+        writer.WriteString("operation", "search");
+        writer.WriteString("query", TruncateForJson(query.Trim(), MaxSearchQueryBytes));
+        writer.WriteString("content_kind", contentKind);
+        writer.WriteNumber("requested_limit", coverage.RequestedLimit);
+        writer.WriteNumber("probed_candidate_count", coverage.ProbedCandidateCount);
+        writer.WriteNumber("returned_count", returnedCount);
+        writer.WriteNumber("probed_result_limit_omitted_count", coverage.ProbedResultLimitOmittedCount);
+        writer.WriteNumber("output_omitted_count", outputOmittedCount);
+        writer.WriteBoolean("output_truncated", outputOmittedCount > 0);
+        writer.WriteBoolean("more_may_exist", coverage.MoreMayExist);
+        writer.WriteNumber("degraded_workspace_count", coverage.Failures.Count);
+        if (coverage.ProbedCandidateCount == 0)
+        {
+            writer.WriteString(
+                "diagnostic_code",
+                coverage.Failures.Count > 0 ? "workspace_search_incomplete" : "no_results");
+        }
+        writer.WriteStartArray("degraded_workspaces");
+        foreach (WorkspaceSearchFailure failure in coverage.Failures.Take(MaxWorkspaceFailures))
+        {
+            writer.WriteStartObject();
+            writer.WriteString(
+                "workspace_id",
+                TruncateForJson(failure.WorkspaceId, MaxSearchSourceIdBytes));
+            writer.WriteString(
+                "display_id",
+                TruncateForJson(failure.DisplayId, MaxSearchDisplayPathBytes));
+            writer.WriteString("diagnostic_code", failure.DiagnosticCode);
+            writer.WriteString(
+                "message",
+                TruncateForJson(failure.Message, MaxWorkspaceFailureMessageBytes));
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteNumber(
+            "degraded_workspaces_omitted_count",
+            Math.Max(0, coverage.Failures.Count - MaxWorkspaceFailures));
+    }
+
+    private static void WriteMcpSearchHit(Utf8JsonWriter writer, TextContentSearchHit hit)
+    {
+        writer.WriteStartObject();
+        WriteMcpSearchHitProperties(writer, hit);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteMcpSearchHitProperties(Utf8JsonWriter writer, TextContentSearchHit hit)
+    {
+        writer.WriteString("source_id", TruncateForJson(hit.SourceId, MaxSearchSourceIdBytes));
+        writer.WriteString("chunk_id", TruncateForJson(hit.ChunkId, MaxSearchSourceIdBytes));
+        writer.WriteString("content_kind", hit.ContentKind);
+        writer.WriteString(
+            "display_path",
+            TruncateForJson(hit.DisplayPath, MaxSearchDisplayPathBytes));
+        if (hit.Path is null) writer.WriteNull("path");
+        else writer.WriteString("path", TruncateForJson(hit.Path, MaxSearchDisplayPathBytes));
+        if (hit.Url is null) writer.WriteNull("url");
+        else writer.WriteString("url", TruncateForJson(hit.Url, MaxSearchUrlBytes));
+        writer.WriteNumber("line", hit.Line);
+        writer.WriteNumber("line_start", hit.LineStart);
+        writer.WriteNumber("line_end", hit.LineEnd);
+        writer.WriteNumber("score", hit.Score);
+        writer.WriteString("snippet", TruncateForJson(hit.Snippet, MaxSearchSnippetBytes));
+        writer.WriteNumber("source_bytes", hit.SourceBytes);
+        if (hit.ContentHash is null) writer.WriteNull("content_hash");
+        else writer.WriteString("content_hash", hit.ContentHash);
+    }
+
+    private static void WriteSearchNextActions(
+        Utf8JsonWriter writer,
+        TextContentSearchHit? first,
+        string? workspaceId,
+        string query,
+        string contentKind,
+        ContentSearchCoverage coverage)
+    {
+        writer.WritePropertyName("next_actions");
+        if (first is null)
+        {
+            if (coverage.Failures.Count > 0)
+            {
+                WorkspaceSearchFailure failure = coverage.Failures[0];
+                WriteNextActions(
+                    writer,
+                    [
+                        NextAction(
+                            "workspace",
+                            "refresh the first workspace that could not be searched",
+                            ("operation", "refresh"),
+                            ("workspace_id", failure.WorkspaceId)),
+                    ]);
+                return;
+            }
+
+            if (coverage.ProbedCandidateCount == 0)
+            {
+                WriteNextActions(writer, SearchNoResultsNextActions(query, contentKind));
+                return;
+            }
+
+            var retryArgs = new List<KeyValuePair<string, string>>
+            {
+                new("operation", "search"),
+                new("query", query),
+                new("content_kind", contentKind),
+                new("limit", "1"),
+            };
+            if (!string.IsNullOrWhiteSpace(workspaceId))
+                retryArgs.Add(new("workspace_id", workspaceId));
+            WriteNextActions(
+                writer,
+                [new ContentNextAction("content", "retry with one result or narrow the query", retryArgs)]);
+            return;
+        }
+
+        var args = new List<KeyValuePair<string, string>>
+        {
+            new("operation", "read"),
+            new("source_id", first.SourceId),
+            new("line", first.Line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        if (!string.IsNullOrWhiteSpace(workspaceId))
+            args.Add(new("workspace_id", workspaceId));
+        WriteNextActions(
+            writer,
+            [new ContentNextAction("content", "read a bounded window around the top hit", args)]);
     }
 
     private static string RenderSearchJson(IReadOnlyList<TextContentSearchHit> hits, string query, string contentKind)
@@ -1252,7 +2266,10 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string RenderReadJson(ExternalContentReadResult result)
+    private static string RenderReadJson(
+        ExternalContentReadResult result,
+        int requestedLine,
+        int contextLines)
     {
         var lines = result.Lines
             .Select(static line =>
@@ -1270,8 +2287,34 @@ public sealed class ContentTool
             writer.WriteStartObject();
             writer.WriteString("source_id", result.SourceId);
             writer.WriteString("display_path", TruncateForJson(result.DisplayPath, MaxReadDisplayPathUnits));
+            writer.WriteString("content_hash", result.ContentHash);
+            writer.WriteNumber("requested_line", requestedLine);
+            writer.WriteNumber("context_lines", contextLines);
             writer.WriteNumber("line_start", result.LineStart);
             writer.WriteNumber("line_end", result.LineEnd);
+            writer.WriteNumber("source_line_count", result.SourceLineCount);
+            writer.WriteBoolean("clamped", result.Clamped);
+            int requestedStart = checked((int)Math.Max(1L, (long)requestedLine - contextLines));
+            int requestedEnd = checked((int)Math.Min(result.SourceLineCount, (long)requestedLine + contextLines));
+            int omittedBefore = Math.Max(0, result.LineStart - requestedStart);
+            int omittedAfter = Math.Max(0, requestedEnd - result.LineEnd);
+            writer.WriteNumber("omitted_before", omittedBefore);
+            writer.WriteNumber("omitted_after", omittedAfter);
+            if (omittedAfter > 0)
+            {
+                writer.WriteString("continuation_direction", "forward");
+                writer.WriteNumber("continuation_line", result.LineEnd + 1);
+            }
+            else if (omittedBefore > 0)
+            {
+                writer.WriteString("continuation_direction", "backward");
+                writer.WriteNumber("continuation_line", result.LineStart - 1);
+            }
+            else
+            {
+                writer.WriteNull("continuation_direction");
+                writer.WriteNull("continuation_line");
+            }
             writer.WriteNumber("truncated_line_count", lines.Count(static line => line.Truncated));
             writer.WriteStartArray("lines");
             foreach (RenderedReadLine line in lines)
@@ -1288,13 +2331,100 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static string RenderMcpReadJson(
+        ExternalContentReadResult result,
+        IReadOnlyList<ExternalContentLine> lines,
+        int requestedLine,
+        int contextLines,
+        int omittedBefore,
+        int omittedAfter)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", 3);
+            writer.WriteString("operation", "read");
+            writer.WriteString("source_id", TruncateForJson(result.SourceId, MaxSearchSourceIdBytes));
+            writer.WriteString("display_path", TruncateForJson(result.DisplayPath, MaxSearchDisplayPathBytes));
+            writer.WriteString("content_hash", result.ContentHash);
+            writer.WriteNumber("requested_line", requestedLine);
+            writer.WriteNumber("context_lines", contextLines);
+            writer.WriteNumber("source_line_count", result.SourceLineCount);
+            writer.WriteBoolean("store_window_clamped", result.Clamped);
+            writer.WriteNumber("line_start", lines.Count == 0 ? 0 : lines[0].LineNumber);
+            writer.WriteNumber("line_end", lines.Count == 0 ? 0 : lines[^1].LineNumber);
+            writer.WriteNumber("returned_count", lines.Count);
+            writer.WriteNumber("omitted_before", omittedBefore);
+            writer.WriteNumber("omitted_after", omittedAfter);
+            writer.WriteBoolean("output_truncated", omittedBefore > 0 || omittedAfter > 0);
+            int truncatedLineCount = 0;
+            writer.WriteStartArray("lines");
+            foreach (ExternalContentLine line in lines)
+            {
+                string text = TruncateForJson(line.Text, MaxMcpReadLineBytes);
+                bool truncated = !string.Equals(text, line.Text, StringComparison.Ordinal);
+                if (truncated)
+                    truncatedLineCount++;
+                writer.WriteStartObject();
+                writer.WriteNumber("line", line.LineNumber);
+                writer.WriteString("text", text);
+                writer.WriteBoolean("truncated", truncated);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteNumber("truncated_line_count", truncatedLineCount);
+            writer.WritePropertyName("next_actions");
+            if (lines.Count > 0 && omittedAfter > 0)
+            {
+                (int line, int continuationContext) = ForwardContinuation(
+                    result.SourceLineCount,
+                    lines[^1].LineNumber + 1);
+                WriteNextActions(
+                    writer,
+                    [
+                        NextAction(
+                            "content",
+                            "continue at the first omitted line",
+                            ("operation", "read"),
+                            ("source_id", result.SourceId),
+                            ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                            ("context_lines", continuationContext.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture))),
+                    ]);
+            }
+            else if (lines.Count > 0 && omittedBefore > 0)
+            {
+                (int line, int continuationContext) = BackwardContinuation(lines[0].LineNumber - 1);
+                WriteNextActions(
+                    writer,
+                    [
+                        NextAction(
+                            "content",
+                            "continue backward at the first omitted line",
+                            ("operation", "read"),
+                            ("source_id", result.SourceId),
+                            ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                            ("context_lines", continuationContext.ToString(
+                                System.Globalization.CultureInfo.InvariantCulture))),
+                    ]);
+            }
+            else
+            {
+                WriteNextActions(writer, []);
+            }
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     private static string RenderListJson(ExternalContentInventory inventory)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 2);
+            writer.WriteNumber("schema_version", 3);
             writer.WriteNumber("per_kind_limit", inventory.PerKindLimit);
             writer.WriteNumber("total_count", inventory.TotalCount);
             writer.WriteNumber("returned_count", inventory.ReturnedCount);
@@ -1334,18 +2464,53 @@ public sealed class ContentTool
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static string RenderMcpList(
+        ExternalContentInventory inventory,
+        bool json,
+        int maxBytes)
+    {
+        ContentInventoryRow[] rows =
+        [
+            .. inventory.Kinds.SelectMany(
+                static kind => kind.Sources.Select(source => new ContentInventoryRow(kind.ContentKind, source))),
+        ];
+
+        string Render(IReadOnlyList<ContentInventoryRow> retained, int _)
+        {
+            var byKind = retained
+                .GroupBy(static row => row.ContentKind, StringComparer.Ordinal)
+                .ToDictionary(
+                    static group => group.Key,
+                    static group => (IReadOnlyList<ExternalContentSource>)
+                        group.Select(static row => row.Source).ToArray(),
+                    StringComparer.Ordinal);
+            var bounded = new ExternalContentInventory(
+                inventory.PerKindLimit,
+                [
+                    .. inventory.Kinds.Select(kind => new ExternalContentKindInventory(
+                        kind.ContentKind,
+                        kind.TotalCount,
+                        byKind.GetValueOrDefault(kind.ContentKind, []))),
+                ]);
+            return json ? RenderListJson(bounded) : RenderListCompact(bounded);
+        }
+
+        return ToolOutputBudget.RenderPrefixWithinByteBudget(rows, maxBytes, Render);
+    }
+
     private static string RenderShapeJson(ExternalContentShape shape)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 2);
+            writer.WriteNumber("schema_version", 3);
             writer.WriteString("source_id", shape.SourceId);
             writer.WriteString("content_kind", shape.ContentKind);
             writer.WriteString(
                 "display_path",
                 TruncateForJson(shape.DisplayPath, MaxInventoryDisplayPathChars));
+            writer.WriteString("content_hash", shape.ContentHash);
             writer.WriteNumber("source_bytes", shape.SourceBytes);
             writer.WriteNumber("line_count", shape.LineCount);
             writer.WriteString("severity_basis", "text_derived");
@@ -1386,7 +2551,7 @@ public sealed class ContentTool
         using (var writer = JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteString("source_id", result.SourceId);
+            writer.WriteString("source_id", TruncateForJson(result.SourceId, MaxSearchSourceIdBytes));
             writer.WriteBoolean("removed", result.Removed);
             writer.WriteNumber("source_count", result.SourceCount);
             writer.WriteNumber("chunk_count", result.ChunkCount);
@@ -1406,7 +2571,21 @@ public sealed class ContentTool
             writer.WritePropertyName("args");
             writer.WriteStartObject();
             foreach (KeyValuePair<string, string> arg in action.Args)
-                writer.WriteString(arg.Key, TruncateForJson(arg.Value, MaxDiagnosticArgumentChars));
+            {
+                if (arg.Key is "line" or "limit" or "context_lines"
+                    && int.TryParse(
+                        arg.Value,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out int number))
+                {
+                    writer.WriteNumber(arg.Key, number);
+                }
+                else
+                {
+                    writer.WriteString(arg.Key, TruncateForJson(arg.Value, MaxDiagnosticArgumentChars));
+                }
+            }
             writer.WriteEndObject();
             writer.WriteEndObject();
         }
@@ -1416,5 +2595,8 @@ public sealed class ContentTool
     private static Utf8JsonWriter JsonWriter(ArrayBufferWriter<byte> buffer) =>
         new(buffer, new JsonWriterOptions { Encoder = ContentJsonEncoder });
 
-    private sealed record WorkspaceContentSearchHit(WorkspaceRegistryRow Workspace, TextContentSearchHit Hit);
+    private sealed record WorkspaceContentSearchHit(
+        WorkspaceRegistryRow Workspace,
+        TextContentSearchHit Hit,
+        int LocalRank);
 }

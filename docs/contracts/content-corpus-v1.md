@@ -12,7 +12,7 @@ source-region search, and `content.db` stores raw chunk text for explicit text s
 external/web imports, and Eros semantic ingestion.
 
 Agent-facing bounded list/shape behavior is versioned separately in
-[`content-mcp-v2.md`](content-mcp-v2.md). Bulk JSONL export is a CLI-only
+[`content-mcp-v3.md`](content-mcp-v3.md). Bulk JSONL export is a CLI-only
 process contract.
 
 ## Content kinds

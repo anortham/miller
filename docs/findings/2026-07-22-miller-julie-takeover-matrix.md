@@ -463,6 +463,41 @@ Keep `content`. Make bare list a bounded per-kind inventory with totals and filt
 
 Accepted Miller's decisive advantage and list/export/shape issues. Corrected generic spillover from “capability to port” to a rejected fit for the stated goal: it adds state and another call. Corrected export remediation from an MCP continuation protocol to CLI-only ownership.
 
+### Phase 7 Remediation Disposition
+
+Completed 2026-07-25. The initial bounded-list/shape/CLI-export/import slice was
+necessary but not sufficient. A fresh Claude audit found thirteen additional
+correctness and efficiency defects: unbounded search fields and limits, stale
+current-workspace reads, all-workspace fail-fast behavior, eager whole-corpus
+raw-text materialization, incomparable cross-workspace score merging, hidden
+read clamps, incomplete JSON continuation, operation-inappropriate recovery,
+generic diagnostics, split search JSON shapes, missing drift identity, and
+unbounded echoed import/remove fields.
+
+Miller now enforces one 12 KiB UTF-8 ceiling on every MCP Content response and
+bounded caller inputs before I/O. Search has a 1–100 execution cap, one schema-v3
+envelope for hit and empty results, revision checks on implicit current-workspace
+search, isolated degraded workspaces, local-rank cross-workspace fusion, explicit
+`content_kind=all`, truthful probe/output omission fields, directly callable next actions, and
+`content_hash` on every hit. FTS opens metadata only and loads raw text for the
+candidate chunk IDs selected by FTS.
+
+Read and shape obtain metadata and chunks from one SQLite snapshot and return the
+same content hash as import/search/list. Read exposes store and output clamps,
+bounded line rendering, exact omissions, and deterministic continuation without
+an endless final forward hop. Inventory totals and rows share one read snapshot.
+Diagnostics are operation-specific and no longer attach read/search placeholders
+to imports. Raised-cap import remains streaming; CLI JSONL export now streams
+rows directly to stdout rather than allocating both a complete row list and a
+complete output string.
+
+The active contract is
+[`content-mcp-v3.md`](../contracts/content-mcp-v3.md); the superseded v2 file was
+removed rather than marked deprecated. Focused Content, FTS, store, export, and
+CLI verification passes 340 tests. The required Claude review loop finished
+clean after all confirmed findings were repaired. Detailed implementation evidence is recorded
+in [`2026-07-25-content-correctness-and-bounds.md`](2026-07-25-content-correctness-and-bounds.md).
+
 ## Tool Pass 8: `patterns`
 
 ### Findings

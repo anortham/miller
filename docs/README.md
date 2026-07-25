@@ -28,6 +28,7 @@ Use this page to avoid treating old milestone plans as the current product contr
           - [`findings/2026-07-23-phase4-shared-search-ranking-and-routing.md`](findings/2026-07-23-phase4-shared-search-ranking-and-routing.md) - Phase 4 shared reranking, container evidence, AND-to-OR relaxation, mixed routing, per-call retrieval control, and visible search calibration.
           - [`findings/2026-07-23-phase5-context-one-call-actionability.md`](findings/2026-07-23-phase5-context-one-call-actionability.md) - Phase 5 task-ranked pivots, bounded implementation evidence, aligned schemas, hard budgets, and visible one-call context calibration.
           - [`findings/2026-07-23-phase7-content-bounds.md`](findings/2026-07-23-phase7-content-bounds.md) - Phase 7A bounded content inventory/shape, CLI-only export boundary, and raised-cap streaming evidence.
+          - [`findings/2026-07-25-content-correctness-and-bounds.md`](findings/2026-07-25-content-correctness-and-bounds.md) - Content re-audit evidence for the universal 12 KiB MCP ceiling, revision-safe and failure-isolated search, lazy raw-text reads, drift hashes, and streaming CLI export.
           - [`findings/2026-07-23-phase7-patterns-bounds.md`](findings/2026-07-23-phase7-patterns-bounds.md) - Phase 7B plus takeover re-audit evidence for exact search/fan-out coverage, bounded MCP list/summary/search, full-population aggregation, and directory semantics.
           - [`findings/2026-07-23-phase-7-workspace-bounds.md`](findings/2026-07-23-phase-7-workspace-bounds.md) - Phase 7C exact workspace-list totals, bounded health formats, and authoritative symbol-read readiness.
 - [`plans/2026-07-22-miller-julie-takeover-audit-plan.md`](plans/2026-07-22-miller-julie-takeover-audit-plan.md) - completed nine-tool Miller-versus-Julie audit method, including one broad and nine mandatory tool-specific Claude reviews.
@@ -57,7 +58,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`findings/2026-07-25-impact-readpath-performance.md`](findings/2026-07-25-impact-readpath-performance.md) - Phase 6 follow-up proving truthful post-rank counts, batched on-demand traversal, Blazor graph parity, and live latency/RSS recovery.
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
-- [`contracts/content-mcp-v2.md`](contracts/content-mcp-v2.md) - active bounded MCP list/shape contract and CLI-only export boundary.
+- [`contracts/content-mcp-v3.md`](contracts/content-mcp-v3.md) - active 12 KiB MCP contract, revision-safe search/read, and CLI-only streaming export boundary.
 - [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - active references/usage JSONL export contract.
 - [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active compact and JSON contract for exact pattern coverage, query fan-out, grouping, ordering, budgets, and diagnostics.

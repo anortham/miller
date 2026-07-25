@@ -995,11 +995,11 @@ public static class CliDispatch
                 }
             }
             var reader = new ContentCorpusExportReader();
-            IReadOnlyList<ContentCorpusExportRow> rows = reader.Read(
+            reader.WriteJsonLines(
                 contentDbPath,
+                outw,
                 requestedKind,
                 o.Value("content-workspace-id"));
-            WriteOutput(outw, ContentCorpusExportReader.ToJsonLines(rows));
             return 0;
         }
 

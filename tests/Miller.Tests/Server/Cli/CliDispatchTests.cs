@@ -1021,15 +1021,16 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(3, code);
         Assert.Empty(outText);
+        string expectedCode = operation == "list" ? "invalid_content_kind" : "content_error";
         if (json)
         {
             using JsonDocument doc = JsonDocument.Parse(errText);
             Assert.Equal(operation, doc.RootElement.GetProperty("operation").GetString());
-            Assert.Equal("content_error", doc.RootElement.GetProperty("diagnostic_code").GetString());
+            Assert.Equal(expectedCode, doc.RootElement.GetProperty("diagnostic_code").GetString());
         }
         else
         {
-            Assert.Contains("diagnostic_code=content_error", errText, StringComparison.Ordinal);
+            Assert.Contains($"diagnostic_code={expectedCode}", errText, StringComparison.Ordinal);
         }
     }
 
@@ -1123,6 +1124,29 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Empty(errText);
         using JsonDocument doc = JsonDocument.Parse(outText);
         Assert.Equal("no_results", doc.RootElement.GetProperty("diagnostic_code").GetString());
+    }
+
+    [Fact]
+    public void Content_Search_CliPreservesLimitsAboveTheMcpCap()
+    {
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        string path = Path.Combine(_dir, "cli-large-limit.log");
+        File.WriteAllText(path, "CliLargeLimitMarker");
+        Assert.Equal(0, Run(new[] { "content", "import", path }, ctx).Code);
+
+        var (code, output, error) = Run(
+            new[]
+            {
+                "content", "search", "CliLargeLimitMarker", "--kind", "all",
+                "--limit", int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json",
+            },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(error);
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(1, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
     }
 
     [Fact]
@@ -1260,6 +1284,35 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("beta (ws-beta)", outText);
         Assert.Contains("alpha.log  external_file  source_id=", outText);
         Assert.Contains("beta.log  external_file  source_id=", outText);
+    }
+
+    [Fact]
+    public void Content_SearchAllWorkspaces_CliJsonPreservesDegradedCoverage()
+    {
+        string missingRoot = Path.Combine(_dir, "missing-index");
+        Directory.CreateDirectory(missingRoot);
+        string missingSymbols = Path.Combine(missingRoot, ".miller", "symbols.db");
+        var ctx = Context(Path.Combine(_dir, ".miller", "symbols.db"), _dir);
+        using (var registry = WorkspaceRegistry.Open(ctx.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-missing", "missing", missingRoot, missingSymbols);
+            registry.MarkScanned("ws-missing", revision: 1);
+        }
+
+        var (code, output, error) = Run(
+            new[]
+            {
+                "content", "search", "UnavailableMarker", "--kind", "source",
+                "--workspace-id", "all", "--json",
+            },
+            ctx);
+
+        Assert.Equal(0, code);
+        Assert.Empty(error);
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.Equal("workspace_search_incomplete", doc.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        Assert.Empty(doc.RootElement.GetProperty("results").EnumerateArray());
     }
 
     [Fact]

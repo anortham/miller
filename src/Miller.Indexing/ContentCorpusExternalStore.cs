@@ -12,6 +12,7 @@ public sealed class ContentCorpusExternalStore
     public const long DefaultMaxImportBytes = 25 * 1024 * 1024;
     public const int DefaultContextLines = 10;
     public const int MaxReadWindowLines = 200;
+    public const int MaxContextLines = 1_000_000;
     public const int MaxStreamingLineChars = 64 * 1024;
     public const int MaxStreamingChunkChars = 1024 * 1024;
 
@@ -366,15 +367,18 @@ public sealed class ContentCorpusExternalStore
         }
 
         using var connection = OpenReadOnly(contentDbPath);
+        using var transaction = connection.BeginTransaction();
         var inventories = new List<ExternalContentKindInventory>(kinds.Length);
         foreach (string kind in kinds)
         {
             using var count = connection.CreateCommand();
+            count.Transaction = transaction;
             count.CommandText = "SELECT COUNT(*) FROM content_sources WHERE content_kind = $kind;";
             count.Parameters.AddWithValue("$kind", kind);
             int total = Convert.ToInt32(count.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
 
             using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = """
                 SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes, s.url,
                        s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
@@ -396,6 +400,7 @@ public sealed class ContentCorpusExternalStore
             inventories.Add(new ExternalContentKindInventory(kind, total, sources));
         }
 
+        transaction.Commit();
         return new ExternalContentInventory(perKindLimit, inventories);
     }
 
@@ -407,8 +412,10 @@ public sealed class ContentCorpusExternalStore
             throw new InvalidOperationException("No content corpus exists. Import a file first.");
 
         using var connection = OpenReadOnly(contentDbPath);
-        ExternalContentSource source = ReadSource(connection, sourceId);
+        using var transaction = connection.BeginTransaction();
+        ExternalContentSource source = ReadSource(connection, transaction, sourceId);
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT line_start, raw_text
             FROM content_chunks
@@ -421,31 +428,35 @@ public sealed class ContentCorpusExternalStore
         var tail = new Queue<ExternalContentLine>(ExternalContentShape.EdgeLineLimit);
         var severity = new int[6];
         int lastLine = 0;
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            int lineStart = reader.GetInt32(0);
-            string[] lines = Normalize(reader.GetString(1)).Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            while (reader.Read())
             {
-                int lineNumber = lineStart + i;
-                if (lineNumber <= lastLine || lineNumber > source.LineCount)
-                    continue;
-                lastLine = lineNumber;
-                var line = new ExternalContentLine(lineNumber, lines[i]);
-                if (head.Count < ExternalContentShape.EdgeLineLimit)
-                    head.Add(line);
-                if (tail.Count == ExternalContentShape.EdgeLineLimit)
-                    tail.Dequeue();
-                tail.Enqueue(line);
-                severity[(int)TextSeverity(lines[i])]++;
+                int lineStart = reader.GetInt32(0);
+                string[] lines = Normalize(reader.GetString(1)).Split('\n');
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    int lineNumber = lineStart + i;
+                    if (lineNumber <= lastLine || lineNumber > source.LineCount)
+                        continue;
+                    lastLine = lineNumber;
+                    var line = new ExternalContentLine(lineNumber, lines[i]);
+                    if (head.Count < ExternalContentShape.EdgeLineLimit)
+                        head.Add(line);
+                    if (tail.Count == ExternalContentShape.EdgeLineLimit)
+                        tail.Dequeue();
+                    tail.Enqueue(line);
+                    severity[(int)TextSeverity(lines[i])]++;
+                }
             }
         }
+        transaction.Commit();
 
         return new ExternalContentShape(
             source.SourceId,
             source.ContentKind,
             source.DisplayPath,
+            source.ContentHash,
             source.SourceBytes,
             source.LineCount,
             head,
@@ -471,26 +482,32 @@ public sealed class ContentCorpusExternalStore
             throw new ArgumentOutOfRangeException(nameof(line), "line must be > 0.");
         if (contextLines < 0)
             throw new ArgumentOutOfRangeException(nameof(contextLines), "context_lines must be >= 0.");
+        if (contextLines > MaxContextLines)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(contextLines),
+                $"context_lines must be <= {MaxContextLines}.");
+        }
         if (!File.Exists(Path.GetFullPath(contentDbPath)))
             throw new InvalidOperationException("No content corpus exists. Import a file first.");
 
         using var connection = OpenReadOnly(contentDbPath);
-        ExternalContentSource source = ReadSource(connection, sourceId);
+        using var transaction = connection.BeginTransaction();
+        ExternalContentSource source = ReadSource(connection, transaction, sourceId);
         if (line > source.LineCount)
             throw new InvalidOperationException($"Source '{sourceId}' has {source.LineCount} lines; requested line {line}.");
 
-        int start = Math.Max(1, line - contextLines);
-        int end = Math.Min(source.LineCount, line + contextLines);
+        int start = checked((int)Math.Max(1L, (long)line - contextLines));
+        int end = checked((int)Math.Min(source.LineCount, (long)line + contextLines));
         bool clamped = end - start + 1 > MaxReadWindowLines;
         if (clamped)
         {
-            // Trim the tail, but never past the requested centre: with context_lines >= MaxReadWindowLines a
-            // pure tail trim would drop the very line the caller asked for.
             start = Math.Max(start, line - (MaxReadWindowLines - 1));
             end = start + MaxReadWindowLines - 1;
         }
 
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT line_start, raw_text
             FROM content_chunks
@@ -504,22 +521,26 @@ public sealed class ContentCorpusExternalStore
         command.Parameters.AddWithValue("$end", end);
 
         var linesByNumber = new SortedDictionary<int, string>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        using (var reader = command.ExecuteReader())
         {
-            int chunkLineStart = reader.GetInt32(0);
-            string[] chunkLines = Normalize(reader.GetString(1)).Split('\n');
-            for (int i = 0; i < chunkLines.Length; i++)
+            while (reader.Read())
             {
-                int number = chunkLineStart + i;
-                if (number >= start && number <= end)
-                    linesByNumber.TryAdd(number, chunkLines[i]);
+                int chunkLineStart = reader.GetInt32(0);
+                string[] chunkLines = Normalize(reader.GetString(1)).Split('\n');
+                for (int i = 0; i < chunkLines.Length; i++)
+                {
+                    int number = chunkLineStart + i;
+                    if (number >= start && number <= end)
+                        linesByNumber.TryAdd(number, chunkLines[i]);
+                }
             }
         }
+        transaction.Commit();
 
         return new ExternalContentReadResult(
             source.SourceId,
             source.DisplayPath,
+            source.ContentHash,
             start,
             end,
             linesByNumber.Select(static kv => new ExternalContentLine(kv.Key, kv.Value)).ToArray(),
@@ -738,9 +759,13 @@ public sealed class ContentCorpusExternalStore
         insert.ExecuteNonQuery();
     }
 
-    private static ExternalContentSource ReadSource(SqliteConnection connection, string sourceId)
+    private static ExternalContentSource ReadSource(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceId)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT s.source_id, s.content_kind, s.display_path, s.content_hash, s.source_bytes, s.url,
                    s.line_count, s.indexed_at_utc, COUNT(c.chunk_id) AS chunk_count
@@ -1274,6 +1299,7 @@ public sealed record ExternalContentShape(
     string SourceId,
     string ContentKind,
     string DisplayPath,
+    string ContentHash,
     long SourceBytes,
     int LineCount,
     IReadOnlyList<ExternalContentLine> Head,
@@ -1293,6 +1319,7 @@ public sealed record ExternalContentShape(
 public sealed record ExternalContentReadResult(
     string SourceId,
     string DisplayPath,
+    string ContentHash,
     int LineStart,
     int LineEnd,
     IReadOnlyList<ExternalContentLine> Lines,

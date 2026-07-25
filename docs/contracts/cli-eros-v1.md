@@ -149,6 +149,7 @@ true` in the payload, not on the exit code alone. Exit `3` is reserved for genui
 
 `miller content export [--kind KIND] [--content-workspace-id ID]` emits deterministic JSONL chunk rows for
 semantic ingestion. This is a CLI-only process contract; the MCP `content` tool does not accept `export`.
+Rows always end with a literal LF byte, including on Windows.
 See `docs/contracts/content-corpus-v1.md` for field-level guarantees.
 
 Capabilities advertise this feed as:
@@ -208,10 +209,15 @@ Read-command JSON is allowed to grow additive recovery fields. Current examples:
 
 - `trace --json` includes `next_actions` for empty or diagnostic outcomes such as no path, no refs, no
   neighbours, or unsupported bridge providers.
-- `content search --json` no-result output remains parseable and may include `diagnostic_code` and
-  `next_actions`; successful search hits remain source-id driven.
+- `content search --json` preserves its v1 process shape for complete searches:
+  successful hits are a top-level array, while a genuine no-result outcome is
+  a parseable object. A degraded current/all-workspace search returns the
+  schema-v3 coverage object with `results`, `degraded_workspaces`, and
+  `diagnostic_code=workspace_search_incomplete` when absence is unproven.
 - `content read --json` parameter/source/window failures return a parseable object with `operation`, `error`,
   `diagnostic_code`, and `next_actions` when Miller can suggest recovery.
+- Invalid `content list --kind` values return `diagnostic_code=invalid_content_kind`
+  rather than the generic `content_error`.
 - Successful `content read --json` line objects include `truncated`; the
   envelope includes `truncated_line_count`. Escape-heavy or very long lines
   return bounded successful output rather than a diagnostic.
