@@ -1831,7 +1831,7 @@ class AgentContractTests(unittest.TestCase):
 
         dev003 = tasks["dev-003"]
         self.assertEqual(
-            {"token-baseline", "token baseline"},
+            {"token-baseline", "token baseline", "token-overlap baseline"},
             set(dev003["fact_predicates"][0]["any_terms"]),
         )
         self.assertEqual(
@@ -1844,6 +1844,28 @@ class AgentContractTests(unittest.TestCase):
                 action["target"]["symbol_id"]
                 for action in dev003["acceptable_actions"]
                 if action["kind"] == "inspect_symbol"
+            },
+        )
+        self.assertIn(
+            ("assemble_context", "src/Eros.Eval/SemanticMillerCandidates.cs"),
+            {
+                (action["kind"], action["target"].get("path"))
+                for action in dev003["acceptable_actions"]
+            },
+        )
+        self.assertIn(
+            "f0cd71e57c4e4d289aeb89601c70623e",
+            {
+                action["target"]["symbol_id"]
+                for action in dev003["acceptable_actions"]
+                if action["kind"] == "inspect_symbol"
+            },
+        )
+        self.assertIn(
+            ("src/Eros.Cli/CliDependencies.cs", "CreateSemanticMillerCandidate"),
+            {
+                (anchor["path"], anchor.get("symbol"))
+                for anchor in dev003["evidence_anchors"]
             },
         )
 
@@ -1913,9 +1935,23 @@ class AgentContractTests(unittest.TestCase):
             {"c_sharp", "C#"},
             set(dev008["fact_predicates"][0]["any_terms"]),
         )
+        self.assertEqual("answer", dev008["fact_predicates"][0]["source"])
         self.assertEqual(
             ["test_can_load_grammar"],
             [item["symbol"] for item in dev008["symbol_cited"]],
+        )
+        self.assertTrue(
+            {
+                "7f017d2f865d142aef5efd35721a6542",
+                "6c26bc69699062c33fd678097ff59be5",
+                "43cacdf7463c28f5388e858745b9e783",
+            }.issubset(
+                {
+                    action["target"].get("symbol_id")
+                    for action in dev008["acceptable_actions"]
+                    if action["kind"] == "assemble_context"
+                }
+            )
         )
 
         dev009 = tasks["dev-009"]
@@ -1997,6 +2033,14 @@ class AgentContractTests(unittest.TestCase):
                 (action["target"].get("path"), action["target"].get("symbol_id"))
                 for action in dev015["acceptable_actions"]
                 if action["kind"] == "inspect_symbol"
+            },
+        )
+        self.assertIn(
+            "bindings/go/binding.go",
+            {
+                action["target"]["path"]
+                for action in dev015["acceptable_actions"]
+                if action["kind"] == "inspect_file"
             },
         )
 

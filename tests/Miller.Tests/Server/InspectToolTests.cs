@@ -1600,7 +1600,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Inspect_NotFoundDiagnosticAction_BoundsLongTarget()
+    public void Inspect_NotFoundWithoutSuggestions_IsConclusive()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, _) = Build(fx);
@@ -1608,20 +1608,37 @@ public sealed class InspectToolTests
             ReadToolRoutingTestSupport.ContextFor(
                 index,
                 fx.DbPath,
-                "ws-long-target",
+                "ws-not-found",
                 fx.WorkspaceRoot));
         var tool = new InspectTool(provider);
-        string target = new('x', 500);
 
-        using var document = JsonDocument.Parse(tool.Inspect(target, format: "json"));
-        string call = document.RootElement
+        using var document = JsonDocument.Parse(tool.Inspect("NoSuchSymbol", format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Contains("definitive empty result", diagnostic.GetProperty("message").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
+    }
+
+    [Fact]
+    public void Inspect_NotFoundWithSuggestions_RecommendsSearch()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-near-miss",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Inspect("GetUse", format: "json"));
+        JsonElement actions = document.RootElement
             .GetProperty("diagnostic")
-            .GetProperty("next_actions")[0]
-            .GetProperty("call")
-            .GetString()!;
+            .GetProperty("next_actions");
 
-        Assert.DoesNotContain(new string('x', 161), call, StringComparison.Ordinal);
-        Assert.Contains(new string('x', 160), call, StringComparison.Ordinal);
+        Assert.Single(actions.EnumerateArray());
+        Assert.Contains("search(", actions[0].GetProperty("call").GetString());
     }
 
     [Fact]

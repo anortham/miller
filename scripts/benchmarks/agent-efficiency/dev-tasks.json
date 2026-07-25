@@ -178,7 +178,7 @@
           "predicate_id": "fact-001",
           "source": "answer",
           "all_terms": ["in-memory", "SQLite"],
-          "any_terms": ["token-baseline", "token baseline"],
+          "any_terms": ["token-baseline", "token baseline", "token-overlap baseline"],
           "evidence_anchor_ids": ["anchor-001"]
         }
       ],
@@ -204,6 +204,14 @@
           "line_start": 56,
           "line_end": 66,
           "relevance_grade": 3
+        },
+        {
+          "anchor_id": "anchor-002",
+          "path": "src/Eros.Cli/CliDependencies.cs",
+          "symbol": "CreateSemanticMillerCandidate",
+          "line_start": 37,
+          "line_end": 37,
+          "relevance_grade": 2
         }
       ],
       "forbidden_claims": ["the choice is implemented in Miller runtime code"],
@@ -237,6 +245,20 @@
           "target": {"symbol_id": "9dfce5330377cf56783c656e66126a40"},
           "requirement_group": "discover-choice-point",
           "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "assemble_context",
+          "target": {"path": "src/Eros.Eval/SemanticMillerCandidates.cs"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-006",
+          "kind": "inspect_symbol",
+          "target": {"symbol_id": "f0cd71e57c4e4d289aeb89601c70623e"},
+          "requirement_group": "discover-choice-point",
+          "evidence_anchor_ids": ["anchor-002"]
         }
       ],
       "forbidden_actions": [],
@@ -638,7 +660,7 @@
       "fact_predicates": [
         {
           "predicate_id": "fact-001",
-          "source": "evidence_claim",
+          "source": "answer",
           "all_terms": ["LANGUAGE", "tree_sitter_c_sharp"],
           "any_terms": ["c_sharp", "C#"],
           "evidence_anchor_ids": ["anchor-001", "anchor-002"]
@@ -694,6 +716,27 @@
           "action_id": "action-002",
           "kind": "assemble_context",
           "target": {"path": "bindings/rust/lib.rs"},
+          "requirement_group": "rust-binding",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-003",
+          "kind": "assemble_context",
+          "target": {"symbol_id": "7f017d2f865d142aef5efd35721a6542"},
+          "requirement_group": "grammar-export",
+          "evidence_anchor_ids": ["anchor-001"]
+        },
+        {
+          "action_id": "action-004",
+          "kind": "assemble_context",
+          "target": {"symbol_id": "6c26bc69699062c33fd678097ff59be5"},
+          "requirement_group": "rust-binding",
+          "evidence_anchor_ids": ["anchor-002"]
+        },
+        {
+          "action_id": "action-005",
+          "kind": "assemble_context",
+          "target": {"symbol_id": "43cacdf7463c28f5388e858745b9e783"},
           "requirement_group": "rust-binding",
           "evidence_anchor_ids": ["anchor-002"]
         }
@@ -1272,6 +1315,12 @@
             "path": "src/scanner.c",
             "symbol_id": "80cc58e7c48d034967766f777a754058"
           },
+          "requirement_group": "refuse-isolated-abi-rename"
+        },
+        {
+          "action_id": "action-005",
+          "kind": "inspect_file",
+          "target": {"path": "bindings/go/binding.go"},
           "requirement_group": "refuse-isolated-abi-rename"
         }
       ],

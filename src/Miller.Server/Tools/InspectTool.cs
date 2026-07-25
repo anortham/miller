@@ -289,12 +289,17 @@ public sealed class InspectTool
 
             case TargetResolution.NotFound nf:
                 resultCount = 0;
+                bool hasSuggestions = nf.Suggestions is { Count: > 0 };
                 diagnostic = ToolDiagnostic.ExpectedEmpty(
                     "not_found",
-                    $"No indexed file or symbol matched '{target}'.",
-                    [new ToolDiagnosticAction(
-                        $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
-                        "find the canonical file or symbol identity")]);
+                    hasSuggestions
+                        ? $"No indexed file or symbol matched '{target}'."
+                        : $"No exact indexed file or symbol matched '{target}'; this is a definitive empty result for the current index.",
+                    hasSuggestions
+                        ? [new ToolDiagnosticAction(
+                            $"search(query=\"{EscapeDiagnosticTarget(target)}\")",
+                            "inspect related or renamed symbols")]
+                        : null);
                 string notFoundOutput = json
                     ? RenderNotFoundJson(nf)
                     : nf.RenderMessage();
