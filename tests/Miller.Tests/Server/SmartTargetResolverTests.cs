@@ -544,6 +544,27 @@ public sealed class SmartTargetResolverTests
             Assert.IsType<TargetResolution.Symbol>(result).Value.SymbolId);
     }
 
+    [Theory]
+    [InlineData("Company.Product.Widget.Render")]
+    [InlineData("Company::Product::Widget::Render")]
+    public void Resolve_FullyQualifiedMember_AllowsMissingNamespaceParents(string target)
+    {
+        const string typeId = "bb11223344556677889900aabbccd101";
+        const string methodId = "bb11223344556677889900aabbccd102";
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(typeId, "Widget", "class", "csharp", "src/Widget.cs", "class Widget", 2, null),
+                new(methodId, "Render", "method", "csharp", "src/Widget.cs", "void Render()", 3, typeId),
+            ]);
+        var resolver = new SmartTargetResolver(BuildIndex(fixture));
+
+        var result = resolver.Resolve(target);
+
+        Assert.Equal(methodId, Assert.IsType<TargetResolution.Symbol>(result).Value.SymbolId);
+    }
+
     [Fact]
     public void Resolve_AsFile_ForcesNameLikeStringToFile()
     {

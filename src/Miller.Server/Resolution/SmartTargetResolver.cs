@@ -292,7 +292,7 @@ public sealed partial class SmartTargetResolver
             if (index > 0)
             {
                 if (ancestor.ParentId is not { } ancestorParentId)
-                    return false;
+                    return true;
 
                 currentId = ancestorParentId;
             }

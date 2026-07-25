@@ -663,8 +663,10 @@ public sealed class EditService
             _dbPath,
             target.SymbolId,
             evidenceBounds);
-        IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact);
-        int unusableExactSites = evidence.Exact.Count(reference => !HasUsableRenameSpan(reference));
+        int oldNameByteLength = Encoding.UTF8.GetByteCount(oldName);
+        IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact, oldNameByteLength);
+        int unusableExactSites = evidence.Exact.Count(
+            reference => !HasUsableRenameSpan(reference, oldNameByteLength));
         int missingExactFiles = exactSites
             .Select(site => site.FilePath)
             .Distinct(StringComparer.Ordinal)
@@ -697,7 +699,8 @@ public sealed class EditService
             var resolvedHomonymKeys = _index.FindByName(oldName)
                 .Where(symbol => !string.Equals(symbol.SymbolId, target.SymbolId, StringComparison.Ordinal))
                 .SelectMany(symbol => RenameIdentifierSites(
-                    ReferenceEvidenceReader.Read(_dbPath, symbol.SymbolId, evidenceBounds).Exact))
+                    ReferenceEvidenceReader.Read(_dbPath, symbol.SymbolId, evidenceBounds).Exact,
+                    oldNameByteLength))
                 .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
                 .ToHashSet();
             fallbackSites = ExtractReader.ReadIdentifierSites(_dbPath, oldName)
@@ -911,7 +914,7 @@ public sealed class EditService
                     (byte)'<' => 1,
                     _ => 0,
                 };
-            if (best is null || score >= best.Value.Score)
+            if (best is null || score > best.Value.Score)
                 best = (i, score);
         }
 
@@ -1240,12 +1243,13 @@ public sealed class EditService
         IReadOnlyList<ReferenceEvidence> ExactEvidence);
 
     private static IReadOnlyList<IdentifierSite> RenameIdentifierSites(
-        IReadOnlyList<ReferenceEvidence> evidence)
+        IReadOnlyList<ReferenceEvidence> evidence,
+        int nameByteLength)
     {
         var sites = new List<IdentifierSite>(evidence.Count);
         foreach (ReferenceEvidence reference in evidence)
         {
-            if (!HasUsableRenameSpan(reference))
+            if (!HasUsableRenameSpan(reference, nameByteLength))
                 continue;
 
             sites.Add(new IdentifierSite(
@@ -1263,12 +1267,15 @@ public sealed class EditService
             .ToArray();
     }
 
-    private static bool HasUsableRenameSpan(ReferenceEvidence reference) =>
+    private static bool HasUsableRenameSpan(ReferenceEvidence reference, int nameByteLength) =>
+        reference.Source is ReferenceEvidenceSource.IdentifierDirect or
+            ReferenceEvidenceSource.IdentifierResolution &&
         reference.StartByte is { } startByte &&
         reference.EndByte is { } endByte &&
         reference.StartLine is not null &&
         startByte >= 0 &&
         endByte > startByte &&
+        endByte - startByte == nameByteLength &&
         startByte <= int.MaxValue &&
         endByte <= int.MaxValue;
 

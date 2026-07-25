@@ -28,6 +28,9 @@ Successful preview and applied JSON include:
 }
 ```
 
+Applied JSON also includes `post_apply_hint`, a copyable `impact` command using the renamed symbol's exact ID
+followed by the test reminder. Preview JSON omits this field.
+
 Each site contains `file`, `line`, `source`, and `resolution_status`. `exact_sites` starts with the definition site,
 then target-proven reference sites. `fallback_sites` contains explicitly selected name-based evidence and may
 include unresolved sites or sites belonging to another same-name symbol.
@@ -41,9 +44,9 @@ as `language=unknown`, `kind=name_based`, `resolution_status=fallback`.
 
 ## Safety
 
-Exact mode refuses the operation when any required exact site lacks a usable byte span, the definition token
-cannot be proven, or exact evidence references a file that cannot be loaded. The caller must choose
-`include_fallback` to accept homonym risk.
+Exact mode refuses the operation when any required exact site is not identifier-derived, does not span exactly
+the old identifier's UTF-8 byte length, lacks a usable byte span, references a file that cannot be loaded, or the
+definition token cannot be proven. The caller must choose `include_fallback` to accept homonym risk.
 
 Apply remains atomic across files. A successful compact apply ends with an `impact` command using the exact symbol
 ID and a reminder to run the selected tests.

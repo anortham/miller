@@ -1375,6 +1375,40 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_ExactMode_RefusesNonIdentifierRelationshipSpan()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            INSERT INTO relationships (
+                relationship_id, from_symbol_id, to_symbol_id, file_id, path, kind,
+                start_line, start_column, end_line, end_column,
+                start_byte, end_byte, confidence)
+            SELECT
+                'd100000000000000000000000000000f',
+                (SELECT symbol_id FROM symbols WHERE name = 'Sum' LIMIT 1),
+                (SELECT symbol_id FROM symbols WHERE name = 'Total' AND path = 'orders/OrderService.cs' LIMIT 1),
+                file_id, path, 'calls',
+                1, 0, 1, 20,
+                0, 20, 1.0
+            FROM files
+            WHERE path = 'billing/Invoice.cs';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("error", result.Outcome);
+        Assert.Contains("incomplete exact reference coverage", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("without usable byte spans", result.Output, StringComparison.Ordinal);
+        Assert.Equal(JulieDbFixture.InvoiceContent, File.ReadAllText(AbsPath("billing/Invoice.cs")));
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_DefaultExactMode_RefusesIncompleteCoverage()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
@@ -1539,6 +1573,69 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal("ok", result.Outcome);
         Assert.Contains("public Color Shade", result.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("public Shade Color", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_DefinitionSelectsFirstEqualScoreNameToken()
+    {
+        const string path = "Result.cs";
+        const string content = """
+            public sealed class Result
+            {
+                public bool IsSuccess => Plan.IsSuccess;
+            }
+            """;
+        int propertyStart = content.IndexOf("public bool", StringComparison.Ordinal);
+        int propertyEnd = content.IndexOf(';', propertyStart) + 1;
+        var rows = new[]
+        {
+            new JulieDbFixture.SymbolRow(
+                "12000000000000000000000000000001",
+                "Result",
+                "class",
+                "csharp",
+                path,
+                "public sealed class Result",
+                1,
+                null)
+            {
+                StartByte = 0,
+                EndByte = content.Length,
+            },
+            new JulieDbFixture.SymbolRow(
+                "12000000000000000000000000000002",
+                "IsSuccess",
+                "property",
+                "csharp",
+                path,
+                "public bool IsSuccess",
+                3,
+                "12000000000000000000000000000001")
+            {
+                StartByte = propertyStart,
+                EndByte = propertyEnd,
+            },
+        };
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [path] = content,
+        };
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows,
+            fileContent: files);
+        LayFiles(files);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "Result.IsSuccess") with
+        {
+            NewText = "Succeeded",
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        Assert.Contains("public bool Succeeded => Plan.IsSuccess", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("public bool IsSuccess => Plan.Succeeded", result.Output, StringComparison.Ordinal);
     }
 
     [Fact]
