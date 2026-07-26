@@ -64,6 +64,32 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
         GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);
 
+    public GraphPath? ShortestPathWithEvidence(
+        string from,
+        string to,
+        int maxDepth,
+        Func<GraphNeighbour, bool> edgeFilter)
+    {
+        _evidenceCache.Clear();
+        try
+        {
+            return GraphTraversal.ShortestPathWithEvidence(
+                from,
+                to,
+                maxDepth,
+                Contains,
+                id => BatchNeighbourEvidence([id], Direction.Forward)
+                    .TryGetValue(id, out IReadOnlyList<GraphNeighbour>? neighbours)
+                        ? neighbours
+                        : Array.Empty<GraphNeighbour>(),
+                edgeFilter);
+        }
+        finally
+        {
+            _evidenceCache.Clear();
+        }
+    }
+
     private IReadOnlyList<ReachedNode> EnrichImpactEvidence(IReadOnlyList<ReachedNode> nodes)
     {
         ArgumentNullException.ThrowIfNull(nodes);

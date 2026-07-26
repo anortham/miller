@@ -2410,6 +2410,13 @@ public sealed class ImpactToolTests
             result;
 
         public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) => null;
+
+        public GraphPath? ShortestPathWithEvidence(
+            string from,
+            string to,
+            int maxDepth,
+            Func<GraphNeighbour, bool> edgeFilter) =>
+            null;
     }
 
     private static void AssertTestEvidenceScope(JsonElement root)

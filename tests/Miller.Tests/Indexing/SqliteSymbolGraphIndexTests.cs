@@ -78,6 +78,29 @@ public sealed class SqliteSymbolGraphIndexTests
     }
 
     [Fact]
+    public void ShortestPathWithEvidence_MatchesRepositoryGraphForInspectFixture()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        using var sqliteGraph = new SqliteSymbolGraphIndex(fx.DbPath);
+        var full = RepositoryIndexLoader.Load(fx.DbPath);
+        string findId = SqliteSymbolReader.Read(fx.DbPath).Single(static s => s.Name == "Find").SymbolId;
+
+        GraphPath expected = Assert.IsType<GraphPath>(full.Graph.ShortestPathWithEvidence(
+            JulieDbFixture.GetUserId,
+            findId,
+            maxDepth: 2,
+            static _ => true));
+        GraphPath actual = Assert.IsType<GraphPath>(sqliteGraph.ShortestPathWithEvidence(
+            JulieDbFixture.GetUserId,
+            findId,
+            maxDepth: 2,
+            static _ => true));
+
+        Assert.Equal(expected.Nodes, actual.Nodes);
+        Assert.Equal(expected.Edges, actual.Edges);
+    }
+
+    [Fact]
     public void ReachWithEvidence_MatchesRepositoryGraphForBlazorComponentEdge()
     {
         const string pageId = "41000000000000000000000000000001";

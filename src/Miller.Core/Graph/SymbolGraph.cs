@@ -8,7 +8,7 @@ public sealed record GraphNode(string Id, bool IsTest, string? Visibility = null
 /// <summary>
 /// One directed dependency edge <c>From → To</c> meaning "<c>From</c> depends on <c>To</c>" (From calls/uses To;
 /// M5 decision D2). <see cref="Kind"/> carries julie's edge label (<c>calls</c>/<c>uses</c>/<c>type_usage</c>/...)
-/// for provenance; it does not affect traversal.
+/// for provenance and path filtering; ordinary reachability still traverses every edge.
 /// </summary>
 /// <param name="From">The dependent symbol id (source of the edge).</param>
 /// <param name="To">The depended-upon symbol id (target of the edge).</param>
@@ -50,6 +50,17 @@ public sealed record GraphReachResult(
     public bool Exhausted => !TruncatedByDepth && !TruncatedByLimit;
 }
 
+public sealed record GraphPathEdge(
+    string From,
+    string To,
+    string Kind,
+    double Confidence,
+    string Source);
+
+public sealed record GraphPath(
+    IReadOnlyList<string> Nodes,
+    IReadOnlyList<GraphPathEdge> Edges);
+
 /// <summary>Which adjacency a <see cref="SymbolGraph.Reach"/> traversal follows.</summary>
 public enum Direction
 {
@@ -76,6 +87,12 @@ public interface ISymbolGraphReachability
         ReachWithEvidence(starts, maxDepth, limit, dir).Nodes;
 
     IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth);
+
+    GraphPath? ShortestPathWithEvidence(
+        string from,
+        string to,
+        int maxDepth,
+        Func<GraphNeighbour, bool> edgeFilter);
 }
 
 /// <summary>
@@ -297,6 +314,19 @@ public sealed class SymbolGraph : ISymbolGraphReachability
     /// <exception cref="ArgumentNullException"><paramref name="from"/> or <paramref name="to"/> is null.</exception>
     public IReadOnlyList<string>? ShortestPath(string from, string to, int maxDepth) =>
         GraphTraversal.ShortestPath(from, to, maxDepth, Contains, Dependencies);
+
+    public GraphPath? ShortestPathWithEvidence(
+        string from,
+        string to,
+        int maxDepth,
+        Func<GraphNeighbour, bool> edgeFilter) =>
+        GraphTraversal.ShortestPathWithEvidence(
+            from,
+            to,
+            maxDepth,
+            Contains,
+            id => NeighbourEvidence(id, Direction.Forward),
+            edgeFilter);
 
     /// <summary>The neighbour ids of <paramref name="id"/> in the requested direction (Both = forward ∪ reverse).</summary>
     private IEnumerable<string> Neighbours(string id, Direction dir) => dir switch

@@ -37,7 +37,7 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
-- Phase 10 Search, Inspect, and Context re-audits are locally complete with clean fresh Claude reviews.
+- Phase 10 Search, Inspect, Context, and Trace re-audits are locally complete with clean fresh Claude reviews.
 
 ## Replacement Standard
 
@@ -356,6 +356,15 @@ The v1 `references` compatibility array remains because
 `exact_references` and `fallback_references`; live Eros source does not currently consume the Trace arrays,
 but deleting a published field would still break other v1 consumers. Focused Trace, CLI Trace, and reference
 reader verification passed 115 tests.
+
+### Phase 10 Re-audit Disposition
+
+Locally completed and fresh-Claude-reviewed 2026-07-26. Path mode now defaults to call-like edges and requires
+the explicit `path_kind=dependency` override for broad dependency traversal. In-memory and SQLite paths preserve
+edge kind, confidence, and provenance for every hop. JSON retains the v1 `kind=dependency_path` field and adds
+the actual `edge_kind` plus evidence fields. Invalid and empty path-kind behavior is typed and identical across
+MCP and CLI. Exact refs and all bridge providers remain unchanged. See
+[`2026-07-26-trace-path-truth-and-evidence.md`](2026-07-26-trace-path-truth-and-evidence.md).
 
 ## Tool Pass 5: `impact`
 

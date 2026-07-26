@@ -197,6 +197,24 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Trace_InvalidPathKindPreservesTypedDiagnosticAtMcpBoundary()
+    {
+        var index = BuildSymbolIndex(
+            [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 1)],
+            [("a", "b")]);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "current.db", "current-ws", "/repo"));
+        var tool = new TraceTool(provider);
+
+        using var document = JsonDocument.Parse(
+            tool.Trace("Alpha", mode: "path", to: "Beta", path_kind: "wide", format: "json"));
+
+        Assert.Equal(
+            "invalid_path_kind",
+            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Path_RendersOrderedShortestPath()
     {
         // a -> b -> c (forward dependency adjacency).
@@ -230,6 +248,148 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Path_DefaultExcludesTypeOnlyEdges()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "a", "Alpha", "class Alpha", "class", "csharp", "src/A.cs", 1, 2, null, false),
+            new(1, "b", "Beta", "class Beta", "class", "csharp", "src/B.cs", 1, 2, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [new GraphEdge("a", "b", "type_usage", 0.8, "identifier")]);
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            mode: "path",
+            to: "Beta",
+            depth: 5,
+            limit: 20,
+            fullFormat: false,
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("No path", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Path_DependencyOverrideIncludesTypeOnlyEdges()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "a", "Alpha", "class Alpha", "class", "csharp", "src/A.cs", 1, 2, null, false),
+            new(1, "b", "Beta", "class Beta", "class", "csharp", "src/B.cs", 1, 2, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            [new GraphEdge("a", "b", "type_usage", 0.8, "identifier")]);
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "path",
+            to: "Beta",
+            depth: 5,
+            limit: 20,
+            fullFormat: false,
+            pathKind: "dependency",
+            out int emitted,
+            out _);
+
+        Assert.Equal(2, emitted);
+        Assert.Contains("edge=type_usage confidence=0.80 provenance=identifier", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Path_UnknownKindReturnsUsageDiagnostic()
+    {
+        var index = BuildSymbolIndex(
+            [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 2)],
+            [("a", "b")]);
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "path",
+            to: "Beta",
+            depth: 5,
+            limit: 20,
+            fullFormat: false,
+            pathKind: "wide",
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        Assert.Contains("path_kind must be one of: call, dependency", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Path_UnknownKindJsonReturnsTypedDiagnostic()
+    {
+        var index = BuildSymbolIndex(
+            [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 2)],
+            [("a", "b")]);
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "path",
+            to: "Beta",
+            depth: 5,
+            limit: 20,
+            fullFormat: false,
+            json: true,
+            pathKind: "wide",
+            out int emitted,
+            out _);
+
+        Assert.Equal(0, emitted);
+        using var document = JsonDocument.Parse(output);
+        JsonElement diagnostic = Assert.Single(
+            document.RootElement.GetProperty("diagnostics").EnumerateArray());
+        Assert.Equal("invalid_path_kind", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("wide", document.RootElement.GetProperty("path_kind").GetString());
+    }
+
+    [Fact]
+    public void Path_NullKindDefaultsToCallAndClampsBounds()
+    {
+        var index = BuildSymbolIndex(
+            [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 2)],
+            [("a", "b")]);
+
+        string output = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "path",
+            to: "Beta",
+            depth: 0,
+            limit: 0,
+            fullFormat: false,
+            json: true,
+            pathKind: null,
+            out int emitted,
+            out _);
+
+        Assert.Equal(1, emitted);
+        using var document = JsonDocument.Parse(output);
+        Assert.Equal("call", document.RootElement.GetProperty("path_kind").GetString());
+        Assert.Equal(1, document.RootElement.GetProperty("depth").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("limit").GetInt32());
+    }
+
+    [Fact]
     public void Path_Json_RendersStructuredPathLinks()
     {
         var index = BuildSymbolIndex(
@@ -250,6 +410,7 @@ public sealed class TraceToolTests
         using var doc = JsonDocument.Parse(json);
         JsonElement root = doc.RootElement;
         Assert.Equal("path", root.GetProperty("mode").GetString());
+        Assert.Equal("call", root.GetProperty("path_kind").GetString());
         Assert.Equal("Gamma", root.GetProperty("to").GetString());
         Assert.Equal("Gamma", root.GetProperty("resolved_to").GetProperty("name").GetString());
         Assert.Equal(2, root.GetProperty("hops").GetInt32());
@@ -262,6 +423,9 @@ public sealed class TraceToolTests
         Assert.Equal("a", links[0].GetProperty("source").GetString());
         Assert.Equal("b", links[0].GetProperty("target").GetString());
         Assert.Equal("dependency_path", links[0].GetProperty("kind").GetString());
+        Assert.Equal("calls", links[0].GetProperty("edge_kind").GetString());
+        Assert.Equal(1.0, links[0].GetProperty("confidence").GetDouble());
+        Assert.Equal("relationship", links[0].GetProperty("provenance").GetString());
         Assert.Equal(1, links[0].GetProperty("hop").GetInt32());
     }
 
@@ -314,14 +478,15 @@ public sealed class TraceToolTests
         JsonElement diagnostic = Assert.Single(root.GetProperty("diagnostics").EnumerateArray());
         Assert.Equal("no_path", diagnostic.GetProperty("code").GetString());
         JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
-        Assert.Equal(3, actions.Length);
+        Assert.Equal(4, actions.Length);
         Assert.Equal("trace", actions[0].GetProperty("tool").GetString());
         Assert.Equal("Alpha", actions[0].GetProperty("args").GetProperty("target").GetString());
         Assert.Equal("refs", actions[0].GetProperty("args").GetProperty("mode").GetString());
         Assert.Contains("source endpoint", actions[0].GetProperty("reason").GetString());
-        Assert.Equal("search", actions[2].GetProperty("tool").GetString());
-        Assert.Equal("Alpha Gamma", actions[2].GetProperty("args").GetProperty("query").GetString());
-        Assert.Equal("source", actions[2].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("dependency", actions[2].GetProperty("args").GetProperty("path_kind").GetString());
+        Assert.Equal("search", actions[3].GetProperty("tool").GetString());
+        Assert.Equal("Alpha Gamma", actions[3].GetProperty("args").GetProperty("query").GetString());
+        Assert.Equal("source", actions[3].GetProperty("args").GetProperty("mode").GetString());
     }
 
     [Fact]
@@ -364,13 +529,14 @@ public sealed class TraceToolTests
         Assert.Equal(0, emitted);
         using var doc = JsonDocument.Parse(json);
         JsonElement[] actions = doc.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
-        Assert.Equal(4, actions.Length);
+        Assert.Equal(5, actions.Length);
         Assert.Equal("trace", actions[2].GetProperty("tool").GetString());
         Assert.Equal("path", actions[2].GetProperty("args").GetProperty("mode").GetString());
         Assert.Equal("2", actions[2].GetProperty("args").GetProperty("depth").GetString());
-        Assert.Equal("search", actions[3].GetProperty("tool").GetString());
-        Assert.Equal("Alpha Gamma", actions[3].GetProperty("args").GetProperty("query").GetString());
-        Assert.Equal("source", actions[3].GetProperty("args").GetProperty("mode").GetString());
+        Assert.Equal("dependency", actions[3].GetProperty("args").GetProperty("path_kind").GetString());
+        Assert.Equal("search", actions[4].GetProperty("tool").GetString());
+        Assert.Equal("Alpha Gamma", actions[4].GetProperty("args").GetProperty("query").GetString());
+        Assert.Equal("source", actions[4].GetProperty("args").GetProperty("mode").GetString());
     }
 
     [Fact]

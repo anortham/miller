@@ -3,7 +3,8 @@
 `miller trace <target> --json` and MCP `trace(format="json")` return structured trace data for the same three
 trace modes as compact output:
 
-- `mode=path`: shortest dependency path from `target` to `to`.
+- `mode=path`: shortest call-like path from `target` to `to`; `path_kind=dependency` /
+  `--path-kind dependency` explicitly opts into all dependency-edge kinds.
 - `mode=refs`: exact target-resolved references with unresolved name fallback kept separate.
 - `mode=bridge`: provider-scoped cross-language bridge links.
 
@@ -70,13 +71,25 @@ Example `next_actions` row:
 
 - `resolved_target`: source symbol object.
 - `resolved_to`: destination symbol object.
+- `path_kind`: normalized applied path filter (`call` or `dependency`); an invalid request echoes its normalized
+  value alongside `invalid_path_kind`.
 - `hops`: full shortest-path hop count, or `null` when no path is available.
 - `nodes`: path symbols in order, truncated by `limit`.
-- `links`: ordered `dependency_path` links between adjacent rendered path nodes.
+- `links`: ordered evidence-bearing links between adjacent rendered path nodes. The v1 compatibility field
+  `kind` remains `dependency_path`; additive `edge_kind` carries the extractor relationship kind. Each link also
+  carries `source`, `target`, numeric `confidence`, `provenance`, and one-based `hop`.
 
-A `no_path` diagnostic means Miller found no extracted dependency-graph path within the requested `depth`; it is
-not proof that the symbols are unrelated. `next_actions` points at refs/source search and, for very shallow depth,
-at one bounded depth bump.
+The default `path_kind=call` admits `calls`, `call`, `invokes`, and `instantiates` edges. It excludes imports,
+type-only uses, inheritance, and other broad dependencies so the result is not mislabeled as a call path.
+`path_kind=dependency` admits every extracted graph edge while preserving its actual kind, confidence, and
+provenance on each hop.
+
+`path_kind=call` is independent of refs-mode `reference_kind=call`: the former filters graph edge kinds for a
+path, while the latter filters exact and fallback reference rows.
+
+An unknown path kind returns `invalid_path_kind`. A `no_path` diagnostic means Miller found no eligible extracted
+graph path within the requested `depth`; it is not proof that the symbols are unrelated. `next_actions` points at
+refs/source search and, for very shallow depth, at one bounded depth bump.
 
 ## References mode
 

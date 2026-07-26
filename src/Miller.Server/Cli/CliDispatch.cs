@@ -2198,7 +2198,7 @@ public static class CliDispatch
     {
         CliOptions o = CliOptions.Parse(args, "full", "json", "no-definition");
         if (string.IsNullOrWhiteSpace(o.Query))
-            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]");
+            return Usage(err, "miller trace <symbol> [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--path-kind call|dependency] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -2234,17 +2234,34 @@ public static class CliDispatch
 
             using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
             var resolver = new SmartTargetResolver(index);
-            string output = TraceTool.RunGraph(
-                index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
-                depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
-                referenceKind, includeDefinition,
-                (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
-                ctx.WorkspaceId ?? "current",
-                string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
-                    ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
-                    : null,
-                o.Value("continuation"),
-                out _, out _);
+            string output = string.Equals(mode, "path", StringComparison.OrdinalIgnoreCase)
+                ? TraceTool.RunGraph(
+                    index,
+                    graph,
+                    resolver,
+                    target: o.Query,
+                    scope: o.Value("scope"),
+                    mode: mode,
+                    to: o.Value("to"),
+                    depth: o.Int("depth", 3),
+                    limit: o.Int("limit", 20),
+                    fullFormat: o.Has("full"),
+                    json: json,
+                    pathKind: o.Value("path-kind", "call")!,
+                    out _,
+                    out _)
+                : TraceTool.RunGraph(
+                    index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
+                    depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
+                    referenceKind, includeDefinition,
+                    (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+                    ctx.WorkspaceId ?? "current",
+                    string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
+                        ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                        : null,
+                    o.Value("continuation"),
+                    out _,
+                    out _);
             outw.WriteLine(output);
             return 0;
         }
@@ -3331,7 +3348,7 @@ public static class CliDispatch
                              <symbol> | --changed-paths PATH[,PATH...] | --diff DIFF | --git [--base REF] [--staged]
                              [--workspace-id SELECTOR] [--workspace DIR] [--max-depth N] [--limit N] [--json]
           trace <symbol>     Follow exact references, a dependency path, or a cross-language bridge.
-                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]
+                             [--workspace-id SELECTOR] [--workspace DIR] [--scope FILE] [--mode refs|path|bridge] [--to SYMBOL] [--path-kind call|dependency] [--reference-kind KIND] [--no-definition] [--depth N] [--limit N] [--continuation TOKEN] [--full] [--json]
           dashboard          Start or reuse the machine-global loopback dashboard.
                              [--port N] [--json]
           workspace [op]     Index lifecycle. op = status (default) | health | onboarding | leader | list | refresh | full | open | remove | prune.

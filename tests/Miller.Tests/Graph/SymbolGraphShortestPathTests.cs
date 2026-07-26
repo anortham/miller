@@ -41,6 +41,53 @@ public sealed class SymbolGraphShortestPathTests
     }
 
     [Fact]
+    public void ShortestPathWithEvidence_filters_edges_and_preserves_provenance()
+    {
+        var graph = SymbolGraph.Build(
+            [N("a"), N("b"), N("c")],
+            [
+                new GraphEdge("a", "b", "type_usage", 0.7, "identifier"),
+                new GraphEdge("a", "c", "calls", 0.9, "relationship"),
+                new GraphEdge("c", "b", "invokes", 0.8, "identifier_target"),
+            ]);
+
+        GraphPath? path = graph.ShortestPathWithEvidence(
+            "a",
+            "b",
+            maxDepth: 3,
+            edge => edge.EdgeKind is "calls" or "invokes");
+
+        Assert.NotNull(path);
+        Assert.Equal(["a", "c", "b"], path.Nodes);
+        Assert.Equal(
+            [
+                new GraphPathEdge("a", "c", "calls", 0.9, "relationship"),
+                new GraphPathEdge("c", "b", "invokes", 0.8, "identifier_target"),
+            ],
+            path.Edges);
+    }
+
+    [Fact]
+    public void ShortestPathWithEvidence_parallel_call_edge_wins_over_type_usage()
+    {
+        var graph = SymbolGraph.Build(
+            [N("a"), N("b")],
+            [
+                new GraphEdge("a", "b", "type_usage", 1.0, "relationship"),
+                new GraphEdge("a", "b", "calls", 0.8, "identifier_target"),
+            ]);
+
+        GraphPath? path = graph.ShortestPathWithEvidence(
+            "a",
+            "b",
+            maxDepth: 1,
+            edge => edge.EdgeKind == "calls");
+
+        GraphPathEdge edge = Assert.Single(Assert.IsType<GraphPath>(path).Edges);
+        Assert.Equal("calls", edge.Kind);
+    }
+
+    [Fact]
     public void ShortestPath_same_node_yields_single_node_path_even_at_zero_depth()
     {
         var graph = SymbolGraph.Build([N("a")], []);

@@ -2818,7 +2818,11 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("Find", root.GetProperty("resolved_to").GetProperty("name").GetString());
         Assert.Contains(
             root.GetProperty("links").EnumerateArray(),
-            link => link.GetProperty("kind").GetString() == "dependency_path");
+            link =>
+                link.GetProperty("kind").GetString() == "dependency_path" &&
+                link.GetProperty("edge_kind").GetString() == "call" &&
+                link.GetProperty("confidence").GetDouble() == 1.0 &&
+                link.GetProperty("provenance").GetString() == "identifier_target");
     }
 
     [Fact]

@@ -57,7 +57,8 @@ public sealed class TraceTool
         "Follow a thread of code. mode=refs lists exact target-resolved references with enclosing symbols and " +
         "separately labels unresolved fallback evidence; JSON reference rows include exact spans plus target and " +
         "containing symbol ids for direct call-site evidence. " +
-        "mode=path finds the shortest dependency path from target to 'to'; mode=bridge follows " +
+        "mode=path finds the shortest call-like path from target to 'to' and reports kind/confidence/provenance " +
+        "per hop; path_kind=dependency opts into broad dependency edges. mode=bridge follows " +
         "provider-scoped cross-language chains (dotnet-web, nextjs, nextjs-api, nuxt, nuxt-api, vue, react, " +
         "backend-http) with a confidence band. refs may be empty for some languages; on empty, use " +
         "search mode=source for text occurrences. Reduced-confidence links are flagged [verb-unknown]/[ambiguous]; " +
@@ -74,6 +75,8 @@ public sealed class TraceTool
         string mode = "refs",
         [Description("For mode=path: the destination symbol name/id the path must reach. Ignored otherwise.")]
         string? to = null,
+        [Description("For mode=path: call (call-like edges only) or dependency (all dependency edges). Default call.")]
+        string? path_kind = "call",
         [Description("For mode=refs: optional reference kind filter: call, variable_ref, type_usage, member_access, or import.")]
         string? reference_kind = null,
         [Description("For mode=refs: include the resolved target definition in compact output and JSON nodes. Default true.")]
@@ -96,18 +99,33 @@ public sealed class TraceTool
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
-            string output = Run(context.Index, context.Resolver,
-                target, scope, mode, to, depth, limit, full,
-                json, reference_kind, include_definition,
-                (symbol, query) => ReferenceEvidenceReader.Read(context.IndexDbPath, symbol.SymbolId, query),
-                context.WorkspaceId ?? "current",
-                NormalizeMode(mode) == ModeRefs
-                    ? ReferenceEvidenceReader.ReadSnapshot(context.IndexDbPath)
-                    : null,
-                continuation,
-                out int emitted, out int nodesVisited);
-            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             string normalizedMode = NormalizeMode(mode);
+            string output = normalizedMode == ModePath
+                ? Run(
+                    context.Index,
+                    context.Resolver,
+                    target,
+                    scope,
+                    mode,
+                    to,
+                    depth,
+                    limit,
+                    full,
+                    json,
+                    path_kind,
+                    out int emitted,
+                    out int nodesVisited)
+                : Run(context.Index, context.Resolver,
+                    target, scope, mode, to, depth, limit, full,
+                    json, reference_kind, include_definition,
+                    (symbol, query) => ReferenceEvidenceReader.Read(context.IndexDbPath, symbol.SymbolId, query),
+                    context.WorkspaceId ?? "current",
+                    normalizedMode == ModeRefs
+                        ? ReferenceEvidenceReader.ReadSnapshot(context.IndexDbPath)
+                        : null,
+                    continuation,
+                    out emitted, out nodesVisited);
+            output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic =
                 emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target, to) : null;
 
@@ -123,6 +141,7 @@ public sealed class TraceTool
                 telemetry.SetMetadata("format", full ? "full" : json ? "json" : "compact");
                 telemetry.SetMetadata("has_scope", !string.IsNullOrWhiteSpace(scope));
                 telemetry.SetMetadata("has_to", !string.IsNullOrWhiteSpace(to));
+                telemetry.SetMetadata("path_kind", normalizedMode == ModePath ? path_kind : null);
                 telemetry.SetMetadata("reference_kind", string.IsNullOrWhiteSpace(reference_kind) ? null : reference_kind.Trim());
                 telemetry.SetMetadata("include_definition", include_definition);
                 telemetry.SetMetadata("depth_bucket", DepthBucket(depth));
@@ -204,6 +223,13 @@ public sealed class TraceTool
     {
         if (mode is not (ModePath or ModeRefs or ModeBridge))
             return ToolDiagnostic.Unsupported("unsupported_mode", $"Trace mode '{mode}' is not supported.");
+        if (mode == ModePath &&
+            output.Contains("path_kind must be one of", StringComparison.Ordinal))
+        {
+            return ToolDiagnostic.Unsupported(
+                "invalid_path_kind",
+                "path_kind must be one of: call, dependency.");
+        }
 
         bool ambiguous = output.Contains("Multiple candidates", StringComparison.Ordinal);
         bool unresolved =
@@ -297,6 +323,82 @@ public sealed class TraceTool
         out int emitted, out int nodesVisited) =>
         Run(index, resolver, target, scope, mode, to, depth, limit, fullFormat, json: false,
             out emitted, out nodesVisited);
+
+    public static string Run(
+        MillerRepositoryIndex index,
+        SmartTargetResolver resolver,
+        string target,
+        string? scope,
+        string mode,
+        string? to,
+        int depth,
+        int limit,
+        bool fullFormat,
+        string? pathKind,
+        out int emitted,
+        out int nodesVisited) =>
+        Run(
+            index,
+            resolver,
+            target,
+            scope,
+            mode,
+            to,
+            depth,
+            limit,
+            fullFormat,
+            json: false,
+            pathKind,
+            out emitted,
+            out nodesVisited);
+
+    public static string Run(
+        MillerRepositoryIndex index,
+        SmartTargetResolver resolver,
+        string target,
+        string? scope,
+        string mode,
+        string? to,
+        int depth,
+        int limit,
+        bool fullFormat,
+        bool json,
+        string? pathKind,
+        out int emitted,
+        out int nodesVisited)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(resolver);
+        if (!string.Equals(NormalizeMode(mode), ModePath, StringComparison.Ordinal))
+        {
+            return Run(
+                index,
+                resolver,
+                target,
+                scope,
+                mode,
+                to,
+                depth,
+                limit,
+                fullFormat,
+                json,
+                out emitted,
+                out nodesVisited);
+        }
+        return RunPath(
+            index,
+            index.Graph,
+            resolver,
+            target,
+            scope,
+            to,
+            depth,
+            limit,
+            json,
+            pathKind,
+            out emitted,
+            out nodesVisited);
+    }
 
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
@@ -440,7 +542,19 @@ public sealed class TraceTool
 
         return normalizedMode switch
         {
-            ModePath => RunPath(index, graph, resolver, target, scope, to, depth, limit, json, out emitted, out nodesVisited),
+            ModePath => RunPath(
+                index,
+                graph,
+                resolver,
+                target,
+                scope,
+                to,
+                depth,
+                limit,
+                json,
+                pathKind: "call",
+                out emitted,
+                out nodesVisited),
             ModeRefs => RunRefs(index, resolver, target, scope, depth, limit, json,
                 referenceKind, includeDefinition, readReferenceEvidence, workspaceId, snapshot, continuation,
                 out emitted, out nodesVisited),
@@ -460,6 +574,59 @@ public sealed class TraceTool
         RunGraph(index, graph, resolver, target, scope, mode, to, depth, limit, fullFormat, json,
             referenceKind: null, includeDefinition: true, readReferenceEvidence: null, out emitted, out nodesVisited);
 
+    public static string RunGraph(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string target,
+        string? scope,
+        string mode,
+        string? to,
+        int depth,
+        int limit,
+        bool fullFormat,
+        bool json,
+        string? pathKind,
+        out int emitted,
+        out int nodesVisited)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(resolver);
+        if (!string.Equals(NormalizeMode(mode), ModePath, StringComparison.Ordinal))
+        {
+            return RunGraph(
+                index,
+                graph,
+                resolver,
+                target,
+                scope,
+                mode,
+                to,
+                depth,
+                limit,
+                fullFormat,
+                json,
+                out emitted,
+                out nodesVisited);
+        }
+        if (depth < 1) depth = 1;
+        if (limit < 1) limit = 1;
+        return RunPath(
+            index,
+            graph,
+            resolver,
+            target,
+            scope,
+            to,
+            depth,
+            limit,
+            json,
+            pathKind,
+            out emitted,
+            out nodesVisited);
+    }
+
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string target, string mode, string? to, int depth, int limit, bool fullFormat,
@@ -477,16 +644,41 @@ public sealed class TraceTool
 
     private static string RunPath(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver, string target, string? scope, string? to,
-        int depth, int limit, bool json, out int emitted, out int nodesVisited)
+        int depth, int limit, bool json, string? pathKind, out int emitted, out int nodesVisited)
     {
         emitted = 0;
         nodesVisited = 0;
+        if (depth < 1) depth = 1;
+        if (limit < 1) limit = 1;
+
+        string normalizedPathKind = string.IsNullOrWhiteSpace(pathKind)
+            ? "call"
+            : pathKind.Trim().ToLowerInvariant();
+        if (normalizedPathKind is not ("call" or "dependency"))
+        {
+            const string message = "path_kind must be one of: call, dependency.";
+            return json
+                ? RenderTraceJson(
+                    ModePath,
+                    target,
+                    to,
+                    depth,
+                    limit,
+                    emitted,
+                    nodesVisited,
+                    message,
+                    "invalid_path_kind",
+                    writeExtraRootProperties: writer =>
+                        writer.WriteString("path_kind", normalizedPathKind))
+                : message;
+        }
 
         if (string.IsNullOrWhiteSpace(to))
         {
             string message = "Usage: mode=path requires 'to' (the destination symbol to find a path to).";
             return json
-                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, message, "missing_to")
+                ? RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, message, "missing_to",
+                    writeExtraRootProperties: writer => writer.WriteString("path_kind", normalizedPathKind))
                 : message;
         }
 
@@ -498,27 +690,38 @@ public sealed class TraceTool
         if (!ResolveSymbol(index, resolver, to, scope: null, out string toId, out string? toNote, out IReadOnlyList<TraceNextAction> toNextActions))
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId: null, path: null,
+                    normalizedPathKind,
                     note: toNote!, diagnosticCode: DiagnosticCode(toNote!), nextActions: toNextActions)
                 : AppendNextActions(toNote!, toNextActions);
 
-        IReadOnlyList<string>? path = graph.ShortestPath(fromId, toId, depth);
-        if (path is null)
+        bool broadDependencyPath = normalizedPathKind == "dependency";
+        GraphPath? graphPath = graph.ShortestPathWithEvidence(
+            fromId,
+            toId,
+            depth,
+            broadDependencyPath ? static _ => true : IsCallLikePathEdge);
+        if (graphPath is null)
         {
-            string message = $"No path from '{target}' to '{to}' within {depth} hop(s).";
-            IReadOnlyList<TraceNextAction> noPathNextActions = NoPathNextActions(target, to, depth);
+            string message =
+                $"No path from '{target}' to '{to}' within {depth} hop(s) using path_kind={normalizedPathKind}.";
+            IReadOnlyList<TraceNextAction> noPathNextActions =
+                NoPathNextActions(target, to, depth, normalizedPathKind);
             return json
                 ? RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path: null,
+                    normalizedPathKind,
                     note: message, diagnosticCode: "no_path", nextActions: noPathNextActions)
                 : AppendNextActions(message, noPathNextActions);
         }
 
         // The path is from..to inclusive (ShortestPath includes both endpoints). Hops = path.Count - 1.
+        IReadOnlyList<string> path = graphPath.Nodes;
         nodesVisited = path.Count;
         if (json)
         {
             int shownCount = Math.Min(path.Count, limit);
             emitted = shownCount;
-            return RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, path,
+            return RenderPathJson(index, target, to, depth, limit, emitted, nodesVisited, fromId, toId, graphPath,
+                normalizedPathKind,
                 note: shownCount < path.Count ? "path truncated by limit." : null,
                 diagnosticCode: shownCount < path.Count ? "limit_truncated" : null);
         }
@@ -534,12 +737,25 @@ public sealed class TraceTool
             string label = symbolsById.TryGetValue(path[i], out IndexedSymbol? symbol) && symbol is not null
                 ? $"{symbol.Name}  {symbol.Kind}  {symbol.FilePath}:{symbol.StartLine}"
                 : path[i];
-            sb.Append(i == 0 ? "  " : "  -> ").Append(label).Append('\n');
+            sb.Append(i == 0 ? "  " : "  -> ").Append(label);
+            if (i > 0)
+            {
+                GraphPathEdge edge = graphPath.Edges[i - 1];
+                sb.Append("  edge=").Append(edge.Kind)
+                    .Append(" confidence=").Append(edge.Confidence.ToString(
+                        "0.00",
+                        System.Globalization.CultureInfo.InvariantCulture))
+                    .Append(" provenance=").Append(edge.Source);
+            }
+            sb.Append('\n');
             shown++;
             emitted++;
         }
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static bool IsCallLikePathEdge(GraphNeighbour edge) =>
+        edge.EdgeKind.ToLowerInvariant() is "calls" or "call" or "invokes" or "instantiates";
 
     private static string RefsEmptyHint(string name, string? normalizedKind) =>
         normalizedKind is null
@@ -1873,7 +2089,11 @@ public sealed class TraceTool
             .ToArray();
     }
 
-    private static IReadOnlyList<TraceNextAction> NoPathNextActions(string target, string to, int depth)
+    private static IReadOnlyList<TraceNextAction> NoPathNextActions(
+        string target,
+        string to,
+        int depth,
+        string pathKind)
     {
         var actions = new List<TraceNextAction>(capacity: 4)
         {
@@ -1904,13 +2124,25 @@ public sealed class TraceTool
                 ("depth", (depth + 1).ToString(CultureInfo.InvariantCulture))));
         }
 
+        if (pathKind == "call")
+        {
+            actions.Add(NextAction(
+                "trace",
+                "retry with broad dependency edges; the result is not a call path",
+                ("target", target),
+                ("mode", ModePath),
+                ("to", to),
+                ("path_kind", "dependency"),
+                ("depth", depth.ToString(CultureInfo.InvariantCulture))));
+        }
+
         actions.Add(NextAction(
             "search",
             "look for text links not represented in the graph",
             ("query", $"{target} {to}"),
             ("mode", "source")));
 
-        return actions.Take(4).ToArray();
+        return actions.Take(5).ToArray();
     }
 
     private static IReadOnlyList<TraceNextAction> RefsEmptyNextActions(string target) =>
@@ -2134,7 +2366,7 @@ public sealed class TraceTool
 
     private static string RenderPathJson(
         ISymbolLookupIndex index, string target, string? to, int depth, int limit, int emitted, int nodesVisited,
-        string? fromId, string? toId, IReadOnlyList<string>? path, string? note, string? diagnosticCode,
+        string? fromId, string? toId, GraphPath? path, string pathKind, string? note, string? diagnosticCode,
         IReadOnlyList<TraceNextAction>? nextActions = null)
     {
         var ids = new List<string>();
@@ -2143,21 +2375,22 @@ public sealed class TraceTool
         if (toId is not null)
             ids.Add(toId);
         if (path is not null)
-            ids.AddRange(path);
+            ids.AddRange(path.Nodes);
 
         var symbolsById = SymbolLookupBatch.FindBySymbolIds(index, ids);
         symbolsById.TryGetValue(fromId ?? string.Empty, out IndexedSymbol? fromSymbol);
         symbolsById.TryGetValue(toId ?? string.Empty, out IndexedSymbol? toSymbol);
-        int shownCount = path is null ? 0 : Math.Min(path.Count, limit);
+        int shownCount = path is null ? 0 : Math.Min(path.Nodes.Count, limit);
 
         return RenderTraceJson(ModePath, target, to, depth, limit, emitted, nodesVisited, note, diagnosticCode,
             nextActions: nextActions,
             writeExtraRootProperties: w =>
             {
+                w.WriteString("path_kind", pathKind);
                 if (path is null)
                     w.WriteNull("hops");
                 else
-                    w.WriteNumber("hops", path.Count - 1);
+                    w.WriteNumber("hops", path.Nodes.Count - 1);
             },
             writeResolvedTarget: w => WriteSymbolOrNull(w, fromSymbol),
             writeResolvedTo: w => WriteSymbolOrNull(w, toSymbol),
@@ -2168,8 +2401,12 @@ public sealed class TraceTool
                 {
                     for (int i = 0; i < shownCount; i++)
                     {
-                        if (symbolsById.TryGetValue(path[i], out IndexedSymbol? symbol))
-                            WriteSymbolNode(w, symbol, i == 0 ? "target" : i == path.Count - 1 ? "destination" : "path", hop: i);
+                        if (symbolsById.TryGetValue(path.Nodes[i], out IndexedSymbol? symbol))
+                            WriteSymbolNode(
+                                w,
+                                symbol,
+                                i == 0 ? "target" : i == path.Nodes.Count - 1 ? "destination" : "path",
+                                hop: i);
                     }
                 }
                 w.WriteEndArray();
@@ -2182,9 +2419,13 @@ public sealed class TraceTool
                     for (int i = 1; i < shownCount; i++)
                     {
                         w.WriteStartObject();
-                        w.WriteString("source", path[i - 1]);
-                        w.WriteString("target", path[i]);
+                        GraphPathEdge edge = path.Edges[i - 1];
+                        w.WriteString("source", edge.From);
+                        w.WriteString("target", edge.To);
                         w.WriteString("kind", "dependency_path");
+                        w.WriteString("edge_kind", edge.Kind);
+                        w.WriteNumber("confidence", edge.Confidence);
+                        w.WriteString("provenance", edge.Source);
                         w.WriteNumber("hop", i);
                         w.WriteEndObject();
                     }
