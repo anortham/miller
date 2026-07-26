@@ -2480,6 +2480,24 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Context_ZeroBudgetWritesNoBytes()
+    {
+        var (compactCode, compactOut, compactErr) = Run(
+            ["context", "GetUser", "--token-budget", "0"],
+            Context(Path.Combine(_dir, "missing.db"), _dir));
+        var (jsonCode, jsonOut, jsonErr) = Run(
+            ["context", "GetUser", "--token-budget", "-1", "--json"],
+            Context(Path.Combine(_dir, "missing.db"), _dir));
+
+        Assert.Equal(0, compactCode);
+        Assert.Empty(compactOut);
+        Assert.Empty(compactErr);
+        Assert.Equal(0, jsonCode);
+        Assert.Empty(jsonOut);
+        Assert.Empty(jsonErr);
+    }
+
+    [Fact]
     public void Context_NoPivotsUsesOneTypedRecoveryChannel()
     {
         using var fx = JulieDbFixture.CreateForInspect();

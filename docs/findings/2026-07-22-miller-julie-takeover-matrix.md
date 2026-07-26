@@ -37,7 +37,7 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
-- Phase 10 Search and Inspect re-audits are locally complete with clean fresh Claude reviews.
+- Phase 10 Search, Inspect, and Context re-audits are locally complete with clean fresh Claude reviews.
 
 ## Replacement Standard
 
@@ -304,6 +304,18 @@ Keep `context`, but redesign it around a few scored pivots with bounded body sni
 ### Claude Disposition
 
 Accepted signature-only output, weak seed scoring, semantic-disconnection, adaptive-depth, and task-signal gaps. Corrected the implied “body is always better” conclusion: live telemetry already shows high response cost, so bodies must replace low-value breadth and pass tokens-to-action gates rather than simply expand output.
+
+### Phase 10 Re-audit Disposition
+
+Locally completed and fresh-Claude-reviewed 2026-07-26. Context now bounds ambiguous entry candidates,
+failing-test and stack identifier work, per-token symbol matches, and mixed .NET/Python frames. Every cap emits a
+truthful diagnostic; capped unmatched evidence cannot claim that the unexamined suffix has no match.
+
+Non-positive MCP and CLI budgets return zero bytes, compact diagnostics no longer label used ambiguous anchors as
+ignored, and Unicode bounds preserve valid surrogate pairs. `exclude_tests` is pinned to usage enrichment only,
+semantic-off behavior and authoritative-body disposition rules remain unchanged, and the conservative
+three-quarter render-selection reserve remains load-bearing. See
+[`2026-07-26-context-correctness-and-bounds.md`](2026-07-26-context-correctness-and-bounds.md).
 
 ## Tool Pass 4: `trace`
 

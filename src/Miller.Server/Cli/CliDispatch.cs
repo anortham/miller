@@ -1964,6 +1964,9 @@ public static class CliDispatch
         CliOptions o = CliOptions.Parse(args, "json", "exclude-tests");
         if (string.IsNullOrWhiteSpace(o.Query))
             return Usage(err, "miller context <query> [--workspace-id SELECTOR] [--workspace DIR] [--token-budget N] [--max-hops 0-2] [--entry-symbol NAME] [--edited-files PATHS] [--failing-test TEXT] [--stack-trace TEXT] [--reference-mode off|usage] [--reference-depth 0-1] [--exclude-tests] [--json]");
+        int tokenBudget = o.Int("token-budget", 2000);
+        if (tokenBudget <= 0)
+            return 0;
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
@@ -1977,7 +1980,6 @@ public static class CliDispatch
         string[]? editedFiles = OptionValues(o.Value("edited-files"));
         string? failingTest = o.Value("failing-test");
         string? stackTrace = o.Value("stack-trace");
-        int tokenBudget = o.Int("token-budget", 2000);
         bool json = o.Has("json");
         int selectedCount;
         int candidatesExamined;

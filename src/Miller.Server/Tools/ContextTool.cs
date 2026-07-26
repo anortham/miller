@@ -72,7 +72,7 @@ public sealed partial class ContextTool
         [Description("Hard bound on complete output in estimated tokens. Default 2000; MCP maximum 2400.")]
         int token_budget = 2000,
         [Description("Neighbour expansion radius in hops (0–2). Default 1.")] int max_hops = 1,
-        [Description("Entry symbol names or ids to rank as pivots. Optional.")] string[]? entry_symbols = null,
+        [Description("Entry symbol names, ids, or indexed file paths to rank as pivots. Optional.")] string[]? entry_symbols = null,
         [Description("A failing test name or snippet used to rank matching pivots. Optional.")]
         string? failing_test = null,
         [Description("A stack trace; file, line, and symbol evidence rank matching pivots. Optional.")]
@@ -95,7 +95,7 @@ public sealed partial class ContextTool
         try
         {
             if (token_budget <= 0)
-                return json ? "{}" : string.Empty;
+                return string.Empty;
 
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
@@ -108,11 +108,11 @@ public sealed partial class ContextTool
             int selectedCount;
             int candidatesExamined;
             string output;
+            ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
             IReadOnlyList<ContextSemanticSeed> semanticSeeds = LoadSemanticSeeds(
                 context,
                 query,
-                exclude_tests);
-            ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
+                parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
             switch (parsedReferenceMode)
             {
                 case ReferenceMode.Off:
@@ -265,6 +265,10 @@ public sealed partial class ContextTool
     }
 
     private const int SearchSeedLimit = 10;
+    internal const int AnchorAmbiguousMatchLimit = 10;
+    internal const int AnchorIdentifierTokenLimit = 24;
+    internal const int AnchorMatchesPerToken = 6;
+    internal const int AnchorStackFrameLimit = 24;
     private const int NoRetrievalRank = int.MaxValue;
     private const int ReachCap = 500;
     internal const int ReferenceRowsPerSymbol = 12;
@@ -898,8 +902,16 @@ public sealed partial class ContextTool
                             pinned: true);
                         break;
                     case TargetResolution.Candidates ambiguous:
-                        diagnostics.Add(new ContextAnchorDiagnostic("entry_symbol", entry, "ambiguous"));
-                        foreach (IndexedSymbol match in ambiguous.Matches)
+                        IndexedSymbol[] ambiguousMatches = ambiguous.Matches
+                            .Take(AnchorAmbiguousMatchLimit + 1)
+                            .ToArray();
+                        diagnostics.Add(new ContextAnchorDiagnostic(
+                            "entry_symbol",
+                            entry,
+                            ambiguousMatches.Length > AnchorAmbiguousMatchLimit
+                                ? "ambiguous_truncated"
+                                : "ambiguous"));
+                        foreach (IndexedSymbol match in ambiguousMatches.Take(AnchorAmbiguousMatchLimit))
                             AddSignal(match, NoRetrievalRank, 0, 70, "ambiguous_entry_symbol");
                         break;
                     case TargetResolution.File file:
@@ -941,20 +953,29 @@ public sealed partial class ContextTool
             }
         }
 
-        bool failingTestMatched = false;
-        foreach (string token in ExtractIdentifierTokens(failingTest))
+        IReadOnlyList<IndexedSymbol> failingTestMatches =
+            FindNamedAnchorCandidates(index, failingTest, out bool failingTestTruncated);
+        bool failingTestMatched = failingTestMatches.Count > 0;
+        foreach (IndexedSymbol match in failingTestMatches)
         {
-            foreach (IndexedSymbol match in index.FindByName(token).Where(static symbol => IsQueryPivot(symbol)))
-            {
-                failingTestMatched = true;
-                AddSignal(match, NoRetrievalRank, 0, 80, "failing_test");
-            }
+            AddSignal(match, NoRetrievalRank, 0, 80, "failing_test");
         }
-        if (!string.IsNullOrWhiteSpace(failingTest) && !failingTestMatched)
+        if (failingTestTruncated)
+        {
+            diagnostics.Add(new ContextAnchorDiagnostic(
+                "failing_test",
+                failingTest!,
+                failingTestMatched ? "truncated" : "no_symbol_match_truncated"));
+        }
+        else if (!string.IsNullOrWhiteSpace(failingTest) && !failingTestMatched)
+        {
             diagnostics.Add(new ContextAnchorDiagnostic("failing_test", failingTest, "no_symbol_match"));
+        }
 
         bool stackMatched = false;
-        foreach ((string file, int line) in ParseStackFrames(stackTrace))
+        IReadOnlyList<(string File, int Line)> stackFrames =
+            ParseStackFrames(stackTrace, out bool stackFramesTruncated);
+        foreach ((string file, int line) in stackFrames)
         {
             string? resolvedPath = index.ResolveIndexedFilePath(file);
             IReadOnlyList<IndexedSymbol> matches = resolvedPath is null
@@ -976,16 +997,34 @@ public sealed partial class ContextTool
                     lineDistance: LineDistance(match, line));
             }
         }
-        foreach (string token in ExtractIdentifierTokens(stackTrace))
+        IReadOnlyList<IndexedSymbol> stackSymbolMatches =
+            FindNamedAnchorCandidates(index, stackTrace, out bool stackSymbolsTruncated);
+        foreach (IndexedSymbol match in stackSymbolMatches)
         {
-            foreach (IndexedSymbol match in index.FindByName(token).Where(static symbol => IsQueryPivot(symbol)))
-            {
-                stackMatched = true;
-                AddSignal(match, NoRetrievalRank, 0, 90, "stack_symbol");
-            }
+            stackMatched = true;
+            AddSignal(match, NoRetrievalRank, 0, 90, "stack_symbol");
         }
-        if (!string.IsNullOrWhiteSpace(stackTrace) && !stackMatched)
+        if (stackFramesTruncated)
+        {
+            diagnostics.Add(new ContextAnchorDiagnostic(
+                "stack_trace",
+                stackTrace!,
+                stackMatched ? "frames_truncated" : "no_frame_match_truncated"));
+        }
+        if (stackSymbolsTruncated)
+        {
+            diagnostics.Add(new ContextAnchorDiagnostic(
+                "stack_trace",
+                stackTrace!,
+                stackMatched ? "symbols_truncated" : "no_symbol_match_truncated"));
+        }
+        if (!string.IsNullOrWhiteSpace(stackTrace) &&
+            !stackMatched &&
+            !stackFramesTruncated &&
+            !stackSymbolsTruncated)
+        {
             diagnostics.Add(new ContextAnchorDiagnostic("stack_trace", stackTrace, "no_frame_match"));
+        }
 
         if (semanticSeeds is not null)
         {
@@ -1195,21 +1234,25 @@ public sealed partial class ContextTool
             Math.Abs(line - Math.Max(symbol.StartLine, symbol.EndLine)));
     }
 
-    private static IEnumerable<(string File, int Line)> ParseStackFrames(string? stackTrace)
+    internal static IReadOnlyList<(string File, int Line)> ParseStackFrames(
+        string? stackTrace,
+        out bool truncated)
     {
         string text = stackTrace ?? string.Empty;
-        foreach (Match frame in StackFramePattern().Matches(text))
-        {
-            yield return (
+        Match[] frames = StackFramePattern().Matches(text).Cast<Match>()
+            .Concat(PythonStackFramePattern().Matches(text).Cast<Match>())
+            .OrderBy(static frame => frame.Index)
+            .Take(AnchorStackFrameLimit + 1)
+            .ToArray();
+        truncated = frames.Length > AnchorStackFrameLimit;
+        return frames
+            .Take(AnchorStackFrameLimit)
+            .Select(static frame => (
                 frame.Groups["file"].Value,
-                int.Parse(frame.Groups["line"].Value, System.Globalization.CultureInfo.InvariantCulture));
-        }
-        foreach (Match frame in PythonStackFramePattern().Matches(text))
-        {
-            yield return (
-                frame.Groups["file"].Value,
-                int.Parse(frame.Groups["line"].Value, System.Globalization.CultureInfo.InvariantCulture));
-        }
+                int.Parse(
+                    frame.Groups["line"].Value,
+                    System.Globalization.CultureInfo.InvariantCulture)))
+            .ToArray();
     }
 
     private static IReadOnlyList<Candidate> AttachPivotBodies(
@@ -1531,6 +1574,35 @@ public sealed partial class ContextTool
             if (token.Length >= 2 && seen.Add(token))
                 yield return token;
         }
+    }
+
+    internal static IReadOnlyList<IndexedSymbol> FindNamedAnchorCandidates(
+        ISymbolLookupIndex index,
+        string? hint,
+        out bool truncated)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        var matches = new List<IndexedSymbol>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string[] tokens = ExtractIdentifierTokens(hint)
+            .Take(AnchorIdentifierTokenLimit + 1)
+            .ToArray();
+        truncated = tokens.Length > AnchorIdentifierTokenLimit;
+        foreach (string token in tokens.Take(AnchorIdentifierTokenLimit))
+        {
+            IndexedSymbol[] tokenMatches = index.FindByName(token)
+                .Where(static symbol => IsQueryPivot(symbol))
+                .Take(AnchorMatchesPerToken + 1)
+                .ToArray();
+            if (tokenMatches.Length > AnchorMatchesPerToken)
+                truncated = true;
+            foreach (IndexedSymbol match in tokenMatches.Take(AnchorMatchesPerToken))
+            {
+                if (seen.Add(match.SymbolId))
+                    matches.Add(match);
+            }
+        }
+        return matches;
     }
 
     [GeneratedRegex("[A-Za-z_][A-Za-z0-9_]*", RegexOptions.CultureInvariant)]
@@ -2113,7 +2185,7 @@ public sealed partial class ContextTool
         if (diagnostics.Count == 0)
             return;
 
-        builder.Append("## ignored anchors\n");
+        builder.Append("## anchor diagnostics\n");
         foreach (ContextAnchorDiagnostic diagnostic in diagnostics)
         {
             string value = Truncate(
@@ -2194,6 +2266,21 @@ public sealed partial class ContextTool
         writer.WriteEndObject();
     }
 
-    internal static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..(max - 1)] + "…";
+    internal static string Truncate(string value, int max)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (max < 1)
+            return string.Empty;
+        if (value.Length <= max)
+            return value;
+
+        int prefixLength = max - 1;
+        if (prefixLength > 0 &&
+            char.IsHighSurrogate(value[prefixLength - 1]) &&
+            char.IsLowSurrogate(value[prefixLength]))
+        {
+            prefixLength--;
+        }
+        return value[..prefixLength] + "…";
+    }
 }

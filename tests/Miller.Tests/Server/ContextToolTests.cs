@@ -1476,6 +1476,108 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_CompactLabelsAmbiguousUsedAnchorsAsDiagnostics()
+    {
+        IndexedSymbol[] matches = Enumerable.Range(0, 20)
+            .Select(i => new IndexedSymbol(
+                i,
+                (10_000 + i).ToString("x32"),
+                "Run",
+                "void Run()",
+                "method",
+                "csharp",
+                $"src/Run{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(matches);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            entry_symbols: ["Run"]);
+
+        Assert.Contains("## anchor diagnostics", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("## ignored anchors", output, StringComparison.Ordinal);
+        Assert.Contains("reason=ambiguous_truncated", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_CompactReportsExactAmbiguousLimitWithoutTruncation()
+    {
+        IndexedSymbol[] matches = Enumerable.Range(0, ContextTool.AnchorAmbiguousMatchLimit)
+            .Select(i => new IndexedSymbol(
+                i,
+                (11_000 + i).ToString("x32"),
+                "Run",
+                "void Run()",
+                "method",
+                "csharp",
+                $"src/Run{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(matches);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            entry_symbols: ["Run"]);
+
+        Assert.Contains("reason=ambiguous", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("reason=ambiguous_truncated", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_JsonReportsTruncatedFailingTestAnchors()
+    {
+        IndexedSymbol[] symbols = Enumerable.Range(0, 30)
+            .Select(i => new IndexedSymbol(
+                i,
+                (20_000 + i).ToString("x32"),
+                $"Failure{i}",
+                $"void Failure{i}()",
+                "method",
+                "csharp",
+                $"tests/Failure{i}.cs",
+                1,
+                2,
+                null,
+                true))
+            .ToArray();
+        var index = MillerRepositoryIndex.Build(symbols);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            failing_test: string.Join(' ', symbols.Select(static symbol => symbol.Name)),
+            format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        Assert.Contains(
+            document.RootElement.GetProperty("anchor_diagnostics").EnumerateArray(),
+            diagnostic =>
+                diagnostic.GetProperty("kind").GetString() == "failing_test" &&
+                diagnostic.GetProperty("reason").GetString() == "truncated");
+    }
+
+    [Fact]
     public void Context_EmptyAfterIgnoredAnchorIncludesRecoveryAction()
     {
         var (index, _) = BuildFixture();
@@ -1608,7 +1710,7 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void Context_ZeroJsonBudgetReturnsCanonicalEmptyObject()
+    public void Context_ZeroJsonBudgetReturnsNoBytes()
     {
         var (index, _) = BuildFixture();
         string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
@@ -1622,7 +1724,24 @@ public sealed class ContextToolTests
             entry_symbols: ["OrderService"],
             format: "json");
 
-        Assert.Equal("{}", output);
+        Assert.Empty(output);
+    }
+
+    [Fact]
+    public void Context_ZeroCompactBudgetReturnsNoBytes()
+    {
+        var (index, _) = BuildFixture();
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context(
+            "order processing",
+            token_budget: 0,
+            entry_symbols: ["OrderService"]);
+
+        Assert.Empty(output);
     }
 
     [Fact]
@@ -1709,7 +1828,7 @@ public sealed class ContextToolTests
     }
 
     [Fact]
-    public void Context_SemanticSeedsRespectTestPaths()
+    public void Context_ExcludeTestsDoesNotChangeReferenceModeOff()
     {
         var symbol = new IndexedSymbol(
             0,
@@ -1739,7 +1858,322 @@ public sealed class ContextToolTests
             format: "json");
 
         using var document = JsonDocument.Parse(output);
+        Assert.Contains(
+            document.RootElement.GetProperty("bundle").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "PathOnlyTest");
+        Assert.Equal(1, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void Context_ExcludeTestsFiltersSemanticSeedsInUsageMode()
+    {
+        var symbol = new IndexedSymbol(
+            0,
+            "00000000000000000000000000000303",
+            "PathOnlyTest",
+            "class PathOnlyTest",
+            "class",
+            "csharp",
+            "tests/PathOnlyTest.cs",
+            1,
+            20,
+            null,
+            IsTest: false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var arm = new RecordingContextSemanticArm(
+            new SemanticQueryResult(
+                [new SemanticHit(symbol.SymbolId, null, symbol.FilePath, 1, 0.91)],
+                UnavailableReason: null));
+        var tool = new ContextTool(provider, arm, new VectorSidecar(SemanticMode.On));
+
+        string output = tool.Context(
+            "durable persistence boundary",
+            exclude_tests: true,
+            format: "json",
+            reference_mode: "usage");
+
+        using var document = JsonDocument.Parse(output);
         Assert.Empty(document.RootElement.GetProperty("bundle").EnumerateArray());
+        Assert.Equal(1, arm.SymbolCalls);
+    }
+
+    [Fact]
+    public void NamedAnchorCandidatesBoundTokensAndMatches()
+    {
+        IndexedSymbol[] uniqueSymbols = Enumerable.Range(0, 100)
+            .Select(i => new IndexedSymbol(
+                i,
+                (200 + i).ToString("x32"),
+                $"Token{i}",
+                $"void Token{i}()",
+                "method",
+                "csharp",
+                $"src/Token{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var uniqueIndex = MillerRepositoryIndex.Build(uniqueSymbols);
+        string manyTokens = string.Join(' ', uniqueSymbols.Select(static symbol => symbol.Name));
+
+        IReadOnlyList<IndexedSymbol> tokenBound =
+            ContextTool.FindNamedAnchorCandidates(uniqueIndex, manyTokens, out bool tokensTruncated);
+
+        Assert.Equal(ContextTool.AnchorIdentifierTokenLimit, tokenBound.Count);
+        Assert.True(tokensTruncated);
+
+        IndexedSymbol[] homonyms = Enumerable.Range(0, 20)
+            .Select(i => new IndexedSymbol(
+                i,
+                (500 + i).ToString("x32"),
+                "Run",
+                "void Run()",
+                "method",
+                "csharp",
+                $"src/Run{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var homonymIndex = MillerRepositoryIndex.Build(homonyms);
+
+        IReadOnlyList<IndexedSymbol> matchBound =
+            ContextTool.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
+
+        Assert.Equal(ContextTool.AnchorMatchesPerToken, matchBound.Count);
+        Assert.True(matchesTruncated);
+    }
+
+    [Fact]
+    public void NamedAnchorCandidates_ExactBoundsAreNotTruncated()
+    {
+        IndexedSymbol[] uniqueSymbols = Enumerable.Range(0, ContextTool.AnchorIdentifierTokenLimit)
+            .Select(i => new IndexedSymbol(
+                i,
+                (700 + i).ToString("x32"),
+                $"Token{i}",
+                $"void Token{i}()",
+                "method",
+                "csharp",
+                $"src/Token{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var uniqueIndex = MillerRepositoryIndex.Build(uniqueSymbols);
+
+        IReadOnlyList<IndexedSymbol> tokenBound = ContextTool.FindNamedAnchorCandidates(
+            uniqueIndex,
+            string.Join(' ', uniqueSymbols.Select(static symbol => symbol.Name)),
+            out bool tokensTruncated);
+
+        Assert.Equal(ContextTool.AnchorIdentifierTokenLimit, tokenBound.Count);
+        Assert.False(tokensTruncated);
+
+        IndexedSymbol[] homonyms = Enumerable.Range(0, ContextTool.AnchorMatchesPerToken)
+            .Select(i => new IndexedSymbol(
+                i,
+                (800 + i).ToString("x32"),
+                "Run",
+                "void Run()",
+                "method",
+                "csharp",
+                $"src/Run{i}.cs",
+                1,
+                2,
+                null,
+                false))
+            .ToArray();
+        var homonymIndex = MillerRepositoryIndex.Build(homonyms);
+
+        IReadOnlyList<IndexedSymbol> matchBound =
+            ContextTool.FindNamedAnchorCandidates(homonymIndex, "Run", out bool matchesTruncated);
+
+        Assert.Equal(ContextTool.AnchorMatchesPerToken, matchBound.Count);
+        Assert.False(matchesTruncated);
+    }
+
+    [Fact]
+    public void ParseStackFrames_BoundsFrameAnchors()
+    {
+        string stackTrace = string.Join(
+            '\n',
+            Enumerable.Range(1, 100).Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
+
+        IReadOnlyList<(string File, int Line)> frames =
+            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+
+        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.Equal(("src/File1.cs", 1), frames[0]);
+        Assert.True(truncated);
+    }
+
+    [Fact]
+    public void ParseStackFrames_ExactFrameLimitIsNotTruncated()
+    {
+        string stackTrace = string.Join(
+            '\n',
+            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit)
+                .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
+
+        IReadOnlyList<(string File, int Line)> frames =
+            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+
+        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public void ParseStackFrames_PythonFrameAfterDotnetLimitReportsTruncation()
+    {
+        string dotnetFrames = string.Join(
+            '\n',
+            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit)
+                .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
+        string stackTrace = dotnetFrames + "\nFile \"src/python_file.py\", line 25";
+
+        IReadOnlyList<(string File, int Line)> frames =
+            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+
+        Assert.Equal(ContextTool.AnchorStackFrameLimit, frames.Count);
+        Assert.True(truncated);
+    }
+
+    [Fact]
+    public void ParseStackFrames_PreservesMixedLanguageTextOrder()
+    {
+        string stackTrace =
+            "File \"src/first.py\", line 4\n" +
+            "at Run (src/second.cs:8)\n" +
+            "File \"src/third.py\", line 12";
+
+        IReadOnlyList<(string File, int Line)> frames =
+            ContextTool.ParseStackFrames(stackTrace, out bool truncated);
+
+        Assert.Equal(
+            [("src/first.py", 4), ("src/second.cs", 8), ("src/third.py", 12)],
+            frames);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public void Context_CompactReportsTruncatedStackAnchorsWithoutClaimingNoMatch()
+    {
+        var index = MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>());
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+        string stackTrace = string.Join(
+            '\n',
+            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit + 1)
+                .Select(i => $"at Unknown{i} (src/Missing{i}.cs:{i})"));
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            stack_trace: stackTrace);
+
+        Assert.Contains("reason=no_frame_match_truncated", output, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"reason=no_frame_match(?:\r?\n|$)", output);
+    }
+
+    [Fact]
+    public void Context_CompactReportsMatchedTruncatedStackAnchors()
+    {
+        var symbol = new IndexedSymbol(
+            0,
+            "00000000000000000000000000000404",
+            "Run1",
+            "void Run1()",
+            "method",
+            "csharp",
+            "src/File1.cs",
+            1,
+            2,
+            null,
+            false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+        string stackTrace = string.Join(
+            '\n',
+            Enumerable.Range(1, ContextTool.AnchorStackFrameLimit + 1)
+                .Select(i => $"at Run{i} (src/File{i}.cs:{i})"));
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            stack_trace: stackTrace);
+
+        Assert.Contains("reason=frames_truncated", output, StringComparison.Ordinal);
+        Assert.Contains("reason=symbols_truncated", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Context_CompactReportsTruncatedFailingTestWithoutClaimingCompleteNoMatch()
+    {
+        var index = MillerRepositoryIndex.Build(Array.Empty<IndexedSymbol>());
+        string root = Path.Combine(Path.GetTempPath(), "miller-context-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "context.db", "context-ws", root));
+        var tool = new ContextTool(provider);
+        string failingTest = string.Join(' ', Enumerable.Range(1, 30).Select(i => $"Unknown{i}"));
+
+        string output = tool.Context(
+            string.Empty,
+            max_hops: 0,
+            failing_test: failingTest);
+
+        Assert.Contains("reason=no_symbol_match_truncated", output, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"reason=no_symbol_match(?:\r?\n|$)", output);
+    }
+
+    [Fact]
+    public void ExtractIdentifierTokens_DeduplicatesBeforeAnchorLimit()
+    {
+        string hint = string.Join(' ', Enumerable.Repeat("Repeated Unique", 30));
+
+        string[] tokens = ContextTool.ExtractIdentifierTokens(hint).ToArray();
+
+        Assert.Equal(["Repeated", "Unique"], tokens);
+    }
+
+    [Fact]
+    public void Truncate_DoesNotSplitSurrogatePairs()
+    {
+        string output = ContextTool.Truncate("abc😀xyz", 5);
+
+        Assert.Equal("abc…", output);
+        Assert.DoesNotContain(output.EnumerateRunes(), static rune => rune.Value == 0xFFFD);
+    }
+
+    [Fact]
+    public void Truncate_NonPositiveLimitReturnsEmpty()
+    {
+        Assert.Empty(ContextTool.Truncate("value", -1));
+        Assert.Empty(ContextTool.Truncate(string.Empty, 0));
+        Assert.Empty(ContextTool.Truncate("value", 0));
+    }
+
+    [Fact]
+    public void Truncate_OneCharacterLimitReturnsEllipsis()
+    {
+        Assert.Equal("…", ContextTool.Truncate("value", 1));
+    }
+
+    [Fact]
+    public void Truncate_SurrogatePairAtStartReturnsOnlyEllipsis()
+    {
+        Assert.Equal("…", ContextTool.Truncate("😀x", 2));
     }
 
     [Fact]

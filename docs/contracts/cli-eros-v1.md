@@ -279,13 +279,17 @@ without deletion. The JSON `result` vocabulary is `removed`, `not_found`, `refus
 
 `miller context <query> --json` returns ranked `symbol` pivots and neighbours with `role`, `reason`, and
 `confidence`, plus a top-level evidence `disposition`. `--entry-symbol`, `--edited-files`, `--failing-test`, and
-`--stack-trace` add task evidence to pivot ranking. Ignored or ambiguous evidence appears in
-`anchor_diagnostics`; an empty or insufficient result includes `next_actions`.
+`--stack-trace` add task evidence to pivot ranking. Unresolved, ambiguous, or capped evidence appears in
+`anchor_diagnostics`; an empty or insufficient result includes `next_actions`. A non-positive token budget
+returns no bytes with or without `--json`. The context-specific contract, including CLI/MCP option mapping,
+anchor work caps, and disposition rules, is
+defined in [`context-json-v1.md`](context-json-v1.md).
 
 `miller context <query> --reference-mode usage --json` keeps the same `bundle` array and adds mixed item types:
 `implementation`, `identifier`, and `content_chunk`. Each item includes `reason` and `confidence`;
 `confidence=name_based` means the identifier came from a same-name row and is a possible reference, not a
-resolved target-symbol edge.
+resolved target-symbol edge. `--exclude-tests` filters only this usage enrichment; it does not alter pivot
+selection when reference mode is off.
 
 Telemetry JSONL fields:
 
