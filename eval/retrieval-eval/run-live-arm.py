@@ -22,9 +22,9 @@ Every corpus root must already be indexed (`miller workspace open --path <root> 
 hybrid, and production evaluation also require a converged vector artifact (run a
 `MILLER_SEMANTIC=on miller serve` round in the root until `vectors.db` reports completed==target
 for both lanes). Lexical evaluation sets `MILLER_SEMANTIC=off`; all other arms set it on. A
-production query whose repo has no serving vector artifact still answers lexically, exactly as the
-live server would. The runner disables randomized canary assignment and clears any model override,
-so the production arm uses the binary's pinned default deterministically.
+fixed forced-hybrid preflight proves every mapped corpus can serve semantic retrieval before the
+runner reads the query set. The runner disables randomized canary assignment and clears any model
+override, so the production arm uses the binary's pinned default deterministically.
 
 One results row is written per query — an empty `ranked` list is the arm's honest "nothing shown"
 (what the negatives metric needs), never a silently missing row. A miller invocation that FAILS
@@ -42,6 +42,8 @@ import time
 
 SEARCH_MODES = ("auto", "symbol", "file", "content", "source")
 FORCED_ARM_SEARCH_MODES = ("auto", "symbol", "file")
+POLICY_VERSION = 2
+SEMANTIC_PREFLIGHT_QUERY = "semantic retrieval preflight"
 
 
 def read_queries(path):
@@ -102,6 +104,23 @@ def run_search(binary, root, query, search_mode, limit, arm):
     return json.loads(completed.stdout), duration_ms
 
 
+def preflight_semantic_corpora(binary, roots, arm):
+    if arm == "lexical":
+        return
+    for repo, root in sorted(roots.items()):
+        try:
+            run_search(
+                binary,
+                root,
+                SEMANTIC_PREFLIGHT_QUERY,
+                "auto",
+                1,
+                "hybrid",
+            )
+        except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+            sys.exit(f"semantic preflight failed for corpus '{repo}': {error}")
+
+
 def ranked_docs(rows, limit):
     ranked = []
     seen = set()
@@ -128,7 +147,8 @@ def main():
                     default="production")
     ap.add_argument("--repo", help="run only query rows for this repo; useful for staged corpus replay")
     ap.add_argument("--latency-out", type=pathlib.Path,
-                    help="optional JSONL of per-query CLI wall time; contains query_id, arm, duration_ms")
+                    help="optional JSONL of per-query CLI wall time; contains query_id, arm, "
+                    "policy_version, duration_ms")
     args = ap.parse_args()
 
     roots = {}
@@ -139,6 +159,8 @@ def main():
         if not pathlib.Path(root).is_dir():
             sys.exit(f"corpus root for '{repo}' is not a directory: {root}")
         roots[repo] = root
+
+    preflight_semantic_corpora(str(args.binary), roots, args.arm)
 
     queries = read_queries(args.queries)
     if args.repo:
@@ -165,11 +187,16 @@ def main():
             except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as error:
                 sys.exit(f"[{index}/{len(queries)}] {query['query_id']}: {error}")
             out.write(json.dumps(
-                {"query_id": query["query_id"], "ranked": ranked_docs(rows, args.limit)},
+                {
+                    "query_id": query["query_id"],
+                    "policy_version": POLICY_VERSION,
+                    "ranked": ranked_docs(rows, args.limit),
+                },
                 separators=(",", ":")) + "\n")
             latency_rows.append({
                 "query_id": query["query_id"],
                 "arm": args.arm,
+                "policy_version": POLICY_VERSION,
                 "duration_ms": duration_ms,
             })
             print(f"[{index}/{len(queries)}] {query['query_id']}: {len(rows)} rows", file=sys.stderr)

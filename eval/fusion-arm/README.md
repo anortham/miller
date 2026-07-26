@@ -82,5 +82,7 @@ docs. Output is deterministic and byte-identical across runs over identical inpu
 
 ## Parity
 
-The 5-query live parity smoke — adapter at fusion-v1 vs `miller search --arm hybrid --json` over real vectors — is
-deferred to Task 4, which produces the live lexical/semantic runs this arm consumes.
+The adapter and live runner now share semantic policy v2. Live production, semantic, and hybrid evaluation
+preflight every mapped corpus through `miller search --arm hybrid --json` before reading the query set, so a
+missing runtime or vector artifact cannot produce a plausible lexical-only score. The final 5-query rank-parity
+smoke over frozen real vectors remains an evidence gate for the lead evaluation run.

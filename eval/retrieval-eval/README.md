@@ -105,10 +105,12 @@ the query, **2** strongly relevant, **1** supporting context.
 One JSON object per line, one per query the arm ran:
 
 ```json
-{"query_id": "m-promote-1", "ranked": ["src/Miller.Indexing/FullRebuildPromotion.cs", "src/Miller.Indexing/JulieExtractRunner.cs"]}
+{"query_id": "m-promote-1", "policy_version": 2, "ranked": ["src/Miller.Indexing/FullRebuildPromotion.cs", "src/Miller.Indexing/JulieExtractRunner.cs"]}
 ```
 
 `ranked` is the arm's ordered `doc_id` list, best first, in the same `doc_id` vocabulary as the query set.
+Miller's live runner emits the integer `policy_version` on result and latency rows. The generic scorer ignores
+unknown metadata, so external arms remain compatible with the minimal `query_id` + `ranked` contract.
 
 Rules an arm must honor:
 
