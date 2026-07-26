@@ -4,6 +4,7 @@ using Xunit;
 
 namespace Miller.Tests.Conventions;
 
+[Trait("Category", "Scale")]
 public sealed class SourceTextConventionTests
 {
     [Fact]
