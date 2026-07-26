@@ -21,10 +21,12 @@ Usage:
 Every corpus root must already be indexed (`miller workspace open --path <root> --full`). Semantic,
 hybrid, and production evaluation also require a converged vector artifact (run a
 `MILLER_SEMANTIC=on miller serve` round in the root until `vectors.db` reports completed==target
-for both lanes). Lexical evaluation sets `MILLER_SEMANTIC=off`; all other arms set it on. A
-fixed forced-hybrid preflight proves every mapped corpus can serve semantic retrieval before the
-runner reads the query set. The runner disables randomized canary assignment and clears any model
-override, so the production arm uses the binary's pinned default deterministically.
+for both lanes). The runner first requires integer policy version 2 from
+`miller capabilities --json`, then a fixed forced-hybrid preflight proves every mapped corpus can
+serve semantic retrieval before the runner reads the query set. Lexical evaluation still reads the
+policy capability but performs no semantic preflight and sets `MILLER_SEMANTIC=off`; all other arms
+set it on. The runner disables randomized canary assignment and clears any model override, so the
+production arm uses the binary's pinned default deterministically.
 
 One results row is written per query — an empty `ranked` list is the arm's honest "nothing shown"
 (what the negatives metric needs), never a silently missing row. A miller invocation that FAILS
@@ -42,7 +44,6 @@ import time
 
 SEARCH_MODES = ("auto", "symbol", "file", "content", "source")
 FORCED_ARM_SEARCH_MODES = ("auto", "symbol", "file")
-POLICY_VERSION = 2
 SEMANTIC_PREFLIGHT_QUERY = "semantic retrieval preflight"
 
 
@@ -104,6 +105,28 @@ def run_search(binary, root, query, search_mode, limit, arm):
     return json.loads(completed.stdout), duration_ms
 
 
+def read_query_policy_version(binary):
+    completed = subprocess.run(
+        [binary, "capabilities", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"miller capabilities exited {completed.returncode}: "
+            f"{completed.stderr.strip()[:500]}")
+    try:
+        capabilities = json.loads(completed.stdout)
+        version = capabilities["semantic"]["query_policy_version"]
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "semantic.query_policy_version must be the integer 2") from error
+    if type(version) is not int or version != 2:
+        raise RuntimeError("semantic.query_policy_version must be the integer 2")
+    return version
+
+
 def preflight_semantic_corpora(binary, roots, arm):
     if arm == "lexical":
         return
@@ -160,6 +183,11 @@ def main():
             sys.exit(f"corpus root for '{repo}' is not a directory: {root}")
         roots[repo] = root
 
+    try:
+        policy_version = read_query_policy_version(str(args.binary))
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        sys.exit(f"policy capability check failed: {error}")
+
     preflight_semantic_corpora(str(args.binary), roots, args.arm)
 
     queries = read_queries(args.queries)
@@ -189,14 +217,14 @@ def main():
             out.write(json.dumps(
                 {
                     "query_id": query["query_id"],
-                    "policy_version": POLICY_VERSION,
+                    "policy_version": policy_version,
                     "ranked": ranked_docs(rows, args.limit),
                 },
                 separators=(",", ":")) + "\n")
             latency_rows.append({
                 "query_id": query["query_id"],
                 "arm": args.arm,
-                "policy_version": POLICY_VERSION,
+                "policy_version": policy_version,
                 "duration_ms": duration_ms,
             })
             print(f"[{index}/{len(queries)}] {query['query_id']}: {len(rows)} rows", file=sys.stderr)

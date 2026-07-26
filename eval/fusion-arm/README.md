@@ -82,7 +82,9 @@ docs. Output is deterministic and byte-identical across runs over identical inpu
 
 ## Parity
 
-The adapter and live runner now share semantic policy v2. Live production, semantic, and hybrid evaluation
-preflight every mapped corpus through `miller search --arm hybrid --json` before reading the query set, so a
-missing runtime or vector artifact cannot produce a plausible lexical-only score. The final 5-query rank-parity
-smoke over frozen real vectors remains an evidence gate for the lead evaluation run.
+The adapter and live runner now share semantic policy v2. The runner requires
+`semantic.query_policy_version: 2` from `miller capabilities --json`, then live production, semantic, and hybrid
+evaluation preflight every mapped corpus through `miller search --arm hybrid --json` before reading the query
+set. A wrong binary, missing runtime, or missing vector artifact therefore cannot produce a plausible
+lexical-only score. The final 5-query rank-parity smoke over frozen real vectors remains an evidence gate for
+the lead evaluation run.

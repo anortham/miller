@@ -109,8 +109,9 @@ One JSON object per line, one per query the arm ran:
 ```
 
 `ranked` is the arm's ordered `doc_id` list, best first, in the same `doc_id` vocabulary as the query set.
-Miller's live runner emits the integer `policy_version` on result and latency rows. The generic scorer ignores
-unknown metadata, so external arms remain compatible with the minimal `query_id` + `ranked` contract.
+Miller's live runner reads `semantic.query_policy_version` from the binary's capabilities, requires the exact
+integer `2`, and stamps that returned value on result and latency rows. The generic scorer ignores unknown
+metadata, so external arms remain compatible with the minimal `query_id` + `ranked` contract.
 
 Rules an arm must honor:
 

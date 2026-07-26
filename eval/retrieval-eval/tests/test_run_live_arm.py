@@ -44,7 +44,14 @@ class RunLiveArmTests(unittest.TestCase):
                 argv.extend(["--corpus", f"{repo}={root}"])
             if latency:
                 argv.extend(["--latency-out", str(latency_out)])
-            responses = completed if isinstance(completed, list) else [completed]
+            capability = subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps({"semantic": {"query_policy_version": 2}}),
+                stderr="",
+            )
+            responses = [capability]
+            responses.extend(completed if isinstance(completed, list) else [completed])
 
             with mock.patch.object(RUN_LIVE_ARM.sys, "argv", argv), mock.patch.object(
                 RUN_LIVE_ARM.subprocess, "run", side_effect=responses
@@ -64,6 +71,76 @@ class RunLiveArmTests(unittest.TestCase):
             )
             return result, run, result_rows, latency_rows
 
+    def test_missing_wrong_and_non_integer_policy_capability_fail_before_reading_queries(self):
+        capability_rows = [
+            ("missing", {}),
+            ("wrong", {"semantic": {"query_policy_version": 1}}),
+            ("string", {"semantic": {"query_policy_version": "2"}}),
+        ]
+        for label, capability in capability_rows:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory) / "corpus"
+                root.mkdir()
+                out = pathlib.Path(directory) / "results.jsonl"
+                argv = [
+                    "run-live-arm.py",
+                    "--queries",
+                    str(pathlib.Path(directory) / "sealed-queries.jsonl"),
+                    "--binary",
+                    "miller",
+                    "--corpus",
+                    f"miller={root}",
+                    "--out",
+                    str(out),
+                    "--arm",
+                    "lexical",
+                ]
+                completed = subprocess.CompletedProcess(
+                    [], 0, stdout=json.dumps(capability), stderr=""
+                )
+
+                with mock.patch.object(
+                    RUN_LIVE_ARM.sys, "argv", argv
+                ), mock.patch.object(
+                    RUN_LIVE_ARM, "read_queries"
+                ) as read_queries, mock.patch.object(
+                    RUN_LIVE_ARM.subprocess, "run", return_value=completed
+                ) as run, self.assertRaisesRegex(
+                    SystemExit, "semantic.query_policy_version must be the integer 2"
+                ):
+                    RUN_LIVE_ARM.main()
+
+                read_queries.assert_not_called()
+                self.assertEqual(
+                    ["miller", "capabilities", "--json"],
+                    run.call_args.args[0],
+                )
+
+    def test_binary_policy_capability_is_propagated_to_result_and_latency_rows(self):
+        queries = [
+            {
+                "query_id": "q1",
+                "query": "lexical query",
+                "repo": "miller",
+                "search_mode": "auto",
+            }
+        ]
+        completed = [
+            subprocess.CompletedProcess([], 0, stdout="[]", stderr=""),
+        ]
+
+        result, run, result_rows, latency_rows = self.run_main(
+            "lexical", queries, completed, latency=True
+        )
+
+        self.assertEqual(0, result)
+        self.assertEqual(
+            ["miller", "capabilities", "--json"],
+            run.call_args_list[0].args[0],
+        )
+        self.assertEqual(2, result_rows[0]["policy_version"])
+        self.assertEqual(2, latency_rows[0]["policy_version"])
+
     def test_production_missing_runtime_fails_before_reading_queries(self):
         self.assert_semantic_preflight_failure("semantic embedding runtime is unavailable")
 
@@ -77,6 +154,12 @@ class RunLiveArmTests(unittest.TestCase):
             queries = pathlib.Path(directory) / "sealed-queries.jsonl"
             out = pathlib.Path(directory) / "results.jsonl"
             completed = subprocess.CompletedProcess([], 1, stdout="", stderr=error)
+            capability = subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=json.dumps({"semantic": {"query_policy_version": 2}}),
+                stderr="",
+            )
             argv = [
                 "run-live-arm.py",
                 "--queries",
@@ -94,14 +177,14 @@ class RunLiveArmTests(unittest.TestCase):
             with mock.patch.object(RUN_LIVE_ARM.sys, "argv", argv), mock.patch.object(
                 RUN_LIVE_ARM, "read_queries"
             ) as read_queries, mock.patch.object(
-                RUN_LIVE_ARM.subprocess, "run", return_value=completed
+                RUN_LIVE_ARM.subprocess, "run", side_effect=[capability, completed]
             ) as run, self.assertRaisesRegex(
                 SystemExit, f"semantic preflight failed for corpus 'miller'.*{error}"
             ):
                 RUN_LIVE_ARM.main()
 
             read_queries.assert_not_called()
-            command = run.call_args.args[0]
+            command = run.call_args_list[1].args[0]
             self.assertEqual("hybrid", command[command.index("--arm") + 1])
             self.assertNotIn("sealed-queries", " ".join(command))
 
@@ -136,13 +219,13 @@ class RunLiveArmTests(unittest.TestCase):
         )
 
         self.assertEqual(0, result)
-        self.assertEqual(4, run.call_count)
-        for call in run.call_args_list[:2]:
+        self.assertEqual(5, run.call_count)
+        for call in run.call_args_list[1:3]:
             command = call.args[0]
             self.assertEqual("hybrid", command[command.index("--arm") + 1])
             self.assertNotIn("first production query", command)
             self.assertNotIn("second production query", command)
-        for call in run.call_args_list[2:]:
+        for call in run.call_args_list[3:]:
             self.assertNotIn("--arm", call.args[0])
         self.assertEqual(
             [
@@ -167,10 +250,10 @@ class RunLiveArmTests(unittest.TestCase):
         result, run, result_rows, _ = self.run_main("lexical", queries, completed)
 
         self.assertEqual(0, result)
-        run.assert_called_once()
-        command = run.call_args.args[0]
+        self.assertEqual(2, run.call_count)
+        command = run.call_args_list[1].args[0]
         self.assertEqual("lexical", command[command.index("--arm") + 1])
-        self.assertEqual("off", run.call_args.kwargs["env"]["MILLER_SEMANTIC"])
+        self.assertEqual("off", run.call_args_list[1].kwargs["env"]["MILLER_SEMANTIC"])
         self.assertEqual(2, result_rows[0]["policy_version"])
 
     def test_semantic_development_arms_preflight_before_queries(self):
@@ -189,9 +272,9 @@ class RunLiveArmTests(unittest.TestCase):
                 result, run, _, _ = self.run_main(arm, queries, [completed, completed])
 
                 self.assertEqual(0, result)
-                self.assertEqual(2, run.call_count)
-                preflight = run.call_args_list[0].args[0]
-                query = run.call_args_list[1].args[0]
+                self.assertEqual(3, run.call_count)
+                preflight = run.call_args_list[1].args[0]
+                query = run.call_args_list[2].args[0]
                 self.assertEqual("hybrid", preflight[preflight.index("--arm") + 1])
                 self.assertEqual(arm, query[query.index("--arm") + 1])
 
