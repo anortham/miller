@@ -245,7 +245,64 @@ public sealed class CanaryContentSearchTests : IDisposable
     }
 
     [Fact]
-    public void TreatmentWithTwoChunksInOneFile_CreditsOnlyTheSemanticChunk()
+    public void OneLexicalHit_StaysFirstWhileSemanticContentExpands()
+    {
+        TextContentSearchHit lexicalSource = Docs("docs/lexical.md", 2, "lexical section");
+        TextContentSearchHit semanticSource = Docs("docs/semantic.md", 7, "semantic section");
+        var index = new MaterializingContentIndex([lexicalSource], [semanticSource]);
+        var arm = ContentArm(chunks: [Chunk(semanticSource.DisplayPath, 1, semanticSource.ChunkId)]);
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>> rerank =
+            SearchTool.BuildContentRerank(
+                arm,
+                ConceptualQuery,
+                Root,
+                onConsult: null,
+                index,
+                contentKinds: null,
+                excludeTests: false,
+                filePattern: null,
+                language: null,
+                candidateLimit: 10)!;
+
+        IReadOnlyList<ContentSearchHit> result = rerank([Candidate(lexicalSource, score: 7.5)]);
+
+        Assert.Equal("docs/lexical.md", result[0].Path);
+        Assert.Contains(result, hit => hit.Path == "docs/semantic.md");
+    }
+
+    [Theory]
+    [InlineData("VectorSidecar TryOpen")]
+    [InlineData("release process")]
+    [InlineData(ConceptualQuery)]
+    public void DecisiveMultiHit_ExcludesSemanticOnlyContentForEveryHybridClass(string query)
+    {
+        TextContentSearchHit firstSource = Docs("docs/first.md", 2, "first section");
+        TextContentSearchHit secondSource = Docs("docs/second.md", 4, "second section");
+        TextContentSearchHit semanticSource = Docs("docs/semantic.md", 7, "semantic section");
+        var index = new MaterializingContentIndex([firstSource, secondSource], [semanticSource]);
+        var arm = ContentArm(chunks: [Chunk(semanticSource.DisplayPath, 1, semanticSource.ChunkId)]);
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>> rerank =
+            SearchTool.BuildContentRerank(
+                arm,
+                query,
+                Root,
+                onConsult: null,
+                index,
+                contentKinds: null,
+                excludeTests: false,
+                filePattern: null,
+                language: null,
+                candidateLimit: 10)!;
+
+        IReadOnlyList<ContentSearchHit> result = rerank(
+            [Candidate(firstSource, score: 10.0), Candidate(secondSource, score: 2.0)]);
+
+        Assert.DoesNotContain(result, hit => hit.Path == "docs/semantic.md");
+        Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public void TreatmentWithOneLexicalChunk_ProtectsItAheadOfTheSemanticChunk()
     {
         TextContentSearchHit lexical = Docs("docs/shared.md", 2, "lexical section");
         TextContentSearchHit semantic = Docs("docs/shared.md", 80, "semantic section");
@@ -255,8 +312,8 @@ public sealed class CanaryContentSearchTests : IDisposable
         SearchTool.ContentCanaryOutcome outcome = Run(index, ConceptualQuery, TreatmentWorkspace, arm);
 
         Assert.True(
-            outcome.Result.Output.IndexOf("semantic section", StringComparison.Ordinal) <
-            outcome.Result.Output.IndexOf("lexical section", StringComparison.Ordinal));
+            outcome.Result.Output.IndexOf("lexical section", StringComparison.Ordinal) <
+            outcome.Result.Output.IndexOf("semantic section", StringComparison.Ordinal));
         Assert.Equal(1, outcome.Facts!.SemanticContributionCount);
     }
 
@@ -640,6 +697,16 @@ public sealed class CanaryContentSearchTests : IDisposable
             SourceBytes: 128,
             ContainingSymbolId: null,
             ContainingSymbolName: null);
+
+    private static ContentSearchHit Candidate(TextContentSearchHit hit, double score) =>
+        new(
+            hit.DisplayPath,
+            score,
+            hit.Line,
+            hit.Snippet,
+            hit.Language,
+            hit.SourceBytes,
+            hit.ChunkId);
 
     public void Dispose()
     {

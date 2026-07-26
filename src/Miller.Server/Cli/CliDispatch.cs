@@ -3486,10 +3486,16 @@ internal sealed class ForcedHybridFusionArm(Func<SemanticSearchArm> openArm) : I
         // The class still comes from the policy even though the hybrid decision does not: the frozen fusion-v1
         // weights are keyed on query shape, so a forced run must be scored under the same profile a routed one
         // would have used or the comparison measures the weights rather than the arms.
-        SemanticFusionClass fusionClass = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None).HybridClass;
+        SemanticFusionClass fusionClass = SemanticQueryPolicy.Route(request.Query).HybridClass;
+        SemanticCandidateAdmission admission =
+            SemanticQueryPolicy.DecideAdmission(SearchRouteExecutor.EvidenceFrom(request.Candidates));
         return semantic.Count == 0
             ? null
-            : RrfFusion.Fuse(request.Candidates, semantic, RrfFusion.WeightsFor(fusionClass));
+            : SearchRouteExecutor.ApplyAdmission(
+                request.Candidates,
+                semantic,
+                RrfFusion.WeightsFor(fusionClass),
+                admission);
     }
 
     private static bool Admits(ISymbolLookupIndex index, SymbolFusionRequest request, VectorMatch match) =>

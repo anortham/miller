@@ -249,7 +249,7 @@ public sealed record CanaryCallFacts
 
     public string ExperimentId { get; init; } = CanaryAssignment.HybridExperimentId;
 
-    public int PolicyVersion { get; init; } = 1;
+    public required int PolicyVersion { get; init; }
 
     public int ResultCount { get; init; }
 
@@ -309,7 +309,7 @@ public sealed record CanaryShadowFacts
 
     public required string Eligibility { get; init; }
 
-    public int PolicyVersion { get; init; } = 1;
+    public required int PolicyVersion { get; init; }
 
     public required string Status { get; init; }
 

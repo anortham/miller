@@ -334,8 +334,12 @@ public sealed partial class ContextTool
             lexical.Candidates.Count,
             lexical.Candidates.Count > 0 ? lexical.Candidates[0].Score : 0,
             lexical.Candidates.Count > 1 ? lexical.Candidates[1].Score : 0);
-        if (!SemanticQueryPolicy.Route(query, evidence).IsHybrid)
+        if (!SemanticQueryPolicy.Route(query).IsHybrid)
             return [];
+        SemanticCandidateAdmission admission = SemanticQueryPolicy.DecideAdmission(evidence);
+        var lexicalIds = new HashSet<string>(
+            lexical.Candidates.Select(static candidate => candidate.SymbolId),
+            StringComparer.Ordinal);
 
         SemanticQueryResult result = _semanticArm.QuerySymbols(
             context.WorkspaceRoot,
@@ -350,6 +354,7 @@ public sealed partial class ContextTool
         foreach (SemanticHit hit in result.Hits.Take(SearchSeedLimit))
         {
             if (hit.SymbolId is not { } symbolId ||
+                !admission.AllowsExpansion && !lexicalIds.Contains(symbolId) ||
                 !seen.Add(symbolId) ||
                 context.Index.FindBySymbolId(symbolId) is not { } symbol ||
                 excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)))

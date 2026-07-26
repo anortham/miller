@@ -30,7 +30,7 @@ public sealed class SemanticQueryPolicyTests
     [MemberData(nameof(LexicalOnlyQueries))]
     public void Route_ShapeRoutedQueries_StayLexicalOnly(string query)
     {
-        Assert.False(SemanticQueryPolicy.Route(query, LexicalEvidence.None).IsHybrid);
+        Assert.False(SemanticQueryPolicy.Route(query).IsHybrid);
     }
 
     public static TheoryData<string> ConceptualQueries => new()
@@ -46,7 +46,7 @@ public sealed class SemanticQueryPolicyTests
     [MemberData(nameof(ConceptualQueries))]
     public void Route_ProseQueries_AreHybridConceptual(string query)
     {
-        var route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        var route = SemanticQueryPolicy.Route(query);
 
         Assert.True(route.IsHybrid);
         Assert.Equal(SemanticFusionClass.Conceptual, route.HybridClass);
@@ -55,47 +55,25 @@ public sealed class SemanticQueryPolicyTests
     [Fact]
     public void Route_ProseQueryNamingAnIdentifier_IsHybridMixed()
     {
-        var route = SemanticQueryPolicy.Route("how does FreshnessService detect a rebuild", LexicalEvidence.None);
+        var route = SemanticQueryPolicy.Route("how does FreshnessService detect a rebuild");
 
         Assert.True(route.IsHybrid);
         Assert.Equal(SemanticFusionClass.Mixed, route.HybridClass);
     }
 
     [Fact]
-    public void Route_AmbiguousQuery_WithWeakLexicalEvidence_GoesHybrid()
+    public void Route_AmbiguousQuery_IsHybridWithoutReadingLexicalEvidence()
     {
-        var route = SemanticQueryPolicy.Route("vector store", LexicalEvidence.None);
+        var route = SemanticQueryPolicy.Route("vector store");
 
         Assert.True(route.IsHybrid);
-        Assert.Equal(SemanticQueryReason.AmbiguousWeakLexical, route.Reason);
-    }
-
-    [Fact]
-    public void Route_AmbiguousQuery_WithDominantLexicalHit_StaysLexicalOnly()
-    {
-        var evidence = new LexicalEvidence(HitCount: 4, TopScore: 9.0, RunnerUpScore: 2.0);
-
-        var route = SemanticQueryPolicy.Route("vector store", evidence);
-
-        Assert.False(route.IsHybrid);
-        Assert.Equal(SemanticQueryReason.AmbiguousStrongLexical, route.Reason);
-    }
-
-    [Fact]
-    public void Route_AmbiguousQuery_WithFlatLexicalScores_GoesHybrid()
-    {
-        var evidence = new LexicalEvidence(HitCount: 12, TopScore: 3.0, RunnerUpScore: 2.9);
-
-        var route = SemanticQueryPolicy.Route("vector store", evidence);
-
-        Assert.True(route.IsHybrid);
-        Assert.Equal(SemanticQueryReason.AmbiguousWeakLexical, route.Reason);
+        Assert.Equal(SemanticQueryReason.Ambiguous, route.Reason);
     }
 
     [Fact]
     public void Route_AmbiguousIdentifierPair_WithWeakEvidence_IsHybridSymbolLookup()
     {
-        var route = SemanticQueryPolicy.Route("VectorSidecar TryOpen", LexicalEvidence.None);
+        var route = SemanticQueryPolicy.Route("VectorSidecar TryOpen");
 
         Assert.True(route.IsHybrid);
         Assert.Equal(SemanticFusionClass.SymbolLookup, route.HybridClass);
@@ -104,48 +82,17 @@ public sealed class SemanticQueryPolicyTests
     [Fact]
     public void Route_AmbiguousPlainPair_WithWeakEvidence_IsHybridMixed()
     {
-        var route = SemanticQueryPolicy.Route("release process", LexicalEvidence.None);
+        var route = SemanticQueryPolicy.Route("release process");
 
         Assert.True(route.IsHybrid);
         Assert.Equal(SemanticFusionClass.Mixed, route.HybridClass);
     }
 
     [Fact]
-    public void Route_StrongLexicalEvidence_DoesNotOverrideProseQueries()
-    {
-        var evidence = new LexicalEvidence(HitCount: 6, TopScore: 20.0, RunnerUpScore: 1.0);
-
-        var route = SemanticQueryPolicy.Route("how does indexing convergence work", evidence);
-
-        Assert.True(route.IsHybrid);
-        Assert.Equal(SemanticQueryReason.Prose, route.Reason);
-    }
-
-    [Fact]
-    public void Route_StrongLexicalEvidence_DoesNotOverrideShapeRoutedLexicalOnly()
-    {
-        var evidence = new LexicalEvidence(HitCount: 0, TopScore: 0.0, RunnerUpScore: 0.0);
-
-        Assert.False(SemanticQueryPolicy.Route("src/x/y.cs", evidence).IsHybrid);
-        Assert.False(SemanticQueryPolicy.Route("FooBar", evidence).IsHybrid);
-    }
-
-    [Fact]
-    public void Route_NullEvidence_BehavesAsNoEvidence()
-    {
-        var withNull = SemanticQueryPolicy.Route("vector store", evidence: null);
-        var withNone = SemanticQueryPolicy.Route("vector store", LexicalEvidence.None);
-
-        Assert.Equal(withNone, withNull);
-    }
-
-    [Fact]
     public void Route_IsDeterministic_AcrossRepeatedCalls()
     {
-        var evidence = new LexicalEvidence(HitCount: 3, TopScore: 5.0, RunnerUpScore: 4.9);
-
-        var first = SemanticQueryPolicy.Route("converge queue yield", evidence);
-        var second = SemanticQueryPolicy.Route("converge queue yield", evidence);
+        var first = SemanticQueryPolicy.Route("converge queue yield");
+        var second = SemanticQueryPolicy.Route("converge queue yield");
 
         Assert.Equal(first, second);
     }
@@ -154,14 +101,14 @@ public sealed class SemanticQueryPolicyTests
     public void Route_TrimsSurroundingWhitespace()
     {
         Assert.Equal(
-            SemanticQueryPolicy.Route("how does indexing convergence work", LexicalEvidence.None),
-            SemanticQueryPolicy.Route("  how does indexing convergence work\t", LexicalEvidence.None));
+            SemanticQueryPolicy.Route("how does indexing convergence work"),
+            SemanticQueryPolicy.Route("  how does indexing convergence work\t"));
     }
 
     [Fact]
-    public void PolicyVersion_IsTheFrozenV1Token()
+    public void PolicyVersion_IsTheSingleIntegerV2()
     {
-        Assert.Equal("policy-v1", SemanticQueryPolicy.PolicyVersion);
+        Assert.Equal(2, SemanticQueryPolicy.PolicyVersion);
     }
 
     [Theory]
@@ -174,20 +121,56 @@ public sealed class SemanticQueryPolicyTests
     }
 
     [Fact]
-    public void LexicalEvidence_None_IsWeak()
+    public void DecideAdmission_ZeroHits_ExpandsWithoutProtection()
     {
-        Assert.False(LexicalEvidence.None.IsStrong);
+        SemanticCandidateAdmission decision = SemanticQueryPolicy.DecideAdmission(LexicalEvidence.None);
+
+        Assert.Equal(SemanticCandidateAdmissionMode.RerankAndExpand, decision.Mode);
+        Assert.Equal(0, decision.ProtectedLexicalCount);
+        Assert.Equal(SemanticCandidateAdmissionReason.NoLexicalHits, decision.Reason);
     }
 
     [Fact]
-    public void LexicalEvidence_SingleDominantHit_IsStrong()
+    public void DecideAdmission_OneHit_ExpandsAndProtectsTheLexicalWinner()
     {
-        Assert.True(new LexicalEvidence(HitCount: 1, TopScore: 7.5, RunnerUpScore: 0.0).IsStrong);
+        SemanticCandidateAdmission decision = SemanticQueryPolicy.DecideAdmission(
+            new LexicalEvidence(HitCount: 1, TopScore: 7.5, RunnerUpScore: 0.0));
+
+        Assert.Equal(SemanticCandidateAdmissionMode.RerankAndExpand, decision.Mode);
+        Assert.Equal(1, decision.ProtectedLexicalCount);
+        Assert.Equal(SemanticCandidateAdmissionReason.SingleLexicalHit, decision.Reason);
     }
 
-    [Fact]
-    public void LexicalEvidence_ZeroHits_IsWeakEvenWithScores()
+    [Theory]
+    [InlineData(2, 5.0, 4.0)]
+    [InlineData(8, 10.0, 2.0)]
+    public void DecideAdmission_DecisiveMultiHitWithPositiveRunnerUp_ReranksOnly(
+        int hitCount,
+        double topScore,
+        double runnerUpScore)
     {
-        Assert.False(new LexicalEvidence(HitCount: 0, TopScore: 7.5, RunnerUpScore: 0.0).IsStrong);
+        SemanticCandidateAdmission decision = SemanticQueryPolicy.DecideAdmission(
+            new LexicalEvidence(hitCount, topScore, runnerUpScore));
+
+        Assert.Equal(SemanticCandidateAdmissionMode.RerankOnly, decision.Mode);
+        Assert.Equal(0, decision.ProtectedLexicalCount);
+        Assert.Equal(SemanticCandidateAdmissionReason.DecisiveMultiHit, decision.Reason);
+    }
+
+    [Theory]
+    [InlineData(2, 5.0, 4.01)]
+    [InlineData(4, 10.0, 0.0)]
+    [InlineData(3, 0.0, 0.0)]
+    public void DecideAdmission_OtherMultiHitEvidence_ReranksAndExpands(
+        int hitCount,
+        double topScore,
+        double runnerUpScore)
+    {
+        SemanticCandidateAdmission decision = SemanticQueryPolicy.DecideAdmission(
+            new LexicalEvidence(hitCount, topScore, runnerUpScore));
+
+        Assert.Equal(SemanticCandidateAdmissionMode.RerankAndExpand, decision.Mode);
+        Assert.Equal(0, decision.ProtectedLexicalCount);
+        Assert.Equal(SemanticCandidateAdmissionReason.WeakMultiHit, decision.Reason);
     }
 }

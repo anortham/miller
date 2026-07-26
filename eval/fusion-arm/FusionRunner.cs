@@ -57,7 +57,12 @@ public static class FusionRunner
             }
 
             IReadOnlyList<string> ranked = Fuser.Apply(plan, lexical, semantic, options.Config);
-            rows.Add(new FusedResultRow { QueryId = query.QueryId, Ranked = ranked });
+            rows.Add(new FusedResultRow
+            {
+                QueryId = query.QueryId,
+                PolicyVersion = plan.PolicyVersion,
+                Ranked = ranked,
+            });
         }
 
         WriteResults(options.OutPath, rows);

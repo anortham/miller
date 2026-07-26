@@ -193,6 +193,7 @@ public sealed class CanarySearchTests : IDisposable
         Assert.Equal(semanticOn, outcome.Result.Output);
 
         CanaryCallFacts facts = outcome.Facts!;
+        Assert.Equal(SemanticQueryPolicy.PolicyVersion, facts.PolicyVersion);
         Assert.Equal(2, facts.LexicalResultCount);
         Assert.Equal(1, facts.SemanticResultCount);
         Assert.Equal(2, facts.FusedResultCount);
@@ -206,6 +207,78 @@ public sealed class CanarySearchTests : IDisposable
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).EncoderFingerprint, facts.EncoderFingerprint);
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).StorageSchema, facts.StorageSchema);
         Assert.Equal(MillerSemanticContract.PinnedIdentity(Pin).CorpusGeneration, facts.CorpusGeneration);
+
+        JsonElement metadata = Stamp(facts);
+        Assert.Equal(SemanticQueryPolicy.PolicyVersion, metadata.GetProperty("canary_policy_version").GetInt32());
+    }
+
+    [Fact]
+    public async Task OneLexicalHit_StaysFirstWhileSemanticExpansionAddsRecall()
+    {
+        IndexedSymbol lexical = Symbol(0, "widget-symbol", "Widget", "src/Widget.cs");
+        IndexedSymbol semanticOnly = Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs");
+        var index = new AdmissionSymbolLookupIndex([(lexical, 7.5)], lexical, semanticOnly);
+        var port = new RecordingPort
+        {
+            Matches = [Match(1, 0.05, semanticOnly.SymbolId, semanticOnly.FilePath)],
+        };
+        await using SemanticEmbeddingSession session = NewSession();
+
+        string output = SearchRouteExecutor.RunSymbols(
+            index,
+            SymbolRoute,
+            Request(ConceptualQuery, json: false, OnArm(port, session))).Output;
+
+        Assert.True(
+            output.IndexOf("Widget", StringComparison.Ordinal) <
+            output.IndexOf("Gadget", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("VectorSidecar TryOpen")]
+    [InlineData("release process")]
+    [InlineData(ConceptualQuery)]
+    public async Task DecisiveMultiHit_ExcludesSemanticOnlyRowsForEveryHybridClass(string query)
+    {
+        IndexedSymbol first = Symbol(0, "widget-symbol", "Widget", "src/Widget.cs");
+        IndexedSymbol second = Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs");
+        IndexedSymbol semanticOnly = Symbol(2, "other-symbol", "Other", "src/Other.cs");
+        var index = new AdmissionSymbolLookupIndex([(first, 10.0), (second, 2.0)], first, second, semanticOnly);
+        var port = new RecordingPort
+        {
+            Matches = [Match(1, 0.05, semanticOnly.SymbolId, semanticOnly.FilePath)],
+        };
+        await using SemanticEmbeddingSession session = NewSession();
+
+        string output = SearchRouteExecutor.RunSymbols(
+            index,
+            SymbolRoute,
+            Request(query, json: false, OnArm(port, session))).Output;
+
+        Assert.Contains("Widget", output, StringComparison.Ordinal);
+        Assert.Contains("Gadget", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Other", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WeakMultiHit_AdmitsSemanticOnlyRows()
+    {
+        IndexedSymbol first = Symbol(0, "widget-symbol", "Widget", "src/Widget.cs");
+        IndexedSymbol second = Symbol(1, "gadget-symbol", "Gadget", "src/Gadget.cs");
+        IndexedSymbol semanticOnly = Symbol(2, "other-symbol", "Other", "src/Other.cs");
+        var index = new AdmissionSymbolLookupIndex([(first, 10.0), (second, 9.0)], first, second, semanticOnly);
+        var port = new RecordingPort
+        {
+            Matches = [Match(1, 0.05, semanticOnly.SymbolId, semanticOnly.FilePath)],
+        };
+        await using SemanticEmbeddingSession session = NewSession();
+
+        string output = SearchRouteExecutor.RunSymbols(
+            index,
+            SymbolRoute,
+            Request(ConceptualQuery, json: false, OnArm(port, session))).Output;
+
+        Assert.Contains("Other", output, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -463,6 +536,7 @@ public sealed class CanarySearchTests : IDisposable
         UtcDate = UtcDate,
         QueryClass = CanaryQueryClass.Prose,
         Eligibility = CanaryEligibility.Eligible,
+        PolicyVersion = SemanticQueryPolicy.PolicyVersion,
     };
 
     private JsonElement StampSaved() => Stamp(EligibleFacts() with
@@ -605,5 +679,40 @@ public sealed class CanarySearchTests : IDisposable
 
         public string? ResolveIndexedFilePath(string target) =>
             _symbols.FirstOrDefault(symbol => string.Equals(symbol.FilePath, target, StringComparison.Ordinal))?.FilePath;
+    }
+
+    private sealed class AdmissionSymbolLookupIndex(
+        IReadOnlyList<(IndexedSymbol Symbol, double Score)> lexical,
+        params IndexedSymbol[] symbols) : ISymbolLookupIndex
+    {
+        public int DocumentCount => symbols.Length;
+
+        public IReadOnlySet<string> KnownExtensions { get; } =
+            new HashSet<string>(StringComparer.Ordinal) { ".cs" };
+
+        public IReadOnlyList<SearchHit> Search(string query, int limit = 10, SearchMode mode = SearchMode.Or) =>
+            [.. lexical.Take(limit).Select(row => new SearchHit(row.Symbol.ToSearchableDocument(), row.Score))];
+
+        public IndexedSymbol Resolve(int docId) => symbols.Single(symbol => symbol.DocId == docId);
+
+        public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
+            [.. symbols.Where(symbol => string.Equals(symbol.Name, name, StringComparison.Ordinal))];
+
+        public IndexedSymbol? FindBySymbolId(string symbolId) =>
+            symbols.FirstOrDefault(symbol => string.Equals(symbol.SymbolId, symbolId, StringComparison.Ordinal));
+
+        public IReadOnlyList<IndexedSymbol> FindChildren(string parentId) => [];
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePath(string filePath) =>
+            [.. symbols.Where(symbol => string.Equals(symbol.FilePath, filePath, StringComparison.Ordinal))];
+
+        public IReadOnlyList<IndexedSymbol> FindByFilePathFragment(string query, int limit) =>
+            [.. symbols.Where(symbol => symbol.FilePath.Contains(query, StringComparison.Ordinal)).Take(limit)];
+
+        public bool IsIndexedFilePath(string path) =>
+            symbols.Any(symbol => string.Equals(symbol.FilePath, path, StringComparison.Ordinal));
+
+        public string? ResolveIndexedFilePath(string target) =>
+            symbols.FirstOrDefault(symbol => string.Equals(symbol.FilePath, target, StringComparison.Ordinal))?.FilePath;
     }
 }

@@ -17,7 +17,7 @@ public sealed class CanaryQueryClassifierTests
     [InlineData("auto", "getUser count", CanaryQueryClassifier.Mixed)]
     public void Classify_MapsEachPolicyRouteToItsFrozenClass(string op, string query, string expected)
     {
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
 
         Assert.Equal(expected, CanaryQueryClassifier.Classify(op, query, route));
     }
@@ -30,7 +30,7 @@ public sealed class CanaryQueryClassifierTests
     [InlineData("read the documentation tutorial faq")]
     public void Classify_PromotesProseWithDocsVocabularyToDocsLike(string query)
     {
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
 
         Assert.Equal(SemanticQueryReason.Prose, route.Reason);
         Assert.Equal(CanaryQueryClassifier.DocsLike, CanaryQueryClassifier.Classify("auto", query, route));
@@ -40,7 +40,7 @@ public sealed class CanaryQueryClassifierTests
     public void Classify_PromotesAnyProseToDocsLikeUnderTheContentOp()
     {
         const string query = "how does the retry loop recover";
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
 
         Assert.Equal(SemanticQueryReason.Prose, route.Reason);
         Assert.Equal(CanaryQueryClassifier.Prose, CanaryQueryClassifier.Classify("auto", query, route));
@@ -51,17 +51,15 @@ public sealed class CanaryQueryClassifierTests
     public void Classify_ProseWithoutVocabularyOrContentOpStaysProse()
     {
         const string query = "how does the workspace refresh converge";
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
 
         Assert.Equal(CanaryQueryClassifier.Prose, CanaryQueryClassifier.Classify("symbol", query, route));
     }
 
-    [Theory]
-    [InlineData(SemanticQueryReason.AmbiguousWeakLexical)]
-    [InlineData(SemanticQueryReason.AmbiguousStrongLexical)]
-    public void Classify_ResolvesBothAmbiguousReasonsToMixed(SemanticQueryReason reason)
+    [Fact]
+    public void Classify_ResolvesAmbiguousQueriesToMixed()
     {
-        var route = new SemanticQueryRoute(reason != SemanticQueryReason.AmbiguousStrongLexical, SemanticFusionClass.Mixed, reason);
+        var route = new SemanticQueryRoute(true, SemanticFusionClass.Mixed, SemanticQueryReason.Ambiguous);
 
         Assert.Equal(CanaryQueryClassifier.Mixed, CanaryQueryClassifier.Classify("auto", "widget parse", route));
     }
@@ -69,10 +67,10 @@ public sealed class CanaryQueryClassifierTests
     [Fact]
     public void Classify_DocsVocabularyIsCaseInsensitiveAndWholeWord()
     {
-        SemanticQueryRoute upper = SemanticQueryPolicy.Route("where is the README", LexicalEvidence.None);
+        SemanticQueryRoute upper = SemanticQueryPolicy.Route("where is the README");
         Assert.Equal(CanaryQueryClassifier.DocsLike, CanaryQueryClassifier.Classify("auto", "where is the README", upper));
 
-        SemanticQueryRoute substring = SemanticQueryPolicy.Route("how does the readmexyz work", LexicalEvidence.None);
+        SemanticQueryRoute substring = SemanticQueryPolicy.Route("how does the readmexyz work");
         Assert.Equal(CanaryQueryClassifier.Prose, CanaryQueryClassifier.Classify("auto", "how does the readmexyz work", substring));
     }
 }

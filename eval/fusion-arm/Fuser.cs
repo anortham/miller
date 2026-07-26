@@ -10,8 +10,12 @@ public sealed record FusionConfig(double ConceptualRatio, int RankConstant, bool
 /// <summary>Whether a query fuses or emits lexical order untouched.</summary>
 public enum FusionMode { LexicalPassthrough, Fuse }
 
-/// <summary>The routing decision for one query: how to combine the arms, and the weights fusion uses when it does.</summary>
-public sealed record FusionPlan(FusionMode Mode, FusionWeights Weights);
+/// <summary>The routing and admission decision for one query.</summary>
+public sealed record FusionPlan(
+    FusionMode Mode,
+    FusionWeights Weights,
+    SemanticCandidateAdmission Admission,
+    int PolicyVersion);
 
 /// <summary>
 /// The offline fused arm. Routing IS <see cref="SemanticQueryPolicy"/> and fusion IS <see cref="RrfFusion"/> — this
@@ -28,17 +32,31 @@ public static class Fuser
         ArgumentNullException.ThrowIfNull(lexical);
         ArgumentNullException.ThrowIfNull(config);
 
+        SemanticCandidateAdmission admission =
+            SemanticQueryPolicy.DecideAdmission(EvidenceFrom(lexical));
         if (config.ForcedHybrid)
-            return new FusionPlan(FusionMode.Fuse, ConceptualWeights(config));
+        {
+            return new FusionPlan(
+                FusionMode.Fuse,
+                ConceptualWeights(config),
+                admission,
+                SemanticQueryPolicy.PolicyVersion);
+        }
 
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, EvidenceFrom(lexical));
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
         if (!route.IsHybrid)
-            return new FusionPlan(FusionMode.LexicalPassthrough, default);
+        {
+            return new FusionPlan(
+                FusionMode.LexicalPassthrough,
+                default,
+                admission,
+                SemanticQueryPolicy.PolicyVersion);
+        }
 
         FusionWeights weights = route.HybridClass == SemanticFusionClass.Conceptual
             ? ConceptualWeights(config)
             : RrfFusion.WeightsFor(route.HybridClass);
-        return new FusionPlan(FusionMode.Fuse, weights);
+        return new FusionPlan(FusionMode.Fuse, weights, admission, SemanticQueryPolicy.PolicyVersion);
     }
 
     /// <summary>Applies <paramref name="plan"/> and returns the top ranked <c>doc_id</c>s, collapsed from the fused
@@ -58,9 +76,20 @@ public static class Fuser
             return CollapseDocs(lexical.Select(static row => row.DocId), config.TopDocs);
 
         var lexicalCandidates = lexical.Select(ToCandidate).ToList();
-        var semanticCandidates = semantic.Select(ToSemanticCandidate).ToList();
+        IReadOnlyList<SemanticRankedCandidate> semanticCandidates =
+            [.. semantic.Select(ToSemanticCandidate)];
+        if (!plan.Admission.AllowsExpansion)
+        {
+            var lexicalIds = new HashSet<string>(
+                lexicalCandidates.Select(static candidate => candidate.SymbolId),
+                StringComparer.Ordinal);
+            semanticCandidates =
+                [.. semanticCandidates.Where(hit => lexicalIds.Contains(hit.Candidate.SymbolId))];
+        }
         IReadOnlyList<FusedCandidate> fused =
             RrfFusion.Fuse(lexicalCandidates, semanticCandidates, plan.Weights, config.RankConstant);
+        if (plan.Admission.ProtectedLexicalCount > 0)
+            fused = ProtectLexicalPrefix(fused, lexicalCandidates, plan.Admission.ProtectedLexicalCount);
         return CollapseDocs(fused.Select(static hit => hit.Candidate.FilePath), config.TopDocs);
     }
 
@@ -84,6 +113,27 @@ public static class Fuser
     static SemanticRankedCandidate ToSemanticCandidate(ArmInputRow row) => new(
         ToCandidate(row),
         row.Rank ?? throw new InvalidDataException($"semantic row for symbol '{row.SymbolId}' is missing its rank"));
+
+    static IReadOnlyList<FusedCandidate> ProtectLexicalPrefix(
+        IReadOnlyList<FusedCandidate> fused,
+        IReadOnlyList<SymbolCandidate> lexical,
+        int protectedLexicalCount)
+    {
+        var byId = fused.ToDictionary(static row => row.Candidate.SymbolId, StringComparer.Ordinal);
+        var protectedIds = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = new List<FusedCandidate>(fused.Count);
+        foreach (SymbolCandidate candidate in lexical.Take(protectedLexicalCount))
+        {
+            if (protectedIds.Add(candidate.SymbolId) &&
+                byId.TryGetValue(candidate.SymbolId, out FusedCandidate? row))
+            {
+                ordered.Add(row);
+            }
+        }
+
+        ordered.AddRange(fused.Where(row => !protectedIds.Contains(row.Candidate.SymbolId)));
+        return ordered;
+    }
 
     static IReadOnlyList<string> CollapseDocs(IEnumerable<string> orderedDocs, int topDocs)
     {

@@ -54,11 +54,13 @@ For each query:
 
 1. Load its lexical file. **Missing lexical file → emit no results row**, count it, and continue (that query
    scores zero downstream, which is retrieval-eval's `missing_results` contract).
-2. Route with `SemanticQueryPolicy.Route(query, evidence)` unless `--forced-hybrid` is set.
+2. Route with `SemanticQueryPolicy.Route(query)` and decide candidate admission from the lexical evidence.
    - **Lexical-only route** → emit the lexical `doc_id` order untouched (the semantic file is not read).
    - **Hybrid route** → load the semantic file (**missing → emit no row + count**) and fuse with
      `RrfFusion.Fuse`. Weights are `new FusionWeights(1.0, conceptualRatio)` for the Conceptual class and the
      frozen `RrfFusion.WeightsFor(class)` constants for SymbolLookup/Mixed.
+   - Zero hits expand; one hit expands while keeping that hit first; decisive multi-hit evidence reranks the
+     lexical population only; other multi-hit evidence reranks and expands.
 3. `--forced-hybrid` bypasses routing entirely and fuses **every** query under Conceptual weights
    `(1.0, conceptualRatio)` — the identifier diagnostic arm that measures fusion's non-inferiority on lexical
    queries.
@@ -71,7 +73,7 @@ scale-invariant, so the Conceptual weight `(1.0, r)` is comparable across ratios
 One retrieval-eval results row per emitted query:
 
 ```json
-{"query_id": "m-rank-1", "ranked": ["src/Miller.Core/Search/Bm25.cs", "src/Miller.Indexing/SymbolSearchSidecar.cs"]}
+{"query_id": "m-rank-1", "policy_version": 2, "ranked": ["src/Miller.Core/Search/Bm25.cs", "src/Miller.Indexing/SymbolSearchSidecar.cs"]}
 ```
 
 `doc_id` collapse happens **after** fusion: the fused symbol order is walked in order, each symbol's `doc_id` is

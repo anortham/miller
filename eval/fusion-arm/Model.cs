@@ -25,6 +25,7 @@ public sealed record QueryRow
 public sealed record FusedResultRow
 {
     [JsonPropertyName("query_id")] public string QueryId { get; init; } = "";
+    [JsonPropertyName("policy_version")] public required int PolicyVersion { get; init; }
     [JsonPropertyName("ranked")] public IReadOnlyList<string> Ranked { get; init; } = [];
 }
 

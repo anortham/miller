@@ -79,7 +79,7 @@ public sealed class SearchDeterminismTests
         await using SemanticEmbeddingSession session = NewSession();
         ForcedHybridFusionArm fusion = ForcedHybrid(FixedVectorPort(), session);
 
-        Assert.False(SemanticQueryPolicy.Route(SymbolQuery, LexicalEvidence.None).IsHybrid);
+        Assert.False(SemanticQueryPolicy.Route(SymbolQuery).IsHybrid);
         Assert.Contains(
             "\"rrf_score\":",
             SearchRouteExecutor.RunSymbols(index, SymbolRoute, Request(SymbolQuery, json: true, fusion)).Output,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Miller.Core.Search;
 using Miller.Server.Telemetry;
 using Xunit;
 
@@ -75,7 +76,7 @@ public sealed class CanaryTelemetryTests : IDisposable
         Assert.Equal("control", metadata.GetProperty("canary_arm").GetString());
         Assert.Equal("prose", metadata.GetProperty("canary_query_class").GetString());
         Assert.Equal("eligible", metadata.GetProperty("canary_eligibility").GetString());
-        Assert.Equal(1, metadata.GetProperty("canary_policy_version").GetInt32());
+        Assert.Equal(SemanticQueryPolicy.PolicyVersion, metadata.GetProperty("canary_policy_version").GetInt32());
         Assert.InRange(metadata.GetProperty("canary_bucket").GetInt32(), 0, 99);
     }
 
@@ -367,6 +368,7 @@ public sealed class CanaryTelemetryTests : IDisposable
         UtcDate = "2026-07-20",
         QueryClass = CanaryQueryClass.Prose,
         Eligibility = CanaryEligibility.Eligible,
+        PolicyVersion = SemanticQueryPolicy.PolicyVersion,
     };
 
     private TelemetryLedger OpenLedger() =>

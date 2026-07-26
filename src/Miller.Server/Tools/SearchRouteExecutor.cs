@@ -266,6 +266,50 @@ internal static class SearchRouteExecutor
             candidates.Visibility is { } visibility ? visibility.Allows : static _ => true,
             request.WorkspaceRoot);
 
+    /// <summary>Builds admission evidence from the lexical population already ranked for this request.</summary>
+    internal static LexicalEvidence EvidenceFrom(IReadOnlyList<SymbolCandidate> candidates) => candidates.Count switch
+    {
+        0 => LexicalEvidence.None,
+        1 => new LexicalEvidence(1, candidates[0].Score, 0),
+        _ => new LexicalEvidence(candidates.Count, candidates[0].Score, candidates[1].Score),
+    };
+
+    /// <summary>Restricts semantic rows to the admission population and preserves its protected lexical prefix.</summary>
+    internal static IReadOnlyList<FusedCandidate> ApplyAdmission(
+        IReadOnlyList<SymbolCandidate> lexical,
+        IReadOnlyList<SemanticRankedCandidate> semantic,
+        FusionWeights weights,
+        SemanticCandidateAdmission admission)
+    {
+        IReadOnlyList<SemanticRankedCandidate> admitted = semantic;
+        if (!admission.AllowsExpansion)
+        {
+            var lexicalIds = new HashSet<string>(
+                lexical.Select(static candidate => candidate.SymbolId),
+                StringComparer.Ordinal);
+            admitted = [.. semantic.Where(hit => lexicalIds.Contains(hit.Candidate.SymbolId))];
+        }
+
+        IReadOnlyList<FusedCandidate> fused = RrfFusion.Fuse(lexical, admitted, weights);
+        if (admission.ProtectedLexicalCount <= 0 || fused.Count <= 1)
+            return fused;
+
+        var byId = fused.ToDictionary(static row => row.Candidate.SymbolId, StringComparer.Ordinal);
+        var protectedIds = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = new List<FusedCandidate>(fused.Count);
+        foreach (SymbolCandidate candidate in lexical.Take(admission.ProtectedLexicalCount))
+        {
+            if (protectedIds.Add(candidate.SymbolId) &&
+                byId.TryGetValue(candidate.SymbolId, out FusedCandidate? row))
+            {
+                ordered.Add(row);
+            }
+        }
+
+        ordered.AddRange(fused.Where(row => !protectedIds.Contains(row.Candidate.SymbolId)));
+        return ordered;
+    }
+
     private static void EnsureKind(SearchRoute route, SearchRouteKind expected)
     {
         if (route.Kind != expected)
@@ -317,9 +361,11 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, Se
         if (request.Candidates.FirstOrDefault()?.Origin is SymbolCandidateOrigin.Container)
             return null;
 
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query, EvidenceFrom(request.Candidates));
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query);
         if (!route.IsHybrid)
             return null;
+        SemanticCandidateAdmission admission =
+            SemanticQueryPolicy.DecideAdmission(SearchRouteExecutor.EvidenceFrom(request.Candidates));
 
         int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
         SemanticQueryResult result = openArm(request.WorkspaceRoot)
@@ -343,20 +389,14 @@ internal sealed class SemanticSymbolFusionArm(SemanticMode mode, Func<string, Se
 
         return semantic.Count == 0
             ? null
-            : RrfFusion.Fuse(request.Candidates, semantic, RrfFusion.WeightsFor(route.HybridClass));
+            : SearchRouteExecutor.ApplyAdmission(
+                request.Candidates,
+                semantic,
+                RrfFusion.WeightsFor(route.HybridClass),
+                admission);
     }
 
     private static bool Admits(ISymbolLookupIndex index, SymbolFusionRequest request, VectorMatch match) =>
         index.FindBySymbolId(match.UnitId) is { } symbol && request.Allows(symbol);
 
-    /// <summary>
-    /// The lexical arm's own confidence, which the policy consults only for shape-ambiguous queries: the top
-    /// two scores of the ranking that already ran, so no extra retrieval happens to produce it.
-    /// </summary>
-    private static LexicalEvidence EvidenceFrom(IReadOnlyList<SymbolCandidate> candidates) => candidates.Count switch
-    {
-        0 => LexicalEvidence.None,
-        1 => new LexicalEvidence(1, candidates[0].Score, 0),
-        _ => new LexicalEvidence(candidates.Count, candidates[0].Score, candidates[1].Score),
-    };
 }

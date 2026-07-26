@@ -43,7 +43,7 @@ public sealed class FusionArmTests : IDisposable
     public void ProseQuery_Fuses_AndConceptualRatioReordersPredictably(double ratio, string[] expected)
     {
         var config = new FusionConfig(ConceptualRatio: ratio, RankConstant: 60, ForcedHybrid: false);
-        var lexical = new[] { Row("A", "docA", 5.0), Row("B", "docB", 4.0) };
+        var lexical = new[] { Row("A", "docA", 5.0), Row("B", "docB", 4.1) };
         var semantic = new[] { Semantic("B", "docB", 1.0, rank: 1), Semantic("C", "docC", 1.0, rank: 2) };
 
         FusionPlan plan = Fuser.Plan("how to parse", lexical, config);
@@ -88,6 +88,35 @@ public sealed class FusionArmTests : IDisposable
     }
 
     [Fact]
+    public void OneLexicalHit_RemainsFirstWhileForcedHybridExpands()
+    {
+        var lexical = new[] { Row("A", "docA", 5.0) };
+        var semantic = new[] { Semantic("B", "docB", 1.0, rank: 1) };
+        var config = new FusionConfig(ConceptualRatio: 5.0, RankConstant: 60, ForcedHybrid: true);
+
+        FusionPlan plan = Fuser.Plan("getUserName", lexical, config);
+        IReadOnlyList<string> ranked = Fuser.Apply(plan, lexical, semantic, config);
+
+        Assert.Equal(new[] { "docA", "docB" }, ranked);
+    }
+
+    [Theory]
+    [InlineData("VectorSidecar TryOpen")]
+    [InlineData("release process")]
+    [InlineData("how does the workspace refresh converge")]
+    public void DecisiveMultiHit_ExcludesSemanticOnlyRowsForEveryHybridClass(string query)
+    {
+        var lexical = new[] { Row("A", "docA", 10.0), Row("B", "docB", 2.0) };
+        var semantic = new[] { Semantic("C", "docC", 1.0, rank: 1) };
+        var config = new FusionConfig(ConceptualRatio: 5.0, RankConstant: 60, ForcedHybrid: false);
+
+        FusionPlan plan = Fuser.Plan(query, lexical, config);
+        IReadOnlyList<string> ranked = Fuser.Apply(plan, lexical, semantic, config);
+
+        Assert.Equal(new[] { "docA", "docB" }, ranked);
+    }
+
+    [Fact]
     public void MissingInputFile_EmitsNoRow_AndIsCountedInSummary()
     {
         WriteArm(_lexicalDir, "q1", Row("A", "docA", 5.0));
@@ -109,6 +138,9 @@ public sealed class FusionArmTests : IDisposable
         List<FusedResultRow> emitted = ReadResults(outPath);
         Assert.Single(emitted);
         Assert.Equal("q1", emitted[0].QueryId);
+        Assert.Equal(2, emitted[0].PolicyVersion);
+        Assert.Equal(2, JsonDocument.Parse(File.ReadAllLines(outPath)[0]).RootElement
+            .GetProperty("policy_version").GetInt32());
     }
 
     [Fact]

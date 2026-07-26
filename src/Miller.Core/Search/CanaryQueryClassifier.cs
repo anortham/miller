@@ -4,9 +4,7 @@ namespace Miller.Core.Search;
 
 /// <summary>
 /// Maps a <see cref="SemanticQueryPolicy"/> route to one of the six frozen <c>canary_query_class</c> values of
-/// <c>canary-telemetry-v1</c> §Enums. Pure and offline-reproducible: the class must be recomputable from the
-/// query alone, so the caller supplies the route computed with <see cref="LexicalEvidence.None"/> — lexical
-/// evidence steers only the treatment arm's internal hybrid decision, never the class or the assignment.
+/// <c>canary-telemetry-v1</c> §Enums. Pure and offline-reproducible: the class is recomputable from the query alone.
 /// </summary>
 public static class CanaryQueryClassifier
 {
@@ -34,7 +32,7 @@ public static class CanaryQueryClassifier
         SemanticQueryReason.IdentifierLike or SemanticQueryReason.CodeSyntax => Identifier,
         SemanticQueryReason.PathLike => Path,
         SemanticQueryReason.Prose => IsDocsLike(op, query) ? DocsLike : Prose,
-        SemanticQueryReason.AmbiguousWeakLexical or SemanticQueryReason.AmbiguousStrongLexical => Mixed,
+        SemanticQueryReason.Ambiguous => Mixed,
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
     };
 

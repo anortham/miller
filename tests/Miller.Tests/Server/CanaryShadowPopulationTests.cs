@@ -162,6 +162,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         SearchTool.SymbolCanaryOutcome outcome = RunShadow(index, SampledWorkspace, RealShadow(port, session));
 
         CanaryShadowFacts facts = outcome.ShadowFacts!;
+        Assert.Equal(SemanticQueryPolicy.PolicyVersion, facts.PolicyVersion);
         Assert.Equal(CanaryShadowStatus.Ok, facts.Status);
         Assert.Equal(1, facts.SemanticResultCount);
         Assert.Equal(3, facts.OverlapAt10);
@@ -414,6 +415,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
             UtcDate = UtcDate,
             QueryClass = CanaryQueryClass.Identifier,
             Eligibility = CanaryEligibility.IneligibleQueryClass,
+            PolicyVersion = SemanticQueryPolicy.PolicyVersion,
             Status = CanaryShadowStatus.Timeout,
         });
 
@@ -421,6 +423,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         Assert.False(metadata.TryGetProperty("canary_encoder_fingerprint", out _));
         Assert.False(metadata.TryGetProperty("canary_storage_schema", out _));
         Assert.False(metadata.TryGetProperty("canary_corpus_generation", out _));
+        Assert.Equal(SemanticQueryPolicy.PolicyVersion, metadata.GetProperty("canary_policy_version").GetInt32());
     }
 
     private static SearchTool.SymbolCanaryOutcome RunShadow(
@@ -454,6 +457,7 @@ public sealed class CanaryShadowPopulationTests : IDisposable
         UtcDate = UtcDate,
         QueryClass = CanaryQueryClass.Identifier,
         Eligibility = CanaryEligibility.IneligibleQueryClass,
+        PolicyVersion = SemanticQueryPolicy.PolicyVersion,
         Status = CanaryShadowStatus.Ok,
         SemanticResultCount = 4,
         OverlapAt10 = 3,

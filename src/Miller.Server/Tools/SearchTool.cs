@@ -1848,7 +1848,7 @@ public sealed class SearchTool
 
         CanaryContractProfile contractProfile = CanaryContractProfile.For(mode);
 
-        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query, LexicalEvidence.None);
+        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(request.Query);
         string queryClass = CanaryQueryClassifier.Classify(op, request.Query, policyRoute);
         CanaryVectorProbe vectorProbe = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
             ? vectorStateProbe()
@@ -1949,6 +1949,7 @@ public sealed class SearchTool
             UtcDate = utcDate,
             QueryClass = queryClass,
             Eligibility = eligibility,
+            PolicyVersion = SemanticQueryPolicy.PolicyVersion,
             Status = CanaryShadowStatus.Skipped,
         };
 
@@ -2056,6 +2057,7 @@ public sealed class SearchTool
             UtcDate = utcDate,
             QueryClass = queryClass,
             Eligibility = eligibility,
+            PolicyVersion = SemanticQueryPolicy.PolicyVersion,
         };
 
         if (eligibility != CanaryEligibility.Eligible)
@@ -2248,7 +2250,9 @@ public sealed class SearchTool
             ArgumentNullException.ThrowIfNull(index);
             ArgumentNullException.ThrowIfNull(request);
 
-            SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query, EvidenceFrom(request.Candidates));
+            SemanticQueryRoute route = SemanticQueryPolicy.Route(request.Query);
+            SemanticCandidateAdmission admission =
+                SemanticQueryPolicy.DecideAdmission(SearchRouteExecutor.EvidenceFrom(request.Candidates));
             int k = Math.Clamp(request.Limit * 2, MinimumRecall, SemanticSearchArm.MaxCandidates);
             SemanticQueryResult result = openArm(request.WorkspaceRoot)
                 .QuerySymbolsAsync(request.Query, k, match => Admits(index, request, match))
@@ -2268,8 +2272,11 @@ public sealed class SearchTool
                     semantic.Add(new SemanticRankedCandidate(ToCandidate(symbol, score: 0), hit.Rank));
             }
 
-            IReadOnlyList<FusedCandidate> fused =
-                RrfFusion.Fuse(request.Candidates, semantic, RrfFusion.WeightsFor(route.HybridClass));
+            IReadOnlyList<FusedCandidate> fused = SearchRouteExecutor.ApplyAdmission(
+                request.Candidates,
+                semantic,
+                RrfFusion.WeightsFor(route.HybridClass),
+                admission);
             LastFused = fused;
             return fused.Count > 0 ? fused : null;
         }
@@ -2277,12 +2284,6 @@ public sealed class SearchTool
         private static bool Admits(ISymbolLookupIndex index, SymbolFusionRequest request, VectorMatch match) =>
             index.FindBySymbolId(match.UnitId) is { } symbol && request.Allows(symbol);
 
-        private static LexicalEvidence EvidenceFrom(IReadOnlyList<SymbolCandidate> candidates) => candidates.Count switch
-        {
-            0 => LexicalEvidence.None,
-            1 => new LexicalEvidence(1, candidates[0].Score, 0),
-            _ => new LexicalEvidence(candidates.Count, candidates[0].Score, candidates[1].Score),
-        };
     }
 
     /// <summary>
@@ -2411,7 +2412,7 @@ public sealed class SearchTool
                 offServingPolicy);
         }
 
-        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute policyRoute = SemanticQueryPolicy.Route(query);
         string queryClass = CanaryQueryClassifier.Classify(op, query, policyRoute);
         CanaryVectorProbe vectorProbe = CanaryEligibility.RequiresVectorProbe(op, semanticDisabled, queryClass)
             ? vectorStateProbe()
@@ -2487,6 +2488,7 @@ public sealed class SearchTool
             UtcDate = utcDate,
             QueryClass = queryClass,
             Eligibility = eligibility,
+            PolicyVersion = SemanticQueryPolicy.PolicyVersion,
         };
 
         if (eligibility != CanaryEligibility.Eligible)
@@ -3075,7 +3077,7 @@ public sealed class SearchTool
         string? language = null,
         int candidateLimit = DefaultLimit)
     {
-        SemanticQueryRoute route = SemanticQueryPolicy.Route(query, LexicalEvidence.None);
+        SemanticQueryRoute route = SemanticQueryPolicy.Route(query);
         if (!route.IsHybrid)
             return null;
 
@@ -3083,6 +3085,8 @@ public sealed class SearchTool
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         return lexical =>
         {
+            SemanticCandidateAdmission admission =
+                SemanticQueryPolicy.DecideAdmission(ContentEvidenceFrom(lexical));
             int semanticDepth = excludeTests || filters.HasAny
                 ? SemanticSearchArm.MaxCandidates
                 : Math.Clamp(
@@ -3103,8 +3107,44 @@ public sealed class SearchTool
                 contentKinds ?? WorkspaceContentSearchKinds,
                 excludeTests,
                 filters);
-            return FuseContentHits(lexical, materialized, semantic.Hits, weights);
+            if (!admission.AllowsExpansion)
+            {
+                var lexicalIds = new HashSet<(string Path, int Line)>(
+                    lexical.Select(static hit => (hit.Path, hit.Line)));
+                materialized = [.. materialized.Where(hit => lexicalIds.Contains((hit.Path, hit.Line)))];
+            }
+
+            IReadOnlyList<ContentSearchHit> fused =
+                FuseContentHits(lexical, materialized, semantic.Hits, weights);
+            return ProtectContentPrefix(fused, lexical, admission.ProtectedLexicalCount);
         };
+    }
+
+    private static LexicalEvidence ContentEvidenceFrom(IReadOnlyList<ContentSearchHit> lexical) => lexical.Count switch
+    {
+        0 => LexicalEvidence.None,
+        1 => new LexicalEvidence(1, lexical[0].Score, 0),
+        _ => new LexicalEvidence(lexical.Count, lexical[0].Score, lexical[1].Score),
+    };
+
+    private static IReadOnlyList<ContentSearchHit> ProtectContentPrefix(
+        IReadOnlyList<ContentSearchHit> fused,
+        IReadOnlyList<ContentSearchHit> lexical,
+        int protectedLexicalCount)
+    {
+        if (protectedLexicalCount <= 0 || fused.Count <= 1)
+            return fused;
+
+        var protectedIds = new HashSet<(string Path, int Line)>();
+        var ordered = new List<ContentSearchHit>(fused.Count);
+        foreach (ContentSearchHit hit in lexical.Take(protectedLexicalCount))
+        {
+            if (protectedIds.Add((hit.Path, hit.Line)))
+                ordered.Add(hit);
+        }
+
+        ordered.AddRange(fused.Where(hit => !protectedIds.Contains((hit.Path, hit.Line))));
+        return ordered;
     }
 
     /// <summary>
@@ -3425,9 +3465,9 @@ public sealed class SearchTool
         if (_semanticArm is not { } arm)
             return null;
 
-        // Rescue only runs when the lexical arms already came back weak or empty, so that IS the evidence the
-        // policy would otherwise read off a ranking — there is no stronger lexical signal left to consult.
-        if (!SemanticQueryPolicy.Route(query, LexicalEvidence.None).IsHybrid)
+        // Rescue only runs after the lexical arms came back weak or empty, so expansion is the only applicable
+        // admission mode; query shape still decides whether semantic retrieval is eligible at all.
+        if (!SemanticQueryPolicy.Route(query).IsHybrid)
             return null;
 
         var visibility = new SymbolVisibilityPolicy(
