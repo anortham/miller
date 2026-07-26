@@ -40,14 +40,19 @@ window.
 `limit` is 1 through 100. Blank `content_kind` defaults to `external_file`;
 explicit `all` searches workspace source, docs, config, external files, and
 web content. Workspace corpus kinds are revision-checked against `symbols.db`.
-A stale current corpus is never searched as if current.
+A stale current corpus is never searched as if current. Each of the five kinds
+is isolated independently, so one unavailable workspace kind cannot hide
+healthy imported results or the failure state of the other workspace kinds.
 
 Cross-workspace results are merged by local rank, then stable workspace and
 source keys. Raw BM25 scores from different corpora are not compared. With
 `workspace_id=all|registered`, a stale or broken workspace is isolated and
 reported while healthy workspaces still return results. An explicit single
 workspace selector fails directly. At most three degraded-workspace detail
-objects are rendered; the exact total and omitted-detail count remain visible.
+objects are rendered; the exact distinct-workspace total and omitted-detail count remain visible. Multiple failing
+content kinds in one workspace are collapsed into one workspace detail with a bounded `failed_kinds` array; the
+prose message is advisory and may be truncated. An imports-only workspace uses
+`diagnostic_code=content_corpus_imports_only`.
 When failures prevent a complete zero-hit claim, the diagnostic is
 `workspace_search_incomplete`, not `no_results`, and the first recovery action
 refreshes a failed workspace.
@@ -78,7 +83,9 @@ broad query does not materialize the complete corpus text in managed memory.
 
 The corpus read window is at most 200 lines and always retains the requested
 line. MCP rendering starts with that full window, then removes the farthest
-outer lines only when required by the 12 KiB response ceiling.
+outer lines only when required by the 12 KiB response ceiling. Oversized
+windows are centered on the requested line when possible, then shifted to the
+start or end boundary so the returned page remains full.
 
 MCP JSON read is schema v3 and reports:
 
@@ -86,17 +93,22 @@ MCP JSON read is schema v3 and reports:
 - returned line range and count;
 - `omitted_before`, `omitted_after`, and `output_truncated`;
 - per-line truncation and `truncated_line_count`;
-- a directly callable continuation at the first omitted line.
+- directly callable backward and forward continuations whenever lines were omitted on the corresponding side.
 
 Compact output reports source-window clamping even when the bounded window ends
-at the last source line. Forward continuation is shown only when unread lines
-remain after the returned window, so a forward continuation chain terminates.
+at the last source line. It emits both earlier and forward recovery calls when a centered window omits both sides.
+Forward continuation is shown only when unread lines remain after the returned window, so a forward continuation
+chain terminates.
 Line text and path metadata are bounded independently of import size.
 
 `content_hash` is shared by import, search, read, shape, and list. A caller can
 detect source replacement between discovery and use without re-reading content.
 Shape and read obtain source metadata and chunks from one SQLite read
 transaction.
+For `workspace_source`, `workspace_docs`, and `workspace_config`, both operations also compare the corpus revision
+to the selected workspace's current `symbols.db` revision before returning text. A stale corpus fails with the
+same actionable freshness diagnostic as workspace-content search. Imported `external_file` and `web` sources are
+not workspace-versioned.
 
 ## List and shape
 

@@ -6,9 +6,9 @@ allowed-tools: mcp__miller__edit, mcp__miller__inspect, mcp__miller__impact, mcp
 
 # Miller Editing
 
-Use Miller's index-aware `edit` tool for existing indexed files. It previews a diff by default, blocks stale
-targets unless you explicitly allow stale edits, and can make localized text edits without reading a whole file
-when you provide a small selector.
+Use Miller's index-aware `edit` tool for existing indexed files. It previews a diff by default and blocks stale
+indexed spans. Only `replace_text` can explicitly allow a stale index because it proves its match against current
+disk text.
 
 ## When To Use
 
@@ -72,7 +72,8 @@ edit(operation="...", target="...", new_text="...", apply=true)
 workspace(operation="refresh")
 ```
 
-Use `allow_stale=true` only when the user explicitly accepts the risk or the edit is purely mechanical and the current disk state was independently checked.
+Use `allow_stale=true` only for `replace_text` after independently checking current disk state. Symbol-body,
+signature, insert, doc, and rename operations require fresh indexed spans even when the user accepts the risk.
 
 ## Match Recovery
 
@@ -83,7 +84,8 @@ fuzzy matches after verifying the span against current disk text. If preview is 
 2. Add `anchor="<nearby text>"` when the old text appears in multiple places.
 3. Add `query="<nearby text>"` to use indexed content as a candidate finder.
 4. Use `match_mode="exact"` when whitespace-tolerant or fuzzy matching would be unsafe.
-5. Use `occurrence="all"` only when every match should change.
+5. Use `occurrence="all"` only when every whole-file match should change; do not combine it with `line`, `anchor`,
+   or `query`.
 
 ## Rules
 

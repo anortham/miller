@@ -27,10 +27,12 @@ namespace Miller.Server.Tools;
 ///   <item>Plan the byte-span edits (<see cref="EditPlanner"/> / <see cref="RenamePlanner"/>) → per-file
 ///   <see cref="PlannedEdit"/> + a <see cref="UnifiedDiff"/>. A planner error → a clean message.</item>
 ///   <item>preview (the default, <c>apply=false</c>) → return the diff preview (+ rename site summary), write
-///   NOTHING, and skip the freshness gate (the gate guards the WRITE).</item>
+///   no source files, and skip the source freshness gate. A stale indexed candidate may still spend the shared
+///   recovery budget requesting single-file index convergence before the preview is returned.</item>
 ///   <item><c>apply=true</c> → run the freshness gate per touched file (refuse if stale unless
-///   <c>allow_stale</c>); then <see cref="EditApplier"/> writes atomically (TOCTOU + rollback); then
-///   write-through converges the index (<see cref="IEditWriteThrough"/>).</item>
+///   <c>allow_stale</c>); then <see cref="EditApplier"/> applies with TOCTOU checks and rollback, reporting any
+///   rollback failure as a partial apply; then write-through converges the index
+///   (<see cref="IEditWriteThrough"/>).</item>
 /// </list>
 ///
 /// The edit operates on whatever is on disk now; the index supplies only the byte spans (symbol ops) /
@@ -44,6 +46,14 @@ public sealed class EditService
     private const string FailureInvalidRequest = "invalid_request";
     private const string FailureTargetNotFound = "target_not_found";
     private const string FailureApplyFailed = "apply_failed";
+    private const string FailurePartialApply = "partial_apply";
+    private const int RenameDiffMaxBytes = 4 * 1024;
+    private const int RenameSummaryMaxBytes = 1024;
+    private const int MaxRenameEvidenceSitesPerTier = 8;
+    private const int MaxRenameCoverageRows = 8;
+    private const int MaxRenameEvidencePathBytes = 256;
+    private const int MaxPartialApplyPaths = 20;
+    private const int MaxDiskAnchorCandidates = 32;
     /// <summary>The bucket for a known failure path that produced no more specific classification.</summary>
     internal const string FailureUnknown = "unknown";
 
@@ -54,6 +64,7 @@ public sealed class EditService
     private readonly SmartTargetResolver _resolver;
     private readonly string _dbPath;
     private readonly string _workspaceRoot;
+    private readonly string _canonicalWorkspaceRoot;
     private readonly EditApplier _applier;
     private readonly IEditWriteThrough _writeThrough;
     private readonly IndexedSourceTextReader _indexedSourceTextReader;
@@ -100,7 +111,8 @@ public sealed class EditService
         _index = index;
         _resolver = resolver;
         _dbPath = dbPath;
-        _workspaceRoot = workspaceRoot;
+        _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _canonicalWorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(workspaceRoot);
         _applier = applier;
         _writeThrough = writeThrough;
         _indexedSourceTextReader = indexedSourceTextReader ?? new IndexedSourceTextReader();
@@ -125,6 +137,10 @@ public sealed class EditService
         /// (design §7.5). Telemetry-only: the tool shell turns it into the <c>wait_reason</c> enum.
         /// </summary>
         public bool StaleWaitPerformed { get; init; }
+        public bool PartiallyApplied { get; init; }
+        public IReadOnlyList<string> FilesLeftModified { get; init; } = [];
+        public int FilesLeftModifiedTotalCount { get; init; }
+        public int FilesLeftModifiedOmittedCount { get; init; }
     }
 
     /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
@@ -147,9 +163,16 @@ public sealed class EditService
             return Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json,
                 failureReason: FailureInvalidRequest);
 
-        return op == EditOperation.RenameSymbol
-            ? ExecuteRename(request, json)
-            : ExecuteSingleFile(request, op, occurrence, json);
+        try
+        {
+            return op == EditOperation.RenameSymbol
+                ? ExecuteRename(request, json)
+                : ExecuteSingleFile(request, op, occurrence, json);
+        }
+        catch (InvalidEditTargetPathException ex)
+        {
+            return Error(ex.Message, json, failureReason: FailureInvalidRequest);
+        }
     }
 
     // ---------- single-file operations ----------
@@ -222,13 +245,19 @@ public sealed class EditService
         EditMatchEvidence? evidence = null;
         EditPlan plan;
         bool staleWaitPerformed = false;
+        TimeSpan recoveryBudget = _recovery.Timeout;
         if (op == EditOperation.ReplaceText)
         {
             if (request.NewText is null)
                 return Error("new_text is required for replace_text.", json,
                     failureReason: FailureInvalidRequest);
 
-            var replace = PlanReplaceText(relativePath, content, request, occurrence);
+            var replace = PlanReplaceText(
+                relativePath,
+                content,
+                request,
+                occurrence,
+                ref recoveryBudget);
             staleWaitPerformed = replace.StaleWaitPerformed;
             if (replace.ErrorMessage is not null)
                 return Error(replace.ErrorMessage, json,
@@ -279,12 +308,22 @@ public sealed class EditService
 
         var planned = new PlannedEdit(absPath, content, newContent, edits);
         return FinishSingleFile(
-            request, op, occurrence, relativePath, planned, json, allowRecovery, evidence, staleWaitPerformed);
+            request,
+            op,
+            occurrence,
+            relativePath,
+            planned,
+            json,
+            allowRecovery,
+            recoveryBudget,
+            evidence,
+            staleWaitPerformed);
     }
 
     private EditResult FinishSingleFile(
         EditRequest request, EditOperation op, Occurrence occurrence,
-        string relativePath, PlannedEdit planned, bool json, bool allowRecovery, EditMatchEvidence? evidence = null,
+        string relativePath, PlannedEdit planned, bool json, bool allowRecovery, TimeSpan recoveryBudget,
+        EditMatchEvidence? evidence = null,
         bool staleWaitPerformed = false)
     {
         string diff = UnifiedDiff.Render(planned.OldContent, planned.NewContent, relativePath);
@@ -293,16 +332,26 @@ public sealed class EditService
             return Preview(diff, json, renameSummary: null, siteCount: 0, evidence) with
             { StaleWaitPerformed = staleWaitPerformed };
 
-        // --- apply path: freshness gate (with gate-time self-heal), then atomic write, then write-through ---
         var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
         bool fresh = gate.Result == FreshnessResult.Fresh;
-        if (!fresh && !request.AllowStale)
+        if (!fresh && (op != EditOperation.ReplaceText || !request.AllowStale))
         {
-            TimeSpan recoveryBudget = _recovery.Timeout;
+            bool recoveryWait = false;
             fresh = allowRecovery &&
-                TryRecoverFreshness(relativePath, planned.FilePath, planned.OldContent, ref recoveryBudget);
+                TryRecoverFreshness(
+                    relativePath,
+                    planned.FilePath,
+                    planned.OldContent,
+                    ref recoveryBudget,
+                    out recoveryWait);
+            staleWaitPerformed |= recoveryWait;
             if (!fresh)
-                return StaleBlocked(relativePath, gate.IndexedContentFound, json);
+                return StaleBlocked(
+                    relativePath,
+                    gate.IndexedContentFound,
+                    json,
+                    allowStaleSafe: op == EditOperation.ReplaceText) with
+                { StaleWaitPerformed = staleWaitPerformed };
 
             // Recovery converged the index, but a SYMBOL op's byte spans were read from the PRE-recovery index —
             // if the drift moved the symbol (e.g. lines prepended above it), those spans now point at the wrong
@@ -312,12 +361,26 @@ public sealed class EditService
             // known-fresh (allowRecovery=false): it never re-enters recovery, and if the symbol no longer
             // resolves it returns the existing clean not-found/no-span error rather than applying a stale plan.
             if (op != EditOperation.ReplaceText)
-                return ExecuteSingleFile(request, op, occurrence, json, allowRecovery: false);
+            {
+                EditResult retry = ExecuteSingleFile(request, op, occurrence, json, allowRecovery: false);
+                return retry with
+                {
+                    StaleWaitPerformed = staleWaitPerformed || retry.StaleWaitPerformed,
+                };
+            }
         }
 
         var applyResult = _applier.Apply([planned]);
         if (!applyResult.Success)
-            return Error(applyResult.Message, json, fresh, FailureApplyFailed);
+        {
+            if (applyResult.PartiallyApplied)
+                return PartialApply(applyResult, json, fresh);
+            return Error(
+                applyResult.Message,
+                json,
+                fresh,
+                FailureApplyFailed);
+        }
 
         _writeThrough.Converge([planned.FilePath]);
         return Applied(diff, staleAllowed: !fresh && request.AllowStale, filesWritten: applyResult.FilesWritten,
@@ -328,32 +391,59 @@ public sealed class EditService
         string relativePath,
         string content,
         EditRequest request,
-        Occurrence occurrence)
+        Occurrence occurrence,
+        ref TimeSpan recoveryBudget)
     {
         TryParseMatchMode(request.MatchMode, out var matchMode);
         string oldText = request.OldText ?? string.Empty;
 
         if (HasIndexedSelector(request))
         {
-            long expectedRevision = ExpectedWorkspaceRevision();
-            IndexedEditCandidateResult candidateResult = _indexedEditCandidateReader.FindCandidates(
-                _dbPath,
-                relativePath,
-                expectedRevision,
-                oldText,
-                request.Query,
-                request.Anchor,
-                request.Line);
+            if (occurrence == Occurrence.All)
+            {
+                return ReplaceTextPlanResult.Error(
+                    "occurrence=all cannot be combined with query, anchor, or line because indexed selectors " +
+                    "narrow matching to bounded content windows. Retry without indexed selectors for a " +
+                    "whole-file replacement.",
+                    FailureInvalidRequest);
+            }
+
+            IndexedEditCandidateResult candidateResult;
+            try
+            {
+                long expectedRevision = ExpectedWorkspaceRevision();
+                candidateResult = _indexedEditCandidateReader.FindCandidates(
+                    _dbPath,
+                    relativePath,
+                    expectedRevision,
+                    matchMode == TextMatchMode.Exact ? oldText : null,
+                    request.Query,
+                    request.Anchor,
+                    request.Line);
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or SqliteException or IOException or InvalidOperationException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                candidateResult = IndexedEditCandidateResult.Unavailable(
+                    "workspace revision unavailable: " + ex.Message);
+            }
 
             if (candidateResult.State == IndexedEditCandidateState.Current)
             {
                 ReplaceTextPlanResult planned = PlanReplaceTextFromIndexedCandidates(
-                    content, request, occurrence, matchMode, candidateResult);
+                    relativePath, content, request, occurrence, matchMode, candidateResult);
                 if (planned.FailureReason != FailureStaleTarget)
                     return planned;
 
                 ReplaceTextPlanResult? converged = WaitForCandidateConvergence(
-                    relativePath, content, request, occurrence, matchMode, out bool waited);
+                    relativePath,
+                    content,
+                    request,
+                    occurrence,
+                    matchMode,
+                    ref recoveryBudget,
+                    out bool waited);
                 return (converged ?? planned) with { StaleWaitPerformed = waited };
             }
 
@@ -365,15 +455,12 @@ public sealed class EditService
                     FailureNoMatch);
             }
 
-            var fallback = TextReplaceMatcher.Plan(content, oldText, occurrence, matchMode);
-            return ReplaceTextPlanResult.Success(
-                fallback.Plan,
-                EvidenceFromPlan(
-                    fallback,
-                    matchSource: "disk_after_index_unavailable",
-                    contentIndexState: "unavailable",
-                    occurrence,
-                    candidateReason: candidateResult.Reason));
+            return PlanReplaceTextFromDiskSelectors(
+                content,
+                request,
+                occurrence,
+                matchMode,
+                candidateResult.Reason);
         }
 
         var diskPlan = TextReplaceMatcher.Plan(content, oldText, occurrence, matchMode);
@@ -388,6 +475,7 @@ public sealed class EditService
     }
 
     private ReplaceTextPlanResult PlanReplaceTextFromIndexedCandidates(
+        string relativePath,
         string content,
         EditRequest request,
         Occurrence occurrence,
@@ -397,16 +485,53 @@ public sealed class EditService
         var successes = new List<(TextReplaceMatchPlan Plan, IndexedEditCandidate Candidate)>();
         foreach (IndexedEditCandidate indexedCandidate in candidateResult.Candidates)
         {
-            TextWindow window = FocusIndexedCandidateWindow(content, indexedCandidate, request);
-            TextReplaceMatchPlan windowPlan = TextReplaceMatcher.Plan(window.Text, request.OldText ?? string.Empty, occurrence, matchMode);
-            if (!windowPlan.IsSuccess)
-                continue;
+            IReadOnlyList<TextWindow> windows = FocusIndexedCandidateWindows(
+                content,
+                indexedCandidate,
+                request,
+                out bool anchorLimitExceeded);
+            if (anchorLimitExceeded)
+            {
+                return ReplaceTextPlanResult.Error(
+                    $"anchor matched more than {MaxDiskAnchorCandidates} disk locations in one indexed " +
+                    "candidate. Retry with a line selector.",
+                    FailureAmbiguousMatch);
+            }
+            foreach (TextWindow window in windows)
+            {
+                TextReplaceMatchPlan windowPlan = TextReplaceMatcher.Plan(
+                    window.Text,
+                    request.OldText ?? string.Empty,
+                    occurrence,
+                    matchMode);
+                if (!windowPlan.IsSuccess)
+                    continue;
+                if (SelectorWindowIsAmbiguous(request, window, windowPlan))
+                {
+                    return ReplaceTextPlanResult.Error(
+                        "selector window contains multiple plausible old_text locations. Retry with a more " +
+                        "specific anchor or a larger exact old_text.",
+                        FailureAmbiguousMatch);
+                }
 
-            successes.Add((OffsetPlan(windowPlan, window), indexedCandidate));
+                TextReplaceMatchPlan offsetPlan = OffsetPlan(windowPlan, window);
+                if (!successes.Any(success => SamePhysicalEdits(success.Plan, offsetPlan)))
+                    successes.Add((offsetPlan, indexedCandidate));
+            }
         }
 
         if (successes.Count == 0)
         {
+            string absolutePath = ToAbsolute(relativePath);
+            var gate = FreshnessGate.Check(_dbPath, relativePath, absolutePath, content);
+            if (gate.Result == FreshnessResult.Fresh)
+            {
+                return ReplaceTextPlanResult.Error(
+                    "old_text did not match current disk text within the indexed selector window. Retry with " +
+                    "current old_text, a different query, anchor, or line, or without indexed selectors.",
+                    FailureNoMatch);
+            }
+
             return ReplaceTextPlanResult.Error(
                 "indexed edit candidates were found, but old_text did not verify against the current disk text. " +
                 "Run workspace refresh or retry with current old_text.",
@@ -454,6 +579,7 @@ public sealed class EditService
         EditRequest request,
         Occurrence occurrence,
         TextMatchMode matchMode,
+        ref TimeSpan recoveryBudget,
         out bool waited)
     {
         string absPath = ToAbsolute(relativePath);
@@ -463,57 +589,217 @@ public sealed class EditService
             return null;
 
         var elapsed = Stopwatch.StartNew();
-        while (true)
+        try
         {
-            IndexedEditCandidateResult converged;
-            try
+            while (true)
             {
-                converged = _indexedEditCandidateReader.FindCandidates(
-                    _dbPath, relativePath, ExpectedWorkspaceRevision(), request.OldText ?? string.Empty,
-                    request.Query, request.Anchor, request.Line);
-            }
-            catch (Exception ex) when (ex is SqliteException or FileNotFoundException or InvalidOperationException)
-            {
-                // A converge in flight can transiently break the revision read (the DB mid-swap or locked).
-                // Execute promises never to throw for an expected condition, so treat it as not-yet-converged.
-                converged = IndexedEditCandidateResult.Unavailable("transient read during converge");
-            }
+                IndexedEditCandidateResult converged;
+                try
+                {
+                    converged = _indexedEditCandidateReader.FindCandidates(
+                        _dbPath, relativePath, ExpectedWorkspaceRevision(),
+                        matchMode == TextMatchMode.Exact ? request.OldText ?? string.Empty : null,
+                        request.Query, request.Anchor, request.Line);
+                }
+                catch (Exception ex) when (ex is SqliteException or FileNotFoundException or InvalidOperationException)
+                {
+                    converged = IndexedEditCandidateResult.Unavailable("transient read during converge");
+                }
 
-            if (converged.State == IndexedEditCandidateState.Current)
-            {
-                ReplaceTextPlanResult retry = PlanReplaceTextFromIndexedCandidates(
-                    content, request, occurrence, matchMode, converged);
-                if (retry.FailureReason != FailureStaleTarget)
-                    return retry;
-            }
+                if (converged.State == IndexedEditCandidateState.Current)
+                {
+                    ReplaceTextPlanResult retry = PlanReplaceTextFromIndexedCandidates(
+                        relativePath, content, request, occurrence, matchMode, converged);
+                    if (retry.FailureReason != FailureStaleTarget)
+                        return retry;
+                }
 
-            if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= _recovery.Timeout)
-                return null;
-            Thread.Sleep(_recovery.PollInterval);
+                if (attempt == StaleRecoveryAttempt.Converged || elapsed.Elapsed >= recoveryBudget)
+                    return null;
+                Thread.Sleep(_recovery.PollInterval);
+            }
+        }
+        finally
+        {
+            recoveryBudget -= elapsed.Elapsed;
+            if (recoveryBudget < TimeSpan.Zero)
+                recoveryBudget = TimeSpan.Zero;
         }
     }
 
-    private static TextWindow FocusIndexedCandidateWindow(string content, IndexedEditCandidate candidate, EditRequest request)
+    private static IReadOnlyList<TextWindow> FocusIndexedCandidateWindows(
+        string content,
+        IndexedEditCandidate candidate,
+        EditRequest request,
+        out bool anchorLimitExceeded)
     {
+        anchorLimitExceeded = false;
+        int oldTextLines = 1 + (request.OldText?.Count(static ch => ch == '\n') ?? 0);
+        int multilineSurroundingLines = oldTextLines - 1;
+
         if (request.Line is { } line && line >= candidate.LineStart && line <= candidate.LineEnd)
-            return SliceLineWindow(content, line, line);
+        {
+            TextWindow lineWindow = SliceLineWindow(
+                content,
+                Math.Max(candidate.LineStart, line - multilineSurroundingLines),
+                Math.Min(candidate.LineEnd, line + multilineSurroundingLines));
+            return string.IsNullOrEmpty(request.Anchor) ||
+                lineWindow.Text.Contains(request.Anchor, StringComparison.Ordinal)
+                    ? [lineWindow]
+                    : [];
+        }
 
         if (!string.IsNullOrEmpty(request.Anchor))
         {
             TextWindow candidateWindow = SliceLineWindow(content, candidate.LineStart, candidate.LineEnd);
-            int anchorOffset = candidateWindow.Text.IndexOf(request.Anchor, StringComparison.Ordinal);
-            if (anchorOffset >= 0)
+            var windows = new List<TextWindow>();
+            int searchOffset = 0;
+            while (searchOffset <= candidateWindow.Text.Length - request.Anchor.Length)
             {
+                int anchorOffset = candidateWindow.Text.IndexOf(
+                    request.Anchor,
+                    searchOffset,
+                    StringComparison.Ordinal);
+                if (anchorOffset < 0)
+                    break;
+                if (windows.Count == MaxDiskAnchorCandidates)
+                {
+                    anchorLimitExceeded = true;
+                    return windows;
+                }
                 int anchorLine = candidateWindow.StartLine + CountNewLinesBefore(candidateWindow.Text, anchorOffset);
-                const int AnchorContextLines = 1;
-                return SliceLineWindow(
+                int anchorSurroundingLines = Math.Max(1, multilineSurroundingLines);
+                windows.Add(SliceLineWindow(
                     content,
-                    Math.Max(candidate.LineStart, anchorLine - AnchorContextLines),
-                    Math.Min(candidate.LineEnd, anchorLine + AnchorContextLines));
+                    Math.Max(candidate.LineStart, anchorLine - anchorSurroundingLines),
+                    Math.Min(candidate.LineEnd, anchorLine + anchorSurroundingLines)));
+                searchOffset = anchorOffset + Math.Max(1, request.Anchor.Length);
+            }
+            return windows;
+        }
+
+        return [SliceLineWindow(content, candidate.LineStart, candidate.LineEnd)];
+    }
+
+    private static bool SamePhysicalEdits(TextReplaceMatchPlan left, TextReplaceMatchPlan right)
+    {
+        if (left.Edits.Count != right.Edits.Count)
+            return false;
+
+        for (int i = 0; i < left.Edits.Count; i++)
+        {
+            if (left.Edits[i].StartByte != right.Edits[i].StartByte ||
+                left.Edits[i].EndByte != right.Edits[i].EndByte)
+                return false;
+        }
+
+        return true;
+    }
+
+    private ReplaceTextPlanResult PlanReplaceTextFromDiskSelectors(
+        string content,
+        EditRequest request,
+        Occurrence occurrence,
+        TextMatchMode matchMode,
+        string? unavailableReason)
+    {
+        if (!string.IsNullOrEmpty(request.Query))
+        {
+            return ReplaceTextPlanResult.Error(
+                "the content index is unavailable, so query cannot be enforced safely. Retry after workspace " +
+                "refresh, or retry without query.",
+                FailureStaleTarget);
+        }
+
+        int oldTextLines = 1 + (request.OldText?.Count(static ch => ch == '\n') ?? 0);
+        int surroundingLines = oldTextLines - 1;
+        var windows = new List<TextWindow>();
+        if (request.Line is { } line)
+        {
+            TextWindow window = SliceLineWindow(
+                content,
+                Math.Max(1, line - surroundingLines),
+                line + surroundingLines);
+            if (string.IsNullOrEmpty(request.Anchor) ||
+                window.Text.Contains(request.Anchor, StringComparison.Ordinal))
+            {
+                windows.Add(window);
+            }
+        }
+        else if (!string.IsNullOrEmpty(request.Anchor))
+        {
+            int searchOffset = 0;
+            int anchorCandidates = 0;
+            while (searchOffset <= content.Length - request.Anchor.Length)
+            {
+                int anchorOffset = content.IndexOf(request.Anchor, searchOffset, StringComparison.Ordinal);
+                if (anchorOffset < 0)
+                    break;
+                if (anchorCandidates == MaxDiskAnchorCandidates)
+                {
+                    return ReplaceTextPlanResult.Error(
+                        $"anchor matched more than {MaxDiskAnchorCandidates} disk locations while the content " +
+                        "index was unavailable. Retry with a line selector or after workspace refresh.",
+                        FailureAmbiguousMatch);
+                }
+                anchorCandidates++;
+                int anchorLine = 1 + CountNewLinesBefore(content, anchorOffset);
+                int anchorSurroundingLines = Math.Max(1, surroundingLines);
+                windows.Add(SliceLineWindow(
+                    content,
+                    Math.Max(1, anchorLine - anchorSurroundingLines),
+                    anchorLine + anchorSurroundingLines));
+                searchOffset = anchorOffset + Math.Max(1, request.Anchor.Length);
             }
         }
 
-        return SliceLineWindow(content, candidate.LineStart, candidate.LineEnd);
+        var successes = new List<TextReplaceMatchPlan>();
+        foreach (TextWindow window in windows)
+        {
+            TextReplaceMatchPlan windowPlan = TextReplaceMatcher.Plan(
+                window.Text,
+                request.OldText ?? string.Empty,
+                occurrence,
+                matchMode);
+            if (!windowPlan.IsSuccess)
+                continue;
+            if (SelectorWindowIsAmbiguous(request, window, windowPlan))
+            {
+                return ReplaceTextPlanResult.Error(
+                    "selector window contains multiple plausible old_text locations. Retry with a more specific " +
+                    "anchor or a larger exact old_text.",
+                    FailureAmbiguousMatch);
+            }
+            TextReplaceMatchPlan offsetPlan = OffsetPlan(windowPlan, window);
+            if (!successes.Any(success => SamePhysicalEdits(success, offsetPlan)))
+                successes.Add(offsetPlan);
+            if (successes.Count > 1)
+                break;
+        }
+
+        if (successes.Count == 0)
+        {
+            return ReplaceTextPlanResult.Error(
+                "old_text did not match current disk text within the requested line or anchor window.",
+                FailureNoMatch);
+        }
+        if (successes.Count > 1)
+        {
+            return ReplaceTextPlanResult.Error(
+                "multiple disk windows matched old_text while the content index was unavailable. Retry with a " +
+                "line selector or after workspace refresh.",
+                FailureAmbiguousMatch);
+        }
+
+        TextReplaceMatchPlan plan = successes[0];
+        return ReplaceTextPlanResult.Success(
+            plan.Plan,
+            EvidenceFromPlan(
+                plan,
+                matchSource: "disk_selector_after_index_unavailable",
+                contentIndexState: "unavailable",
+                occurrence,
+                candidateReason: unavailableReason));
     }
 
     private static int CountNewLinesBefore(string text, int exclusiveEnd)
@@ -548,7 +834,8 @@ public sealed class EditService
             plan.RequestedMode,
             plan.MatchedMode,
             matches,
-            plan.MatchCount);
+            plan.MatchCount,
+            plan.AmbiguousMatchCount);
     }
 
     private static EditMatchEvidence EvidenceFromPlan(
@@ -568,6 +855,7 @@ public sealed class EditService
             lineStart,
             lineEnd,
             plan.MatchCount,
+            plan.Matches.Count,
             OccurrenceName(occurrence),
             DiskVerified: plan.IsSuccess,
             candidateReason,
@@ -585,6 +873,54 @@ public sealed class EditService
         !string.IsNullOrEmpty(request.Query) ||
         !string.IsNullOrEmpty(request.Anchor) ||
         request.Line is not null;
+
+    private static bool SelectorWindowIsAmbiguous(
+        EditRequest request,
+        TextWindow window,
+        TextReplaceMatchPlan plan)
+    {
+        if (string.IsNullOrEmpty(request.Anchor) && request.Line is null)
+            return false;
+        if (plan.AmbiguousMatchCount > 1)
+            return true;
+
+        string oldText = request.OldText ?? string.Empty;
+        if (oldText.Length == 0)
+            return false;
+
+        int from = 0;
+        while (from <= window.Text.Length - oldText.Length)
+        {
+            int at = window.Text.IndexOf(oldText, from, StringComparison.Ordinal);
+            if (at < 0)
+                break;
+
+            int literalStart = at;
+            int literalEnd = at + oldText.Length;
+            while (literalStart < literalEnd && char.IsWhiteSpace(window.Text[literalStart]))
+                literalStart++;
+            while (literalEnd > literalStart && char.IsWhiteSpace(window.Text[literalEnd - 1]))
+                literalEnd--;
+            if (literalStart == literalEnd)
+            {
+                literalStart = at;
+                literalEnd = at + oldText.Length;
+            }
+
+            int startLine = 1 + CountNewLinesBefore(window.Text, literalStart);
+            int endLine = 1 + CountNewLinesBefore(window.Text, Math.Max(literalStart, literalEnd - 1));
+            if (!plan.Matches.Any(match =>
+                    startLine >= match.StartLine &&
+                    endLine <= match.EndLine))
+            {
+                return true;
+            }
+
+            from = at + 1;
+        }
+
+        return false;
+    }
 
     private static TextWindow SliceLineWindow(string content, int lineStart, int lineEnd)
     {
@@ -703,11 +1039,22 @@ public sealed class EditService
                     oldNameByteLength))
                 .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
                 .ToHashSet();
-            fallbackSites = ExtractReader.ReadIdentifierSites(_dbPath, oldName)
+            IReadOnlyList<IdentifierSite> nameBasedSites = ExtractReader.ReadIdentifierSites(_dbPath, oldName)
                 .Where(site =>
                     !exactKeys.Contains((site.FilePath, site.StartByte, site.EndByte))
                     && !resolvedHomonymKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
                 .ToArray();
+            int unusableFallbackSites = nameBasedSites.Count(
+                site => site.StartByte < 0 || site.EndByte - site.StartByte != oldNameByteLength);
+            if (unusableFallbackSites > 0)
+            {
+                return Error(
+                    $"fallback rename coverage includes {unusableFallbackSites} site(s) without a usable byte span. " +
+                    "Refresh the workspace and retry.",
+                    json,
+                    failureReason: FailureNoMatch);
+            }
+            fallbackSites = nameBasedSites;
         }
 
         string? missingSelectedFile = exactSites
@@ -726,7 +1073,32 @@ public sealed class EditService
         IReadOnlyList<IdentifierSite> sites = exactSites.Concat(fallbackSites).ToArray();
         var span = ExtractReader.ReadEditSpan(_dbPath, target.SymbolId);
 
-        var files = BuildRenameFiles(oldName, sites, target, span, out IdentifierSite? definitionSite);
+        var files = BuildRenameFiles(
+            oldName,
+            sites,
+            target,
+            span,
+            out IdentifierSite? definitionSite,
+            out IdentifierSite? invalidSite);
+        if (invalidSite is not null)
+        {
+            string invalidPath = ToAbsolute(invalidSite.FilePath);
+            var invalidGate = FreshnessGate.Check(
+                _dbPath,
+                invalidSite.FilePath,
+                invalidPath,
+                ReadDisk(invalidPath));
+            if (invalidGate.Result == FreshnessResult.Fresh || !IsApply(request))
+            {
+                return Error(
+                    $"rename coverage includes a byte span in '{invalidSite.FilePath}' that does not match " +
+                    $"the old identifier '{oldName}'. Refresh the workspace and retry.",
+                    json,
+                    failureReason: invalidGate.Result == FreshnessResult.Fresh
+                        ? FailureNoMatch
+                        : FailureStaleTarget);
+            }
+        }
         if (definitionSite is null)
         {
             return Error(
@@ -769,10 +1141,9 @@ public sealed class EditService
         if (!IsApply(request))
             return Preview(diff, json, summary, plan.TotalSites, renameEvidence: renameEvidence);
 
-        // --- apply: gate EVERY touched file (with gate-time self-heal under ONE shared budget), then atomic
-        // multi-file write, then per-file write-through ---
         bool anyStale = false;
         bool anyRecovered = false;
+        bool staleWaitPerformed = false;
         TimeSpan renameRecoveryBudget = _recovery.Timeout;
         foreach (var pe in plan.PlannedEdits)
         {
@@ -780,12 +1151,23 @@ public sealed class EditService
             var gate = FreshnessGate.Check(_dbPath, rel, pe.FilePath, pe.OldContent);
             if (gate.Result != FreshnessResult.Fresh)
             {
-                if (request.AllowStale)
-                    anyStale = true;
-                else if (allowRecovery && TryRecoverFreshness(rel, pe.FilePath, pe.OldContent, ref renameRecoveryBudget))
+                bool recoveryWait = false;
+                if (allowRecovery && TryRecoverFreshness(
+                    rel,
+                    pe.FilePath,
+                    pe.OldContent,
+                    ref renameRecoveryBudget,
+                    out recoveryWait))
+                {
                     anyRecovered = true;
+                    staleWaitPerformed |= recoveryWait;
+                }
                 else
-                    return StaleBlocked(rel, gate.IndexedContentFound, json);
+                {
+                    staleWaitPerformed |= recoveryWait;
+                    return StaleBlocked(rel, gate.IndexedContentFound, json, allowStaleSafe: false) with
+                    { StaleWaitPerformed = staleWaitPerformed };
+                }
             }
         }
 
@@ -795,14 +1177,28 @@ public sealed class EditService
         // (the retry gates every file again, known-fresh, and never re-enters recovery). If the symbol no
         // longer resolves the retry returns the existing clean not-found error rather than applying stale sites.
         if (anyRecovered)
-            return ExecuteRename(request, json, allowRecovery: false);
+        {
+            EditResult retry = ExecuteRename(request, json, allowRecovery: false);
+            return retry with
+            {
+                StaleWaitPerformed = staleWaitPerformed || retry.StaleWaitPerformed,
+            };
+        }
 
         var applyResult = _applier.Apply(plan.PlannedEdits);
         if (!applyResult.Success)
+        {
+            if (applyResult.PartiallyApplied)
+                return PartialApply(applyResult, json, !anyStale);
             // The gate has been evaluated for every touched file (anyStale), so report the freshness verdict on
             // failure too — matching the single-file apply-failure path (FinishSingleFile) so telemetry's
             // IndexFresh is populated whenever the gate ran.
-            return Error(applyResult.Message, json, !anyStale, FailureApplyFailed);
+            return Error(
+                applyResult.Message,
+                json,
+                !anyStale,
+                FailureApplyFailed);
+        }
 
         _writeThrough.Converge(plan.PlannedEdits.Select(p => p.FilePath).ToArray());
 
@@ -812,7 +1208,8 @@ public sealed class EditService
             "verify the rename, then run the selected tests");
         return Applied(appliedSummary, staleAllowed: anyStale, filesWritten: applyResult.FilesWritten,
             indexFresh: !anyStale, json, resultCountOverride: plan.TotalSites,
-            renameEvidence: renameEvidence, postApplyHint: postApplyHint);
+            renameEvidence: renameEvidence, postApplyHint: postApplyHint) with
+        { StaleWaitPerformed = staleWaitPerformed };
     }
 
     private List<RenameFileInput> BuildRenameFiles(
@@ -820,24 +1217,46 @@ public sealed class EditService
         IReadOnlyList<IdentifierSite> sites,
         IndexedSymbol target,
         SymbolEditSpan? span,
-        out IdentifierSite? definitionSite)
+        out IdentifierSite? definitionSite,
+        out IdentifierSite? invalidSite)
     {
         var byFile = new Dictionary<string, List<RenameSite>>(StringComparer.Ordinal);
         var content = new Dictionary<string, string>(StringComparer.Ordinal);
+        var utf8Content = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var absolutePaths = new Dictionary<string, string>(StringComparer.Ordinal);
+        byte[] oldNameBytes = Encoding.UTF8.GetBytes(oldName);
+        invalidSite = null;
+        string Absolute(string path)
+        {
+            if (!absolutePaths.TryGetValue(path, out string? absolute))
+                absolutePaths[path] = absolute = ToAbsolute(path);
+            return absolute;
+        }
 
         foreach (var s in sites)
         {
-            string abs = ToAbsolute(s.FilePath);
+            string abs = Absolute(s.FilePath);
             if (!File.Exists(abs))
                 continue;
             if (!content.ContainsKey(s.FilePath))
+            {
                 content[s.FilePath] = ReadDisk(abs);
+                utf8Content[s.FilePath] = Encoding.UTF8.GetBytes(content[s.FilePath]);
+            }
+            byte[] fileBytes = utf8Content[s.FilePath];
+            if (s.StartByte < 0 ||
+                s.EndByte < s.StartByte ||
+                s.EndByte > fileBytes.Length ||
+                !fileBytes.AsSpan(s.StartByte, s.EndByte - s.StartByte).SequenceEqual(oldNameBytes))
+            {
+                invalidSite ??= s;
+            }
             if (!byFile.TryGetValue(s.FilePath, out var list))
                 byFile[s.FilePath] = list = [];
             list.Add(new RenameSite(s.StartByte, s.EndByte, s.StartLine, IsDefinition: false));
         }
 
-        definitionSite = AddDefinitionSite(oldName, target, span, byFile, content);
+        definitionSite = AddDefinitionSite(oldName, target, span, byFile, content, Absolute);
 
         var result = new List<RenameFileInput>(byFile.Count);
         foreach (var (path, list) in byFile)
@@ -847,20 +1266,22 @@ public sealed class EditService
                 .Select(g => g.OrderByDescending(r => r.IsDefinition).First())
                 .OrderBy(r => r.StartByte)
                 .ToArray();
-            result.Add(new RenameFileInput(ToAbsolute(path), content[path], deduped));
+            result.Add(new RenameFileInput(Absolute(path), content[path], deduped));
         }
         return result;
     }
 
     private IdentifierSite? AddDefinitionSite(
         string oldName, IndexedSymbol target, SymbolEditSpan? span,
-        Dictionary<string, List<RenameSite>> byFile, Dictionary<string, string> content)
+        Dictionary<string, List<RenameSite>> byFile,
+        Dictionary<string, string> content,
+        Func<string, string> absolute)
     {
         if (span is null)
             return null;
 
         string defRel = target.FilePath;
-        string defAbs = ToAbsolute(defRel);
+        string defAbs = absolute(defRel);
         if (!File.Exists(defAbs))
             return null;
 
@@ -946,6 +1367,19 @@ public sealed class EditService
         EditMatchEvidence? evidence = null,
         RenameEvidenceSummary? renameEvidence = null)
     {
+        diff = BoundDiff(diff);
+        if (renameSummary is not null)
+        {
+            diff = ToolOutputBudget.TruncateUtf8(
+                diff,
+                RenameDiffMaxBytes,
+                "\n… rename diff truncated; inspect the working tree for the complete preview.");
+            renameSummary = ToolOutputBudget.TruncateUtf8(
+                renameSummary,
+                RenameSummaryMaxBytes,
+                "\n… rename summary truncated; inspect the diff for retained files.");
+        }
+
         if (diff.Length == 0 && renameSummary is null)
         {
             if (json)
@@ -1020,14 +1454,25 @@ public sealed class EditService
             evidence.Target.StartLine,
             "definition",
             "exact");
-        foreach (IdentifierSite site in evidence.ExactSites)
+        foreach (IdentifierSite site in evidence.ExactSites.Take(MaxRenameEvidenceSitesPerTier - 1))
             WriteRenameSiteJson(writer, site.FilePath, site.StartLine, "reference", "exact");
         writer.WriteEndArray();
+        int exactSiteTotal = 1 + evidence.ExactSites.Count;
+        int exactSiteReturned = Math.Min(exactSiteTotal, MaxRenameEvidenceSitesPerTier);
+        writer.WriteNumber("exact_sites_total_count", exactSiteTotal);
+        writer.WriteNumber("exact_sites_returned_count", exactSiteReturned);
+        writer.WriteNumber("exact_sites_omitted_count", exactSiteTotal - exactSiteReturned);
         writer.WritePropertyName("fallback_sites");
         writer.WriteStartArray();
-        foreach (IdentifierSite site in evidence.FallbackSites)
+        foreach (IdentifierSite site in evidence.FallbackSites.Take(MaxRenameEvidenceSitesPerTier))
             WriteRenameSiteJson(writer, site.FilePath, site.StartLine, "name_based", "fallback");
         writer.WriteEndArray();
+        int fallbackSiteReturned = Math.Min(evidence.FallbackSites.Count, MaxRenameEvidenceSitesPerTier);
+        writer.WriteNumber("fallback_sites_total_count", evidence.FallbackSites.Count);
+        writer.WriteNumber("fallback_sites_returned_count", fallbackSiteReturned);
+        writer.WriteNumber(
+            "fallback_sites_omitted_count",
+            evidence.FallbackSites.Count - fallbackSiteReturned);
         writer.WritePropertyName("coverage");
         writer.WriteStartArray();
         writer.WriteStartObject();
@@ -1036,12 +1481,16 @@ public sealed class EditService
         writer.WriteString("resolution_status", "exact");
         writer.WriteNumber("count", 1);
         writer.WriteEndObject();
-        foreach (var group in evidence.ExactEvidence
-                     .GroupBy(reference => (
-                         Language: reference.Language ?? evidence.Target.Language,
-                         Kind: reference.SourceKind))
-                     .OrderBy(group => group.Key.Language, StringComparer.Ordinal)
-                     .ThenBy(group => group.Key.Kind, StringComparer.Ordinal))
+        var exactCoverage = evidence.ExactEvidence
+            .GroupBy(reference => (
+                Language: reference.Language ?? evidence.Target.Language,
+                Kind: reference.SourceKind))
+            .OrderBy(group => group.Key.Language, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.Kind, StringComparer.Ordinal)
+            .ToArray();
+        int fallbackCoverageRows = evidence.FallbackSites.Count > 0 ? 1 : 0;
+        int exactCoverageLimit = Math.Max(0, MaxRenameCoverageRows - 1 - fallbackCoverageRows);
+        foreach (var group in exactCoverage.Take(exactCoverageLimit))
         {
             writer.WriteStartObject();
             writer.WriteString("language", group.Key.Language);
@@ -1060,6 +1509,9 @@ public sealed class EditService
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
+        int coverageTotal = 1 + exactCoverage.Length + fallbackCoverageRows;
+        writer.WriteNumber("coverage_total_count", coverageTotal);
+        writer.WriteNumber("coverage_omitted_count", Math.Max(0, coverageTotal - MaxRenameCoverageRows));
         writer.WriteNumber("fallback_candidates", evidence.Coverage.FallbackAvailable);
         writer.WriteString("fallback_status", evidence.Coverage.FallbackStatus.ToString());
         writer.WriteEndObject();
@@ -1073,7 +1525,12 @@ public sealed class EditService
         string resolutionStatus)
     {
         writer.WriteStartObject();
-        writer.WriteString("file", ToRelative(ToAbsolute(filePath)));
+        writer.WriteString(
+            "file",
+            ToolOutputBudget.TruncateUtf8(
+                ToRelative(ToAbsolute(filePath)),
+                MaxRenameEvidencePathBytes,
+                "…"));
         writer.WriteNumber("line", line);
         writer.WriteString("source", source);
         writer.WriteString("resolution_status", resolutionStatus);
@@ -1087,6 +1544,11 @@ public sealed class EditService
         RenameEvidenceSummary? renameEvidence = null,
         string? postApplyHint = null)
     {
+        int outputBudget = renameEvidence is null ? ToolOutputBudget.EditDiffMaxBytes : RenameDiffMaxBytes;
+        diffOrSummary = ToolOutputBudget.TruncateUtf8(
+            diffOrSummary,
+            outputBudget,
+            "\n… diff preview truncated; inspect the working tree for the complete applied change.");
         int count = resultCountOverride ?? filesWritten;
         if (json)
         {
@@ -1120,6 +1582,78 @@ public sealed class EditService
         return new EditResult(sb.ToString().TrimEnd('\n'), true, staleAllowed, indexFresh, "ok", count);
     }
 
+    private EditResult PartialApply(EditApplier.ApplyResult applyResult, bool json, bool indexFresh)
+    {
+        IReadOnlyList<string> absolutePaths = applyResult.FilesLeftModified ?? [];
+        string? convergeFailure = null;
+        try
+        {
+            _writeThrough.Converge(absolutePaths);
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or SqliteException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            convergeFailure = ex.Message;
+        }
+
+        string[] relativePaths = absolutePaths
+            .Select(ToRelative)
+            .Select(static path => ToolOutputBudget.TruncateUtf8(path, MaxRenameEvidencePathBytes, "…"))
+            .ToArray();
+        string[] renderedPaths = relativePaths.Take(MaxPartialApplyPaths).ToArray();
+        int omittedPaths = Math.Max(0, relativePaths.Length - renderedPaths.Length);
+        string message = convergeFailure is null
+            ? applyResult.Message
+            : $"{applyResult.Message} Index convergence also failed: {convergeFailure}";
+        EditResult result;
+        if (json)
+        {
+            result = new EditResult(JsonObject(writer =>
+            {
+                writer.WriteBoolean("applied", false);
+                writer.WriteBoolean("partially_applied", true);
+                writer.WriteNumber("files_left_modified_count", relativePaths.Length);
+                writer.WriteStartArray("files_left_modified");
+                foreach (string path in renderedPaths)
+                    writer.WriteStringValue(path);
+                writer.WriteEndArray();
+                writer.WriteNumber("files_left_modified_omitted_count", omittedPaths);
+                writer.WriteBoolean("index_fresh", indexFresh);
+                writer.WriteBoolean("index_converged", convergeFailure is null);
+                writer.WriteString("failure_reason", FailurePartialApply);
+                writer.WriteString("error", message);
+            }), false, false, indexFresh, "error", relativePaths.Length, FailurePartialApply);
+        }
+        else
+        {
+            result = new EditResult(
+                $"edit: partial apply — {relativePaths.Length} file(s) remain modified: " +
+                $"{string.Join(", ", renderedPaths)}" +
+                $"{(omittedPaths > 0 ? $", … {omittedPaths} more" : string.Empty)}. {message}",
+                false,
+                false,
+                indexFresh,
+                "error",
+                relativePaths.Length,
+                FailurePartialApply);
+        }
+
+        return result with
+        {
+            PartiallyApplied = true,
+            FilesLeftModified = renderedPaths,
+            FilesLeftModifiedTotalCount = relativePaths.Length,
+            FilesLeftModifiedOmittedCount = omittedPaths,
+        };
+    }
+
+    private static string BoundDiff(string diff) =>
+        ToolOutputBudget.TruncateUtf8(
+            diff,
+            ToolOutputBudget.EditDiffMaxBytes,
+            "\n… diff preview truncated; narrow the edit target for a smaller proof.");
+
     private static void AppendEvidence(StringBuilder sb, EditMatchEvidence? evidence)
     {
         if (evidence is null)
@@ -1137,7 +1671,14 @@ public sealed class EditService
     private static void AppendEvidenceNotes(StringBuilder sb, EditMatchEvidence evidence)
     {
         var notes = new List<string>(3);
-        if (evidence.MatchCount > 1)
+        if (evidence.Occurrence == "all" && evidence.SelectedMatchCount < evidence.MatchCount)
+        {
+            int skipped = evidence.MatchCount - evidence.SelectedMatchCount;
+            notes.Add(
+                $"occurrence=all selected {evidence.SelectedMatchCount} of {evidence.MatchCount} " +
+                $"non-overlapping matches; {skipped} overlapping candidate(s) skipped");
+        }
+        else if (evidence.MatchCount > 1)
             notes.Add($"occurrence={evidence.Occurrence} of {evidence.MatchCount} matches");
         if (!evidence.DiskVerified)
             notes.Add("old_text did not verify against current disk text");
@@ -1162,6 +1703,7 @@ public sealed class EditService
         if (evidence.LineEnd is { } lineEnd)
             w.WriteNumber("line_end", lineEnd);
         w.WriteNumber("match_count", evidence.MatchCount);
+        w.WriteNumber("selected_match_count", evidence.SelectedMatchCount);
         w.WriteString("occurrence", evidence.Occurrence);
         w.WriteBoolean("disk_verified", evidence.DiskVerified);
         w.WriteString("content_index_state", evidence.ContentIndexState);
@@ -1169,11 +1711,18 @@ public sealed class EditService
             w.WriteString("content_index_note", evidence.CandidateReason);
     }
 
-    private static EditResult StaleBlocked(string relativePath, bool indexedContentFound, bool json)
+    private static EditResult StaleBlocked(
+        string relativePath,
+        bool indexedContentFound,
+        bool json,
+        bool allowStaleSafe)
     {
+        string recovery = allowStaleSafe
+            ? "run a workspace refresh, or pass allow_stale for replace_text only"
+            : "run a workspace refresh and retry";
         string reason = indexedContentFound
-            ? $"index stale for {relativePath} — run a workspace refresh, or pass allow_stale to edit anyway."
-            : $"no indexed snapshot for {relativePath} — run a workspace refresh first, or pass allow_stale.";
+            ? $"index stale for {relativePath} — {recovery}."
+            : $"no indexed snapshot for {relativePath} — {recovery}.";
         if (json)
             return new EditResult(JsonObject(w =>
             {
@@ -1193,9 +1742,15 @@ public sealed class EditService
     /// out — the caller then refuses exactly as it did before this seam existed. Time spent is deducted from
     /// <paramref name="budget"/> so a multi-file gate loop cannot stack per-file waits.
     /// </summary>
-    private bool TryRecoverFreshness(string relativePath, string absPath, string diskText, ref TimeSpan budget)
+    private bool TryRecoverFreshness(
+        string relativePath,
+        string absPath,
+        string diskText,
+        ref TimeSpan budget,
+        out bool waited)
     {
         StaleRecoveryAttempt attempt = _writeThrough.TryRecoverStaleFile(absPath);
+        waited = attempt != StaleRecoveryAttempt.None;
         if (attempt == StaleRecoveryAttempt.None)
             return false;
 
@@ -1455,10 +2010,57 @@ public sealed class EditService
         return filled;
     }
 
-    private string ToAbsolute(string relativeOrAbsolute) =>
-        Path.IsPathRooted(relativeOrAbsolute)
-            ? relativeOrAbsolute
-            : Path.Combine(_workspaceRoot, relativeOrAbsolute);
+    private string ToAbsolute(string relativeOrAbsolute)
+    {
+        string lexical = Path.IsPathRooted(relativeOrAbsolute)
+            ? Path.GetFullPath(relativeOrAbsolute)
+            : Path.GetFullPath(relativeOrAbsolute, _workspaceRoot);
+        string canonical;
+        try
+        {
+            canonical = PathCanonicalizer.CanonicalizeFile(_canonicalWorkspaceRoot, lexical);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException)
+        {
+            throw new InvalidEditTargetPathException(
+                $"edit target '{relativeOrAbsolute}' could not be resolved safely inside the workspace root.",
+                ex);
+        }
+
+        string rootWithSeparator = _canonicalWorkspaceRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? _canonicalWorkspaceRoot
+            : _canonicalWorkspaceRoot + Path.DirectorySeparatorChar;
+        StringComparison comparison =
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!canonical.StartsWith(rootWithSeparator, comparison))
+        {
+            throw new InvalidEditTargetPathException(
+                $"edit target '{relativeOrAbsolute}' resolves outside the workspace root.");
+        }
+
+        string relative = Path.GetRelativePath(_workspaceRoot, lexical);
+        string expectedCanonical = Path.GetFullPath(relative, _canonicalWorkspaceRoot);
+        if (!string.Equals(canonical, expectedCanonical, comparison))
+        {
+            throw new InvalidEditTargetPathException(
+                $"edit target '{relativeOrAbsolute}' resolves through a symbolic link; edit the real workspace path instead.");
+        }
+
+        return lexical;
+    }
+
+    private sealed class InvalidEditTargetPathException : Exception
+    {
+        public InvalidEditTargetPathException(string message)
+            : base(message)
+        {
+        }
+
+        public InvalidEditTargetPathException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
 
     // Map an absolute path back to the workspace-relative path julie keyed the index/freshness snapshot under
     // (forward-slashed, matching julie's stored file_path). Falls back to the absolute path if it is outside
@@ -1575,6 +2177,7 @@ public sealed class EditService
         int? LineStart,
         int? LineEnd,
         int MatchCount,
+        int SelectedMatchCount,
         string Occurrence,
         bool DiskVerified,
         string? CandidateReason,

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Indexing;
 using Miller.Server.Hosting;
 using Xunit;
 
@@ -40,6 +41,25 @@ public sealed class SidecarCorruptionRecoveryTests : IDisposable
 
         Assert.True(recovered);
         Assert.Equal("rebuilt", File.ReadAllText(artifact));
+    }
+
+    [Fact]
+    public void TryRebuildCorruptSidecar_PreservationRefusalNeverDeletesEvenWithCorruptInnerFailure()
+    {
+        string artifact = WriteArtifact("content.db", "imported content");
+        bool rebuilt = false;
+
+        bool recovered = SidecarCorruptionRecovery.TryRebuildCorruptSidecar(
+            new ContentImportPreservationException(
+                "preservation blocked",
+                new InvalidOperationException("content sidecar has malformed meta")),
+            artifact,
+            () => rebuilt = true,
+            NullLogger.Instance);
+
+        Assert.False(recovered);
+        Assert.False(rebuilt);
+        Assert.Equal("imported content", File.ReadAllText(artifact));
     }
 
     [Fact]

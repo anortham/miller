@@ -151,6 +151,34 @@ public sealed class WorkspaceHealthLeaderTests
             action.Contains("workspace full", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Create_ImportsOnlyContentCorpus_RecommendsRefreshWithoutCorruptionRecovery()
+    {
+        WorkspaceFacts facts = Facts() with
+        {
+            ContentCorpus = new ContentCorpusFacts(
+                "imports_only",
+                "/repo/.miller/content.db",
+                ContentCorpusSchema.SchemaVersion,
+                WorkspaceRevision: null,
+                SourceCount: 1,
+                ChunkCount: 1,
+                IndexedSourceBytes: 10,
+                StoredRawBytes: 10),
+        };
+
+        WorkspaceHealthFacts health = Health(facts, leader: null);
+
+        HealthWarning warning = Assert.Single(health.Warnings, row => row.Code == "content_corpus");
+        Assert.Equal("usable_with_warnings", warning.Severity);
+        Assert.Contains(
+            health.RecommendedActions,
+            action => action.Contains("workspace refresh", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            health.RecommendedActions,
+            action => action.Contains("workspace full", StringComparison.Ordinal));
+    }
+
     // ---- version-aware leadership warnings (D6): leader_extractor_older_than_artifact ----
 
     [Fact]

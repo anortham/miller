@@ -110,6 +110,51 @@ public sealed class EditApplierTests : IDisposable
         Assert.Equal(Encoding.UTF8.GetByteCount("new body\n"), raw.Length);
     }
 
+    [Fact]
+    public void Apply_OnUnix_PreservesExecutableMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string path = Write("script.sh", "#!/bin/sh\nexit 0\n");
+        File.SetUnixFileMode(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        UnixFileMode originalMode = File.GetUnixFileMode(path);
+        var plan = new PlannedEdit(path, "#!/bin/sh\nexit 0\n", "#!/bin/sh\nexit 1\n",
+            [new TextEdit(15, 16, "1")]);
+
+        var result = NewApplier().Apply([plan]);
+
+        Assert.True(result.Success);
+        Assert.Equal(originalMode, File.GetUnixFileMode(path));
+    }
+
+    [Fact]
+    public void Apply_SymlinkTarget_RefusesWithoutReplacingLink()
+    {
+        string target = Write("links/target.cs", "old\n");
+        string link = Path.Combine(_dir, "links/link.cs");
+        try
+        {
+            File.CreateSymbolicLink(link, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return;
+        }
+
+        var plan = new PlannedEdit(link, "old\n", "new\n", [new TextEdit(0, 3, "new")]);
+
+        var result = NewApplier().Apply([plan]);
+
+        Assert.False(result.Success);
+        Assert.Contains("symbolic link", result.Message, StringComparison.Ordinal);
+        Assert.NotNull(new FileInfo(link).LinkTarget);
+        Assert.Equal("old\n", File.ReadAllText(target));
+    }
+
     // ---- TOCTOU abort ----
 
     [Fact]
@@ -175,6 +220,34 @@ public sealed class EditApplierTests : IDisposable
         Assert.Contains("rolled back", result.Message);
         Assert.Equal("a-orig\n", File.ReadAllText(a)); // restored
         Assert.Equal("b-orig\n", File.ReadAllText(b)); // never changed
+    }
+
+    [Fact]
+    public void Apply_WhenRollbackFails_ReportsPartialWriteAndAffectedPath()
+    {
+        string a = Write("partial/a.cs", "a-orig\n");
+        string b = Write("partial/b.cs", "b-orig\n");
+        var planA = new PlannedEdit(a, "a-orig\n", "a-new\n", [new TextEdit(0, 1, "a-new\n")]);
+        var planB = new PlannedEdit(b, "b-orig\n", "b-new\n", [new TextEdit(0, 1, "b-new\n")]);
+
+        var applier = new EditApplier(() => new NoopLease());
+        var result = applier.ApplyWithWriterForTest(
+            [planA, planB],
+            (target, content) =>
+            {
+                if (target == b)
+                    throw new IOException("forward write failed");
+                File.WriteAllText(target, content);
+            },
+            (_, _) => throw new NotSupportedException("restore failed"));
+
+        Assert.False(result.Success);
+        Assert.True(result.PartiallyApplied);
+        Assert.Equal(1, result.FilesWritten);
+        Assert.Equal([a], result.FilesLeftModified);
+        Assert.Contains(a, result.Message, StringComparison.Ordinal);
+        Assert.Contains("manual recovery required", result.Message, StringComparison.Ordinal);
+        Assert.Equal("a-new\n", File.ReadAllText(a));
     }
 
     // ---- temp cleanup ----

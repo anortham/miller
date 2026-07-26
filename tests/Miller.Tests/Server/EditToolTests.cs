@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Miller.Core.Editing;
 using Miller.Indexing;
@@ -378,6 +379,79 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("i => i.Total", disk);              // second occurrence untouched (default first)
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Execute_OutsideWorkspaceTarget_IsRefusedBeforeReadOrWrite(bool apply)
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        string outside = Path.Combine(Path.GetDirectoryName(_root)!, "miller-edit-outside-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(outside, "secret marker\n");
+
+        try
+        {
+            var (svc, _) = Build(fx);
+            var result = svc.Execute(Req("replace_text", Path.GetRelativePath(_root, outside)) with
+            {
+                OldText = "secret marker",
+                NewText = "changed",
+                Apply = apply,
+                AllowStale = true,
+            });
+
+            Assert.False(result.Applied);
+            Assert.Equal("invalid_request", result.FailureReason);
+            Assert.Contains("outside the workspace root", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret marker", result.Output, StringComparison.Ordinal);
+            Assert.Equal("secret marker\n", File.ReadAllText(outside));
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public void Execute_SymlinkTargetEscapingWorkspace_IsRefused()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        string outside = Path.Combine(Path.GetDirectoryName(_root)!, "miller-edit-link-target-" + Guid.NewGuid().ToString("N"));
+        string link = AbsPath("escape.cs");
+        File.WriteAllText(outside, "secret marker\n");
+
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(link, outside);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                return;
+            }
+
+            var (svc, _) = Build(fx);
+            var result = svc.Execute(Req("replace_text", "escape.cs") with
+            {
+                OldText = "secret marker",
+                NewText = "changed",
+                Apply = true,
+                AllowStale = true,
+            });
+
+            Assert.False(result.Applied);
+            Assert.Equal("invalid_request", result.FailureReason);
+            Assert.Contains("outside the workspace root", result.Output, StringComparison.Ordinal);
+            Assert.Equal("secret marker\n", File.ReadAllText(outside));
+        }
+        finally
+        {
+            if (File.Exists(link))
+                File.Delete(link);
+            File.Delete(outside);
+        }
+    }
+
     [Fact]
     public void Execute_ReplaceText_OccurrenceAll_ReplacesEvery()
     {
@@ -398,6 +472,26 @@ public sealed class EditToolTests : IDisposable
         Assert.DoesNotContain("Total", disk); // every occurrence replaced
         Assert.Contains("public int Sum()", disk);
         Assert.Contains("i => i.Sum", disk);
+    }
+
+    [Fact]
+    public void Execute_LargePreview_StaysWithinMcpByteBudgetAndReportsTruncation()
+    {
+        string content = string.Join('\n', Enumerable.Range(0, 1500).Select(static i => $"old value {i:D4};")) + "\n";
+        using var fx = CreateSingleFileFixture("large.cs", content);
+        LayFiles(new Dictionary<string, string> { ["large.cs"] = content });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "large.cs") with
+        {
+            OldText = "old",
+            NewText = "new",
+            Occurrence = "all",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("diff preview truncated", result.Output, StringComparison.Ordinal);
+        Assert.True(Encoding.UTF8.GetByteCount(result.Output) <= ToolOutputBudget.EditMcpMaxBytes);
     }
 
     [Fact]
@@ -488,6 +582,42 @@ public sealed class EditToolTests : IDisposable
                 "match note: occurrence=all of 2 matches",
             ],
             EvidenceLines(result.Output));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_OccurrenceAll_ReportsSkippedOverlappingCandidates()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "    foo();\n    foo();\n    foo();\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "foo();\nfoo();",
+            NewText = "bar();",
+            Occurrence = "all",
+            Format = "json",
+        });
+
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        JsonElement root = doc.RootElement;
+        Assert.Equal(2, root.GetProperty("match_count").GetInt32());
+        Assert.Equal(1, root.GetProperty("selected_match_count").GetInt32());
+
+        var compact = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "foo();\nfoo();",
+            NewText = "bar();",
+            Occurrence = "all",
+        });
+
+        Assert.Contains(
+            "match note: occurrence=all selected 1 of 2 non-overlapping matches; " +
+            "1 overlapping candidate(s) skipped",
+            compact.Output,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -781,6 +911,318 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_ReplaceText_IndexedAnchorMissingOnDisk_IsNotDropped()
+    {
+        const string relPath = "src/Api.cs";
+        string indexed = NumberedLines(220, (170, "target-value beta-anchor"));
+        string current = NumberedLines(220, (170, "target-value current-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, indexed);
+        LayFiles(new Dictionary<string, string> { [relPath] = indexed });
+        BuildContentDb(fx);
+        File.WriteAllText(AbsPath(relPath), current);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "beta-anchor",
+            AllowStale = true,
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.Equal(current, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_RepeatedIndexedAnchorInsideOneChunk_IsAmbiguous()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            120,
+            (10, "target-value shared-anchor"),
+            (100, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "shared-anchor",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_AnchorWindowWithAdjacentMatches_IsAmbiguous()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "target-value"),
+            (14, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "shared-anchor",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_IndexedAnchorFuzzyAdjacentLiteral_IsAmbiguous()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "target-value"),
+            (14, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "shared-anchor",
+            MatchMode = "fuzzy",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableIndexAnchorFuzzyAdjacentLiteral_IsAmbiguous()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "target-value"),
+            (14, "target-value shared-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Anchor = "shared-anchor",
+            MatchMode = "fuzzy",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_IndexedAnchorFuzzyMatch_IgnoresWorseNearMiss()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "return totalxx;"),
+            (14, "shared-anchor"),
+            (15, "return totals;"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "return total;",
+            NewText = "return value;",
+            Anchor = "shared-anchor",
+            MatchMode = "fuzzy",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("-return totals;", result.Output);
+        Assert.DoesNotContain("-return totalxx;", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableIndexAnchorFuzzyMatch_IgnoresWorseNearMiss()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "return totalxx;"),
+            (14, "shared-anchor"),
+            (15, "return totals;"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "return total;",
+            NewText = "return value;",
+            Anchor = "shared-anchor",
+            MatchMode = "fuzzy",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("-return totals;", result.Output);
+        Assert.DoesNotContain("-return totalxx;", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_IndexedAnchorNormalizedMatch_AllowsIndentedLiteral()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "shared-anchor"),
+            (14, "    return 42;"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "    return 42;",
+            NewText = "return 43;",
+            Anchor = "shared-anchor",
+            MatchMode = "normalized",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("-    return 42;", result.Output);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableIndexAnchorNormalizedMatch_AllowsTrailingNewline()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "shared-anchor"),
+            (14, "return 42;"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "return 42;\n",
+            NewText = "return 43;\n",
+            Anchor = "shared-anchor",
+            MatchMode = "normalized",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("-return 42;", result.Output);
+    }
+
+    [Theory]
+    [InlineData("code\n\nmore\n", "\n\n", 2)]
+    [InlineData("code\n    \nmore\n", "    \n", 2)]
+    public void Execute_ReplaceText_LineSelector_AllowsUniqueWhitespaceOnlyLiteral(
+        string source,
+        string oldText,
+        int line)
+    {
+        const string relPath = "src/Api.cs";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = oldText,
+            NewText = "-",
+            Line = line,
+            MatchMode = "exact",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Null(result.FailureReason);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_LineSelectorWithOverlappingLiteralMatches_IsAmbiguous()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            80,
+            (13, "alpha"),
+            (14, "alpha"),
+            (15, "alpha"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "alpha\nalpha",
+            NewText = "beta",
+            Line = 14,
+            MatchMode = "exact",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableIndex_CapsBroadAnchorCandidates()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            100,
+            Enumerable.Range(1, 100).Select(static line => (line, "broad-anchor")).ToArray());
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "missing-target",
+            NewText = "updated-value",
+            Anchor = "broad-anchor",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("ambiguous_match", result.FailureReason);
+        Assert.Contains("more than 32", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ReplaceText_UnavailableContentDb_FallsBackToDiskMatching()
     {
         const string relPath = "src/Api.cs";
@@ -793,7 +1235,7 @@ public sealed class EditToolTests : IDisposable
         {
             OldText = "target-value",
             NewText = "updated-value",
-            Query = "Value",
+            Line = 1,
         });
 
         Assert.False(result.Applied);
@@ -819,7 +1261,7 @@ public sealed class EditToolTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(result.Output);
         JsonElement root = doc.RootElement;
         Assert.Equal(
-            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state"],
+            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "selected_match_count", "occurrence", "disk_verified", "content_index_state"],
             root.EnumerateObject().Select(static p => p.Name).ToArray());
         Assert.Equal("exact", root.GetProperty("match_mode").GetString());
         Assert.Equal("disk", root.GetProperty("match_source").GetString());
@@ -849,7 +1291,7 @@ public sealed class EditToolTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(result.Output);
         JsonElement root = doc.RootElement;
         Assert.Equal(
-            ["applied", "files_written", "stale_allowed", "index_fresh", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state"],
+            ["applied", "files_written", "stale_allowed", "index_fresh", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "selected_match_count", "occurrence", "disk_verified", "content_index_state"],
             root.EnumerateObject().Select(static p => p.Name).ToArray());
     }
 
@@ -866,16 +1308,16 @@ public sealed class EditToolTests : IDisposable
         {
             OldText = "target-value",
             NewText = "updated-value",
-            Query = "Value",
+            Line = 1,
             Format = "json",
         });
 
         using JsonDocument doc = JsonDocument.Parse(result.Output);
         JsonElement root = doc.RootElement;
         Assert.Equal(
-            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "occurrence", "disk_verified", "content_index_state", "content_index_note"],
+            ["applied", "mode", "diff", "match_mode", "match_source", "line_start", "line_end", "match_count", "selected_match_count", "occurrence", "disk_verified", "content_index_state", "content_index_note"],
             root.EnumerateObject().Select(static p => p.Name).ToArray());
-        Assert.Equal("disk_after_index_unavailable", root.GetProperty("match_source").GetString());
+        Assert.Equal("disk_selector_after_index_unavailable", root.GetProperty("match_source").GetString());
         Assert.Equal("unavailable", root.GetProperty("content_index_state").GetString());
         Assert.StartsWith("missing content.db at ", root.GetProperty("content_index_note").GetString());
     }
@@ -905,6 +1347,188 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal("ambiguous_match", result.FailureReason);
         Assert.Contains("ambiguous", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("line", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_OverlappingIndexedChunks_DeduplicatesOnePhysicalMatch()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(220, (150, "target-value"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "target-value",
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("updated-value", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_LineHint_AllowsMultilineOldText()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (150, "target-start"),
+            (151, "target-end"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-start\ntarget-end",
+            NewText = "updated-value",
+            Line = 150,
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        Assert.Null(result.FailureReason);
+        Assert.Contains("updated-value", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_LineHint_PinsSingleLineDuplicate()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (149, "target-value"),
+            (150, "target-value"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 150,
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        string[] lines = File.ReadAllLines(AbsPath(relPath));
+        Assert.Equal("target-value", lines[148]);
+        Assert.Equal("updated-value", lines[149]);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_IndexedSelectorRevisionUnavailable_DegradesToDiskMatch()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "public class Api { public string Value => \"target-value\"; }\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+        File.Delete(fx.DbPath);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 1,
+            Format = "json",
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        using JsonDocument doc = JsonDocument.Parse(result.Output);
+        Assert.Equal("disk_selector_after_index_unavailable", doc.RootElement.GetProperty("match_source").GetString());
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_UnavailableIndex_LineSelectorStillPinsRepeatedText()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value"),
+            (170, "target-value"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+        File.Delete(ContentCorpusSidecar.ContentDbPathFor(fx.DbPath));
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 170,
+            Apply = true,
+        });
+
+        Assert.True(result.Applied);
+        string[] lines = File.ReadAllLines(AbsPath(relPath));
+        Assert.Equal("target-value", lines[1]);
+        Assert.Equal("updated-value", lines[169]);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_FreshFileWithLaggingContentCandidate_ReturnsNoMatchWithoutRecovery()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "public class Api { public string Value => \"target-value\"; }\n";
+        const string current = "public class Api { public string Value => \"current-value\"; }\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        File.WriteAllText(AbsPath(relPath), current);
+        ConvergeIndexedHash(fx, relPath);
+        var writeThrough = new RecoveringWriteThrough(_ => StaleRecoveryAttempt.Requested);
+        EditService svc = Build(
+            fx,
+            writeThrough,
+            new EditService.RecoveryOptions(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(1)));
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Line = 1,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("no_match", result.FailureReason);
+        Assert.Empty(writeThrough.RecoveryCalls);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_OccurrenceAllWithIndexedSelector_IsRefused()
+    {
+        const string relPath = "src/Api.cs";
+        string source = NumberedLines(
+            220,
+            (2, "target-value alpha-anchor"),
+            (170, "target-value beta-anchor"));
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        BuildContentDb(fx);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "target-value",
+            NewText = "updated-value",
+            Query = "alpha-anchor",
+            Occurrence = "all",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("invalid_request", result.FailureReason);
+        Assert.Contains("occurrence=all", result.Output, StringComparison.Ordinal);
         Assert.Equal(source, File.ReadAllText(AbsPath(relPath)));
     }
 
@@ -1003,13 +1627,12 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
-    public void Execute_StaleTarget_Proceeds_WithAllowStale_AndTagsResult()
+    public void Execute_StaleSymbolTarget_AllowStaleDoesNotBypassSafeRecovery()
     {
         using var fx = JulieDbFixture.CreateForEdit();
         LayFiles(EditFixtureFiles);
-        // Drift the disk by appending a line; the indexed body span [49,91) is still valid against the prefix.
-        File.WriteAllText(AbsPath("orders/OrderService.cs"),
-            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        string drifted = "// prepended\n" + JulieDbFixture.OrderServiceContent;
+        File.WriteAllText(AbsPath("orders/OrderService.cs"), drifted);
         var (svc, _) = Build(fx);
 
         var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
@@ -1019,11 +1642,60 @@ public sealed class EditToolTests : IDisposable
             AllowStale = true,
         });
 
+        Assert.False(result.Applied);
+        Assert.Equal("stale_target", result.FailureReason);
+        Assert.Contains("run a workspace refresh and retry", result.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("pass allow_stale", result.Output, StringComparison.Ordinal);
+        Assert.Equal(drifted, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_StaleSymbolTarget_WithAllowStaleStillAttemptsSafeRecovery()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(
+            AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        var wt = new RecoveringWriteThrough(_ =>
+        {
+            ConvergeIndexedHash(fx, "orders/OrderService.cs");
+            return StaleRecoveryAttempt.Converged;
+        });
+        var svc = Build(fx, wt);
+
+        var result = svc.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 7; }",
+            Apply = true,
+            AllowStale = true,
+        });
+
+        Assert.True(result.Applied);
+        Assert.False(result.StaleAllowed);
+        Assert.Contains("return 7;", File.ReadAllText(AbsPath("orders/OrderService.cs")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_StaleReplaceText_ProceedsWithAllowStale()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        File.WriteAllText(AbsPath("orders/OrderService.cs"),
+            JulieDbFixture.OrderServiceContent + "// drifted\n");
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", "orders/OrderService.cs") with
+        {
+            OldText = "return _items.Sum(i => i.Total);",
+            NewText = "return 7;",
+            Apply = true,
+            AllowStale = true,
+        });
+
         Assert.True(result.Applied);
         Assert.True(result.StaleAllowed);
-        string disk = File.ReadAllText(AbsPath("orders/OrderService.cs"));
-        Assert.Contains("{ return 7; }", disk);
-        Assert.EndsWith("// drifted\n", disk); // the appended drift is preserved
+        Assert.Contains("return 7;", File.ReadAllText(AbsPath("orders/OrderService.cs")), StringComparison.Ordinal);
     }
 
     // ---- gate-time stale recovery (the gate self-heals before refusing) ----
@@ -1083,6 +1755,7 @@ public sealed class EditToolTests : IDisposable
         Assert.True(result.Applied);
         Assert.False(result.StaleAllowed);
         Assert.Equal(true, result.IndexFresh);
+        Assert.True(result.StaleWaitPerformed);
         Assert.Contains("{ return 7; }", File.ReadAllText(AbsPath("orders/OrderService.cs")));
     }
 
@@ -1105,6 +1778,7 @@ public sealed class EditToolTests : IDisposable
         });
 
         Assert.False(result.Applied);
+        Assert.True(result.StaleWaitPerformed);
         Assert.Contains("stale", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Single(wt.RecoveryCalls);
         Assert.EndsWith("// drifted\n", File.ReadAllText(AbsPath("orders/OrderService.cs")));
@@ -1460,6 +2134,33 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_IncludeFallback_RefusesMalformedFallbackSpan()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET target_symbol_id = NULL,
+                end_byte = end_byte + 1
+            WHERE identifier_id = 'd100000000000000000000000000000d';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            RenameMode = "include_fallback",
+            Apply = true,
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("no_match", result.FailureReason);
+        Assert.Contains("fallback", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("byte span", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(JulieDbFixture.CafeContent, File.ReadAllText(AbsPath("unicode/Café.cs")));
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_ExactMode_ExcludesResolvedHomonymSites()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
@@ -1672,6 +2373,144 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Edit_RenameSymbol_LargeJsonPreview_StaysWithinMcpBudgetAndReportsOmissions()
+    {
+        const string targetId = "12000000000000000000000000000002";
+        const string definitionPath = "definition/Many.cs";
+        const string definition = """
+            public sealed class Many
+            {
+                public int Total { get; }
+            }
+            """;
+        int propertyStart = definition.IndexOf("public int Total", StringComparison.Ordinal);
+        int propertyEnd = definition.IndexOf("{ get; }", propertyStart, StringComparison.Ordinal) + "{ get; }".Length;
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [definitionPath] = definition,
+        };
+        var identifiers = new List<JulieDbFixture.IdentifierRow>();
+        for (int i = 0; i < 160; i++)
+        {
+            string path = $"references/Reference{i:D3}.cs";
+            string content = $"public static class Reference{i:D3} {{ public static int Read() => Total; }}";
+            files[path] = content;
+            int start = content.IndexOf("Total", StringComparison.Ordinal);
+            identifiers.Add(new JulieDbFixture.IdentifierRow(
+                (i + 1).ToString("x32", System.Globalization.CultureInfo.InvariantCulture),
+                "Total",
+                "member_access",
+                "csharp",
+                path,
+                1,
+                null)
+            {
+                StartByte = start,
+                EndByte = start + "Total".Length,
+                TargetSymbolId = targetId,
+            });
+        }
+
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "12000000000000000000000000000001",
+                    "Many",
+                    "class",
+                    "csharp",
+                    definitionPath,
+                    "public sealed class Many",
+                    1,
+                    null)
+                {
+                    StartByte = 0,
+                    EndByte = definition.Length,
+                },
+                new JulieDbFixture.SymbolRow(
+                    targetId,
+                    "Total",
+                    "property",
+                    "csharp",
+                    definitionPath,
+                    "public int Total",
+                    3,
+                    "12000000000000000000000000000001")
+                {
+                    StartByte = propertyStart,
+                    EndByte = propertyEnd,
+                },
+            ],
+            identifiers: identifiers,
+            fileContent: files);
+        LayFiles(files);
+
+        string output = BuildTool(fx).Edit(
+            "rename_symbol",
+            "Many.Total",
+            new_text: "GrandTotal",
+            format: "json");
+
+        Assert.True(
+            Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.EditMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(output).ToString());
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.False(doc.RootElement.GetProperty("applied").GetBoolean());
+        JsonElement evidence = doc.RootElement.GetProperty("rename_evidence");
+        Assert.True(evidence.GetProperty("exact_sites_omitted_count").GetInt32() > 0);
+        Assert.Equal(0, evidence.GetProperty("fallback_sites_omitted_count").GetInt32());
+    }
+
+    [Fact]
+    public void Edit_JsonFailureWithHugeTarget_StaysValidAndWithinMcpBudget()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+
+        string output = BuildTool(fx).Edit(
+            "replace_symbol_body",
+            new string('x', 50_000),
+            new_text: "{ }",
+            format: "json");
+
+        Assert.True(
+            Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.EditMcpMaxBytes,
+            Encoding.UTF8.GetByteCount(output).ToString());
+        using JsonDocument doc = JsonDocument.Parse(output);
+        Assert.False(doc.RootElement.GetProperty("applied").GetBoolean());
+    }
+
+    [Fact]
+    public void BoundMcpOutput_OversizedPartialApply_ReturnsBoundedValidJsonWithExactCounts()
+    {
+        string[] paths = Enumerable.Range(0, 500)
+            .Select(index => $"src/{index:D4}/{new string('x', 300)}.cs")
+            .ToArray();
+        var result = new EditService.EditResult(
+            new string('x', 20_000),
+            Applied: false,
+            StaleAllowed: false,
+            IndexFresh: true,
+            Outcome: "error",
+            ResultCount: paths.Length,
+            FailureReason: "partial_apply")
+        {
+            PartiallyApplied = true,
+            FilesLeftModified = paths,
+            FilesLeftModifiedTotalCount = paths.Length,
+        };
+
+        string output = EditTool.BoundMcpOutput(result, json: true);
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.EditMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        Assert.Equal(500, document.RootElement.GetProperty("files_left_modified_total_count").GetInt32());
+        Assert.Equal(480, document.RootElement.GetProperty("files_left_modified_omitted_count").GetInt32());
+        Assert.Equal(20, document.RootElement.GetProperty("files_left_modified").GetArrayLength());
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_Apply_RewritesEveryExactTargetSiteAndAddsVerificationHint()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
@@ -1731,6 +2570,46 @@ public sealed class EditToolTests : IDisposable
         Assert.True(result.IndexFresh);
         Assert.Empty(wt.Converged);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_PartialApply_ReportsModifiedPathsAndConvergesThem()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        LayFiles(EditFixtureFiles);
+        int writes = 0;
+        var applier = new EditApplier(
+            () => new NoopLease(),
+            (path, content) =>
+            {
+                writes++;
+                if (writes == 2)
+                    throw new IOException("forward write failed");
+                File.WriteAllText(path, content);
+            },
+            (_, _) => throw new IOException("rollback failed"));
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var resolver = new SmartTargetResolver(index);
+        var wt = new RecordingWriteThrough();
+        var svc = new EditService(index, resolver, fx.DbPath, _root, applier, wt);
+
+        EditService.EditResult result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            Apply = true,
+            Format = "json",
+        });
+
+        Assert.False(result.Applied);
+        Assert.True(result.PartiallyApplied);
+        Assert.Equal("partial_apply", result.FailureReason);
+        Assert.Equal(1, result.ResultCount);
+        string modified = Assert.Single(result.FilesLeftModified);
+        Assert.Equal([AbsPath(modified)], wt.Converged);
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        Assert.True(document.RootElement.GetProperty("partially_applied").GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("files_left_modified_count").GetInt32());
+        Assert.Equal(modified, Assert.Single(document.RootElement.GetProperty("files_left_modified").EnumerateArray()).GetString());
     }
 
     [Fact]
@@ -2121,6 +3000,8 @@ public sealed class EditToolTests : IDisposable
                 AbsPath(File_),
                 JulieDbFixture.OrderServiceContent.Replace("Total", "Amount", StringComparison.Ordinal));
         }
+        if (path == "indexed_selector_no_candidate")
+            BuildContentDb(fx);
 
         using var ledger = OpenLedger();
         using var telemetry = ledger.Measure("edit", op: null);
@@ -2176,9 +3057,6 @@ public sealed class EditToolTests : IDisposable
         Assert.Equal(expectedBucket, StampedFailureBucket(telemetry, File_, Secret, Replacement));
     }
 
-    // The two exits above reach the indexed-candidate reader only when content.db is ABSENT (the disk-fallback
-    // arm). These two cover the arm where content.db is CURRENT and the candidate set itself decides the
-    // failure — the only replace_text buckets the theory cannot reach with the shared edit fixture.
     [Fact]
     public void Edit_IndexedCandidateFailsDiskVerification_StampsStaleTargetBucket()
     {

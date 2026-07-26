@@ -38,6 +38,8 @@ public static partial class ToolOutputBudget
     public const int ContextMcpMaxTokens = 2400;
     public const int WorkspaceOnboardingMcpRowLimit = 3;
     public const int InspectFullBodyMaxBytes = 4 * 1024;
+    public const int EditMcpMaxBytes = 12 * 1024;
+    public const int EditDiffMaxBytes = 8 * 1024;
     public const int ContentMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
@@ -162,6 +164,25 @@ public static partial class ToolOutputBudget
         }
 
         return output;
+    }
+
+    public static string TruncateUtf8(string text, int maxBytes, string suffix)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(suffix);
+        if (maxBytes < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes), maxBytes, "Output budget must be positive.");
+
+        int suffixBytes = Encoding.UTF8.GetByteCount(suffix);
+        if (suffixBytes > maxBytes)
+            throw new ArgumentException("Suffix exceeds the output byte budget.", nameof(suffix));
+        if (Encoding.UTF8.GetByteCount(text) <= maxBytes)
+            return text;
+
+        byte[] bytes = Encoding.UTF8.GetBytes(text);
+        int prefixBudget = maxBytes - suffixBytes;
+        long prefixEnd = FindValidEnd(bytes, 0, prefixBudget);
+        return StrictUtf8.GetString(bytes.AsSpan(0, checked((int)prefixEnd))) + suffix;
     }
 
     public static string EncodeReferenceCursor(

@@ -22,4 +22,12 @@ public sealed class AotSerializationConventionTests
         Assert.DoesNotContain("JsonSerializer.Serialize(request)", source);
         Assert.DoesNotContain("JsonSerializer.Deserialize<FullScanRequest>(json)", source);
     }
+
+    [Fact]
+    public void Server_DoesNotSerializeAnonymousTypesThroughReflection()
+    {
+        string serverRoot = Path.Combine(ScaleTestSupport.RepoRoot(), "src", "Miller.Server");
+        foreach (string path in Directory.EnumerateFiles(serverRoot, "*.cs", SearchOption.AllDirectories))
+            Assert.DoesNotContain("JsonSerializer.Serialize(new", File.ReadAllText(path), StringComparison.Ordinal);
+    }
 }

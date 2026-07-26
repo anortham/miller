@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.Versioning;
 using Miller.Core.Editing;
 
 namespace Miller.Server.Hosting;
@@ -32,6 +33,8 @@ public sealed class EditApplier
     private const string TempSuffix = ".miller-tmp";
 
     private readonly Func<IDisposable?> _acquireWriterLock;
+    private readonly Action<string, string> _writeFile;
+    private readonly Action<string, string> _restoreFile;
 
     /// <summary>
     /// Construct over a writer-lock acquisition seam. <paramref name="acquireWriterLock"/> returns a held lease
@@ -43,13 +46,33 @@ public sealed class EditApplier
     {
         ArgumentNullException.ThrowIfNull(acquireWriterLock);
         _acquireWriterLock = acquireWriterLock;
+        _writeFile = AtomicTempMove;
+        _restoreFile = WriteAtomicPreservingBom;
+    }
+
+    internal EditApplier(
+        Func<IDisposable?> acquireWriterLock,
+        Action<string, string> writeFile,
+        Action<string, string> restoreFile)
+    {
+        ArgumentNullException.ThrowIfNull(acquireWriterLock);
+        ArgumentNullException.ThrowIfNull(writeFile);
+        ArgumentNullException.ThrowIfNull(restoreFile);
+        _acquireWriterLock = acquireWriterLock;
+        _writeFile = writeFile;
+        _restoreFile = restoreFile;
     }
 
     /// <summary>The outcome of an apply: success + count, or failure + a clean, actionable message.</summary>
     /// <param name="Success">True iff every file was written and committed.</param>
     /// <param name="FilesWritten">Number of files committed (0 on any abort/rollback).</param>
     /// <param name="Message">A clean message on failure; empty on success.</param>
-    public readonly record struct ApplyResult(bool Success, int FilesWritten, string Message);
+    public readonly record struct ApplyResult(
+        bool Success,
+        int FilesWritten,
+        string Message,
+        bool PartiallyApplied = false,
+        IReadOnlyList<string>? FilesLeftModified = null);
 
     /// <summary>
     /// Apply <paramref name="plans"/> atomically under the writer lock. See the type summary for the transaction.
@@ -57,7 +80,7 @@ public sealed class EditApplier
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="plans"/> is null.</exception>
     public ApplyResult Apply(IReadOnlyList<PlannedEdit> plans) =>
-        ApplyWithWriter(plans, AtomicTempMove);
+        ApplyWithWriter(plans, _writeFile, _restoreFile);
 
     /// <summary>
     /// Test seam: apply with a caller-supplied per-file writer so a write fault can be injected to exercise the
@@ -66,9 +89,18 @@ public sealed class EditApplier
     /// </summary>
     internal ApplyResult ApplyWithWriterForTest(
         IReadOnlyList<PlannedEdit> plans, Action<string, string> writeFile) =>
-        ApplyWithWriter(plans, writeFile);
+        ApplyWithWriter(plans, writeFile, WriteAtomicPreservingBom);
 
-    private ApplyResult ApplyWithWriter(IReadOnlyList<PlannedEdit> plans, Action<string, string> writeFile)
+    internal ApplyResult ApplyWithWriterForTest(
+        IReadOnlyList<PlannedEdit> plans,
+        Action<string, string> writeFile,
+        Action<string, string> restoreFile) =>
+        ApplyWithWriter(plans, writeFile, restoreFile);
+
+    private ApplyResult ApplyWithWriter(
+        IReadOnlyList<PlannedEdit> plans,
+        Action<string, string> writeFile,
+        Action<string, string> restoreFile)
     {
         ArgumentNullException.ThrowIfNull(plans);
         if (plans.Count == 0)
@@ -90,6 +122,11 @@ public sealed class EditApplier
                 {
                     return new ApplyResult(false, 0,
                         $"target file no longer exists: {plan.FilePath} — re-plan against the current tree.");
+                }
+                if (new FileInfo(plan.FilePath).LinkTarget is not null)
+                {
+                    return new ApplyResult(false, 0,
+                        $"target file is a symbolic link: {plan.FilePath} — edit the real workspace path instead.");
                 }
 
                 string current = ReadAllText(plan.FilePath);
@@ -114,14 +151,30 @@ public sealed class EditApplier
             }
             catch (Exception ex)
             {
-                // Restore every already-committed file to its original bytes, newest first. Use the same atomic
-                // BOM-preserving write as the forward path so a fault mid-restore cannot truncate the original.
+                var unrestored = new List<string>();
                 for (int i = written.Count - 1; i >= 0; i--)
                 {
-                    try { WriteAtomicPreservingBom(written[i].Path, written[i].Original); }
-                    catch (IOException) { /* best-effort restore; the message flags the partial state below */ }
-                    catch (UnauthorizedAccessException) { }
+                    try
+                    {
+                        restoreFile(written[i].Path, written[i].Original);
+                    }
+                    catch (Exception)
+                    {
+                        unrestored.Add(written[i].Path);
+                    }
                 }
+
+                if (unrestored.Count > 0)
+                {
+                    return new ApplyResult(
+                        false,
+                        unrestored.Count,
+                        $"edit failed on {written.Count + 1} of {plans.Count} file(s) ({ex.Message}); " +
+                        $"rollback failed for {BoundedPathList(unrestored)} — partial write; manual recovery required.",
+                        PartiallyApplied: true,
+                        FilesLeftModified: unrestored);
+                }
+
                 return new ApplyResult(false, 0,
                     $"edit failed on {written.Count + 1} of {plans.Count} file(s) ({ex.Message}); " +
                     "rolled back the already-written file(s).");
@@ -149,8 +202,54 @@ public sealed class EditApplier
         bool emitBom = FileHasUtf8Bom(targetPath);
         string dir = Path.GetDirectoryName(targetPath) ?? ".";
         string temp = Path.Combine(dir, Path.GetFileName(targetPath) + TempSuffix + Guid.NewGuid().ToString("N"));
-        File.WriteAllText(temp, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: emitBom));
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            File.WriteAllText(temp, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: emitBom));
+        }
+        else
+        {
+            UnixFileMode? mode = TryGetUnixFileMode(targetPath);
+            File.WriteAllText(temp, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: emitBom));
+            if (mode is { } unixMode)
+                TrySetUnixFileMode(temp, unixMode);
+        }
         File.Move(temp, targetPath, overwrite: true);
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("macos")]
+    private static UnixFileMode? TryGetUnixFileMode(string path)
+    {
+        try
+        {
+            return File.GetUnixFileMode(path);
+        }
+        catch (Exception ex) when (
+            ex is PlatformNotSupportedException or NotSupportedException or UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
+    }
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("macos")]
+    private static void TrySetUnixFileMode(string path, UnixFileMode mode)
+    {
+        try
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+        catch (Exception ex) when (
+            ex is PlatformNotSupportedException or NotSupportedException or UnauthorizedAccessException or IOException)
+        {
+        }
+    }
+
+    private static string BoundedPathList(IReadOnlyList<string> paths)
+    {
+        const int cap = 8;
+        string shown = string.Join(", ", paths.Take(cap));
+        return paths.Count <= cap ? shown : $"{shown}, … {paths.Count - cap} more";
     }
 
     // True iff the file currently begins with a UTF-8 byte-order mark (EF BB BF). File.ReadAllText/WriteAllText

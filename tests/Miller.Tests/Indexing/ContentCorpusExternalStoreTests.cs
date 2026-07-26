@@ -70,6 +70,28 @@ public sealed class ContentCorpusExternalStoreTests : IDisposable
     }
 
     [Fact]
+    public void ImportWithoutWorkspaceCorpus_ReportsImportsOnlyInsteadOfUnreadable()
+    {
+        string logPath = Path.Combine(_dir, "imports-only.log");
+        File.WriteAllText(logPath, "Imported content remains searchable.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(_contentDbPath, logPath);
+
+        var sidecar = new ContentCorpusSidecar();
+        ContentCorpusFacts facts = sidecar.Inspect(
+            Path.Combine(_dir, ".miller", "symbols.db"),
+            expectedRevision: 1);
+
+        Assert.Equal("imports_only", facts.State);
+        Assert.Null(facts.WorkspaceRevision);
+        Assert.Equal(1, facts.SourceCount);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            FtsTextContentSearchIndex.Open(_contentDbPath, expectedRevision: 1));
+        Assert.Contains("imports only", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("workspace refresh", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void DefaultMaxImportBytes_IsTwentyFiveMiB()
     {
         Assert.Equal(25L * 1024 * 1024, ContentCorpusExternalStore.DefaultMaxImportBytes);

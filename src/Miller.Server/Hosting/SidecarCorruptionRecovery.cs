@@ -20,6 +20,8 @@ internal static class SidecarCorruptionRecovery
         ArgumentNullException.ThrowIfNull(rebuild);
         ArgumentNullException.ThrowIfNull(logger);
 
+        if (failure is ContentImportPreservationException)
+            return false;
         if (!IsSidecarCorruption(failure))
             return false;
 

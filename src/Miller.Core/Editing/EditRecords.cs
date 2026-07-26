@@ -91,7 +91,8 @@ public sealed record TextReplaceMatchPlan(
     TextMatchMode RequestedMode,
     TextMatchMode? MatchedMode,
     IReadOnlyList<TextReplaceMatch> Matches,
-    int MatchCount)
+    int MatchCount,
+    int AmbiguousMatchCount)
 {
     public bool IsSuccess => Plan.IsSuccess;
 

@@ -11,6 +11,7 @@ using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -26,6 +27,7 @@ namespace Miller.Tests.Server;
 /// and the non-leader refresh/full path (poll only, with the honest cannot-force note). The live extract path
 /// (open's prime scan, full's force-scan + swap on a real repo) is the Scale suite (<see cref="LiveWorkspaceTests"/>).
 /// </summary>
+[Collection(SemanticActivationEnvironmentCollection.Name)]
 public sealed class WorkspaceToolTests : IDisposable
 {
     private const string Ws = "ws-tool-001";

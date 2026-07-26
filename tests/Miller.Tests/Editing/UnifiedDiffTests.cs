@@ -116,6 +116,22 @@ public sealed class UnifiedDiffTests
     }
 
     [Fact]
+    public void Render_LargeUnrelatedInputs_ReturnsBoundedChangeProofWithoutQuadraticMatrix()
+    {
+        string oldText = string.Join('\n', Enumerable.Range(0, 2500).Select(static i => $"old-{i:D4}")) + "\n";
+        string newText = string.Join('\n', Enumerable.Range(0, 2500).Select(static i => $"new-{i:D4}")) + "\n";
+
+        string diff = UnifiedDiff.Render(oldText, newText, "large.cs");
+
+        Assert.Contains("diff preview truncated", diff, StringComparison.Ordinal);
+        Assert.Contains("-old-0000", diff, StringComparison.Ordinal);
+        Assert.Contains("+new-0000", diff, StringComparison.Ordinal);
+        Assert.Contains("old lines omitted", diff, StringComparison.Ordinal);
+        Assert.Contains("new lines omitted", diff, StringComparison.Ordinal);
+        Assert.True(diff.Length < 8192, diff.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public void Render_AppliedToOldContent_YieldsNewContent_RoundTrip()
     {
         // Sanity: the diff describes exactly the transformation old→new (verified by reconstructing new

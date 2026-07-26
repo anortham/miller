@@ -110,6 +110,10 @@ authoritative `symbols.db` readiness verdict. Missing/stale `search_sidecar` and
 recovery action. Non-search symbol reads such as `inspect`, `context`, `impact`, and `trace` continue from a fresh,
 compatible `symbols.db` when an unrelated search/content/vector sidecar is unavailable. Symbol search still fails
 visibly when its required `search.db` is missing, stale, or corrupt.
+An `imports_only` content corpus is `usable_with_warnings` and recommends `workspace refresh`.
+`preservation_blocked` is degraded and recommends preserving/recovering the imported sources before replacing the
+sidecar, starting with the concrete CLI `miller content export`; it never recommends a destructive full rebuild as
+though the imports were disposable.
 
 ## State rules
 

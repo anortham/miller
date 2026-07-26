@@ -371,12 +371,14 @@ public static class DashboardIndexFactsReader
         }
     }
 
-    private static string MapContentSidecarStatus(string state) =>
+    internal static string MapContentSidecarStatus(string state) =>
         state switch
         {
             "current" => "fresh",
             "stale" => "stale",
             "missing" => "missing",
+            "imports_only" => "imports_only",
+            "preservation_blocked" => "preservation_blocked",
             "unreadable" => "unreadable",
             _ => "unknown",
         };
@@ -397,7 +399,7 @@ public static class DashboardIndexFactsReader
         if (searchSidecarStatus is "stale" or "stale_schema" or "unreadable")
             return "stale_sidecar";
 
-        if (contentSidecarStatus is "stale" or "unreadable")
+        if (contentSidecarStatus is "stale" or "imports_only" or "preservation_blocked" or "unreadable")
             return "stale_sidecar";
 
         if (searchSidecarStatus is "missing" || contentSidecarStatus is "missing")

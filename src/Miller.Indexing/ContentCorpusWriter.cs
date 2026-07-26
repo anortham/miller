@@ -1,11 +1,13 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
 
 namespace Miller.Indexing;
 
-public static class ContentCorpusWriter
+public static partial class ContentCorpusWriter
 {
     private const long MaxWorkspaceFileBytes = 1_048_576;
 
@@ -40,6 +42,7 @@ public static class ContentCorpusWriter
                     try { File.Move(tempPath, fullPath, overwrite: true); break; }
                     catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
                 }
+                ClearPreservationFailure(fullPath);
                 if (preserved > 0)
                     facts = ReadFacts(fullPath, revision);
             }
@@ -60,7 +63,10 @@ public static class ContentCorpusWriter
     {
         if (!File.Exists(existingPath))
             return 0;
+        if (!HasSqliteHeader(existingPath))
+            return 0;
 
+        bool importsProven = false;
         try
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -80,8 +86,15 @@ public static class ContentCorpusWriter
 
             try
             {
-                if (!CanCopyExternalSources(connection))
+                int expectedSourceCount = CountExternalSources(connection);
+                if (expectedSourceCount == 0)
                     return 0;
+                importsProven = true;
+                if (!HasCompatibleExternalSourceShape(connection))
+                {
+                    throw new InvalidOperationException(
+                        "Existing content.db imported-content tables are incompatible with the current corpus.");
+                }
 
                 using var tx = connection.BeginTransaction();
                 int sourceCount = ExecuteNonQuery(connection, """
@@ -94,10 +107,10 @@ public static class ContentCorpusWriter
                     WHERE content_kind IN ($external, $web)
                       AND status = 'active';
                     """);
-                if (sourceCount == 0)
+                if (sourceCount != expectedSourceCount)
                 {
-                    tx.Commit();
-                    return 0;
+                    throw new InvalidOperationException(
+                        $"Expected to preserve {expectedSourceCount} imported sources but copied {sourceCount}.");
                 }
 
                 ExecuteNonQuery(connection, """
@@ -146,25 +159,140 @@ public static class ContentCorpusWriter
             ex is SqliteException or InvalidOperationException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return 0;
+            if (importsProven)
+            {
+                RecordPreservationFailure(existingPath, ex.Message);
+                throw new ContentImportPreservationException(
+                    $"Content rebuild refused because Miller could not preserve imported content from '{existingPath}'. " +
+                    "The existing content.db was left unchanged.",
+                    ex);
+            }
+            throw new InvalidOperationException(
+                $"Content rebuild could not read the existing derived corpus at '{existingPath}'.",
+                ex);
         }
     }
 
-    private static bool CanCopyExternalSources(SqliteConnection connection)
+    internal static string? TryReadPreservationFailure(string contentDbPath)
+    {
+        try
+        {
+            string markerPath = PreservationFailurePathFor(contentDbPath);
+            if (!File.Exists(markerPath) || !File.Exists(contentDbPath))
+                return null;
+            PreservationFailureStamp? stamp =
+                JsonSerializer.Deserialize(
+                    File.ReadAllText(markerPath),
+                    ContentCorpusWriterJsonContext.Default.PreservationFailureStamp);
+            var info = new FileInfo(contentDbPath);
+            return stamp is not null &&
+                stamp.Length == info.Length &&
+                stamp.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks
+                    ? stamp.Error
+                    : null;
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or JsonException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static void RecordPreservationFailure(string contentDbPath, string error)
+    {
+        try
+        {
+            var info = new FileInfo(contentDbPath);
+            var stamp = new PreservationFailureStamp(info.Length, info.LastWriteTimeUtc.Ticks, error);
+            File.WriteAllText(
+                PreservationFailurePathFor(contentDbPath),
+                JsonSerializer.Serialize(
+                    stamp,
+                    ContentCorpusWriterJsonContext.Default.PreservationFailureStamp));
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+        }
+    }
+
+    private static void ClearPreservationFailure(string contentDbPath)
+    {
+        try
+        {
+            string markerPath = PreservationFailurePathFor(contentDbPath);
+            if (File.Exists(markerPath))
+                File.Delete(markerPath);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+        }
+    }
+
+    private static string PreservationFailurePathFor(string contentDbPath) =>
+        Path.GetFullPath(contentDbPath) + ".preservation-error";
+
+    private sealed record PreservationFailureStamp(long Length, long LastWriteUtcTicks, string Error);
+
+    [JsonSerializable(typeof(PreservationFailureStamp))]
+    private sealed partial class ContentCorpusWriterJsonContext : JsonSerializerContext;
+
+    private static bool HasSqliteHeader(string path)
+    {
+        Span<byte> header = stackalloc byte[16];
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return stream.Read(header) == header.Length
+            && header.SequenceEqual("SQLite format 3\0"u8);
+    }
+
+    private static int CountExternalSources(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT schema_version
-            FROM old.content_meta
-            LIMIT 2;
+            SELECT COUNT(*)
+            FROM old.content_sources
+            WHERE content_kind IN ($external, $web)
+              AND status = 'active';
             """;
+        command.Parameters.AddWithValue("$external", TextContentKind.ExternalFile);
+        command.Parameters.AddWithValue("$web", TextContentKind.Web);
+        return checked(Convert.ToInt32(command.ExecuteScalar()));
+    }
+
+    private static bool HasCompatibleExternalSourceShape(SqliteConnection connection)
+    {
+        return HasColumns(
+                connection,
+                "content_sources",
+                "source_id", "content_kind", "workspace_id", "workspace_revision", "path", "url",
+                "display_path", "language", "content_hash", "source_bytes", "line_count", "is_test",
+                "status", "indexed_at_utc")
+            && HasColumns(
+                connection,
+                "content_chunks",
+                "chunk_id", "source_id", "content_kind", "path", "url", "display_path", "language",
+                "line_start", "line_end", "byte_start", "byte_end", "raw_text", "doc_len", "is_test",
+                "source_bytes", "containing_symbol_id", "containing_symbol_name")
+            && HasColumns(
+                connection,
+                "content_symbol_spans",
+                "source_id", "symbol_id", "symbol_name", "path", "start_line", "end_line")
+            && HasColumns(connection, "content_fts", "chunk_id", "body");
+    }
+
+    private static bool HasColumns(
+        SqliteConnection connection,
+        string table,
+        params string[] requiredColumns)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA old.table_info(\"{table}\");";
         using var reader = command.ExecuteReader();
-        if (!reader.Read())
-            return false;
-        int schemaVersion = reader.GetInt32(0);
-        if (reader.Read())
-            return false;
-        return schemaVersion == ContentCorpusSchema.SchemaVersion;
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+            columns.Add(reader.GetString(1));
+        return requiredColumns.All(columns.Contains);
     }
 
     private static int ExecuteNonQuery(SqliteConnection connection, string sql)

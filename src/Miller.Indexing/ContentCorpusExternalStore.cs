@@ -502,7 +502,9 @@ public sealed class ContentCorpusExternalStore
         bool clamped = end - start + 1 > MaxReadWindowLines;
         if (clamped)
         {
-            start = Math.Max(start, line - (MaxReadWindowLines - 1));
+            int maxStart = Math.Max(1, source.LineCount - MaxReadWindowLines + 1);
+            int preferredStart = line - ((MaxReadWindowLines - 1) / 2);
+            start = Math.Clamp(preferredStart, 1, maxStart);
             end = start + MaxReadWindowLines - 1;
         }
 
@@ -539,6 +541,7 @@ public sealed class ContentCorpusExternalStore
 
         return new ExternalContentReadResult(
             source.SourceId,
+            source.ContentKind,
             source.DisplayPath,
             source.ContentHash,
             start,
@@ -1318,6 +1321,7 @@ public sealed record ExternalContentShape(
 /// </summary>
 public sealed record ExternalContentReadResult(
     string SourceId,
+    string ContentKind,
     string DisplayPath,
     string ContentHash,
     int LineStart,

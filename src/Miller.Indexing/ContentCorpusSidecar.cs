@@ -131,6 +131,30 @@ public sealed class ContentCorpusSidecar
                 StoredRawBytes: 0);
         }
 
+        if (ContentCorpusWriter.TryReadPreservationFailure(contentDbPath) is { } preservationFailure)
+        {
+            try
+            {
+                return ReadFacts(contentDbPath, expectedRevision);
+            }
+            catch (Exception ex) when (
+                ex is SqliteException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+            }
+
+            return new ContentCorpusFacts(
+                "preservation_blocked",
+                contentDbPath,
+                SchemaVersion: null,
+                WorkspaceRevision: null,
+                SourceCount: 0,
+                ChunkCount: 0,
+                IndexedSourceBytes: 0,
+                StoredRawBytes: 0,
+                Error: preservationFailure);
+        }
+
         try
         {
             return ReadFacts(contentDbPath, expectedRevision);
@@ -221,7 +245,7 @@ public sealed class ContentCorpusSidecar
             throw new InvalidOperationException("content_meta has no row");
 
         int schemaVersion = checked((int)reader.GetInt64(0));
-        long workspaceRevision = reader.GetInt64(1);
+        long? workspaceRevision = reader.IsDBNull(1) ? null : reader.GetInt64(1);
         int sourceCount = checked((int)reader.GetInt64(2));
         int chunkCount = checked((int)reader.GetInt64(3));
         long indexedSourceBytes = reader.GetInt64(4);
@@ -236,9 +260,14 @@ public sealed class ContentCorpusSidecar
         if (reader.Read())
             throw new InvalidOperationException("content_meta has multiple rows");
 
-        string state = schemaVersion == ContentCorpusSchema.SchemaVersion && workspaceRevision == expectedRevision
-            ? "current"
-            : "stale";
+        string? preservationFailure = ContentCorpusWriter.TryReadPreservationFailure(contentDbPath);
+        string state = preservationFailure is not null
+            ? "preservation_blocked"
+            : workspaceRevision is null
+            ? "imports_only"
+            : schemaVersion == ContentCorpusSchema.SchemaVersion && workspaceRevision == expectedRevision
+                ? "current"
+                : "stale";
         return new ContentCorpusFacts(
             state,
             Path.GetFullPath(contentDbPath),
@@ -254,6 +283,7 @@ public sealed class ContentCorpusSidecar
             missingSkipped,
             hashMismatchSkipped,
             nonUtf8Skipped,
-            ioSkipped);
+            ioSkipped,
+            Error: preservationFailure);
     }
 }

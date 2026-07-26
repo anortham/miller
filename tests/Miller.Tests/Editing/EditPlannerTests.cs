@@ -305,6 +305,34 @@ public sealed class EditPlannerTests
     }
 
     [Fact]
+    public void AddDoc_CrLfFile_PreservesCrLfLineEndings()
+    {
+        const string content = "class C\r\n{\r\n    void M() { }\r\n}\r\n";
+        var line3Start = ByteLen("class C\r\n{\r\n");
+        var span = new SymbolEditSpan(line3Start, ByteLen(content) - 2, null, null, StartLine: 3, Name: "M");
+
+        var plan = EditPlanner.AddDoc(content, span, "/// summary\n/// detail");
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal(
+            "    /// summary\r\n    /// detail\r\n",
+            Assert.Single(plan.Edits).Replacement);
+    }
+
+    [Fact]
+    public void AddDoc_MixedLineEndings_UsesTargetLineEnding()
+    {
+        const string content = "class C\r\n{\n    void M() { }\n}\n";
+        var line3Start = ByteLen("class C\r\n{\n");
+        var span = new SymbolEditSpan(line3Start, ByteLen(content) - 1, null, null, StartLine: 3, Name: "M");
+
+        EditPlan plan = EditPlanner.AddDoc(content, span, "/// summary");
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal("    /// summary\n", Assert.Single(plan.Edits).Replacement);
+    }
+
+    [Fact]
     public void AddDoc_LineStartIsByteOffset_AfterMultibyteLines()
     {
         // A preceding line contains multibyte chars; line→byte mapping must count bytes, not chars.

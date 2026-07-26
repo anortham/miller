@@ -284,12 +284,21 @@ public sealed record WorkspaceHealthFacts(
         string message = string.IsNullOrWhiteSpace(error)
             ? $"{code} is {state}"
             : $"{code} is {state}: {error}";
-        string severity = string.Equals(state, "missing", StringComparison.OrdinalIgnoreCase)
+        bool refreshable = string.Equals(state, "missing", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(state, "stale", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(state, "imports_only", StringComparison.OrdinalIgnoreCase);
+        string severity = string.Equals(state, "missing", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(state, "imports_only", StringComparison.OrdinalIgnoreCase)
             ? "usable_with_warnings"
             : "degraded";
         warnings.Add(new HealthWarning(code, severity, message));
-        if (string.Equals(state, "missing", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(state, "stale", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(state, "preservation_blocked", StringComparison.OrdinalIgnoreCase))
+        {
+            recommended.Add(
+                "run miller content export to preserve imported chunks, keep content.db as the recovery source, " +
+                "then recover or re-import sources before replacing the content_corpus");
+        }
+        else if (refreshable)
         {
             recommended.Add($"run workspace refresh to rebuild the {code}");
         }

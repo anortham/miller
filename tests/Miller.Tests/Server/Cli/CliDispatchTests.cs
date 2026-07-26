@@ -26,6 +26,7 @@ namespace Miller.Tests.Server.Cli;
 /// from a seeded temp DB, so these stay in the fast suite. <see cref="WorkspaceContext"/> is constructed directly
 /// (rather than from a CWD) so the tests never chdir — that would race xUnit's parallel collections.
 /// </summary>
+[Collection(SemanticActivationEnvironmentCollection.Name)]
 public sealed class CliDispatchTests : IDisposable
 {
     private readonly string _dir;

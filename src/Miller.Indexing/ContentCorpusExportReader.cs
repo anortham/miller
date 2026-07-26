@@ -8,39 +8,6 @@ namespace Miller.Indexing;
 
 public sealed class ContentCorpusExportReader
 {
-    private const string ExportQuery = """
-        SELECT m.schema_version,
-               s.workspace_id,
-               s.workspace_revision,
-               c.source_id,
-               c.chunk_id,
-               c.content_kind,
-               c.path,
-               c.url,
-               c.display_path,
-               c.language,
-               c.line_start,
-               c.line_end,
-               c.byte_start,
-               c.byte_end,
-               c.source_bytes,
-               s.content_hash,
-               c.raw_text,
-               c.doc_len,
-               c.is_test,
-               c.containing_symbol_id,
-               c.containing_symbol_name,
-               s.status,
-               s.indexed_at_utc
-        FROM content_chunks c
-        JOIN content_sources s ON s.source_id = c.source_id
-        CROSS JOIN content_meta m
-        WHERE s.status = 'active'
-          AND ($kind IS NULL OR c.content_kind = $kind)
-          AND ($workspace IS NULL OR s.workspace_id = $workspace)
-        ORDER BY c.content_kind, c.display_path, c.line_start, c.chunk_id;
-        """;
-
     public IReadOnlyList<ContentCorpusExportRow> Read(
         string contentDbPath,
         string? contentKind = null,
@@ -55,7 +22,7 @@ public sealed class ContentCorpusExportReader
 
         using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = ExportQuery;
+        command.CommandText = BuildExportQuery(connection);
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
 
@@ -90,7 +57,7 @@ public sealed class ContentCorpusExportReader
         string? workspace = string.IsNullOrWhiteSpace(workspaceId) ? null : workspaceId.Trim();
         using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = ExportQuery;
+        command.CommandText = BuildExportQuery(connection);
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
 
@@ -156,9 +123,6 @@ public sealed class ContentCorpusExportReader
     private static ContentCorpusExportRow ReadRow(SqliteDataReader reader)
     {
         int schemaVersion = reader.GetInt32(0);
-        if (schemaVersion != ContentCorpusSchema.SchemaVersion)
-            throw new InvalidOperationException($"content.db schema_version {schemaVersion} is not supported.");
-
         return new ContentCorpusExportRow(
             schemaVersion,
             reader.IsDBNull(1) ? null : reader.GetString(1),
@@ -183,6 +147,76 @@ public sealed class ContentCorpusExportReader
             reader.IsDBNull(20) ? null : reader.GetString(20),
             reader.GetString(21),
             reader.GetString(22));
+    }
+
+    private static string BuildExportQuery(SqliteConnection connection)
+    {
+        IReadOnlySet<string> sourceColumns = ReadColumns(connection, "content_sources");
+        IReadOnlySet<string> chunkColumns = ReadColumns(connection, "content_chunks");
+        string Source(string name, string fallback) =>
+            sourceColumns.Contains(name) ? $"s.\"{name}\"" : fallback;
+        string Chunk(string name, string fallback) =>
+            chunkColumns.Contains(name) ? $"c.\"{name}\"" : fallback;
+
+        string contentKind = Chunk("content_kind", Source("content_kind", "''"));
+        string displayPath = Chunk("display_path", Source("display_path", Chunk("source_id", "''")));
+        string workspaceFilter = sourceColumns.Contains("workspace_id")
+            ? "($workspace IS NULL OR s.workspace_id = $workspace)"
+            : "$workspace IS NULL";
+        return $"""
+            SELECT {ReadSchemaVersion(connection)},
+                   {Source("workspace_id", "NULL")},
+                   {Source("workspace_revision", "NULL")},
+                   {Chunk("source_id", "''")},
+                   {Chunk("chunk_id", "''")},
+                   {contentKind},
+                   {Chunk("path", Source("path", "NULL"))},
+                   {Chunk("url", Source("url", "NULL"))},
+                   {displayPath},
+                   {Chunk("language", Source("language", "''"))},
+                   {Chunk("line_start", "1")},
+                   {Chunk("line_end", Chunk("line_start", "1"))},
+                   {Chunk("byte_start", "0")},
+                   {Chunk("byte_end", "0")},
+                   {Chunk("source_bytes", Source("source_bytes", "0"))},
+                   {Source("content_hash", "''")},
+                   {Chunk("raw_text", "''")},
+                   {Chunk("doc_len", "0")},
+                   {Chunk("is_test", Source("is_test", "0"))},
+                   {Chunk("containing_symbol_id", "NULL")},
+                   {Chunk("containing_symbol_name", "NULL")},
+                   {Source("status", "'active'")},
+                   {Source("indexed_at_utc", "''")}
+            FROM content_chunks c
+            JOIN content_sources s ON s.source_id = c.source_id
+            WHERE {Source("status", "'active'")} = 'active'
+              AND ($kind IS NULL OR {contentKind} = $kind)
+              AND {workspaceFilter}
+            ORDER BY {contentKind}, {displayPath}, {Chunk("line_start", "1")}, {Chunk("chunk_id", "''")};
+            """;
+    }
+
+    private static IReadOnlySet<string> ReadColumns(SqliteConnection connection, string table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info(\"{table}\");";
+        using var reader = command.ExecuteReader();
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read())
+            columns.Add(reader.GetString(1));
+        if (columns.Count == 0)
+            throw new InvalidOperationException($"content.db is missing required table {table}.");
+        return columns;
+    }
+
+    private static int ReadSchemaVersion(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT schema_version FROM content_meta LIMIT 1;";
+        object? value = command.ExecuteScalar();
+        if (value is null or DBNull)
+            throw new InvalidOperationException("content.db content_meta has no schema_version.");
+        return checked(Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture));
     }
 
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)

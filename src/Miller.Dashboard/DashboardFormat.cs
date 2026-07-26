@@ -127,6 +127,8 @@ public static class DashboardFormat
         {
             "missing" => "Run Refresh index to build the sidecar.",
             "stale" or "stale_schema" => "Sidecar is behind the index — run Refresh index.",
+            "imports_only" => "Imported content is available; run Refresh index to add workspace text.",
+            "preservation_blocked" => "Imported content could not be migrated — preserve it before replacing this sidecar.",
             "unreadable" => "Sidecar exists but could not be read — try Refresh index.",
             _ => string.Empty,
         };

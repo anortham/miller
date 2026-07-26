@@ -62,6 +62,13 @@ public sealed class FtsTextContentSearchIndex : ITextContentSearchIndex, ISemant
                 $"this build expects {ContentCorpusSchema.SchemaVersion}. Rebuild the content corpus.");
         }
 
+        if (meta.WorkspaceRevision is null)
+        {
+            throw new InvalidOperationException(
+                $"content.db at '{absPath}' contains imports only; run workspace refresh " +
+                "to build workspace text before source, docs, or config search.");
+        }
+
         if (meta.WorkspaceRevision != expectedRevision)
         {
             string actualRevision = meta.WorkspaceRevision?.ToString(CultureInfo.InvariantCulture) ?? "none";

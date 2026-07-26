@@ -21,7 +21,7 @@ public sealed class LiveEditTests
 {
     // A write-through that canonicalizes + reindexes each changed file through the real binary (what the leader
     // does inline) and records the converged paths so the test can assert it ran.
-    private sealed class LiveWriteThrough(JulieExtractOps ops) : IEditWriteThrough
+    private sealed class LiveWriteThrough(JulieExtractOps ops, bool recoverStale = false) : IEditWriteThrough
     {
         public List<string> Converged { get; } = [];
         public void Converge(IReadOnlyList<string> changedFiles)
@@ -31,6 +31,15 @@ public sealed class LiveEditTests
                 ops.Update(f);
                 Converged.Add(f);
             }
+        }
+
+        public StaleRecoveryAttempt TryRecoverStaleFile(string fullPath)
+        {
+            if (!recoverStale)
+                return StaleRecoveryAttempt.None;
+            ops.Update(fullPath);
+            Converged.Add(fullPath);
+            return StaleRecoveryAttempt.Converged;
         }
     }
 
@@ -179,15 +188,21 @@ public sealed class LiveEditTests
             // The external edit survives (no write happened).
             Assert.Contains("// external edit", File.ReadAllText(Path.Combine(repo, "OrderService.cs")));
 
-            // allow_stale lets a deliberate edit through despite the drift.
-            var forced = service3.Execute(new EditRequest("replace_symbol_body", "OrderService.GrandTotal")
+            var recoveryService = new EditService(
+                index3,
+                resolver3,
+                canonicalDb,
+                canonicalRoot,
+                applier,
+                new LiveWriteThrough(ops, recoverStale: true));
+            var forced = recoveryService.Execute(new EditRequest("replace_symbol_body", "OrderService.GrandTotal")
             {
                 NewText = "{\n        return 7;\n    }",
                 Apply = true,
                 AllowStale = true,
             });
             Assert.True(forced.Applied, forced.Output);
-            Assert.True(forced.StaleAllowed);
+            Assert.False(forced.StaleAllowed);
             Assert.Contains("return 7;", File.ReadAllText(Path.Combine(repo, "OrderService.cs")));
         }
         finally

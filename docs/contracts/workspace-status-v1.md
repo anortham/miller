@@ -65,10 +65,11 @@ continuous testing, launcher smokes, fleet inventory, and local readiness checks
 
 `content_corpus` when present:
 
-- `state`: sidecar state, for example `current`, `missing`, `stale`, `disabled`, or `error`.
+- `state`: sidecar state, for example `current`, `imports_only`, `preservation_blocked`, `missing`, `stale`,
+  `disabled`, or `error`. `preservation_blocked` means a rebuild refused to discard imported content.
 - `path`: path to `.miller/content.db`, or `null`.
 - `schema_version`: content corpus schema version, or `null`.
-- `workspace_revision`: workspace revision the sidecar reflects, or `null`.
+- `workspace_revision`: workspace revision the sidecar reflects, or `null` for an imports-only corpus.
 - `source_count`, `chunk_count`, `indexed_source_bytes`, `stored_raw_bytes`: corpus counts.
 - `status_skipped`, `scope_skipped`, `too_large_skipped`, `missing_skipped`, `hash_mismatch_skipped`,
   `non_utf8_skipped`, `io_skipped`: skipped-source counters.

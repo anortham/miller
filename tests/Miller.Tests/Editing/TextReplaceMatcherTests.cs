@@ -110,6 +110,63 @@ public sealed class TextReplaceMatcherTests
     }
 
     [Fact]
+    public void Plan_Fuzzy_PrefersLowestDistanceBeforePosition()
+    {
+        const string content = "return totals;\nreturn total;\n";
+
+        var plan = TextReplaceMatcher.Plan(content, "return total;", Occurrence.First, TextMatchMode.Fuzzy);
+
+        Assert.True(plan.IsSuccess);
+        var match = Assert.Single(plan.Matches);
+        Assert.Equal(0, match.Distance);
+        Assert.Equal(ByteLen("return totals;\n"), match.StartByte);
+        Assert.Equal(2, plan.MatchCount);
+        Assert.Equal(1, plan.AmbiguousMatchCount);
+    }
+
+    [Fact]
+    public void Plan_Fuzzy_AllKeepsEveryCandidateWithinThreshold()
+    {
+        const string content = "return totals;\nreturn total;\n";
+
+        var plan = TextReplaceMatcher.Plan(content, "return total;", Occurrence.All, TextMatchMode.Fuzzy);
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal(2, plan.MatchCount);
+        Assert.Equal(2, plan.Edits.Count);
+        Assert.Equal([1, 0], plan.Matches.Select(static match => match.Distance).ToArray());
+    }
+
+    [Fact]
+    public void Plan_Fuzzy_AllKeepsLowestDistanceNonOverlappingCandidates()
+    {
+        const string content = "alpha\nalpha\nalpha\n";
+
+        var plan = TextReplaceMatcher.Plan(content, "alpha\nalpha", Occurrence.All, TextMatchMode.Fuzzy);
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal(2, plan.MatchCount);
+        Assert.Single(plan.Edits);
+        Assert.Single(plan.Matches);
+    }
+
+    [Fact]
+    public void Plan_Normalized_AllKeepsNonOverlappingCandidatesAndReportsFullPopulation()
+    {
+        const string content = "    foo();\n    foo();\n    foo();\n";
+
+        var plan = TextReplaceMatcher.Plan(
+            content,
+            "foo();\nfoo();",
+            Occurrence.All,
+            TextMatchMode.Normalized);
+
+        Assert.True(plan.IsSuccess);
+        Assert.Equal(2, plan.MatchCount);
+        Assert.Single(plan.Edits);
+    }
+
+    [Fact]
     public void Plan_Fuzzy_RefusesLongSnippets()
     {
         var content = new string('a', TextReplaceMatcher.MaxFuzzySnippetChars + 10);

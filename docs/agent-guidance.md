@@ -61,7 +61,8 @@ parameters and selectors below are what those short forms omit.
 - **`edit`** — index-aware edits: `replace_text`, `replace_symbol_body`, `replace_symbol_signature`,
   `rename_symbol`, `insert_before`, `insert_after`, `add_doc`. For localized existing-file edits, `replace_text`
   supports `match_mode=auto|exact|normalized|fuzzy` plus `query`/`anchor`/`line` selectors and match proof.
-  Previews a diff unless `apply=true`; stale targets self-heal or tell you to refresh / pass `allow_stale`.
+  Previews a diff unless `apply=true`; stale targets self-heal or tell you to refresh. Use `allow_stale=true`
+  only for `replace_text`; symbol-span, insert, doc, and rename operations always require fresh indexed spans.
 - **`content`** — import/search/read/shape/list/remove external/web text for logs, CI output, reports, dumps, and
   fetched markdown. `search` returns snippets, `source_id`, and `workspace_id`; `shape` gives a bounded head/tail,
   line count, and text-derived severity summary; `read` returns ≤200-line windows. Bare `list` reports exact

@@ -83,9 +83,17 @@ public static class TextReplaceMatcher
                 matches.Add(match);
         }
 
-        return matches.Count == 0
-            ? Failure(TextMatchMode.Normalized, requestedMode, EditErrorKind.TextNotFound, "old_text not found with normalized matching.")
-            : Success(matches, occurrence, requestedMode, TextMatchMode.Normalized);
+        if (matches.Count == 0)
+            return Failure(TextMatchMode.Normalized, requestedMode, EditErrorKind.TextNotFound, "old_text not found with normalized matching.");
+        IReadOnlyList<TextReplaceMatch> selectionPool =
+            occurrence == Occurrence.All ? NonOverlapping(matches) : matches;
+        return Success(
+            selectionPool,
+            occurrence,
+            requestedMode,
+            TextMatchMode.Normalized,
+            matchCount: matches.Count,
+            ambiguousMatchCount: occurrence == Occurrence.All ? selectionPool.Count : matches.Count);
     }
 
     private static TextReplaceMatchPlan PlanFuzzy(string content, string oldText, Occurrence occurrence, TextMatchMode requestedMode)
@@ -124,16 +132,48 @@ public static class TextReplaceMatcher
                 matches.Add(match);
         }
 
-        return matches.Count == 0
-            ? Failure(TextMatchMode.Fuzzy, requestedMode, EditErrorKind.TextNotFound, "old_text not found with bounded fuzzy matching.")
-            : Success(matches, occurrence, requestedMode, TextMatchMode.Fuzzy);
+        if (matches.Count == 0)
+            return Failure(TextMatchMode.Fuzzy, requestedMode, EditErrorKind.TextNotFound, "old_text not found with bounded fuzzy matching.");
+
+        int bestDistance = matches.Min(static match => match.Distance);
+        var bestMatches = matches
+            .Where(match => match.Distance == bestDistance)
+            .OrderBy(static match => match.StartByte)
+            .ToArray();
+        IReadOnlyList<TextReplaceMatch> selectionPool =
+            occurrence == Occurrence.All ? NonOverlapping(matches) : bestMatches;
+        return Success(
+            selectionPool,
+            occurrence,
+            requestedMode,
+            TextMatchMode.Fuzzy,
+            matchCount: matches.Count,
+            ambiguousMatchCount: occurrence == Occurrence.All ? selectionPool.Count : bestMatches.Length);
+    }
+
+    private static IReadOnlyList<TextReplaceMatch> NonOverlapping(IReadOnlyList<TextReplaceMatch> matches)
+    {
+        var selected = new List<TextReplaceMatch>();
+        foreach (TextReplaceMatch candidate in matches
+                     .OrderBy(static match => match.Distance)
+                     .ThenBy(static match => match.StartByte))
+        {
+            if (selected.All(existing =>
+                    candidate.EndByte <= existing.StartByte || candidate.StartByte >= existing.EndByte))
+            {
+                selected.Add(candidate);
+            }
+        }
+        return selected.OrderBy(static match => match.StartByte).ToArray();
     }
 
     private static TextReplaceMatchPlan Success(
         IReadOnlyList<TextReplaceMatch> allMatches,
         Occurrence occurrence,
         TextMatchMode requestedMode,
-        TextMatchMode matchedMode)
+        TextMatchMode matchedMode,
+        int? matchCount = null,
+        int? ambiguousMatchCount = null)
     {
         var selected = occurrence switch
         {
@@ -144,7 +184,13 @@ public static class TextReplaceMatcher
         };
 
         var edits = selected.Select(m => new TextEdit(m.StartByte, m.EndByte, string.Empty)).ToArray();
-        return new TextReplaceMatchPlan(EditPlan.Success(edits), requestedMode, matchedMode, selected, allMatches.Count);
+        return new TextReplaceMatchPlan(
+            EditPlan.Success(edits),
+            requestedMode,
+            matchedMode,
+            selected,
+            matchCount ?? allMatches.Count,
+            ambiguousMatchCount ?? allMatches.Count);
     }
 
     private static TextReplaceMatchPlan Failure(TextMatchMode attemptedMode, TextMatchMode requestedMode, EditErrorKind kind, string message) =>
@@ -153,7 +199,8 @@ public static class TextReplaceMatcher
             requestedMode,
             MatchedMode: null,
             Matches: [],
-            MatchCount: 0);
+            MatchCount: 0,
+            AmbiguousMatchCount: 0);
 
     // A no-match is the edit tool's dominant failure and the agent cannot see the file, so the message has to
     // name the next call rather than only report the miss (design §7.2).

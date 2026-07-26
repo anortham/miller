@@ -111,6 +111,38 @@ public sealed class ContentCorpusExportReaderTests : IDisposable
         Assert.Equal("workspace-1", source.GetProperty("workspace_id").GetString());
     }
 
+    [Fact]
+    public void ExportJsonLines_LegacySchemaAndMissingOptionalColumn_PreservesImportedText()
+    {
+        using var fixture = WriteWorkspaceContent();
+        string logPath = Path.Combine(_dir, "legacy.log");
+        File.WriteAllText(logPath, "LegacyRecoveryMarker\n");
+        new ContentCorpusExternalStore().Import(
+            _contentDbPath,
+            logPath,
+            displayPath: "legacy.log");
+        using (var connection = new SqliteConnection($"Data Source={_contentDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE content_meta SET schema_version = 1;
+                ALTER TABLE content_chunks DROP COLUMN url;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        string jsonl = new ContentCorpusExportReader().ExportJsonLines(
+            _contentDbPath,
+            contentKind: TextContentKind.ExternalFile);
+
+        JsonElement row = Assert.Single(ParseLines(jsonl));
+        Assert.Equal(1, row.GetProperty("schema_version").GetInt32());
+        Assert.Equal("legacy.log", row.GetProperty("display_path").GetString());
+        Assert.Contains("LegacyRecoveryMarker", row.GetProperty("chunk_text").GetString());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("url").ValueKind);
+    }
+
     private JulieDbFixture WriteWorkspaceContent()
     {
         const string sourceText = """

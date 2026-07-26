@@ -113,8 +113,13 @@ public static class EditPlanner
             return EmptyNewText("add_doc");
 
         var lineStartByte = ByteOffsetOfLineStart(content, span.StartLine);
-        var aligned = AlignDocToSymbolIndent(newText, IndentOfLine(content, span.StartLine));
-        return EditPlan.Success([new TextEdit(lineStartByte, lineStartByte, aligned + "\n")]);
+        string newline = LineEndingOfLine(content, span.StartLine);
+        string normalizedDoc = newText
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        var aligned = AlignDocToSymbolIndent(normalizedDoc, IndentOfLine(content, span.StartLine));
+        string replacement = aligned.Replace("\n", newline, StringComparison.Ordinal) + newline;
+        return EditPlan.Success([new TextEdit(lineStartByte, lineStartByte, replacement)]);
     }
 
     /// <summary>
@@ -149,6 +154,23 @@ public static class EditPlanner
         if (line < 1 || line > lines.Length)
             return string.Empty;
         return LeadingWhitespace(lines[line - 1]);
+    }
+
+    private static string LineEndingOfLine(string content, int line)
+    {
+        string[] lines = content.Split('\n');
+        if (line >= 1 && line <= lines.Length)
+        {
+            string target = lines[line - 1];
+            if (target.EndsWith('\r'))
+                return "\r\n";
+            if (line < lines.Length)
+                return "\n";
+        }
+
+        if (line > 1 && line - 2 < lines.Length && lines[line - 2].EndsWith('\r'))
+            return "\r\n";
+        return "\n";
     }
 
     /// <summary>The leading run of spaces/tabs of <paramref name="line"/> (a trailing '\r' is not whitespace we indent with).</summary>

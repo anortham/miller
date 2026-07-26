@@ -1,4 +1,7 @@
+using System.Buffers;
 using System.ComponentModel;
+using System.Text;
+using System.Text.Json;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -11,8 +14,8 @@ namespace Miller.Server.Tools;
 /// The <c>edit</c> tool (miller-toolbox.md §6, m6-design): index-aware, preview-first, freshness-gated code
 /// mutation. It PREVIEWS a unified diff by default and writes NOTHING; a caller must pass <c>apply=true</c> to
 /// commit. Operations: replace_text, replace_symbol_body, replace_symbol_signature, rename_symbol (workspace-
-/// wide, name-based — homonyms included, contained by the preview), insert_before, insert_after, add_doc. A
-/// write is blocked if the index is stale for the target file (re-index first, or pass <c>allow_stale</c>);
+/// wide, exact-reference-first), insert_before, insert_after, add_doc. A write is blocked if the index is stale
+/// for the target file; <c>allow_stale</c> is restricted to disk-derived <c>replace_text</c> edits.
 /// applies are atomic (TOCTOU re-check + rollback) and converge the index afterwards.
 ///
 /// <para>This class is the thin MCP/DI/telemetry shell; the whole pipeline lives in the unit-tested
@@ -62,8 +65,8 @@ public sealed class EditTool
         "Edit indexed code with proof: previews a diff and writes NOTHING by default; set apply=true to commit " +
         "the change. Operations: replace_text (match_mode + query/anchor/line selectors avoid full-file reads; " +
         "returns match proof), replace_symbol_body, replace_symbol_signature, rename_symbol (workspace-wide), " +
-        "insert_before/insert_after, add_doc. If the index is stale for the target file Miller converges it " +
-        "first; refused only if that fails (re-index or pass allow_stale). NOT for: creating new files (use your " +
+        "insert_before/insert_after, add_doc. If the index is stale Miller converges it first; allow_stale may " +
+        "bypass refusal only for disk-derived replace_text edits. NOT for: creating new files (use your " +
         "file tools) or bulk text audits (search mode=markers first). Example: edit operation=replace_text " +
         "target=src/App.cs old_text=\"retries: 3\" new_text=\"retries: 5\".")]
     public string Edit(
@@ -80,7 +83,7 @@ public sealed class EditTool
         [Description("Optional nearby text selector to narrow replace_text candidates.")] string? anchor = null,
         [Description("Optional 1-based line hint to narrow replace_text candidates.")] int? line = null,
         [Description("Set true to commit the edit to disk. Default false (preview a diff and write nothing).")] bool apply = false,
-        [Description("Bypass the index-stale refusal for the target file. Default false.")] bool allow_stale = false,
+        [Description("Bypass stale-index refusal only for replace_text; symbol-span and rename edits always require fresh index spans. Default false.")] bool allow_stale = false,
         [Description("Disambiguate an ambiguous symbol name to a file. Optional.")] string? scope = null,
         [Description("rename_symbol safety: exact (default) or include_fallback (explicit name-based fallback).")]
         string rename_mode = "exact",
@@ -146,7 +149,7 @@ public sealed class EditTool
                 if (telemetry.Outcome == TelemetryOutcome.Empty)
                     telemetry.SetEmptyReason("edit_noop");
             }
-            return result.Output;
+            return BoundMcpOutput(result, string.Equals(format, "json", StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex)
         {
@@ -154,11 +157,89 @@ public sealed class EditTool
             {
                 telemetry.Outcome = TelemetryOutcome.Error;
                 telemetry.SetError(ex);
-                // Type name only: the bucket is a queryable enum, and an exception message can carry a path or
-                // user text. The message/detail stay in the scope's dedicated error fields, not in metadata.
                 telemetry.SetMetadata(FailureReasonMetadataKey, UnhandledFailureReasonPrefix + ex.GetType().Name);
             }
-            return $"edit failed: {ex.Message}";
+            string message = $"edit failed: {ex.Message}";
+            if (!string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+            {
+                return ToolOutputBudget.TruncateUtf8(
+                    message,
+                    ToolOutputBudget.EditMcpMaxBytes,
+                    "\n… edit failure output truncated.");
+            }
+
+            const int failureMessageMaxBytes = 2 * 1024;
+            return WriteJson(writer =>
+            {
+                writer.WriteStartObject();
+                writer.WriteBoolean("applied", false);
+                writer.WriteString("outcome", "error");
+                writer.WriteString("failure_reason", UnhandledFailureReasonPrefix + ex.GetType().Name);
+                writer.WriteBoolean(
+                    "output_truncated",
+                    Encoding.UTF8.GetByteCount(message) > failureMessageMaxBytes);
+                writer.WriteString("message", ToolOutputBudget.TruncateUtf8(
+                    message,
+                    failureMessageMaxBytes,
+                    "\n… edit failure output truncated."));
+                writer.WriteEndObject();
+            });
         }
+    }
+
+    internal static string BoundMcpOutput(EditService.EditResult result, bool json)
+    {
+        if (Encoding.UTF8.GetByteCount(result.Output) <= ToolOutputBudget.EditMcpMaxBytes)
+            return result.Output;
+        if (!json)
+        {
+            return ToolOutputBudget.TruncateUtf8(
+                result.Output,
+                ToolOutputBudget.EditMcpMaxBytes,
+                "\n… edit output truncated; inspect the working tree for complete evidence.");
+        }
+
+        string[] boundedPaths = result.FilesLeftModified
+            .Take(20)
+            .Select(static path => ToolOutputBudget.TruncateUtf8(path, 256, "…"))
+            .ToArray();
+        return WriteJson(writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteBoolean("applied", result.Applied);
+            writer.WriteBoolean("partially_applied", result.PartiallyApplied);
+            writer.WriteString("outcome", result.Outcome);
+            writer.WriteNumber("result_count", result.ResultCount);
+            writer.WriteStartArray("files_left_modified");
+            foreach (string path in boundedPaths)
+                writer.WriteStringValue(path);
+            writer.WriteEndArray();
+            writer.WriteNumber("files_left_modified_total_count", result.FilesLeftModifiedTotalCount);
+            writer.WriteNumber("files_left_modified_omitted_count", Math.Max(
+                result.FilesLeftModifiedOmittedCount,
+                result.FilesLeftModifiedTotalCount - boundedPaths.Length));
+            writer.WriteBoolean("stale_allowed", result.StaleAllowed);
+            if (result.IndexFresh is { } indexFresh)
+                writer.WriteBoolean("index_fresh", indexFresh);
+            else
+                writer.WriteNull("index_fresh");
+            if (result.FailureReason is { } failureReason)
+                writer.WriteString("failure_reason", failureReason);
+            else
+                writer.WriteNull("failure_reason");
+            writer.WriteBoolean("output_truncated", true);
+            writer.WriteString(
+                "note",
+                "Edit output exceeded the MCP byte budget; inspect the working tree for complete evidence.");
+            writer.WriteEndObject();
+        });
+    }
+
+    private static string WriteJson(Action<Utf8JsonWriter> write)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+            write(writer);
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 }

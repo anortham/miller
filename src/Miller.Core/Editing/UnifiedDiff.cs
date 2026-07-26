@@ -13,6 +13,8 @@ public static class UnifiedDiff
 {
     /// <summary>Lines of unchanged context kept around each change region (standard unified-diff value).</summary>
     private const int ContextLines = 3;
+    private const long MaxLcsCells = 1_000_000;
+    private const int MaxFallbackLinesPerSide = 40;
 
     /// <summary>
     /// Render the unified diff transforming <paramref name="oldContent"/> into <paramref name="newContent"/>.
@@ -34,7 +36,8 @@ public static class UnifiedDiff
         var oldLines = SplitLines(oldContent);
         var newLines = SplitLines(newContent);
 
-        var ops = DiffLines(oldLines, newLines);
+        if (!TryDiffLines(oldLines, newLines, out var ops))
+            return RenderBoundedFallback(oldLines, newLines, path);
         var hunks = GroupIntoHunks(ops);
         if (hunks.Count == 0)
             return string.Empty;
@@ -45,6 +48,47 @@ public static class UnifiedDiff
         foreach (var hunk in hunks)
             hunk.Write(sb);
         return sb.ToString();
+    }
+
+    private static string RenderBoundedFallback(
+        IReadOnlyList<string> oldLines,
+        IReadOnlyList<string> newLines,
+        string path)
+    {
+        int prefix = 0;
+        while (prefix < oldLines.Count &&
+               prefix < newLines.Count &&
+               string.Equals(oldLines[prefix], newLines[prefix], StringComparison.Ordinal))
+        {
+            prefix++;
+        }
+
+        int suffix = 0;
+        while (suffix < oldLines.Count - prefix &&
+               suffix < newLines.Count - prefix &&
+               string.Equals(oldLines[oldLines.Count - suffix - 1], newLines[newLines.Count - suffix - 1], StringComparison.Ordinal))
+        {
+            suffix++;
+        }
+
+        int oldChanged = oldLines.Count - prefix - suffix;
+        int newChanged = newLines.Count - prefix - suffix;
+        int oldShown = Math.Min(oldChanged, MaxFallbackLinesPerSide);
+        int newShown = Math.Min(newChanged, MaxFallbackLinesPerSide);
+        var output = new StringBuilder()
+            .Append("--- ").Append(path).Append('\n')
+            .Append("+++ ").Append(path).Append('\n')
+            .Append("@@ -").Append(prefix + 1).Append(',').Append(oldChanged)
+            .Append(" +").Append(prefix + 1).Append(',').Append(newChanged).Append(" @@\n");
+        for (int index = 0; index < oldShown; index++)
+            output.Append('-').Append(oldLines[prefix + index]).Append('\n');
+        if (oldChanged > oldShown)
+            output.Append("# diff preview truncated: ").Append(oldChanged - oldShown).Append(" old lines omitted\n");
+        for (int index = 0; index < newShown; index++)
+            output.Append('+').Append(newLines[prefix + index]).Append('\n');
+        if (newChanged > newShown)
+            output.Append("# diff preview truncated: ").Append(newChanged - newShown).Append(" new lines omitted\n");
+        return output.ToString();
     }
 
     /// <summary>
@@ -66,49 +110,76 @@ public static class UnifiedDiff
 
     private readonly record struct DiffOp(OpKind Kind, string Text);
 
-    /// <summary>Classic LCS-based line diff producing a flat sequence of equal/delete/insert ops.</summary>
-    private static List<DiffOp> DiffLines(IReadOnlyList<string> a, IReadOnlyList<string> b)
+    private static bool TryDiffLines(
+        IReadOnlyList<string> a,
+        IReadOnlyList<string> b,
+        out List<DiffOp> ops)
     {
-        var n = a.Count;
-        var m = b.Count;
+        int prefix = 0;
+        while (prefix < a.Count &&
+               prefix < b.Count &&
+               string.Equals(a[prefix], b[prefix], StringComparison.Ordinal))
+        {
+            prefix++;
+        }
 
-        // LCS length table.
+        int suffix = 0;
+        while (suffix < a.Count - prefix &&
+               suffix < b.Count - prefix &&
+               string.Equals(a[a.Count - suffix - 1], b[b.Count - suffix - 1], StringComparison.Ordinal))
+        {
+            suffix++;
+        }
+
+        int n = a.Count - prefix - suffix;
+        int m = b.Count - prefix - suffix;
+        if ((long)(n + 1) * (m + 1) > MaxLcsCells)
+        {
+            ops = [];
+            return false;
+        }
+
         var lcs = new int[n + 1, m + 1];
         for (var i = n - 1; i >= 0; i--)
             for (var j = m - 1; j >= 0; j--)
-                lcs[i, j] = string.Equals(a[i], b[j], StringComparison.Ordinal)
+                lcs[i, j] = string.Equals(a[prefix + i], b[prefix + j], StringComparison.Ordinal)
                     ? lcs[i + 1, j + 1] + 1
                     : Math.Max(lcs[i + 1, j], lcs[i, j + 1]);
 
-        // Walk the table to emit ops, preferring deletions before insertions for a stable ordering.
-        var ops = new List<DiffOp>();
+        ops = new List<DiffOp>(a.Count + b.Count);
+        for (int i = 0; i < prefix; i++)
+            ops.Add(new DiffOp(OpKind.Equal, a[i]));
+
         var x = 0;
         var y = 0;
         while (x < n && y < m)
         {
-            if (string.Equals(a[x], b[y], StringComparison.Ordinal))
+            if (string.Equals(a[prefix + x], b[prefix + y], StringComparison.Ordinal))
             {
-                ops.Add(new DiffOp(OpKind.Equal, a[x]));
+                ops.Add(new DiffOp(OpKind.Equal, a[prefix + x]));
                 x++;
                 y++;
             }
             else if (lcs[x + 1, y] >= lcs[x, y + 1])
             {
-                ops.Add(new DiffOp(OpKind.Delete, a[x]));
+                ops.Add(new DiffOp(OpKind.Delete, a[prefix + x]));
                 x++;
             }
             else
             {
-                ops.Add(new DiffOp(OpKind.Insert, b[y]));
+                ops.Add(new DiffOp(OpKind.Insert, b[prefix + y]));
                 y++;
             }
         }
         while (x < n)
-            ops.Add(new DiffOp(OpKind.Delete, a[x++]));
+            ops.Add(new DiffOp(OpKind.Delete, a[prefix + x++]));
         while (y < m)
-            ops.Add(new DiffOp(OpKind.Insert, b[y++]));
+            ops.Add(new DiffOp(OpKind.Insert, b[prefix + y++]));
 
-        return ops;
+        for (int i = suffix; i > 0; i--)
+            ops.Add(new DiffOp(OpKind.Equal, a[a.Count - i]));
+
+        return true;
     }
 
     private sealed class Hunk

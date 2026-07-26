@@ -29,6 +29,12 @@ public sealed class DashboardRegistryReadTests : IDisposable
         _telemetryDb = Path.Combine(_dir, "telemetry.db");
     }
 
+    [Fact]
+    public void MapContentSidecarStatus_ImportsOnly_IsActionablyStale()
+    {
+        Assert.Equal("imports_only", DashboardIndexFactsReader.MapContentSidecarStatus("imports_only"));
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }

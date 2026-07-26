@@ -27,6 +27,7 @@ public sealed class ContentTool
 
     private sealed record ContentReadLocation(
         string ContentDbPath,
+        string? IndexDbPath,
         string? WorkspaceId,
         string WorkspaceRoot);
 
@@ -34,7 +35,8 @@ public sealed class ContentTool
         string WorkspaceId,
         string DisplayId,
         string DiagnosticCode,
-        string Message);
+        string Message,
+        IReadOnlyList<string>? FailedKinds = null);
 
     private sealed record ContentSearchCoverage(
         int RequestedLimit,
@@ -201,12 +203,14 @@ public sealed class ContentTool
 
         var currentLocation = new ContentReadLocation(
             contentDbPath,
+            _workspace.ExtractDbPath,
             _workspace.WorkspaceId,
             _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
         ContentReadLocation shapeLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(shapeLocation.ContentDbPath, sourceId);
         shapeLocation = ResolveReadLocation(shapeLocation, resolvedSourceId, workspaceId: null);
         ExternalContentShape result = _store.Shape(shapeLocation.ContentDbPath, resolvedSourceId);
+        EnsureWorkspaceContentFresh(shapeLocation, result.ContentKind);
         if (telemetry is not null)
         {
             if (!string.IsNullOrWhiteSpace(shapeLocation.WorkspaceId))
@@ -386,28 +390,36 @@ public sealed class ContentTool
         int limit,
         ICollection<WorkspaceSearchFailure> failures)
     {
-        var groups = new List<IReadOnlyList<TextContentSearchHit>>
-        {
-            SearchCurrentContent(contentDbPath, query, TextContentKind.ExternalFile, limit),
-            SearchCurrentContent(contentDbPath, query, TextContentKind.Web, limit),
-        };
-        try
-        {
-            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceSource, limit));
-            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceDocs, limit));
-            groups.Add(SearchCurrentContent(contentDbPath, query, TextContentKind.WorkspaceConfig, limit));
-        }
-        catch (Exception ex)
-        {
-            failures.Add(new WorkspaceSearchFailure(
+        var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
+        IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
+            contentDbPath,
+            query,
+            limit,
+            () =>
+            {
+                if (!File.Exists(_workspace.ExtractDbPath))
+                {
+                    throw new InvalidOperationException(
+                        "Workspace symbols.db not found; content corpus freshness cannot be verified.");
+                }
+                using var freshness = new FreshnessReader(_workspace.ExtractDbPath);
+                return freshness.LatestRevision();
+            },
+            kindFailures);
+
+        if (kindFailures.Count > 0)
+            AddWorkspaceSearchFailure(
+                failures,
                 _workspace.WorkspaceId ?? "current",
                 "current",
-                ContentDiagnosticCode("search", ex),
-                ex.Message));
-        }
+                kindFailures);
 
-        return InterleaveByKind(groups, limit);
+        return hits;
     }
+
+    private static bool IsExpectedContentSearchFailure(Exception ex) =>
+        ex is FileNotFoundException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException or IOException
+            or UnauthorizedAccessException or ArgumentException or NotSupportedException;
 
     private string SearchWorkspaces(
         string query,
@@ -428,15 +440,16 @@ public sealed class ContentTool
         bool moreMayExist = false;
         foreach (WorkspaceRegistryRow row in workspaces)
         {
-            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
             try
             {
+                string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
                 IReadOnlyList<TextContentSearchHit> local = SearchWorkspaceContent(
                     row,
                     contentDbPath,
                     query,
                     contentKind,
-                    probeLimit);
+                    probeLimit,
+                    failures);
                 moreMayExist |= local.Count > limit;
                 for (int localRank = 0; localRank < local.Count; localRank++)
                     hits.Add(new WorkspaceContentSearchHit(row, local[localRank], localRank));
@@ -523,14 +536,21 @@ public sealed class ContentTool
         string contentDbPath,
         string query,
         string? contentKind,
-        int limit)
+        int limit,
+        ICollection<WorkspaceSearchFailure>? failures)
     {
         if (contentKind is null)
         {
-            return InterleaveByKind(
-                SearchableContentKinds.Select(
-                    kind => SearchWorkspaceContent(row, contentDbPath, query, kind, limit)),
-                limit);
+            var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
+            IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
+                contentDbPath,
+                query,
+                limit,
+                () => ExpectedWorkspaceRevision(row),
+                kindFailures);
+            if (kindFailures.Count > 0 && failures is not null)
+                AddWorkspaceSearchFailure(failures, row.WorkspaceId, row.DisplayId, kindFailures);
+            return hits;
         }
         if (!IsWorkspaceContentKind(contentKind))
             return _store.Search(contentDbPath, query, contentKind, limit);
@@ -555,14 +575,126 @@ public sealed class ContentTool
         || string.Equals(contentKind, TextContentKind.WorkspaceDocs, StringComparison.Ordinal)
         || string.Equals(contentKind, TextContentKind.WorkspaceConfig, StringComparison.Ordinal);
 
-    private static readonly string[] SearchableContentKinds =
+    private static readonly string[] WorkspaceContentKinds =
     [
         TextContentKind.WorkspaceSource,
         TextContentKind.WorkspaceDocs,
         TextContentKind.WorkspaceConfig,
+    ];
+
+    private static readonly string[] ImportedContentKinds =
+    [
         TextContentKind.ExternalFile,
         TextContentKind.Web,
     ];
+
+    private static readonly string[] AllContentKinds =
+    [
+        TextContentKind.ExternalFile,
+        TextContentKind.Web,
+        TextContentKind.WorkspaceSource,
+        TextContentKind.WorkspaceDocs,
+        TextContentKind.WorkspaceConfig,
+    ];
+
+    private static IReadOnlyList<TextContentSearchHit> SearchAllContentKinds(
+        string contentDbPath,
+        string query,
+        int limit,
+        Func<long> expectedRevision,
+        List<(string Kind, string DiagnosticCode, string Message)> failures)
+    {
+        if (!File.Exists(contentDbPath))
+            return [];
+
+        FtsTextContentSearchIndex? index = null;
+        try
+        {
+            index = FtsTextContentSearchIndex.Open(contentDbPath, expectedRevision());
+        }
+        catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
+        {
+            AddKindFailures(WorkspaceContentKinds, ex, failures);
+        }
+
+        var groups = new Dictionary<string, IReadOnlyList<TextContentSearchHit>>(StringComparer.Ordinal);
+        if (index is not null)
+        {
+            SearchKinds(index, AllContentKinds, query, limit, groups, failures);
+        }
+        else
+        {
+            try
+            {
+                index = FtsTextContentSearchIndex.OpenUnversioned(contentDbPath);
+                SearchKinds(index, ImportedContentKinds, query, limit, groups, failures);
+            }
+            catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
+            {
+                AddKindFailures(ImportedContentKinds, ex, failures);
+            }
+        }
+
+        return InterleaveByKind(
+            AllContentKinds
+                .Where(groups.ContainsKey)
+                .Select(kind => groups[kind]),
+            limit);
+    }
+
+    private static void SearchKinds(
+        FtsTextContentSearchIndex index,
+        IEnumerable<string> kinds,
+        string query,
+        int limit,
+        IDictionary<string, IReadOnlyList<TextContentSearchHit>> groups,
+        ICollection<(string Kind, string DiagnosticCode, string Message)> failures)
+    {
+        foreach (string kind in kinds)
+        {
+            try
+            {
+                groups[kind] = index.Search(query, kind, limit, excludeTests: false);
+            }
+            catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
+            {
+                failures.Add((kind, ContentDiagnosticCode("search", ex), ex.Message));
+            }
+        }
+    }
+
+    private static void AddKindFailures(
+        IEnumerable<string> kinds,
+        Exception ex,
+        ICollection<(string Kind, string DiagnosticCode, string Message)> failures)
+    {
+        string diagnosticCode = ContentDiagnosticCode("search", ex);
+        foreach (string kind in kinds)
+            failures.Add((kind, diagnosticCode, ex.Message));
+    }
+
+    private static void AddWorkspaceSearchFailure(
+        ICollection<WorkspaceSearchFailure> failures,
+        string workspaceId,
+        string displayId,
+        IReadOnlyList<(string Kind, string DiagnosticCode, string Message)> kindFailures)
+    {
+        string diagnosticCode = kindFailures
+            .Select(static failure => failure.DiagnosticCode)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .Count() == 1
+                ? kindFailures[0].DiagnosticCode
+                : "workspace_search_incomplete";
+        failures.Add(new WorkspaceSearchFailure(
+            workspaceId,
+            displayId,
+            diagnosticCode,
+            string.Join(
+                "; ",
+                kindFailures.Select(static failure => $"{failure.Kind}: {failure.Message}")),
+            kindFailures.Select(static failure => failure.Kind).ToArray()));
+    }
 
     private static IReadOnlyList<TextContentSearchHit> InterleaveByKind(
         IEnumerable<IReadOnlyList<TextContentSearchHit>> groups,
@@ -606,6 +738,7 @@ public sealed class ContentTool
         int effectiveContextLines = contextLines ?? ContentCorpusExternalStore.DefaultContextLines;
         var currentLocation = new ContentReadLocation(
             contentDbPath,
+            _workspace.ExtractDbPath,
             _workspace.WorkspaceId,
             _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
         ContentReadLocation readLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
@@ -616,6 +749,7 @@ public sealed class ContentTool
             resolvedSourceId,
             line.Value,
             effectiveContextLines);
+        EnsureWorkspaceContentFresh(readLocation, result.ContentKind);
         if (telemetry is not null)
         {
             if (!string.IsNullOrWhiteSpace(readLocation.WorkspaceId))
@@ -778,8 +912,33 @@ public sealed class ContentTool
 
     private static ContentReadLocation Location(WorkspaceRegistryRow row) => new(
         ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath),
+        row.IndexDbPath,
         row.WorkspaceId,
         row.CanonicalRoot);
+
+    private static void EnsureWorkspaceContentFresh(ContentReadLocation location, string contentKind)
+    {
+        if (!IsWorkspaceContentKind(contentKind))
+            return;
+        if (string.IsNullOrWhiteSpace(location.IndexDbPath) || !File.Exists(location.IndexDbPath))
+        {
+            throw new InvalidOperationException(
+                "Workspace symbols.db not found; content corpus freshness cannot be verified.");
+        }
+
+        long expectedRevision;
+        using (var freshness = new FreshnessReader(location.IndexDbPath))
+            expectedRevision = freshness.LatestRevision();
+        ContentCorpusFacts facts = new ContentCorpusSidecar().Inspect(location.IndexDbPath, expectedRevision);
+        if (!string.Equals(facts.State, "current", StringComparison.Ordinal))
+        {
+            string actualRevision = facts.WorkspaceRevision?.ToString(
+                System.Globalization.CultureInfo.InvariantCulture) ?? "none";
+            throw new InvalidOperationException(
+                $"content.db is {facts.State}: revision {actualRevision}, expected {expectedRevision}. " +
+                "Refresh or rebuild the content corpus before reading workspace text.");
+        }
+    }
 
     private const int MaxListSourcesPerKind = 20;
 
@@ -1234,7 +1393,10 @@ public sealed class ContentTool
             output.AppendLine()
                 .Append("workspace_warning: ")
                 .Append(TruncateUtf8(failure.DisplayId, MaxSearchDisplayPathBytes))
-                .Append(" diagnostic_code=").Append(failure.DiagnosticCode)
+                .Append(" diagnostic_code=").Append(failure.DiagnosticCode);
+            if (failure.FailedKinds is { Count: > 0 })
+                output.Append(" failed_kinds=").Append(string.Join(',', failure.FailedKinds));
+            output
                 .Append(" message=").Append(TruncateUtf8(failure.Message, MaxWorkspaceFailureMessageBytes));
         }
         if (failures.Count > MaxWorkspaceFailures)
@@ -1262,7 +1424,7 @@ public sealed class ContentTool
             int requestedEnd = checked((int)Math.Min(result.SourceLineCount, (long)requestedLine + contextLines));
             int omittedBefore = Math.Max(0, result.LineStart - requestedStart);
             int omittedAfter = Math.Max(0, requestedEnd - result.LineEnd);
-            int advance = Math.Min(contextLines, ContentCorpusExternalStore.MaxReadWindowLines - 1);
+            int advance = (ContentCorpusExternalStore.MaxReadWindowLines - 1) / 2;
             if (omittedAfter > 0)
             {
                 sb.Append("window clamped to ").Append(ContentCorpusExternalStore.MaxReadWindowLines)
@@ -1279,6 +1441,12 @@ public sealed class ContentTool
             }
             sb.Append(" omitted_before=").Append(omittedBefore)
               .Append(" omitted_after=").Append(omittedAfter);
+            if (omittedBefore > 0)
+            {
+                int previousCenter = Math.Max(1, result.LineStart - advance - 1);
+                sb.Append(" — earlier with line=").Append(previousCenter)
+                  .Append(" context_lines=").Append(contextLines);
+            }
             sb.Append('\n');
         }
 
@@ -1391,20 +1559,20 @@ public sealed class ContentTool
     {
         if (lines.Count == 0)
             return;
+        if (omittedBefore > 0)
+        {
+            (int line, int contextLines) = BackwardContinuation(lines[0].LineNumber - 1);
+            output.Append('\n').Append("previous: content read source_id=")
+                .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
+                .Append(" line=").Append(line)
+                .Append(" context_lines=").Append(contextLines);
+        }
         if (omittedAfter > 0)
         {
             (int line, int contextLines) = ForwardContinuation(
                 result.SourceLineCount,
                 lines[^1].LineNumber + 1);
             output.Append('\n').Append("next: content read source_id=")
-                .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
-                .Append(" line=").Append(line)
-                .Append(" context_lines=").Append(contextLines);
-        }
-        else if (omittedBefore > 0)
-        {
-            (int line, int contextLines) = BackwardContinuation(lines[0].LineNumber - 1);
-            output.Append('\n').Append("previous: content read source_id=")
                 .Append(TruncateUtf8(result.SourceId, MaxSearchSourceIdBytes))
                 .Append(" line=").Append(line)
                 .Append(" context_lines=").Append(contextLines);
@@ -1711,6 +1879,8 @@ public sealed class ContentTool
                 return "invalid_limit";
             if (message.Contains(" is stale:", StringComparison.OrdinalIgnoreCase))
                 return "content_corpus_stale";
+            if (message.Contains("contains imports only", StringComparison.OrdinalIgnoreCase))
+                return "content_corpus_imports_only";
             if (message.Contains("content.db not found", StringComparison.OrdinalIgnoreCase))
                 return "content_corpus_missing";
             if (message.Contains("symbols.db not found", StringComparison.OrdinalIgnoreCase))
@@ -2097,6 +2267,10 @@ public sealed class ContentTool
                 "display_id",
                 TruncateForJson(failure.DisplayId, MaxSearchDisplayPathBytes));
             writer.WriteString("diagnostic_code", failure.DiagnosticCode);
+            writer.WriteStartArray("failed_kinds");
+            foreach (string kind in failure.FailedKinds ?? [])
+                writer.WriteStringValue(kind);
+            writer.WriteEndArray();
             writer.WriteString(
                 "message",
                 TruncateForJson(failure.Message, MaxWorkspaceFailureMessageBytes));
@@ -2375,44 +2549,34 @@ public sealed class ContentTool
             writer.WriteEndArray();
             writer.WriteNumber("truncated_line_count", truncatedLineCount);
             writer.WritePropertyName("next_actions");
+            var actions = new List<ContentNextAction>();
+            if (lines.Count > 0 && omittedBefore > 0)
+            {
+                (int line, int continuationContext) = BackwardContinuation(lines[0].LineNumber - 1);
+                actions.Add(NextAction(
+                    "content",
+                    "continue backward at the first omitted line",
+                    ("operation", "read"),
+                    ("source_id", result.SourceId),
+                    ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("context_lines", continuationContext.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture))));
+            }
             if (lines.Count > 0 && omittedAfter > 0)
             {
                 (int line, int continuationContext) = ForwardContinuation(
                     result.SourceLineCount,
                     lines[^1].LineNumber + 1);
-                WriteNextActions(
-                    writer,
-                    [
-                        NextAction(
-                            "content",
-                            "continue at the first omitted line",
-                            ("operation", "read"),
-                            ("source_id", result.SourceId),
-                            ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                            ("context_lines", continuationContext.ToString(
-                                System.Globalization.CultureInfo.InvariantCulture))),
-                    ]);
+                actions.Add(NextAction(
+                    "content",
+                    "continue at the first omitted line",
+                    ("operation", "read"),
+                    ("source_id", result.SourceId),
+                    ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    ("context_lines", continuationContext.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture))));
             }
-            else if (lines.Count > 0 && omittedBefore > 0)
-            {
-                (int line, int continuationContext) = BackwardContinuation(lines[0].LineNumber - 1);
-                WriteNextActions(
-                    writer,
-                    [
-                        NextAction(
-                            "content",
-                            "continue backward at the first omitted line",
-                            ("operation", "read"),
-                            ("source_id", result.SourceId),
-                            ("line", line.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                            ("context_lines", continuationContext.ToString(
-                                System.Globalization.CultureInfo.InvariantCulture))),
-                    ]);
-            }
-            else
-            {
-                WriteNextActions(writer, []);
-            }
+            WriteNextActions(writer, actions);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);

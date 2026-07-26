@@ -482,7 +482,7 @@ public sealed class ContentToolTests : IDisposable
             "window clamped to 200 lines (requested 301) — continue with line=450 context_lines=150",
             read,
             StringComparison.Ordinal);
-        Assert.Equal((100, 299), RenderedRange(read));
+        Assert.Equal((151, 350), RenderedRange(read));
         Assert.Contains("250: line 250", read, StringComparison.Ordinal);
     }
 
@@ -505,11 +505,12 @@ public sealed class ContentToolTests : IDisposable
 
         string read = tool.Content("read", source_id: "big/log.txt", line: 495, context_lines: 300);
 
-        Assert.StartsWith("window clamped to 200 lines (requested 601)", read, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "window ended at source boundary after clamping to 200 lines (requested 601)",
+            read,
+            StringComparison.Ordinal);
         Assert.Contains("495: line 495", read, StringComparison.Ordinal);
-        (int start, int end) = RenderedRange(read);
-        Assert.Equal(200, end - start + 1);
-        Assert.InRange(495, start, end);
+        Assert.Equal((301, 500), RenderedRange(read));
     }
 
     [Fact]
@@ -649,8 +650,16 @@ public sealed class ContentToolTests : IDisposable
         Assert.True(root.GetProperty("store_window_clamped").GetBoolean());
         Assert.True(root.GetProperty("output_truncated").GetBoolean());
         Assert.True(root.GetProperty("omitted_after").GetInt32() > 0);
-        JsonElement action = Assert.Single(root.GetProperty("next_actions").EnumerateArray());
-        JsonElement args = action.GetProperty("args");
+        JsonElement[] actions = root.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Equal(2, actions.Length);
+        JsonElement previousArgs = actions[0].GetProperty("args");
+        string previous = tool.Content(
+            "read",
+            source_id: previousArgs.GetProperty("source_id").GetString(),
+            line: previousArgs.GetProperty("line").GetInt32(),
+            context_lines: previousArgs.GetProperty("context_lines").GetInt32());
+        Assert.Equal(start - 1, RenderedRange(previous).End);
+        JsonElement args = actions[1].GetProperty("args");
         string continuation = tool.Content(
             "read",
             source_id: args.GetProperty("source_id").GetString(),
@@ -847,6 +856,19 @@ public sealed class ContentToolTests : IDisposable
             .ToArray();
         Assert.Contains(TextContentKind.ExternalFile, kinds);
         Assert.Contains(TextContentKind.Web, kinds);
+        Assert.Equal(1, doc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+        JsonElement failure = Assert.Single(doc.RootElement.GetProperty("degraded_workspaces").EnumerateArray());
+        Assert.Equal("current", failure.GetProperty("display_id").GetString());
+        Assert.Contains("workspace_source", failure.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Equal(
+            [
+                TextContentKind.WorkspaceSource,
+                TextContentKind.WorkspaceDocs,
+                TextContentKind.WorkspaceConfig,
+            ],
+            failure.GetProperty("failed_kinds").EnumerateArray()
+                .Select(static kind => kind.GetString()!)
+                .ToArray());
     }
 
     [Fact]
@@ -1700,6 +1722,77 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("diagnostic_code=content_corpus_stale", output, StringComparison.Ordinal);
         Assert.Contains("is stale", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("expected 2", output, StringComparison.Ordinal);
+
+        string importedPath = Path.Combine(_dir, "stale-import.log");
+        File.WriteAllText(importedPath, "StaleWorkspaceSourceMarker imported.");
+        var store = new ContentCorpusExternalStore();
+        store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(fixture.DbPath),
+            importedPath,
+            displayPath: "stale-import.log");
+        var selectedTool = new ContentTool(_workspace, store);
+
+        string selected = selectedTool.Content(
+            "search",
+            query: "StaleWorkspaceSourceMarker",
+            content_kind: "all",
+            workspace_id: "ws-stale",
+            format: "json");
+
+        using JsonDocument selectedDoc = JsonDocument.Parse(selected);
+        JsonElement selectedHit = Assert.Single(selectedDoc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(TextContentKind.ExternalFile, selectedHit.GetProperty("content_kind").GetString());
+        Assert.Equal(1, selectedDoc.RootElement.GetProperty("degraded_workspace_count").GetInt32());
+    }
+
+    [Fact]
+    public void Content_SearchAll_IsolatesInvalidRegisteredIndexPath()
+    {
+        string healthyRoot = Path.Combine(_dir, "healthy-path");
+        string invalidRoot = Path.Combine(_dir, "invalid-path");
+        Directory.CreateDirectory(healthyRoot);
+        Directory.CreateDirectory(invalidRoot);
+        string healthySymbols = Path.Combine(healthyRoot, ".miller", "symbols.db");
+        string healthyLog = Path.Combine(healthyRoot, "healthy.log");
+        File.WriteAllText(healthyLog, "InvalidRegistryPathMarker");
+        var store = new ContentCorpusExternalStore();
+        store.Import(
+            ContentCorpusSidecar.ContentDbPathFor(healthySymbols),
+            healthyLog,
+            displayPath: "healthy.log");
+        using (var registry = WorkspaceRegistry.Open(_workspace.RegistryDbPath))
+        {
+            registry.UpsertSeen("ws-healthy", "healthy", healthyRoot, healthySymbols);
+            registry.MarkScanned("ws-healthy", revision: 1);
+            registry.UpsertSeen(
+                "ws-invalid",
+                "invalid",
+                invalidRoot,
+                Path.Combine(invalidRoot, ".miller", "symbols.db"));
+            registry.MarkScanned("ws-invalid", revision: 1);
+        }
+        using (var connection = new SqliteConnection($"Data Source={_workspace.RegistryDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE workspaces SET index_db_path = '' WHERE workspace_id = 'ws-invalid';";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        var tool = new ContentTool(_workspace, store);
+
+        string output = tool.Content(
+            "search",
+            query: "InvalidRegistryPathMarker",
+            content_kind: TextContentKind.ExternalFile,
+            workspace_id: "all",
+            limit: 10,
+            format: "json");
+
+        using JsonDocument doc = JsonDocument.Parse(output);
+        JsonElement hit = Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal("ws-healthy", hit.GetProperty("workspace_id").GetString());
+        JsonElement failure = Assert.Single(doc.RootElement.GetProperty("degraded_workspaces").EnumerateArray());
+        Assert.Equal("ws-invalid", failure.GetProperty("workspace_id").GetString());
     }
 
     [Fact]
@@ -1902,6 +1995,20 @@ public sealed class ContentToolTests : IDisposable
         Assert.Contains("src/Api.cs:", read);
         Assert.Contains($"{line}: ", read);
         Assert.Contains("WorkspaceReadMarker", read);
+
+        fixture.ExecuteWrite("""
+            UPDATE extraction_revisions
+            SET revision_id = 2
+            WHERE revision_id = 1;
+            """);
+
+        string staleRead = tool.Content("read", source_id: sourceId, line: line, context_lines: 0);
+        Assert.StartsWith("content read failed:", staleRead, StringComparison.Ordinal);
+        Assert.Contains("stale", staleRead, StringComparison.OrdinalIgnoreCase);
+
+        string staleShape = tool.Content("shape", source_id: sourceId);
+        Assert.StartsWith("content failed:", staleShape, StringComparison.Ordinal);
+        Assert.Contains("stale", staleShape, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

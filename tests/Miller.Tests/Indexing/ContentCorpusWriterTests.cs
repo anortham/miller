@@ -246,12 +246,111 @@ public sealed class ContentCorpusWriterTests : IDisposable
         Assert.Equal(1L, ScalarLong(connection, $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.Web}'"));
     }
 
+    [Fact]
+    public void Write_DifferentSchemaVersionWithCompatibleImportShape_PreservesImportedSource()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        var store = new ContentCorpusExternalStore();
+
+        ContentCorpusWriter.Write(_contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        string logPath = Path.Combine(_dir, "important.log");
+        File.WriteAllText(logPath, "Imported content must survive rebuild refusal.");
+        store.Import(_contentDbPath, logPath, displayPath: "important.log");
+
+        using (SqliteConnection connection = OpenReadWrite())
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE content_meta SET schema_version = $version;";
+            command.Parameters.AddWithValue("$version", ContentCorpusSchema.SchemaVersion + 1);
+            command.ExecuteNonQuery();
+        }
+
+        ContentCorpusWriter.Write(
+            _contentDbPath,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "workspace-1",
+            revision: 2);
+
+        using var existing = OpenRead();
+        Assert.Equal(ContentCorpusSchema.SchemaVersion, ScalarLong(existing, "SELECT schema_version FROM content_meta"));
+        Assert.Equal(
+            1L,
+            ScalarLong(
+                existing,
+                $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.ExternalFile}'"));
+    }
+
+    [Fact]
+    public void Write_IncompatibleImportShape_RefusesPromotionWithoutDeletingImportedSource()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [new JulieDbFixture.SymbolRow("sym", "Api", "class", "csharp", "src/Api.cs", "public class Api", 1, null)],
+            fileContent: new Dictionary<string, string> { ["src/Api.cs"] = "public class Api { }" });
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(fx.DbPath);
+        var store = new ContentCorpusExternalStore();
+        ContentCorpusWriter.Write(contentDbPath, fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1);
+        string logPath = Path.Combine(_dir, "important.log");
+        File.WriteAllText(logPath, "Imported content must survive rebuild refusal.");
+        store.Import(contentDbPath, logPath, displayPath: "important.log");
+        using (var connection = new SqliteConnection($"Data Source={contentDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE content_fts;";
+            command.ExecuteNonQuery();
+        }
+
+        var ex = Assert.Throws<ContentImportPreservationException>(() =>
+            ContentCorpusWriter.Write(
+                contentDbPath,
+                fx.DbPath,
+                fx.WorkspaceRoot,
+                "workspace-1",
+                revision: 2));
+
+        Assert.Contains("preserve imported content", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "incompatible",
+            ContentCorpusWriter.TryReadPreservationFailure(contentDbPath),
+            StringComparison.OrdinalIgnoreCase);
+        ContentCorpusFacts facts = new ContentCorpusSidecar().Inspect(fx.DbPath, expectedRevision: 2);
+        Assert.Equal("preservation_blocked", facts.State);
+        Assert.True(facts.SourceCount > 0);
+        Assert.True(facts.ChunkCount > 0);
+        using var existing = new SqliteConnection($"Data Source={contentDbPath};Mode=ReadOnly");
+        existing.Open();
+        Assert.Equal(
+            1L,
+            ScalarLong(
+                existing,
+                $"SELECT COUNT(*) FROM content_sources WHERE content_kind = '{TextContentKind.ExternalFile}'"));
+    }
+
     private SqliteConnection OpenRead()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = _contentDbPath,
             Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
+    private SqliteConnection OpenReadWrite()
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _contentDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
             Pooling = false,
         }.ToString());
         connection.Open();

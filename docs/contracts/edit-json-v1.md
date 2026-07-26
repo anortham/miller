@@ -20,8 +20,16 @@ Successful preview and applied JSON include:
     "mode": "exact",
     "target_symbol_id": "exact-symbol-id",
     "exact_sites": [],
+    "exact_sites_total_count": 0,
+    "exact_sites_returned_count": 0,
+    "exact_sites_omitted_count": 0,
     "fallback_sites": [],
+    "fallback_sites_total_count": 0,
+    "fallback_sites_returned_count": 0,
+    "fallback_sites_omitted_count": 0,
     "coverage": [],
+    "coverage_total_count": 0,
+    "coverage_omitted_count": 0,
     "fallback_candidates": 0,
     "fallback_status": "NoCandidates"
   }
@@ -33,11 +41,13 @@ followed by the test reminder. Preview JSON omits this field.
 
 Each site contains `file`, `line`, `source`, and `resolution_status`. `exact_sites` starts with the definition site,
 then target-proven reference sites. `fallback_sites` contains explicitly selected name-based evidence and may
-include unresolved sites or sites belonging to another same-name symbol.
+include unresolved sites or sites belonging to another same-name symbol. Each tier returns at most eight sites;
+the total, returned, and omitted counts state the complete population.
 
 Coverage rows contain `language`, `kind`, `resolution_status`, and `count`. The definition has its own exact
 coverage row. Exact reference rows are grouped by extracted language and source kind; explicit fallback is grouped
 as `language=unknown`, `kind=name_based`, `resolution_status=fallback`.
+Coverage returns at most eight rows and reports its exact total and omitted count.
 
 `fallback_candidates` reports unresolved candidates observed even when exact mode refuses them.
 `fallback_status` reports the evidence reader's fallback state.
@@ -48,5 +58,33 @@ Exact mode refuses the operation when any required exact site is not identifier-
 the old identifier's UTF-8 byte length, lacks a usable byte span, references a file that cannot be loaded, or the
 definition token cannot be proven. The caller must choose `include_fallback` to accept homonym risk.
 
-Apply remains atomic across files. A successful compact apply ends with an `impact` command using the exact symbol
-ID and a reminder to run the selected tests.
+`allow_stale=true` applies only to `replace_text`, whose match is derived from current disk text. Symbol-span,
+insert, documentation, and rename operations always require fresh indexed spans.
+
+`query`, `anchor`, and `line` narrow `replace_text` to bounded candidate windows. `occurrence=all` cannot be
+combined with those selectors because that would make `all` mean only the hidden candidate window; omit selectors
+for a whole-file replacement. When the content index is unavailable, `line` and `anchor` are enforced against
+current disk text, while `query` refuses rather than widening silently to the whole file. Within a selector
+window, multiple plausible or overlapping locations refuse as `ambiguous_match` instead of letting
+`occurrence=first` choose a neighboring target.
+
+Every MCP edit response is valid compact text or JSON within 12 KiB. Rename diffs, summaries, site rows, and
+coverage rows are independently bounded; omission counts remain exact. If an unexpected path still exceeds the
+envelope, the MCP shell returns a small valid JSON or compact summary that preserves apply/outcome facts and
+states that detailed evidence was omitted.
+
+Apply rolls back every already-written file when a later write fails. If a rollback itself fails, JSON reports
+`applied=false`, `partially_applied=true`, `failure_reason=partial_apply`, `files_left_modified_count`, and
+`files_left_modified`; `result_count` is the number of files still modified. At most twenty paths are returned and
+`files_left_modified_omitted_count` is exact. Compact output follows the same bound.
+Miller attempts write-through convergence for those paths so the index does not knowingly retain pre-edit text.
+A successful compact apply ends with an `impact` command using the exact symbol ID and a reminder to run the
+selected tests.
+
+`match_count` reports the full candidate population while `selected_match_count` reports the non-overlapping spans
+selected for preview or apply. Normalized and fuzzy `occurrence=all` skip overlapping candidates rather than emit
+corrupting splices; compact output states the selected and skipped counts when they differ. Fuzzy
+`occurrence=first|last` chooses the lowest edit-distance tier before position. Fuzzy `occurrence=all` selects
+lowest-distance non-overlapping candidates from the full threshold population. When the changed region is too
+large for bounded LCS alignment, the diff still returns a bounded prefix proof plus exact old/new omitted-line
+counts.

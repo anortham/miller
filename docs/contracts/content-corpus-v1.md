@@ -11,6 +11,15 @@ version 1.
 source-region search, and `content.db` stores raw chunk text for explicit text search, bounded reads,
 external/web imports, and Eros semantic ingestion.
 
+Workspace rebuilds preserve active `external_file` and `web` rows by their required table/column shape, not by an
+exact corpus schema-version match, so compatible schema upgrades do not strand imports. If the imported-content
+shape cannot be copied exactly, promotion is refused, the existing database remains in place, and Miller records a
+fingerprinted preservation failure beside it. Workspace status then reports `preservation_blocked` with the error
+while that unchanged database remains. The marker is diagnostic, not a permanent latch: later rebuilds retry
+preservation so transient failures can heal. Miller records it only after proving active imports exist; an unreadable
+derived corpus with no proven imports remains eligible for corruption recovery. Corrupt or incompatible proven
+imports are never silently discarded.
+
 Agent-facing bounded list/shape behavior is versioned separately in
 [`content-mcp-v3.md`](content-mcp-v3.md). Bulk JSONL export is a CLI-only
 process contract.
@@ -158,6 +167,12 @@ Streaming and non-streaming imports use this same convention. Overlap means
 - A missing, unreadable, non-UTF-8, oversized, stale-hash, or non-indexed workspace file is skipped and recorded in corpus facts.
 - Workspace-derived content is rebuilt atomically for full scans. Incremental refresh may replace rows for changed files in a transaction.
 - External/web content is Miller-owned. Imports, replacements, and removals run in transactions and do not require `julie-extract`.
+- A corpus with external/web imports but no workspace build has `workspace_revision = null` and reports
+  `state=imports_only`; imported search/read remains available while workspace source/docs/config search directs
+  the caller to `workspace refresh`.
+- A workspace rebuild must preserve every active external/web source before promotion. If an existing SQLite
+  corpus contains imports but its schema or rows cannot be copied, the rebuild refuses promotion and leaves the
+  existing artifact unchanged.
 - Removing an external/web source deletes its source row, chunk rows, and FTS rows. It must not delete the original file or browser cache.
 - A stale workspace content DB is not silently accepted for explicit text search. It must either converge or return an actionable stale/corrupt status.
 - Corrupt or schema-mismatched `content.db` files fail visibly and should be rebuilt by the writer path, not opened with an in-memory fallback.
@@ -167,10 +182,13 @@ Streaming and non-streaming imports use this same convention. Overlap means
 Eros and other consumers read deterministic chunk rows through an export API. Each line is one JSON object.
 Optional fields are emitted with explicit `null` values when unavailable so consumers can depend on a stable
 field set.
+Export is also the non-destructive preservation path for an older or shape-incompatible corpus: it reads the
+columns that exist, supplies stable null/zero defaults for missing optional fields, and reports the artifact's
+actual schema version instead of refusing it. Required source/chunk tables must still exist.
 
 | Field | Required | Description |
 |---|---:|---|
-| `schema_version` | yes | `2`. |
+| `schema_version` | yes | Artifact schema version; current writers emit `2`, while recovery exports may be older. |
 | `workspace_id` | no | Workspace ID, when available. |
 | `workspace_revision` | no | Workspace revision, when available. |
 | `source_id` | yes | Source row ID. |
