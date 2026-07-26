@@ -45,6 +45,7 @@ public static partial class ToolOutputBudget
     public const int ContentMcpMaxBytes = 12 * 1024;
     public const int SearchMcpMaxBytes = 12 * 1024;
     public const int SearchMcpSnippetMaxBytes = 512;
+    public const int ImpactMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
     public const int WorkspaceMcpMaxBytes = 12 * 1024;

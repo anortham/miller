@@ -34,7 +34,8 @@ usage error (exit 2).
 
 The MCP mode uses `from_index_revision` and optional `from_artifact_id`; it is exclusive with `target`,
 `changed_paths`, `diff`, and `git`. MCP and CLI both prepare the revision snapshot and render it through the
-same impact core.
+same impact core. MCP responses above 12,288 UTF-8 bytes use the byte-identical continuation envelope in
+[`impact-mcp-output-page-v1.md`](impact-mcp-output-page-v1.md); the CLI remains a complete single response.
 
 ## Top-level shape
 
@@ -162,7 +163,8 @@ than by interpreting a failed or legacy-shaped response.
 
 Traversal evidence is advertised separately as `impact_traversal_evidence` with its own v1 JSON contract. The
 two feature gates are independent: the delta feature vouches for the revision span; the traversal feature
-describes bounded graph execution over the paths that could seed the current index.
+describes bounded graph execution over the paths that could seed the current index. Oversized MCP transport is
+negotiated independently through `impact_mcp_output_page`.
 
 ## Mechanism
 
@@ -176,3 +178,6 @@ is a per-file-revision-stamp mechanism, not a snapshot hash-diff.
 v1. Field names, `delta_status` values, and the capability/flag strings are frozen. The additive `traversal`
 object has its own v1 contract. Additive fields may appear in a future minor; consumers must ignore unknown
 fields. A breaking change ships as a new `schema_version` and a new contract doc.
+
+MCP transport paging does not narrow `changed_paths` or change this schema. Consumers concatenate every
+`impact_output_page.output_fragment` before parsing the reconstructed delta envelope.

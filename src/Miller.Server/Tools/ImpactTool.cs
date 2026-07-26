@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -82,7 +83,8 @@ public sealed class ImpactTool
         "before committing. Or pass exactly one of: target, changed_paths, diff, git/base/staged, or " +
         "from_index_revision with from_artifact_id. Use BEFORE a refactor and AFTER edits; prefer it over grepping " +
         "for usages when the question is \"what breaks and what do I test\". NOT for: plain reference lists " +
-        "(trace mode=refs). Example: impact target=SymbolSearchSidecar. Compact by default; format=json to chain.")]
+        "(trace mode=refs). Example: impact target=SymbolSearchSidecar. Compact by default; format=json to chain. " +
+        "Large MCP responses return an impact_output_page envelope; repeat the same call with its continuation token.")]
     public string Impact(
         [Description("A symbol name/id or a file path (smart-resolved). One of target/changed_paths/diff/git.")]
         string? target = null,
@@ -106,16 +108,21 @@ public sealed class ImpactTool
         [Description("Output format: compact|json. Default compact.")] string format = "compact",
         [Description("Workspace selector: display_id, unique prefix, full id, registered root path, current, or primary.")] string? workspace_id = null,
         [Description("Refresh a registered workspace before reading. Defaults true when workspace_id is supplied.")]
-        bool? ensure_fresh = null)
+        bool? ensure_fresh = null,
+        [Description("Opaque token from an impact_output_page response. Repeat the same call arguments to read the next byte-identical fragment.")]
+        string? continuation = null)
     {
         var telemetry = TelemetryContext.Current;
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+        string continuationWorkspaceId = string.IsNullOrWhiteSpace(workspace_id) ? "current" : workspace_id;
         try
         {
             max_depth = NormalizeDepth(max_depth);
             limit = NormalizeLimit(limit);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            continuationWorkspaceId =
+                context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             bool explicitGit = git || staged || !string.IsNullOrWhiteSpace(@base);
             int provided =
@@ -129,7 +136,7 @@ public sealed class ImpactTool
                 (!from_index_revision.HasValue && !string.IsNullOrWhiteSpace(from_artifact_id)))
             {
                 string usage = Usage(json);
-                return ToolDiagnosticRenderer.Attach(
+                string refusal = ToolDiagnosticRenderer.Attach(
                     "impact",
                     ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner),
                     ToolDiagnostic.Refusal(
@@ -137,6 +144,11 @@ public sealed class ImpactTool
                         "Impact accepts exactly one input source."),
                     json,
                     telemetry);
+                return PageMcpOutput(
+                    refusal,
+                    json,
+                    continuationWorkspaceId,
+                    continuation);
             }
 
             bool noArgDefault = provided == 0;
@@ -153,7 +165,7 @@ public sealed class ImpactTool
                         // No-arg in a non-git (or broken-git) workspace: fall back to the usage note rather than
                         // erroring -- `impact` with no args must never fail just because there is no git diff to read.
                         string usage = Usage(json);
-                        return ToolDiagnosticRenderer.Attach(
+                        string refusal = ToolDiagnosticRenderer.Attach(
                             "impact",
                             ReadToolWorkspaceRouting.PrefixCompact(usage, compactBanner),
                             ToolDiagnostic.Refusal(
@@ -161,6 +173,11 @@ public sealed class ImpactTool
                                 "No working-tree git diff is available; provide target, changed_paths, or diff."),
                             json,
                             telemetry);
+                        return PageMcpOutput(
+                            refusal,
+                            json,
+                            continuationWorkspaceId,
+                            continuation);
                     }
                     throw new ToolDiagnosticException(ToolDiagnostic.Unavailable(
                         "git_diff_failed",
@@ -279,16 +296,31 @@ public sealed class ImpactTool
                     json,
                     telemetry);
             }
-            return output;
+            return PageMcpOutput(
+                output,
+                json,
+                continuationWorkspaceId,
+                continuation);
         }
         catch (Exception ex)
         {
             ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
+            if (diagnostic.Code.StartsWith("continuation_", StringComparison.Ordinal))
+                diagnostic = diagnostic with { NextActions = [] };
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
                 telemetry?.SetError(ex);
-            return ToolDiagnosticRenderer.Render(
+            string diagnosticOutput = ToolDiagnosticRenderer.Render(
                 "impact",
                 diagnostic,
+                json,
+                telemetry);
+            if (Encoding.UTF8.GetByteCount(diagnosticOutput) <= ToolOutputBudget.ImpactMcpMaxBytes)
+                return diagnosticOutput;
+            return ToolDiagnosticRenderer.Render(
+                "impact",
+                ToolDiagnostic.Unavailable(
+                    "impact_diagnostic_output_too_large",
+                    "The impact failure detail exceeded the MCP output budget."),
                 json,
                 telemetry);
         }
@@ -1460,6 +1492,78 @@ public sealed class ImpactTool
             w.WritePropertyName("traversal");
             WriteTraversalJson(w, traversal, maxDepth, limit);
             w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
+    private static string PageMcpOutput(
+        string output,
+        bool json,
+        string workspaceId,
+        string? continuation)
+    {
+        int totalBytes = Encoding.UTF8.GetByteCount(output);
+        if (totalBytes <= ToolOutputBudget.ImpactMcpMaxBytes &&
+            string.IsNullOrWhiteSpace(continuation))
+        {
+            return output;
+        }
+
+        byte[] outputBytes = Encoding.UTF8.GetBytes(output);
+        string outputHash = "sha256:" + Convert.ToHexStringLower(SHA256.HashData(outputBytes));
+        var identity = new ToolContinuationIdentity(
+            workspaceId,
+            "impact",
+            outputHash,
+            0,
+            outputBytes.LongLength);
+        int fragmentBudget = Math.Min(
+            totalBytes,
+            ToolOutputBudget.ImpactMcpMaxBytes / 2);
+
+        while (fragmentBudget > 0)
+        {
+            ToolOutputPage page = ToolOutputBudget.PageBody(
+                output,
+                fragmentBudget,
+                identity,
+                continuation);
+            string envelope = RenderMcpOutputPage(page, json, totalBytes);
+            if (Encoding.UTF8.GetByteCount(envelope) <= ToolOutputBudget.ImpactMcpMaxBytes)
+                return envelope;
+            fragmentBudget /= 2;
+        }
+
+        throw new ToolDiagnosticException(ToolDiagnostic.Unavailable(
+            "impact_output_page_unavailable",
+            "The MCP output budget cannot contain an impact continuation page."));
+    }
+
+    private static string RenderMcpOutputPage(
+        ToolOutputPage page,
+        bool json,
+        int totalBytes)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = NewWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", 1);
+            writer.WriteString("kind", "impact_output_page");
+            writer.WriteString("format", json ? "json" : "compact");
+            writer.WriteString("output_fragment", page.Text);
+            writer.WriteNumber("output_start_byte", page.StartOffset);
+            writer.WriteNumber("output_end_byte", page.EndOffset);
+            writer.WriteNumber("output_total_bytes", totalBytes);
+            writer.WriteBoolean("output_truncated", page.Truncated);
+            if (page.Continuation is null)
+                writer.WriteNull("continuation");
+            else
+                writer.WriteString("continuation", page.Continuation);
+            writer.WriteString(
+                "note",
+                "Concatenate output_fragment values in byte order to recover the complete impact response.");
+            writer.WriteEndObject();
         }
         return Utf8(buffer);
     }

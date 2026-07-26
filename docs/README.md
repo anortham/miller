@@ -61,6 +61,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/refresh-wait-v1.md`](contracts/refresh-wait-v1.md) - active refresh/wait JSON contract for Eros convergence.
 - [`contracts/impact-index-revision-delta-v1.md`](contracts/impact-index-revision-delta-v1.md) - active index-revision changed-path delta JSON contract and unchanged `delta_status` semantics.
 - [`contracts/impact-traversal-evidence-v1.md`](contracts/impact-traversal-evidence-v1.md) - active bounded traversal evidence JSON contract, including independent capability negotiation and scoped exhaustion limits.
+- [`contracts/impact-mcp-output-page-v1.md`](contracts/impact-mcp-output-page-v1.md) - active stateless MCP continuation contract for byte-identical large impact responses.
 - [`contracts/impact-test-role-evidence-v1.md`](contracts/impact-test-role-evidence-v1.md) - active positive test-role evidence contract for normal and index-revision impact JSON, including candidate-only/absence-unknown scope.
 - [`findings/2026-07-23-phase-6-impact-evidence.md`](findings/2026-07-23-phase-6-impact-evidence.md) - Phase 6 evidence for ranked graph explanations, exact-versus-heuristic tests, shared MCP/CLI revision deltas, and bounded compact output.
 - [`findings/2026-07-25-impact-readpath-performance.md`](findings/2026-07-25-impact-readpath-performance.md) - Phase 6 follow-up proving truthful post-rank counts, batched on-demand traversal, Blazor graph parity, and live latency/RSS recovery.

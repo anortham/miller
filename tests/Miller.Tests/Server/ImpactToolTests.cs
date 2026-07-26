@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Miller.Core.Graph;
 using Miller.Indexing;
@@ -1865,6 +1866,170 @@ public sealed class ImpactToolTests
         Assert.StartsWith("workspace: target-ws\n", output);
         Assert.DoesNotContain(targetRoot, output);
         Assert.Contains("Process", output);
+    }
+
+    [Fact]
+    public void Impact_Json_LargeResultPagesWithinMcpBudgetAndReassemblesTheCompleteCoreOutput()
+    {
+        var (index, resolver) = BuildManyImpactedFixture(impactedCount: 250);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-page-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "impact-page.db", "current", root));
+        var tool = new ImpactTool(provider);
+        string expected = ImpactTool.Run(
+            index,
+            resolver,
+            target: "Validate",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 1000,
+            json: true,
+            out _,
+            out _);
+        var fragments = new List<string>();
+        string? continuation = null;
+        long expectedStart = 0;
+        int expectedBytes = Encoding.UTF8.GetByteCount(expected);
+
+        do
+        {
+            string output = tool.Impact(
+                target: "Validate",
+                max_depth: 1,
+                limit: 1000,
+                format: "json",
+                continuation: continuation);
+
+            Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.ImpactMcpMaxBytes);
+            using JsonDocument page = JsonDocument.Parse(output);
+            Assert.Equal(1, page.RootElement.GetProperty("schema_version").GetInt32());
+            Assert.Equal("impact_output_page", page.RootElement.GetProperty("kind").GetString());
+            Assert.Equal("json", page.RootElement.GetProperty("format").GetString());
+            fragments.Add(page.RootElement.GetProperty("output_fragment").GetString()!);
+            Assert.Equal(expectedStart, page.RootElement.GetProperty("output_start_byte").GetInt64());
+            long end = page.RootElement.GetProperty("output_end_byte").GetInt64();
+            Assert.True(end > expectedStart);
+            Assert.Equal(expectedBytes, page.RootElement.GetProperty("output_total_bytes").GetInt32());
+            continuation = page.RootElement.GetProperty("continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : page.RootElement.GetProperty("continuation").GetString();
+            Assert.Equal(
+                continuation is not null,
+                page.RootElement.GetProperty("output_truncated").GetBoolean());
+            Assert.Equal(
+                "Concatenate output_fragment values in byte order to recover the complete impact response.",
+                page.RootElement.GetProperty("note").GetString());
+            expectedStart = end;
+        }
+        while (continuation is not null);
+
+        Assert.Equal(expectedBytes, expectedStart);
+        Assert.Equal(expected, string.Concat(fragments));
+    }
+
+    [Fact]
+    public void Impact_Compact_MultibyteOutputPagesWithoutReplacementCharacters()
+    {
+        const string seedId = "55000000000000000000000000000001";
+        var symbols = new List<IndexedSymbol>
+        {
+            new(0, seedId, "Seed", "void Seed()", "method", "csharp",
+                "src/Seed.cs", 1, 2, null, false),
+        };
+        var edges = new List<GraphEdge>();
+        for (int i = 0; i < 60; i++)
+        {
+            string dependentId = (i + 600).ToString("x32");
+            string dependentName = new string('界', 124) + i.ToString("00");
+            symbols.Add(new IndexedSymbol(
+                symbols.Count,
+                dependentId,
+                dependentName,
+                $"void {dependentName}()",
+                "method",
+                "csharp",
+                "src/Dependent.cs",
+                i + 1,
+                i + 1,
+                null,
+                false));
+            edges.Add(new GraphEdge(dependentId, seedId, "calls"));
+        }
+        var index = MillerRepositoryIndex.Build(
+            symbols,
+            edges);
+        var resolver = new SmartTargetResolver(index);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-multibyte-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "impact-multibyte.db", "current", root));
+        var tool = new ImpactTool(provider);
+        string expected = ImpactTool.Run(
+            index,
+            resolver,
+            target: "Seed",
+            changedPaths: null,
+            diff: null,
+            maxDepth: 1,
+            limit: 100,
+            json: false,
+            out _,
+            out _);
+        Assert.True(
+            Encoding.UTF8.GetByteCount(expected) > ToolOutputBudget.ImpactMcpMaxBytes,
+            $"compact bytes: {Encoding.UTF8.GetByteCount(expected)}");
+        var fragments = new List<string>();
+        string? continuation = null;
+
+        do
+        {
+            string output = tool.Impact(
+                target: "Seed",
+                max_depth: 1,
+                format: "compact",
+                continuation: continuation);
+            Assert.True(Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.ImpactMcpMaxBytes);
+            using JsonDocument page = JsonDocument.Parse(output);
+            Assert.Equal("compact", page.RootElement.GetProperty("format").GetString());
+            string fragment = page.RootElement.GetProperty("output_fragment").GetString()!;
+            Assert.DoesNotContain('\uFFFD', fragment);
+            fragments.Add(fragment);
+            continuation = page.RootElement.GetProperty("continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : page.RootElement.GetProperty("continuation").GetString();
+        }
+        while (continuation is not null);
+
+        Assert.Equal(expected, string.Concat(fragments));
+    }
+
+    [Fact]
+    public void Impact_Json_ContinuationRefusesChangedCompleteOutput()
+    {
+        var (index, _) = BuildManyImpactedFixture(impactedCount: 250);
+        string root = Path.Combine(Path.GetTempPath(), "miller-impact-token-" + Guid.NewGuid().ToString("N"));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, "impact-token.db", "current", root));
+        var tool = new ImpactTool(provider);
+        using JsonDocument first = JsonDocument.Parse(tool.Impact(
+            target: "Validate",
+            max_depth: 1,
+            limit: 1000,
+            format: "json"));
+        string continuation = first.RootElement.GetProperty("continuation").GetString()!;
+
+        using JsonDocument refused = JsonDocument.Parse(tool.Impact(
+            target: "Validate",
+            max_depth: 1,
+            limit: 1,
+            format: "json",
+            continuation: continuation));
+
+        JsonElement diagnostic = refused.RootElement.GetProperty("diagnostic");
+        Assert.Equal(
+            "continuation_hash_mismatch",
+            diagnostic.GetProperty("code").GetString());
+        Assert.Empty(diagnostic.GetProperty("next_actions").EnumerateArray());
     }
 
     [Fact]

@@ -1,8 +1,9 @@
 # Miller impact traversal evidence JSON v1 contract
 
-Every result-bearing `impact --json` response includes a `traversal` object. It reports whether Miller's bounded
-reverse traversal exhausted the graph frontier it could see. Changed-path and revision-delta modes also report
-which paths seeded traversal, could not seed it, or were deleted.
+Every reconstructed result-bearing `impact --json` response includes a `traversal` object. An oversized MCP
+response first uses the negotiated output-page transport described below. The reconstructed result reports
+whether Miller's bounded reverse traversal exhausted the graph frontier it could see. Changed-path and
+revision-delta modes also report which paths seeded traversal, could not seed it, or were deleted.
 
 > **Scope of an exhausted result:** `status: "exhausted"` is only relative to the reported `seeded_paths` and
 > the current indexed edges. Dynamic dispatch, reflection, configuration, generated code, unresolved references,
@@ -19,6 +20,7 @@ The feature string is `impact_traversal_evidence`. It is advertised independentl
 `impact_index_revision_delta` in the top-level `features` array from `miller capabilities --json`. The capability
 response also contains a `json_contracts` row named `impact_traversal_evidence`, command
 `impact --json --from-index-revision N --from-artifact-id ID`, `schema_version` 1, and this document's path.
+Oversized MCP transport is negotiated separately through `impact_mcp_output_page`.
 
 The full invocation remains:
 
@@ -136,3 +138,7 @@ new `schema_version` and contract document.
 
 Compact output begins with the same status, reason, effective bounds, counts, and truncation flags. It is capped
 at 6,000 characters and names JSON as the complete machine-readable channel when result rows are omitted.
+
+MCP responses above 12,288 UTF-8 bytes use the byte-identical continuation envelope documented in
+[`impact-mcp-output-page-v1.md`](impact-mcp-output-page-v1.md). This transport paging does not change traversal
+counts, status, reason, or truncation semantics. CLI JSON remains a complete single response.

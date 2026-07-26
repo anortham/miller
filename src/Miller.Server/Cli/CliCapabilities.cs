@@ -46,6 +46,12 @@ internal static class CliCapabilities
     /// <summary>Whether this build ships the impact test-role evidence contract.</summary>
     public const bool ImpactTestRoleEvidenceActive = true;
 
+    /// <summary>The negotiated capability wire string for stateless MCP impact output paging.</summary>
+    public const string ImpactMcpOutputPageFeature = "impact_mcp_output_page";
+
+    /// <summary>Whether this build ships the MCP impact output-page contract.</summary>
+    public const bool ImpactMcpOutputPageActive = true;
+
     /// <summary>
     /// The top-level <c>features</c> array (R4): the negotiated capability strings Eros checks before enabling a
     /// capability-gated behavior. Pure and gated so the "advertise only when active; absent when inactive"
@@ -54,7 +60,8 @@ internal static class CliCapabilities
     public static IReadOnlyList<string> NegotiatedFeatures(
         bool impactIndexRevisionDelta,
         bool impactTraversalEvidence,
-        bool impactTestRoleEvidence)
+        bool impactTestRoleEvidence,
+        bool impactMcpOutputPage)
     {
         var features = new List<string>();
         if (impactIndexRevisionDelta)
@@ -63,6 +70,8 @@ internal static class CliCapabilities
             features.Add(ImpactTraversalEvidenceFeature);
         if (impactTestRoleEvidence)
             features.Add(ImpactTestRoleEvidenceFeature);
+        if (impactMcpOutputPage)
+            features.Add(ImpactMcpOutputPageFeature);
         return features;
     }
 
@@ -134,6 +143,8 @@ internal static class CliCapabilities
             "docs/contracts/impact-traversal-evidence-v1.md"),
         ("impact_test_role_evidence", "impact --json", 1,
             "docs/contracts/impact-test-role-evidence-v1.md"),
+        ("impact_mcp_output_page", "impact --json", 1,
+            "docs/contracts/impact-mcp-output-page-v1.md"),
         ("references_candidates", "references candidates --json", 1, "docs/contracts/references-candidates-v1.md"),
     ];
 
@@ -142,10 +153,14 @@ internal static class CliCapabilities
     /// is inactive; every other contract remains independently available.
     /// </summary>
     public static IReadOnlyList<(string Name, string Command, int SchemaVersion, string Doc)>
-        NegotiatedJsonContracts(bool impactTraversalEvidence, bool impactTestRoleEvidence) =>
+        NegotiatedJsonContracts(
+            bool impactTraversalEvidence,
+            bool impactTestRoleEvidence,
+            bool impactMcpOutputPage) =>
         JsonContracts
             .Where(contract => impactTraversalEvidence || contract.Name != ImpactTraversalEvidenceFeature)
             .Where(contract => impactTestRoleEvidence || contract.Name != ImpactTestRoleEvidenceFeature)
+            .Where(contract => impactMcpOutputPage || contract.Name != ImpactMcpOutputPageFeature)
             .ToArray();
 
     public static string Render(bool json)
@@ -176,7 +191,8 @@ internal static class CliCapabilities
         foreach (string feature in NegotiatedFeatures(
                      ImpactIndexRevisionDeltaActive,
                      ImpactTraversalEvidenceActive,
-                     ImpactTestRoleEvidenceActive))
+                     ImpactTestRoleEvidenceActive,
+                     ImpactMcpOutputPageActive))
             sb.AppendLine("  - " + feature);
         sb.AppendLine("supported_export_formats:");
         sb.AppendLine("  - content_corpus jsonl via `miller content export`");
@@ -191,7 +207,8 @@ internal static class CliCapabilities
         sb.AppendLine("json_contracts:");
         foreach (var jsonContract in NegotiatedJsonContracts(
                      ImpactTraversalEvidenceActive,
-                     ImpactTestRoleEvidenceActive))
+                     ImpactTestRoleEvidenceActive,
+                     ImpactMcpOutputPageActive))
             sb.AppendLine($"  - {jsonContract.Name} v{jsonContract.SchemaVersion}: `{jsonContract.Command}` ({jsonContract.Doc})");
         return sb.ToString().TrimEnd();
     }
@@ -244,7 +261,8 @@ internal static class CliCapabilities
             foreach (string feature in NegotiatedFeatures(
                          ImpactIndexRevisionDeltaActive,
                          ImpactTraversalEvidenceActive,
-                         ImpactTestRoleEvidenceActive))
+                         ImpactTestRoleEvidenceActive,
+                         ImpactMcpOutputPageActive))
                 w.WriteStringValue(feature);
             w.WriteEndArray();
 
@@ -258,7 +276,8 @@ internal static class CliCapabilities
             w.WriteStartArray();
             foreach (var jsonContract in NegotiatedJsonContracts(
                          ImpactTraversalEvidenceActive,
-                         ImpactTestRoleEvidenceActive))
+                         ImpactTestRoleEvidenceActive,
+                         ImpactMcpOutputPageActive))
             {
                 w.WriteStartObject();
                 w.WriteString("name", jsonContract.Name);
