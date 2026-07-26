@@ -2208,6 +2208,18 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void Search_UnknownMode_IsUsageErrorExitTwo()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var (code, _, errText) = Run(new[] { "search", "UserService", "--mode", "bogus" }, Context(fx.DbPath));
+
+        Assert.Equal(2, code);
+        Assert.Contains("mode must be", errText);
+        Assert.Contains("miller search", errText);
+    }
+
+    [Fact]
     public void Search_ArmLexical_RendersExactlyTheDefaultOutput()
     {
         using var fx = JulieDbFixture.CreateDefault();

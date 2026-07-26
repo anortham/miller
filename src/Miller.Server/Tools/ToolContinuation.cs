@@ -41,6 +41,8 @@ public static partial class ToolOutputBudget
     public const int EditMcpMaxBytes = 12 * 1024;
     public const int EditDiffMaxBytes = 8 * 1024;
     public const int ContentMcpMaxBytes = 12 * 1024;
+    public const int SearchMcpMaxBytes = 12 * 1024;
+    public const int SearchMcpSnippetMaxBytes = 512;
     public const int PatternsMcpMaxBytes = 12 * 1024;
     public const int PatternsMcpDiagnosticReserveBytes = 1024;
     public const int WorkspaceMcpMaxBytes = 12 * 1024;
@@ -164,6 +166,28 @@ public static partial class ToolOutputBudget
         }
 
         return output;
+    }
+
+    public static string BoundSearchSnippet(string snippet, bool boundAgentOutput, out bool truncated)
+    {
+        ArgumentNullException.ThrowIfNull(snippet);
+        truncated = false;
+        if (!boundAgentOutput || Encoding.UTF8.GetByteCount(snippet) <= SearchMcpSnippetMaxBytes)
+            return snippet;
+
+        int byteBudget = SearchMcpSnippetMaxBytes - Encoding.UTF8.GetByteCount("…");
+        int utf16Length = 0;
+        int utf8Length = 0;
+        foreach (Rune rune in snippet.EnumerateRunes())
+        {
+            if (utf8Length + rune.Utf8SequenceLength > byteBudget)
+                break;
+            utf8Length += rune.Utf8SequenceLength;
+            utf16Length += rune.Utf16SequenceLength;
+        }
+
+        truncated = true;
+        return snippet[..utf16Length] + "…";
     }
 
     public static string TruncateUtf8(string text, int maxBytes, string suffix)

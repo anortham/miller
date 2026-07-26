@@ -24,6 +24,29 @@ internal static class MarkerSearch
         string? compactBanner,
         string? filePattern,
         string? language,
+        out int renderedCount) =>
+        Run(
+            index,
+            markers,
+            limit,
+            excludeTests,
+            json,
+            compactBanner,
+            filePattern,
+            language,
+            boundAgentOutput: false,
+            out renderedCount);
+
+    internal static string Run(
+        IRegionSearchIndex index,
+        IReadOnlyList<string> markers,
+        int limit,
+        bool excludeTests,
+        bool json,
+        string? compactBanner,
+        string? filePattern,
+        string? language,
+        bool boundAgentOutput,
         out int renderedCount)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
@@ -36,8 +59,8 @@ internal static class MarkerSearch
             language);
         renderedCount = hits.Count;
         return json
-            ? RenderJson(hits)
-            : RenderCompact(hits, markers, compactBanner);
+            ? RenderJson(hits, boundAgentOutput)
+            : RenderCompact(hits, markers, compactBanner, boundAgentOutput);
     }
 
     internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
@@ -152,7 +175,8 @@ internal static class MarkerSearch
     private static string RenderCompact(
         IReadOnlyList<MarkerSearchHit> hits,
         IReadOnlyList<string> markers,
-        string? compactBanner)
+        string? compactBanner,
+        bool boundAgentOutput)
     {
         if (hits.Count == 0)
         {
@@ -170,7 +194,11 @@ internal static class MarkerSearch
                 .Append("  ").Append(region.Kind);
             if (!string.IsNullOrWhiteSpace(region.ContainingSymbolName))
                 block.Append("  ").Append(region.ContainingSymbolName);
-            foreach (string line in region.Snippet.Split('\n'))
+            string snippet = ToolOutputBudget.BoundSearchSnippet(
+                region.Snippet,
+                boundAgentOutput,
+                out _);
+            foreach (string line in snippet.Split('\n'))
                 block.Append('\n').Append("    ").Append(line);
             blocks.Add(block.ToString());
         }
@@ -179,7 +207,9 @@ internal static class MarkerSearch
         return ReadToolWorkspaceRouting.PrefixCompact(body, compactBanner);
     }
 
-    private static string RenderJson(IReadOnlyList<MarkerSearchHit> hits)
+    private static string RenderJson(
+        IReadOnlyList<MarkerSearchHit> hits,
+        bool boundAgentOutput)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(
@@ -200,7 +230,13 @@ internal static class MarkerSearch
                 writer.WriteNumber("line", region.Line);
                 writer.WriteString("kind", region.Kind);
                 writer.WriteString("language", region.Language);
-                writer.WriteString("snippet", region.Snippet);
+                string snippet = ToolOutputBudget.BoundSearchSnippet(
+                    region.Snippet,
+                    boundAgentOutput,
+                    out bool snippetTruncated);
+                writer.WriteString("snippet", snippet);
+                if (snippetTruncated)
+                    writer.WriteBoolean("snippet_truncated", true);
                 writer.WriteString("region_id", region.RegionId);
                 if (region.ContainingSymbolId is null) writer.WriteNull("containing_symbol_id");
                 else writer.WriteString("containing_symbol_id", region.ContainingSymbolId);

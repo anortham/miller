@@ -408,9 +408,11 @@ public sealed class SearchTool
                     foreignWorkspace: !content.IsCurrent,
                     treatmentArmFactory: () => BuildTreatmentContentArm(content.WorkspaceRoot),
                     excludeTests: exclude_tests is true,
-                    semanticMode: semanticMode);
+                    semanticMode: semanticMode,
+                    boundAgentOutput: true);
                 output = canary.Result.Output;
                 count = canary.Result.Count;
+                RequireSearchMcpOutput(output);
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, content);
@@ -447,11 +449,6 @@ public sealed class SearchTool
                         BoundAgentOutput: true));
                 output = result.Output;
                 count = result.Count;
-                if (!json && route.Mode == SearchToolMode.Source &&
-                    SourceChunksNotIndexed(query, textContent.WorkspaceRoot))
-                {
-                    output += SourceChunksNotIndexedNote;
-                }
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, textContent);
@@ -531,14 +528,15 @@ public sealed class SearchTool
                         language,
                         compactBanner,
                         context,
-                        canary.ServingPolicy);
+                        canary.ServingPolicy,
+                        out bool sourceRescueAttempted);
                     canaryRescueKind = MapCanaryRescueKind(rescue);
                     if (scope is not null)
                     {
                         scope.SetMetadata("auto_rescue_attempted", true);
                         scope.SetMetadata("auto_rescue_kind", rescue?.Kind ?? "unavailable");
                         scope.SetMetadata("auto_rescue_result_count", rescue?.Count ?? 0);
-                        scope.SetMetadata("auto_source_rescue_attempted", true);
+                        scope.SetMetadata("auto_source_rescue_attempted", sourceRescueAttempted);
                         scope.SetMetadata("auto_source_rescue_found", rescue is { Kind: "source", Count: > 0 });
                     }
                     if (rescue is { Count: > 0 })
@@ -550,6 +548,7 @@ public sealed class SearchTool
                             scope.SourceBytes += rescue.SourceBytes;
                     }
                 }
+                RequireSearchMcpOutput(output);
                 if (scope is not null)
                 {
                     ReadToolWorkspaceRouting.ApplyTelemetry(scope, context);
@@ -575,6 +574,7 @@ public sealed class SearchTool
                 }
             }
 
+            RequireSearchMcpOutput(output);
             ToolDiagnostic? diagnostic =
                 count == 0 ? SearchEmptyDiagnostic(route, query) : null;
             if (scope is not null)
@@ -594,10 +594,15 @@ public sealed class SearchTool
                     json,
                     scope);
             }
-            return output;
+            return RequireSearchMcpOutput(output);
         }
         catch (Exception ex)
         {
+            if (scope is not null &&
+                ex is ToolDiagnosticException { Diagnostic.Code: "output_metadata_too_large" })
+            {
+                scope.ResultCount = 0;
+            }
             ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
                 scope?.SetError(ex);
@@ -636,15 +641,14 @@ public sealed class SearchTool
     private static string CanaryUtcDate(TelemetryScope? scope) =>
         scope?.UtcDate ?? DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    // internal (not private): the CLI search verb reuses the EXACT same mode mapping so `miller search --mode x`
-    // and the MCP tool agree on interpretation — one source of truth.
     internal static SearchToolMode ParseMode(string mode) => mode?.ToLowerInvariant() switch
     {
+        null or "" or "auto" => SearchToolMode.Auto,
         "text" => SearchToolMode.Text,
         "symbol" => SearchToolMode.Symbol,
         "file" => SearchToolMode.File,
         "content" => SearchToolMode.Content,
-        "docs" => SearchToolMode.Content, // alias
+        "docs" => SearchToolMode.Content,
         "source" => SearchToolMode.Source,
         "external" => SearchToolMode.External,
         "external_file" => SearchToolMode.External,
@@ -652,7 +656,9 @@ public sealed class SearchTool
         "all-text" => SearchToolMode.AllText,
         "all_text" => SearchToolMode.AllText,
         "markers" or "marker" => SearchToolMode.Markers,
-        _ => SearchToolMode.Auto, // includes "auto", null, and anything unrecognized
+        _ => throw new ArgumentException(
+            "mode must be auto, text, symbol, file, markers, content, source, external, web, or all-text.",
+            nameof(mode)),
     };
 
     internal static SearchRetrievalMode ParseRetrieval(string retrieval) =>
@@ -825,7 +831,8 @@ public sealed class SearchTool
             request.Json,
             out int count,
             request.CompactBanner,
-            request.HasDocLookup);
+            request.HasDocLookup,
+            boundAgentOutput: request.BoundAgentOutput);
         return new SearchRouteExecutionResult(output, count);
     }
 
@@ -837,6 +844,17 @@ public sealed class SearchTool
                 [new ToolDiagnosticAction(
                     "workspace(operation=\"health\")",
                     "inspect semantic artifact readiness")]));
+
+    private static string RequireSearchMcpOutput(string output)
+    {
+        if (Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.SearchMcpMaxBytes)
+            return output;
+
+        throw new ToolDiagnosticException(
+            ToolDiagnostic.Refusal(
+                "output_metadata_too_large",
+                "Search output metadata exceeds the 12 KiB MCP budget; narrow the query or filters."));
+    }
 
     internal static IReadOnlyCollection<string> ContentKindsForMode(SearchToolMode mode) =>
         mode switch
@@ -2325,7 +2343,8 @@ public sealed class SearchTool
         bool foreignWorkspace,
         Func<ISemanticTextArm?>? treatmentArmFactory,
         bool excludeTests = false,
-        SemanticMode semanticMode = SemanticMode.On) =>
+        SemanticMode semanticMode = SemanticMode.On,
+        bool boundAgentOutput = false) =>
         RunContentWithCanaryProbe(
             index,
             query,
@@ -2346,7 +2365,8 @@ public sealed class SearchTool
             foreignWorkspace,
             treatmentArmFactory,
             excludeTests,
-            semanticMode);
+            semanticMode,
+            boundAgentOutput);
 
     internal static ContentCanaryOutcome RunContentWithCanaryProbe(
         ITextContentSearchIndex index,
@@ -2368,7 +2388,8 @@ public sealed class SearchTool
         bool foreignWorkspace,
         Func<ISemanticTextArm?>? treatmentArmFactory,
         bool excludeTests = false,
-        SemanticMode semanticMode = SemanticMode.On)
+        SemanticMode semanticMode = SemanticMode.On,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(vectorStateProbe);
 
@@ -2380,7 +2401,8 @@ public sealed class SearchTool
             string offOutput = RunContentCorpus(
                 index, query, limit, json, out int offCount, out long offBytes, out _, out _, out _,
                 compactBanner, filePattern, language, suggestionLookup,
-                offServingPolicy == SearchServingPolicy.Production ? productionRerank : null);
+                offServingPolicy == SearchServingPolicy.Production ? productionRerank : null,
+                boundAgentOutput);
             return new ContentCanaryOutcome(
                 new SearchRouteExecutionResult(offOutput, offCount, offBytes),
                 Facts: null,
@@ -2425,7 +2447,7 @@ public sealed class SearchTool
             index, query, limit, json, out int count, out long sourceBytes,
             out int lexicalResultCount, out IReadOnlyList<ContentSearchHit> servedPage,
             out IReadOnlyList<ContentSearchHit> lexicalOrder,
-            compactBanner, filePattern, language, suggestionLookup, rerank);
+            compactBanner, filePattern, language, suggestionLookup, rerank, boundAgentOutput);
 
         CanaryCallFacts facts = WithCohortIdentity(
             BuildContentCanaryFacts(
@@ -2665,10 +2687,11 @@ public sealed class SearchTool
         string? filePattern = null,
         string? language = null,
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
-        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null) =>
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null,
+        bool boundAgentOutput = false) =>
         RunContentCorpus(
             index, query, limit, json, out renderedCount, out sourceBytes, out _, out _, out _,
-            compactBanner, filePattern, language, suggestionLookup, rerank);
+            compactBanner, filePattern, language, suggestionLookup, rerank, boundAgentOutput);
 
     /// <summary>
     /// The content core with the canary facts exposed alongside the render: <paramref name="lexicalResultCount"/>
@@ -2691,7 +2714,8 @@ public sealed class SearchTool
         string? filePattern = null,
         string? language = null,
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
-        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null)
+        Func<IReadOnlyList<ContentSearchHit>, IReadOnlyList<ContentSearchHit>>? rerank = null,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2756,8 +2780,8 @@ public sealed class SearchTool
             .Sum(static group => group.Max(static hit => hit.SourceBytes));
 
         return json
-            ? RenderContentJson(hits, page)
-            : RenderContentCompact(hits, page, total, compactBanner);
+            ? RenderContentJson(hits, page, boundAgentOutput)
+            : RenderContentCompact(hits, page, total, compactBanner, boundAgentOutput);
     }
 
     /// <summary>
@@ -2801,7 +2825,8 @@ public sealed class SearchTool
         string? filePattern = null,
         string? language = null,
         Func<string, IReadOnlyList<IndexedSymbol>>? suggestionLookup = null,
-        Action<IReadOnlyList<string>>? servedPathsSink = null)
+        Action<IReadOnlyList<string>>? servedPathsSink = null,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2856,8 +2881,8 @@ public sealed class SearchTool
 
         servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
-            ? RenderTextContentJson(hits, page)
-            : RenderTextContentCompact(hits, page, total, compactBanner);
+            ? RenderTextContentJson(hits, page, boundAgentOutput)
+            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput);
     }
 
     public static string RunTextContent(
@@ -2872,7 +2897,8 @@ public sealed class SearchTool
         string? compactBanner = null,
         string? filePattern = null,
         string? language = null,
-        Action<IReadOnlyList<string>>? servedPathsSink = null)
+        Action<IReadOnlyList<string>>? servedPathsSink = null,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
@@ -2921,8 +2947,8 @@ public sealed class SearchTool
 
         servedPathsSink?.Invoke([.. hits.Take(page).Select(static hit => hit.DisplayPath)]);
         return json
-            ? RenderTextContentJson(hits, page)
-            : RenderTextContentCompact(hits, page, total, compactBanner);
+            ? RenderTextContentJson(hits, page, boundAgentOutput)
+            : RenderTextContentCompact(hits, page, total, compactBanner, boundAgentOutput);
     }
 
     /// <summary>
@@ -2940,7 +2966,8 @@ public sealed class SearchTool
         string? compactBanner = null,
         string? modeNote = null,
         string? filePattern = null,
-        string? language = null)
+        string? language = null,
+        bool boundAgentOutput = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(kinds);
@@ -2982,8 +3009,8 @@ public sealed class SearchTool
         }
 
         return json
-            ? RenderRegionJson(hits, page)
-            : RenderRegionCompact(hits, page, total, prefix);
+            ? RenderRegionJson(hits, page, boundAgentOutput)
+            : RenderRegionCompact(hits, page, total, prefix, boundAgentOutput);
     }
 
     // tri-state: null → hide only for NL phrases lacking test/def intent; true → always; false → never.
@@ -3005,21 +3032,6 @@ public sealed class SearchTool
     internal static bool IsLowSignalKind(string kind) =>
         string.Equals(kind, "import", StringComparison.Ordinal) ||
         string.Equals(kind, "module", StringComparison.Ordinal);
-
-    /// <summary>
-    /// The mode-contract honesty note (design §6.3): <c>mode=source</c> stays lexical-only under the default
-    /// corpus, which embeds docs and config but not source bodies. The note fires only when the arm WOULD have
-    /// been consulted — a semantically shaped query over a readable artifact — so it reports a corpus boundary
-    /// rather than restating that semantic retrieval is off.
-    /// </summary>
-    private const string SourceChunksNotIndexedNote =
-        "\nnote: source_chunks_not_indexed — the default vector corpus embeds docs/config, not source bodies, " +
-        "so mode=source ranks lexically only.";
-
-    private bool SourceChunksNotIndexed(string query, string workspaceRoot) =>
-        _semanticArm is { } arm &&
-        SemanticQueryPolicy.Route(query, LexicalEvidence.None).IsHybrid &&
-        arm.QueryChunks(workspaceRoot, query, 1).Served;
 
     /// <summary>
     /// The <c>mode=content</c> hybrid arm. It fuses lexical hits with semantic-only chunks when the content index
@@ -3229,8 +3241,10 @@ public sealed class SearchTool
         string? language,
         string? compactBanner,
         WorkspaceSymbolSearchContext symbolContext,
-        SearchServingPolicy servingPolicy)
+        SearchServingPolicy servingPolicy,
+        out bool sourceRescueAttempted)
     {
+        sourceRescueAttempted = false;
         try
         {
             WorkspaceTextContentSearchContext textContent =
@@ -3251,6 +3265,7 @@ public sealed class SearchTool
             }
 
             bool hideTests = ResolveExcludeTests(excludeTests, query, SearchToolMode.Source);
+            sourceRescueAttempted = true;
             AutoTextRescueResult sourceRescue = RunAutoSourceRescue(
                 textContent.Index,
                 query,
@@ -3330,7 +3345,8 @@ public sealed class SearchTool
             compactBanner: null,
             filePattern,
             language,
-            paths => servedPaths = paths);
+            servedPathsSink: paths => servedPaths = paths,
+            boundAgentOutput: true);
         return sourceCount == 0
             ? new AutoTextRescueResult(primaryOutput, 0, sourceBytes, "none")
             : new AutoTextRescueResult(
@@ -3371,7 +3387,8 @@ public sealed class SearchTool
             filePattern,
             language,
             suggestionLookup: null,
-            servedPathsSink: paths => servedPaths = paths);
+            servedPathsSink: paths => servedPaths = paths,
+            boundAgentOutput: true);
         return docsCount == 0
             ? null
             : new AutoTextRescueResult(
@@ -4462,7 +4479,8 @@ public sealed class SearchTool
         IReadOnlyList<RegionSearchHit> hits,
         int page,
         int total,
-        string? compactPrefix)
+        string? compactPrefix,
+        bool boundAgentOutput = false)
     {
         var blocks = new List<string>(page);
         for (int i = 0; i < page; i++)
@@ -4472,7 +4490,11 @@ public sealed class SearchTool
             block.Append(h.Path).Append(':').Append(h.Line).Append("  ").Append(h.Kind);
             if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
                 block.Append("  ").Append(h.ContainingSymbolName);
-            foreach (string line in h.Snippet.Split('\n'))
+            string snippet = ToolOutputBudget.BoundSearchSnippet(
+                h.Snippet,
+                boundAgentOutput,
+                out _);
+            foreach (string line in snippet.Split('\n'))
                 block.Append('\n').Append("    ").Append(line);
             blocks.Add(block.ToString());
         }
@@ -4484,11 +4506,16 @@ public sealed class SearchTool
 
         int remainder = total - page;
         if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
+                .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
+                .Append(')');
         return sb.ToString();
     }
 
-    private static string RenderRegionJson(IReadOnlyList<RegionSearchHit> hits, int page)
+    private static string RenderRegionJson(
+        IReadOnlyList<RegionSearchHit> hits,
+        int page,
+        bool boundAgentOutput = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4502,7 +4529,13 @@ public sealed class SearchTool
                 writer.WriteNumber("line", h.Line);
                 writer.WriteString("kind", h.Kind);
                 writer.WriteNumber("score", h.Score);
-                writer.WriteString("snippet", h.Snippet);
+                string snippet = ToolOutputBudget.BoundSearchSnippet(
+                    h.Snippet,
+                    boundAgentOutput,
+                    out bool snippetTruncated);
+                writer.WriteString("snippet", snippet);
+                if (snippetTruncated)
+                    writer.WriteBoolean("snippet_truncated", true);
                 writer.WriteString("region_id", h.RegionId);
                 if (h.ContainingSymbolId is null) writer.WriteNull("containing_symbol_id");
                 else writer.WriteString("containing_symbol_id", h.ContainingSymbolId);
@@ -4525,7 +4558,11 @@ public sealed class SearchTool
     // Each hit is a `path:line` header followed by its snippet window (±2 lines), each snippet line indented
     // for visual nesting; hits are separated by a blank line. A distinct shape from the symbol renderer.
     private static string RenderContentCompact(
-        IReadOnlyList<ContentSearchHit> hits, int page, int total, string? compactBanner)
+        IReadOnlyList<ContentSearchHit> hits,
+        int page,
+        int total,
+        string? compactBanner,
+        bool boundAgentOutput = false)
     {
         var blocks = new List<string>(page);
         for (int i = 0; i < page; i++)
@@ -4533,7 +4570,11 @@ public sealed class SearchTool
             var h = hits[i];
             var block = new StringBuilder();
             block.Append(h.Path).Append(':').Append(h.Line);
-            foreach (var line in h.Snippet.Split('\n'))
+            string snippet = ToolOutputBudget.BoundSearchSnippet(
+                h.Snippet,
+                boundAgentOutput,
+                out _);
+            foreach (string line in snippet.Split('\n'))
                 block.Append('\n').Append("    ").Append(line);
             blocks.Add(block.ToString());
         }
@@ -4545,11 +4586,16 @@ public sealed class SearchTool
 
         int remainder = total - page;
         if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
+                .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
+                .Append(')');
         return sb.ToString();
     }
 
-    private static string RenderContentJson(IReadOnlyList<ContentSearchHit> hits, int page)
+    private static string RenderContentJson(
+        IReadOnlyList<ContentSearchHit> hits,
+        int page,
+        bool boundAgentOutput = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4562,7 +4608,13 @@ public sealed class SearchTool
                 writer.WriteString("file", h.Path);
                 writer.WriteNumber("line", h.Line);
                 writer.WriteNumber("score", h.Score);
-                writer.WriteString("snippet", h.Snippet);
+                string snippet = ToolOutputBudget.BoundSearchSnippet(
+                    h.Snippet,
+                    boundAgentOutput,
+                    out bool snippetTruncated);
+                writer.WriteString("snippet", snippet);
+                if (snippetTruncated)
+                    writer.WriteBoolean("snippet_truncated", true);
                 writer.WriteEndObject();
             }
             writer.WriteEndArray();
@@ -4571,7 +4623,11 @@ public sealed class SearchTool
     }
 
     private static string RenderTextContentCompact(
-        IReadOnlyList<TextContentSearchHit> hits, int page, int total, string? compactBanner)
+        IReadOnlyList<TextContentSearchHit> hits,
+        int page,
+        int total,
+        string? compactBanner,
+        bool boundAgentOutput = false)
     {
         var blocks = new List<string>(page);
         for (int i = 0; i < page; i++)
@@ -4581,7 +4637,11 @@ public sealed class SearchTool
             block.Append(h.DisplayPath).Append(':').Append(h.Line).Append("  ").Append(h.ContentKind);
             if (!string.IsNullOrWhiteSpace(h.ContainingSymbolName))
                 block.Append("  ").Append(h.ContainingSymbolName);
-            foreach (string line in h.Snippet.Split('\n'))
+            string snippet = ToolOutputBudget.BoundSearchSnippet(
+                h.Snippet,
+                boundAgentOutput,
+                out _);
+            foreach (string line in snippet.Split('\n'))
                 block.Append('\n').Append("    ").Append(line);
             blocks.Add(block.ToString());
         }
@@ -4593,11 +4653,16 @@ public sealed class SearchTool
 
         int remainder = total - page;
         if (remainder > 0)
-            sb.Append('\n').Append("… ").Append(remainder).Append(" more (raise limit)");
+            sb.Append('\n').Append("… ").Append(remainder).Append(" more (")
+                .Append(boundAgentOutput ? "narrow query or filters" : "raise limit")
+                .Append(')');
         return sb.ToString();
     }
 
-    private static string RenderTextContentJson(IReadOnlyList<TextContentSearchHit> hits, int page)
+    private static string RenderTextContentJson(
+        IReadOnlyList<TextContentSearchHit> hits,
+        int page,
+        bool boundAgentOutput = false)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -4622,7 +4687,13 @@ public sealed class SearchTool
                 writer.WriteNumber("byte_start", h.ByteStart);
                 writer.WriteNumber("byte_end", h.ByteEnd);
                 writer.WriteNumber("score", h.Score);
-                writer.WriteString("snippet", h.Snippet);
+                string snippet = ToolOutputBudget.BoundSearchSnippet(
+                    h.Snippet,
+                    boundAgentOutput,
+                    out bool snippetTruncated);
+                writer.WriteString("snippet", snippet);
+                if (snippetTruncated)
+                    writer.WriteBoolean("snippet_truncated", true);
                 writer.WriteNumber("source_bytes", h.SourceBytes);
                 if (h.ContainingSymbolId is null) writer.WriteNull("containing_symbol_id");
                 else writer.WriteString("containing_symbol_id", h.ContainingSymbolId);

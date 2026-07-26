@@ -226,7 +226,7 @@ public sealed class SearchToolRescueTests
     }
 
     [Fact]
-    public void SourceMode_AppendsTheNotIndexedNote_WhenTheArmWasConsultable()
+    public void SourceMode_NeverQueriesSemanticArmOrAppendsSemanticRows()
     {
         StubSemanticTextArm arm = ArmWith(
             chunks: [Hit(docId: "docs/design.md#1", path: "docs/design.md", rank: 1)]);
@@ -236,9 +236,12 @@ public sealed class SearchToolRescueTests
 
         string output = tool.Search(ConceptualQuery, mode: "source");
 
-        Assert.Contains("source_chunks_not_indexed", output, StringComparison.Ordinal);
+        Assert.Contains("converge the workspace refresh", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("source_chunks_not_indexed", output, StringComparison.Ordinal);
         Assert.DoesNotContain("semantic symbol", output, StringComparison.Ordinal);
         Assert.DoesNotContain("semantic docs", output, StringComparison.Ordinal);
+        Assert.Equal(0, arm.SymbolQueries);
+        Assert.Equal(0, arm.ChunkQueries);
     }
 
     [Fact]

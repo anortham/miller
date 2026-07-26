@@ -388,6 +388,11 @@ public static class CliDispatch
         {
             route = SearchRoutePlanner.Plan(requestedMode, o.Value("regions"), o.Query);
         }
+        catch (ArgumentException ex)
+        {
+            err.WriteLine(ex.Message);
+            return Usage(err, SearchUsage);
+        }
         catch (InvalidOperationException ex)
         {
             err.WriteLine(ex.Message);

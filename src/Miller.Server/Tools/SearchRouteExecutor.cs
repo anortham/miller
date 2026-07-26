@@ -169,7 +169,8 @@ internal static class SearchRouteExecutor
             request.CompactBanner,
             request.FilePattern,
             request.Language,
-            request.SuggestionLookup);
+            request.SuggestionLookup,
+            boundAgentOutput: request.BoundAgentOutput);
 
         return new SearchRouteExecutionResult(output, count, sourceBytes);
     }
@@ -196,7 +197,8 @@ internal static class SearchRouteExecutor
             request.CompactBanner,
             request.FilePattern,
             request.Language,
-            request.SuggestionLookup);
+            request.SuggestionLookup,
+            boundAgentOutput: request.BoundAgentOutput);
 
         return new SearchRouteExecutionResult(output, count, sourceBytes);
     }
@@ -222,7 +224,8 @@ internal static class SearchRouteExecutor
             request.CompactBanner,
             route.ModeNote,
             request.FilePattern,
-            request.Language);
+            request.Language,
+            request.BoundAgentOutput);
 
         return new SearchRouteExecutionResult(output, count);
     }
@@ -247,6 +250,7 @@ internal static class SearchRouteExecutor
             request.CompactBanner,
             request.FilePattern,
             request.Language,
+            request.BoundAgentOutput,
             out int count);
 
         return new SearchRouteExecutionResult(output, count);

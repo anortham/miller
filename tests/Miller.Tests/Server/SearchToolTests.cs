@@ -441,6 +441,79 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_RetrievalSemantic_BoundsMcpJson()
+    {
+        IndexedSymbol symbol = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "SemanticWidget",
+            "class",
+            "src/SemanticWidget.cs",
+            1,
+            signature: "public sealed class SemanticWidget" + new string('x', 60_000));
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 4.0)),
+            "/workspace");
+        var semanticArm = new RecordingSemanticTextArm(
+            new SemanticQueryResult(
+                [new SemanticHit(symbol.SymbolId, null, symbol.FilePath, 1, 0.9)],
+                UnavailableReason: null));
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm);
+
+        string output = tool.Search(
+            "conceptual widget",
+            mode: "symbol",
+            format: "json",
+            retrieval: "semantic");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(symbol.SymbolId, row.GetProperty("symbol_id").GetString());
+        Assert.EndsWith("…", row.GetProperty("signature").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_RetrievalHybrid_BoundsMcpJson()
+    {
+        IndexedSymbol symbol = Symbol(
+            0,
+            "10000000000000000000000000000001",
+            "HybridWidget",
+            "class",
+            "src/HybridWidget.cs",
+            1,
+            signature: "public sealed class HybridWidget" + new string('x', 60_000));
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 4.0)),
+            "/workspace");
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            new RecordingFusionArm(serve: true));
+
+        string output = tool.Search(
+            "conceptual widget",
+            mode: "symbol",
+            format: "json",
+            retrieval: "hybrid");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(symbol.SymbolId, row.GetProperty("symbol_id").GetString());
+        Assert.EndsWith("…", row.GetProperty("signature").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Search_RetrievalSemantic_UnservedArmReturnsTypedUnavailable()
     {
         IndexedSymbol symbol = Symbol(
@@ -552,6 +625,23 @@ public sealed class SearchToolTests
 
         Assert.Contains("\"code\":\"invalid_request\"", output, StringComparison.Ordinal);
         Assert.Contains("auto, lexical, hybrid, or semantic", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_InvalidModeReturnsTypedInvalidRequest()
+    {
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex(),
+            "/workspace");
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search(
+            "Widget",
+            mode: "obsolete",
+            format: "json");
+
+        Assert.Contains("\"code\":\"invalid_request\"", output, StringComparison.Ordinal);
+        Assert.Contains("auto, text, symbol, file, markers, content, source, external, web, or all-text", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1358,6 +1448,41 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_McpRoute_FinalBudgetReturnsTypedRefusalForOversizedMetadata()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-search-budget-telemetry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = "src/" + new string('x', 20_000) + ".cs";
+        var symbol = Symbol(0, "sym-widget", "Widget", "class", path, 1);
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((symbol, 1.0)),
+            "/workspace");
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using var ledger = TelemetryLedger.Open(Path.Combine(dir, "telemetry.db"), "current-ws", "/workspace");
+            using var scope = ledger.Measure("search", op: "symbol");
+
+            string output = tool.Search("Widget", mode: "symbol", format: "json");
+
+            Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+            using JsonDocument document = JsonDocument.Parse(output);
+            Assert.Equal(
+                "output_metadata_too_large",
+                document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+            Assert.Contains("narrow the query or filters", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("raise limit", output, StringComparison.Ordinal);
+            Assert.Equal(0, scope.ResultCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void Run_Json_PreservesCompleteSignatureForProcessConsumers()
     {
         string signature = "export default grammar(" + new string('x', 60_000) + ")";
@@ -1842,6 +1967,27 @@ public sealed class SearchToolTests
         tool.Search(query, mode: "source", limit: 3);
 
         Assert.Equal(0, provider.SymbolSearchResolveCount);
+    }
+
+    [Fact]
+    public void Search_ModeSource_NeverQueriesSemanticChunks()
+    {
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex(),
+            "/workspace",
+            TextContentIndex());
+        var semanticArm = new RecordingSemanticTextArm(new SemanticQueryResult([], null));
+        var tool = new SearchTool(
+            provider,
+            provider,
+            provider,
+            provider,
+            fusionArm: null,
+            semanticArm);
+
+        tool.Search("how does workspace recovery preserve active state", mode: "source");
+
+        Assert.Equal(0, semanticArm.ChunkCalls);
     }
 
     private static IReadOnlyList<IndexedSymbol> LongPathNearMatches() =>
@@ -3055,6 +3201,49 @@ public sealed class SearchToolTests
     }
 
     [Fact]
+    public void Search_AutoMode_SourceRescueBoundsLongSnippet()
+    {
+        string path = "src/ExactApi.cs";
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex(),
+            "/workspace",
+            TextContentIndex(SourceHit(
+                path,
+                line: 42,
+                snippet: "KnownSourceError " + new string('x', 60_000))));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("KnownSourceError");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        Assert.Contains(path + ":42", output, StringComparison.Ordinal);
+        Assert.Contains("…", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_ModeContent_BoundsLongJsonSnippet()
+    {
+        string path = "docs/exact-guide.md";
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex(),
+            "/workspace",
+            TextContentIndex(CorpusHit(
+                path,
+                TextContentKind.WorkspaceDocs,
+                line: 4,
+                snippet: new string('x', 60_000))));
+        var tool = new SearchTool(provider, provider);
+
+        string output = tool.Search("guide", mode: "content", format: "json");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(path, row.GetProperty("file").GetString());
+        Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
+    }
+
+    [Fact]
     public void Search_AutoMode_WeakSymbolSearch_RendersBoundedSourceRescue()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-weak-search-" + Guid.NewGuid().ToString("N"));
@@ -3249,7 +3438,54 @@ public sealed class SearchToolTests
             Assert.True(doc.RootElement.GetProperty("auto_rescue_attempted").GetBoolean());
             Assert.Equal("source", doc.RootElement.GetProperty("auto_rescue_kind").GetString());
             Assert.Equal(1, doc.RootElement.GetProperty("auto_rescue_result_count").GetInt32());
+            Assert.True(doc.RootElement.GetProperty("auto_source_rescue_attempted").GetBoolean());
             Assert.Equal(777, ReadTelemetrySourceBytes(telemetryDb));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Search_AutoMode_EarlyDocsRescue_RecordsSourceRescueNotAttempted()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-docs-rescue-telemetry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string telemetryDb = Path.Combine(dir, "telemetry.db");
+        string root = Path.Combine(dir, "root");
+        var weakSymbol = Symbol(
+            1,
+            "workspace-health-symbol",
+            "WorkspaceHealthSnapshot",
+            "class",
+            "src/WorkspaceHealthSnapshot.cs",
+            12,
+            "public sealed class WorkspaceHealthSnapshot");
+        var provider = new FixedSymbolSearchProvider(
+            new StubSymbolSearchIndex((weakSymbol, 0.1)),
+            root,
+            TextContentIndex(CorpusHit(
+                "docs/workspace-health.md",
+                TextContentKind.WorkspaceDocs,
+                line: 9,
+                snippet: "workspace health explains stale sidecars and recovery steps")));
+        var tool = new SearchTool(provider, provider);
+
+        try
+        {
+            using (var ledger = TelemetryLedger.Open(telemetryDb, "current-ws", root))
+            {
+                using var scope = ledger.Measure("search", op: "auto");
+                string output = tool.Search("workspace health");
+                Assert.Contains("Docs/config matches also found:", output);
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(ReadTelemetryMetadata(telemetryDb));
+            Assert.True(doc.RootElement.GetProperty("auto_rescue_attempted").GetBoolean());
+            Assert.Equal("docs_config", doc.RootElement.GetProperty("auto_rescue_kind").GetString());
+            Assert.False(doc.RootElement.GetProperty("auto_source_rescue_attempted").GetBoolean());
         }
         finally
         {
@@ -3569,6 +3805,7 @@ public sealed class SearchToolTests
     private sealed class RecordingSemanticTextArm(SemanticQueryResult symbols) : ISemanticTextArm
     {
         public int SymbolCalls { get; private set; }
+        public int ChunkCalls { get; private set; }
 
         public SemanticQueryResult QuerySymbols(
             string workspaceRoot,
@@ -3580,8 +3817,11 @@ public sealed class SearchToolTests
             return symbols;
         }
 
-        public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k) =>
-            SemanticQueryResult.Unavailable("chunk retrieval is not configured.");
+        public SemanticQueryResult QueryChunks(string workspaceRoot, string query, int k)
+        {
+            ChunkCalls++;
+            return SemanticQueryResult.Unavailable("chunk retrieval is not configured.");
+        }
     }
 
     private sealed class StubSymbolSearchIndex : ISymbolLookupIndex

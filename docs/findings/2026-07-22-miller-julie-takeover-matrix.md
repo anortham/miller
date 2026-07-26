@@ -173,7 +173,7 @@ Create one deep reference-evidence module whose caller-facing input is a symbol 
 
 | Tool | Current Miller | Julie advantage | Miller advantage | Required decision | Priority |
 |---|---|---|---|---|---|
-| `search` | shared transparent reranker, AND→OR relaxation, typed mixed file/symbol auto lane, container evidence, per-call retrieval policy, optional semantic RRF | final sealed comparative evidence remains outstanding | deterministic rank-identical backends, stronger empty diagnosis, structural choice-point recovery, optional/off-switchable semantics | keep; Phase 4 implementation complete, carry to sealed gate | P1 complete |
+| `search` | shared transparent reranker, AND→OR relaxation, typed mixed auto lane, strict modes, lexical-only source, truthful rescue telemetry, universal 12 KiB MCP bound | final sealed comparative evidence remains outstanding | deterministic rank-identical backends, stronger empty diagnosis, structural choice-point recovery, optional/off-switchable semantics | keep; Phase 4 and takeover re-audit implementation complete, carry to sealed gate | P1 complete |
 | `inspect` | one file/symbol tool, fresh body slice, compact/JSON, refs/callers/callees | resolved and typed relationships, implementations/types/tests, qualified resolution, kind-aware render | hash-guarded live body, strict ambiguity, JSON, smaller surface | keep; rebuild relationships and enrich typed sections | P0/P1 |
 | `context` | token-bounded signatures and neighbours, lexical seeds, optional usage enrichment | bodies, hybrid seeds, pivot scoring, task signals, adaptive depth | deterministic/offline path, copyable next calls, query-affinity neighbours | keep; redesign as pivot/body bundle | P0 |
 | `trace` | exact/fallback refs, path, bridge, strong diagnostics, JSON, stateless paging | naming variants and call-precise path remain stronger | bridge providers, provenance, homonym safety, and honesty flags are substantially better | keep; type path and evaluate naming variants | P2 |
@@ -201,6 +201,15 @@ retrieval with explicit OR relaxation, typed mixed auto results, per-call retrie
 FTS5/in-memory parity. A visible conceptual choice-point query improved from no expected target in the top six
 to the correct owning factory at rank one. See
 [`2026-07-23-phase4-shared-search-ranking-and-routing.md`](2026-07-23-phase4-shared-search-ranking-and-routing.md).
+
+### Phase 10 Re-audit Disposition
+
+Locally completed 2026-07-26; the required fresh Claude review remains pending. Unknown modes now return a
+typed invalid request, explicit source search performs zero semantic work, auto-rescue telemetry records an
+attempt only when the source query runs, and every MCP Search route has a 12 KiB UTF-8 ceiling. Textual
+snippets use a 512-byte Unicode-safe bound with additive JSON truncation evidence; stable identities are
+preserved, so irreducible metadata returns the shared typed refusal instead of malformed or silently truncated
+output. See [`2026-07-26-search-correctness-and-bounds.md`](2026-07-26-search-correctness-and-bounds.md).
 
 ### Recommendation
 

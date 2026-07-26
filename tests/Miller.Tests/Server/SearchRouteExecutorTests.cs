@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
@@ -94,6 +95,246 @@ public sealed class SearchRouteExecutorTests
         Assert.Contains("src/Widget.cs:12", result.Output);
         Assert.Equal(["comment"], index.LastKinds);
         Assert.True(index.LastExcludeTests);
+    }
+
+    [Fact]
+    public void RunContent_BoundAgentOutput_BoundsJsonSnippetAndPreservesPath()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("content", regions: null);
+        string path = "docs/exact-guide.md";
+        var index = new RecordingTextContentSearchIndex(
+            TextHit(
+                "docs",
+                TextContentKind.WorkspaceDocs,
+                path,
+                "markdown",
+                50,
+                new string('x', 60_000)));
+
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunContent(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "guide",
+                Limit: 5,
+                Json: true,
+                ExcludeTests: false,
+                BoundAgentOutput: true));
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(path, row.GetProperty("file").GetString());
+        Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
+        Assert.True(row.GetProperty("snippet").GetString()!.Length < 60_000);
+    }
+
+    [Fact]
+    public void RunTextContent_BoundAgentOutput_BoundsJsonSnippetAndPreservesIdentities()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("source", regions: null);
+        string path = "src/ExactWidget.cs";
+        var index = new RecordingTextContentSearchIndex(
+            TextHit(
+                "source-exact",
+                TextContentKind.WorkspaceSource,
+                path,
+                "csharp",
+                120,
+                new string('y', 60_000)));
+
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunTextContent(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "widget",
+                Limit: 5,
+                Json: true,
+                ExcludeTests: false,
+                BoundAgentOutput: true));
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal("source-exact", row.GetProperty("source_id").GetString());
+        Assert.Equal("source-exact-chunk", row.GetProperty("chunk_id").GetString());
+        Assert.Equal(path, row.GetProperty("display_path").GetString());
+        Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void RunTextContent_BoundAgentOutput_OmitsSnippetTruncatedWhenComplete()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("source", regions: null);
+        var index = new RecordingTextContentSearchIndex(
+            TextHit(
+                "source-exact",
+                TextContentKind.WorkspaceSource,
+                "src/ExactWidget.cs",
+                "csharp",
+                120,
+                "short complete snippet"));
+
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunTextContent(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "widget",
+                Limit: 5,
+                Json: true,
+                ExcludeTests: false,
+                BoundAgentOutput: true));
+
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal("short complete snippet", row.GetProperty("snippet").GetString());
+        Assert.False(row.TryGetProperty("snippet_truncated", out _));
+    }
+
+    [Fact]
+    public void RunRegions_BoundAgentOutput_BoundsJsonSnippetAndPreservesIdentities()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("source", "comment");
+        string path = "src/ExactWidget.cs";
+        var index = new RecordingRegionSearchIndex(
+            new RegionSearchHit(
+                path,
+                2.0,
+                12,
+                "comment",
+                new string('z', 60_000),
+                new string('z', 60_000),
+                "region-exact",
+                ContainingSymbolId: "symbol-exact",
+                ContainingSymbolName: "Widget.Run",
+                Language: "csharp"));
+
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "widget",
+                Limit: 5,
+                Json: true,
+                ExcludeTests: false,
+                BoundAgentOutput: true));
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(path, row.GetProperty("file").GetString());
+        Assert.Equal("region-exact", row.GetProperty("region_id").GetString());
+        Assert.Equal("symbol-exact", row.GetProperty("containing_symbol_id").GetString());
+        Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void RunMarkers_BoundAgentOutput_BoundsJsonSnippetAndPreservesIdentities()
+    {
+        SearchRoute route = SearchRoutePlanner.Plan("markers", regions: null);
+        string path = "src/ExactWidget.cs";
+        string snippet = "// TODO " + new string('q', 60_000);
+        var index = new RecordingRegionSearchIndex(
+            new RegionSearchHit(
+                path,
+                2.0,
+                12,
+                "comment",
+                snippet,
+                snippet,
+                "region-marker-exact",
+                ContainingSymbolId: "symbol-marker-exact",
+                ContainingSymbolName: "Widget.Run",
+                Language: "csharp"));
+
+        SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "TODO",
+                Limit: 5,
+                Json: true,
+                ExcludeTests: false,
+                BoundAgentOutput: true));
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Output), 1, ToolOutputBudget.SearchMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(result.Output);
+        JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(path, row.GetProperty("file").GetString());
+        Assert.Equal("region-marker-exact", row.GetProperty("region_id").GetString());
+        Assert.Equal("symbol-marker-exact", row.GetProperty("containing_symbol_id").GetString());
+        Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void BoundAgentOutput_OverflowGuidanceNarrowsQueryOrFilters()
+    {
+        var contentIndex = new RecordingTextContentSearchIndex(
+            TextHit("docs-1", TextContentKind.WorkspaceDocs, "docs/one.md", "markdown", 10),
+            TextHit("docs-2", TextContentKind.WorkspaceDocs, "docs/two.md", "markdown", 10));
+        string content = SearchRouteExecutor.RunContent(
+            contentIndex,
+            SearchRoutePlanner.Plan("content", regions: null),
+            new SearchRouteExecutionRequest(
+                Query: "guide",
+                Limit: 1,
+                Json: false,
+                ExcludeTests: false,
+                BoundAgentOutput: true)).Output;
+
+        var sourceIndex = new RecordingTextContentSearchIndex(
+            TextHit("source-1", TextContentKind.WorkspaceSource, "src/One.cs", "csharp", 10),
+            TextHit("source-2", TextContentKind.WorkspaceSource, "src/Two.cs", "csharp", 10));
+        string source = SearchRouteExecutor.RunTextContent(
+            sourceIndex,
+            SearchRoutePlanner.Plan("source", regions: null),
+            new SearchRouteExecutionRequest(
+                Query: "guide",
+                Limit: 1,
+                Json: false,
+                ExcludeTests: false,
+                BoundAgentOutput: true)).Output;
+
+        var regionIndex = new RecordingRegionSearchIndex(
+            new RegionSearchHit(
+                "src/One.cs",
+                2.0,
+                12,
+                "comment",
+                "guide one",
+                "guide one",
+                "region-one",
+                null,
+                null,
+                "csharp"),
+            new RegionSearchHit(
+                "src/Two.cs",
+                1.0,
+                14,
+                "comment",
+                "guide two",
+                "guide two",
+                "region-two",
+                null,
+                null,
+                "csharp"));
+        string regions = SearchRouteExecutor.RunRegions(
+            regionIndex,
+            SearchRoutePlanner.Plan("auto", "comment"),
+            new SearchRouteExecutionRequest(
+                Query: "guide",
+                Limit: 1,
+                Json: false,
+                ExcludeTests: false,
+                BoundAgentOutput: true)).Output;
+
+        Assert.All(
+            new[] { content, source, regions },
+            output =>
+            {
+                Assert.Contains("narrow query or filters", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("raise limit", output, StringComparison.Ordinal);
+            });
     }
 
     [Fact]
@@ -588,7 +829,8 @@ public sealed class SearchRouteExecutorTests
         string contentKind,
         string path,
         string language,
-        long sourceBytes) =>
+        long sourceBytes,
+        string snippet = "matched guide content") =>
         new(
             SourceId: id,
             ChunkId: id + "-chunk",
@@ -603,7 +845,7 @@ public sealed class SearchRouteExecutorTests
             LineEnd: 8,
             ByteStart: 0,
             ByteEnd: 20,
-            Snippet: "matched guide content",
+            Snippet: snippet,
             SourceBytes: sourceBytes,
             ContainingSymbolId: null,
             ContainingSymbolName: null);

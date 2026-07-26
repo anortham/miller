@@ -48,6 +48,18 @@ public sealed class ToolContinuationTests
     }
 
     [Fact]
+    public void BoundSearchSnippet_UsesUtf8BudgetWithoutSplittingCodePoint()
+    {
+        string snippet = new string('a', 510) + "😀";
+
+        string bounded = ToolOutputBudget.BoundSearchSnippet(snippet, boundAgentOutput: true, out bool truncated);
+
+        Assert.True(truncated);
+        Assert.Equal(new string('a', 509) + "…", bounded);
+        Assert.Equal(ToolOutputBudget.SearchMcpSnippetMaxBytes, Encoding.UTF8.GetByteCount(bounded));
+    }
+
+    [Fact]
     public void RenderPrefixWithinByteBudget_NeverRendersPastCandidateLimit()
     {
         int[] items = Enumerable.Range(1, 50_000).ToArray();
