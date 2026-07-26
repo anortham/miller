@@ -84,7 +84,7 @@ Invalid or scalar JSON from a JSON-capable tool is reclassified as
 | Tool | Existing payload retained | Typed diagnostic transition |
 |---|---|---|
 | `search` | Non-empty route payloads retain their fields; bounded snippets add `snippet_truncated` only when changed. | Empty routes add `diagnostic`; validation, availability, and final-budget refusals use the diagnostic envelope. See `search-mcp-v1.md`. |
-| `inspect` | Resolved file and symbol objects retain their fields. | Not-found files/symbols and ambiguity add `diagnostic`; continuation refusals and hard failures use the envelope. |
+| `inspect` | Resolved file and symbol objects retain their fields. | Not-found files/symbols and ambiguity add `diagnostic`; continuation, final-budget, and hard failures use the envelope. See `inspect-json-v1.md`. |
 | `context` | Non-empty bundles retain their fields. | Zero-entry bundles add `diagnostic`; refusals and hard failures use the envelope. |
 | `trace` | Trace mode fields and algorithm `diagnostics[]` remain present. | Overall empty/refusal/error classification is authoritative in top-level `diagnostic`; see `trace-json-v1.md`. |
 | `impact` | Non-empty impact objects retain their fields. | Empty diffs, unresolved targets, and zero dependents add distinct diagnostics; refusals and hard failures use the envelope. |

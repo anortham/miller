@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Resolution;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests;
@@ -160,10 +161,10 @@ public sealed class InspectToolTests
             "class (1)\n" +
             "  SearchTool  :10  public sealed class SearchTool\n" +
             "method (2)\n" +
-            "  Run  :20  public static string Run(...)\n" +
-            "  RenderCompact  :30  private static string RenderCompact(...)\n" +
+            "  Run  :20  [parent=SearchTool]  public static string Run(...)\n" +
+            "  RenderCompact  :30  [parent=SearchTool]  private static string RenderCompact(...)\n" +
             "field (1)\n" +
-            "  _workspaceProvider  :11  private readonly IWorkspaceSearchProvider _workspaceProvider\n" +
+            "  _workspaceProvider  :11  [parent=SearchTool]  private readonly IWorkspaceSearchProvider _workspaceProvider\n" +
             "low_signal hidden: 1 import, 1 module (pass kind=import/module)",
             output);
         Assert.DoesNotContain("using System;", output);
@@ -270,6 +271,177 @@ public sealed class InspectToolTests
 
         using var document = JsonDocument.Parse(output);
         Assert.Equal(10, document.RootElement.GetProperty("children").GetArrayLength());
+    }
+
+    [Fact]
+    public void Inspect_McpRoute_FinalBudgetReturnsTypedRefusalForOversizedMetadata()
+    {
+        string hugeName = new('x', 20_000);
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "a2000000000000000000000000000001",
+                    hugeName,
+                    "class",
+                    "csharp",
+                    "src/HugeName.cs",
+                    "public sealed class HugeName",
+                    1,
+                    null),
+            ]);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-huge-doc", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+        string telemetryPath = Path.Combine(fx.Directory, "telemetry.db");
+        using var ledger = TelemetryLedger.Open(
+            telemetryPath,
+            "ws-huge-doc",
+            fx.WorkspaceRoot);
+        string output;
+        using (TelemetryScope scope = ledger.Measure("inspect", op: "summary"))
+        {
+            scope.ResultCount = 7;
+            Assert.Same(scope, TelemetryContext.Current);
+
+            output = tool.Inspect(hugeName, format: "json");
+
+            Assert.Equal(0, scope.ResultCount);
+        }
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.InspectMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal(
+            "output_metadata_too_large",
+            diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.False(document.RootElement.TryGetProperty("symbol", out _));
+        Assert.False(document.RootElement.TryGetProperty("children", out _));
+        Assert.Contains("use CLI output", output, StringComparison.Ordinal);
+
+        using var telemetry = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = telemetryPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        telemetry.Open();
+        using var command = telemetry.CreateCommand();
+        command.CommandText =
+            "SELECT result_count, metadata_json FROM tool_telemetry WHERE tool = 'inspect' ORDER BY id DESC LIMIT 1;";
+        using SqliteDataReader reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(0, reader.GetInt32(0));
+        using JsonDocument metadata = JsonDocument.Parse(reader.GetString(1));
+        Assert.Equal(
+            "output_metadata_too_large",
+            metadata.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("refusal", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+    }
+
+    [Fact]
+    public void Inspect_McpRoute_TruncatesLongDocCommentWithoutLosingTheSymbol()
+    {
+        string sourceDoc = string.Concat(Enumerable.Repeat("日本語😀", 2_000));
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "a2100000000000000000000000000001",
+                    "HugeDoc",
+                    "class",
+                    "csharp",
+                    "src/HugeDoc.cs",
+                    "public sealed class HugeDoc",
+                    1,
+                    null)
+                {
+                    DocComment = sourceDoc,
+                },
+            ]);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-huge-doc", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("HugeDoc", format: "json");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(output), 1, ToolOutputBudget.InspectMcpMaxBytes);
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement symbol = document.RootElement.GetProperty("symbol");
+        Assert.Equal("HugeDoc", symbol.GetProperty("name").GetString());
+        Assert.True(symbol.GetProperty("doc_truncated").GetBoolean());
+        string boundedDoc = symbol.GetProperty("doc").GetString()!;
+        Assert.EndsWith("…", boundedDoc, StringComparison.Ordinal);
+        Assert.DoesNotContain("\uFFFD", boundedDoc, StringComparison.Ordinal);
+        Assert.DoesNotContain(boundedDoc.EnumerateRunes(), static rune => rune.Value == 0xFFFD);
+        Assert.InRange(
+            Encoding.UTF8.GetByteCount(boundedDoc),
+            ToolOutputBudget.InspectMcpDocMaxBytes - 4,
+            ToolOutputBudget.InspectMcpDocMaxBytes);
+        Assert.False(document.RootElement.TryGetProperty("diagnostic", out _));
+    }
+
+    [Fact]
+    public void Run_StaticCore_RetainsExhaustiveMetadataBeyondMcpBudgets()
+    {
+        string hugeName = new('n', 20_000);
+        string hugeDoc = new('d', 20_000);
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    "a2200000000000000000000000000001",
+                    hugeName,
+                    "class",
+                    "csharp",
+                    "src/HugeName.cs",
+                    "public sealed class HugeName",
+                    1,
+                    null),
+                new JulieDbFixture.SymbolRow(
+                    "a2200000000000000000000000000002",
+                    "HugeDoc",
+                    "class",
+                    "csharp",
+                    "src/HugeDoc.cs",
+                    "public sealed class HugeDoc",
+                    1,
+                    null)
+                {
+                    DocComment = hugeDoc,
+                },
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string nameOutput = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            hugeName, depth: "summary", kind: null, scope: null, limit: 50, json: true, out _);
+        string docOutput = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "HugeDoc", depth: "summary", kind: null, scope: null, limit: 50, json: true, out _);
+
+        Assert.True(Encoding.UTF8.GetByteCount(nameOutput) > ToolOutputBudget.InspectMcpMaxBytes);
+        using JsonDocument nameDocument = JsonDocument.Parse(nameOutput);
+        Assert.False(nameDocument.RootElement.TryGetProperty("diagnostic", out _));
+        using JsonDocument docDocument = JsonDocument.Parse(docOutput);
+        JsonElement symbol = docDocument.RootElement.GetProperty("symbol");
+        Assert.Equal(hugeDoc, symbol.GetProperty("doc").GetString());
+        Assert.False(symbol.TryGetProperty("doc_truncated", out _));
+        Assert.True(Encoding.UTF8.GetByteCount(docOutput) > ToolOutputBudget.InspectMcpMaxBytes);
+    }
+
+    [Fact]
+    public void Inspect_McpContract_PinsPublishedBudgets()
+    {
+        Assert.Equal(12 * 1024, ToolOutputBudget.InspectMcpMaxBytes);
+        Assert.Equal(2 * 1024, ToolOutputBudget.InspectMcpDocMaxBytes);
+        Assert.Equal(10, ToolOutputBudget.McpRowLimit);
     }
 
     [Fact]
@@ -411,6 +583,120 @@ public sealed class InspectToolTests
         Assert.Contains("public User GetUser(int id)", output);
         Assert.Contains("Gets a user by id.", output);    // doc_comment via ReadDetail
         Assert.Contains("auth/UserService.cs:2", output); // file:line
+    }
+
+    [Fact]
+    public void Run_SymbolSummary_Json_ExposesTypedTestRoleEvidence()
+    {
+        const string testId = "aa200000000000000000000000000001";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    testId,
+                    "Run_returns_value",
+                    "method",
+                    "csharp",
+                    "tests/WorkerTests.cs",
+                    "public void Run_returns_value()",
+                    4,
+                    null)
+                {
+                    IsTest = true,
+                },
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string output = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            testId, depth: "summary", kind: null, scope: null, limit: 50, json: true, out _);
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement evidence = document.RootElement.GetProperty("symbol").GetProperty("test_evidence");
+        Assert.True(evidence.GetProperty("is_test").GetBoolean());
+        Assert.True(evidence.GetProperty("test_case").GetBoolean());
+        Assert.False(evidence.GetProperty("test_container").GetBoolean());
+        Assert.False(evidence.GetProperty("test_lifecycle").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(evidence.GetProperty("status").GetString()));
+        Assert.True(evidence.TryGetProperty("reason", out _));
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_ExposesExactTestLocations()
+    {
+        const string targetId = "aa300000000000000000000000000001";
+        const string testId = "aa300000000000000000000000000002";
+        const string nonTestId = "aa300000000000000000000000000003";
+        const string fallbackTestId = "aa300000000000000000000000000004";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "Run", "method", "csharp", "src/Worker.cs", "public void Run()", 4, null),
+                new JulieDbFixture.SymbolRow(
+                    testId,
+                    "Run_returns_value",
+                    "method",
+                    "csharp",
+                    "tests/WorkerTests.cs",
+                    "public void Run_returns_value()",
+                    8,
+                    null)
+                {
+                    IsTest = true,
+                },
+                new(nonTestId, "Caller", "method", "csharp", "src/Caller.cs", "public void Caller()", 4, null),
+                new JulieDbFixture.SymbolRow(
+                    fallbackTestId,
+                    "Run_fallback_candidate",
+                    "method",
+                    "csharp",
+                    "tests/FallbackTests.cs",
+                    "public void Run_fallback_candidate()",
+                    8,
+                    null)
+                {
+                    IsTest = true,
+                },
+            ],
+            identifiers:
+            [
+                new("identifier-test-call", "Run", "call", "csharp", "tests/WorkerTests.cs", 10, testId)
+                {
+                    TargetSymbolId = targetId,
+                },
+                new("identifier-test-call-again", "Run", "call", "csharp", "tests/WorkerTests.cs", 12, testId)
+                {
+                    TargetSymbolId = targetId,
+                },
+                new("identifier-non-test-call", "Run", "call", "csharp", "src/Caller.cs", 6, nonTestId)
+                {
+                    TargetSymbolId = targetId,
+                },
+                new("identifier-fallback-test-call", "Run", "call", "csharp", "tests/FallbackTests.cs", 10, fallbackTestId),
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string json = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string compact = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement locations = document.RootElement.GetProperty("test_locations");
+        JsonElement test = Assert.Single(locations.EnumerateArray());
+        Assert.Equal(testId, test.GetProperty("symbol_id").GetString());
+        Assert.Equal("tests/WorkerTests.cs", test.GetProperty("file").GetString());
+        Assert.True(test.GetProperty("test_evidence").GetProperty("is_test").GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("test_locations_total_count").GetInt32());
+        Assert.DoesNotContain(
+            locations.EnumerateArray(),
+            location => location.GetProperty("symbol_id").GetString() is nonTestId or fallbackTestId);
+        Assert.Contains("## test locations", compact, StringComparison.Ordinal);
+        Assert.Contains("Run_returns_value  tests/WorkerTests.cs:8", compact, StringComparison.Ordinal);
     }
 
     // ---- Symbol full ----
@@ -843,6 +1129,216 @@ public sealed class InspectToolTests
             "reference fallback suppressed because the target name is ambiguous",
             compact,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_Json_ExposesTypedImplementationAndInheritanceSections()
+    {
+        const string interfaceId = "aa100000000000000000000000000001";
+        const string implementationId = "aa100000000000000000000000000002";
+        const string baseId = "aa100000000000000000000000000003";
+        const string subtypeId = "aa100000000000000000000000000004";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(interfaceId, "IWorker", "interface", "csharp", "src/IWorker.cs", "public interface IWorker", 1, null),
+                new(implementationId, "Worker", "class", "csharp", "src/Worker.cs", "public sealed class Worker", 1, null),
+                new(baseId, "WorkerBase", "class", "csharp", "src/WorkerBase.cs", "public class WorkerBase", 1, null),
+                new(subtypeId, "SpecialWorker", "class", "csharp", "src/SpecialWorker.cs", "public sealed class SpecialWorker", 1, null),
+            ],
+            relationships:
+            [
+                new("rel-implements", implementationId, interfaceId, "implements")
+                {
+                    FilePath = "src/Worker.cs",
+                    StartLine = 1,
+                },
+                new("rel-extends", subtypeId, baseId, "extends")
+                {
+                    FilePath = "src/SpecialWorker.cs",
+                    StartLine = 1,
+                },
+            ],
+            identifiers:
+            [
+                new("identifier-fallback-implements", "IWorker", "implements", "csharp", "src/Worker.cs", 2, implementationId),
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string interfaceJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            interfaceId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string implementationJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            implementationId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string baseJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            baseId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string subtypeJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            subtypeId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string interfaceCompact = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            interfaceId, depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+        string subtypeCompact = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            subtypeId, depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        AssertTypedInboundRelationship(
+            interfaceJson,
+            "implementations",
+            implementationId,
+            "Worker",
+            expectFallback: true);
+        AssertTypedOutgoingRelationship(
+            implementationJson,
+            "implements",
+            interfaceId,
+            "IWorker",
+            expectFallback: true);
+        AssertTypedInboundRelationship(baseJson, "subtypes", subtypeId, "SpecialWorker");
+        AssertTypedOutgoingRelationship(subtypeJson, "extends", baseId, "WorkerBase");
+        Assert.Contains("## implementations", interfaceCompact, StringComparison.Ordinal);
+        Assert.Contains("Worker  src/Worker.cs:1", interfaceCompact, StringComparison.Ordinal);
+        Assert.Contains("## implementations fallback (unresolved)", interfaceCompact, StringComparison.Ordinal);
+        Assert.Contains("## extends", subtypeCompact, StringComparison.Ordinal);
+        Assert.Contains("WorkerBase  src/WorkerBase.cs:1", subtypeCompact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SymbolOverview_BoundsTestLocationsAndTypedRelationshipsWithTruthfulCounts()
+    {
+        const string targetId = "aa110000000000000000000000000001";
+        JulieDbFixture.SymbolRow[] implementations = Enumerable.Range(1, 5)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"aa1100000000000000000000000001{i:00}",
+                $"Worker{i}",
+                "class",
+                "csharp",
+                $"src/Worker{i}.cs",
+                $"public sealed class Worker{i}",
+                1,
+                null))
+            .ToArray();
+        JulieDbFixture.SymbolRow[] tests = Enumerable.Range(1, 5)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"aa1100000000000000000000000002{i:00}",
+                $"Worker{i}_uses_contract",
+                "method",
+                "csharp",
+                $"tests/Worker{i}Tests.cs",
+                $"public void Worker{i}_uses_contract()",
+                1,
+                null)
+            {
+                IsTest = true,
+            })
+            .ToArray();
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "IWorker", "interface", "csharp", "src/IWorker.cs", "public interface IWorker", 1, null),
+                .. implementations,
+                .. tests,
+            ],
+            identifiers: tests
+                .Select((test, index) => new JulieDbFixture.IdentifierRow(
+                    $"identifier-test-{index}",
+                    "IWorker",
+                    "type_usage",
+                    "csharp",
+                    test.FilePath,
+                    2,
+                    test.Id)
+                {
+                    TargetSymbolId = targetId,
+                })
+                .ToArray(),
+            relationships: implementations
+                .Select((implementation, index) => new JulieDbFixture.RelationshipRow(
+                    $"relationship-implementation-{index}",
+                    implementation.Id,
+                    targetId,
+                    "implements")
+                {
+                    FilePath = implementation.FilePath,
+                    StartLine = 1,
+                })
+                .ToArray());
+        var (index, resolver) = Build(fx);
+
+        string json = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        string compact = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            targetId, depth: "overview", kind: null, scope: null, limit: 50, json: false, out _);
+
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement root = document.RootElement;
+        Assert.Equal(3, root.GetProperty("test_locations").GetArrayLength());
+        Assert.Equal(5, root.GetProperty("test_locations_total_count").GetInt32());
+        Assert.Equal(3, root.GetProperty("test_locations_returned_count").GetInt32());
+        Assert.Equal(2, root.GetProperty("test_locations_omitted_count").GetInt32());
+        Assert.True(root.GetProperty("test_locations_truncated").GetBoolean());
+        JsonElement implementationsJson = root.GetProperty("implementations");
+        Assert.Equal(3, implementationsJson.GetProperty("exact").GetArrayLength());
+        JsonElement coverage = implementationsJson.GetProperty("coverage");
+        Assert.Equal(5, coverage.GetProperty("exact_available").GetInt32());
+        Assert.Equal(3, coverage.GetProperty("exact_returned").GetInt32());
+        Assert.True(coverage.GetProperty("exact_truncated").GetBoolean());
+        Assert.Contains("... 2 more implementations", compact, StringComparison.Ordinal);
+        Assert.Contains("... 2 more test locations", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_FullDepth_BoundsMcpAndStaticEvidenceSections()
+    {
+        using var fx = BoundedEvidenceFixture(testCount: 51, fallbackImplementationCount: 11);
+        var (index, resolver) = Build(fx);
+
+        string overviewJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "IWorker", depth: "overview", kind: null, scope: null, limit: 50, json: true, out _);
+        using JsonDocument overviewDocument = JsonDocument.Parse(overviewJson);
+        JsonElement overviewCoverage = overviewDocument.RootElement
+            .GetProperty("implementations")
+            .GetProperty("coverage");
+        Assert.Equal(
+            3,
+            overviewDocument.RootElement.GetProperty("implementations").GetProperty("fallback").GetArrayLength());
+        Assert.Equal(11, overviewCoverage.GetProperty("fallback_available").GetInt32());
+        Assert.Equal(3, overviewCoverage.GetProperty("fallback_returned").GetInt32());
+        Assert.True(overviewCoverage.GetProperty("fallback_truncated").GetBoolean());
+
+        string staticJson = InspectTool.Run(
+            index, resolver, fx.DbPath, fx.WorkspaceRoot,
+            "IWorker", depth: "full", kind: null, scope: null, limit: 50, json: true, out _);
+        using JsonDocument staticDocument = JsonDocument.Parse(staticJson);
+        JsonElement staticRoot = staticDocument.RootElement;
+        Assert.Equal(50, staticRoot.GetProperty("test_locations").GetArrayLength());
+        Assert.Equal(51, staticRoot.GetProperty("test_locations_total_count").GetInt32());
+        Assert.Equal(50, staticRoot.GetProperty("test_locations_returned_count").GetInt32());
+        Assert.Equal(1, staticRoot.GetProperty("test_locations_omitted_count").GetInt32());
+        Assert.True(staticRoot.GetProperty("test_locations_truncated").GetBoolean());
+        JsonElement staticImplementations = staticRoot.GetProperty("implementations");
+        Assert.Equal(10, staticImplementations.GetProperty("fallback").GetArrayLength());
+        JsonElement staticCoverage = staticImplementations.GetProperty("coverage");
+        Assert.Equal(11, staticCoverage.GetProperty("fallback_available").GetInt32());
+        Assert.Equal(10, staticCoverage.GetProperty("fallback_returned").GetInt32());
+        Assert.True(staticCoverage.GetProperty("fallback_truncated").GetBoolean());
+
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-full-bounds", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+        string mcpCompact = tool.Inspect("IWorker", depth: "full");
+
+        Assert.InRange(Encoding.UTF8.GetByteCount(mcpCompact), 1, ToolOutputBudget.InspectMcpMaxBytes);
+        Assert.DoesNotContain("output_metadata_too_large", mcpCompact, StringComparison.Ordinal);
+        Assert.Contains("... 41 more test locations", mcpCompact, StringComparison.Ordinal);
+        Assert.Contains("... 1 more implementations fallback", mcpCompact, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1980,6 +2476,174 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Run_FileSummary_ExposesLineSpansAndStableNesting()
+    {
+        const string typeId = "a3000000000000000000000000000001";
+        const string methodId = "a3000000000000000000000000000002";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new JulieDbFixture.SymbolRow(
+                    typeId,
+                    "Container",
+                    "class",
+                    "csharp",
+                    "src/Nested.cs",
+                    "public sealed class Container",
+                    1,
+                    null)
+                {
+                    EndLine = 30,
+                },
+                new JulieDbFixture.SymbolRow(
+                    methodId,
+                    "Run",
+                    "method",
+                    "csharp",
+                    "src/Nested.cs",
+                    "public void Run()",
+                    2,
+                    typeId)
+                {
+                    EndLine = 10,
+                },
+                new JulieDbFixture.SymbolRow(
+                    "a3000000000000000000000000000003",
+                    "Local",
+                    "function",
+                    "csharp",
+                    "src/Nested.cs",
+                    "void Local()",
+                    4,
+                    methodId)
+                {
+                    EndLine = 6,
+                    IsTest = true,
+                },
+            ]);
+        var (index, resolver) = Build(fx);
+
+        string json = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+        string compact = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: null,
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+        string filteredJson = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: "method",
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+        string filteredCompact = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: "method",
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+        string nestedFilteredJson = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: "function",
+            scope: null,
+            limit: 50,
+            json: true,
+            out _);
+        string nestedFilteredCompact = InspectTool.Run(
+            index,
+            resolver,
+            fx.DbPath,
+            fx.WorkspaceRoot,
+            "src/Nested.cs",
+            depth: "summary",
+            kind: "function",
+            scope: null,
+            limit: 50,
+            json: false,
+            out _);
+
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement children = document.RootElement.GetProperty("children");
+        JsonElement container = children
+            .EnumerateArray()
+            .Single(child => child.GetProperty("name").GetString() == "Container");
+        JsonElement run = children
+            .EnumerateArray()
+            .Single(child => child.GetProperty("name").GetString() == "Run");
+        JsonElement local = children
+            .EnumerateArray()
+            .Single(child => child.GetProperty("name").GetString() == "Local");
+        Assert.Equal(0, container.GetProperty("nesting_depth").GetInt32());
+        Assert.Equal(2, run.GetProperty("line").GetInt32());
+        Assert.Equal(10, run.GetProperty("end_line").GetInt32());
+        Assert.Equal(typeId, run.GetProperty("parent_symbol_id").GetString());
+        Assert.Equal(1, run.GetProperty("nesting_depth").GetInt32());
+        Assert.Equal(2, local.GetProperty("nesting_depth").GetInt32());
+        Assert.Equal("csharp", run.GetProperty("language").GetString());
+        JsonElement runTestEvidence = run.GetProperty("test_evidence");
+        Assert.False(runTestEvidence.GetProperty("is_test").GetBoolean());
+        Assert.True(runTestEvidence.TryGetProperty("reason", out _));
+        JsonElement localTestEvidence = local.GetProperty("test_evidence");
+        Assert.True(localTestEvidence.GetProperty("is_test").GetBoolean());
+        Assert.True(localTestEvidence.GetProperty("test_case").GetBoolean());
+        Assert.False(localTestEvidence.GetProperty("test_container").GetBoolean());
+        Assert.False(localTestEvidence.GetProperty("test_lifecycle").GetBoolean());
+        Assert.False(string.IsNullOrWhiteSpace(localTestEvidence.GetProperty("status").GetString()));
+        Assert.True(localTestEvidence.TryGetProperty("reason", out _));
+        Assert.Contains("  Run  :2-10  [parent=Container]", compact, StringComparison.Ordinal);
+        Assert.Contains("  Local  :4-6  [parent=Container.Run]", compact, StringComparison.Ordinal);
+        using JsonDocument filteredDocument = JsonDocument.Parse(filteredJson);
+        JsonElement filteredRun = Assert.Single(
+            filteredDocument.RootElement.GetProperty("children").EnumerateArray());
+        Assert.Equal(1, filteredRun.GetProperty("nesting_depth").GetInt32());
+        Assert.Contains("  Run  :2-10  [parent=Container]", filteredCompact, StringComparison.Ordinal);
+        using JsonDocument nestedFilteredDocument = JsonDocument.Parse(nestedFilteredJson);
+        JsonElement filteredLocal = Assert.Single(
+            nestedFilteredDocument.RootElement.GetProperty("children").EnumerateArray());
+        Assert.Equal(methodId, filteredLocal.GetProperty("parent_symbol_id").GetString());
+        Assert.Equal(2, filteredLocal.GetProperty("nesting_depth").GetInt32());
+        Assert.Contains(
+            "  Local  :4-6  [parent=Container.Run]",
+            nestedFilteredCompact,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Inspect_ExplicitWorkspaceId_UsesTargetIndexResolverAndDbPath_AndPrefixesFreshness()
     {
         using var current = EmptyFixture("current-ws");
@@ -2165,6 +2829,138 @@ public sealed class InspectToolTests
         Assert.Contains("src/Two.cs", output);
         Assert.Equal(0, fullResolveCount);
         Assert.Equal(1, searchResolveCount);
+    }
+
+    private static void AssertTypedInboundRelationship(
+        string json,
+        string propertyName,
+        string sourceSymbolId,
+        string sourceName,
+        bool expectFallback = false)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement relationship = document.RootElement.GetProperty(propertyName);
+        JsonElement exact = Assert.Single(relationship.GetProperty("exact").EnumerateArray());
+        Assert.Equal(sourceSymbolId, exact.GetProperty("source_symbol_id").GetString());
+        Assert.Equal(sourceName, exact.GetProperty("name").GetString());
+        JsonElement fallback = relationship.GetProperty("fallback");
+        if (expectFallback)
+        {
+            JsonElement unresolved = Assert.Single(fallback.EnumerateArray());
+            Assert.Equal(sourceSymbolId, unresolved.GetProperty("source_symbol_id").GetString());
+            Assert.Equal("fallback", unresolved.GetProperty("resolution_status").GetString());
+            Assert.Equal(1, relationship.GetProperty("coverage").GetProperty("fallback_available").GetInt32());
+            Assert.Equal(1, relationship.GetProperty("coverage").GetProperty("fallback_returned").GetInt32());
+        }
+        else
+        {
+            Assert.Empty(fallback.EnumerateArray());
+        }
+        JsonElement coverage = relationship.GetProperty("coverage");
+        Assert.Equal(1, coverage.GetProperty("exact_available").GetInt32());
+        Assert.Equal(1, coverage.GetProperty("exact_returned").GetInt32());
+        Assert.False(coverage.GetProperty("exact_truncated").GetBoolean());
+        Assert.False(coverage.GetProperty("fallback_truncated").GetBoolean());
+        Assert.Equal(
+            expectFallback ? "available" : "no_candidates",
+            coverage.GetProperty("fallback_status").GetString());
+    }
+
+    private static void AssertTypedOutgoingRelationship(
+        string json,
+        string propertyName,
+        string targetSymbolId,
+        string targetName,
+        bool expectFallback = false)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        JsonElement relationship = document.RootElement.GetProperty(propertyName);
+        JsonElement exact = Assert.Single(relationship.GetProperty("exact").EnumerateArray());
+        Assert.Equal(targetSymbolId, exact.GetProperty("target_symbol_id").GetString());
+        Assert.Equal(targetName, exact.GetProperty("name").GetString());
+        JsonElement fallback = relationship.GetProperty("fallback");
+        if (expectFallback)
+        {
+            JsonElement unresolved = Assert.Single(fallback.EnumerateArray());
+            Assert.Equal(JsonValueKind.Null, unresolved.GetProperty("target_symbol_id").ValueKind);
+            Assert.Equal(targetName, unresolved.GetProperty("name").GetString());
+            Assert.Equal("fallback", unresolved.GetProperty("resolution_status").GetString());
+            Assert.Equal(1, relationship.GetProperty("coverage").GetProperty("fallback_available").GetInt32());
+            Assert.Equal(1, relationship.GetProperty("coverage").GetProperty("fallback_returned").GetInt32());
+        }
+        else
+        {
+            Assert.Empty(fallback.EnumerateArray());
+        }
+        JsonElement coverage = relationship.GetProperty("coverage");
+        Assert.Equal(1, coverage.GetProperty("exact_available").GetInt32());
+        Assert.Equal(1, coverage.GetProperty("exact_returned").GetInt32());
+        Assert.False(coverage.GetProperty("exact_truncated").GetBoolean());
+        Assert.False(coverage.GetProperty("fallback_truncated").GetBoolean());
+    }
+
+    private static JulieDbFixture BoundedEvidenceFixture(
+        int testCount,
+        int fallbackImplementationCount)
+    {
+        string targetId = 1.ToString("x32");
+        JulieDbFixture.SymbolRow[] tests = Enumerable.Range(0, testCount)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                (100 + i).ToString("x32"),
+                $"ContractTest{i}",
+                "method",
+                "csharp",
+                $"tests/Contract{i}Tests.cs",
+                $"public void ContractTest{i}()",
+                1,
+                null)
+            {
+                IsTest = true,
+            })
+            .ToArray();
+        JulieDbFixture.SymbolRow[] implementations = Enumerable.Range(0, fallbackImplementationCount)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                (1_000 + i).ToString("x32"),
+                $"Worker{i}",
+                "class",
+                "csharp",
+                $"src/Worker{i}.cs",
+                $"public sealed class Worker{i}",
+                1,
+                null))
+            .ToArray();
+        JulieDbFixture.IdentifierRow[] exactTestReferences = tests
+            .Select((test, index) => new JulieDbFixture.IdentifierRow(
+                $"identifier-test-{index}",
+                "IWorker",
+                "type_usage",
+                "csharp",
+                test.FilePath,
+                2,
+                test.Id)
+            {
+                TargetSymbolId = targetId,
+            })
+            .ToArray();
+        JulieDbFixture.IdentifierRow[] fallbackImplementations = implementations
+            .Select((implementation, index) => new JulieDbFixture.IdentifierRow(
+                $"identifier-implementation-{index}",
+                "IWorker",
+                "implements",
+                "csharp",
+                implementation.FilePath,
+                1,
+                implementation.Id))
+            .ToArray();
+        return JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(targetId, "IWorker", "interface", "csharp", "src/IWorker.cs", "public interface IWorker", 1, null),
+                .. tests,
+                .. implementations,
+            ],
+            identifiers: [.. exactTestReferences, .. fallbackImplementations]);
     }
 
     private static void DeleteFileRow(string dbPath, string filePath)

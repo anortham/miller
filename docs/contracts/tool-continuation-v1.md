@@ -20,9 +20,13 @@ Full-depth inspect renders at most 10 exact callees and 10 unresolved fallback c
 `callee_coverage` reports exact available/returned/truncated counts for both tiers; compact output reports
 omitted counts. `trace` remains the exhaustive graph path.
 
-MCP `search` and file-target `inspect` calls return at most 20 rows, regardless of a larger requested limit.
-MCP search JSON truncates each signature to the shared 110-character agent-rendering bound. Static tool cores
-and CLI/process JSON retain the caller's requested row limit and complete signatures.
+MCP file-target `inspect` calls return at most 10 rows, regardless of a larger requested limit. MCP `search`
+uses its route-specific bounds from [Search MCP Contract v1](search-mcp-v1.md), including the shared
+110-character signature limit. Static tool cores and CLI/process JSON retain the caller's requested file-list
+limit and complete signatures.
+
+The complete MCP inspect response is capped at 12 KiB of UTF-8. Miller never raw-truncates JSON. Metadata or
+diagnostics that cannot fit return `refusal/output_metadata_too_large` with zero served-result attribution.
 
 A reference page contains at most 16 KiB of UTF-8 JSON. Exact rows are emitted before unresolved fallback rows,
 and the continuation maintains independent offsets for both tiers:

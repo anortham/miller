@@ -589,6 +589,86 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
+    public void ReadForSymbol_PartitionsInboundAndOutgoingEvidenceInOneSnapshot()
+    {
+        using var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Target", "class", "csharp", "src/Target.cs", "class Target", 1, null),
+                new(FirstCallerId, "Source", "class", "csharp", "src/Source.cs", "class Source", 1, null),
+                new(SecondCallerId, "Derived", "class", "csharp", "src/Derived.cs", "class Derived", 1, null),
+            ],
+            relationships:
+            [
+                new("relationship-implements", FirstCallerId, FirstTargetId, "implements")
+                {
+                    FilePath = "src/Source.cs",
+                    StartLine = 1,
+                },
+                new("relationship-extends", FirstCallerId, FirstTargetId, "extends")
+                {
+                    FilePath = "src/Source.cs",
+                    StartLine = 1,
+                },
+                new("relationship-implemented-by", SecondCallerId, FirstCallerId, "implements")
+                {
+                    FilePath = "src/Derived.cs",
+                    StartLine = 1,
+                },
+                new("relationship-extended-by", SecondCallerId, FirstCallerId, "extends")
+                {
+                    FilePath = "src/Derived.cs",
+                    StartLine = 1,
+                },
+            ]);
+        ReferenceKind[] kinds = [ReferenceKind.Implementation, ReferenceKind.Inheritance];
+        var bounds = new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10);
+
+        ReferenceEvidenceBundle result = ReferenceEvidenceReader.ReadForSymbol(
+            fixture.DbPath,
+            FirstCallerId,
+            new ReferenceEvidenceQuery(bounds),
+            new ReferenceEvidenceQuery(bounds),
+            bounds,
+            kinds);
+
+        Assert.Equal(2, result.Inbound.Exact.Count);
+        Assert.Equal(2, result.Outgoing.Exact.Count);
+        Assert.All(result.Inbound.Exact, row =>
+        {
+            Assert.Equal(SecondCallerId, row.ContainingSymbolId);
+            Assert.Equal("src/Derived.cs", row.FilePath);
+        });
+        Assert.All(result.Outgoing.Exact, row =>
+        {
+            Assert.Equal(FirstTargetId, row.TargetSymbolId);
+            Assert.Equal("src/Source.cs", row.FilePath);
+        });
+        Assert.Equal(
+            ReferenceKind.Implementation,
+            Assert.Single(result.InboundKinds[ReferenceKind.Implementation].Exact).Kind);
+        Assert.Equal(
+            ReferenceKind.Inheritance,
+            Assert.Single(result.InboundKinds[ReferenceKind.Inheritance].Exact).Kind);
+        Assert.Equal(
+            ReferenceKind.Implementation,
+            Assert.Single(result.OutgoingKinds[ReferenceKind.Implementation].Exact).Kind);
+        Assert.Equal(
+            ReferenceKind.Inheritance,
+            Assert.Single(result.OutgoingKinds[ReferenceKind.Inheritance].Exact).Kind);
+        Assert.All(
+            result.InboundKinds.Values.SelectMany(static evidence => evidence.Exact),
+            row => Assert.Equal(SecondCallerId, row.ContainingSymbolId));
+        Assert.All(
+            result.OutgoingKinds.Values.SelectMany(static evidence => evidence.Exact),
+            row => Assert.Equal(FirstTargetId, row.TargetSymbolId));
+        Assert.Equal(result.Inbound.Snapshot, result.Outgoing.Snapshot);
+        Assert.All(result.InboundKinds.Values, evidence => Assert.Equal(result.Inbound.Snapshot, evidence.Snapshot));
+        Assert.All(result.OutgoingKinds.Values, evidence => Assert.Equal(result.Inbound.Snapshot, evidence.Snapshot));
+    }
+
+    [Fact]
     public void Read_UsesIdentifierEvidenceWhenRelationshipProjectionIsUnavailable()
     {
         using var fixture = JulieDbFixture.CreateForInspect();

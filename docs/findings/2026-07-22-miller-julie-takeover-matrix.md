@@ -37,6 +37,7 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
+- Phase 10 Search and Inspect re-audits are locally complete with clean fresh Claude reviews.
 
 ## Replacement Standard
 
@@ -204,7 +205,7 @@ to the correct owning factory at rank one. See
 
 ### Phase 10 Re-audit Disposition
 
-Locally completed 2026-07-26; the required fresh Claude review remains pending. Unknown modes now return a
+Locally completed and fresh-Claude-reviewed 2026-07-26. Unknown modes now return a
 typed invalid request, explicit source search performs zero semantic work, auto-rescue telemetry records an
 attempt only when the source query runs, and every MCP Search route has a 12 KiB UTF-8 ceiling. Textual
 snippets use a 512-byte Unicode-safe bound with additive JSON truncation evidence; stable identities are
@@ -239,6 +240,25 @@ Accepted OR-only wiring, thin symbol reranking, mixed-result, per-call retrieval
 - Julie adds kind-aware sections for implementations, required methods, parameter/return types, exports/dependencies, test locations, and optional semantic neighbors.
 - Miller is better at live hash-guarded body slices, strict ambiguity, JSON, bounded omitted counts, and a merged file/symbol surface.
 - `inspect depth=full` returns the complete body without a token budget or freshness-bound continuation. Count caps on relations do not bound a large definition body.
+
+### Phase 10 Re-audit Disposition
+
+Locally completed and fresh-Claude-reviewed 2026-07-26. Inspect now reads inbound, outgoing, implementation,
+and inheritance evidence from one artifact snapshot; keeps exact and unresolved fallback tiers distinct; and
+derives test locations only from the complete deduplicated exact-reference symbol set plus typed extractor test
+evidence.
+
+File JSON now exposes language, end lines, parent IDs, nesting depth, and typed test evidence. Compact file rows
+use parent-qualified paths that remain truthful when kind filters hide ancestors. Overview/full symbol output
+adds bounded test locations and typed `implements`, `extends`, `implementations`, and `subtypes` sections.
+Miller does not infer required methods, parameter/return types, exports, or dependencies when the extractor lacks
+language-parity facts.
+
+Every MCP response is capped at 12 KiB of valid UTF-8, documentation is Unicode-safely bounded to 2 KiB, and
+irreducible metadata returns the shared typed refusal with zero served-result attribution. Static cores and
+CLI/process output remain exhaustive. Focused verification passes 238 tests; fresh code and tests/contracts
+reviews both finished `approve` with no findings. See
+[`2026-07-26-inspect-correctness-and-bounds.md`](2026-07-26-inspect-correctness-and-bounds.md).
 
 ### Recommendation
 

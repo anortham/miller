@@ -3,11 +3,78 @@ using Miller.Core.References;
 
 namespace Miller.Indexing;
 
+/// <summary>Inbound, outgoing, and kind-partitioned evidence read from one artifact snapshot.</summary>
+public sealed record ReferenceEvidenceBundle(
+    ReferenceEvidenceSet Inbound,
+    OutgoingReferenceEvidenceSet Outgoing,
+    IReadOnlyDictionary<ReferenceKind, ReferenceEvidenceSet> InboundKinds,
+    IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> OutgoingKinds);
+
 /// <summary>Reads bounded, normalized reference evidence keyed by resolved symbol IDs.</summary>
 public static class ReferenceEvidenceReader
 {
     private static readonly string[] RequiredResolutionTables =
         ["identifier_resolutions", "pending_resolutions", "pending_relationships"];
+
+    /// <summary>Read inbound, outgoing, and selected relationship kinds for one symbol from one snapshot.</summary>
+    public static ReferenceEvidenceBundle ReadForSymbol(
+        string dbPath,
+        string symbolId,
+        ReferenceEvidenceQuery inboundQuery,
+        ReferenceEvidenceQuery outgoingQuery,
+        ReferenceEvidenceBounds kindBounds,
+        IReadOnlyList<ReferenceKind> kinds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        inboundQuery.Validate();
+        outgoingQuery.Validate();
+        kindBounds.Validate();
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Count == 0)
+            throw new ArgumentException("At least one reference kind is required.", nameof(kinds));
+
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+
+        string targetName = ReadTargetName(connection, symbolId);
+        List<ReferenceEvidence> inboundExactRows = ReadExact(connection, symbolId);
+        List<ReferenceEvidence> inboundFallbackRows = ReadFallback(connection, symbolId, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, symbolId, targetName);
+        List<OutgoingReferenceEvidence> outgoingExactRows = ReadOutgoingExact(connection, symbolId);
+        List<OutgoingReferenceEvidence> outgoingFallbackRows = ReadOutgoingFallback(connection, symbolId);
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        ReferenceKind[] distinctKinds = kinds.Distinct().ToArray();
+
+        return new ReferenceEvidenceBundle(
+            BuildInboundSet(
+                inboundExactRows,
+                inboundFallbackRows,
+                inboundQuery,
+                sameNameDefinitionCount,
+                snapshot),
+            BuildOutgoingSet(
+                outgoingExactRows,
+                outgoingFallbackRows,
+                outgoingQuery,
+                snapshot),
+            distinctKinds.ToDictionary(
+                static kind => kind,
+                kind => BuildInboundSet(
+                    inboundExactRows,
+                    inboundFallbackRows,
+                    new ReferenceEvidenceQuery(kindBounds, kind),
+                    sameNameDefinitionCount,
+                    snapshot)),
+            distinctKinds.ToDictionary(
+                static kind => kind,
+                kind => BuildOutgoingSet(
+                    outgoingExactRows,
+                    outgoingFallbackRows,
+                    new ReferenceEvidenceQuery(kindBounds, kind),
+                    snapshot)));
+    }
 
     /// <summary>Read exact inbound sites and separately typed fallback candidates for one symbol.</summary>
     public static ReferenceEvidenceSet Read(
@@ -31,13 +98,65 @@ public static class ReferenceEvidenceReader
         RequireResolutionTables(connection);
 
         string targetName = ReadTargetName(connection, targetSymbolId);
-        var exactRows = FilterKind(ReadExact(connection, targetSymbolId), query.Kind);
+        List<ReferenceEvidence> exactRows = ReadExact(connection, targetSymbolId);
+        List<ReferenceEvidence> fallbackRows = ReadFallback(connection, targetSymbolId, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, targetSymbolId, targetName);
+        return BuildInboundSet(
+            exactRows,
+            fallbackRows,
+            query,
+            sameNameDefinitionCount,
+            ReadSnapshot(connection));
+    }
+
+    /// <summary>Read several independently bounded inbound relationship kinds from one artifact snapshot.</summary>
+    public static IReadOnlyDictionary<ReferenceKind, ReferenceEvidenceSet> ReadKinds(
+        string dbPath,
+        string targetSymbolId,
+        ReferenceEvidenceBounds bounds,
+        IReadOnlyList<ReferenceKind> kinds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetSymbolId);
+        bounds.Validate();
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Count == 0)
+            throw new ArgumentException("At least one reference kind is required.", nameof(kinds));
+
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+
+        string targetName = ReadTargetName(connection, targetSymbolId);
+        List<ReferenceEvidence> exactRows = ReadExact(connection, targetSymbolId);
+        List<ReferenceEvidence> fallbackRows = ReadFallback(connection, targetSymbolId, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, targetSymbolId, targetName);
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        return kinds
+            .Distinct()
+            .ToDictionary(
+                static kind => kind,
+                kind => BuildInboundSet(
+                    exactRows,
+                    fallbackRows,
+                    new ReferenceEvidenceQuery(bounds, kind),
+                    sameNameDefinitionCount,
+                    snapshot));
+    }
+
+    private static ReferenceEvidenceSet BuildInboundSet(
+        List<ReferenceEvidence> allExactRows,
+        List<ReferenceEvidence> allFallbackRows,
+        ReferenceEvidenceQuery query,
+        int sameNameDefinitionCount,
+        ReferenceEvidenceSnapshot snapshot)
+    {
+        var exactRows = FilterKind(allExactRows, query.Kind);
         var exact = Deduplicate(exactRows);
         int exactAvailable = exact.Count;
         var boundedExact = exact.Skip(query.ExactOffset).Take(query.Bounds.ExactLimit).ToArray();
 
-        int sameNameDefinitionCount = CountDefinitions(connection, targetSymbolId, targetName);
-        var fallbackRows = FilterKind(ReadFallback(connection, targetSymbolId, targetName), query.Kind);
+        var fallbackRows = FilterKind(allFallbackRows, query.Kind);
         var fallbackCandidates = Deduplicate(fallbackRows);
         IReadOnlyList<ReferenceEvidence> fallback;
         int fallbackAvailable = fallbackCandidates.Count;
@@ -72,7 +191,7 @@ public static class ReferenceEvidenceReader
                 fallbackStatus == ReferenceFallbackStatus.Available &&
                 fallbackAvailable > query.FallbackOffset + fallback.Count,
                 fallbackStatus),
-            ReadSnapshot(connection))
+            snapshot)
         {
             ExactCallerSymbolIds = ExactContainingSymbolIds(exact, callLike: true),
             ExactReferencedBySymbolIds = ExactContainingSymbolIds(exact, callLike: false),
@@ -101,9 +220,61 @@ public static class ReferenceEvidenceReader
         RequireResolutionTables(connection);
         RequireSymbol(connection, containingSymbolId);
 
-        var exactRows = FilterOutgoingKind(ReadOutgoingExact(connection, containingSymbolId), query.Kind);
+        List<OutgoingReferenceEvidence> exactRows =
+            ReadOutgoingExact(connection, containingSymbolId);
+        List<OutgoingReferenceEvidence> fallbackRows =
+            ReadOutgoingFallback(connection, containingSymbolId);
+        return BuildOutgoingSet(
+            exactRows,
+            fallbackRows,
+            query,
+            ReadSnapshot(connection));
+    }
+
+    /// <summary>Read several independently bounded outgoing relationship kinds from one artifact snapshot.</summary>
+    public static IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> ReadOutgoingKinds(
+        string dbPath,
+        string containingSymbolId,
+        ReferenceEvidenceBounds bounds,
+        IReadOnlyList<ReferenceKind> kinds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(containingSymbolId);
+        bounds.Validate();
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Count == 0)
+            throw new ArgumentException("At least one reference kind is required.", nameof(kinds));
+
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+        RequireSymbol(connection, containingSymbolId);
+
+        List<OutgoingReferenceEvidence> exactRows =
+            ReadOutgoingExact(connection, containingSymbolId);
+        List<OutgoingReferenceEvidence> fallbackRows =
+            ReadOutgoingFallback(connection, containingSymbolId);
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        return kinds
+            .Distinct()
+            .ToDictionary(
+                static kind => kind,
+                kind => BuildOutgoingSet(
+                    exactRows,
+                    fallbackRows,
+                    new ReferenceEvidenceQuery(bounds, kind),
+                    snapshot));
+    }
+
+    private static OutgoingReferenceEvidenceSet BuildOutgoingSet(
+        List<OutgoingReferenceEvidence> allExactRows,
+        List<OutgoingReferenceEvidence> allFallbackRows,
+        ReferenceEvidenceQuery query,
+        ReferenceEvidenceSnapshot snapshot)
+    {
+        var exactRows = FilterOutgoingKind(allExactRows, query.Kind);
         var exact = DeduplicateOutgoing(exactRows);
-        var fallbackRows = FilterOutgoingKind(ReadOutgoingFallback(connection, containingSymbolId), query.Kind);
+        var fallbackRows = FilterOutgoingKind(allFallbackRows, query.Kind);
         var fallback = DeduplicateOutgoing(fallbackRows);
         var boundedExact = exact.Skip(query.ExactOffset).Take(query.Bounds.ExactLimit).ToArray();
         var boundedFallback = fallback
@@ -122,7 +293,7 @@ public static class ReferenceEvidenceReader
                 boundedFallback.Length,
                 exact.Count > query.ExactOffset + boundedExact.Length,
                 fallback.Count > query.FallbackOffset + boundedFallback.Length),
-            ReadSnapshot(connection));
+            snapshot);
     }
 
     /// <summary>Read the current extractor artifact identity used by stateless reference continuations.</summary>

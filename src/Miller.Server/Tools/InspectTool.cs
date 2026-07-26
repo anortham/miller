@@ -38,7 +38,8 @@ public sealed class InspectTool
     [Description(
         "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
         "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
-        "(the right first symbol read); depth=full adds relation lists and a bounded body page. For constants, " +
+        "(the right first symbol read); overview/full also expose test locations and typed inheritance or " +
+        "implementation relations when extractor evidence exists; depth=full adds relation lists and a bounded body page. For constants, " +
         "fields, properties, and variables, a full result with value_declaration_complete=true is authoritative " +
         "and needs no search confirmation. Use before reading " +
         "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
@@ -108,10 +109,15 @@ public sealed class InspectTool
                     diagnostic,
                     json,
                     telemetry);
-            return output;
+            return RequireInspectMcpOutput(output);
         }
         catch (Exception ex)
         {
+            if (telemetry is not null &&
+                ex is ToolDiagnosticException { Diagnostic.Code: "output_metadata_too_large" })
+            {
+                telemetry.ResultCount = 0;
+            }
             ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex);
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
                 telemetry?.SetError(ex);
@@ -123,6 +129,17 @@ public sealed class InspectTool
         }
     }
 
+    private static string RequireInspectMcpOutput(string output)
+    {
+        if (Encoding.UTF8.GetByteCount(output) <= ToolOutputBudget.InspectMcpMaxBytes)
+            return output;
+
+        throw new ToolDiagnosticException(
+            ToolDiagnostic.Refusal(
+                "output_metadata_too_large",
+                "Inspect output metadata exceeds the 12 KiB MCP budget; use CLI output for exhaustive metadata or narrow the target or depth."));
+    }
+
     private const int RefLimit = 50;
     private const int FullCalleeLimit = 10;
     private const int OverviewRelationLimit = 3;
@@ -130,6 +147,8 @@ public sealed class InspectTool
     private const int OverviewBodyPreviewMaxLines = 16;
     private const int OverviewBodyPreviewMaxChars = 700;
     private const int FullValueDeclarationMaxLength = 4096;
+    private static readonly ReferenceKind[] TypedRelationshipKinds =
+        [ReferenceKind.Implementation, ReferenceKind.Inheritance];
 
     // Minimum name-based reference count at which a compact symbol read (overview/full) earns a trailing
     // "run impact" nudge. Below this the symbol is not hot enough for the hint to add value.
@@ -376,7 +395,8 @@ public sealed class InspectTool
         out int resultCount,
         out int matchedCount)
     {
-        IEnumerable<IndexedSymbol> symbols = index.FindByFilePath(path);
+        IReadOnlyList<IndexedSymbol> fileSymbols = index.FindByFilePath(path);
+        IEnumerable<IndexedSymbol> symbols = fileSymbols;
         if (!string.IsNullOrWhiteSpace(kind))
             symbols = symbols.Where(s => string.Equals(s.Kind, kind, StringComparison.OrdinalIgnoreCase));
         var all = symbols.ToList();
@@ -405,7 +425,7 @@ public sealed class InspectTool
             w.WriteStartObject();
             w.WriteString("file", path);
             w.WritePropertyName("children");
-            WriteSymbolArray(w, ordered.Take(jsonPage));
+            WriteFileSymbolArray(w, ordered.Take(jsonPage), fileSymbols);
             w.WriteNumber("children_total_count", ordered.Count);
             w.WriteNumber("children_returned_count", jsonPage);
             w.WriteNumber("children_omitted_count", ordered.Count - jsonPage);
@@ -426,7 +446,7 @@ public sealed class InspectTool
 
         var sb = new StringBuilder();
         sb.Append("# ").Append(path).Append('\n');
-        AppendFileSymbolGroups(sb, visible.Take(compactPage));
+        AppendFileSymbolGroups(sb, visible.Take(compactPage), fileSymbols);
         int remainder = visible.Count - compactPage;
         if (remainder > 0)
         {
@@ -454,8 +474,12 @@ public sealed class InspectTool
         return sb.ToString().TrimEnd('\n');
     }
 
-    private static void AppendFileSymbolGroups(StringBuilder sb, IEnumerable<IndexedSymbol> symbols)
+    private static void AppendFileSymbolGroups(
+        StringBuilder sb,
+        IEnumerable<IndexedSymbol> symbols,
+        IReadOnlyList<IndexedSymbol> hierarchy)
     {
+        IReadOnlyDictionary<string, IndexedSymbol> byId = BuildSymbolMap(hierarchy);
         foreach (var group in symbols
                      .GroupBy(static s => s.Kind, StringComparer.Ordinal)
                      .OrderBy(static g => KindRank(g.Key))
@@ -464,17 +488,62 @@ public sealed class InspectTool
             var items = group.OrderBy(static s => s.StartLine).ThenBy(static s => s.Name, StringComparer.Ordinal).ToList();
             sb.Append(group.Key).Append(" (").Append(items.Count).Append(")\n");
             foreach (IndexedSymbol symbol in items)
-                sb.Append("  ").Append(FileSymbolLine(symbol)).Append('\n');
+                sb.Append("  ")
+                    .Append(FileSymbolLine(symbol, byId))
+                    .Append('\n');
         }
     }
 
-    private static string FileSymbolLine(IndexedSymbol s)
+    private static string FileSymbolLine(
+        IndexedSymbol s,
+        IReadOnlyDictionary<string, IndexedSymbol> byId)
     {
         var sb = new StringBuilder();
         sb.Append(s.Name).Append("  :").Append(s.StartLine);
+        if (s.EndLine > 0)
+            sb.Append('-').Append(s.EndLine);
+        string? parentPath = FileParentPath(s, byId);
+        if (parentPath is not null)
+            sb.Append("  [parent=").Append(parentPath).Append(']');
         if (SignatureAddsInfo(s))
             sb.Append("  ").Append(Truncate(InlineSignature(s.Signature!), ToolRenderLimits.SignatureMaxLength));
         return sb.ToString();
+    }
+
+    private static string? FileParentPath(
+        IndexedSymbol symbol,
+        IReadOnlyDictionary<string, IndexedSymbol> byId)
+    {
+        string? parentId = symbol.ParentId;
+        var names = new List<string>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (parentId is not null && visited.Add(parentId) && byId.TryGetValue(parentId, out IndexedSymbol? parent))
+        {
+            names.Add(parent.Name);
+            parentId = parent.ParentId;
+        }
+
+        if (names.Count == 0)
+            return null;
+
+        names.Reverse();
+        return string.Join('.', names);
+    }
+
+    private static int FileNestingDepth(
+        IndexedSymbol symbol,
+        IReadOnlyDictionary<string, IndexedSymbol> byId)
+    {
+        int depth = 0;
+        string? parentId = symbol.ParentId;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (parentId is not null && visited.Add(parentId) && byId.TryGetValue(parentId, out IndexedSymbol? parent))
+        {
+            depth++;
+            parentId = parent.ParentId;
+        }
+
+        return depth;
     }
 
     // Some extractors emit a signature that is just the symbol name again (e.g. bare fields); repeating it
@@ -553,7 +622,20 @@ public sealed class InspectTool
         if (detail is not null && !string.IsNullOrEmpty(detail.Visibility))
             sb.Append("visibility: ").Append(detail.Visibility).Append('\n');
         if (detail is not null && !string.IsNullOrEmpty(detail.DocComment))
-            sb.Append("doc: ").Append(detail.DocComment).Append('\n');
+        {
+            bool docTruncated =
+                boundAgentOutput &&
+                Encoding.UTF8.GetByteCount(detail.DocComment) > ToolOutputBudget.InspectMcpDocMaxBytes;
+            string docComment = docTruncated
+                ? ToolOutputBudget.TruncateUtf8(
+                    detail.DocComment,
+                    ToolOutputBudget.InspectMcpDocMaxBytes,
+                    "…")
+                : detail.DocComment;
+            sb.Append("doc: ").Append(docComment).Append('\n');
+            if (docTruncated)
+                sb.Append("doc_truncated: true\n");
+        }
 
         if (depth == InspectDepth.Summary)
             return sb.ToString().TrimEnd('\n');
@@ -573,6 +655,19 @@ public sealed class InspectTool
             ? OverviewRelationLimit
             : boundAgentOutput ? ToolOutputBudget.McpRowLimit : RefLimit;
         int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
+        int typedRelationLimit = depth == InspectDepth.Overview
+            ? OverviewRelationLimit
+            : boundAgentOutput ? ToolOutputBudget.McpRowLimit : FullCalleeLimit;
+        ReferenceEvidenceBundle evidence = ReferenceEvidenceReader.ReadForSymbol(
+            dbPath,
+            sym.SymbolId,
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(relationLimit + 1, relationLimit + 1)),
+            new ReferenceEvidenceQuery(
+                new ReferenceEvidenceBounds(RefLimit + 1, RefLimit + 1),
+                ReferenceKind.Call),
+            new ReferenceEvidenceBounds(typedRelationLimit, typedRelationLimit),
+            TypedRelationshipKinds);
 
         var children = index.FindChildren(sym.SymbolId);
         if (children.Count > 0)
@@ -586,10 +681,7 @@ public sealed class InspectTool
             AppendOmittedLine(sb, children.Count, childLimit, "children");
         }
 
-        ReferenceEvidenceSet referenceEvidence = ReferenceEvidenceReader.Read(
-            dbPath,
-            sym.SymbolId,
-            new ReferenceEvidenceBounds(relationLimit + 1, relationLimit + 1));
+        ReferenceEvidenceSet referenceEvidence = evidence.Inbound;
         IReadOnlyList<ReferenceEvidence> refs = referenceEvidence.Exact;
         if (refs.Count > 0)
         {
@@ -658,12 +750,22 @@ public sealed class InspectTool
                 "referenced_by");
         }
 
-        OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
-            dbPath,
-            sym.SymbolId,
-            new ReferenceEvidenceQuery(
-                new ReferenceEvidenceBounds(RefLimit + 1, RefLimit + 1),
-                ReferenceKind.Call));
+        IReadOnlyList<IndexedSymbol> testLocations =
+            ResolveTestLocations(index, referenceEvidence);
+        if (testLocations.Count > 0)
+        {
+            sb.Append("\n## test locations\n");
+            foreach (IndexedSymbol testLocation in testLocations.Take(relationLimit))
+                sb.Append(testLocation.Name)
+                    .Append("  ")
+                    .Append(testLocation.FilePath)
+                    .Append(':')
+                    .Append(testLocation.StartLine)
+                    .Append('\n');
+            AppendOmittedLine(sb, testLocations.Count, relationLimit, "test locations");
+        }
+
+        OutgoingReferenceEvidenceSet outgoing = evidence.Outgoing;
         var callees = DistinctCallees(index, outgoing.Exact);
         if (callees.Count > 0)
         {
@@ -699,6 +801,35 @@ public sealed class InspectTool
             }
             AppendOmittedLine(sb, calleeFallback.Count, calleeLimit, "callees (fallback)");
         }
+
+        IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> typedOutgoing =
+            evidence.OutgoingKinds;
+        IReadOnlyDictionary<ReferenceKind, ReferenceEvidenceSet> typedInbound =
+            evidence.InboundKinds;
+        AppendTypedOutgoingRelationships(
+            sb,
+            "implements",
+            index,
+            typedOutgoing[ReferenceKind.Implementation],
+            typedRelationLimit);
+        AppendTypedOutgoingRelationships(
+            sb,
+            "extends",
+            index,
+            typedOutgoing[ReferenceKind.Inheritance],
+            typedRelationLimit);
+        AppendTypedInboundRelationships(
+            sb,
+            "implementations",
+            index,
+            typedInbound[ReferenceKind.Implementation],
+            typedRelationLimit);
+        AppendTypedInboundRelationships(
+            sb,
+            "subtypes",
+            index,
+            typedInbound[ReferenceKind.Inheritance],
+            typedRelationLimit);
 
         sb.Append(depth == InspectDepth.Overview ? "\n## body preview\n" : "\n## body\n");
         var body = detail is null
@@ -741,6 +872,98 @@ public sealed class InspectTool
         return sb.ToString().TrimEnd('\n');
     }
 
+    private static void AppendTypedOutgoingRelationships(
+        StringBuilder builder,
+        string heading,
+        ISymbolLookupIndex index,
+        OutgoingReferenceEvidenceSet evidence,
+        int limit)
+    {
+        if (evidence.Exact.Count > 0)
+        {
+            builder.Append("\n## ").Append(heading).Append('\n');
+            foreach (OutgoingReferenceEvidence relationship in evidence.Exact)
+            {
+                IndexedSymbol? target = relationship.TargetSymbolId is null
+                    ? null
+                    : index.FindBySymbolId(relationship.TargetSymbolId);
+                builder.Append(target?.Name ?? relationship.TargetName)
+                    .Append("  ");
+                AppendCompactLocation(
+                    builder,
+                    target?.FilePath ?? relationship.FilePath,
+                    target is null ? relationship.StartLine : target.StartLine);
+                builder.Append('\n');
+            }
+            AppendOmittedLine(builder, evidence.Coverage.ExactAvailable, limit, heading);
+        }
+
+        if (evidence.Fallback.Count > 0)
+        {
+            builder.Append("\n## ").Append(heading).Append(" fallback (unresolved)\n");
+            foreach (OutgoingReferenceEvidence relationship in evidence.Fallback)
+            {
+                builder.Append(relationship.TargetName).Append("  ");
+                AppendCompactLocation(builder, relationship.FilePath, relationship.StartLine);
+                builder.Append('\n');
+            }
+            AppendOmittedLine(builder, evidence.Coverage.FallbackAvailable, limit, heading + " fallback");
+        }
+    }
+
+    private static void AppendTypedInboundRelationships(
+        StringBuilder builder,
+        string heading,
+        ISymbolLookupIndex index,
+        ReferenceEvidenceSet evidence,
+        int limit)
+    {
+        if (evidence.Exact.Count > 0)
+        {
+            builder.Append("\n## ").Append(heading).Append('\n');
+            foreach (ReferenceEvidence relationship in evidence.Exact)
+                AppendTypedInboundRelationship(builder, index, relationship);
+            AppendOmittedLine(builder, evidence.Coverage.ExactAvailable, limit, heading);
+        }
+
+        if (evidence.Fallback.Count > 0)
+        {
+            builder.Append("\n## ").Append(heading).Append(" fallback (unresolved)\n");
+            foreach (ReferenceEvidence relationship in evidence.Fallback)
+                AppendTypedInboundRelationship(builder, index, relationship);
+            AppendOmittedLine(builder, evidence.Coverage.FallbackAvailable, limit, heading + " fallback");
+        }
+    }
+
+    private static void AppendTypedInboundRelationship(
+        StringBuilder builder,
+        ISymbolLookupIndex index,
+        ReferenceEvidence relationship)
+    {
+        IndexedSymbol? source = relationship.ContainingSymbolId is null
+            ? null
+            : index.FindBySymbolId(relationship.ContainingSymbolId);
+        builder.Append(source?.Name ?? "[unknown source]");
+        if (source is null && relationship.ContainingSymbolId is not null)
+            builder.Append(" [id=").Append(relationship.ContainingSymbolId).Append(']');
+        builder.Append("  ");
+        AppendCompactLocation(
+            builder,
+            source?.FilePath ?? relationship.FilePath,
+            source is null ? relationship.StartLine : source.StartLine);
+        builder.Append('\n');
+    }
+
+    private static void AppendCompactLocation(
+        StringBuilder builder,
+        string filePath,
+        int? line)
+    {
+        builder.Append(filePath);
+        if (line is > 0)
+            builder.Append(':').Append(line.Value);
+    }
+
     private static string RenderSymbolJson(
         ISymbolLookupIndex index,
         string dbPath,
@@ -764,7 +987,8 @@ public sealed class InspectTool
                 sym,
                 detail,
                 SignatureLimit(sym, depth),
-                preserveSignatureWhitespace: isFullValueDeclaration);
+                preserveSignatureWhitespace: isFullValueDeclaration,
+                boundAgentOutput: boundAgentOutput);
             if (isFullValueDeclaration)
             {
                 w.WriteBoolean("value_declaration_complete", IsCompleteValueDeclaration(sym));
@@ -798,6 +1022,19 @@ public sealed class InspectTool
                     ? OverviewRelationLimit
                     : boundAgentOutput ? ToolOutputBudget.McpRowLimit : RefLimit;
                 int calleeLimit = depth == InspectDepth.Overview ? OverviewRelationLimit : FullCalleeLimit;
+                int typedRelationLimit = depth == InspectDepth.Overview
+                    ? OverviewRelationLimit
+                    : boundAgentOutput ? ToolOutputBudget.McpRowLimit : FullCalleeLimit;
+                ReferenceEvidenceBundle evidence = ReferenceEvidenceReader.ReadForSymbol(
+                    dbPath,
+                    sym.SymbolId,
+                    new ReferenceEvidenceQuery(
+                        new ReferenceEvidenceBounds(relationLimit, relationLimit)),
+                    new ReferenceEvidenceQuery(
+                        new ReferenceEvidenceBounds(calleeLimit, calleeLimit),
+                        ReferenceKind.Call),
+                    new ReferenceEvidenceBounds(typedRelationLimit, typedRelationLimit),
+                    TypedRelationshipKinds);
 
                 w.WritePropertyName("children");
                 WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
@@ -805,10 +1042,7 @@ public sealed class InspectTool
                         ? OverviewChildLimit
                         : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue));
 
-                ReferenceEvidenceSet referenceEvidence = ReferenceEvidenceReader.Read(
-                    dbPath,
-                    sym.SymbolId,
-                    new ReferenceEvidenceBounds(relationLimit, relationLimit));
+                ReferenceEvidenceSet referenceEvidence = evidence.Inbound;
                 IReadOnlyList<ReferenceEvidence> refs = referenceEvidence.Exact;
                 w.WritePropertyName("refs");
                 w.WriteStartArray();
@@ -843,12 +1077,17 @@ public sealed class InspectTool
                     w.WriteStringValue(reference.Name);
                 w.WriteEndArray();
 
-                OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
-                    dbPath,
-                    sym.SymbolId,
-                    new ReferenceEvidenceQuery(
-                        new ReferenceEvidenceBounds(calleeLimit, calleeLimit),
-                        ReferenceKind.Call));
+                IReadOnlyList<IndexedSymbol> testLocations =
+                    ResolveTestLocations(index, referenceEvidence);
+                w.WritePropertyName("test_locations");
+                WriteSymbolArray(w, testLocations.Take(relationLimit));
+                int testLocationReturnedCount = Math.Min(testLocations.Count, relationLimit);
+                w.WriteNumber("test_locations_total_count", testLocations.Count);
+                w.WriteNumber("test_locations_returned_count", testLocationReturnedCount);
+                w.WriteNumber("test_locations_omitted_count", testLocations.Count - testLocationReturnedCount);
+                w.WriteBoolean("test_locations_truncated", testLocationReturnedCount < testLocations.Count);
+
+                OutgoingReferenceEvidenceSet outgoing = evidence.Outgoing;
                 w.WritePropertyName("callees");
                 w.WriteStartArray();
                 foreach (OutgoingReferenceEvidence callee in outgoing.Exact)
@@ -861,6 +1100,31 @@ public sealed class InspectTool
                     WriteOutgoingReference(w, index, callee);
                 w.WriteEndArray();
                 WriteOutgoingCoverage(w, outgoing.Coverage);
+
+                IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> typedOutgoing =
+                    evidence.OutgoingKinds;
+                IReadOnlyDictionary<ReferenceKind, ReferenceEvidenceSet> typedInbound =
+                    evidence.InboundKinds;
+                WriteTypedOutgoingRelationshipSet(
+                    w,
+                    "implements",
+                    index,
+                    typedOutgoing[ReferenceKind.Implementation]);
+                WriteTypedOutgoingRelationshipSet(
+                    w,
+                    "extends",
+                    index,
+                    typedOutgoing[ReferenceKind.Inheritance]);
+                WriteTypedInboundRelationshipSet(
+                    w,
+                    "implementations",
+                    index,
+                    typedInbound[ReferenceKind.Implementation]);
+                WriteTypedInboundRelationshipSet(
+                    w,
+                    "subtypes",
+                    index,
+                    typedInbound[ReferenceKind.Inheritance]);
 
                 var body = detail is null
                     ? ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded)
@@ -1122,6 +1386,22 @@ public sealed class InspectTool
             .ToList();
     }
 
+    private static IReadOnlyList<IndexedSymbol> ResolveTestLocations(
+        ISymbolLookupIndex index,
+        ReferenceEvidenceSet evidence)
+    {
+        return evidence.ExactCallerSymbolIds
+            .Concat(evidence.ExactReferencedBySymbolIds)
+            .Distinct(StringComparer.Ordinal)
+            .Select(index.FindBySymbolId)
+            .Where(static symbol => symbol is { IsTest: true })
+            .Select(static symbol => symbol!)
+            .OrderBy(static symbol => symbol.FilePath, StringComparer.Ordinal)
+            .ThenBy(static symbol => symbol.StartLine)
+            .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch
     {
         ReferenceEvidenceSource.IdentifierDirect => "identifier_direct",
@@ -1192,9 +1472,99 @@ public sealed class InspectTool
         writer.WriteEndObject();
     }
 
+    private static void WriteTypedOutgoingRelationshipSet(
+        Utf8JsonWriter writer,
+        string propertyName,
+        ISymbolLookupIndex index,
+        OutgoingReferenceEvidenceSet evidence)
+    {
+        writer.WritePropertyName(propertyName);
+        writer.WriteStartObject();
+        writer.WritePropertyName("exact");
+        writer.WriteStartArray();
+        foreach (OutgoingReferenceEvidence relationship in evidence.Exact)
+            WriteOutgoingReference(writer, index, relationship);
+        writer.WriteEndArray();
+        writer.WritePropertyName("fallback");
+        writer.WriteStartArray();
+        foreach (OutgoingReferenceEvidence relationship in evidence.Fallback)
+            WriteOutgoingReference(writer, index, relationship);
+        writer.WriteEndArray();
+        writer.WritePropertyName("coverage");
+        WriteOutgoingCoverageObject(writer, evidence.Coverage);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteTypedInboundRelationshipSet(
+        Utf8JsonWriter writer,
+        string propertyName,
+        ISymbolLookupIndex index,
+        ReferenceEvidenceSet evidence)
+    {
+        writer.WritePropertyName(propertyName);
+        writer.WriteStartObject();
+        writer.WritePropertyName("exact");
+        writer.WriteStartArray();
+        foreach (ReferenceEvidence relationship in evidence.Exact)
+            WriteInboundRelationship(writer, index, relationship);
+        writer.WriteEndArray();
+        writer.WritePropertyName("fallback");
+        writer.WriteStartArray();
+        foreach (ReferenceEvidence relationship in evidence.Fallback)
+            WriteInboundRelationship(writer, index, relationship);
+        writer.WriteEndArray();
+        writer.WritePropertyName("coverage");
+        WriteInboundCoverageObject(writer, evidence.Coverage);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteInboundRelationship(
+        Utf8JsonWriter writer,
+        ISymbolLookupIndex index,
+        ReferenceEvidence reference)
+    {
+        IndexedSymbol? source = reference.ContainingSymbolId is null
+            ? null
+            : index.FindBySymbolId(reference.ContainingSymbolId);
+        writer.WriteStartObject();
+        if (reference.ContainingSymbolId is null)
+            writer.WriteNull("source_symbol_id");
+        else
+            writer.WriteString("source_symbol_id", reference.ContainingSymbolId);
+        if (source is null)
+            writer.WriteNull("name");
+        else
+            writer.WriteString("name", source.Name);
+        if (source is null)
+        {
+            writer.WriteNull("definition_file");
+            writer.WriteNull("definition_line");
+        }
+        else
+        {
+            writer.WriteString("definition_file", source.FilePath);
+            writer.WriteNumber("definition_line", source.StartLine);
+        }
+        writer.WriteString("site_file", reference.FilePath);
+        WriteNullableNumber(writer, "site_line", reference.StartLine);
+        writer.WriteString("kind", reference.SourceKind);
+        writer.WriteString("resolution_status", ResolutionStatusLabel(reference.ResolutionStatus));
+        writer.WriteString("source", EvidenceSourceLabel(reference.Source));
+        WriteNullableNumber(writer, "resolution_tier", reference.ResolutionTier);
+        writer.WriteNumber("confidence", reference.Confidence);
+        writer.WriteEndObject();
+    }
+
     private static void WriteInboundCoverage(Utf8JsonWriter writer, ReferenceEvidenceCoverage coverage)
     {
         writer.WritePropertyName("reference_coverage");
+        WriteInboundCoverageObject(writer, coverage);
+    }
+
+    private static void WriteInboundCoverageObject(
+        Utf8JsonWriter writer,
+        ReferenceEvidenceCoverage coverage)
+    {
         writer.WriteStartObject();
         writer.WriteNumber("exact_available", coverage.ExactAvailable);
         writer.WriteNumber("exact_returned", coverage.ExactReturned);
@@ -1217,6 +1587,13 @@ public sealed class InspectTool
         OutgoingReferenceEvidenceCoverage coverage)
     {
         writer.WritePropertyName("callee_coverage");
+        WriteOutgoingCoverageObject(writer, coverage);
+    }
+
+    private static void WriteOutgoingCoverageObject(
+        Utf8JsonWriter writer,
+        OutgoingReferenceEvidenceCoverage coverage)
+    {
         writer.WriteStartObject();
         writer.WriteNumber("exact_available", coverage.ExactAvailable);
         writer.WriteNumber("exact_returned", coverage.ExactReturned);
@@ -1371,18 +1748,46 @@ public sealed class InspectTool
         w.WriteEndArray();
     }
 
+    private static void WriteFileSymbolArray(
+        Utf8JsonWriter w,
+        IEnumerable<IndexedSymbol> symbols,
+        IReadOnlyList<IndexedSymbol> hierarchy)
+    {
+        IReadOnlyDictionary<string, IndexedSymbol> byId = BuildSymbolMap(hierarchy);
+        w.WriteStartArray();
+        foreach (IndexedSymbol symbol in symbols)
+            WriteSymbolObject(w, symbol, detail: null, nestingDepth: FileNestingDepth(symbol, byId));
+        w.WriteEndArray();
+    }
+
+    private static IReadOnlyDictionary<string, IndexedSymbol> BuildSymbolMap(
+        IReadOnlyList<IndexedSymbol> symbols)
+    {
+        var byId = new Dictionary<string, IndexedSymbol>(StringComparer.Ordinal);
+        foreach (IndexedSymbol symbol in symbols)
+            byId.TryAdd(symbol.SymbolId, symbol);
+        return byId;
+    }
+
     private static void WriteSymbolObject(
         Utf8JsonWriter w,
         IndexedSymbol s,
         SymbolDetail? detail,
         int signatureMaxLength = ToolRenderLimits.SignatureMaxLength,
-        bool preserveSignatureWhitespace = false)
+        bool preserveSignatureWhitespace = false,
+        int? nestingDepth = null,
+        bool boundAgentOutput = false)
     {
         w.WriteStartObject();
         w.WriteString("name", s.Name);
         w.WriteString("kind", s.Kind);
+        w.WriteString("language", s.Language);
         w.WriteString("file", s.FilePath);
         w.WriteNumber("line", s.StartLine);
+        if (s.EndLine > 0) w.WriteNumber("end_line", s.EndLine); else w.WriteNull("end_line");
+        if (s.ParentId is null) w.WriteNull("parent_symbol_id"); else w.WriteString("parent_symbol_id", s.ParentId);
+        if (nestingDepth is { } depth)
+            w.WriteNumber("nesting_depth", depth);
         if (s.Signature is null) w.WriteNull("signature");
         else w.WriteString(
             "signature",
@@ -1390,9 +1795,38 @@ public sealed class InspectTool
                 preserveSignatureWhitespace ? s.Signature : InlineSignature(s.Signature),
                 signatureMaxLength));
         w.WriteString("symbol_id", s.SymbolId);
+        TestRoleEvidence testEvidence = s.TestEvidence;
+        w.WritePropertyName("test_evidence");
+        w.WriteStartObject();
+        w.WriteBoolean("is_test", testEvidence.IsTest);
+        w.WriteBoolean("test_case", testEvidence.IsCase);
+        w.WriteBoolean("test_container", testEvidence.IsContainer);
+        w.WriteBoolean("test_lifecycle", testEvidence.IsLifecycle);
+        w.WriteString("status", testEvidence.Status);
+        if (testEvidence.Reason is null) w.WriteNull("reason"); else w.WriteString("reason", testEvidence.Reason);
+        w.WriteEndObject();
         if (detail is not null)
         {
-            if (detail.DocComment is null) w.WriteNull("doc"); else w.WriteString("doc", detail.DocComment);
+            if (detail.DocComment is null)
+            {
+                w.WriteNull("doc");
+            }
+            else
+            {
+                bool docTruncated =
+                    boundAgentOutput &&
+                    Encoding.UTF8.GetByteCount(detail.DocComment) > ToolOutputBudget.InspectMcpDocMaxBytes;
+                w.WriteString(
+                    "doc",
+                    docTruncated
+                        ? ToolOutputBudget.TruncateUtf8(
+                            detail.DocComment,
+                            ToolOutputBudget.InspectMcpDocMaxBytes,
+                            "…")
+                        : detail.DocComment);
+                if (docTruncated)
+                    w.WriteBoolean("doc_truncated", true);
+            }
             if (detail.Visibility is null) w.WriteNull("visibility"); else w.WriteString("visibility", detail.Visibility);
         }
         w.WriteEndObject();

@@ -26,10 +26,17 @@ For `depth=overview|full`, inspect JSON exposes:
   confidence, and resolution tier.
 - `callee_fallback`: unresolved outgoing call evidence.
 - `callee_coverage`: exact/fallback available, returned, and truncated fields.
+- `test_locations`: exact containing symbols whose typed extractor evidence marks them as tests, with explicit
+  total/returned/omitted/truncated counts.
+- `implements` and `extends`: outgoing typed relationship evidence.
+- `implementations` and `subtypes`: inbound typed relationship evidence.
 
 Compact output uses the same tiers and labels fallback as unresolved.
 Caller and `referenced_by` membership comes from the full exact evidence set, independent of the bounded `refs`
 display page.
+
+Each typed relationship object keeps `exact`, `fallback`, and `coverage` separate. Miller maps the extractor's
+relationship kind and never infers these sections by parsing a language-specific signature.
 
 ## Context
 
