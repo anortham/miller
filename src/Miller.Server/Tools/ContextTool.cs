@@ -580,34 +580,6 @@ public sealed partial class ContextTool
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
-    internal static string RunReferenceAware(
-        ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
-        string query, int tokenBudget, int maxHops,
-        IReadOnlyList<string>? entrySymbols, string? failingTest, string? stackTrace,
-        int referenceDepth, bool excludeTests, bool json,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readReferences,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>> readCallees,
-        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
-        out int selectedCount, out int candidatesExamined) =>
-        RunReferenceAware(
-            index,
-            graph,
-            resolver,
-            query,
-            tokenBudget,
-            maxHops,
-            entrySymbols,
-            failingTest,
-            stackTrace,
-            referenceDepth,
-            excludeTests,
-            json,
-            symbol => LegacyInboundEvidence(symbol, readReferences(symbol)),
-            symbol => LegacyOutgoingEvidence(symbol, readCallees(symbol)),
-            readContentChunks,
-            out selectedCount,
-            out candidatesExamined);
-
     private static string RenderWithinBudget<T>(
         IReadOnlyList<T> initiallySelected,
         int tokenBudget,
@@ -1867,89 +1839,6 @@ public sealed partial class ContextTool
             w.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
-    }
-
-    private static ReferenceEvidenceSet LegacyInboundEvidence(
-        IndexedSymbol target,
-        IReadOnlyList<SymbolRef> references)
-    {
-        ReferenceEvidence[] fallback = references
-            .Select(reference => new ReferenceEvidence(
-                null,
-                reference.ContainingSymbolId,
-                reference.FilePath,
-                reference.StartLine,
-                null,
-                null,
-                null,
-                null,
-                null,
-                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
-                reference.Kind,
-                ReferenceEvidenceSource.NameFallback,
-                null,
-                0.5,
-                ReferenceResolutionStatus.Fallback,
-                null,
-                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
-                false,
-                "legacy_name_projection"))
-            .ToArray();
-        return new ReferenceEvidenceSet(
-            [],
-            fallback,
-            new ReferenceEvidenceCoverage(
-                fallback.Length,
-                fallback.Length,
-                0,
-                0,
-                0,
-                1,
-                false,
-                false,
-                fallback.Length == 0
-                    ? ReferenceFallbackStatus.NoCandidates
-                    : ReferenceFallbackStatus.Available));
-    }
-
-    private static OutgoingReferenceEvidenceSet LegacyOutgoingEvidence(
-        IndexedSymbol containing,
-        IReadOnlyList<SymbolRef> references)
-    {
-        OutgoingReferenceEvidence[] fallback = references
-            .Select(reference => new OutgoingReferenceEvidence(
-                containing.SymbolId,
-                null,
-                reference.Name,
-                reference.FilePath,
-                reference.StartLine,
-                null,
-                null,
-                null,
-                null,
-                null,
-                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
-                reference.Kind,
-                ReferenceEvidenceSource.NameFallback,
-                null,
-                0.5,
-                ReferenceResolutionStatus.Fallback,
-                null,
-                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
-                false,
-                "legacy_name_projection"))
-            .ToArray();
-        return new OutgoingReferenceEvidenceSet(
-            [],
-            fallback,
-            new OutgoingReferenceEvidenceCoverage(
-                fallback.Length,
-                fallback.Length,
-                0,
-                0,
-                0,
-                false,
-                false));
     }
 
     private static string EvidenceSourceLabel(ReferenceEvidenceSource source) => source switch

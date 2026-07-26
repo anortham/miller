@@ -84,6 +84,92 @@ public sealed class ContextToolTests
             ContainingSymbolId: containingSymbolId,
             ContainingSymbolName: containingSymbolName);
 
+    private static ReferenceEvidence FallbackInbound(
+        string referenceSiteId,
+        string? containingSymbolId,
+        string path,
+        int line,
+        ReferenceKind kind) =>
+        new(
+            null,
+            containingSymbolId,
+            path,
+            line,
+            0,
+            line,
+            1,
+            line * 100,
+            line * 100 + 1,
+            kind,
+            kind == ReferenceKind.Call ? "call" : "type_usage",
+            ReferenceEvidenceSource.NameFallback,
+            null,
+            0.5,
+            ReferenceResolutionStatus.Fallback,
+            "csharp",
+            referenceSiteId,
+            true,
+            "target_token");
+
+    private static OutgoingReferenceEvidence FallbackOutgoing(
+        string referenceSiteId,
+        string containingSymbolId,
+        string targetName,
+        string path,
+        int line,
+        ReferenceKind kind) =>
+        new(
+            containingSymbolId,
+            null,
+            targetName,
+            path,
+            line,
+            0,
+            line,
+            1,
+            line * 100,
+            line * 100 + 1,
+            kind,
+            kind == ReferenceKind.Call ? "call" : "type_usage",
+            ReferenceEvidenceSource.NameFallback,
+            null,
+            0.5,
+            ReferenceResolutionStatus.Fallback,
+            "csharp",
+            referenceSiteId,
+            true,
+            "target_token");
+
+    private static ReferenceEvidenceSet InboundSet(params ReferenceEvidence[] fallback) =>
+        new(
+            [],
+            fallback,
+            new ReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                fallback.Length,
+                fallback.Length,
+                1,
+                false,
+                false,
+                fallback.Length == 0
+                    ? ReferenceFallbackStatus.NoCandidates
+                    : ReferenceFallbackStatus.Available));
+
+    private static OutgoingReferenceEvidenceSet OutgoingSet(params OutgoingReferenceEvidence[] fallback) =>
+        new(
+            [],
+            fallback,
+            new OutgoingReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                fallback.Length,
+                fallback.Length,
+                false,
+                false));
+
     private static void WriteContentChunk(
         string contentDbPath,
         string chunkId,
@@ -406,11 +492,13 @@ public sealed class ContextToolTests
                 query: "zzz no lexical match zzz", tokenBudget: 1, maxHops: 0,
                 entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
                 referenceDepth: 1, excludeTests: false, json,
-                readReferences: _ => new[]
-                {
-                    new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId),
-                },
-                readCallees: _ => Array.Empty<SymbolRef>(),
+                readReferenceEvidence: _ => InboundSet(FallbackInbound(
+                    "site:file:web/OrderController.cs:1200:1201",
+                    ControllerId,
+                    "web/OrderController.cs",
+                    12,
+                    ReferenceKind.TypeUsage)),
+                readOutgoingEvidence: _ => OutgoingSet(),
                 readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
                 out selectedCount, out _);
         }
@@ -768,12 +856,23 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: true,
-            readReferences: symbol => symbol.SymbolId == ServiceId
-                ? new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) }
-                : Array.Empty<SymbolRef>(),
-            readCallees: symbol => symbol.SymbolId == ServiceId
-                ? new[] { new SymbolRef("OrderRepo", "call", "src/OrderService.cs", 20, ServiceId) }
-                : Array.Empty<SymbolRef>(),
+            readReferenceEvidence: symbol => symbol.SymbolId == ServiceId
+                ? InboundSet(FallbackInbound(
+                    "site:file:web/OrderController.cs:1200:1201",
+                    ControllerId,
+                    "web/OrderController.cs",
+                    12,
+                    ReferenceKind.TypeUsage))
+                : InboundSet(),
+            readOutgoingEvidence: symbol => symbol.SymbolId == ServiceId
+                ? OutgoingSet(FallbackOutgoing(
+                    "site:file:src/OrderService.cs:2000:2001",
+                    ServiceId,
+                    "OrderRepo",
+                    "src/OrderService.cs",
+                    20,
+                    ReferenceKind.Call))
+                : OutgoingSet(),
             readContentChunks: (symbols, _) => new[]
             {
                 SourceHit(
@@ -939,8 +1038,13 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: false,
-            readReferences: _ => new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) },
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(FallbackInbound(
+                "site:file:web/OrderController.cs:1200:1201",
+                ControllerId,
+                "web/OrderController.cs",
+                12,
+                ReferenceKind.TypeUsage)),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
             out _, out _);
 
@@ -966,12 +1070,20 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 1,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: true, json: false,
-            readReferences: _ => new[]
-            {
-                new SymbolRef("OrderService", "type_usage", "tests/OrderServiceTests.cs", 8, TestId),
-                new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId),
-            },
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(
+                FallbackInbound(
+                    "site:file:tests/OrderServiceTests.cs:800:801",
+                    TestId,
+                    "tests/OrderServiceTests.cs",
+                    8,
+                    ReferenceKind.TypeUsage),
+                FallbackInbound(
+                    "site:file:web/OrderController.cs:1200:1201",
+                    ControllerId,
+                    "web/OrderController.cs",
+                    12,
+                    ReferenceKind.TypeUsage)),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, excludeTests) => new[]
             {
                 SourceHit("tests/OrderServiceTests.cs", 5, "OrderService test reference"),
@@ -1040,15 +1152,20 @@ public sealed class ContextToolTests
     public void RunReferenceAware_DedupesDuplicateReferenceRows()
     {
         var (index, resolver) = BuildFixture();
-        var duplicate = new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId);
+        ReferenceEvidence duplicate = FallbackInbound(
+            "site:file:web/OrderController.cs:1200:1201",
+            ControllerId,
+            "web/OrderController.cs",
+            12,
+            ReferenceKind.TypeUsage);
 
         string output = ContextTool.RunReferenceAware(
             index, index.Graph, resolver,
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: true,
-            readReferences: _ => new[] { duplicate, duplicate },
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(duplicate, duplicate),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
             out _, out _);
 
@@ -1068,8 +1185,13 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 0, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: false,
-            readReferences: _ => new[] { new SymbolRef("OrderService", "type_usage", "web/OrderController.cs", 12, ControllerId) },
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(FallbackInbound(
+                "site:file:web/OrderController.cs:1200:1201",
+                ControllerId,
+                "web/OrderController.cs",
+                12,
+                ReferenceKind.TypeUsage)),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
             out int count, out _);
 
@@ -1092,10 +1214,15 @@ public sealed class ContextToolTests
                 query: "zzz no lexical match zzz", tokenBudget, maxHops: 0,
                 entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
                 referenceDepth: 1, excludeTests: false, json,
-                readReferences: _ => Enumerable.Range(1, 8)
-                    .Select(i => new SymbolRef("Reference" + i, "type_usage", "src/Reference" + i + ".cs", i, ServiceId))
-                    .ToArray(),
-                readCallees: _ => Array.Empty<SymbolRef>(),
+                readReferenceEvidence: _ => InboundSet(Enumerable.Range(1, 8)
+                    .Select(i => FallbackInbound(
+                        $"site:file:src/Reference{i}.cs:{i * 100}:{i * 100 + 1}",
+                        ServiceId,
+                        $"src/Reference{i}.cs",
+                        i,
+                        ReferenceKind.TypeUsage))
+                    .ToArray()),
+                readOutgoingEvidence: _ => OutgoingSet(),
                 readContentChunks: (_, _) => new[]
                 {
                     SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,
@@ -1114,13 +1241,13 @@ public sealed class ContextToolTests
     public void RunReferenceAware_Json_TrimmingKeepsLargestPriorityPrefixWithBoundedAllocations()
     {
         var (index, resolver) = BuildFixture();
-        SymbolRef[] references = Enumerable.Range(1, 2000)
-            .Select(i => new SymbolRef(
-                "Reference" + i,
-                "type_usage",
-                "src/Reference" + i + ".cs",
+        ReferenceEvidence[] references = Enumerable.Range(1, 2000)
+            .Select(i => FallbackInbound(
+                $"site:file:src/Reference{i}.cs:{i * 100}:{i * 100 + 1}",
+                ServiceId,
+                $"src/Reference{i}.cs",
                 i,
-                ServiceId))
+                ReferenceKind.TypeUsage))
             .ToArray();
 
         string full = ContextTool.RunReferenceAware(
@@ -1128,8 +1255,8 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: int.MaxValue, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: true,
-            readReferences: _ => references,
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(references),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
             out _, out _);
 
@@ -1139,8 +1266,8 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 40000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 1, excludeTests: false, json: true,
-            readReferences: _ => references,
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(references),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => Array.Empty<TextContentSearchHit>(),
             out int selectedCount, out _);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
@@ -1169,8 +1296,8 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 100000, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 0, excludeTests: false, json: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => new[]
             {
                 SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,
@@ -1182,8 +1309,8 @@ public sealed class ContextToolTests
             query: "zzz no lexical match zzz", tokenBudget: 512, maxHops: 0,
             entrySymbols: new[] { "OrderService" }, failingTest: null, stackTrace: null,
             referenceDepth: 0, excludeTests: false, json: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
-            readCallees: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: _ => InboundSet(),
+            readOutgoingEvidence: _ => OutgoingSet(),
             readContentChunks: (_, _) => new[]
             {
                 SourceHit("src/OrderService.cs", 1, longSnippet, containingSymbolId: ServiceId,

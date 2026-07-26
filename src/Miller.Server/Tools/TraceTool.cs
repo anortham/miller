@@ -490,31 +490,6 @@ public sealed class TraceTool
     public static string Run(
         MillerRepositoryIndex index, SmartTargetResolver resolver,
         string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
-        string? referenceKind, bool includeDefinition,
-        Func<IndexedSymbol, IReadOnlyList<SymbolRef>>? readReferences,
-        out int emitted, out int nodesVisited) =>
-        Run(
-            index,
-            resolver,
-            target,
-            scope,
-            mode,
-            to,
-            depth,
-            limit,
-            fullFormat,
-            json,
-            referenceKind,
-            includeDefinition,
-            readReferences is null
-                ? null
-                : (symbol, query) => LegacyReferenceEvidence(symbol, readReferences(symbol), query),
-            out emitted,
-            out nodesVisited);
-
-    public static string Run(
-        MillerRepositoryIndex index, SmartTargetResolver resolver,
-        string target, string? scope, string mode, string? to, int depth, int limit, bool fullFormat, bool json,
         out int emitted, out int nodesVisited) =>
         Run(index, resolver, target, scope, mode, to, depth, limit, fullFormat, json,
             referenceKind: null, includeDefinition: true, readReferenceEvidence: null, out emitted, out nodesVisited);
@@ -1120,55 +1095,6 @@ public sealed class TraceTool
         ReferenceEvidenceSource.NameFallback => "name_fallback",
         _ => throw new ArgumentOutOfRangeException(nameof(source), source, null),
     };
-
-    private static ReferenceEvidenceSet LegacyReferenceEvidence(
-        IndexedSymbol target,
-        IReadOnlyList<SymbolRef> references,
-        ReferenceEvidenceQuery query)
-    {
-        ReferenceEvidence[] all = references
-            .Select(reference => new ReferenceEvidence(
-                null,
-                reference.ContainingSymbolId,
-                reference.FilePath,
-                reference.StartLine,
-                null,
-                null,
-                null,
-                null,
-                null,
-                ReferenceEvidenceReader.NormalizeKind(reference.Kind),
-                reference.Kind,
-                ReferenceEvidenceSource.NameFallback,
-                null,
-                0.5,
-                ReferenceResolutionStatus.Fallback,
-                null,
-                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
-                false,
-                "legacy_name_projection"))
-            .Where(reference => query.Kind is null || reference.Kind == query.Kind)
-            .OrderBy(reference => reference.FilePath, StringComparer.Ordinal)
-            .ThenBy(reference => reference.StartLine)
-            .ToArray();
-        ReferenceEvidence[] page = all
-            .Skip(query.FallbackOffset)
-            .Take(query.Bounds.FallbackLimit)
-            .ToArray();
-        return new ReferenceEvidenceSet(
-            [],
-            page,
-            new ReferenceEvidenceCoverage(
-                0,
-                0,
-                0,
-                all.Length,
-                page.Length,
-                1,
-                false,
-                all.Length > query.FallbackOffset + page.Length,
-                all.Length == 0 ? ReferenceFallbackStatus.NoCandidates : ReferenceFallbackStatus.Available));
-    }
 
     private static bool TryNormalizeReferenceKind(string? referenceKind, out string? normalized, out string? error)
     {

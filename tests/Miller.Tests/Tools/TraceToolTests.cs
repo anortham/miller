@@ -95,6 +95,63 @@ public sealed class TraceToolTests
 
     private static SmartTargetResolver ResolverFor(MillerRepositoryIndex index) => new(index);
 
+    private static ReferenceEvidence FallbackReference(
+        string referenceSiteId,
+        string? containingSymbolId,
+        string path,
+        int? line,
+        ReferenceKind kind) =>
+        new(
+            null,
+            containingSymbolId,
+            path,
+            line,
+            line is null ? null : 0,
+            line,
+            line is null ? null : 1,
+            line is null ? null : line * 100,
+            line is null ? null : line * 100 + 1,
+            kind,
+            kind == ReferenceKind.Call ? "call" : "type_usage",
+            ReferenceEvidenceSource.NameFallback,
+            null,
+            0.5,
+            ReferenceResolutionStatus.Fallback,
+            "csharp",
+            referenceSiteId,
+            line is not null,
+            line is null ? "spanless" : "target_token");
+
+    private static ReferenceEvidenceSet FallbackPage(
+        IReadOnlyList<ReferenceEvidence> references,
+        ReferenceEvidenceQuery query)
+    {
+        ReferenceEvidence[] all = references
+            .Where(reference => query.Kind is null || reference.Kind == query.Kind)
+            .OrderBy(reference => reference.FilePath, StringComparer.Ordinal)
+            .ThenBy(reference => reference.StartLine)
+            .ToArray();
+        ReferenceEvidence[] page = all
+            .Skip(query.FallbackOffset)
+            .Take(query.Bounds.FallbackLimit)
+            .ToArray();
+        return new ReferenceEvidenceSet(
+            [],
+            page,
+            new ReferenceEvidenceCoverage(
+                0,
+                0,
+                0,
+                all.Length,
+                page.Length,
+                1,
+                false,
+                all.Length > query.FallbackOffset + page.Length,
+                all.Length == 0
+                    ? ReferenceFallbackStatus.NoCandidates
+                    : ReferenceFallbackStatus.Available));
+    }
+
     // Build an index whose bridge graph comes from the REAL BridgeGraphBuilder run over structural facts, so
     // observation nodes carry per-provider provenance exactly as production does. The provenance-scoped route
     // diagnostics under test need it; a hand-built BridgeGraph.Build node map carries none and pools instead.
@@ -585,16 +642,16 @@ public sealed class TraceToolTests
                 ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
             },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
-            new SymbolRef("Alpha", "type_usage", "src/Types.cs", 20, "types"),
+            FallbackReference("site:file:src/Caller.cs:1000:1001", "caller", "src/Caller.cs", 10, ReferenceKind.Call),
+            FallbackReference("site:file:src/Types.cs:2000:2001", "types", "src/Types.cs", 20, ReferenceKind.TypeUsage),
         };
 
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: "call", includeDefinition: true,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out int visited);
 
         Assert.Equal(1, emitted);
@@ -604,7 +661,7 @@ public sealed class TraceToolTests
         Assert.Contains("Alpha  method  src/A.cs:1", outp);
         Assert.Contains(
             "src/Caller.cs:10  call  in=CallerMethod  [fallback source=name_fallback " +
-            "site=legacy:src/Caller.cs:10:call provenance=legacy_name_projection confidence=0.50]",
+            "site=site:file:src/Caller.cs:1000:1001 provenance=target_token confidence=0.50]",
             outp);
         Assert.DoesNotContain("containing=", outp);
         Assert.DoesNotContain("src/Types.cs", outp);
@@ -1194,15 +1251,20 @@ public sealed class TraceToolTests
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "deadbeefdeadbeefdeadbeefdeadbeef"),
+            FallbackReference(
+                "site:file:src/Caller.cs:1000:1001",
+                "deadbeefdeadbeefdeadbeefdeadbeef",
+                "src/Caller.cs",
+                10,
+                ReferenceKind.Call),
         };
 
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: "call", includeDefinition: false,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out int visited);
 
         Assert.Equal(1, emitted);
@@ -1283,16 +1345,16 @@ public sealed class TraceToolTests
                 ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
             },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
-            new SymbolRef("Alpha", "type_usage", "src/Types.cs", 20, null),
+            FallbackReference("site:file:src/Caller.cs:1000:1001", "caller", "src/Caller.cs", 10, ReferenceKind.Call),
+            FallbackReference("site:file:src/Types.cs:2000:2001", null, "src/Types.cs", 20, ReferenceKind.TypeUsage),
         };
 
         string json = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out int visited);
 
         Assert.Equal(2, emitted);
@@ -1333,7 +1395,14 @@ public sealed class TraceToolTests
         string json = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 0, limit: 20,
             fullFormat: false, json: true, referenceKind: null, includeDefinition: false,
-            readReferences: _ => new[] { new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller") },
+            readReferenceEvidence: (_, query) => FallbackPage(
+                [FallbackReference(
+                    "site:file:src/Caller.cs:1000:1001",
+                    "caller",
+                    "src/Caller.cs",
+                    10,
+                    ReferenceKind.Call)],
+                query),
             out int emitted, out int visited);
 
         Assert.Equal(1, emitted);
@@ -1357,7 +1426,7 @@ public sealed class TraceToolTests
             TraceTool.Run(index, ResolverFor(index),
                 target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
                 fullFormat: false, json: false, referenceKind: "definitely-not-a-kind", includeDefinition: true,
-                readReferences: _ => Array.Empty<SymbolRef>(),
+                readReferenceEvidence: (_, query) => FallbackPage([], query),
                 out _, out _));
 
         Assert.Equal("invalid_reference_kind", exception.Diagnostic.Code);
@@ -1374,7 +1443,7 @@ public sealed class TraceToolTests
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: (_, query) => FallbackPage([], query),
             out int emitted, out int visited);
 
         Assert.Equal(0, emitted);
@@ -1395,7 +1464,7 @@ public sealed class TraceToolTests
         string json = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: (_, query) => FallbackPage([], query),
             out int emitted, out int visited);
 
         Assert.Equal(0, emitted);
@@ -1424,15 +1493,15 @@ public sealed class TraceToolTests
                 ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
             },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+            FallbackReference("site:file:src/Caller.cs:1000:1001", "caller", "src/Caller.cs", 10, ReferenceKind.Call),
         };
 
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
@@ -1447,16 +1516,16 @@ public sealed class TraceToolTests
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/One.cs", 10, null),
-            new SymbolRef("Alpha", "call", "src/Two.cs", 20, null),
+            FallbackReference("site:file:src/One.cs:1000:1001", null, "src/One.cs", 10, ReferenceKind.Call),
+            FallbackReference("site:file:src/Two.cs:2000:2001", null, "src/Two.cs", 20, ReferenceKind.Call),
         };
 
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 1,
             fullFormat: false, json: false, referenceKind: null, includeDefinition: false,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
@@ -1475,15 +1544,15 @@ public sealed class TraceToolTests
                 ParentId: null, IsTest: true),
         };
         var index = MillerRepositoryIndex.Build(indexed, Array.Empty<GraphEdge>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("AlphaTests", "call", "tests/Caller.cs", 10, null),
+            FallbackReference("site:file:tests/Caller.cs:1000:1001", null, "tests/Caller.cs", 10, ReferenceKind.Call),
         };
 
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "AlphaTests", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
@@ -1501,7 +1570,7 @@ public sealed class TraceToolTests
         string outp = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: false, referenceKind: null, includeDefinition: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
+            readReferenceEvidence: (_, query) => FallbackPage([], query),
             out int emitted, out _);
 
         Assert.Equal(0, emitted);
@@ -1519,15 +1588,15 @@ public sealed class TraceToolTests
                 ("caller", "CallerMethod", "method", "src/Caller.cs", 5),
             },
             Array.Empty<(string, string)>());
-        var references = new[]
+        ReferenceEvidence[] references =
         {
-            new SymbolRef("Alpha", "call", "src/Caller.cs", 10, "caller"),
+            FallbackReference("site:file:src/Caller.cs:1000:1001", "caller", "src/Caller.cs", 10, ReferenceKind.Call),
         };
 
         string json = TraceTool.Run(index, ResolverFor(index),
             target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
             fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
-            readReferences: _ => references,
+            readReferenceEvidence: (_, query) => FallbackPage(references, query),
             out int emitted, out _);
 
         Assert.Equal(1, emitted);
