@@ -66,6 +66,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`findings/2026-07-23-phase-6-impact-evidence.md`](findings/2026-07-23-phase-6-impact-evidence.md) - Phase 6 evidence for ranked graph explanations, exact-versus-heuristic tests, shared MCP/CLI revision deltas, and bounded compact output.
 - [`findings/2026-07-25-impact-readpath-performance.md`](findings/2026-07-25-impact-readpath-performance.md) - Phase 6 follow-up proving truthful post-rank counts, batched on-demand traversal, Blazor graph parity, and live latency/RSS recovery.
 - [`findings/2026-07-26-phase10-patterns-reaudit.md`](findings/2026-07-26-phase10-patterns-reaudit.md) - Phase 10 clean Patterns disposition covering full-population truth, single-snapshot reads, MCP bounds, and exhaustive CLI behavior.
+- [`findings/2026-07-26-phase10-workspace-reaudit.md`](findings/2026-07-26-phase10-workspace-reaudit.md) - Phase 10 clean Workspace disposition covering registered-root deletion safety, registry-only prune, truthful totals, final MCP bounds, and exhaustive CLI behavior.
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`contracts/content-mcp-v3.md`](contracts/content-mcp-v3.md) - active 12 KiB MCP contract, revision-safe search/read, and CLI-only streaming export boundary.

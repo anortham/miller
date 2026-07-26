@@ -37,9 +37,10 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
-- Phase 10 Search, Inspect, Context, Trace, Impact, and Patterns re-audits are locally complete. Impact now pages
-  large MCP results through a stateless byte-identical continuation envelope while preserving complete CLI JSON;
-  Patterns required no source or contract change after its full-population and output-bound verification.
+- Phase 10 Search, Inspect, Context, Trace, Impact, Patterns, and Workspace re-audits are locally complete. Impact
+  now pages large MCP results through a stateless byte-identical continuation envelope while preserving complete
+  CLI JSON; Patterns and Workspace required no source or contract changes after their truth, safety, and
+  output-bound verification.
 
 ## Replacement Standard
 
@@ -655,6 +656,20 @@ intentionally rejected. Detailed evidence and Claude dispositions are recorded i
 [`2026-07-25-workspace-correctness-safety-and-bounds.md`](2026-07-25-workspace-correctness-safety-and-bounds.md).
 The implementation review loop closed with `verdict=clean` after 537 focused
 Workspace, CLI, renderer, telemetry, removal, continuation, and dashboard tests passed.
+
+### 2026-07-26 Phase 10 Re-audit Disposition
+
+The Phase 10 pass did not repeat the July 25 remediation. Fresh HEAD CLI dogfood confirmed one selected row from
+75 registrations with exact matched, returned, omitted, and missing-root totals; selected status resolved the
+exact root, workspace ID, and artifact; health returned `usable_with_warnings` with two warnings and two recovery
+actions. The focused non-Scale Workspace scope passed 289 tests.
+
+Fresh read-only Claude review approved registered-root and symlink-safe removal, registry-only prune, final 12 KiB
+MCP enforcement after diagnostic attachment, truthful list/onboarding omission accounting, and exhaustive CLI
+separation. An intermediate excerpt-only review's claims that onboarding and health could escape the budget were
+rejected after validating the complete call chain: both success and exception paths pass through the final UTF-8
+byte check, and oversize output is replaced by a fixed bounded diagnostic. Detailed evidence is recorded in
+[`2026-07-26-phase10-workspace-reaudit.md`](2026-07-26-phase10-workspace-reaudit.md).
 
 ## Cross-Cutting Findings
 
