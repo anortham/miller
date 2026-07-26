@@ -11,7 +11,10 @@ using ModelContextProtocol.Server;
 
 namespace Miller.Server.Tools;
 
-internal readonly record struct ContentToolExecutionResult(string Output, bool IsError);
+internal readonly record struct ContentToolExecutionResult(
+    string Output,
+    bool IsError,
+    ToolDiagnostic? Diagnostic = null);
 
 [McpServerToolType]
 public sealed class ContentTool
@@ -152,15 +155,22 @@ public sealed class ContentTool
         catch (Exception ex)
         {
             string diagnosticCode = ContentDiagnosticCode(op, ex);
-            if (telemetry is not null)
-            {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-                telemetry.SetMetadata("diagnostic_code", diagnosticCode);
-                telemetry.SetErrorCategory(diagnosticCode);
-            }
-            string output = RenderFailure(op, ex, diagnosticCode, json, sourceId, outputByteBudget);
-            return new ContentToolExecutionResult(output, IsError: true);
+            ToolDiagnostic diagnostic = ContentDiagnostic(diagnosticCode, ex);
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            int? failureBudget = outputByteBudget is { } configuredBudget
+                ? Math.Max(1, configuredBudget - 2_048)
+                : null;
+            string failure = RenderFailure(op, ex, diagnosticCode, json, sourceId, failureBudget);
+            string output = ToolDiagnosticRenderer.Attach(
+                "content",
+                failure,
+                diagnostic,
+                json,
+                telemetry);
+            if (outputByteBudget is { } finalBudget)
+                output = ToolOutputBudget.RequireWithinByteBudget(output, finalBudget);
+            return new ContentToolExecutionResult(output, IsError: true, diagnostic);
         }
     }
 
@@ -1871,6 +1881,8 @@ public sealed class ContentTool
             return "input_too_large";
         if (message.Contains("format must be", StringComparison.OrdinalIgnoreCase))
             return "invalid_format";
+        if (message.Contains("content operation must be", StringComparison.OrdinalIgnoreCase))
+            return "invalid_operation";
         if (string.Equals(operation, "search", StringComparison.Ordinal))
         {
             if (message.Contains("requires query", StringComparison.OrdinalIgnoreCase))
@@ -1952,6 +1964,31 @@ public sealed class ContentTool
         }
 
         return "content_error";
+    }
+
+    private static ToolDiagnostic ContentDiagnostic(string code, Exception ex)
+    {
+        string message = SearchTool.Truncate(ex.Message, 1_024);
+        if (code == "ambiguous_source")
+            return ToolDiagnostic.Ambiguity(code, message);
+        if (code == "source_not_found")
+            return ToolDiagnostic.ExpectedEmpty(code, message);
+        if (code is "content_corpus_missing" or "content_corpus_stale" or
+            "content_corpus_imports_only" or "workspace_search_incomplete")
+        {
+            return ToolDiagnostic.Unavailable(code, message);
+        }
+        if (code is "input_too_large" or "invalid_format" or "invalid_operation" or
+            "missing_query" or "invalid_limit" or "missing_source_id" or "missing_line" or
+            "line_out_of_range" or "invalid_context_lines" or "invalid_line" or
+            "missing_path" or "import_too_large" or "invalid_utf8" or "missing_url" or
+            "invalid_content_kind")
+        {
+            return ToolDiagnostic.Refusal(code, message);
+        }
+        if (ex is IOException or UnauthorizedAccessException)
+            return ToolDiagnostic.Unavailable(code, message);
+        return ToolDiagnostic.InternalFailure(code, message);
     }
 
     private static IReadOnlyList<ContentNextAction> SearchNoResultsNextActions(string query, string contentKind) =>

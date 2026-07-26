@@ -2644,6 +2644,9 @@ public sealed class EditToolTests : IDisposable
 
         Assert.False(result.Applied);
         Assert.Equal("invalid_request", result.FailureReason);
+        Assert.NotNull(result.Diagnostic);
+        Assert.Equal("invalid_request", result.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, result.Diagnostic.Class);
         Assert.Contains("operation", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -2748,10 +2751,37 @@ public sealed class EditToolTests : IDisposable
 
         using var ledger = OpenLedger();
         using var telemetry = ledger.Measure("edit", op: null);
-        tool.Edit("frobnicate", "orders/OrderService.cs", old_text: "SecretOld", new_text: "SecretNew");
+        string output = tool.Edit(
+            "frobnicate",
+            "orders/OrderService.cs",
+            old_text: "SecretOld",
+            new_text: "SecretNew");
 
         Assert.Equal("invalid_request", StampedFailureBucket(
             telemetry, "orders/OrderService.cs", "SecretOld", "SecretNew"));
+        Assert.Contains("diagnostic_code=invalid_request", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=refusal", output, StringComparison.Ordinal);
+        Assert.Equal(TelemetryOutcome.Empty, telemetry.Outcome);
+        Assert.False(telemetry.UseMcpErrorChannel);
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.Equal("invalid_request", metadata.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("refusal", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+    }
+
+    [Fact]
+    public void Edit_UnknownOperation_JsonCarriesTypedRefusal()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        EditTool tool = BuildTool(fx);
+
+        string output = tool.Edit("frobnicate", "orders/OrderService.cs", format: "json");
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("invalid_request", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
     }
 
     [Fact]
@@ -2914,7 +2944,8 @@ public sealed class EditToolTests : IDisposable
         string output = tool.Edit(
             "replace_symbol_body", "OrderService.Total", new_text: "{ return 0; }", apply: true);
 
-        Assert.StartsWith("edit failed:", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_code=internal_failure", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=internal_failure", output, StringComparison.Ordinal);
         Assert.Equal(TelemetryOutcome.Error, telemetry.Outcome);
         Assert.Equal("unhandled_InvalidOperationException", StampedFailureBucket(
             telemetry, ThrowingWriteThrough.Message, "orders/OrderService.cs"));

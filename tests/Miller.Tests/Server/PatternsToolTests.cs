@@ -620,6 +620,39 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
+    public void Patterns_SearchByQuery_FairlyRepresentsMatchedFamilies()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 20
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                printf('fact-bulk-route-%02d', n), 'file:src/Auth.cs', printf('src/Bulk%02d.cs', n), 'csharp',
+                'bulk.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+            FROM seq;
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        using JsonDocument document = JsonDocument.Parse(
+            tool.Patterns(operation: "search", query: "route", limit: 2, format: "json"));
+        string[] patternIds = document.RootElement.GetProperty("matches")
+            .EnumerateArray()
+            .Select(match => match.GetProperty("pattern_id").GetString()!)
+            .ToArray();
+
+        Assert.Equal(2, patternIds.Length);
+        Assert.Equal(2, patternIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void Patterns_SearchByQuery_PrioritizesPatternIdsWithFactsUnderActiveFilters()
     {
         using var fx = CreatePatternFixture();
@@ -758,6 +791,53 @@ public sealed class PatternsToolTests
             format: "json");
         using JsonDocument queryActionDoc = JsonDocument.Parse(queryActionResult);
         Assert.False(queryActionDoc.RootElement.TryGetProperty("diagnostic", out _));
+    }
+
+    [Fact]
+    public void Patterns_SearchJson_ContinuationReturnsEveryBoundedRowExactlyOnce()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 80
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                printf('fact-page-%03d', n), 'file:src/Auth.cs', printf('src/Page%03d.cs', n), 'csharp',
+                'paged.pattern.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                n, 1, n, 20, n * 20, n * 20 + 19, 1.0,
+                '{"verb":"GET","route_template":"/abcdefghijklmnopqrstuvwxyz"}'
+            FROM seq;
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+        var factIds = new List<string>();
+        string? continuation = null;
+
+        do
+        {
+            using var document = JsonDocument.Parse(tool.Patterns(
+                operation: "search",
+                pattern_id: "paged.pattern.v1",
+                limit: 80,
+                format: "json",
+                continuation: continuation));
+            factIds.AddRange(document.RootElement
+                .GetProperty("matches")
+                .EnumerateArray()
+                .Select(match => match.GetProperty("fact_id").GetString()!));
+            continuation = document.RootElement.GetProperty("continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : document.RootElement.GetProperty("continuation").GetString();
+        }
+        while (continuation is not null);
+
+        Assert.Equal(80, factIds.Count);
+        Assert.Equal(80, factIds.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -1113,6 +1193,18 @@ public sealed class PatternsToolTests
 
         Assert.Contains("query is only supported for search", output, StringComparison.Ordinal);
         Assert.Contains("diagnostic_code=invalid_request", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=refusal", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Patterns_UnknownFormat_ReturnsTypedRefusal()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string output = tool.Patterns(operation: "list", format: "yaml");
+
+        Assert.Contains("diagnostic_code=invalid_format", output, StringComparison.Ordinal);
         Assert.Contains("diagnostic_class=refusal", output, StringComparison.Ordinal);
     }
 

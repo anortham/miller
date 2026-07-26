@@ -134,56 +134,46 @@ public sealed class EditTool
             {
                 telemetry.ResultCount = result.ResultCount;
                 telemetry.IndexFresh = result.IndexFresh;
-                telemetry.Outcome = result.Outcome switch
+                if (result.Diagnostic is not null)
                 {
-                    "ok" => TelemetryOutcome.Ok,
-                    "empty" => TelemetryOutcome.Empty,
-                    _ => TelemetryOutcome.Error,
-                };
+                    ToolDiagnosticRenderer.ApplyTelemetry(telemetry, result.Diagnostic);
+                }
+                else
+                {
+                    telemetry.Outcome = result.Outcome switch
+                    {
+                        "ok" => TelemetryOutcome.Ok,
+                        "empty" => TelemetryOutcome.Empty,
+                        _ => TelemetryOutcome.Error,
+                    };
+                }
                 if (result.StaleWaitPerformed)
                     telemetry.SetWaitReason(EditService.StaleConvergeWaitReason);
                 if (result.FailureReason is not null)
                     telemetry.SetMetadata(FailureReasonMetadataKey, result.FailureReason);
                 else if (telemetry.Outcome == TelemetryOutcome.Error)
                     telemetry.SetMetadata(FailureReasonMetadataKey, EditService.FailureUnknown);
-                if (telemetry.Outcome == TelemetryOutcome.Empty)
+                if (telemetry.Outcome == TelemetryOutcome.Empty && result.Diagnostic is null)
                     telemetry.SetEmptyReason("edit_noop");
             }
             return BoundMcpOutput(result, string.Equals(format, "json", StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex)
         {
-            if (telemetry is not null)
+            ToolDiagnostic diagnostic = ToolDiagnostic.FromException(ex) with
             {
-                telemetry.Outcome = TelemetryOutcome.Error;
-                telemetry.SetError(ex);
-                telemetry.SetMetadata(FailureReasonMetadataKey, UnhandledFailureReasonPrefix + ex.GetType().Name);
-            }
-            string message = $"edit failed: {ex.Message}";
-            if (!string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
-            {
-                return ToolOutputBudget.TruncateUtf8(
-                    message,
-                    ToolOutputBudget.EditMcpMaxBytes,
-                    "\n… edit failure output truncated.");
-            }
-
-            const int failureMessageMaxBytes = 2 * 1024;
-            return WriteJson(writer =>
-            {
-                writer.WriteStartObject();
-                writer.WriteBoolean("applied", false);
-                writer.WriteString("outcome", "error");
-                writer.WriteString("failure_reason", UnhandledFailureReasonPrefix + ex.GetType().Name);
-                writer.WriteBoolean(
-                    "output_truncated",
-                    Encoding.UTF8.GetByteCount(message) > failureMessageMaxBytes);
-                writer.WriteString("message", ToolOutputBudget.TruncateUtf8(
-                    message,
-                    failureMessageMaxBytes,
-                    "\n… edit failure output truncated."));
-                writer.WriteEndObject();
-            });
+                Message = SearchTool.Truncate(ex.Message, 1_024),
+            };
+            if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
+                telemetry?.SetError(ex);
+            telemetry?.SetMetadata(
+                FailureReasonMetadataKey,
+                UnhandledFailureReasonPrefix + ex.GetType().Name);
+            return ToolDiagnosticRenderer.Render(
+                "edit",
+                diagnostic,
+                string.Equals(format, "json", StringComparison.OrdinalIgnoreCase),
+                telemetry);
         }
     }
 
@@ -203,7 +193,7 @@ public sealed class EditTool
             .Take(20)
             .Select(static path => ToolOutputBudget.TruncateUtf8(path, 256, "…"))
             .ToArray();
-        return WriteJson(writer =>
+        string bounded = WriteJson(writer =>
         {
             writer.WriteStartObject();
             writer.WriteBoolean("applied", result.Applied);
@@ -233,6 +223,14 @@ public sealed class EditTool
                 "Edit output exceeded the MCP byte budget; inspect the working tree for complete evidence.");
             writer.WriteEndObject();
         });
+        return result.Diagnostic is null
+            ? bounded
+            : ToolDiagnosticRenderer.Attach(
+                "edit",
+                bounded,
+                result.Diagnostic,
+                json: true,
+                telemetry: null);
     }
 
     private static string WriteJson(Action<Utf8JsonWriter> write)

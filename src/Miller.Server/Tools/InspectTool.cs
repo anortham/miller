@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -63,6 +64,13 @@ public sealed class InspectTool
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
+            if (!string.Equals(format, "compact", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_format",
+                    "inspect format must be compact or json."));
+            }
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             InspectDepth parsedDepth = ParseDepth(depth);
             int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
@@ -161,12 +169,23 @@ public sealed class InspectTool
         Full,
     }
 
-    private static InspectDepth ParseDepth(string? depth) =>
-        string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase)
-            ? InspectDepth.Full
-            : string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase)
-                ? InspectDepth.Overview
-                : InspectDepth.Summary;
+    private static InspectDepth ParseDepth(string? depth)
+    {
+        if (string.IsNullOrWhiteSpace(depth) ||
+            string.Equals(depth, "summary", StringComparison.OrdinalIgnoreCase))
+        {
+            return InspectDepth.Summary;
+        }
+
+        if (string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase))
+            return InspectDepth.Overview;
+        if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase))
+            return InspectDepth.Full;
+
+        throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+            "invalid_depth",
+            "inspect depth must be summary, overview, or full."));
+    }
 
     private static string DepthName(InspectDepth depth) => depth switch
     {
@@ -249,26 +268,7 @@ public sealed class InspectTool
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(target);
         diagnostic = null;
-        if (!string.IsNullOrWhiteSpace(continuation) && depth != InspectDepth.Full)
-        {
-            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
-                "continuation_not_applicable",
-                "Inspect continuations are valid only with depth=full.",
-                [new ToolDiagnosticAction(
-                    $"inspect(target=\"{EscapeDiagnosticTarget(target)}\", depth=\"full\")",
-                    "restart the full-body read")]));
-        }
-
         var resolution = resolver.Resolve(target, scope);
-        if (!string.IsNullOrWhiteSpace(continuation) && resolution is not TargetResolution.Symbol)
-        {
-            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
-                "continuation_target_mismatch",
-                "Inspect continuations can resume only the exact symbol body that created them.",
-                [new ToolDiagnosticAction(
-                    $"inspect(target=\"{EscapeDiagnosticTarget(target)}\", depth=\"full\")",
-                    "restart inspection without the continuation")]));
-        }
 
         switch (resolution)
         {
@@ -279,6 +279,8 @@ public sealed class InspectTool
                     kind,
                     limit,
                     json,
+                    workspaceId,
+                    continuation,
                     boundAgentOutput,
                     out resultCount,
                     out int matchedCount);
@@ -293,6 +295,15 @@ public sealed class InspectTool
                     json ? null : compactBanner);
 
             case TargetResolution.Symbol sym:
+                if (!string.IsNullOrWhiteSpace(continuation) && depth != InspectDepth.Full)
+                {
+                    throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                        "continuation_not_applicable",
+                        "Symbol-body continuations require depth=full.",
+                        [new ToolDiagnosticAction(
+                            $"inspect(target=\"{EscapeDiagnosticTarget(target)}\", depth=\"full\")",
+                            "restart the full-body read")]));
+                }
                 resultCount = 1;
                 string symbolOutput = json
                     ? RenderSymbolJson(
@@ -391,6 +402,8 @@ public sealed class InspectTool
         string? kind,
         int limit,
         bool json,
+        string workspaceId,
+        string? continuation,
         bool boundAgentOutput,
         out int resultCount,
         out int matchedCount)
@@ -410,54 +423,111 @@ public sealed class InspectTool
                 : $"No indexed symbols in {path}";
         }
 
+        List<IndexedSymbol> ordered = all
+            .OrderBy(static symbol => IsLowSignalKind(symbol.Kind) ? 1 : 0)
+            .ThenBy(static symbol => KindRank(symbol.Kind))
+            .ThenBy(static symbol => symbol.StartLine)
+            .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
+            .ThenBy(static symbol => symbol.SymbolId, StringComparer.Ordinal)
+            .ToList();
+        List<IndexedSymbol> population = json || !string.IsNullOrWhiteSpace(kind)
+            ? ordered
+            : ordered.Where(static symbol => !IsLowSignalKind(symbol.Kind)).ToList();
+        if (population.Count == 0)
+        {
+            resultCount = 0;
+            return RenderNoVisibleFileSymbols(path, all, kind);
+        }
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_file",
+            workspaceId,
+            PopulationFingerprint(population),
+            RequestFingerprint(path, kind, json ? "json" : "compact", limit.ToString()));
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.DecodePopulationCursor(continuation, identity).Offset;
+        if (offset < 0 || offset >= population.Count)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "continuation_offset_invalid",
+                "Inspect file continuation offset is outside the current result population."));
+        }
+        List<IndexedSymbol> page = population.Skip(offset).Take(limit).ToList();
+        int nextOffset = checked(offset + page.Count);
+        string? nextContinuation = nextOffset < population.Count
+            ? ToolOutputBudget.EncodePopulationCursor(
+                identity,
+                new ToolPopulationContinuationCursor(nextOffset))
+            : null;
+        resultCount = page.Count;
+
         if (json)
         {
-            List<IndexedSymbol> ordered = all
-                .OrderBy(static symbol => IsLowSignalKind(symbol.Kind) ? 1 : 0)
-                .ThenBy(static symbol => KindRank(symbol.Kind))
-                .ThenBy(static symbol => symbol.StartLine)
-                .ThenBy(static symbol => symbol.Name, StringComparer.Ordinal)
-                .ToList();
-            int jsonPage = Math.Min(limit, ordered.Count);
-            resultCount = jsonPage;
             var buffer = new ArrayBufferWriter<byte>();
             using var w = NewWriter(buffer);
             w.WriteStartObject();
             w.WriteString("file", path);
             w.WritePropertyName("children");
-            WriteFileSymbolArray(w, ordered.Take(jsonPage), fileSymbols);
-            w.WriteNumber("children_total_count", ordered.Count);
-            w.WriteNumber("children_returned_count", jsonPage);
-            w.WriteNumber("children_omitted_count", ordered.Count - jsonPage);
-            w.WriteBoolean("children_truncated", jsonPage < ordered.Count);
+            WriteFileSymbolArray(w, page, fileSymbols);
+            w.WriteNumber("children_total_count", population.Count);
+            w.WriteNumber("children_returned_count", page.Count);
+            w.WriteNumber("children_omitted_count", population.Count - nextOffset);
+            w.WriteBoolean("children_truncated", nextContinuation is not null);
+            w.WriteNumber("page_offset", offset);
+            if (nextContinuation is null)
+                w.WriteNull("continuation");
+            else
+                w.WriteString("continuation", nextContinuation);
             w.WriteEndObject();
             w.Flush();
             return Utf8(buffer);
         }
 
-        var visible = string.IsNullOrWhiteSpace(kind)
-            ? all.Where(static s => !IsLowSignalKind(s.Kind)).ToList()
-            : all;
-        int compactPage = Math.Min(limit, visible.Count);
-        resultCount = compactPage;
-
-        if (visible.Count == 0)
-            return RenderNoVisibleFileSymbols(path, all, kind);
-
         var sb = new StringBuilder();
         sb.Append("# ").Append(path).Append('\n');
-        AppendFileSymbolGroups(sb, visible.Take(compactPage), fileSymbols);
-        int remainder = visible.Count - compactPage;
+        AppendFileSymbolGroups(sb, page, fileSymbols);
+        int remainder = population.Count - nextOffset;
         if (remainder > 0)
         {
-            sb.Append("… ").Append(remainder).Append(" more (")
-                .Append(boundAgentOutput ? "narrow with kind=<symbol-kind>" : "raise limit")
-                .Append(")\n");
+            sb.Append("… ").Append(remainder).Append(" more\n");
+            if (nextContinuation is not null)
+            {
+                sb.Append(NextStepHint.Render(
+                    $"inspect target=\"{EscapeDiagnosticTarget(path)}\" limit={limit}" +
+                    (string.IsNullOrWhiteSpace(kind) ? "" : $" kind=\"{EscapeDiagnosticTarget(kind)}\"") +
+                    $" continuation=\"{nextContinuation}\"",
+                    "continue this file listing")).Append('\n');
+            }
         }
         if (string.IsNullOrWhiteSpace(kind))
             AppendHiddenLowSignalNote(sb, all);
         return sb.ToString().TrimEnd('\n');
     }
+
+    private static string PopulationFingerprint(IEnumerable<IndexedSymbol> symbols)
+    {
+        var builder = new StringBuilder();
+        foreach (IndexedSymbol symbol in symbols)
+        {
+            AppendFingerprintField(builder, symbol.SymbolId);
+            AppendFingerprintField(builder, symbol.Kind);
+            AppendFingerprintField(builder, symbol.Name);
+            AppendFingerprintField(builder, symbol.StartLine.ToString());
+            AppendFingerprintField(builder, symbol.Signature ?? string.Empty);
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+
+    private static string RequestFingerprint(params string?[] fields)
+    {
+        var builder = new StringBuilder();
+        foreach (string? field in fields)
+            AppendFingerprintField(builder, field ?? string.Empty);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+
+    private static void AppendFingerprintField(StringBuilder builder, string value) =>
+        builder.Append(value.Length).Append(':').Append(value);
 
     private static string RenderNoVisibleFileSymbols(string path, IReadOnlyList<IndexedSymbol> all, string? kind)
     {

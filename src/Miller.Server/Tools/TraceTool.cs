@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.ComponentModel;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -95,11 +96,44 @@ public sealed class TraceTool
         bool json = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         try
         {
+            if (!string.Equals(format, "compact", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(format, "json", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(format, "full", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_format",
+                    "trace format must be compact, json, or full."));
+            }
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string normalizedMode = NormalizeMode(mode);
+            if (normalizedMode is not (ModeRefs or ModePath or ModeBridge))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_mode",
+                    "trace mode must be refs, path, or bridge."));
+            }
+            if (normalizedMode == ModePath)
+            {
+                string normalizedPathKind = string.IsNullOrWhiteSpace(path_kind)
+                    ? "call"
+                    : path_kind.Trim().ToLowerInvariant();
+                if (normalizedPathKind is not ("call" or "dependency"))
+                {
+                    throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                        "invalid_path_kind",
+                        "trace path_kind must be call or dependency."));
+                }
+            }
+            if (normalizedMode == ModeRefs &&
+                !TryNormalizeReferenceKind(reference_kind, out _, out string? kindError))
+            {
+                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                    "invalid_reference_kind",
+                    kindError!));
+            }
             string output = normalizedMode == ModePath
                 ? Run(
                     context.Index,
@@ -175,7 +209,7 @@ public sealed class TraceTool
     private const string ModeRefs = "refs";
     private const string ModeBridge = "bridge";
     private const int MaxNextActions = 10;
-    private const int MaxReferencePageBytes = 16 * 1024;
+    private const int MaxReferencePageBytes = 12 * 1024;
 
     private sealed record TraceNextAction(string Tool, string Reason, IReadOnlyList<KeyValuePair<string, string>> Args);
 
@@ -449,8 +483,7 @@ public sealed class TraceTool
                 referenceKind, includeDefinition, readReferenceEvidence, workspaceId, snapshot, continuation,
                 out emitted, out nodesVisited),
             ModeBridge => RunBridge(index, resolver, target, scope, depth, limit, fullFormat, json, out emitted, out nodesVisited),
-            _ =>
-                UnknownMode(mode, json, target, to, depth, limit, out emitted, out nodesVisited),
+            _ => throw InvalidMode(mode),
         };
     }
 
@@ -563,7 +596,7 @@ public sealed class TraceTool
                     note: "trace mode=bridge requires the full repository bridge graph.",
                     diagnosticCode: "bridge_requires_full_index")
                 : "trace mode=bridge requires the full repository bridge graph.",
-            _ => UnknownMode(mode, json, target, to, depth, limit, out emitted, out nodesVisited),
+            _ => throw InvalidMode(mode),
         };
     }
 
@@ -656,21 +689,9 @@ public sealed class TraceTool
             : pathKind.Trim().ToLowerInvariant();
         if (normalizedPathKind is not ("call" or "dependency"))
         {
-            const string message = "path_kind must be one of: call, dependency.";
-            return json
-                ? RenderTraceJson(
-                    ModePath,
-                    target,
-                    to,
-                    depth,
-                    limit,
-                    emitted,
-                    nodesVisited,
-                    message,
-                    "invalid_path_kind",
-                    writeExtraRootProperties: writer =>
-                        writer.WriteString("path_kind", normalizedPathKind))
-                : message;
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "invalid_path_kind",
+                "trace path_kind must be call or dependency."));
         }
 
         if (string.IsNullOrWhiteSpace(to))
@@ -779,11 +800,11 @@ public sealed class TraceTool
             limit = 1;
 
         if (!TryNormalizeReferenceKind(referenceKind, out string? normalizedKind, out string? kindError))
-            return json
-                ? RenderRefsJson(index, target, depth, limit, emitted, nodesVisited, targetSymbol: null,
-                    evidence: null, exact: [], fallback: [], normalizedKind, includeDefinition, kindError,
-                    "invalid_reference_kind")
-                : kindError!;
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "invalid_reference_kind",
+                kindError!));
+        }
 
         if (readReferenceEvidence is null)
         {
@@ -816,28 +837,39 @@ public sealed class TraceTool
         ReferenceKind? kind = normalizedKind is null
             ? null
             : ReferenceEvidenceReader.NormalizeKind(normalizedKind);
-        var cursor = new ToolReferenceContinuationCursor(0, 0);
-        ToolReferenceContinuationIdentity? continuationIdentity = null;
-        if (!string.IsNullOrWhiteSpace(continuation))
-        {
-            if (snapshot is null)
-            {
-                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
-                    "continuation_unavailable",
-                    "Reference continuation requires an artifact snapshot."));
-            }
-            continuationIdentity = new ToolReferenceContinuationIdentity(
-                workspaceId,
-                targetSymbol.SymbolId,
-                snapshot.ArtifactId,
-                snapshot.Revision,
-                normalizedKind ?? "all",
-                includeDefinition,
-                limit);
-            cursor = ToolOutputBudget.DecodeReferenceCursor(continuation, continuationIdentity);
-        }
+        var populationQuery = new ReferenceEvidenceQuery(
+            new ReferenceEvidenceBounds(limit, limit),
+            kind,
+            0,
+            0);
+        ReferenceEvidenceSet evidence = readReferenceEvidence(targetSymbol, populationQuery);
+        ReferenceEvidence[] exactPopulation = evidence.Exact
+            .Where(reference => kind is null || reference.Kind == kind)
+            .Take(limit)
+            .ToArray();
+        ReferenceEvidence[] fallbackPopulation = evidence.Fallback
+            .Where(reference => kind is null || reference.Kind == kind)
+            .Take(Math.Max(0, limit - exactPopulation.Length))
+            .ToArray();
+        string populationFingerprint = ReferencePopulationFingerprint(
+            exactPopulation,
+            fallbackPopulation,
+            evidence.Coverage);
+        string requestFingerprint = FingerprintFields(
+            targetSymbol.SymbolId,
+            normalizedKind ?? "all",
+            includeDefinition ? "definition" : "no-definition",
+            limit.ToString(CultureInfo.InvariantCulture));
+        var continuationIdentity = new ToolPopulationContinuationIdentity(
+            "trace_refs",
+            workspaceId,
+            populationFingerprint,
+            requestFingerprint);
+        var cursor = string.IsNullOrWhiteSpace(continuation)
+            ? new ToolPopulationContinuationCursor(0)
+            : ToolOutputBudget.DecodePopulationCursor(continuation, continuationIdentity);
 
-        int consumed = checked(cursor.ExactOffset + cursor.FallbackOffset);
+        int consumed = cursor.Offset;
         if (consumed >= limit)
         {
             throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
@@ -845,51 +877,32 @@ public sealed class TraceTool
                 "Reference continuation has already reached the requested limit."));
         }
         int pageSize = Math.Min(24, limit - consumed);
-        var query = new ReferenceEvidenceQuery(
-            new ReferenceEvidenceBounds(pageSize, pageSize),
-            kind,
-            cursor.ExactOffset,
-            cursor.FallbackOffset);
-        ReferenceEvidenceSet evidence = readReferenceEvidence(targetSymbol, query);
-        ReferenceEvidenceSnapshot? effectiveSnapshot = snapshot ?? evidence.Snapshot;
-        if (continuationIdentity is null && effectiveSnapshot is not null)
-        {
-            continuationIdentity = new ToolReferenceContinuationIdentity(
-                workspaceId,
-                targetSymbol.SymbolId,
-                effectiveSnapshot.ArtifactId,
-                effectiveSnapshot.Revision,
-                normalizedKind ?? "all",
-                includeDefinition,
-                limit);
-        }
-        ReferenceEvidence[] exact = evidence.Exact
-            .Where(reference => kind is null || reference.Kind == kind)
+        int exactStart = Math.Min(consumed, exactPopulation.Length);
+        int fallbackStart = Math.Max(0, consumed - exactPopulation.Length);
+        ReferenceEvidence[] exact = exactPopulation
+            .Skip(exactStart)
             .Take(pageSize)
             .ToArray();
-        ReferenceEvidence[] fallback = evidence.Fallback
-            .Where(reference => kind is null || reference.Kind == kind)
+        ReferenceEvidence[] fallback = fallbackPopulation
+            .Skip(fallbackStart)
             .Take(Math.Max(0, pageSize - exact.Length))
             .ToArray();
+        int populationCount = exactPopulation.Length + fallbackPopulation.Length;
         bool pageHadReferences = exact.Length + fallback.Length > 0;
         while (exact.Length + fallback.Length > 0)
         {
-            int candidateNextExactOffset = cursor.ExactOffset + exact.Length;
-            int candidateNextFallbackOffset = cursor.FallbackOffset + fallback.Length;
+            int candidateNextOffset = consumed + exact.Length + fallback.Length;
+            int candidateNextExactOffset = Math.Min(candidateNextOffset, exactPopulation.Length);
+            int candidateNextFallbackOffset = Math.Max(0, candidateNextOffset - exactPopulation.Length);
             bool candidateMoreExact = evidence.Coverage.ExactAvailable > candidateNextExactOffset;
             bool candidateMoreFallback =
                 evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available &&
                 evidence.Coverage.FallbackAvailable > candidateNextFallbackOffset;
-            bool candidateWithinLimit = consumed + exact.Length + fallback.Length < limit;
             string? candidateContinuation =
-                continuationIdentity is not null &&
-                candidateWithinLimit &&
-                (candidateMoreExact || candidateMoreFallback)
-                    ? ToolOutputBudget.EncodeReferenceCursor(
+                candidateNextOffset < populationCount
+                    ? ToolOutputBudget.EncodePopulationCursor(
                         continuationIdentity,
-                        new ToolReferenceContinuationCursor(
-                            candidateNextExactOffset,
-                            candidateNextFallbackOffset))
+                        new ToolPopulationContinuationCursor(candidateNextOffset))
                     : null;
             var candidateCoverage = evidence.Coverage with
             {
@@ -912,7 +925,7 @@ public sealed class TraceTool
                  consumed + exact.Length + fallback.Length <
                  candidateServableAvailable);
             string? candidateNote = candidateContinuation is not null
-                ? "reference page truncated by the 16 KiB output budget; continue with the returned token."
+                ? "reference page truncated by the 12 KiB output budget; continue with the returned token."
                 : candidateLimitTruncated
                     ? "reference trace truncated by limit."
                     : candidateFallbackSuppressed
@@ -943,12 +956,6 @@ public sealed class TraceTool
                 continuation: candidateContinuation);
             if (Encoding.UTF8.GetByteCount(candidateJson) <= MaxReferencePageBytes)
                 break;
-            if (continuationIdentity is null)
-            {
-                throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
-                    "continuation_unavailable",
-                    "Reference output exceeds 16 KiB but no artifact snapshot is available for safe continuation."));
-            }
             if (fallback.Length > 0)
                 fallback = fallback[..^1];
             else
@@ -958,20 +965,20 @@ public sealed class TraceTool
         {
             throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
                 "reference_item_too_large",
-                "A single reference row exceeds the 16 KiB output budget."));
+                "A single reference row exceeds the 12 KiB output budget."));
         }
-        int nextExactOffset = cursor.ExactOffset + exact.Length;
-        int nextFallbackOffset = cursor.FallbackOffset + fallback.Length;
+        int nextOffset = consumed + exact.Length + fallback.Length;
+        int nextExactOffset = Math.Min(nextOffset, exactPopulation.Length);
+        int nextFallbackOffset = Math.Max(0, nextOffset - exactPopulation.Length);
         bool moreExact = evidence.Coverage.ExactAvailable > nextExactOffset;
         bool moreFallback =
             evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available &&
             evidence.Coverage.FallbackAvailable > nextFallbackOffset;
-        bool withinRequestedLimit = consumed + exact.Length + fallback.Length < limit;
         string? nextContinuation =
-            continuationIdentity is not null && withinRequestedLimit && (moreExact || moreFallback)
-                ? ToolOutputBudget.EncodeReferenceCursor(
+            nextOffset < populationCount
+                ? ToolOutputBudget.EncodePopulationCursor(
                     continuationIdentity,
-                    new ToolReferenceContinuationCursor(nextExactOffset, nextFallbackOffset))
+                    new ToolPopulationContinuationCursor(nextOffset))
                 : null;
         var displayCoverage = evidence.Coverage with
         {
@@ -997,7 +1004,7 @@ public sealed class TraceTool
         }
         else if (nextContinuation is not null)
         {
-            resultNote = "reference page truncated by the 16 KiB output budget; continue with the returned token.";
+            resultNote = "reference page truncated by the 12 KiB output budget; continue with the returned token.";
             diagnosticCode = "output_page_truncated";
         }
         else if (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.SuppressedAmbiguousName)
@@ -2352,15 +2359,57 @@ public sealed class TraceTool
     private static string EscapeShellishArgument(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
 
-    private static string UnknownMode(string? mode, bool json, string target, string? to, int depth, int limit, out int emitted, out int nodesVisited)
+    private static string ReferencePopulationFingerprint(
+        IReadOnlyList<ReferenceEvidence> exact,
+        IReadOnlyList<ReferenceEvidence> fallback,
+        ReferenceEvidenceCoverage coverage)
     {
-        emitted = 0;
-        nodesVisited = 0;
-        string message = $"Unknown mode '{mode}'. Use one of: refs, path, bridge.";
-        return json
-            ? RenderTraceJson(mode ?? string.Empty, target, to, depth, limit, emitted, nodesVisited, message, "unknown_mode")
-            : message;
+        var fields = new List<string?>
+        {
+            coverage.ExactAvailable.ToString(CultureInfo.InvariantCulture),
+            coverage.FallbackAvailable.ToString(CultureInfo.InvariantCulture),
+            coverage.FallbackStatus.ToString(),
+        };
+        foreach (ReferenceEvidence reference in exact.Concat(fallback))
+        {
+            fields.Add(reference.TargetSymbolId);
+            fields.Add(reference.ContainingSymbolId);
+            fields.Add(reference.FilePath);
+            fields.Add(reference.StartLine?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.StartColumn?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.EndLine?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.EndColumn?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.StartByte?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.EndByte?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.Kind.ToString());
+            fields.Add(reference.SourceKind);
+            fields.Add(reference.Source.ToString());
+            fields.Add(reference.ResolutionTier?.ToString(CultureInfo.InvariantCulture));
+            fields.Add(reference.Confidence.ToString("R", CultureInfo.InvariantCulture));
+            fields.Add(reference.ResolutionStatus.ToString());
+            fields.Add(reference.Language);
+        }
+        return FingerprintFields(fields.ToArray());
     }
+
+    private static string FingerprintFields(params string?[] fields)
+    {
+        var canonical = new StringBuilder();
+        foreach (string? field in fields)
+        {
+            string value = field ?? string.Empty;
+            canonical.Append(Encoding.UTF8.GetByteCount(value))
+                .Append(':')
+                .Append(value)
+                .Append(';');
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
+    }
+
+    private static ToolDiagnosticException InvalidMode(string? mode) =>
+        new(ToolDiagnostic.Refusal(
+            "invalid_mode",
+            $"Unknown trace mode '{mode}'. Use refs, path, or bridge."));
 
     // ---------- JSON rendering ----------
 
@@ -2451,13 +2500,6 @@ public sealed class TraceTool
                 if (normalizedKind is null) w.WriteNull("reference_kind"); else w.WriteString("reference_kind", normalizedKind);
                 w.WriteBoolean("include_definition", includeDefinition);
                 if (continuation is null) w.WriteNull("continuation"); else w.WriteString("continuation", continuation);
-                w.WritePropertyName("references");
-                w.WriteStartArray();
-                foreach (ReferenceEvidence reference in exact)
-                    WriteReference(index, w, reference, targetSymbol?.Name);
-                foreach (ReferenceEvidence reference in fallback)
-                    WriteReference(index, w, reference, targetSymbol?.Name);
-                w.WriteEndArray();
                 w.WritePropertyName("exact_references");
                 w.WriteStartArray();
                 foreach (ReferenceEvidence reference in exact)
@@ -2568,6 +2610,7 @@ public sealed class TraceTool
         using (var w = NewWriter(buffer))
         {
             w.WriteStartObject();
+            w.WriteNumber("schema_version", 2);
             w.WriteString("mode", mode);
             w.WriteString("target", target);
             if (to is null) w.WriteNull("to"); else w.WriteString("to", to);

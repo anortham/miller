@@ -306,58 +306,56 @@ public sealed class TraceToolTests
     }
 
     [Fact]
-    public void Path_UnknownKindReturnsUsageDiagnostic()
+    public void Path_UnknownKindReturnsTypedRefusal()
     {
         var index = BuildSymbolIndex(
             [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 2)],
             [("a", "b")]);
 
-        string output = TraceTool.Run(
-            index,
-            ResolverFor(index),
-            target: "Alpha",
-            scope: null,
-            mode: "path",
-            to: "Beta",
-            depth: 5,
-            limit: 20,
-            fullFormat: false,
-            pathKind: "wide",
-            out int emitted,
-            out _);
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(
+                index,
+                ResolverFor(index),
+                target: "Alpha",
+                scope: null,
+                mode: "path",
+                to: "Beta",
+                depth: 5,
+                limit: 20,
+                fullFormat: false,
+                pathKind: "wide",
+                out _,
+                out _));
 
-        Assert.Equal(0, emitted);
-        Assert.Contains("path_kind must be one of: call, dependency", output, StringComparison.Ordinal);
+        Assert.Equal("invalid_path_kind", exception.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
     }
 
     [Fact]
-    public void Path_UnknownKindJsonReturnsTypedDiagnostic()
+    public void Path_UnknownKindJsonReturnsTypedRefusal()
     {
         var index = BuildSymbolIndex(
             [("a", "Alpha", "method", "src/A.cs", 1), ("b", "Beta", "method", "src/B.cs", 2)],
             [("a", "b")]);
 
-        string output = TraceTool.Run(
-            index,
-            ResolverFor(index),
-            target: "Alpha",
-            scope: null,
-            mode: "path",
-            to: "Beta",
-            depth: 5,
-            limit: 20,
-            fullFormat: false,
-            json: true,
-            pathKind: "wide",
-            out int emitted,
-            out _);
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(
+                index,
+                ResolverFor(index),
+                target: "Alpha",
+                scope: null,
+                mode: "path",
+                to: "Beta",
+                depth: 5,
+                limit: 20,
+                fullFormat: false,
+                json: true,
+                pathKind: "wide",
+                out _,
+                out _));
 
-        Assert.Equal(0, emitted);
-        using var document = JsonDocument.Parse(output);
-        JsonElement diagnostic = Assert.Single(
-            document.RootElement.GetProperty("diagnostics").EnumerateArray());
-        Assert.Equal("invalid_path_kind", diagnostic.GetProperty("code").GetString());
-        Assert.Equal("wide", document.RootElement.GetProperty("path_kind").GetString());
+        Assert.Equal("invalid_path_kind", exception.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
     }
 
     [Fact]
@@ -661,6 +659,8 @@ public sealed class TraceToolTests
         Assert.Equal(1, visited);
         using var doc = JsonDocument.Parse(json);
         JsonElement root = doc.RootElement;
+        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.False(root.TryGetProperty("references", out _));
         JsonElement reference = Assert.Single(root.GetProperty("exact_references").EnumerateArray());
         Assert.Equal("a", reference.GetProperty("target_symbol_id").GetString());
         Assert.Equal("exact", reference.GetProperty("resolution_status").GetString());
@@ -796,7 +796,7 @@ public sealed class TraceToolTests
     }
 
     [Fact]
-    public void Refs_Json_UsesArtifactBoundStatelessContinuationAboveOutputBudget()
+    public void Refs_Json_ContinuationSurvivesUnrelatedWorkspaceRevision()
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
@@ -902,7 +902,7 @@ public sealed class TraceToolTests
             includeDefinition: true,
             readReferenceEvidence: ReadPage,
             workspaceId: "workspace",
-            snapshot,
+            new ReferenceEvidenceSnapshot("artifact", 43),
             continuation: token,
             out int secondCount,
             out _);
@@ -910,8 +910,8 @@ public sealed class TraceToolTests
 
         Assert.InRange(firstCount, 1, 24);
         Assert.Equal(30 - firstCount, secondCount);
-        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(first), 1, 16 * 1024);
-        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(second), 1, 16 * 1024);
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(first), 1, 12 * 1024);
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(second), 1, 12 * 1024);
         Assert.Equal(
             30,
             firstDocument.RootElement.GetProperty("exact_references").GetArrayLength() +
@@ -920,7 +920,96 @@ public sealed class TraceToolTests
     }
 
     [Fact]
-    public void Refs_Json_ContinuationKeepsEachPageWithinSixteenKiB()
+    public void Refs_Json_ContinuationRejectsChangedReferencePopulation()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        ReferenceEvidence[] references = Enumerable.Range(1, 30)
+            .Select(line => new ReferenceEvidence(
+                "a",
+                null,
+                $"src/Caller{line}.cs",
+                line,
+                1,
+                line,
+                6,
+                line * 10,
+                line * 10 + 5,
+                ReferenceKind.Call,
+                "call",
+                ReferenceEvidenceSource.IdentifierDirect,
+                null,
+                1,
+                ReferenceResolutionStatus.Exact,
+                "csharp"))
+            .ToArray();
+
+        ReferenceEvidenceSet ReadPopulation(IndexedSymbol _, ReferenceEvidenceQuery query) =>
+            new(
+                references.Take(query.Bounds.ExactLimit).ToArray(),
+                [],
+                new ReferenceEvidenceCoverage(
+                    references.Length,
+                    references.Length,
+                    Math.Min(references.Length, query.Bounds.ExactLimit),
+                    0,
+                    0,
+                    1,
+                    references.Length > query.Bounds.ExactLimit,
+                    false,
+                    ReferenceFallbackStatus.NoCandidates),
+                new ReferenceEvidenceSnapshot("artifact", 42));
+
+        string first = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 30,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPopulation,
+            workspaceId: "workspace",
+            snapshot: null,
+            continuation: null,
+            out _,
+            out _);
+        using var firstDocument = JsonDocument.Parse(first);
+        string token = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+        references[29] = references[29] with { FilePath = "src/ChangedCaller.cs" };
+
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(
+                index,
+                ResolverFor(index),
+                target: "Alpha",
+                scope: null,
+                mode: "refs",
+                to: null,
+                depth: 3,
+                limit: 30,
+                fullFormat: false,
+                json: true,
+                referenceKind: null,
+                includeDefinition: true,
+                readReferenceEvidence: ReadPopulation,
+                workspaceId: "workspace",
+                snapshot: null,
+                continuation: token,
+                out _,
+                out _));
+
+        Assert.Equal("stale_continuation", exception.Diagnostic.Code);
+    }
+
+    [Fact]
+    public void Refs_Json_ContinuationKeepsEachPageWithinTwelveKiB()
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
@@ -989,13 +1078,13 @@ public sealed class TraceToolTests
             out _);
         using var document = JsonDocument.Parse(json);
 
-        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(json), 1, 16 * 1024);
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(json), 1, 12 * 1024);
         Assert.InRange(emitted, 1, 23);
         Assert.Equal(JsonValueKind.String, document.RootElement.GetProperty("continuation").ValueKind);
     }
 
     [Fact]
-    public void Refs_Json_LimitTruncationNeverEscapesSixteenKiBBudget()
+    public void Refs_Json_LimitTruncationNeverEscapesTwelveKiBBudget()
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
@@ -1067,7 +1156,7 @@ public sealed class TraceToolTests
                 out _);
 
             Assert.True(
-                System.Text.Encoding.UTF8.GetByteCount(json) <= 16 * 1024,
+                System.Text.Encoding.UTF8.GetByteCount(json) <= 12 * 1024,
                 $"directoryLength={directoryLength}");
         }
     }
@@ -1185,7 +1274,7 @@ public sealed class TraceToolTests
         Assert.Equal("Alpha", Assert.Single(root.GetProperty("nodes").EnumerateArray()).GetProperty("name").GetString());
         Assert.Empty(root.GetProperty("links").EnumerateArray());
 
-        JsonElement[] refs = root.GetProperty("references").EnumerateArray().ToArray();
+        JsonElement[] refs = root.GetProperty("fallback_references").EnumerateArray().ToArray();
         Assert.Equal(2, refs.Length);
         Assert.Equal(JsonValueKind.Null, refs[0].GetProperty("target_symbol_id").ValueKind);
         Assert.Equal("call", refs[0].GetProperty("kind").GetString());
@@ -1223,25 +1312,25 @@ public sealed class TraceToolTests
         Assert.False(root.GetProperty("include_definition").GetBoolean());
         Assert.Equal(1, root.GetProperty("depth").GetInt32());
         Assert.Empty(root.GetProperty("nodes").EnumerateArray());
-        Assert.Single(root.GetProperty("references").EnumerateArray());
+        Assert.Single(root.GetProperty("fallback_references").EnumerateArray());
     }
 
     [Fact]
-    public void Refs_UnknownReferenceKind_RendersUsage()
+    public void Refs_UnknownReferenceKind_ReturnsTypedRefusal()
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
 
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
-            fullFormat: false, json: false, referenceKind: "definitely-not-a-kind", includeDefinition: true,
-            readReferences: _ => Array.Empty<SymbolRef>(),
-            out int emitted, out int visited);
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(index, ResolverFor(index),
+                target: "Alpha", scope: null, mode: "refs", to: null, depth: 3, limit: 20,
+                fullFormat: false, json: false, referenceKind: "definitely-not-a-kind", includeDefinition: true,
+                readReferences: _ => Array.Empty<SymbolRef>(),
+                out _, out _));
 
-        Assert.Equal(0, emitted);
-        Assert.Equal(0, visited);
-        Assert.Contains("reference_kind must be one of", outp);
+        Assert.Equal("invalid_reference_kind", exception.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
     }
 
     [Fact]
@@ -3176,18 +3265,19 @@ public sealed class TraceToolTests
     [Theory]
     [InlineData("sideways")]
     [InlineData("auto")]
-    public void UnknownMode_CleanMessage(string mode)
+    public void UnknownMode_ReturnsTypedRefusal(string mode)
     {
         var index = BuildSymbolIndex(
             new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
             Array.Empty<(string, string)>());
 
-        string outp = TraceTool.Run(index, ResolverFor(index),
-            target: "Alpha", mode: mode, to: null, depth: 3, limit: 20, fullFormat: false,
-            out int emitted, out _);
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(index, ResolverFor(index),
+                target: "Alpha", mode: mode, to: null, depth: 3, limit: 20, fullFormat: false,
+                out _, out _));
 
-        Assert.Equal(0, emitted);
-        Assert.Contains($"Unknown mode '{mode}'", outp);
+        Assert.Equal("invalid_mode", exception.Diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, exception.Diagnostic.Class);
     }
 
     [Fact]

@@ -21,16 +21,13 @@ public sealed record ToolOutputPage(
 
 public readonly record struct BoundedPrefixRender(string Output, int RetainedCount);
 
-public sealed record ToolReferenceContinuationIdentity(
+public sealed record ToolPopulationContinuationIdentity(
+    string Kind,
     string WorkspaceId,
-    string SymbolId,
-    string ArtifactId,
-    long Revision,
-    string ReferenceKind,
-    bool IncludeDefinition,
-    int Limit);
+    string PopulationFingerprint,
+    string RequestFingerprint);
 
-public sealed record ToolReferenceContinuationCursor(int ExactOffset, int FallbackOffset);
+public sealed record ToolPopulationContinuationCursor(int Offset);
 
 public static partial class ToolOutputBudget
 {
@@ -212,53 +209,45 @@ public static partial class ToolOutputBudget
         return StrictUtf8.GetString(bytes.AsSpan(0, checked((int)prefixEnd))) + suffix;
     }
 
-    public static string EncodeReferenceCursor(
-        ToolReferenceContinuationIdentity identity,
-        ToolReferenceContinuationCursor cursor)
+    public static string EncodePopulationCursor(
+        ToolPopulationContinuationIdentity identity,
+        ToolPopulationContinuationCursor cursor)
     {
-        ValidateReferenceIdentity(identity);
-        if (cursor.ExactOffset < 0 || cursor.FallbackOffset < 0)
-            throw new ArgumentOutOfRangeException(nameof(cursor), "Reference cursor offsets cannot be negative.");
+        ValidatePopulationIdentity(identity);
+        if (cursor.Offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(cursor), "Population cursor offset cannot be negative.");
 
-        var unsigned = new UnsignedReferenceContinuationPayload(
+        var unsigned = new UnsignedPopulationContinuationPayload(
             1,
+            identity.Kind,
             identity.WorkspaceId,
-            identity.SymbolId,
-            identity.ArtifactId,
-            identity.Revision,
-            identity.ReferenceKind,
-            identity.IncludeDefinition,
-            identity.Limit,
-            cursor.ExactOffset,
-            cursor.FallbackOffset);
+            identity.PopulationFingerprint,
+            identity.RequestFingerprint,
+            cursor.Offset);
         byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(
             unsigned,
-            ToolContinuationJsonContext.Default.UnsignedReferenceContinuationPayload);
+            ToolContinuationJsonContext.Default.UnsignedPopulationContinuationPayload);
         string checksum = Convert.ToHexStringLower(SHA256.HashData(unsignedBytes));
-        var payload = new ReferenceContinuationPayload(
+        var payload = new PopulationContinuationPayload(
             unsigned.Version,
+            unsigned.Kind,
             unsigned.WorkspaceId,
-            unsigned.SymbolId,
-            unsigned.ArtifactId,
-            unsigned.Revision,
-            unsigned.ReferenceKind,
-            unsigned.IncludeDefinition,
-            unsigned.Limit,
-            unsigned.ExactOffset,
-            unsigned.FallbackOffset,
+            unsigned.PopulationFingerprint,
+            unsigned.RequestFingerprint,
+            unsigned.Offset,
             checksum);
         return Base64UrlEncode(JsonSerializer.SerializeToUtf8Bytes(
             payload,
-            ToolContinuationJsonContext.Default.ReferenceContinuationPayload));
+            ToolContinuationJsonContext.Default.PopulationContinuationPayload));
     }
 
-    public static ToolReferenceContinuationCursor DecodeReferenceCursor(
+    public static ToolPopulationContinuationCursor DecodePopulationCursor(
         string token,
-        ToolReferenceContinuationIdentity expected)
+        ToolPopulationContinuationIdentity expected)
     {
-        ValidateReferenceIdentity(expected);
+        ValidatePopulationIdentity(expected);
         if (string.IsNullOrWhiteSpace(token))
-            throw Refusal("continuation_invalid", "Reference continuation is empty.");
+            throw Refusal("continuation_invalid", "Population continuation is empty.");
 
         byte[] payloadBytes;
         try
@@ -267,78 +256,75 @@ public static partial class ToolOutputBudget
         }
         catch (FormatException)
         {
-            throw Refusal("continuation_invalid", "Reference continuation is malformed.");
+            throw Refusal("continuation_invalid", "Population continuation is malformed.");
         }
         if (!string.Equals(Base64UrlEncode(payloadBytes), token, StringComparison.Ordinal))
-            throw Refusal("continuation_invalid", "Reference continuation is not canonical base64url.");
+            throw Refusal("continuation_invalid", "Population continuation is not canonical base64url.");
 
-        ReferenceContinuationPayload payload;
+        PopulationContinuationPayload payload;
         try
         {
             payload = JsonSerializer.Deserialize(
                 payloadBytes,
-                ToolContinuationJsonContext.Default.ReferenceContinuationPayload)
-                ?? throw new JsonException("Reference continuation payload is empty.");
+                ToolContinuationJsonContext.Default.PopulationContinuationPayload)
+                ?? throw new JsonException("Population continuation payload is empty.");
         }
         catch (JsonException)
         {
-            throw Refusal("continuation_invalid", "Reference continuation is malformed.");
+            throw Refusal("continuation_invalid", "Population continuation is malformed.");
         }
 
-        var unsigned = new UnsignedReferenceContinuationPayload(
+        var unsigned = new UnsignedPopulationContinuationPayload(
             payload.Version,
+            payload.Kind,
             payload.WorkspaceId,
-            payload.SymbolId,
-            payload.ArtifactId,
-            payload.Revision,
-            payload.ReferenceKind,
-            payload.IncludeDefinition,
-            payload.Limit,
-            payload.ExactOffset,
-            payload.FallbackOffset);
+            payload.PopulationFingerprint,
+            payload.RequestFingerprint,
+            payload.Offset);
         byte[] unsignedBytes = JsonSerializer.SerializeToUtf8Bytes(
             unsigned,
-            ToolContinuationJsonContext.Default.UnsignedReferenceContinuationPayload);
+            ToolContinuationJsonContext.Default.UnsignedPopulationContinuationPayload);
         string checksum = Convert.ToHexStringLower(SHA256.HashData(unsignedBytes));
-        if (string.IsNullOrWhiteSpace(payload.Checksum) || payload.Checksum.Length != checksum.Length)
-            throw Refusal("continuation_invalid", "Reference continuation checksum is invalid.");
-        if (!CryptographicOperations.FixedTimeEquals(
+        if (string.IsNullOrWhiteSpace(payload.Checksum) || payload.Checksum.Length != checksum.Length ||
+            !CryptographicOperations.FixedTimeEquals(
                 Encoding.ASCII.GetBytes(checksum),
                 Encoding.ASCII.GetBytes(payload.Checksum)))
         {
-            throw Refusal("continuation_invalid", "Reference continuation checksum is invalid.");
+            throw Refusal("continuation_invalid", "Population continuation checksum is invalid.");
         }
 
-        if (payload.Version != 1 ||
-            !string.Equals(payload.WorkspaceId, expected.WorkspaceId, StringComparison.Ordinal) ||
-            !string.Equals(payload.SymbolId, expected.SymbolId, StringComparison.Ordinal) ||
-            !string.Equals(payload.ArtifactId, expected.ArtifactId, StringComparison.Ordinal) ||
-            payload.Revision != expected.Revision ||
-            !string.Equals(payload.ReferenceKind, expected.ReferenceKind, StringComparison.Ordinal) ||
-            payload.IncludeDefinition != expected.IncludeDefinition ||
-            payload.Limit != expected.Limit)
+        if (payload.Version != 1)
+            throw Refusal("continuation_invalid", "Population continuation version is unsupported.");
+        if (!string.Equals(payload.Kind, expected.Kind, StringComparison.Ordinal))
         {
             throw Refusal(
-                "continuation_stale",
-                "Reference continuation does not match the current workspace, target, artifact, filter, or limit.");
+                "continuation_kind_mismatch",
+                "Continuation belongs to a different result population.");
         }
-        if (payload.ExactOffset < 0 || payload.FallbackOffset < 0)
-            throw Refusal("continuation_offset_invalid", "Reference continuation offsets are invalid.");
+        if (!string.Equals(payload.WorkspaceId, expected.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(
+                payload.PopulationFingerprint,
+                expected.PopulationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(payload.RequestFingerprint, expected.RequestFingerprint, StringComparison.Ordinal))
+        {
+            throw Refusal(
+                "stale_continuation",
+                "Continuation no longer matches the requested result population.");
+        }
+        if (payload.Offset < 0)
+            throw Refusal("continuation_offset_invalid", "Population continuation offset is invalid.");
 
-        return new ToolReferenceContinuationCursor(payload.ExactOffset, payload.FallbackOffset);
+        return new ToolPopulationContinuationCursor(payload.Offset);
     }
 
-    private static void ValidateReferenceIdentity(ToolReferenceContinuationIdentity identity)
+    private static void ValidatePopulationIdentity(ToolPopulationContinuationIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(identity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.Kind);
         ArgumentException.ThrowIfNullOrWhiteSpace(identity.WorkspaceId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(identity.SymbolId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(identity.ArtifactId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(identity.ReferenceKind);
-        if (identity.Revision < 0)
-            throw new ArgumentOutOfRangeException(nameof(identity), "Reference revision cannot be negative.");
-        if (identity.Limit < 1)
-            throw new ArgumentOutOfRangeException(nameof(identity), "Reference limit must be positive.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.PopulationFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.RequestFingerprint);
     }
 
     private static long FindValidEnd(byte[] bytes, long start, long tentativeEnd)
@@ -521,34 +507,26 @@ public static partial class ToolOutputBudget
         long NextOffset,
         string Checksum);
 
-    private sealed record UnsignedReferenceContinuationPayload(
+    private sealed record UnsignedPopulationContinuationPayload(
         int Version,
+        string Kind,
         string WorkspaceId,
-        string SymbolId,
-        string ArtifactId,
-        long Revision,
-        string ReferenceKind,
-        bool IncludeDefinition,
-        int Limit,
-        int ExactOffset,
-        int FallbackOffset);
+        string PopulationFingerprint,
+        string RequestFingerprint,
+        int Offset);
 
-    private sealed record ReferenceContinuationPayload(
+    private sealed record PopulationContinuationPayload(
         int Version,
+        string Kind,
         string WorkspaceId,
-        string SymbolId,
-        string ArtifactId,
-        long Revision,
-        string ReferenceKind,
-        bool IncludeDefinition,
-        int Limit,
-        int ExactOffset,
-        int FallbackOffset,
+        string PopulationFingerprint,
+        string RequestFingerprint,
+        int Offset,
         string Checksum);
 
     [JsonSerializable(typeof(UnsignedContinuationPayload))]
     [JsonSerializable(typeof(ContinuationPayload))]
-    [JsonSerializable(typeof(UnsignedReferenceContinuationPayload))]
-    [JsonSerializable(typeof(ReferenceContinuationPayload))]
+    [JsonSerializable(typeof(UnsignedPopulationContinuationPayload))]
+    [JsonSerializable(typeof(PopulationContinuationPayload))]
     private sealed partial class ToolContinuationJsonContext : JsonSerializerContext;
 }

@@ -274,6 +274,105 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_FileSummary_JsonContinuationIsLosslessAndPopulationBound()
+    {
+        var rows = Enumerable.Range(0, 23)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"{i + 1:x32}",
+                $"Member{i:D2}",
+                "method",
+                "csharp",
+                "src/Paged.cs",
+                $"void Member{i:D2}()",
+                i + 1,
+                null))
+            .ToArray();
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-paged", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+        var returnedNames = new List<string>();
+        string? continuation = null;
+
+        do
+        {
+            using var document = JsonDocument.Parse(tool.Inspect(
+                "src/Paged.cs",
+                limit: 10,
+                format: "json",
+                continuation: continuation));
+            returnedNames.AddRange(document.RootElement
+                .GetProperty("children")
+                .EnumerateArray()
+                .Select(child => child.GetProperty("name").GetString()!));
+            continuation = document.RootElement.GetProperty("continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : document.RootElement.GetProperty("continuation").GetString();
+        }
+        while (continuation is not null);
+
+        Assert.Equal(rows.Select(row => row.Name), returnedNames);
+        Assert.Equal(returnedNames.Count, returnedNames.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Inspect_FileSummary_ContinuationRejectsChangedPopulation()
+    {
+        JulieDbFixture.SymbolRow[] rows = Enumerable.Range(0, 12)
+            .Select(i => new JulieDbFixture.SymbolRow(
+                $"{i + 1:x32}",
+                $"Member{i:D2}",
+                "method",
+                "csharp",
+                "src/Paged.cs",
+                $"void Member{i:D2}()",
+                i + 1,
+                null))
+            .ToArray();
+        using var firstFixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows);
+        var (firstIndex, _) = Build(firstFixture);
+        var firstTool = new InspectTool(new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                firstIndex,
+                firstFixture.DbPath,
+                "ws-paged",
+                firstFixture.WorkspaceRoot)));
+        using JsonDocument firstPage = JsonDocument.Parse(
+            firstTool.Inspect("src/Paged.cs", limit: 5, format: "json"));
+        string continuation = firstPage.RootElement.GetProperty("continuation").GetString()!;
+
+        rows[11] = rows[11] with { Name = "ChangedMember" };
+        using var changedFixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows);
+        var (changedIndex, _) = Build(changedFixture);
+        var changedTool = new InspectTool(new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                changedIndex,
+                changedFixture.DbPath,
+                "ws-paged",
+                changedFixture.WorkspaceRoot)));
+        using JsonDocument changedResult = JsonDocument.Parse(
+            changedTool.Inspect(
+                "src/Paged.cs",
+                limit: 5,
+                format: "json",
+                continuation: continuation));
+
+        Assert.Equal(
+            "stale_continuation",
+            changedResult.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void Inspect_McpRoute_FinalBudgetReturnsTypedRefusalForOversizedMetadata()
     {
         string hugeName = new('x', 20_000);
@@ -445,7 +544,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Inspect_FileSummary_McpCompact_DoesNotSuggestRaisingClampedLimit()
+    public void Inspect_FileSummary_McpCompact_ContinuesPastClampedLimit()
     {
         var rows = Enumerable.Range(0, 30)
             .Select(i => new JulieDbFixture.SymbolRow(
@@ -470,7 +569,8 @@ public sealed class InspectToolTests
         string output = tool.Inspect("src/Many.cs", limit: 100);
 
         Assert.DoesNotContain("raise limit", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("narrow with kind=", output, StringComparison.Ordinal);
+        Assert.Contains("continuation=", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("narrow with kind=", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2063,6 +2163,49 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_UnknownDepth_JsonReturnsTypedRefusal()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-invalid-depth",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        using var document = JsonDocument.Parse(tool.Inspect(
+            "auth/UserService.cs",
+            depth: "verbose",
+            format: "json"));
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("invalid_depth", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public void Inspect_UnknownFormat_ReturnsTypedRefusal()
+    {
+        using var fx = JulieDbFixture.CreateForInspect();
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(
+                index,
+                fx.DbPath,
+                "ws-invalid-format",
+                fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("auth/UserService.cs", format: "yaml");
+
+        Assert.Contains("diagnostic_code=invalid_format", output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=refusal", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Inspect_FullBody_Json_UsesBoundedStatelessContinuation()
     {
         var fixture = LongBodyFixture();
@@ -2194,7 +2337,7 @@ public sealed class InspectToolTests
     }
 
     [Fact]
-    public void Inspect_ContinuationOnFileTarget_IsTypedRefusal()
+    public void Inspect_InvalidContinuationOnFileTarget_IsTypedRefusal()
     {
         using var fx = JulieDbFixture.CreateForInspect();
         var (index, _) = Build(fx);
@@ -2214,7 +2357,7 @@ public sealed class InspectToolTests
 
         using var document = JsonDocument.Parse(output);
         JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
-        Assert.Equal("continuation_target_mismatch", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("continuation_invalid", diagnostic.GetProperty("code").GetString());
         Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
     }
 

@@ -2844,7 +2844,9 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("GetUser", root.GetProperty("resolved_target").GetProperty("name").GetString());
         Assert.Equal(1, root.GetProperty("emitted").GetInt32());
 
-        JsonElement reference = Assert.Single(root.GetProperty("references").EnumerateArray());
+        Assert.Equal(2, root.GetProperty("schema_version").GetInt32());
+        Assert.False(root.TryGetProperty("references", out _));
+        JsonElement reference = Assert.Single(root.GetProperty("exact_references").EnumerateArray());
         Assert.Equal("GetUser", reference.GetProperty("name").GetString());
         Assert.Equal("call", reference.GetProperty("kind").GetString());
         Assert.Equal("auth/Repo.cs", reference.GetProperty("file").GetString());

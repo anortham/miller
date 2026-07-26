@@ -141,6 +141,7 @@ public sealed class EditService
         public IReadOnlyList<string> FilesLeftModified { get; init; } = [];
         public int FilesLeftModifiedTotalCount { get; init; }
         public int FilesLeftModifiedOmittedCount { get; init; }
+        public ToolDiagnostic? Diagnostic { get; init; }
     }
 
     /// <summary>Run the full edit pipeline for <paramref name="request"/>. Never throws for an expected condition.</summary>
@@ -151,29 +152,77 @@ public sealed class EditService
 
         bool json = string.Equals(request.Format, "json", StringComparison.OrdinalIgnoreCase);
 
+        if (!string.Equals(request.Format, "compact", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(request.Format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return WithDiagnostic(
+                Error(
+                    $"unknown format '{request.Format}'. Valid: compact, json.",
+                    json,
+                    failureReason: FailureInvalidRequest),
+                json);
+        }
+
         if (!TryParseOperation(request.Operation, out var op))
-            return Error($"unknown operation '{request.Operation}'. Valid: {string.Join(", ", OperationNames)}.", json,
-                failureReason: FailureInvalidRequest);
+            return WithDiagnostic(
+                Error($"unknown operation '{request.Operation}'. Valid: {string.Join(", ", OperationNames)}.", json,
+                    failureReason: FailureInvalidRequest),
+                json);
 
         if (!TryParseOccurrence(request.Occurrence, out var occurrence))
-            return Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json,
-                failureReason: FailureInvalidRequest);
+            return WithDiagnostic(
+                Error($"unknown occurrence '{request.Occurrence}'. Valid: first, last, all.", json,
+                    failureReason: FailureInvalidRequest),
+                json);
 
         if (op == EditOperation.ReplaceText && !TryParseMatchMode(request.MatchMode, out _))
-            return Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json,
-                failureReason: FailureInvalidRequest);
+            return WithDiagnostic(
+                Error($"unknown match_mode '{request.MatchMode}'. Valid: auto, exact, normalized, fuzzy.", json,
+                    failureReason: FailureInvalidRequest),
+                json);
 
+        EditResult result;
         try
         {
-            return op == EditOperation.RenameSymbol
+            result = op == EditOperation.RenameSymbol
                 ? ExecuteRename(request, json)
                 : ExecuteSingleFile(request, op, occurrence, json);
         }
         catch (InvalidEditTargetPathException ex)
         {
-            return Error(ex.Message, json, failureReason: FailureInvalidRequest);
+            result = Error(ex.Message, json, failureReason: FailureInvalidRequest);
         }
+        return WithDiagnostic(result, json);
     }
+
+    private static EditResult WithDiagnostic(EditResult result, bool json)
+    {
+        if (string.Equals(result.Outcome, "ok", StringComparison.Ordinal))
+            return result;
+
+        ToolDiagnostic diagnostic = result.FailureReason switch
+        {
+            FailureNoMatch or FailureTargetNotFound =>
+                ToolDiagnostic.ExpectedEmpty(result.FailureReason, DiagnosticMessage(result.Output)),
+            FailureAmbiguousMatch =>
+                ToolDiagnostic.Ambiguity(result.FailureReason, DiagnosticMessage(result.Output)),
+            FailureInvalidRequest or FailureStaleTarget =>
+                ToolDiagnostic.Refusal(result.FailureReason, DiagnosticMessage(result.Output)),
+            FailureApplyFailed or FailurePartialApply =>
+                ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
+            _ => ToolDiagnostic.InternalFailure(
+                result.FailureReason ?? FailureUnknown,
+                DiagnosticMessage(result.Output)),
+        };
+        return result with
+        {
+            Output = ToolDiagnosticRenderer.Attach("edit", result.Output, diagnostic, json, telemetry: null),
+            Diagnostic = diagnostic,
+        };
+    }
+
+    private static string DiagnosticMessage(string output) =>
+        SearchTool.Truncate(output, 1_024);
 
     // ---------- single-file operations ----------
 

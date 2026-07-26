@@ -81,9 +81,9 @@ public static class NearDuplicateAnalyzer
     /// <summary>Default cap on returned groups.</summary>
     public const int DefaultMaxGroups = 50;
 
-    private const string IdentifierToken = "id";
-    private const string NumberToken = "num";
-    private const string StringToken = "str";
+    private const string IdentifierToken = "\u0001id";
+    private const string NumberToken = "\u0001num";
+    private const string StringToken = "\u0001str";
 
     private static readonly ulong[] PermutationSeeds = BuildPermutationSeeds();
 

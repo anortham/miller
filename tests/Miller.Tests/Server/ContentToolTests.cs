@@ -807,6 +807,29 @@ public sealed class ContentToolTests : IDisposable
         Assert.EndsWith("…", doc.RootElement.GetProperty("operation").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Content_UnknownOperation_JsonCarriesTypedRefusal()
+    {
+        using var ledger = TelemetryLedger.Open(
+            _workspace.TelemetryDbPath,
+            _workspace.WorkspaceId,
+            _workspace.WorkspaceRoot);
+        using var telemetry = ledger.Measure("content", op: null);
+        string output = new ContentTool(_workspace, new ContentCorpusExternalStore())
+            .Content("frobnicate", format: "json");
+
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        Assert.Equal("invalid_operation", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.Equal("empty", diagnostic.GetProperty("outcome").GetString());
+        Assert.Equal(TelemetryOutcome.Empty, telemetry.Outcome);
+        Assert.False(telemetry.UseMcpErrorChannel);
+        using JsonDocument metadata = JsonDocument.Parse(telemetry.MetadataJson);
+        Assert.Equal("invalid_operation", metadata.RootElement.GetProperty("diagnostic_code").GetString());
+        Assert.Equal("refusal", metadata.RootElement.GetProperty("diagnostic_class").GetString());
+    }
+
     [Theory]
     [InlineData("source", "workspace_source")]
     [InlineData("workspace_source", "workspace_source")]

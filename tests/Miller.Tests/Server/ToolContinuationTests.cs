@@ -191,110 +191,32 @@ public sealed class ToolContinuationTests
     }
 
     [Fact]
-    public void ReferenceCursor_RoundTripsWithoutServerState()
+    public void PopulationCursor_BindsKindAndRelevantPopulation()
     {
-        var identity = new ToolReferenceContinuationIdentity(
+        var identity = new ToolPopulationContinuationIdentity(
+            "inspect_file",
             "workspace",
-            "symbol",
-            "artifact",
-            42,
-            "call",
-            true,
-            100);
-
-        string token = ToolOutputBudget.EncodeReferenceCursor(
+            "population-a",
+            "request-a");
+        string token = ToolOutputBudget.EncodePopulationCursor(
             identity,
-            new ToolReferenceContinuationCursor(24, 3));
-        ToolReferenceContinuationCursor cursor =
-            ToolOutputBudget.DecodeReferenceCursor(token, identity);
+            new ToolPopulationContinuationCursor(10));
 
-        Assert.Equal(24, cursor.ExactOffset);
-        Assert.Equal(3, cursor.FallbackOffset);
-    }
+        ToolPopulationContinuationCursor cursor =
+            ToolOutputBudget.DecodePopulationCursor(token, identity);
+        Assert.Equal(10, cursor.Offset);
 
-    [Fact]
-    public void ReferenceCursor_RejectsChangedArtifactRevision()
-    {
-        var identity = new ToolReferenceContinuationIdentity(
-            "workspace",
-            "symbol",
-            "artifact",
-            42,
-            "all",
-            true,
-            100);
-        string token = ToolOutputBudget.EncodeReferenceCursor(
-            identity,
-            new ToolReferenceContinuationCursor(24, 0));
-
-        var exception = Assert.Throws<ToolDiagnosticException>(() =>
-            ToolOutputBudget.DecodeReferenceCursor(
+        ToolDiagnosticException kindMismatch = Assert.Throws<ToolDiagnosticException>(() =>
+            ToolOutputBudget.DecodePopulationCursor(
                 token,
-                identity with { Revision = 43 }));
+                identity with { Kind = "patterns_search" }));
+        Assert.Equal("continuation_kind_mismatch", kindMismatch.Diagnostic.Code);
 
-        Assert.Equal("continuation_stale", exception.Diagnostic.Code);
-    }
-
-    [Fact]
-    public void ReferenceCursor_RejectsNonCanonicalBase64Url()
-    {
-        ToolReferenceContinuationIdentity? identity = null;
-        string? token = null;
-        string? padding = null;
-        for (int suffixLength = 0; suffixLength < 4; suffixLength++)
-        {
-            identity = new ToolReferenceContinuationIdentity(
-                "workspace",
-                "symbol",
-                "artifact" + new string('x', suffixLength),
-                42,
-                "all",
-                true,
-                100);
-            token = ToolOutputBudget.EncodeReferenceCursor(
-                identity,
-                new ToolReferenceContinuationCursor(24, 0));
-            int paddingLength = (4 - token.Length % 4) % 4;
-            if (paddingLength > 0)
-            {
-                padding = new string('=', paddingLength);
-                break;
-            }
-        }
-        Assert.NotNull(identity);
-        Assert.NotNull(token);
-        Assert.NotNull(padding);
-
-        var exception = Assert.Throws<ToolDiagnosticException>(() =>
-            ToolOutputBudget.DecodeReferenceCursor(token + padding, identity));
-
-        Assert.Equal("continuation_invalid", exception.Diagnostic.Code);
-    }
-
-    [Fact]
-    public void ReferenceCursor_RejectsMissingChecksum()
-    {
-        const string payload =
-            "{\"Version\":1,\"WorkspaceId\":\"workspace\",\"SymbolId\":\"symbol\"," +
-            "\"ArtifactId\":\"artifact\",\"Revision\":42,\"ReferenceKind\":\"all\"," +
-            "\"IncludeDefinition\":true,\"Limit\":100,\"ExactOffset\":24,\"FallbackOffset\":0}";
-        string token = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload))
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-        var identity = new ToolReferenceContinuationIdentity(
-            "workspace",
-            "symbol",
-            "artifact",
-            42,
-            "all",
-            true,
-            100);
-
-        var exception = Assert.Throws<ToolDiagnosticException>(() =>
-            ToolOutputBudget.DecodeReferenceCursor(token, identity));
-
-        Assert.Equal("continuation_invalid", exception.Diagnostic.Code);
+        ToolDiagnosticException stalePopulation = Assert.Throws<ToolDiagnosticException>(() =>
+            ToolOutputBudget.DecodePopulationCursor(
+                token,
+                identity with { PopulationFingerprint = "population-b" }));
+        Assert.Equal("stale_continuation", stalePopulation.Diagnostic.Code);
     }
 
     private static string CreateContinuationToken(long nextOffset)
