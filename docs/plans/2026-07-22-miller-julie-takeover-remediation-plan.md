@@ -35,7 +35,7 @@ The completed audit used one broad Claude review and nine fresh tool-specific Cl
 | Agent efficiency | Miller meets or beats Julie on calls, tokens, and wall time to first correct action, with no higher wrong-action rate. |
 | Bounds | Compact context, impact, health, list, and content responses stay within their documented budgets. |
 | Reliability | JSON requests always return valid JSON or a classified MCP error; no hard failure masquerades as success text. |
-| Platform | Local semantic retrieval passes RC4 conformance and acceleration checks on macOS, Windows, and Linux. |
+| Platform | All four RC4 packages pass protocol, deterministic CPU fallback, and zero-work checks; physical acceleration evidence is required only for provider lanes claimed as promoted. |
 | Product | A sealed paired agent run supports retiring Julie without losing a Julie-only workflow. |
 | Independent review | All nine tool-specific Claude implementation reviews and the broad final Claude review are recorded and locally validated. |
 
@@ -364,14 +364,17 @@ Add a shared deterministic output-budget and continuation contract to `inspect` 
 This lane may begin after Phase 0 while Phases 1–8 continue. It validates RC4 packaging, protocol, provider selection, and resource behavior without choosing the final model or claiming Phase 9 complete.
 
 1. Run the committed sidecar conformance suite on the released RC4 artifacts.
-2. Verify acceleration/provider selection on Apple MPS, Windows DirectML-equivalent, Linux CUDA/ROCm, and documented Intel fallback/support.
+2. Verify the released provider matrix: Apple Metal and Windows/Linux Vulkan package selection, deterministic
+   CPU fallback on every target, and physical acceleration on each lane claimed as promoted.
 3. Measure cold/warm latency, memory, concurrency, determinism, and multi-client behavior.
 4. Preserve automatic fallback and an explicit zero-work off state.
 
 #### Early Preflight Gate
 
-- All platform packages pass protocol and hardware-selection tests.
-- Cold/warm latency, memory, concurrency, determinism, and multi-client evidence is recorded for every required platform lane.
+- All platform packages pass protocol, selection, CPU fallback, and zero-work tests.
+- Cold/warm latency, memory, concurrency, determinism, and multi-client evidence is recorded for every promoted
+  physical acceleration lane. Unpromoted optional provider lanes remain explicitly labeled package candidates
+  and cannot support an acceleration-performance claim.
 - Passing this gate only clears the platform/protocol dependency; it does not select a model or complete Phase 9.
 
 ### Final Model Decision

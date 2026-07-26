@@ -18,6 +18,9 @@ dispatch, release, or Julie-session interference
   Apple arm64 archive passed CPU and Metal conformance, concurrent determinism, fallback, and throughput proof;
   Apple x64 Metal, Linux Vulkan, and Windows Vulkan remain honestly labeled package candidates until their
   applicable physical-hardware promotion evidence exists.
+- The scoped Phase 9 gate requires protocol, deterministic CPU fallback, and zero-work proof on all four
+  packages, plus physical acceleration evidence only for lanes claimed as promoted. Optional unpromoted provider
+  lanes make no acceleration-performance claim and do not block the takeover or package-only workflow.
 - Package smoke now asserts all nine MCP tool names. The strict hash-bound Miller product attestation, operator
   creation command, fail-closed receipt validator, conditional Miller migration guide, and conditional 1.14.0
   release notes are integrated through `d0fe8cf3`.
@@ -82,7 +85,8 @@ runtime, selection, and package inputs before calibration begins.
 Before any paid calibration or sealed execution:
 
 - verify the completed Phase 7 remaining-surface work and Phase 8 all-language extraction coverage;
-- verify the completed Phase 9 RC4/macOS-x64/platform/model-decision gates;
+- verify the completed Phase 9 RC4 package/protocol/CPU-fallback, promoted Apple-arm64 acceleration, and
+  model-decision gates while retaining candidate labels on unpromoted provider lanes;
 - retain `patterns` in both Unix and Windows MCP tool-list assertions in `.github/workflows/release.yml`;
 - retain the resolved snapshot-manifest contract and safe product-attestation contract;
 - prepare, but do not publish, the Miller replacement text, migration guide, and release notes;
@@ -298,8 +302,8 @@ dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release \
   --filter "FullyQualifiedName~AgentInstructionsTests|FullyQualifiedName~CliDispatchTests|FullyQualifiedName~CliOptionsTests|FullyQualifiedName~CliBinarySubprocessTests|FullyQualifiedName~ToolDiagnostic|FullyQualifiedName~ToolContinuation"
 ```
 
-The package MCP smoke remains the authoritative AOT `initialize` plus `tools/list` check after it is corrected to
-assert all nine names:
+The package MCP smoke is the authoritative AOT `initialize` plus `tools/list` check and now asserts all nine
+names:
 
 ```text
 search inspect context impact trace edit content workspace patterns
@@ -451,11 +455,10 @@ The operator may additionally state only that preflight, automatic reruns, artif
 unresolved voids passed. Do not return `aggregate.json`, scorer JSONL, identity/evidence manifests, private
 filenames, raw rows, the void ledger, or adapter mapping.
 
-## Required product-verdict attestation amendment
+## Resolved product-verdict attestation contract
 
-The safe aggregate is intentionally neutral and hides product mapping. The implementation session therefore
-cannot prove that a passing `candidate` is Miller. Before the sealed run, amend the frozen operator protocol to
-permit one additional privacy-safe attestation bound to the safe aggregate:
+The safe aggregate is intentionally neutral and hides product mapping. The frozen operator protocol now permits
+one additional privacy-safe attestation bound to the safe aggregate:
 
 ```json
 {
@@ -476,8 +479,10 @@ Allowed `product_verdict` values are `pass` and `fail`; it must equal the sealed
 through the pre-frozen private mapping. The attestation reveals no neutral-role mapping, task data, metrics, paths,
 filenames, adapter commands, or evidence. Its safe-aggregate hash binds it to the exact returned file.
 
-This is not allowed by the current “only safe aggregate plus statement” protocol. It must be explicitly approved,
-documented, schema-validated, and frozen before the spend begins. Do not improvise it afterward.
+This contract is implemented in `product-verdict-attestation.schema.json`,
+`SEALED-AGENT-PROTOCOL.md`, `takeover-evaluation-v1.md`, and the evaluator's create/validate commands and tests.
+The operator still creates the attestation only after the explicitly approved sealed run; no separate contract
+amendment remains.
 
 ## Evaluator drift against Phase 0
 
@@ -497,15 +502,12 @@ repository-relative script and `AGENT_EFFICIENCY_PYTHON` instead of an absolute 
 `c6895c78` change affects only the older foundation reference-count helper, not takeover-v1 selection, execution,
 or scoring.
 
-One Phase 0 ambiguity must be closed before sealed execution:
+The Phase 0 snapshot-manifest ambiguity is resolved:
 
-- the frozen prose says every takeover manifest carries `contract_id=takeover-evaluation-v1`;
+- the frozen prose now distinguishes the top-level task manifest from the schema-versioned snapshot manifest;
 - `snapshot-manifest.schema.json` and `dev-snapshots.json` contain only `schema_version` plus `snapshots`;
-- the snapshot loader therefore hashes and validates snapshot identity without a snapshot-level `contract_id`.
-
-This contradiction existed in `87bf18ab`; it is not later drift. Either clarify in the frozen contract that the
-snapshot manifest is schema-versioned and bound through the takeover selection identity, or add the contract ID
-with a versioned schema migration. Do not silently infer the intended rule during a sealed run.
+- the snapshot loader hashes and validates the exact snapshot-manifest bytes, and the v1 selection identity binds
+  that digest together with `contract_id=takeover-evaluation-v1`.
 
 The task schema also permits a missing top-level `contract_id` for explicit legacy calibration compatibility, but
 `build_selection` rejects any full takeover parent whose tasks are not stamped v1. The current
@@ -574,7 +576,7 @@ surface outright only in a separately approved retirement change.
 | nine Claude reviews plus broad review | no | authentication and paid/subscription usage approval |
 | sealed preflight/execution/scoring | no | external operator, private artifacts, spend-once approval |
 | safe aggregate validation | yes | only after operator returns the allowlisted file |
-| product-verdict attestation | no | contract amendment and operator statement |
+| product-verdict attestation | no | operator-generated under the frozen contract after the approved sealed run |
 | push frozen branch and package workflow | no | push approval and GitHub-hosted compute |
 | local merge to Miller main | no | explicit integration approval after exact state check |
 | Julie docs/merge/push/release | no | active-session reconciliation plus separate cross-repo approvals |

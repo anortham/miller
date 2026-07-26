@@ -17,7 +17,7 @@ The implementation owners remain:
 
 ## Contract Identity And Versioning
 
-Every takeover manifest, run artifact, scorer input, aggregate, and identity manifest carries:
+Every top-level takeover task manifest, run artifact, scorer input, aggregate, and identity manifest carries:
 
 ```json
 {
@@ -33,6 +33,11 @@ The identifier and version have semantic force:
 - A change to a field's meaning, an enum, canonicalization, metric formula, gate, identity hash, privacy class, or required field requires a new schema version. A breaking contract change requires `takeover-evaluation-v2`.
 - Existing visible exports may enter through an explicit legacy compatibility adapter. They remain calibration evidence and cannot receive takeover, sealed, or retirement verdicts.
 - Missing v1 fields are never inferred from prompts, filenames, product labels, old workflow classes, or default values.
+
+The snapshot manifest is the intentional exception: it is schema-versioned and validated by
+`snapshot-manifest.schema.json`, then bound into the v1 selection identity by the SHA-256 of its exact bytes. It
+does not repeat `contract_id`; the selection identity that consumes it carries
+`contract_id=takeover-evaluation-v1` and `schema_version=1`.
 
 ## Corpus Lanes And Decision Scope
 

@@ -29,7 +29,7 @@ Miller is already better in six foundation areas:
 
 The right product is the existing Miller surface with deeper shared implementations. All nine MCP tools remain
 justified. No new MCP tool is required by this audit. `trace auto` was removed during Phase 3 after callers and
-callees moved to `inspect`; unbounded `content export` should become CLI-only.
+callees moved to `inspect`; `content export` is CLI-only and no longer exists on MCP.
 
 ## Remediation progress
 
@@ -37,10 +37,15 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
-- Phase 10 Search, Inspect, Context, Trace, Impact, Patterns, and Workspace re-audits are locally complete. Impact
-  now pages large MCP results through a stateless byte-identical continuation envelope while preserving complete
-  CLI JSON; Patterns and Workspace required no source or contract changes after their truth, safety, and
-  output-bound verification.
+- Phase 10 re-audits are locally complete for all nine tools. Edit and Content closed together at `2d2ff720`;
+  Search, Inspect, Context, Trace, Impact, Patterns, and Workspace then closed in their documented serial passes.
+  Impact now pages large MCP results through a stateless byte-identical continuation envelope while preserving
+  complete CLI JSON; Patterns and Workspace required no source or contract changes after their truth, safety,
+  and output-bound verification.
+- The separate broad Phase 10 architecture/evidence review is clean after reconciling current provider,
+  all-language, evaluator-identity, tool-inventory, and historical-baseline wording. Its validated dispositions
+  are recorded in
+  [`2026-07-26-phase10-broad-final-review.md`](2026-07-26-phase10-broad-final-review.md).
 
 ## Replacement Standard
 
@@ -81,7 +86,11 @@ Claude participated in every audit pass, not only the broad comparison. Prefligh
 
 The broad review did not satisfy any tool-specific pass. Each tool received a fresh ephemeral review, and the lead independently checked its claims before including them here.
 
-## Priority Summary
+## Original Priority Summary (2026-07-22 Baseline)
+
+This table is the pre-remediation audit snapshot, not current blocker state. Every P0/P1 item below has a
+completed disposition in the tool sections and Phase 10 evidence records. No locally known P0/P1 correctness
+blocker remains; package validation, visible recalibration, and the sealed paired decision remain takeover gates.
 
 | Priority | Finding | Affected tools | Replacement effect |
 |---|---|---|---|
@@ -173,7 +182,10 @@ Create one deep reference-evidence module whose caller-facing input is a symbol 
 - Old tests that assert “every identifier with that name” are inverted.
 - Per-language fallback coverage is reported rather than silently treated as complete.
 
-## Full Tool Matrix
+## Original Full Tool Matrix (2026-07-22 Baseline)
+
+The `Current Miller`, decision, and priority columns below preserve the original comparison that drove the
+remediation plan. Current shipped dispositions are recorded in each tool section and in **Remediation progress**.
 
 | Tool | Current Miller | Julie advantage | Miller advantage | Required decision | Priority |
 |---|---|---|---|---|---|
@@ -489,6 +501,27 @@ Keep one `edit` tool. Route rename through the shared exact-reference evidence m
 
 Accepted Miller's transaction advantage and rename/parse/freshness gaps. Corrected the claim that Julie rename is fully semantic: it depends on `fast_refs`, which still has name fallback and can misattribute unqualified identifiers. Rejected Julie's regex import rewriting and partial per-file rename commits as patterns to copy.
 
+### Phase 10 Remediation Disposition
+
+Completed at `2d2ff720`. Exact rename now proves the definition and target-identified sites from current disk
+bytes, separates fallback evidence and coverage, refuses incomplete exact coverage, replans after stale recovery,
+and retains atomic rollback. `replace_text` is the only operation that may explicitly bypass index freshness,
+because its selected match is re-proved against disk. Successful rename apply returns a copyable exact-ID Impact
+action and test reminder. MCP diff, match, site, coverage, partial-apply, and diagnostic output is bounded with
+exact omission counts.
+
+The original live-AST/parse-invalid recommendation is intentionally rejected. Miller does not own a language
+parser or post-edit extraction; a language-agnostic bracket heuristic would look authoritative without proving
+syntax. The shipped safety boundary is exact indexed identity plus byte-span, current-disk, canonical-path,
+symlink, TOCTOU, rollback, and post-apply verification evidence. Parser-backed extraction remains owned by
+`julie-extractors`.
+
+The combined final Edit/Content gate passed 796 focused tests with one expected platform skip, 5,019 fast tests
+with two expected skips, 91 Scale tests with three optional-sidecar skips, Release build with zero warnings and
+errors, and osx-arm64 Native AOT. Iterative read-only Claude review closed selector-window ambiguity,
+wrong-location writes, overlap truth, stale rename replanning, rollback reporting, and bounded evidence; the
+final focused review returned no findings.
+
 ## Tool Pass 7: `content`
 
 ### Findings
@@ -550,6 +583,8 @@ removed rather than marked deprecated. Focused Content, FTS, store, export, and
 CLI verification passes 340 tests. The required Claude review loop finished
 clean after all confirmed findings were repaired. Detailed implementation evidence is recorded
 in [`2026-07-25-content-correctness-and-bounds.md`](2026-07-25-content-correctness-and-bounds.md).
+The combined Phase 10 Edit/Content closeout at `2d2ff720` re-ran the affected, fast, Scale, Release, and Native
+AOT gates and completed the required fresh Content review without reopening the shipped Phase 7 design.
 
 ## Tool Pass 8: `patterns`
 
@@ -714,11 +749,15 @@ The June foundation matrix proved that expected anchors were often present, not 
 - calls, input/output tokens, and wall time to first correct action;
 - one-call task completion for context/inspect/impact;
 - correct refusal and uncertainty, not only successful answer count;
-- semantic-off, BGE-small, and CodeRankEmbed arms on identical tasks once RC3 is available.
+- semantic-off, BGE-small, and CodeRankEmbed arms on identical tasks using the released and pinned RC4 sidecar.
 
 ### Language Parity
 
-This Miller artifact proves exact resolution only for the languages and kinds present in this repo. It does not prove all 36 extractor languages. Every feature that depends on exact references, test linkage, typed relationships, or rename coverage must run against a committed all-language extract fixture and report missing capability by language/kind. A sparse language cannot silently look authoritative.
+Phase 8 is complete. The released and pinned `julie-extract 2.17.0` all-language resolution gate covers all 36
+supported languages and 689 coverage cells with zero silent cells or deferred coverage debt. Miller still reports
+exact, fallback, confidence, provenance, and capability gaps separately; a sparse or unresolved kind cannot
+silently look authoritative. The hash-bound prerequisite record is
+[`takeover-phase-10-readiness-audit.md`](../../.razorback/sdd/takeover-phase-10-readiness-audit.md).
 
 ## Live Miller Telemetry, Last 14 Days
 
@@ -770,7 +809,7 @@ The edit rate is dominated by intentional refusals; content errors are mostly un
 |---|---|---|
 | Nine MCP tools | Keep | Each owns a distinct agent intent and earns its interface. |
 | `trace auto` | Removed | Callers and callees belong to `inspect`; reference and path workflows remain in `trace`. |
-| `content export` MCP operation | Remove after contract review | Unbounded process/export workflow belongs on CLI/JSONL. |
+| `content export` MCP operation | Removed | Unbounded process/export workflow remains on CLI/JSONL only. |
 | New refs/call-path/blast-radius tools | Do not add | Existing `trace` and `impact` can become deep enough. |
 | Generic spillover tool | Do not add | Adds state and another call; fix primary bounds instead. |
 | Deterministic continuation on existing read tools | Add where output can exceed its budget | Preserves bounded, recoverable evidence without session state or another tool. |

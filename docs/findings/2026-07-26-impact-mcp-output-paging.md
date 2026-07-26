@@ -33,4 +33,5 @@ small-response MCP/CLI byte parity are preserved.
 Each continuation request deterministically re-runs the Impact computation before validating and returning the
 next stateless fragment. Telemetry therefore records each page request as a real Impact invocation. This avoids
 server-side spill state and keeps output identity honest, but large paged git-diff calls do repeat traversal and
-the git read.
+the git read. The evaluator does not exclude that cost: the final visible calibration must measure it before the
+approval-gated sealed run, and the sealed call, token, and wall-time comparison counts every continuation.
