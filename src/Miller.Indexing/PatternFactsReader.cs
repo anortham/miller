@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
@@ -175,22 +178,48 @@ public sealed class PatternFactsReader
         IReadOnlyList<PatternMetadataFilter>? metadataFilters,
         int limit)
     {
+        PatternExactSearchPageResult page = SearchExactPageWithContext(
+            dbPath,
+            patternId,
+            language,
+            pathGlob,
+            metadataFilters,
+            offset: 0,
+            limit);
+        return new PatternExactSearchResult(
+            new PatternMatchResult(page.Page.TotalCount, page.Page.Rows),
+            page.PatternExists,
+            page.SuggestionPatternIds);
+    }
+
+    public PatternExactSearchPageResult SearchExactPageWithContext(
+        string dbPath,
+        string patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
         ValidateFilters(metadataFilters);
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset));
 
         int boundedLimit = Math.Clamp(limit, 1, 500);
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
         using SqliteTransaction transaction = connection.BeginTransaction();
-        PatternMatchResult matches = SearchWithCount(
+        PatternMatchPage page = ReadMatchPage(
             connection,
             transaction,
             [patternId],
             language,
             pathGlob,
             metadataFilters,
+            offset,
             boundedLimit);
-        bool patternExists = matches.TotalCount > 0;
+        bool patternExists = page.TotalCount > 0;
         IReadOnlyList<string> suggestionPatternIds = [];
         if (!patternExists)
         {
@@ -218,7 +247,7 @@ public sealed class PatternFactsReader
             suggestionPatternIds = scoped;
         }
         transaction.Commit();
-        return new PatternExactSearchResult(matches, patternExists, suggestionPatternIds);
+        return new PatternExactSearchPageResult(page, patternExists, suggestionPatternIds);
     }
 
     public PatternMatchResult SearchWithCount(
@@ -289,9 +318,38 @@ public sealed class PatternFactsReader
         int limit,
         int maxPatternIds)
     {
+        PatternQueryMatchPageResult page = SearchByQueryPageWithCount(
+            dbPath,
+            query,
+            language,
+            pathGlob,
+            metadataFilters,
+            offset: 0,
+            limit,
+            maxPatternIds);
+        return new PatternQueryMatchResult(
+            page.ConsideredPatternIds,
+            page.SuggestionPatternIds,
+            page.MatchedPatternCount,
+            page.ReturnedPatternIds,
+            new PatternMatchResult(page.Page.TotalCount, page.Page.Rows));
+    }
+
+    public PatternQueryMatchPageResult SearchByQueryPageWithCount(
+        string dbPath,
+        string query,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit,
+        int maxPatternIds)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         ValidateFilters(metadataFilters);
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset));
         if (maxPatternIds <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxPatternIds));
 
@@ -352,24 +410,25 @@ public sealed class PatternFactsReader
             .Take(maxPatternIds)
             .Select(static row => row.PatternId)
             .ToArray();
-        PatternMatchResult matches = returnedPatternIds.Length == 0
-            ? new PatternMatchResult(0, [])
-            : SearchWithCount(
+        PatternMatchPage page = returnedPatternIds.Length == 0
+            ? EmptyMatchPage(offset)
+            : ReadFairMatchPage(
                 connection,
                 transaction,
                 returnedPatternIds,
                 language,
                 pathGlob,
                 metadataFilters,
+                offset,
                 Math.Clamp(limit, 1, 500));
         transaction.Commit();
 
-        return new PatternQueryMatchResult(
+        return new PatternQueryMatchPageResult(
             observed.Select(static row => row.PatternId).ToArray(),
             suggestionPatternIds,
             matched.Length,
             returnedPatternIds,
-            matches);
+            page);
     }
 
     private static IReadOnlyDictionary<string, long> CountMatchesByPatternId(
@@ -453,6 +512,170 @@ public sealed class PatternFactsReader
             throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
 
         return ReadMatchesWithCount(command, where, pathGlob, pathInSql, boundedLimit);
+    }
+
+    private static PatternMatchPage ReadMatchPage(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int boundedLimit)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        List<string> where = AddSearchFilters(
+            command,
+            patternId: null,
+            language,
+            pathGlob: null,
+            metadataFilters,
+            out _);
+        where.AddRange(AddFactFilters(command, patternIds, language: null));
+        command.CommandText = $"""
+            SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                   containing_symbol_id, start_line, start_column, end_line, end_column,
+                   start_byte, end_byte, confidence, metadata_json
+            FROM structural_facts
+            {WhereClause(where)}
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+
+        Func<string, bool>? pathMatches = string.IsNullOrWhiteSpace(pathGlob)
+            ? null
+            : PatternPathGlobMatcher.Compile(pathGlob);
+        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var rows = new List<PatternMatchRow>(boundedLimit);
+        long totalCount = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            PatternMatchRow row = ReadMatch(reader);
+            if (pathMatches is not null && !pathMatches(row.Path))
+                continue;
+
+            AppendPatternMatchIdentity(fingerprint, row);
+            if (totalCount >= offset && rows.Count < boundedLimit)
+                rows.Add(row);
+            totalCount++;
+        }
+
+        return new PatternMatchPage(
+            totalCount,
+            Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
+            offset,
+            rows);
+    }
+
+    private static PatternMatchPage ReadFairMatchPage(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<string> patternIds,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int boundedLimit)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        int parameterIndex = 0;
+        List<string> where = AddFactFilters(command, patternIds, language);
+        bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref parameterIndex);
+        if (!pathInSql)
+        {
+            Func<string, bool> pathMatches = PatternPathGlobMatcher.Compile(pathGlob);
+            connection.CreateFunction(
+                "miller_pattern_path_matches",
+                (string candidate) => pathMatches(candidate),
+                isDeterministic: true);
+            where.Add("miller_pattern_path_matches(path)");
+        }
+        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+            || PatternMetadataSql.TryAddMetadataFilters(
+                command,
+                where,
+                metadataFilters,
+                ref parameterIndex);
+        if (metadataFilters is { Count: > 0 } && !metadataInSql)
+            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+        command.CommandText = $"""
+            WITH ranked AS (
+                SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                       containing_symbol_id, start_line, start_column, end_line, end_column,
+                       start_byte, end_byte, confidence, metadata_json,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY pattern_id
+                           ORDER BY path, start_byte, structural_fact_id
+                       ) AS family_rank
+                FROM structural_facts
+                {WhereClause(where)}
+            )
+            SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
+                   containing_symbol_id, start_line, start_column, end_line, end_column,
+                   start_byte, end_byte, confidence, metadata_json
+            FROM ranked
+            ORDER BY family_rank, pattern_id, path, start_byte, structural_fact_id;
+            """;
+
+        return ReadOrderedMatchPage(command, offset, boundedLimit);
+    }
+
+    private static PatternMatchPage ReadOrderedMatchPage(
+        SqliteCommand command,
+        int offset,
+        int boundedLimit)
+    {
+        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var rows = new List<PatternMatchRow>(boundedLimit);
+        long totalCount = 0;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            PatternMatchRow row = ReadMatch(reader);
+            AppendPatternMatchIdentity(fingerprint, row);
+            if (totalCount >= offset && rows.Count < boundedLimit)
+                rows.Add(row);
+            totalCount++;
+        }
+
+        return new PatternMatchPage(
+            totalCount,
+            Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
+            offset,
+            rows);
+    }
+
+    private static PatternMatchPage EmptyMatchPage(int offset)
+    {
+        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        return new PatternMatchPage(
+            0,
+            Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
+            offset,
+            []);
+    }
+
+    private static void AppendPatternMatchIdentity(IncrementalHash fingerprint, PatternMatchRow row)
+    {
+        AppendFingerprintField(fingerprint, row.PatternId);
+        AppendFingerprintField(fingerprint, row.Path);
+        AppendFingerprintField(
+            fingerprint,
+            row.Span.StartByte.ToString(CultureInfo.InvariantCulture));
+        AppendFingerprintField(fingerprint, row.FactId);
+    }
+
+    private static void AppendFingerprintField(IncrementalHash fingerprint, string? field)
+    {
+        string value = field ?? string.Empty;
+        fingerprint.AppendData(Encoding.UTF8.GetBytes(
+            value.Length.ToString(CultureInfo.InvariantCulture) + ":"));
+        fingerprint.AppendData(Encoding.UTF8.GetBytes(value));
     }
 
     public IEnumerable<PatternMatchRow> EnumerateMatches(
@@ -1054,8 +1277,19 @@ public sealed record PatternMatchResult(
     long TotalCount,
     IReadOnlyList<PatternMatchRow> Rows);
 
+public sealed record PatternMatchPage(
+    long TotalCount,
+    string PopulationFingerprint,
+    int Offset,
+    IReadOnlyList<PatternMatchRow> Rows);
+
 public sealed record PatternExactSearchResult(
     PatternMatchResult Matches,
+    bool PatternExists,
+    IReadOnlyList<string> SuggestionPatternIds);
+
+public sealed record PatternExactSearchPageResult(
+    PatternMatchPage Page,
     bool PatternExists,
     IReadOnlyList<string> SuggestionPatternIds);
 
@@ -1065,6 +1299,13 @@ public sealed record PatternQueryMatchResult(
     int MatchedPatternCount,
     IReadOnlyList<string> ReturnedPatternIds,
     PatternMatchResult Matches);
+
+public sealed record PatternQueryMatchPageResult(
+    IReadOnlyList<string> ConsideredPatternIds,
+    IReadOnlyList<string> SuggestionPatternIds,
+    int MatchedPatternCount,
+    IReadOnlyList<string> ReturnedPatternIds,
+    PatternMatchPage Page);
 
 public sealed record PatternSpan(
     int StartLine,

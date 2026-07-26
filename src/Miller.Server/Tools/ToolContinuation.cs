@@ -246,6 +246,34 @@ public static partial class ToolOutputBudget
         ToolPopulationContinuationIdentity expected)
     {
         ValidatePopulationIdentity(expected);
+        PopulationContinuationPayload payload = DecodePopulationCursorPayload(token);
+
+        if (!string.Equals(payload.Kind, expected.Kind, StringComparison.Ordinal))
+        {
+            throw Refusal(
+                "continuation_kind_mismatch",
+                "Continuation belongs to a different result population.");
+        }
+        if (!string.Equals(payload.WorkspaceId, expected.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(
+                payload.PopulationFingerprint,
+                expected.PopulationFingerprint,
+                StringComparison.Ordinal) ||
+            !string.Equals(payload.RequestFingerprint, expected.RequestFingerprint, StringComparison.Ordinal))
+        {
+            throw Refusal(
+                "stale_continuation",
+                "Continuation no longer matches the requested result population.");
+        }
+
+        return new ToolPopulationContinuationCursor(payload.Offset);
+    }
+
+    internal static ToolPopulationContinuationCursor PeekPopulationCursorPosition(string token) =>
+        new(DecodePopulationCursorPayload(token).Offset);
+
+    private static PopulationContinuationPayload DecodePopulationCursorPayload(string token)
+    {
         if (string.IsNullOrWhiteSpace(token))
             throw Refusal("continuation_invalid", "Population continuation is empty.");
 
@@ -295,27 +323,10 @@ public static partial class ToolOutputBudget
 
         if (payload.Version != 1)
             throw Refusal("continuation_invalid", "Population continuation version is unsupported.");
-        if (!string.Equals(payload.Kind, expected.Kind, StringComparison.Ordinal))
-        {
-            throw Refusal(
-                "continuation_kind_mismatch",
-                "Continuation belongs to a different result population.");
-        }
-        if (!string.Equals(payload.WorkspaceId, expected.WorkspaceId, StringComparison.Ordinal) ||
-            !string.Equals(
-                payload.PopulationFingerprint,
-                expected.PopulationFingerprint,
-                StringComparison.Ordinal) ||
-            !string.Equals(payload.RequestFingerprint, expected.RequestFingerprint, StringComparison.Ordinal))
-        {
-            throw Refusal(
-                "stale_continuation",
-                "Continuation no longer matches the requested result population.");
-        }
         if (payload.Offset < 0)
             throw Refusal("continuation_offset_invalid", "Population continuation offset is invalid.");
 
-        return new ToolPopulationContinuationCursor(payload.Offset);
+        return payload;
     }
 
     private static void ValidatePopulationIdentity(ToolPopulationContinuationIdentity identity)

@@ -587,6 +587,59 @@ public sealed class PatternsTool
         return new PatternToolResult(page.Output, page.RetainedCount, emptyReason);
     }
 
+    private static PatternToolResult PageMatchPopulation(
+        PatternMatchPage page,
+        string kind,
+        string workspaceId,
+        string requestFingerprint,
+        string? continuation,
+        bool json,
+        int? outputByteBudget,
+        Func<IReadOnlyList<PatternMatchRow>, int, string> renderer,
+        string? emptyReason)
+    {
+        var identity = new ToolPopulationContinuationIdentity(
+            kind,
+            workspaceId,
+            page.PopulationFingerprint,
+            requestFingerprint);
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.DecodePopulationCursor(continuation, identity).Offset;
+        if (offset != page.Offset ||
+            offset < 0 ||
+            (page.TotalCount > 0 && offset >= page.TotalCount))
+        {
+            throw InvalidRequest("patterns continuation offset is outside the current result population.");
+        }
+
+        string RenderPage(IReadOnlyList<PatternMatchRow> retained, int _)
+        {
+            int returnedThrough = checked(offset + retained.Count);
+            string? next = returnedThrough < page.TotalCount
+                ? ToolOutputBudget.EncodePopulationCursor(
+                    identity,
+                    new ToolPopulationContinuationCursor(returnedThrough))
+                : null;
+            return AttachContinuation(renderer(retained, returnedThrough), json, next);
+        }
+
+        BoundedPrefixRender rendered = outputByteBudget is { } maxBytes
+            ? ToolOutputBudget.RenderPrefixWithinByteBudgetWithCount(
+                page.Rows,
+                maxBytes,
+                RenderPage,
+                MaxMcpCollectionRenderCandidates(maxBytes, json))
+            : new BoundedPrefixRender(RenderPage(page.Rows, 0), page.Rows.Count);
+        if (page.TotalCount > 0 && rendered.RetainedCount == 0)
+        {
+            throw new ToolDiagnosticException(ToolDiagnostic.Refusal(
+                "output_metadata_too_large",
+                "Patterns output metadata leaves no room for a result row; narrow the request."));
+        }
+        return new PatternToolResult(rendered.Output, rendered.RetainedCount, emptyReason);
+    }
+
     private static void ValidateEmptyContinuation(
         string kind,
         string workspaceId,
@@ -624,49 +677,6 @@ public sealed class PatternsTool
         return output.Insert(end, property);
     }
 
-    private static IReadOnlyList<PatternMatchRow> CanonicalMatches(
-        IEnumerable<PatternMatchRow> rows) =>
-        rows.OrderBy(static row => row.PatternId, StringComparer.Ordinal)
-            .ThenBy(static row => row.Path, StringComparer.Ordinal)
-            .ThenBy(static row => row.Span.StartByte)
-            .ThenBy(static row => row.FactId, StringComparer.Ordinal)
-            .ToArray();
-
-    private static IReadOnlyList<PatternMatchRow> FairRoundRobin(
-        IReadOnlyList<IReadOnlyList<PatternMatchRow>> families,
-        int limit)
-    {
-        var offsets = new int[families.Count];
-        var selected = new List<PatternMatchRow>(limit);
-        bool advanced;
-        do
-        {
-            advanced = false;
-            for (int family = 0; family < families.Count && selected.Count < limit; family++)
-            {
-                if (offsets[family] >= families[family].Count)
-                    continue;
-                selected.Add(families[family][offsets[family]++]);
-                advanced = true;
-            }
-        }
-        while (advanced && selected.Count < limit);
-        return selected;
-    }
-
-    private static string PatternMatchFingerprint(PatternMatchRow row) =>
-        FingerprintFields(
-            row.FactId,
-            row.PatternId,
-            row.Language,
-            row.Path,
-            row.CaptureName,
-            row.NodeKind,
-            row.ContainingSymbolId,
-            row.Span.StartByte.ToString(CultureInfo.InvariantCulture),
-            row.Span.EndByte.ToString(CultureInfo.InvariantCulture),
-            row.MetadataJson);
-
     private static string FingerprintPopulation<T>(
         IEnumerable<T> rows,
         Func<T, string> rowFingerprint) =>
@@ -698,19 +708,23 @@ public sealed class PatternsTool
         string? continuation)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
-        PatternExactSearchResult searchResult = reader.SearchExactWithContext(
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.PeekPopulationCursorPosition(continuation).Offset;
+        PatternExactSearchPageResult searchResult = reader.SearchExactPageWithContext(
             dbPath,
             patternId,
             language,
             path,
             metadataFilters.Count == 0 ? null : metadataFilters,
+            offset,
             boundedLimit);
-        PatternMatchResult matches = searchResult.Matches;
-        long totalCount = matches.TotalCount;
-        IReadOnlyList<PatternMatchRow> rows = CanonicalMatches(matches.Rows);
+        PatternMatchPage page = searchResult.Page;
+        long totalCount = page.TotalCount;
+        IReadOnlyList<PatternMatchRow> rows = page.Rows;
 
         bool patternExists = searchResult.PatternExists;
-        bool filteredOut = rows.Count == 0
+        bool filteredOut = totalCount == 0
             && patternExists
             && (!string.IsNullOrWhiteSpace(path) || !string.IsNullOrWhiteSpace(language) || metadataFilters.Count > 0);
         IReadOnlyList<string> suggestions = rows.Count == 0 && !filteredOut
@@ -744,15 +758,14 @@ public sealed class PatternsTool
                     metadataFilters,
                     totalCount,
                     totalCount - returnedThrough);
-        return PagePopulation(
-            rows,
+        return PageMatchPopulation(
+            page,
             "patterns_search_exact",
             workspaceId,
             requestFingerprint,
             continuation,
             json,
             outputByteBudget,
-            PatternMatchFingerprint,
             Render,
             emptyReason);
     }
@@ -772,15 +785,19 @@ public sealed class PatternsTool
         string? continuation)
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
+        int offset = string.IsNullOrWhiteSpace(continuation)
+            ? 0
+            : ToolOutputBudget.PeekPopulationCursorPosition(continuation).Offset;
         bool hasActiveFilters = !string.IsNullOrWhiteSpace(path)
             || !string.IsNullOrWhiteSpace(language)
             || metadataFilters.Count > 0;
-        PatternQueryMatchResult queryResult = reader.SearchByQueryWithCount(
+        PatternQueryMatchPageResult queryResult = reader.SearchByQueryPageWithCount(
             dbPath,
             query,
             language,
             path,
             metadataFilters.Count == 0 ? null : metadataFilters,
+            offset,
             boundedLimit,
             MaxQueryPatternIds);
         IReadOnlyList<string> returnedPatternIds = queryResult.ReturnedPatternIds;
@@ -842,24 +859,10 @@ public sealed class PatternsTool
             return new PatternToolResult(hint, 0, emptyReason);
         }
 
-        PatternMatchResult matches = queryResult.Matches;
-        long totalCount = matches.TotalCount;
-        IReadOnlyList<IReadOnlyList<PatternMatchRow>> families = returnedPatternIds
-            .Select(patternId => CanonicalMatches(
-                reader.SearchWithCount(
-                    dbPath,
-                    patternId,
-                    language,
-                    path,
-                    metadataFilters.Count == 0 ? null : metadataFilters,
-                    boundedLimit).Rows))
-            .OrderBy(static family => family.Count == 0 ? 1 : 0)
-            .ThenBy(static family => family.Count == 0 ? string.Empty : family[0].Path, StringComparer.Ordinal)
-            .ThenBy(static family => family.Count == 0 ? int.MaxValue : family[0].Span.StartByte)
-            .ThenBy(static family => family.Count == 0 ? string.Empty : family[0].FactId, StringComparer.Ordinal)
-            .ToArray();
-        IReadOnlyList<PatternMatchRow> rows = FairRoundRobin(families, boundedLimit);
-        string? resultEmptyReason = rows.Count == 0
+        PatternMatchPage page = queryResult.Page;
+        long totalCount = page.TotalCount;
+        IReadOnlyList<PatternMatchRow> rows = page.Rows;
+        string? resultEmptyReason = totalCount == 0
             ? hasActiveFilters ? "filtered_out" : "no_facts"
             : null;
 
@@ -885,15 +888,14 @@ public sealed class PatternsTool
                     resultEmptyReason,
                     totalCount,
                     totalCount - returnedThrough);
-        return PagePopulation(
-            rows,
+        return PageMatchPopulation(
+            page,
             "patterns_search_query",
             workspaceId,
             requestFingerprint,
             continuation,
             json,
             outputByteBudget,
-            PatternMatchFingerprint,
             Render,
             resultEmptyReason);
     }

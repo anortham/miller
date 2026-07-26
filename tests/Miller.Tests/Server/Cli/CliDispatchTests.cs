@@ -1459,6 +1459,75 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(JsonValueKind.Null, replay.RootElement.GetProperty("continuation").ValueKind);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Patterns_Search_ContinuationFlagReplaysLogicalPage(bool json)
+    {
+        using var fx = DbWithPatterns();
+        var firstArgs = new List<string>
+        {
+            "patterns",
+            "search",
+            "--pattern",
+            "htmx.attribute.v1",
+            "--limit",
+            "1",
+        };
+        if (json)
+            firstArgs.Add("--json");
+
+        var (firstCode, firstOut, firstErr) = Run(
+            firstArgs,
+            Context(fx.DbPath, fx.WorkspaceRoot));
+        string continuation;
+        string firstIdentity;
+        if (json)
+        {
+            using var firstDocument = JsonDocument.Parse(firstOut);
+            continuation = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+            firstIdentity = firstDocument.RootElement.GetProperty("matches")[0]
+                .GetProperty("fact_id")
+                .GetString()!;
+        }
+        else
+        {
+            continuation = firstOut
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .Single(line => line.StartsWith("continuation: ", StringComparison.Ordinal))
+                ["continuation: ".Length..];
+            firstIdentity = firstOut;
+        }
+
+        var replayArgs = new List<string>(firstArgs)
+        {
+            "--continuation",
+            continuation,
+        };
+        var (replayCode, replayOut, replayErr) = Run(
+            replayArgs,
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, firstCode);
+        Assert.Empty(firstErr);
+        Assert.Equal(0, replayCode);
+        Assert.Empty(replayErr);
+        if (json)
+        {
+            using var replayDocument = JsonDocument.Parse(replayOut);
+            Assert.NotEqual(
+                firstIdentity,
+                replayDocument.RootElement.GetProperty("matches")[0]
+                    .GetProperty("fact_id")
+                    .GetString());
+        }
+        else
+        {
+            Assert.NotEqual(firstIdentity, replayOut);
+            Assert.Contains("name=hx-trigger", replayOut, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void Patterns_JsonWithoutOperation_DefaultsToList()
     {

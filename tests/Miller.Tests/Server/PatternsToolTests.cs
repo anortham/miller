@@ -741,6 +741,29 @@ public sealed class PatternsToolTests
         Assert.InRange(returned, 1, 199);
         Assert.Equal(200 - returned, doc.RootElement.GetProperty("matches_omitted_count").GetInt32());
         Assert.Equal(returned, doc.RootElement.GetProperty("matches").GetArrayLength());
+        string continuation = doc.RootElement.GetProperty("continuation").GetString()!;
+        using JsonDocument secondPage = JsonDocument.Parse(tool.Patterns(
+            operation: "search",
+            pattern_id: "budget.pattern.v1",
+            language: "csharp",
+            path: "src/**",
+            where: "verb=GET",
+            limit: 500,
+            format: "json",
+            continuation: continuation));
+        int secondReturned = secondPage.RootElement
+            .GetProperty("matches_returned_count")
+            .GetInt32();
+        Assert.InRange(secondReturned, 1, 200 - returned);
+        Assert.Equal(
+            $"fact-budget-{returned + 1:000}",
+            secondPage.RootElement
+                .GetProperty("matches")[0]
+                .GetProperty("fact_id")
+                .GetString());
+        Assert.Equal(
+            200 - returned - secondReturned,
+            secondPage.RootElement.GetProperty("matches_omitted_count").GetInt32());
         JsonElement actionArgs = doc.RootElement.GetProperty("next_actions")[0].GetProperty("args");
         Assert.Equal("budget.pattern.v1", actionArgs.GetProperty("pattern_id").GetString());
         Assert.Equal("csharp", actionArgs.GetProperty("language").GetString());
@@ -794,14 +817,14 @@ public sealed class PatternsToolTests
     }
 
     [Fact]
-    public void Patterns_SearchJson_ContinuationReturnsEveryBoundedRowExactlyOnce()
+    public void Patterns_SearchJson_LogicalLimitPagesEveryCanonicalRowExactlyOnce()
     {
         using var fx = CreatePatternFixture();
         Exec(fx.DbPath, """
             WITH RECURSIVE seq(n) AS (
                 SELECT 1
                 UNION ALL
-                SELECT n + 1 FROM seq WHERE n < 80
+                SELECT n + 1 FROM seq WHERE n < 4
             )
             INSERT INTO structural_facts
                 (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
@@ -823,7 +846,7 @@ public sealed class PatternsToolTests
             using var document = JsonDocument.Parse(tool.Patterns(
                 operation: "search",
                 pattern_id: "paged.pattern.v1",
-                limit: 80,
+                limit: 1,
                 format: "json",
                 continuation: continuation));
             factIds.AddRange(document.RootElement
@@ -836,8 +859,149 @@ public sealed class PatternsToolTests
         }
         while (continuation is not null);
 
-        Assert.Equal(80, factIds.Count);
-        Assert.Equal(80, factIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(
+            ["fact-page-001", "fact-page-002", "fact-page-003", "fact-page-004"],
+            factIds);
+        Assert.Equal(4, factIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Patterns_SearchByQuery_LogicalPagesPreserveFairFamilyOrder()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-bulk-route-1', 'file:src/Auth.cs', 'src/Bulk.cs', 'csharp',
+                 'bulk.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 1, 1, 1, 20, 0, 19, 1.0, '{"verb":"GET"}'),
+                ('fact-bulk-route-2', 'file:src/Auth.cs', 'src/Bulk.cs', 'csharp',
+                 'bulk.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 2, 1, 2, 20, 20, 39, 1.0, '{"verb":"POST"}'),
+                ('fact-client-route-1', 'file:src/Auth.cs', 'src/Client.cs', 'csharp',
+                 'client.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 1, 1, 1, 20, 0, 19, 1.0, '{"verb":"GET"}'),
+                ('fact-client-route-2', 'file:src/Auth.cs', 'src/Client.cs', 'csharp',
+                 'client.route.v1', 'route_call', 'invocation_expression', 'sym-auth',
+                 2, 1, 2, 20, 20, 39, 1.0, '{"verb":"POST"}');
+            """);
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+        var factIds = new List<string>();
+        string? continuation = null;
+
+        do
+        {
+            using var document = JsonDocument.Parse(tool.Patterns(
+                operation: "search",
+                query: "route",
+                limit: 2,
+                format: "json",
+                continuation: continuation));
+            factIds.AddRange(document.RootElement
+                .GetProperty("matches")
+                .EnumerateArray()
+                .Select(match => match.GetProperty("fact_id").GetString()!));
+            continuation = document.RootElement.GetProperty("continuation").ValueKind == JsonValueKind.Null
+                ? null
+                : document.RootElement.GetProperty("continuation").GetString();
+        }
+        while (continuation is not null);
+
+        Assert.Equal(
+            [
+                "fact-route",
+                "fact-bulk-route-1",
+                "fact-client-route-1",
+                "fact-bulk-route-2",
+                "fact-client-route-2",
+            ],
+            factIds);
+    }
+
+    [Fact]
+    public void Patterns_SearchCompact_LogicalLimitReturnsReplayableContinuation()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+
+        string first = tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            limit: 1);
+        string continuation = first
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.StartsWith("continuation: ", StringComparison.Ordinal))
+            ["continuation: ".Length..];
+        string second = tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            limit: 1,
+            continuation: continuation);
+
+        Assert.Contains("name=hx-get", first, StringComparison.Ordinal);
+        Assert.Contains("name=hx-trigger", second, StringComparison.Ordinal);
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public void Patterns_SearchJson_ChangedPopulationRejectsContinuation()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+        using var first = JsonDocument.Parse(tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            limit: 1,
+            format: "json"));
+        string continuation = first.RootElement.GetProperty("continuation").GetString()!;
+        Exec(fx.DbPath, """
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            VALUES
+                ('fact-new-hx', 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                 'htmx.attribute.v1', 'attribute', 'attribute', 'sym-auth',
+                 1, 1, 1, 10, 0, 9, 1.0, '{"name":"hx-new"}');
+            """);
+
+        using var replay = JsonDocument.Parse(tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            limit: 1,
+            format: "json",
+            continuation: continuation));
+
+        Assert.Equal(
+            "stale_continuation",
+            replay.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public void Patterns_SearchJson_WrongPopulationKindRejectsContinuation()
+    {
+        using var fx = CreatePatternFixture();
+        var tool = new PatternsTool(new TestArtifactProvider(ArtifactFor(fx)), new PatternFactsReader());
+        using var first = JsonDocument.Parse(tool.Patterns(
+            operation: "search",
+            pattern_id: "htmx.attribute.v1",
+            limit: 1,
+            format: "json"));
+        string continuation = first.RootElement.GetProperty("continuation").GetString()!;
+
+        using var replay = JsonDocument.Parse(tool.Patterns(
+            operation: "search",
+            query: "attribute",
+            limit: 1,
+            format: "json",
+            continuation: continuation));
+
+        Assert.Equal(
+            "continuation_kind_mismatch",
+            replay.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
     }
 
     [Fact]
