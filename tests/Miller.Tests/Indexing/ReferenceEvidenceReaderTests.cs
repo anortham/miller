@@ -399,7 +399,7 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
-    public void Read_TiedInboundRowsChooseContainingSymbolDeterministically()
+    public void Read_ProducerSiteIdentityCollapsesConflictingContainingSymbols()
     {
         using var fixture = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -426,9 +426,8 @@ public sealed class ReferenceEvidenceReaderTests
             FirstTargetId,
             new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
 
-        Assert.Equal(
-            [FirstCallerId, SecondCallerId],
-            result.Exact.Select(reference => reference.ContainingSymbolId));
+        ReferenceEvidence reference = Assert.Single(result.Exact);
+        Assert.Equal(SecondCallerId, reference.ContainingSymbolId);
     }
 
     [Fact]
@@ -669,26 +668,17 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
-    public void Read_UsesIdentifierEvidenceWhenRelationshipProjectionIsUnavailable()
+    public void Read_MissingSchemaFiveRelationshipsTable_IsRejected()
     {
         using var fixture = JulieDbFixture.CreateForInspect();
         SqliteFixtureMutator.DropRelationshipsTable(fixture.DbPath);
 
-        ReferenceEvidenceSet inbound = ReferenceEvidenceReader.Read(
-            fixture.DbPath,
-            JulieDbFixture.GetUserId,
-            new ReferenceEvidenceBounds(10, 10));
-        OutgoingReferenceEvidenceSet outgoing = ReferenceEvidenceReader.ReadOutgoing(
-            fixture.DbPath,
-            JulieDbFixture.GetUserId,
-            new ReferenceEvidenceQuery(
-                new ReferenceEvidenceBounds(10, 10),
-                ReferenceKind.Call));
-
-        Assert.Equal(2, inbound.Exact.Count);
-        OutgoingReferenceEvidence callee = Assert.Single(outgoing.Exact);
-        Assert.Equal("dd001122334455667788990a1b2c3d4e", callee.TargetSymbolId);
-        Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, callee.Source);
+        IncompatibleExtractException exception = Assert.Throws<IncompatibleExtractException>(() =>
+            ReferenceEvidenceReader.Read(
+                fixture.DbPath,
+                JulieDbFixture.GetUserId,
+                new ReferenceEvidenceBounds(10, 10)));
+        Assert.Contains("relationships", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -725,7 +715,7 @@ public sealed class ReferenceEvidenceReaderTests
 
         var reference = Assert.Single(result.Exact);
         Assert.Equal(ReferenceEvidenceSource.Relationship, reference.Source);
-        Assert.Null(reference.Language);
+        Assert.Equal("csharp", reference.Language);
     }
 
     [Theory]

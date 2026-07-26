@@ -231,7 +231,7 @@ internal static class SearchRouteExecutor
     }
 
     public static SearchRouteExecutionResult RunMarkers(
-        IRegionSearchIndex index,
+        string dbPath,
         SearchRoute route,
         SearchRouteExecutionRequest request)
     {
@@ -242,7 +242,7 @@ internal static class SearchRouteExecutor
         bool hideTests = request.ExcludeTests ?? false;
         IReadOnlyList<string> markers = MarkerSearch.ParseMarkers(request.Query);
         string output = MarkerSearch.Run(
-            index,
+            dbPath,
             markers,
             request.Limit,
             hideTests,

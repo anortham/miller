@@ -755,11 +755,10 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Status_ByWorkspaceId_ReadsRegisteredFactsWithoutRequiringFullIndexTables()
+    public void Status_ByWorkspaceId_ReadsRegisteredSchemaFiveFacts()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
         using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
-        SqliteFixtureMutator.DropRelationshipsTable(other.DbPath);
         WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
@@ -1119,12 +1118,11 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
-    public void Health_ByWorkspaceId_ReadsRegisteredFactsWithoutHydratingFullIndex()
+    public void Health_ByWorkspaceId_ReadsRegisteredSchemaFiveFactsWithoutHydratingFullIndex()
     {
         using var current = CreateSynth(revision: 4, workspaceId: Ws);
         using var other = CreateSynth(revision: 9, workspaceId: OtherWs);
         SeedHealthRows(other.DbPath);
-        SqliteFixtureMutator.DropRelationshipsTable(other.DbPath);
         WorkspaceToolHarness harness = BuildHarness(current, builtRevision: 4, workspaceId: Ws);
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);

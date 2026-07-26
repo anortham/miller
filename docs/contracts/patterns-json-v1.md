@@ -1,5 +1,7 @@
 # Patterns Contract v1
 
+Superseded by [`patterns-json-v2.md`](patterns-json-v2.md) for schema-5 artifacts.
+
 Status: active local contract for `miller patterns` and the MCP `patterns` tool in compact and JSON formats.
 
 The `patterns` surface reads generic `structural_facts` emitted by `julie-extractors`. Miller does not run raw

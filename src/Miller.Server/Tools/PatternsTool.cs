@@ -15,6 +15,7 @@ namespace Miller.Server.Tools;
 [McpServerToolType]
 public sealed class PatternsTool
 {
+    public const int JsonSchemaVersion = 2;
     public const int DefaultLimit = 50;
     public const int MaxLimit = 500;
     public const int MaxQueryPatternIds = 25;
@@ -803,7 +804,7 @@ public sealed class PatternsTool
                 using (Utf8JsonWriter writer = NewWriter(buffer))
                 {
                     writer.WriteStartObject();
-                    writer.WriteNumber("schema_version", 1);
+                    writer.WriteNumber("schema_version", JsonSchemaVersion);
                     writer.WriteString("operation", "search");
                     writer.WriteString("query", query);
                     writer.WriteString("empty_reason", emptyReason);
@@ -1345,7 +1346,7 @@ public sealed class PatternsTool
         using (Utf8JsonWriter writer = NewWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 1);
+            writer.WriteNumber("schema_version", JsonSchemaVersion);
             writer.WriteString("operation", "list");
             WriteActiveFiltersJson(writer, path, language, metadataFilters);
             WriteCollectionCountsJson(writer, "patterns", totalCount, rows.Count, omittedCount);
@@ -1390,7 +1391,7 @@ public sealed class PatternsTool
         using (Utf8JsonWriter writer = NewWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 1);
+            writer.WriteNumber("schema_version", JsonSchemaVersion);
             writer.WriteString("operation", "summary");
             WriteActiveFiltersJson(writer, path, language, metadataFilters);
             if (groupBy != PatternSummaryGroupBy.LanguagePatternCapture)
@@ -1437,7 +1438,7 @@ public sealed class PatternsTool
         using (Utf8JsonWriter writer = NewWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 1);
+            writer.WriteNumber("schema_version", JsonSchemaVersion);
             writer.WriteString("operation", "search");
             writer.WriteString("pattern_id", patternId);
             WriteMatchCountsJson(writer, totalCount, rows.Count, omittedCount);
@@ -1492,7 +1493,7 @@ public sealed class PatternsTool
         using (Utf8JsonWriter writer = NewWriter(buffer))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("schema_version", 1);
+            writer.WriteNumber("schema_version", JsonSchemaVersion);
             writer.WriteString("operation", "search");
             writer.WriteString("query", query);
             WriteQueryFanoutJson(writer, fanout);

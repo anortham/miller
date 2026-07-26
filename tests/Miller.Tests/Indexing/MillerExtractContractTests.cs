@@ -11,16 +11,15 @@ namespace Miller.Tests.Indexing;
 public sealed class MillerExtractContractTests
 {
     [Fact]
-    public void ContractPinsJulieExtractSchemaV4Versions()
+    public void ContractPinsJulieExtractSchemaFiveVersions()
     {
-        // Schema v4 (product 2.9.0) adds workspace reference resolution; the extract contract and
-        // report schema stayed at 3 (additive artifact change, verified on a live 2.9.0 scan report).
-        Assert.Equal(4, MillerExtractContract.ExpectedSchemaVersion);
-        Assert.Equal(4, MillerExtractContract.ExpectedSqliteSchemaVersion);
-        Assert.Equal(3, MillerExtractContract.ExpectedExtractContractVersion);
+        Assert.Equal(5, MillerExtractContract.ExpectedSchemaVersion);
+        Assert.Equal(5, MillerExtractContract.ExpectedSqliteSchemaVersion);
+        Assert.Equal(4, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(3, MillerExtractContract.ExpectedReportSchemaVersion);
+        Assert.Equal(4, MillerExtractContract.ExpectedJsonlSchemaVersion);
         Assert.Equal("blake3", MillerExtractContract.ExpectedHashAlgorithm);
-        Assert.Equal("2.17.0", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.18.0", MillerExtractContract.PinnedJulieExtractVersion);
         Assert.False(string.IsNullOrWhiteSpace(MillerExtractContract.PinnedJulieExtractVersion));
     }
 
@@ -45,7 +44,7 @@ public sealed class MillerExtractContractTests
             // The pins 'name' carries a literal {VER} placeholder; substitute before asserting (reconciliation #4).
             string? resolvedName = name?.Replace("{VER}", pinnedVersion);
             Assert.Contains($"v{pinnedVersion}", resolvedName, StringComparison.Ordinal); // published assets carry the leading 'v'
-            Assert.True(IsSha256Hex(sha256), $"missing or invalid sha256 pin for {asset.Name}");
+            Assert.True(string.IsNullOrEmpty(sha256), $"unreleased pin must not invent sha256 for {asset.Name}");
         }
     }
 

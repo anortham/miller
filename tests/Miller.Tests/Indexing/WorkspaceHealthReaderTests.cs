@@ -129,7 +129,7 @@ public sealed class WorkspaceHealthReaderTests
     }
 
     [Fact]
-    public void Read_MissingOptionalTables_ReportUnavailableSections()
+    public void Read_MissingLanguageCapabilityGapsTable_ThrowsIncompatibleExtract()
     {
         using var fx = JulieDbFixture.Create(
             JulieDbFixture.PinnedSchema,
@@ -137,12 +137,28 @@ public sealed class WorkspaceHealthReaderTests
             Array.Empty<JulieDbFixture.SymbolRow>());
         Exec(fx.DbPath, "DROP TABLE language_capability_gaps;");
 
-        WorkspaceExtractionHealthFacts facts = WorkspaceHealthReader.Read(fx.DbPath);
+        IncompatibleExtractException exception = Assert.Throws<IncompatibleExtractException>(
+            () => WorkspaceHealthReader.Read(fx.DbPath));
 
-        Assert.False(facts.CapabilityGaps.Available);
-        Assert.Empty(facts.CapabilityGaps.Rows);
-        Assert.Contains("language_capability_gaps", facts.CapabilityGaps.Error, StringComparison.Ordinal);
-        Assert.True(facts.ParseDiagnostics.Available);
+        Assert.Contains("language_capability_gaps", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Read_UnknownCapabilityGapStatus_IsRejected()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        Exec(fx.DbPath, """
+            PRAGMA ignore_check_constraints = ON;
+            INSERT INTO language_capability_gaps
+                (gap_id, language, capability, status, reason, required_closure, evidence_json)
+            VALUES ('gap-invalid', 'csharp', 'reference_resolution.tier3_receiver',
+                    'closed', 'invalid test row', 'none', '{}');
+            """);
+
+        IncompatibleExtractException ex = Assert.Throws<IncompatibleExtractException>(
+            () => WorkspaceHealthReader.Read(fx.DbPath));
+        Assert.Contains("closed", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("open | exception", ex.Message, StringComparison.Ordinal);
     }
 
     private static void Exec(string dbPath, string sql)

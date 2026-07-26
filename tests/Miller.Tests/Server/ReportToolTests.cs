@@ -311,8 +311,8 @@ public sealed class ReportToolTests
         Assert.True(root.GetProperty("extraction_health").GetProperty("available").GetBoolean());
 
         JsonElement markers = root.GetProperty("markers");
-        Assert.False(markers.GetProperty("available").GetBoolean());
-        Assert.False(string.IsNullOrWhiteSpace(markers.GetProperty("reason").GetString()));
+        Assert.True(markers.GetProperty("available").GetBoolean());
+        Assert.Equal(0, markers.GetProperty("total").GetInt32());
 
         JsonElement complexity = root.GetProperty("complexity");
         Assert.True(complexity.GetProperty("available").GetBoolean());
@@ -379,10 +379,15 @@ public sealed class ReportToolTests
                 Row("aa11223344556677889900aabbccee21", "Symbol", "src/S.cs", 5),
             });
 
-        var regionIndex = new StubRegionSearchIndex(
-            Hit("src/S.cs", 10, "TODO fix the widget"),
-            Hit("src/S.cs", 20, "TODO handle nulls"),
-            Hit("src/Other.cs", 4, "HACK temporary shim"));
+        fx.AddStructuralFact(
+            "marker-1", null, "src/S.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"TODO"}""");
+        fx.AddStructuralFact(
+            "marker-2", null, "src/S.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"TODO"}""");
+        fx.AddStructuralFact(
+            "marker-3", null, "src/Other.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"HACK"}""");
 
         ReportToolResult result = ReportTool.Run(
             fx.DbPath,
@@ -393,7 +398,7 @@ public sealed class ReportToolTests
             includeTests: true,
             historyReader: new StubGitHistoryReader(
                 new GitHistoryResult(Success: false, Commits: [], Error: "no git")),
-            regionIndex: regionIndex);
+            regionIndex: null);
 
         using var doc = JsonDocument.Parse(result.Output);
         JsonElement markers = doc.RootElement.GetProperty("markers");
@@ -434,7 +439,7 @@ public sealed class ReportToolTests
         Assert.Contains("## complexity", result.Output);
         Assert.Contains("## risk", result.Output);
         Assert.Contains("RiskySymbol", result.Output);
-        Assert.Contains("markers: unavailable", result.Output);
+        Assert.Contains("TODO 0", result.Output);
     }
 
     private static StubGitHistoryReader CommitTouching(string path, int line, string commit) =>

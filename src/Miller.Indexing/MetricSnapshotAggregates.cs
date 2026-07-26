@@ -32,19 +32,12 @@ public static class MetricSnapshotAggregates
     public const string CloneGroupCount = "clone_group_count";
     public const string MarkerTotal = "marker_total";
 
-    // Marker set + comment kinds mirror Miller.Server.Tools.MarkerSearch. That type is Server-internal and cannot
-    // be referenced from this (lower) layer, so the tiny marker vocabulary is duplicated here; keep the two in step.
     private static readonly string[] MarkerNames = { "TODO", "FIXME", "HACK", "XXX" };
-    private static readonly IReadOnlySet<string> CommentKinds =
-        new HashSet<string>(StringComparer.Ordinal) { "comment", "doc_comment" };
-    private const int MarkerSearchLimit = 500; // MarkerSearch.MaxLimit — bound the region scan.
+    private const int MarkerSearchLimit = 500;
 
     /// <summary>
-    /// Read the converge metric set from <paramref name="symbolsDbPath"/>. When <paramref name="regionIndex"/> is
-    /// supplied the marker metric is included (per-marker breakdown in <c>detail_json</c>); when it is null the
-    /// marker metric is absent (not 0), per the absent-vs-zero rule. Opens a single read-only connection and runs
-    /// one bounded pass of aggregate queries. Throws only on an unreadable/absent DB — <see cref="RecordConverge"/>
-    /// wraps every failure so the converge path is never destabilized.
+    /// Read the converge metric set from <paramref name="symbolsDbPath"/>, including marker counts from the
+    /// producer-owned <c>code.marker.v1</c> structural facts.
     /// </summary>
     public static IReadOnlyList<MetricHistoryPoint> ReadConvergeMetrics(
         string symbolsDbPath, IRegionSearchIndex? regionIndex)
@@ -60,8 +53,7 @@ public static class MetricSnapshotAggregates
             AddComplexityPercentiles(connection, metrics);
         }
 
-        if (regionIndex is not null)
-            AddMarkerCounts(regionIndex, metrics);
+        AddMarkerCounts(symbolsDbPath, metrics);
 
         return metrics;
     }
@@ -238,40 +230,17 @@ public static class MetricSnapshotAggregates
         return sortedAsc[lo] + ((sortedAsc[hi] - sortedAsc[lo]) * (rank - lo));
     }
 
-    // marker_total — distinct comment/doc-comment regions containing any TODO/FIXME/HACK/XXX, with per-marker
-    // region counts in detail_json. Reproduces the region-dedup + word-boundary re-check MarkerSearch/ReportTool do
-    // (a region matching several markers counts once toward the total, once per marker in the breakdown). Only
-    // reached when a region index was supplied ⟹ marker_total is absent when the index is unavailable.
-    private static void AddMarkerCounts(IRegionSearchIndex regionIndex, List<MetricHistoryPoint> metrics)
+    private static void AddMarkerCounts(string symbolsDbPath, List<MetricHistoryPoint> metrics)
     {
-        var regionMarkers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (string marker in MarkerNames)
-        {
-            IReadOnlyList<RegionSearchHit> hits =
-                regionIndex.Search(marker, CommentKinds, MarkerSearchLimit, excludeTests: false);
-            foreach (RegionSearchHit hit in hits)
-            {
-                if (!ContainsMarker(hit.RawText, marker) && !ContainsMarker(hit.Snippet, marker))
-                    continue;
-                if (!regionMarkers.TryGetValue(hit.RegionId, out HashSet<string>? set))
-                {
-                    set = new HashSet<string>(StringComparer.Ordinal);
-                    regionMarkers[hit.RegionId] = set;
-                }
-                set.Add(marker);
-            }
-        }
-
         var perMarker = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string marker in MarkerNames)
             perMarker[marker] = 0;
-        foreach (HashSet<string> set in regionMarkers.Values)
-        {
-            foreach (string marker in set)
-                perMarker[marker]++;
-        }
+        IReadOnlyList<MarkerFactRow> rows = MarkerFactReader.Read(symbolsDbPath, excludeTests: false, MarkerSearchLimit);
+        foreach (MarkerFactRow row in rows)
+            if (perMarker.ContainsKey(row.Marker))
+                perMarker[row.Marker]++;
 
-        metrics.Add(new MetricHistoryPoint(MarkerTotal, regionMarkers.Count, BuildMarkerDetailJson(perMarker)));
+        metrics.Add(new MetricHistoryPoint(MarkerTotal, rows.Count, BuildMarkerDetailJson(perMarker)));
     }
 
     private static string BuildMarkerDetailJson(IReadOnlyDictionary<string, int> perMarker)

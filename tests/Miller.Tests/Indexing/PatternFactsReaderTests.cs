@@ -228,7 +228,7 @@ public sealed class PatternFactsReaderTests
         Exec(fx.DbPath, "DROP TABLE structural_facts;");
         var reader = new PatternFactsReader();
 
-        var ex = Assert.Throws<InvalidOperationException>(() => reader.Search(
+        var ex = Assert.Throws<IncompatibleExtractException>(() => reader.Search(
             fx.DbPath,
             patternId: "htmx.attribute.v1",
             language: null,

@@ -93,10 +93,17 @@ public static class WorkspaceHealthReader
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
+            string status = reader.GetString(2);
+            if (status is not ("open" or "exception"))
+            {
+                throw new IncompatibleExtractException(
+                    $"language_capability_gaps contains unknown status '{status}'; schema 5 accepts only open | exception.");
+            }
+
             rows.Add(new CapabilityGapGroup(
                 Language: reader.GetString(0),
                 Capability: reader.GetString(1),
-                Status: reader.GetString(2),
+                Status: status,
                 Count: reader.GetInt64(3)));
         }
 

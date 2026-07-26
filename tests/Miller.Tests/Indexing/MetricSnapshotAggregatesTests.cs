@@ -28,33 +28,39 @@ public sealed class MetricSnapshotAggregatesTests
     }
 
     [Fact]
-    public void ReadConvergeMetrics_OmitsMarkerMetric_WhenNoRegionIndex()
+    public void ReadConvergeMetrics_IncludesZeroMarkerMetricFromArtifact()
     {
         using var fx = NewFixture();
 
         IReadOnlyList<MetricHistoryPoint> metrics =
             MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
 
-        Assert.DoesNotContain(metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
+        Assert.Equal(0d, ValueOf(metrics, MetricSnapshotAggregates.MarkerTotal));
     }
 
     [Fact]
     public void ReadConvergeMetrics_IncludesMarkerTotalAndBreakdown_WhenRegionIndexAvailable()
     {
         using var fx = NewFixture();
-        var region = new FakeRegionIndex();
-        region.Add("TODO", Hit("r1", "// TODO fix this"));
-        region.Add("TODO", Hit("r3", "// TODO and FIXME together"));
-        region.Add("FIXME", Hit("r2", "// FIXME later"));
-        region.Add("FIXME", Hit("r3", "// TODO and FIXME together"));
+        fx.AddStructuralFact(
+            "r1", null, "src/A.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"TODO"}""");
+        fx.AddStructuralFact(
+            "r2", null, "src/B.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"FIXME"}""");
+        fx.AddStructuralFact(
+            "r3", null, "src/C.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"TODO"}""");
+        fx.AddStructuralFact(
+            "r4", null, "src/D.cs", patternId: MarkerFactReader.PatternId,
+            captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"FIXME"}""");
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, region);
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
 
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
-        // r1, r2, r3 distinct ⟹ total 3; r3 counts toward both TODO and FIXME.
-        Assert.Equal(3d, marker.Value);
+        Assert.Equal(4d, marker.Value);
         Assert.Equal("{\"TODO\":2,\"FIXME\":2,\"HACK\":0,\"XXX\":0}", marker.DetailJson);
     }
 

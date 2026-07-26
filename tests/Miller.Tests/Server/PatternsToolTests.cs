@@ -51,7 +51,7 @@ public sealed class PatternsToolTests
 
         Assert.DoesNotContain("workspace:", json, StringComparison.OrdinalIgnoreCase);
         using JsonDocument doc = JsonDocument.Parse(json);
-        Assert.Equal(1, doc.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(2, doc.RootElement.GetProperty("schema_version").GetInt32());
         Assert.Equal("list", doc.RootElement.GetProperty("operation").GetString());
 
         JsonElement htmx = doc.RootElement.GetProperty("patterns").EnumerateArray()

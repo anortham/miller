@@ -189,21 +189,10 @@ with the standard rebuild message. Fields (`schema_version` 1):
 These fields do not form runnable-test inventory. Eros owns runner discovery, freshness, scheduling, execution
 results, and verdicts; false flags and zero counts are not proof of absence.
 
-`miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
-`identifiers` row, ordered `(path, start_byte, identifier_id)`. This is a raw usage fact feed, not a ranking
-surface; Miller's own deterministic dead-code candidate listing is `references candidates`
-([`references-candidates-v1.md`](references-candidates-v1.md)). See [`references-export-v1.md`](references-export-v1.md)
-for field-level guarantees. Fields (`schema_version` 1):
-
-- `identifier_id` — julie's identifier-row ID; this is the source fact ID.
-- `name`, `reference_kind`, `language`, `path` — identifier identity and file location.
-- `start_line`, `end_line`, `start_column`, `end_column`, `start_byte`, `end_byte` — exact occurrence span.
-- `source_symbol_id`, `source_symbol_name`, `source_symbol_kind`, `source_symbol_is_test` — nullable enclosing
-  symbol facts from `identifiers.containing_symbol_id`.
-- `target_symbol_id`, `target_symbol_name`, `target_symbol_kind`, `target_symbol_is_test` — nullable resolved
-  target facts when the artifact has `identifiers.target_symbol_id`.
-- `resolution_status` — `unresolved`, `resolved`, or `dangling_target`.
-- `confidence`, `metadata_json`, `artifact_id`, `workspace_revision`.
+`miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits schema-2 canonical
+reference assertions keyed by producer-owned `reference_site_id`. See
+[`references-export-v2.md`](references-export-v2.md). Miller groups identifier, relationship, and resolution
+provenance by canonical site, target, and kind; it never guesses identity from overlapping spans.
 
 Read-command JSON is allowed to grow additive recovery fields. Current examples:
 
@@ -225,7 +214,8 @@ Read-command JSON is allowed to grow additive recovery fields. Current examples:
   `near_matches`, `empty_reason`, and `active_filters`.
 
 `miller patterns export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
-`structural_facts` row, ordered `(path, start_byte, structural_fact_id)`. Fields (`schema_version` 1):
+`structural_facts` row, ordered `(path, start_byte, structural_fact_id)`. Fields (`schema_version` 2; see
+[`patterns-json-v2.md`](patterns-json-v2.md)):
 
 - `structural_fact_id`, `path`, `language`, `pattern_id`, `capture_name`, `node_kind`.
 - `containing_symbol_id` (nullable), `confidence`.

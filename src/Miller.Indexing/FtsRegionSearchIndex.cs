@@ -12,15 +12,6 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
 {
     private const int SnippetMaxChars = 240;
 
-    private static readonly HashSet<string> TestSegments = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "test", "tests", "__tests__", "spec", "specs", "testdata", "fixtures",
-    };
-
-    private static readonly string[] FileNameInfixes = { ".test.", ".spec.", ".tests." };
-
-    private static readonly string[] PascalSuffixes = { "Test", "Tests", "Spec", "Specs" };
-
     private readonly string _connectionString;
     private readonly IReadOnlyDictionary<string, RegionDocument> _regionsById;
     private readonly int _regionCount;
@@ -131,7 +122,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
                 continue;
             if (!kinds.Contains(region.Kind))
                 continue;
-            if (excludeTests && LooksLikeTestPath(region.Path))
+            if (excludeTests && TestPathClassifier.Check(region.Path))
                 continue;
 
             tokens.Clear();
@@ -442,78 +433,6 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
         if (snippet.Length <= SnippetMaxChars)
             return snippet;
         return snippet[..SnippetMaxChars].TrimEnd() + "...";
-    }
-
-    private static bool LooksLikeTestPath(string? filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-            return false;
-
-        string[] segments = filePath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0)
-            return false;
-
-        for (int i = 0; i < segments.Length - 1; i++)
-        {
-            if (TestSegments.Contains(segments[i]))
-                return true;
-            if (segments[i].EndsWith(".Tests", StringComparison.OrdinalIgnoreCase)
-                || segments[i].EndsWith(".Test", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        string fileName = segments[^1];
-        if (TestSegments.Contains(fileName))
-            return true;
-
-        foreach (string infix in FileNameInfixes)
-            if (fileName.Contains(infix, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-        return StemLooksLikeTest(StripExtension(fileName));
-    }
-
-    private static bool StemLooksLikeTest(string stem)
-    {
-        if (stem.Length == 0)
-            return false;
-        if (HasBoundaryTestToken(stem))
-            return true;
-        foreach (string suffix in PascalSuffixes)
-            if (stem.Length > suffix.Length && stem.EndsWith(suffix, StringComparison.Ordinal))
-                return true;
-        return false;
-    }
-
-    private static bool HasBoundaryTestToken(string stem)
-    {
-        int start = 0;
-        for (int i = 0; i <= stem.Length; i++)
-        {
-            if (i != stem.Length && !IsTestDelimiter(stem[i]))
-                continue;
-
-            ReadOnlySpan<char> token = stem.AsSpan(start, i - start);
-            if (token.Equals("test", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("tests", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("spec", StringComparison.OrdinalIgnoreCase)
-                || token.Equals("specs", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            start = i + 1;
-        }
-
-        return false;
-    }
-
-    private static bool IsTestDelimiter(char c) => c is '.' or '_' or '-';
-
-    private static string StripExtension(string fileName)
-    {
-        string ext = Path.GetExtension(fileName);
-        return ext.Length > 0 ? fileName[..^ext.Length] : fileName;
     }
 
     private sealed record RegionMeta(long Revision, int SchemaVersion, int RegionCount, double RegionAvgdl);

@@ -40,7 +40,7 @@ public static class ReportTool
 
         IndexSection index = ReadIndexSection(dbPath);
         WorkspaceExtractionHealthFacts extraction = WorkspaceHealthReader.Read(dbPath);
-        MarkerSection markers = ReadMarkerSection(regionIndex, includeTests);
+        MarkerSection markers = ReadMarkerSection(dbPath, includeTests);
         IReadOnlyList<ComplexityHotspot> complexity = ComplexityRankingReader.Read(
             dbPath, limit, ComplexitySeverity.Moderate, includeTests);
         IReadOnlyList<CloneGroup> clones = CloneGroupReader.Read(
@@ -118,21 +118,11 @@ public static class ReportTool
         return new IndexSection(counts.Symbols, counts.Files, counts.Languages);
     }
 
-    private static MarkerSection ReadMarkerSection(IRegionSearchIndex? regionIndex, bool includeTests)
+    private static MarkerSection ReadMarkerSection(string dbPath, bool includeTests)
     {
-        if (regionIndex is null)
-        {
-            return new MarkerSection(
-                Available: false,
-                Reason: "region search index unavailable (search sidecar disabled or search.db missing)",
-                BoundedAt: 0,
-                Counts: [],
-                Total: 0);
-        }
-
         IReadOnlyList<string> markerNames = MarkerSearch.ParseMarkers(null);
         IReadOnlyList<MarkerSearchHit> hits = MarkerSearch.FindMarkers(
-            regionIndex,
+            dbPath,
             markerNames,
             MarkerSearch.MaxLimit,
             excludeTests: !includeTests,

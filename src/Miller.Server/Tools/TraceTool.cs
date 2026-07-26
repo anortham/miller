@@ -1101,8 +1101,10 @@ public sealed class TraceTool
             index.FindBySymbolId(containingId) is { } containing)
             sb.Append("  in=").Append(containing.Name);
         sb.Append("  [").Append(reference.ResolutionStatus == ReferenceResolutionStatus.Exact ? "exact" : "fallback")
-          .Append(" source=").Append(EvidenceSourceLabel(reference.Source))
-          .Append(" confidence=").Append(reference.Confidence.ToString("0.00", CultureInfo.InvariantCulture));
+              .Append(" source=").Append(EvidenceSourceLabel(reference.Source))
+              .Append(" site=").Append(reference.ReferenceSiteId)
+              .Append(" provenance=").Append(reference.SiteProvenance)
+              .Append(" confidence=").Append(reference.Confidence.ToString("0.00", CultureInfo.InvariantCulture));
         if (reference.ResolutionTier is { } tier)
             sb.Append(" tier=").Append(tier);
         sb.Append(']');
@@ -1140,7 +1142,11 @@ public sealed class TraceTool
                 ReferenceEvidenceSource.NameFallback,
                 null,
                 0.5,
-                ReferenceResolutionStatus.Fallback))
+                ReferenceResolutionStatus.Fallback,
+                null,
+                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
+                false,
+                "legacy_name_projection"))
             .Where(reference => query.Kind is null || reference.Kind == query.Kind)
             .OrderBy(reference => reference.FilePath, StringComparer.Ordinal)
             .ThenBy(reference => reference.StartLine)
@@ -2386,8 +2392,11 @@ public sealed class TraceTool
             fields.Add(reference.Source.ToString());
             fields.Add(reference.ResolutionTier?.ToString(CultureInfo.InvariantCulture));
             fields.Add(reference.Confidence.ToString("R", CultureInfo.InvariantCulture));
-            fields.Add(reference.ResolutionStatus.ToString());
-            fields.Add(reference.Language);
+                fields.Add(reference.ResolutionStatus.ToString());
+                fields.Add(reference.Language);
+                fields.Add(reference.ReferenceSiteId);
+                fields.Add(reference.IsExact ? "1" : "0");
+                fields.Add(reference.SiteProvenance);
         }
         return FingerprintFields(fields.ToArray());
     }
@@ -2710,6 +2719,9 @@ public sealed class TraceTool
             ? fallbackName
             : index.FindBySymbolId(reference.TargetSymbolId)?.Name ?? fallbackName;
         w.WriteStartObject();
+        w.WriteString("reference_site_id", reference.ReferenceSiteId);
+        w.WriteBoolean("is_exact", reference.IsExact);
+        w.WriteString("site_provenance", reference.SiteProvenance);
         if (name is null) w.WriteNull("name"); else w.WriteString("name", name);
         w.WriteString("target_symbol_id", reference.TargetSymbolId);
         w.WriteString("kind", reference.SourceKind);

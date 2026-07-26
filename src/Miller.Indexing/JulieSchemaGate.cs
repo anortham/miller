@@ -15,6 +15,17 @@ internal static class JulieSchemaGate
 {
     // SQLite "no such table: X" maps to SqliteErrorCode 1 (SQLITE_ERROR) — distinguished by message text.
     private const int SqliteGenericError = 1;
+    private static readonly string[] RequiredSchemaFiveTables =
+    [
+        "reference_sites",
+        "identifiers",
+        "relationships",
+        "identifier_resolutions",
+        "pending_relationships",
+        "pending_resolutions",
+        "structural_facts",
+        "language_capability_gaps",
+    ];
 
     /// <summary>
     /// Verify the DB on <paramref name="connection"/> is a compatible julie-extract artifact. The connection
@@ -52,6 +63,9 @@ internal static class JulieSchemaGate
                 $"DB has hash_algorithm value '{hashAlgorithm}', expected '{MillerExtractContract.ExpectedHashAlgorithm}'; " +
                 $"it is not a julie-extract artifact compatible with this Miller build. Re-run restore + `scan` " +
                 $"with the pinned julie-extract (v{MillerExtractContract.PinnedJulieExtractVersion}).");
+
+        foreach (string tableName in RequiredSchemaFiveTables)
+            RequireTable(connection, tableName);
     }
 
     // Current julie-extract artifacts store the schema version as a metadata KEY (sqlite_schema_version), not a
@@ -111,6 +125,22 @@ internal static class JulieSchemaGate
         ex.SqliteErrorCode == SqliteGenericError &&
         ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase) &&
         ex.Message.Contains(table, StringComparison.Ordinal);
+
+    private static void RequireTable(SqliteConnection connection, string tableName)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = $table_name;
+            """;
+        command.Parameters.AddWithValue("$table_name", tableName);
+        if (command.ExecuteScalar() is null)
+            throw new IncompatibleExtractException(
+                $"DB has no '{tableName}' table; it is not a compatible julie-extract schema 5 artifact. " +
+                $"Re-run restore + `workspace full` with the pinned julie-extract.");
+    }
 
     private static IncompatibleExtractException MissingTable(string table, SqliteException inner) =>
         new($"DB has no '{table}' table; it is not a compatible julie-extract artifact. " +

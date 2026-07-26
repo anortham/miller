@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
@@ -256,6 +257,8 @@ public sealed class PatternMetadataSqlTests
         string first = PatternFactsExportReader.ExportJsonLines(fx.DbPath);
         string second = PatternFactsExportReader.ExportJsonLines(fx.DbPath);
         Assert.Equal(first, second);
+        using JsonDocument row = JsonDocument.Parse(first);
+        Assert.Equal(2, row.RootElement.GetProperty("schema_version").GetInt32());
         Assert.Contains("\"structural_fact_id\":\"fact-hx-get\"", first, StringComparison.Ordinal);
     }
 
@@ -276,7 +279,7 @@ public sealed class PatternMetadataSqlTests
         using var fx = CreatePatternFixture();
         Exec(fx.DbPath, "DROP TABLE structural_facts;");
 
-        InvalidOperationException ex = Assert.Throws<InvalidOperationException>(
+        IncompatibleExtractException ex = Assert.Throws<IncompatibleExtractException>(
             () => PatternFactsExportReader.ExportJsonLines(fx.DbPath));
         Assert.Contains("structural_facts", ex.Message, StringComparison.Ordinal);
     }

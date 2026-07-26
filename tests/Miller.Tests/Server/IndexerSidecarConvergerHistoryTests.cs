@@ -16,7 +16,7 @@ namespace Miller.Tests.Server;
 public sealed class IndexerSidecarConvergerHistoryTests
 {
     [Fact]
-    public void Converge_RecordsOneConvergeSnapshot_WithAggregatesAndNoMarkerMetric()
+    public void Converge_RecordsZeroMarkerMetricWhenNoMarkerFactsExist()
     {
         using var fx = NewFixture();
         var calls = new List<string>();
@@ -33,21 +33,24 @@ public sealed class IndexerSidecarConvergerHistoryTests
         Assert.Equal(9L, ScalarLong(historyPath, "SELECT revision FROM snapshots LIMIT 1;"));
         Assert.Equal(2d, ScalarDouble(historyPath,
             $"SELECT value FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.SymbolCount}';"));
-        // Search disabled ⟹ no region index ⟹ marker metric is absent (not 0).
-        Assert.Equal(0L, ScalarLong(historyPath,
+        Assert.Equal(1L, ScalarLong(historyPath,
             $"SELECT COUNT(*) FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.MarkerTotal}';"));
+        Assert.Equal(0d, ScalarDouble(historyPath,
+            $"SELECT value FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.MarkerTotal}';"));
     }
 
     [Fact]
-    public void Converge_WithRegionSearchDb_RecordsMarkerTotalAndBreakdown()
+    public void Converge_WithMarkerFact_RecordsMarkerTotalAndBreakdown()
     {
         using var fx = NewFixture();
         var calls = new List<string>();
         IndexerSidecarConverger converger = NewConverger(calls, searchEnabled: true);
-
-        // A region search index bearing a single TODO comment region, at the revision the converge will record.
-        string searchDbPath = Path.Combine(Path.GetDirectoryName(fx.DbPath)!, "search.db");
-        WriteRegionSearchDb(searchDbPath, revision: 11, "// TODO tidy this branch later");
+        fx.AddStructuralFact(
+            "marker-todo",
+            "id-a",
+            "src/A.cs",
+            patternId: MarkerFactReader.PatternId,
+            metadataJson: """{"marker":"TODO","description":"tidy this branch later"}""");
 
         converger.Converge(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 11, fullRebuild: false);
 

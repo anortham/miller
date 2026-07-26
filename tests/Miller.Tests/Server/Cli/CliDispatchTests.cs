@@ -287,11 +287,16 @@ public sealed class CliDispatchTests : IDisposable
             Assert.StartsWith("1.14.0", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.17.0", julie.GetProperty("pinned_version").GetString());
-        Assert.Equal(4, julie.GetProperty("sqlite_schema_version").GetInt64());
-        Assert.Equal(3, julie.GetProperty("extract_contract_version").GetInt64());
+        Assert.Equal("2.18.0", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal(5, julie.GetProperty("sqlite_schema_version").GetInt64());
+        Assert.Equal(4, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
+        Assert.Equal(4, julie.GetProperty("jsonl_schema_version").GetInt64());
         Assert.Equal("blake3", julie.GetProperty("hash_algorithm").GetString());
+        Assert.Equal(
+            SemanticQueryPolicy.PolicyVersion,
+            root.GetProperty("semantic").GetProperty("query_policy_version").GetInt32());
+        Assert.Equal(2, root.GetProperty("semantic").GetProperty("query_policy_version").GetInt32());
 
         JsonElement artifacts = root.GetProperty("artifacts");
         Assert.Equal(SearchIndexWriter.SchemaVersion, artifacts.GetProperty("search_sidecar_schema_version").GetInt32());
@@ -334,7 +339,13 @@ public sealed class CliDispatchTests : IDisposable
             root.GetProperty("json_contracts").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "patterns");
         Assert.Equal("patterns --json", patternsContract.GetProperty("command").GetString());
-        Assert.Equal(1, patternsContract.GetProperty("schema_version").GetInt32());
+        Assert.Equal(2, patternsContract.GetProperty("schema_version").GetInt32());
+
+        JsonElement referencesExportContract = Assert.Single(
+            root.GetProperty("json_contracts").EnumerateArray(),
+            item => item.GetProperty("name").GetString() == "references_export");
+        Assert.Equal("references export --jsonl", referencesExportContract.GetProperty("command").GetString());
+        Assert.Equal(2, referencesExportContract.GetProperty("schema_version").GetInt32());
 
         JsonElement metricsContract = Assert.Single(
             root.GetProperty("json_contracts").EnumerateArray(),
@@ -814,11 +825,9 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Search_UsesSymbolProjectionWithoutFullGraphLoad()
+    public void Search_UsesSchemaFiveSymbolProjection()
     {
         using var fx = JulieDbFixture.CreateForInspect();
-        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
-
         var (code, outText, errText) = Run(new[] { "search", "GetUser" }, Context(fx.DbPath, fx.WorkspaceRoot));
 
         Assert.Equal(0, code);
@@ -1328,7 +1337,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(0, code);
         Assert.Empty(errText);
         using JsonDocument doc = JsonDocument.Parse(outText);
-        Assert.Equal(1, doc.RootElement.GetProperty("schema_version").GetInt32());
+        Assert.Equal(2, doc.RootElement.GetProperty("schema_version").GetInt32());
         Assert.Equal("list", doc.RootElement.GetProperty("operation").GetString());
         JsonElement htmx = doc.RootElement.GetProperty("patterns").EnumerateArray()
             .Single(row => row.GetProperty("pattern_id").GetString() == "htmx.attribute.v1");
@@ -1385,6 +1394,69 @@ public sealed class CliDispatchTests : IDisposable
             Enumerable.Range(1, 300)
                 .Select(static n => $"generated.cli.long_pattern_identifier_{n:000}.v1"),
             generatedIds);
+    }
+
+    [Fact]
+    public void Patterns_ListJson_ContinuationReplaysAProducerPageToken()
+    {
+        using var fx = DbWithPatterns();
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = fx.DbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString()))
+        {
+            connection.Open();
+            Exec(connection, """
+                WITH RECURSIVE seq(n) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT n + 1 FROM seq WHERE n < 25
+                )
+                INSERT INTO structural_facts
+                    (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                     containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                     confidence, metadata_json)
+                SELECT
+                    printf('fact-cli-page-%03d', n), 'file:src/Auth.cs', 'src/Auth.cs', 'csharp',
+                    printf('generated.cli.page_pattern_%03d.v1', n), 'generated_capture',
+                    'invocation_expression', 'sym-auth',
+                    n, 1, n, 20, n * 20, n * 20 + 19, 1.0, '{"verb":"GET"}'
+                FROM seq;
+                """);
+        }
+
+        PatternToolResult first = PatternsTool.Run(
+            new PatternFactsReader(),
+            fx.DbPath,
+            operation: "list",
+            patternId: null,
+            query: null,
+            language: null,
+            path: null,
+            where: null,
+            groupBy: null,
+            facet: null,
+            limit: PatternsTool.DefaultLimit,
+            json: true,
+            outputByteBudget: 1800,
+            workspaceId: "current");
+        using JsonDocument firstDoc = JsonDocument.Parse(first.Output);
+        string continuation = firstDoc.RootElement.GetProperty("continuation").GetString()!;
+        string firstPattern = firstDoc.RootElement.GetProperty("patterns")[0].GetProperty("pattern_id").GetString()!;
+
+        var (code, outText, errText) = Run(
+            new[] { "patterns", "list", "--json", "--continuation", continuation },
+            Context(fx.DbPath, fx.WorkspaceRoot));
+
+        Assert.Equal(0, code);
+        Assert.Empty(errText);
+        using JsonDocument replay = JsonDocument.Parse(outText);
+        Assert.NotEqual(
+            firstPattern,
+            replay.RootElement.GetProperty("patterns")[0].GetProperty("pattern_id").GetString());
+        Assert.Equal(JsonValueKind.Null, replay.RootElement.GetProperty("continuation").ValueKind);
     }
 
     [Fact]
@@ -1633,7 +1705,7 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void References_Export_EmitsOneJsonlRowPerIdentifier()
+    public void References_Export_EmitsCanonicalAssertionPerSiteTargetAndKind()
     {
         using var fx = JulieDbFixture.CreateForEdit();
         MarkSymbolAsTest(fx.DbPath, "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00");
@@ -1649,31 +1721,42 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(4, lines.Length);
         JsonElement call = lines
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
-            .Single(row => row.GetProperty("identifier_id").GetString() == "d100000000000000000000000000000c");
-        Assert.Equal(1, call.GetProperty("schema_version").GetInt32());
-        Assert.Equal("Total", call.GetProperty("name").GetString());
-        Assert.Equal("call", call.GetProperty("reference_kind").GetString());
+            .Single(row =>
+                row.GetProperty("path").GetString() == "billing/Invoice.cs"
+                && row.GetProperty("target_symbol_id").GetString() == JulieDbFixture.TotalMethodId);
+        Assert.Equal(2, call.GetProperty("schema_version").GetInt32());
+        Assert.Equal("site:file:billing/Invoice.cs:71:76", call.GetProperty("reference_site_id").GetString());
+        Assert.Equal("call", call.GetProperty("canonical_kind").GetString());
+        Assert.Equal("target_token", call.GetProperty("site_provenance").GetString());
+        Assert.True(call.GetProperty("is_exact").GetBoolean());
         Assert.Equal("csharp", call.GetProperty("language").GetString());
         Assert.Equal("billing/Invoice.cs", call.GetProperty("path").GetString());
-        Assert.Equal(3, call.GetProperty("start_line").GetInt64());
-        Assert.Equal(71, call.GetProperty("start_byte").GetInt64());
-        Assert.Equal(76, call.GetProperty("end_byte").GetInt64());
+        JsonElement span = call.GetProperty("span");
+        Assert.Equal(3, span.GetProperty("start_line").GetInt64());
+        Assert.Equal(71, span.GetProperty("start_byte").GetInt64());
+        Assert.Equal(76, span.GetProperty("end_byte").GetInt64());
         Assert.Equal("5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00", call.GetProperty("source_symbol_id").GetString());
         Assert.Equal("Sum", call.GetProperty("source_symbol_name").GetString());
         Assert.Equal("method", call.GetProperty("source_symbol_kind").GetString());
         Assert.True(call.GetProperty("source_symbol_is_test").GetBoolean());
         Assert.Equal(JulieDbFixture.TotalMethodId, call.GetProperty("target_symbol_id").GetString());
-        Assert.Equal("Total", call.GetProperty("target_symbol_name").GetString());
+        Assert.Equal("Total", call.GetProperty("target_name").GetString());
         Assert.Equal("method", call.GetProperty("target_symbol_kind").GetString());
         Assert.False(call.GetProperty("target_symbol_is_test").GetBoolean());
         Assert.Equal("resolved", call.GetProperty("resolution_status").GetString());
+        Assert.Equal(JsonValueKind.Null, call.GetProperty("resolution_tier").ValueKind);
+        Assert.Equal(1d, call.GetProperty("confidence").GetDouble());
+        Assert.Equal(
+            new[] { "identifier_direct" },
+            call.GetProperty("provenance").EnumerateArray()
+                .Select(static value => value.GetString())
+                .ToArray());
         Assert.Equal("artifact-ws-edit-001", call.GetProperty("artifact_id").GetString());
         Assert.Equal(JsonValueKind.Null, call.GetProperty("workspace_revision").ValueKind);
-        Assert.Equal(JsonValueKind.Null, call.GetProperty("metadata_json").ValueKind);
 
         JsonElement unresolved = lines
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
-            .Single(row => row.GetProperty("identifier_id").GetString() == "d100000000000000000000000000000d");
+            .First(row => row.GetProperty("resolution_status").GetString() == "unresolved");
         Assert.Equal(JsonValueKind.Null, unresolved.GetProperty("target_symbol_id").ValueKind);
         Assert.Equal("unresolved", unresolved.GetProperty("resolution_status").GetString());
     }
@@ -2031,6 +2114,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(2, code);
         Assert.Contains("miller patterns", errText);
         Assert.Contains("top_directory", errText);
+        Assert.Contains("--continuation", errText);
         Assert.DoesNotContain("no Miller index", errText);
     }
 
@@ -2301,12 +2385,19 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Todos_UsesFreshDiskRegionIndex()
+    public void Todos_UsesCodeMarkerFactsWithoutRegionSidecar()
     {
         const string path = "src/Target.cs";
         const string text = "// HACK cli todo surface\nclass TargetType {}\n";
         using var fx = DbWithRegion(path, text);
-        WriteRegionSearchDbFor(fx, revision: 1);
+        fx.AddStructuralFact(
+            "marker-hack",
+            null,
+            path,
+            patternId: MarkerFactReader.PatternId,
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: """{"marker":"HACK","description":"cli todo surface"}""");
 
         var (code, outText, errText) = Run(
             new[] { "todos", "--markers", "HACK" },
@@ -2314,8 +2405,8 @@ public sealed class CliDispatchTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("src/Target.cs:1  HACK  comment  TargetType", outText);
-        Assert.Contains("// HACK cli todo surface", outText);
+        Assert.Contains("src/Target.cs:1  HACK  comment", outText);
+        Assert.Contains("HACK: cli todo surface", outText);
     }
 
     [Fact]
@@ -2328,11 +2419,9 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Inspect_Summary_UsesSymbolProjectionWithoutFullGraphLoad()
+    public void Inspect_Summary_UsesSchemaFiveSymbolProjection()
     {
         using var fx = JulieDbFixture.CreateForInspect();
-        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
-
         var (code, outText, errText) = Run(new[] { "inspect", "GetUser" }, Context(fx.DbPath, fx.WorkspaceRoot));
 
         Assert.Equal(0, code);
@@ -2342,11 +2431,9 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Inspect_Full_AmbiguousTarget_UsesSymbolProjectionWithoutFullGraphLoad()
+    public void Inspect_Full_AmbiguousTarget_UsesSchemaFiveSymbolProjection()
     {
         using var fx = DbWithAmbiguousSymbols();
-        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
-
         var (code, outText, errText) = Run(
             new[] { "inspect", "Duplicate", "--depth", "full" },
             Context(fx.DbPath, fx.WorkspaceRoot));
@@ -2359,11 +2446,9 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
-    public void Inspect_Full_UniqueTarget_UsesSymbolProjectionWithoutFullGraphLoad()
+    public void Inspect_Full_UniqueTarget_UsesSchemaFiveReferenceProjection()
     {
         using var fx = JulieDbFixture.CreateForInspect();
-        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
-
         var (code, outText, errText) = Run(
             new[] { "inspect", "GetUser", "--depth", "full" },
             Context(fx.DbPath, fx.WorkspaceRoot));
@@ -4175,7 +4260,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(0, code);
         Assert.Empty(errText);
         // The export path emits one JSONL row per identifier (schema_version present, no candidates envelope).
-        Assert.Contains("\"identifier_id\":", outText);
+        Assert.Contains("\"reference_site_id\":", outText);
         Assert.DoesNotContain("\"candidates\":", outText);
     }
 

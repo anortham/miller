@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -133,7 +134,9 @@ internal static class CliCapabilities
         ("workspace_leader", "workspace leader --json", 1, "docs/contracts/workspace-leader-json-v1.md"),
         ("refresh_wait", "refresh --json --wait", 1, "docs/contracts/refresh-wait-v1.md"),
         ("trace", "trace --json", 1, "docs/contracts/trace-json-v1.md"),
-        ("patterns", "patterns --json", 1, "docs/contracts/patterns-json-v1.md"),
+        ("patterns", "patterns --json", PatternsTool.JsonSchemaVersion, "docs/contracts/patterns-json-v2.md"),
+        ("references_export", "references export --jsonl", ReferenceExportReader.SchemaVersion,
+            "docs/contracts/references-export-v2.md"),
         ("metrics", "metrics <churn|clones|complexity|risk> --json", 1, "docs/contracts/metrics-json-v1.md"),
         ("metrics_history", "metrics history --json", 1, "docs/contracts/metrics-history-v1.md"),
         ("report", "report --json", 1, "docs/contracts/report-json-v1.md"),
@@ -179,6 +182,7 @@ internal static class CliCapabilities
         sb.AppendLine($"sqlite_schema_version: {contract.SqliteSchemaVersion}");
         sb.AppendLine($"extract_contract_version: {contract.ExtractContractVersion}");
         sb.AppendLine($"report_schema_version: {contract.ReportSchemaVersion}");
+        sb.AppendLine($"jsonl_schema_version: {contract.JsonlSchemaVersion}");
         sb.AppendLine($"hash_algorithm: {contract.HashAlgorithm}");
         sb.AppendLine($"search_sidecar_schema_version: {SearchIndexWriter.SchemaVersion}");
         sb.AppendLine($"content_corpus_schema_version: {ContentCorpusSchema.SchemaVersion}");
@@ -233,7 +237,13 @@ internal static class CliCapabilities
             w.WriteNumber("sqlite_schema_version", contract.SqliteSchemaVersion);
             w.WriteNumber("extract_contract_version", contract.ExtractContractVersion);
             w.WriteNumber("report_schema_version", contract.ReportSchemaVersion);
+            w.WriteNumber("jsonl_schema_version", contract.JsonlSchemaVersion);
             w.WriteString("hash_algorithm", contract.HashAlgorithm);
+            w.WriteEndObject();
+
+            w.WritePropertyName("semantic");
+            w.WriteStartObject();
+            w.WriteNumber("query_policy_version", SemanticQueryPolicy.PolicyVersion);
             w.WriteEndObject();
 
             w.WritePropertyName("artifacts");

@@ -78,6 +78,7 @@ public sealed class SqliteBridgeReaderTests : IDisposable
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
+        JulieDbFixture.EnsureRequiredSchemaFiveTables(connection);
 
         using var seed = connection.CreateCommand();
         // Seed the v1 gate keys from the pinned constants (not literals) so a julie re-pin needs no edit here.

@@ -27,6 +27,16 @@ public sealed class JulieSchemaGateTests
 
     private static string S(long v) => v.ToString(CultureInfo.InvariantCulture);
 
+    [Fact]
+    public void Contract_IsSchemaFiveExtractFourAndJulie218()
+    {
+        Assert.Equal(5, MillerExtractContract.ExpectedSchemaVersion);
+        Assert.Equal(5, MillerExtractContract.ExpectedSqliteSchemaVersion);
+        Assert.Equal(4, MillerExtractContract.ExpectedExtractContractVersion);
+        Assert.Equal(4, MillerExtractContract.ExpectedJsonlSchemaVersion);
+        Assert.Equal("2.18.0", MillerExtractContract.PinnedJulieExtractVersion);
+    }
+
     private static SqliteConnection OpenReadOnly(string dbPath)
     {
         var csb = new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly };
@@ -43,6 +53,17 @@ public sealed class JulieSchemaGateTests
 
         // No exception == compatible. Calling it is the assertion; a throw would fail the test.
         JulieSchemaGate.Verify(conn);
+    }
+
+    [Fact]
+    public void Verify_SchemaFourContractThree_RequiresFullRebuild()
+    {
+        using var fx = JulieDbFixture.Create(4, "3", NoRows);
+        using var conn = OpenReadOnly(fx.DbPath);
+
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+        Assert.Contains("workspace full", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("schema 4", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -154,6 +175,32 @@ public sealed class JulieSchemaGateTests
         var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
         Assert.Contains("hash_algorithm", ex.Message);
         Assert.Contains("blake3", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("reference_sites")]
+    [InlineData("identifiers")]
+    [InlineData("relationships")]
+    [InlineData("identifier_resolutions")]
+    [InlineData("pending_relationships")]
+    [InlineData("pending_resolutions")]
+    [InlineData("structural_facts")]
+    [InlineData("language_capability_gaps")]
+    public void Verify_MissingRequiredSchemaFiveTable_ThrowsNamingTheTable(string tableName)
+    {
+        using var fx = JulieDbFixture.Create(PinSchema, PinContractStr, NoRows);
+        using (var writer = new SqliteConnection($"Data Source={fx.DbPath}"))
+        {
+            writer.Open();
+            using var drop = writer.CreateCommand();
+            drop.CommandText = $"DROP TABLE {tableName};";
+            drop.ExecuteNonQuery();
+        }
+
+        using var conn = OpenReadOnly(fx.DbPath);
+        var ex = Assert.Throws<IncompatibleExtractException>(() => JulieSchemaGate.Verify(conn));
+
+        Assert.Contains(tableName, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

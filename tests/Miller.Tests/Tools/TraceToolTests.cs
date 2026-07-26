@@ -602,7 +602,10 @@ public sealed class TraceToolTests
         Assert.Contains("# trace refs Alpha (1 reference(s), exact=0, fallback=1, kind=call)", outp);
         Assert.Contains("definition:", outp);
         Assert.Contains("Alpha  method  src/A.cs:1", outp);
-        Assert.Contains("src/Caller.cs:10  call  in=CallerMethod  [fallback source=name_fallback confidence=0.50]", outp);
+        Assert.Contains(
+            "src/Caller.cs:10  call  in=CallerMethod  [fallback source=name_fallback " +
+            "site=legacy:src/Caller.cs:10:call provenance=legacy_name_projection confidence=0.50]",
+            outp);
         Assert.DoesNotContain("containing=", outp);
         Assert.DoesNotContain("src/Types.cs", outp);
     }
@@ -632,7 +635,11 @@ public sealed class TraceToolTests
             ReferenceEvidenceSource.IdentifierResolution,
             2,
             0.9,
-            ReferenceResolutionStatus.Exact);
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:caller:100:105",
+            IsExact: true,
+            SiteProvenance: "target_token");
         var evidence = new ReferenceEvidenceSet(
             [exact],
             [],
@@ -691,7 +698,11 @@ public sealed class TraceToolTests
             ReferenceEvidenceSource.IdentifierDirect,
             null,
             1,
-            ReferenceResolutionStatus.Exact);
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:caller:100:105",
+            IsExact: true,
+            SiteProvenance: "target_token");
         var evidence = new ReferenceEvidenceSet(
             [exact],
             [],
@@ -758,7 +769,11 @@ public sealed class TraceToolTests
                     ReferenceEvidenceSource.IdentifierDirect,
                     null,
                     1,
-                    ReferenceResolutionStatus.Exact),
+                    ReferenceResolutionStatus.Exact,
+                    Language: "csharp",
+                    ReferenceSiteId: "site:caller:100:105",
+                    IsExact: true,
+                    SiteProvenance: "target_token"),
             ],
             [],
             new ReferenceEvidenceCoverage(
@@ -818,7 +833,10 @@ public sealed class TraceToolTests
                 null,
                 1,
                 ReferenceResolutionStatus.Exact,
-                "csharp"))
+                "csharp",
+                $"site:caller:{line}",
+                true,
+                "target_token"))
             .ToArray();
         var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
         ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
@@ -942,7 +960,10 @@ public sealed class TraceToolTests
                 null,
                 1,
                 ReferenceResolutionStatus.Exact,
-                "csharp"))
+                "csharp",
+                $"site:caller:{line}",
+                true,
+                "target_token"))
             .ToArray();
 
         ReferenceEvidenceSet ReadPopulation(IndexedSymbol _, ReferenceEvidenceQuery query) =>
@@ -1032,7 +1053,10 @@ public sealed class TraceToolTests
                 null,
                 1,
                 ReferenceResolutionStatus.Exact,
-                "csharp"))
+                "csharp",
+                $"site:caller:{line}",
+                true,
+                "target_token"))
             .ToArray();
         var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
         ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
@@ -1111,7 +1135,10 @@ public sealed class TraceToolTests
                     null,
                     1,
                     ReferenceResolutionStatus.Exact,
-                    "csharp"))
+                    "csharp",
+                    $"site:caller:{line}",
+                    true,
+                    "target_token"))
                 .ToArray();
             ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
             {
@@ -1207,7 +1234,11 @@ public sealed class TraceToolTests
                     ReferenceEvidenceSource.IdentifierDirect,
                     null,
                     1,
-                    ReferenceResolutionStatus.Exact),
+                    ReferenceResolutionStatus.Exact,
+                    Language: "csharp",
+                    ReferenceSiteId: "site:unknown",
+                    IsExact: false,
+                    SiteProvenance: "spanless"),
             ],
             [],
             new ReferenceEvidenceCoverage(

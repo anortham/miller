@@ -114,6 +114,10 @@ public sealed class EditToolTests : IDisposable
             UPDATE identifiers SET
                 start_byte = start_byte + $b, end_byte = end_byte + $b, start_line = start_line + $l
             WHERE path = $path;
+            UPDATE reference_sites SET
+                start_byte = start_byte + $b, end_byte = end_byte + $b,
+                start_line = start_line + $l, end_line = end_line + $l
+            WHERE path = $path;
             """;
         cmd.Parameters.AddWithValue("$b", byteDelta);
         cmd.Parameters.AddWithValue("$l", lineDelta);
@@ -2053,12 +2057,21 @@ public sealed class EditToolTests : IDisposable
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
         fx.ExecuteWrite("""
+            INSERT INTO reference_sites (
+                reference_site_id, file_id, path, language, containing_symbol_id,
+                start_line, start_column, end_line, end_column, start_byte, end_byte, is_exact, provenance)
+            SELECT
+                'relationship-spanless', file_id, path, language, NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL, 0, 'test_spanless'
+            FROM files
+            WHERE path = 'billing/Invoice.cs';
             INSERT INTO relationships (
-                relationship_id, from_symbol_id, to_symbol_id, file_id, path, kind,
+                relationship_id, reference_site_id, from_symbol_id, to_symbol_id, file_id, path, kind,
                 start_line, start_column, end_line, end_column,
                 start_byte, end_byte, confidence)
             SELECT
                 'd100000000000000000000000000000f',
+                'relationship-spanless',
                 (SELECT symbol_id FROM symbols WHERE name = 'Sum' LIMIT 1),
                 (SELECT symbol_id FROM symbols WHERE name = 'Total' AND path = 'orders/OrderService.cs' LIMIT 1),
                 file_id, path, 'calls',

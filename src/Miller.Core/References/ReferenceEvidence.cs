@@ -71,7 +71,10 @@ public sealed record ReferenceEvidence(
     int? ResolutionTier,
     double Confidence,
     ReferenceResolutionStatus ResolutionStatus,
-    string? Language = null);
+    string? Language,
+    string ReferenceSiteId,
+    bool IsExact,
+    string SiteProvenance);
 
 /// <summary>Counts and fallback safety facts for one bounded reference read.</summary>
 public sealed record ReferenceEvidenceCoverage(
@@ -118,7 +121,10 @@ public sealed record OutgoingReferenceEvidence(
     int? ResolutionTier,
     double Confidence,
     ReferenceResolutionStatus ResolutionStatus,
-    string? Language = null);
+    string? Language,
+    string ReferenceSiteId,
+    bool IsExact,
+    string SiteProvenance);
 
 /// <summary>Counts for one independently bounded outgoing reference read.</summary>
 public sealed record OutgoingReferenceEvidenceCoverage(

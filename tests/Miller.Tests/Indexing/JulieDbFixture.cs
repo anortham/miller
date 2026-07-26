@@ -236,17 +236,34 @@ internal sealed class JulieDbFixture : IDisposable
         string kind = "call", string targetDisplayName = "Target", string targetTerminalName = "Target",
         int startLine = 1, double confidence = 1.0)
     {
+        string referenceSiteId = ReferenceSiteId(
+            filePath, pendingRelationshipId, startByte, endByte);
+        ExecuteWrite("""
+            INSERT OR IGNORE INTO reference_sites
+                (reference_site_id, file_id, path, language, containing_symbol_id,
+                 start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 is_exact, provenance)
+            VALUES ($site, $fid, $path, 'csharp', $containing,
+                    NULL, NULL, NULL, NULL, NULL, NULL, 0, 'spanless');
+            """, p =>
+        {
+            p.AddWithValue("$site", referenceSiteId);
+            p.AddWithValue("$fid", FileId(filePath));
+            p.AddWithValue("$path", filePath);
+            p.AddWithValue("$containing", (object?)callerScopeSymbolId ?? fromSymbolId);
+        });
         ExecuteWrite("""
             INSERT INTO pending_relationships
-                (pending_relationship_id, from_symbol_id, caller_scope_symbol_id, file_id, path, kind,
+                (pending_relationship_id, reference_site_id, from_symbol_id, caller_scope_symbol_id, file_id, path, kind,
                  target_display_name, target_terminal_name, target_receiver, target_namespace_json,
                  target_import_context, start_line, start_column, end_line, end_column, start_byte, end_byte,
                  confidence, metadata_json)
-            VALUES ($id, $from, $caller, $fid, $path, $kind, $display, $terminal, NULL, '[]', NULL,
+            VALUES ($id, $site, $from, $caller, $fid, $path, $kind, $display, $terminal, NULL, '[]', NULL,
                     $sl, NULL, NULL, NULL, $sb, $eb, $conf, NULL);
             """, p =>
         {
             p.AddWithValue("$id", pendingRelationshipId);
+            p.AddWithValue("$site", referenceSiteId);
             p.AddWithValue("$from", fromSymbolId);
             p.AddWithValue("$caller", (object?)callerScopeSymbolId ?? DBNull.Value);
             p.AddWithValue("$fid", FileId(filePath));
@@ -291,7 +308,8 @@ internal sealed class JulieDbFixture : IDisposable
     public void AddStructuralFact(
         string structuralFactId, string? containingSymbolId, string path,
         string language = "csharp", string patternId = "custom.pattern.v1",
-        string captureName = "attribute", string nodeKind = "attribute")
+        string captureName = "attribute", string nodeKind = "attribute",
+        string? metadataJson = null)
     {
         ExecuteWrite("""
             INSERT INTO structural_facts
@@ -299,7 +317,7 @@ internal sealed class JulieDbFixture : IDisposable
                  containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
                  confidence, metadata_json)
             VALUES ($id, $fid, $path, $lang, $pattern, $capture, $node, $symbol,
-                    1, 1, 1, 2, 0, 1, 1.0, NULL);
+                    1, 1, 1, 2, 0, 1, 1.0, $metadata);
             """, p =>
         {
             p.AddWithValue("$id", structuralFactId);
@@ -310,6 +328,7 @@ internal sealed class JulieDbFixture : IDisposable
             p.AddWithValue("$capture", captureName);
             p.AddWithValue("$node", nodeKind);
             p.AddWithValue("$symbol", (object?)containingSymbolId ?? DBNull.Value);
+            p.AddWithValue("$metadata", (object?)metadataJson ?? DBNull.Value);
         });
     }
 
@@ -544,6 +563,8 @@ internal sealed class JulieDbFixture : IDisposable
 
             Exec(conn, FilesDdl);
             Exec(conn, SymbolsDdl);
+            Exec(conn, ReferenceSitesDdl);
+            Exec(conn, ReferenceSitesIndexesDdl);
             Exec(conn, IdentifiersDdl);
             // The relationships table is always created so a SymbolGraphReader can open against any fixture.
             Exec(conn, RelationshipsDdl);
@@ -687,13 +708,30 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 foreach (var ident in identifiers)
                 {
+                    int syntheticStartByte = ident.StartByte ?? (ident.StartLine * 100);
+                    int syntheticEndByte = ident.EndByte ?? (syntheticStartByte + 1);
+                    string referenceSiteId = ReferenceSiteId(
+                        ident.FilePath, ident.Id, syntheticStartByte, syntheticEndByte);
+                    InsertReferenceSite(
+                        conn,
+                        referenceSiteId,
+                        ident.FilePath,
+                        ident.Language,
+                        ident.ContainingSymbolId,
+                        ident.StartLine,
+                        0,
+                        ident.StartLine,
+                        0,
+                        syntheticStartByte,
+                        syntheticEndByte);
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO identifiers (identifier_id, file_id, path, language, name, kind, " +
+                        "INSERT INTO identifiers (identifier_id, reference_site_id, file_id, path, language, name, kind, " +
                         "start_line, start_column, end_line, end_column, start_byte, end_byte, confidence, " +
                         "containing_symbol_id, target_symbol_id) " +
-                        "VALUES ($id, $fid, $fp, $lang, $name, $kind, $sl, 0, $sl, 0, $sb, $eb, 1.0, $cid, $target);";
+                        "VALUES ($id, $site, $fid, $fp, $lang, $name, $kind, $sl, 0, $sl, 0, $sb, $eb, 1.0, $cid, $target);";
                     cmd.Parameters.AddWithValue("$id", ident.Id);
+                    cmd.Parameters.AddWithValue("$site", referenceSiteId);
                     cmd.Parameters.AddWithValue("$fid", FileId(ident.FilePath));
                     cmd.Parameters.AddWithValue("$fp", ident.FilePath);
                     cmd.Parameters.AddWithValue("$lang", ident.Language);
@@ -712,12 +750,30 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 foreach (var rel in relationships)
                 {
+                    int? syntheticStartByte = rel.StartByte
+                        ?? (rel.StartLine is null ? null : (rel.StartLine * 100) + rel.StartColumn.GetValueOrDefault());
+                    int? syntheticEndByte = rel.EndByte ?? syntheticStartByte + 1;
+                    string referenceSiteId = ReferenceSiteId(
+                        rel.FilePath, rel.Id, syntheticStartByte, syntheticEndByte);
+                    InsertReferenceSite(
+                        conn,
+                        referenceSiteId,
+                        rel.FilePath,
+                        "csharp",
+                        rel.FromSymbolId,
+                        rel.StartLine,
+                        rel.StartColumn ?? (rel.StartLine is null ? null : 0),
+                        rel.EndLine ?? rel.StartLine,
+                        rel.EndColumn ?? (rel.StartLine is null ? null : 0),
+                        syntheticStartByte,
+                        syntheticEndByte);
                     using var cmd = conn.CreateCommand();
                     cmd.CommandText =
-                        "INSERT INTO relationships (relationship_id, from_symbol_id, to_symbol_id, file_id, path, " +
+                        "INSERT INTO relationships (relationship_id, reference_site_id, from_symbol_id, to_symbol_id, file_id, path, " +
                         "kind, start_line, start_column, end_line, end_column, start_byte, end_byte, confidence) " +
-                        "VALUES ($id, $from, $to, $fid, $path, $kind, $sl, $sc, $el, $ec, $sb, $eb, $confidence);";
+                        "VALUES ($id, $site, $from, $to, $fid, $path, $kind, $sl, $sc, $el, $ec, $sb, $eb, $confidence);";
                     cmd.Parameters.AddWithValue("$id", rel.Id);
+                    cmd.Parameters.AddWithValue("$site", referenceSiteId);
                     cmd.Parameters.AddWithValue("$from", rel.FromSymbolId);
                     cmd.Parameters.AddWithValue("$to", rel.ToSymbolId);
                     cmd.Parameters.AddWithValue("$fid", string.IsNullOrEmpty(rel.FilePath) ? string.Empty : FileId(rel.FilePath));
@@ -863,6 +919,61 @@ internal sealed class JulieDbFixture : IDisposable
 
     /// <summary>The deterministic synthetic file_id for a path (v1 files PK; symbols/identifiers FK to it).</summary>
     private static string FileId(string path) => "file:" + path;
+
+    private static string ReferenceSiteId(
+        string path,
+        string rowId,
+        int? startByte,
+        int? endByte) =>
+        startByte is not null && endByte is not null
+            ? $"site:{FileId(path)}:{startByte}:{endByte}"
+            : $"site:{FileId(path)}:{rowId}";
+
+    private static void InsertReferenceSite(
+        SqliteConnection connection,
+        string referenceSiteId,
+        string path,
+        string language,
+        string? containingSymbolId,
+        int? startLine,
+        int? startColumn,
+        int? endLine,
+        int? endColumn,
+        int? startByte,
+        int? endByte)
+    {
+        bool exact = startLine is not null
+            && startColumn is not null
+            && endLine is not null
+            && endColumn is not null
+            && startByte is not null
+            && endByte is not null;
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO reference_sites
+                (reference_site_id, file_id, path, language, containing_symbol_id,
+                 start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 is_exact, provenance)
+            VALUES
+                ($site, $file, $path, $language, $containing,
+                 $startLine, $startColumn, $endLine, $endColumn, $startByte, $endByte,
+                 $exact, $provenance);
+            """;
+        command.Parameters.AddWithValue("$site", referenceSiteId);
+        command.Parameters.AddWithValue("$file", FileId(path));
+        command.Parameters.AddWithValue("$path", path);
+        command.Parameters.AddWithValue("$language", language);
+        command.Parameters.AddWithValue("$containing", (object?)containingSymbolId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$startLine", exact ? startLine : DBNull.Value);
+        command.Parameters.AddWithValue("$startColumn", exact ? startColumn : DBNull.Value);
+        command.Parameters.AddWithValue("$endLine", exact ? endLine : DBNull.Value);
+        command.Parameters.AddWithValue("$endColumn", exact ? endColumn : DBNull.Value);
+        command.Parameters.AddWithValue("$startByte", exact ? startByte : DBNull.Value);
+        command.Parameters.AddWithValue("$endByte", exact ? endByte : DBNull.Value);
+        command.Parameters.AddWithValue("$exact", exact ? 1 : 0);
+        command.Parameters.AddWithValue("$provenance", exact ? "target_token" : "spanless");
+        command.ExecuteNonQuery();
+    }
 
     /// <summary>
     /// The canonical fixture: a v1 artifact with ~12 realistic rows — mixed kinds/languages, some NULL
@@ -1128,6 +1239,18 @@ internal sealed class JulieDbFixture : IDisposable
         foreach (var r in rows) if (r.ParentId is not null) yield return r;
     }
 
+    public static void EnsureRequiredSchemaFiveTables(SqliteConnection connection)
+    {
+        Exec(connection, ReferenceSitesDdl);
+        Exec(connection, IdentifiersDdl);
+        Exec(connection, RelationshipsDdl);
+        Exec(connection, IdentifierResolutionsDdl);
+        Exec(connection, PendingRelationshipsDdl);
+        Exec(connection, PendingResolutionsDdl);
+        Exec(connection, StructuralFactsDdl);
+        Exec(connection, LanguageCapabilityGapsDdl);
+    }
+
     private static void Exec(SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
@@ -1210,6 +1333,7 @@ internal sealed class JulieDbFixture : IDisposable
     private const string IdentifiersDdl = """
         CREATE TABLE IF NOT EXISTS identifiers (
             identifier_id TEXT PRIMARY KEY,
+            reference_site_id TEXT NOT NULL DEFAULT 'fixture-spanless',
             file_id TEXT NOT NULL,
             path TEXT NOT NULL,
             language TEXT NOT NULL,
@@ -1228,6 +1352,7 @@ internal sealed class JulieDbFixture : IDisposable
     private const string RelationshipsDdl = """
         CREATE TABLE IF NOT EXISTS relationships (
             relationship_id TEXT PRIMARY KEY,
+            reference_site_id TEXT NOT NULL DEFAULT 'fixture-spanless',
             from_symbol_id TEXT NOT NULL,
             to_symbol_id TEXT NOT NULL,
             file_id TEXT NOT NULL,
@@ -1460,6 +1585,7 @@ internal sealed class JulieDbFixture : IDisposable
     private const string PendingRelationshipsDdl = """
         CREATE TABLE IF NOT EXISTS pending_relationships (
             pending_relationship_id TEXT PRIMARY KEY,
+            reference_site_id TEXT NOT NULL DEFAULT 'fixture-spanless',
             from_symbol_id TEXT NOT NULL,
             caller_scope_symbol_id TEXT,
             file_id TEXT NOT NULL,
@@ -1489,6 +1615,30 @@ internal sealed class JulieDbFixture : IDisposable
         CREATE INDEX IF NOT EXISTS idx_pending_file ON pending_relationships(file_id);
         CREATE INDEX IF NOT EXISTS idx_pending_from ON pending_relationships(from_symbol_id);
         CREATE INDEX IF NOT EXISTS idx_pending_caller_scope ON pending_relationships(caller_scope_symbol_id);
+        """;
+
+    private const string ReferenceSitesDdl = """
+        CREATE TABLE IF NOT EXISTS reference_sites (
+            reference_site_id TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            language TEXT NOT NULL,
+            containing_symbol_id TEXT,
+            start_line INTEGER,
+            start_column INTEGER,
+            end_line INTEGER,
+            end_column INTEGER,
+            start_byte INTEGER,
+            end_byte INTEGER,
+            is_exact INTEGER NOT NULL,
+            provenance TEXT NOT NULL
+        );
+        """;
+
+    private const string ReferenceSitesIndexesDdl = """
+        CREATE INDEX IF NOT EXISTS idx_reference_sites_file ON reference_sites(file_id);
+        CREATE INDEX IF NOT EXISTS idx_reference_sites_span
+            ON reference_sites(file_id, start_byte, end_byte);
         """;
 
     // v4 overlay: identifier_resolutions (the resolved/ambiguous outcome for a plain identifier reference). The

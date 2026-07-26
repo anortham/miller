@@ -11,6 +11,7 @@ public sealed record MillerContractFacts(
     long SqliteSchemaVersion,
     long ExtractContractVersion,
     long ReportSchemaVersion,
+    long JsonlSchemaVersion,
     string HashAlgorithm)
 {
     public static MillerContractFacts Current { get; } = new(
@@ -19,5 +20,6 @@ public sealed record MillerContractFacts(
         MillerExtractContract.ExpectedSqliteSchemaVersion,
         MillerExtractContract.ExpectedExtractContractVersion,
         MillerExtractContract.ExpectedReportSchemaVersion,
+        MillerExtractContract.ExpectedJsonlSchemaVersion,
         MillerExtractContract.ExpectedHashAlgorithm);
 }

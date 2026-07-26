@@ -1889,17 +1889,21 @@ public sealed partial class ContextTool
                 ReferenceEvidenceSource.NameFallback,
                 null,
                 0.5,
-                ReferenceResolutionStatus.Fallback))
+                ReferenceResolutionStatus.Fallback,
+                null,
+                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
+                false,
+                "legacy_name_projection"))
             .ToArray();
         return new ReferenceEvidenceSet(
             [],
             fallback,
             new ReferenceEvidenceCoverage(
-                0,
-                0,
-                0,
                 fallback.Length,
                 fallback.Length,
+                0,
+                0,
+                0,
                 1,
                 false,
                 false,
@@ -1929,17 +1933,21 @@ public sealed partial class ContextTool
                 ReferenceEvidenceSource.NameFallback,
                 null,
                 0.5,
-                ReferenceResolutionStatus.Fallback))
+                ReferenceResolutionStatus.Fallback,
+                null,
+                $"legacy:{reference.FilePath}:{reference.StartLine}:{reference.Kind}",
+                false,
+                "legacy_name_projection"))
             .ToArray();
         return new OutgoingReferenceEvidenceSet(
             [],
             fallback,
             new OutgoingReferenceEvidenceCoverage(
-                0,
-                0,
-                0,
                 fallback.Length,
                 fallback.Length,
+                0,
+                0,
+                0,
                 false,
                 false));
     }

@@ -13,10 +13,8 @@ internal static class MarkerSearch
     internal const int MaxLimit = 500;
     private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX"];
     private static readonly HashSet<string> AllowedMarkers = new(DefaultMarkers, StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> CommentKinds = new(StringComparer.Ordinal) { "comment", "doc_comment" };
-
     internal static string Run(
-        IRegionSearchIndex index,
+        string dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
@@ -26,7 +24,7 @@ internal static class MarkerSearch
         string? language,
         out int renderedCount) =>
         Run(
-            index,
+            dbPath,
             markers,
             limit,
             excludeTests,
@@ -38,7 +36,7 @@ internal static class MarkerSearch
             out renderedCount);
 
     internal static string Run(
-        IRegionSearchIndex index,
+        string dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
@@ -51,7 +49,7 @@ internal static class MarkerSearch
     {
         int boundedLimit = Math.Clamp(limit, 1, MaxLimit);
         IReadOnlyList<MarkerSearchHit> hits = FindMarkers(
-            index,
+            dbPath,
             markers,
             boundedLimit,
             excludeTests,
@@ -64,44 +62,34 @@ internal static class MarkerSearch
     }
 
     internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
-        IRegionSearchIndex index,
+        string dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
         string? filePattern,
         string? language)
     {
-        ArgumentNullException.ThrowIfNull(index);
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(markers);
         if (limit < 1) limit = 1;
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
-        // Key by region alone: a region matching several markers collapses to one hit that
-        // lists every matched marker, so the limit counts regions, not (marker, region) pairs.
-        var byRegion = new Dictionary<string, RegionMarkers>(StringComparer.Ordinal);
-        int fetchLimit = filters.HasAny ? MaxLimit : Math.Min(limit * 4 + 10, MaxLimit);
-
-        foreach (string marker in markers)
-        {
-            IReadOnlyList<RegionSearchHit> hits = index.Search(marker, CommentKinds, fetchLimit, excludeTests);
-            foreach (RegionSearchHit hit in hits)
-            {
-                if (!filters.Allows(hit.Path, hit.Language))
-                    continue;
-                if (!ContainsMarker(hit.RawText, marker) && !ContainsMarker(hit.Snippet, marker))
-                    continue;
-
-                if (!byRegion.TryGetValue(hit.RegionId, out RegionMarkers? accumulator))
-                {
-                    accumulator = new RegionMarkers(hit);
-                    byRegion[hit.RegionId] = accumulator;
-                }
-                accumulator.Markers.Add(marker);
-            }
-        }
-
-        return byRegion.Values
-            .Select(static accumulator => new MarkerSearchHit(OrderMarkers(accumulator.Markers), accumulator.Region))
+        HashSet<string> wanted = new(markers, StringComparer.OrdinalIgnoreCase);
+        return MarkerFactReader.Read(dbPath, excludeTests, MaxLimit)
+            .Where(hit => wanted.Contains(hit.Marker) && filters.Allows(hit.Path, hit.Language))
+            .Select(static hit => new MarkerSearchHit(
+                [hit.Marker.ToUpperInvariant()],
+                new RegionSearchHit(
+                    hit.Path,
+                    1.0,
+                    hit.StartLine,
+                    hit.NodeKind,
+                    MarkerSnippet(hit),
+                    MarkerSnippet(hit),
+                    hit.FactId,
+                    hit.ContainingSymbolId,
+                    hit.ContainingSymbolName,
+                    hit.Language)))
             .OrderBy(static hit => hit.Region.Path, StringComparer.Ordinal)
             .ThenBy(static hit => hit.Region.Line)
             .ThenBy(static hit => Array.IndexOf(DefaultMarkers, hit.Markers[0]))
@@ -110,22 +98,12 @@ internal static class MarkerSearch
             .ToArray();
     }
 
-    // Order a region's matched markers by canonical rank (DefaultMarkers index) then name —
-    // the same tiebreak the pre-collapse ordering used, so Markers[0] is the "first" marker.
-    private static IReadOnlyList<string> OrderMarkers(IEnumerable<string> markers) =>
-        markers
-            .OrderBy(static marker => Array.IndexOf(DefaultMarkers, marker))
-            .ThenBy(static marker => marker, StringComparer.Ordinal)
-            .ToArray();
-
-    private sealed class RegionMarkers
-    {
-        internal RegionMarkers(RegionSearchHit region) => Region = region;
-
-        internal RegionSearchHit Region { get; }
-
-        internal HashSet<string> Markers { get; } = new(StringComparer.Ordinal);
-    }
+    private static string MarkerSnippet(MarkerFactRow hit) =>
+        hit.Description is null
+            ? hit.Marker
+            : hit.Owner is null
+                ? $"{hit.Marker}: {hit.Description}"
+                : $"{hit.Marker}({hit.Owner}): {hit.Description}";
 
     internal static IReadOnlyList<string> ParseMarkers(string? markers)
     {
@@ -148,29 +126,6 @@ internal static class MarkerSearch
         }
         return parts;
     }
-
-    private static bool ContainsMarker(string text, string marker)
-    {
-        int start = 0;
-        while (start < text.Length)
-        {
-            int index = text.IndexOf(marker, start, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-                return false;
-
-            int before = index - 1;
-            int after = index + marker.Length;
-            bool leftBoundary = before < 0 || !IsMarkerWordChar(text[before]);
-            bool rightBoundary = after >= text.Length || !IsMarkerWordChar(text[after]);
-            if (leftBoundary && rightBoundary)
-                return true;
-
-            start = index + marker.Length;
-        }
-        return false;
-    }
-
-    private static bool IsMarkerWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     private static string RenderCompact(
         IReadOnlyList<MarkerSearchHit> hits,

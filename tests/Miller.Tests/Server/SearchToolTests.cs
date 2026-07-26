@@ -3686,17 +3686,32 @@ public sealed class SearchToolTests
     }
 
     [Fact]
-    public void Search_ModeMarkers_RoutesToRegionProvider_AndRendersMarkerRows()
+    public void Search_ModeMarkers_RoutesToSymbolArtifact_AndRendersMarkerFacts()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        current.AddStructuralFact(
+            "marker-todo",
+            current.Rows[0].Id,
+            "src/A.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "comment",
+            metadataJson: """{"marker":"TODO","description":"migrate"}""");
+        current.AddStructuralFact(
+            "marker-hack",
+            current.Rows[0].Id,
+            "src/B.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "doc_comment",
+            metadataJson: """{"marker":"HACK","description":"temporary"}""");
+        current.AddStructuralFact(
+            "not-a-marker",
+            current.Rows[0].Id,
+            "src/C.cs",
+            patternId: "string.literal.v1",
+            nodeKind: "string_literal",
+            metadataJson: """{"marker":"HACK","description":"not a marker"}""");
         string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
-        var regionIndex = new StubRegionSearchIndex(
-            new RegionSearchHit("src/A.cs", 2.0, 7, "comment", "// TODO migrate", "// TODO migrate",
-                "region-todo", "sym-a", "A", "csharp"),
-            new RegionSearchHit("src/B.cs", 2.0, 11, "doc_comment", "/// HACK temporary", "/// HACK temporary",
-                "region-hack", "sym-b", "B", "csharp"),
-            new RegionSearchHit("src/C.cs", 2.0, 13, "string_literal", "\"HACK not a marker\"", "\"HACK not a marker\"",
-                "region-string", "sym-c", "C", "csharp"));
+        var regionIndex = new StubRegionSearchIndex();
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
             ReadToolRoutingTestSupport.RegionContextFor(regionIndex, current.DbPath, "current-ws", root),
@@ -3706,10 +3721,10 @@ public sealed class SearchToolTests
         string compact = tool.Search("HACK", mode: "markers");
         string json = tool.Search("HACK", mode: "markers", format: "json");
 
-        Assert.Equal(2, provider.RegionSearchResolveCount);
-        Assert.Equal(0, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.RegionSearchResolveCount);
+        Assert.Equal(2, provider.SymbolSearchResolveCount);
         Assert.Equal(0, provider.ContentSearchResolveCount);
-        Assert.Contains("src/B.cs:11  HACK  doc_comment  B", compact);
+        Assert.Contains("src/B.cs:1  HACK  doc_comment  CurrentOnly", compact);
         Assert.DoesNotContain("TODO", compact);
         Assert.DoesNotContain("string_literal", compact);
 
@@ -3717,7 +3732,7 @@ public sealed class SearchToolTests
         JsonElement item = Assert.Single(doc.RootElement.EnumerateArray());
         Assert.Equal("HACK", item.GetProperty("marker").GetString());
         Assert.Equal("src/B.cs", item.GetProperty("file").GetString());
-        Assert.Equal("B", item.GetProperty("containing_symbol_name").GetString());
+        Assert.Equal("CurrentOnly", item.GetProperty("containing_symbol_name").GetString());
     }
 
     [Fact]
@@ -3748,22 +3763,34 @@ public sealed class SearchToolTests
     public void Search_ModeMarkers_DoesNotAutoExcludeTestsForSpaceSeparatedMarkerList()
     {
         using var current = FixtureWithSymbol("current-ws", "CurrentOnly");
+        current.AddStructuralFact(
+            "marker-todo-test",
+            current.Rows[0].Id,
+            "tests/A.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "comment",
+            metadataJson: """{"marker":"TODO","description":"test marker"}""");
+        current.AddStructuralFact(
+            "marker-hack-test",
+            current.Rows[0].Id,
+            "tests/B.cs",
+            patternId: MarkerFactReader.PatternId,
+            nodeKind: "comment",
+            metadataJson: """{"marker":"HACK","description":"test marker"}""");
         string root = Path.Combine(Path.GetTempPath(), "miller-current-" + Guid.NewGuid().ToString("N"));
-        var regionIndex = new StubRegionSearchIndex(
-            new RegionSearchHit("tests/A.cs", 2.0, 7, "comment", "// TODO test marker", "// TODO test marker",
-                "region-a", "sym-a", "A", "csharp"),
-            new RegionSearchHit("tests/B.cs", 2.0, 11, "comment", "// HACK test marker", "// HACK test marker",
-                "region-b", "sym-b", "B", "csharp"));
+        var regionIndex = new StubRegionSearchIndex();
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(BuildIndex(current), current.DbPath, "current-ws", root),
             ReadToolRoutingTestSupport.RegionContextFor(regionIndex, current.DbPath, "current-ws", root),
             regionTargets: Array.Empty<(string, WorkspaceRegionSearchContext)>());
         var tool = new SearchTool(provider, provider, provider);
 
-        _ = tool.Search("TODO HACK", mode: "markers");
+        string compact = tool.Search("TODO HACK", mode: "markers");
 
-        Assert.Equal(2, regionIndex.SearchCalls.Count);
-        Assert.All(regionIndex.SearchCalls, call => Assert.False(call.ExcludeTests));
+        Assert.Equal(1, provider.SymbolSearchResolveCount);
+        Assert.Equal(0, provider.RegionSearchResolveCount);
+        Assert.Contains("tests/A.cs", compact);
+        Assert.Contains("tests/B.cs", compact);
     }
 
     [Fact]

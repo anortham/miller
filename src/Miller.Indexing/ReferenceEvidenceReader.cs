@@ -14,7 +14,7 @@ public sealed record ReferenceEvidenceBundle(
 public static class ReferenceEvidenceReader
 {
     private static readonly string[] RequiredResolutionTables =
-        ["identifier_resolutions", "pending_resolutions", "pending_relationships"];
+        ["reference_sites", "identifier_resolutions", "pending_resolutions", "pending_relationships"];
 
     /// <summary>Read inbound, outgoing, and selected relationship kinds for one symbol from one snapshot.</summary>
     public static ReferenceEvidenceBundle ReadForSymbol(
@@ -373,43 +373,41 @@ public static class ReferenceEvidenceReader
 
     private static List<ReferenceEvidence> ReadExact(SqliteConnection connection, string targetSymbolId)
     {
-        string relationshipArm = HasTable(connection, "relationships")
-            ? """
-              UNION ALL
-              SELECT r.from_symbol_id, r.path, r.start_line, r.start_column, r.end_line, r.end_column,
-                     r.start_byte, r.end_byte, r.kind, r.confidence, 'relationship' AS source,
-                     NULL AS tier, f.language
-              FROM relationships r
-              LEFT JOIN files f ON f.file_id = r.file_id
-              WHERE r.to_symbol_id = $target
-              """
-            : string.Empty;
         using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT i.containing_symbol_id, i.path, i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, i.confidence, 'identifier_direct' AS source,
-                   NULL AS tier, i.language
+        command.CommandText = """
+            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, i.confidence, 'identifier_direct' AS source,
+                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
             FROM identifiers i
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.target_symbol_id = $target
             UNION ALL
-            SELECT i.containing_symbol_id, i.path, i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
-                   'identifier_resolution' AS source, ir.tier, i.language
+            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
+                   'identifier_resolution' AS source, ir.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM identifier_resolutions ir
             JOIN identifiers i ON i.identifier_id = ir.identifier_id
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE ir.target_symbol_id = $target
               AND (i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id)
-            {relationshipArm}
             UNION ALL
-            SELECT COALESCE(p.caller_scope_symbol_id, p.from_symbol_id), p.path,
-                   p.start_line, p.start_column, p.end_line, p.end_column,
-                   p.start_byte, p.end_byte, p.kind, MIN(p.confidence, pr.confidence),
-                   'pending_resolution' AS source, pr.tier, f.language
+            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, r.kind, r.confidence, 'relationship' AS source,
+                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
+            FROM relationships r
+            JOIN reference_sites s ON s.reference_site_id = r.reference_site_id
+            WHERE r.to_symbol_id = $target
+            UNION ALL
+            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, pr.confidence),
+                   'pending_resolution' AS source, pr.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM pending_resolutions pr
             JOIN pending_relationships p ON p.pending_relationship_id = pr.pending_relationship_id
-            JOIN files f ON f.file_id = p.file_id
+            JOIN reference_sites s ON s.reference_site_id = p.reference_site_id
             WHERE pr.target_symbol_id = $target
-            ORDER BY 2, 7, 3, 9, 11;
+            ORDER BY 2, 7, 3, 9, 11, 14;
             """;
         command.Parameters.AddWithValue("$target", targetSymbolId);
         return ReadRows(command, targetSymbolId, ReferenceResolutionStatus.Exact);
@@ -422,17 +420,18 @@ public static class ReferenceEvidenceReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT i.containing_symbol_id, i.path, i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, MIN(i.confidence, 0.5), 'name_fallback' AS source,
-                   NULL AS tier, i.language
+            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, MIN(i.confidence, 0.5), 'name_fallback' AS source,
+                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
             FROM identifiers i
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.name = $name
               AND i.target_symbol_id IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM identifier_resolutions ir
                   WHERE ir.identifier_id = i.identifier_id
                     AND ir.target_symbol_id IS NOT NULL)
-            ORDER BY i.path, i.start_byte, i.start_line, i.kind, i.identifier_id;
+            ORDER BY s.path, s.start_byte, s.start_line, i.kind, s.reference_site_id;
             """;
         command.Parameters.AddWithValue("$name", targetName);
         return ReadRows(command, targetSymbolId, ReferenceResolutionStatus.Fallback);
@@ -442,50 +441,51 @@ public static class ReferenceEvidenceReader
         SqliteConnection connection,
         string containingSymbolId)
     {
-        string relationshipArm = HasTable(connection, "relationships")
-            ? """
-              UNION ALL
-              SELECT r.to_symbol_id, target.name, r.path,
-                     r.start_line, r.start_column, r.end_line, r.end_column,
-                     r.start_byte, r.end_byte, r.kind, r.confidence,
-                     'relationship' AS source, NULL AS tier, f.language
-              FROM relationships r
-              JOIN symbols target ON target.symbol_id = r.to_symbol_id
-              LEFT JOIN files f ON f.file_id = r.file_id
-              WHERE r.from_symbol_id = $containing
-              """
-            : string.Empty;
         using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT i.target_symbol_id, target.name, i.path,
-                   i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, i.confidence,
-                   'identifier_direct' AS source, NULL AS tier, i.language
+        command.CommandText = """
+            SELECT i.target_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, i.confidence,
+                   'identifier_direct' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM identifiers i
             JOIN symbols target ON target.symbol_id = i.target_symbol_id
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.containing_symbol_id = $containing
             UNION ALL
-            SELECT ir.target_symbol_id, target.name, i.path,
-                   i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
-                   'identifier_resolution' AS source, ir.tier, i.language
+            SELECT ir.target_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
+                   'identifier_resolution' AS source, ir.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM identifier_resolutions ir
             JOIN identifiers i ON i.identifier_id = ir.identifier_id
             JOIN symbols target ON target.symbol_id = ir.target_symbol_id
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.containing_symbol_id = $containing
               AND (i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id)
-            {relationshipArm}
             UNION ALL
-            SELECT pr.target_symbol_id, target.name, p.path,
-                   p.start_line, p.start_column, p.end_line, p.end_column,
-                   p.start_byte, p.end_byte, p.kind, MIN(p.confidence, pr.confidence),
-                   'pending_resolution' AS source, pr.tier, f.language
+            SELECT r.to_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, r.kind, r.confidence,
+                   'relationship' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
+            FROM relationships r
+            JOIN symbols target ON target.symbol_id = r.to_symbol_id
+            JOIN reference_sites s ON s.reference_site_id = r.reference_site_id
+            WHERE r.from_symbol_id = $containing
+            UNION ALL
+            SELECT pr.target_symbol_id, target.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, pr.confidence),
+                   'pending_resolution' AS source, pr.tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM pending_resolutions pr
             JOIN pending_relationships p ON p.pending_relationship_id = pr.pending_relationship_id
             JOIN symbols target ON target.symbol_id = pr.target_symbol_id
-            JOIN files f ON f.file_id = p.file_id
+            JOIN reference_sites s ON s.reference_site_id = p.reference_site_id
             WHERE COALESCE(p.caller_scope_symbol_id, p.from_symbol_id) = $containing
-            ORDER BY 3, 8, 4, 10, 12, 2, 1;
+            ORDER BY 3, 8, 4, 10, 12, 2, 1, 15;
             """;
         command.Parameters.AddWithValue("$containing", containingSymbolId);
         return ReadOutgoingRows(command, containingSymbolId, ReferenceResolutionStatus.Exact);
@@ -497,11 +497,13 @@ public static class ReferenceEvidenceReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT NULL AS target_symbol_id, i.name, i.path,
-                   i.start_line, i.start_column, i.end_line, i.end_column,
-                   i.start_byte, i.end_byte, i.kind, MIN(i.confidence, 0.5),
-                   'name_fallback' AS source, NULL AS tier, i.language
+            SELECT NULL AS target_symbol_id, i.name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, MIN(i.confidence, 0.5),
+                   'name_fallback' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM identifiers i
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.containing_symbol_id = $containing
               AND i.target_symbol_id IS NULL
               AND NOT EXISTS (
@@ -509,29 +511,21 @@ public static class ReferenceEvidenceReader
                   WHERE ir.identifier_id = i.identifier_id
                     AND ir.target_symbol_id IS NOT NULL)
             UNION ALL
-            SELECT NULL AS target_symbol_id, p.target_display_name, p.path,
-                   p.start_line, p.start_column, p.end_line, p.end_column,
-                   p.start_byte, p.end_byte, p.kind, MIN(p.confidence, 0.5),
-                   'name_fallback' AS source, NULL AS tier, f.language
+            SELECT NULL AS target_symbol_id, p.target_display_name, s.path,
+                   s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, MIN(p.confidence, 0.5),
+                   'name_fallback' AS source, NULL AS tier, s.language,
+                   s.reference_site_id, s.is_exact, s.provenance
             FROM pending_relationships p
-            JOIN files f ON f.file_id = p.file_id
+            JOIN reference_sites s ON s.reference_site_id = p.reference_site_id
             WHERE COALESCE(p.caller_scope_symbol_id, p.from_symbol_id) = $containing
               AND NOT EXISTS (
                   SELECT 1 FROM pending_resolutions pr
                   WHERE pr.pending_relationship_id = p.pending_relationship_id)
-            ORDER BY 3, 8, 4, 10, 2;
+            ORDER BY 3, 8, 4, 10, 2, 15;
             """;
         command.Parameters.AddWithValue("$containing", containingSymbolId);
         return ReadOutgoingRows(command, containingSymbolId, ReferenceResolutionStatus.Fallback);
-    }
-
-    private static bool HasTable(SqliteConnection connection, string table)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $table LIMIT 1;";
-        command.Parameters.AddWithValue("$table", table);
-        return command.ExecuteScalar() is not null;
     }
 
     private static List<ReferenceEvidence> Deduplicate(IEnumerable<ReferenceEvidence> rows) =>
@@ -539,6 +533,7 @@ public static class ReferenceEvidenceReader
             .Select(group => group
                 .OrderBy(row => SourcePrecedence(row.Source))
                 .ThenByDescending(row => row.Confidence)
+                .ThenBy(row => row.ContainingSymbolId, StringComparer.Ordinal)
                 .First())
             .OrderBy(row => row.FilePath, StringComparer.Ordinal)
             .ThenBy(row => row.StartByte ?? long.MaxValue)
@@ -573,6 +568,8 @@ public static class ReferenceEvidenceReader
             .Select(group => group
                 .OrderBy(row => SourcePrecedence(row.Source))
                 .ThenByDescending(row => row.Confidence)
+                .ThenBy(row => row.TargetSymbolId, StringComparer.Ordinal)
+                .ThenBy(row => row.TargetName, StringComparer.Ordinal)
                 .First())
             .OrderBy(row => row.FilePath, StringComparer.Ordinal)
             .ThenBy(row => row.StartByte ?? long.MaxValue)
@@ -588,40 +585,9 @@ public static class ReferenceEvidenceReader
         ReferenceKind? kind) =>
         kind is null ? rows : rows.Where(row => row.Kind == kind.Value).ToList();
 
-    private static ReferenceSiteKey SiteKey(ReferenceEvidence row) =>
-        row.StartByte is not null
-            ? new(row.FilePath, null, row.StartByte, row.EndByte, null, null, null, null, row.Kind)
-            : new(
-                row.FilePath,
-                row.ContainingSymbolId,
-                null,
-                null,
-                row.StartLine,
-                row.StartColumn.GetValueOrDefault(),
-                null,
-                null,
-                row.Kind);
+    private static ReferenceSiteKey SiteKey(ReferenceEvidence row) => new(row.ReferenceSiteId, row.TargetSymbolId, row.Kind);
 
-    private static OutgoingReferenceSiteKey OutgoingSiteKey(OutgoingReferenceEvidence row) =>
-        row.StartByte is not null
-            ? new(
-                row.FilePath,
-                row.StartByte,
-                row.EndByte,
-                null,
-                null,
-                row.Kind,
-                row.TargetSymbolId,
-                row.TargetName)
-            : new(
-                row.FilePath,
-                null,
-                null,
-                row.StartLine,
-                row.StartColumn.GetValueOrDefault(),
-                row.Kind,
-                row.TargetSymbolId,
-                row.TargetName);
+    private static OutgoingReferenceSiteKey OutgoingSiteKey(OutgoingReferenceEvidence row) => new(row.ReferenceSiteId, row.TargetSymbolId, row.TargetName, row.Kind);
 
     private static int SourcePrecedence(ReferenceEvidenceSource source) => source switch
     {
@@ -660,7 +626,10 @@ public static class ReferenceEvidenceReader
                 ReadInt32(reader, 11),
                 reader.GetDouble(9),
                 resolutionStatus,
-                ReadString(reader, 12)));
+                ReadString(reader, 12),
+                reader.GetString(13),
+                reader.GetInt64(14) == 1,
+                reader.GetString(15)));
         }
 
         return rows;
@@ -693,7 +662,10 @@ public static class ReferenceEvidenceReader
                 ReadInt32(reader, 12),
                 reader.GetDouble(10),
                 resolutionStatus,
-                ReadString(reader, 13)));
+                ReadString(reader, 13),
+                reader.GetString(14),
+                reader.GetInt64(15) == 1,
+                reader.GetString(16)));
         }
 
         return rows;
@@ -734,23 +706,13 @@ public static class ReferenceEvidenceReader
         reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
 
     private readonly record struct ReferenceSiteKey(
-        string FilePath,
-        string? ContainingSymbolId,
-        long? StartByte,
-        long? EndByte,
-        int? StartLine,
-        int? StartColumn,
-        int? EndLine,
-        int? EndColumn,
+        string ReferenceSiteId,
+        string? TargetSymbolId,
         ReferenceKind Kind);
 
     private readonly record struct OutgoingReferenceSiteKey(
-        string FilePath,
-        long? StartByte,
-        long? EndByte,
-        int? StartLine,
-        int? StartColumn,
-        ReferenceKind Kind,
+        string ReferenceSiteId,
         string? TargetSymbolId,
-        string TargetName);
+        string TargetName,
+        ReferenceKind Kind);
 }

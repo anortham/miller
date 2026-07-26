@@ -3,6 +3,7 @@ using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Tools;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -233,22 +234,22 @@ public sealed class SearchRouteExecutorTests
     {
         SearchRoute route = SearchRoutePlanner.Plan("markers", regions: null);
         string path = "src/ExactWidget.cs";
-        string snippet = "// TODO " + new string('q', 60_000);
-        var index = new RecordingRegionSearchIndex(
-            new RegionSearchHit(
-                path,
-                2.0,
-                12,
-                "comment",
-                snippet,
-                snippet,
-                "region-marker-exact",
-                ContainingSymbolId: "symbol-marker-exact",
-                ContainingSymbolName: "Widget.Run",
-                Language: "csharp"));
+        using var fixture = JulieDbFixture.CreateDefault();
+        fixture.AddStructuralFact(
+            "region-marker-exact",
+            null,
+            path,
+            patternId: "code.marker.v1",
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: JsonSerializer.Serialize(new
+            {
+                marker = "TODO",
+                description = new string('q', 60_000),
+            }));
 
         SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
-            index,
+            fixture.DbPath,
             route,
             new SearchRouteExecutionRequest(
                 Query: "TODO",
@@ -262,7 +263,7 @@ public sealed class SearchRouteExecutorTests
         JsonElement row = Assert.Single(document.RootElement.EnumerateArray());
         Assert.Equal(path, row.GetProperty("file").GetString());
         Assert.Equal("region-marker-exact", row.GetProperty("region_id").GetString());
-        Assert.Equal("symbol-marker-exact", row.GetProperty("containing_symbol_id").GetString());
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("containing_symbol_id").ValueKind);
         Assert.True(row.GetProperty("snippet_truncated").GetBoolean());
     }
 

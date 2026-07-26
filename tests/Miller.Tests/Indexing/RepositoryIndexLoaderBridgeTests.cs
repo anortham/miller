@@ -160,6 +160,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                    '{"framework":"aspnet","api_style":"minimal_api","route_template":"/save","effective_route_template":"/admin/connectors/save","verb":"POST","handler_kind":"method_group","handler_name":"SaveAsync"}');
                 """;
             command.ExecuteNonQuery();
+            JulieDbFixture.EnsureRequiredSchemaFiveTables(connection);
 
             // Seed the v1 artifact_metadata gate keys from the pinned constants (not literals) so a julie re-pin
             // needs no edit here. Kept as a separate interpolated command to leave the brace-bearing DDL above a
@@ -285,6 +286,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
             CREATE TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
+        JulieDbFixture.EnsureRequiredSchemaFiveTables(connection);
         SeedGate(command);
         InsertNextRouteFacts(command);
     }
@@ -957,6 +959,7 @@ public sealed class RepositoryIndexLoaderBridgeTests : IDisposable
                     VALUES ('s1', 'Foo', 'public class Foo', 'class', 'csharp', 'Foo.cs', 1, 3, NULL);
                     """;
                 command.ExecuteNonQuery();
+                JulieDbFixture.EnsureRequiredSchemaFiveTables(connection);
             }
 
             var index = RepositoryIndexLoader.Load(dbPath);

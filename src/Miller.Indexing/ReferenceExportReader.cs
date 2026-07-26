@@ -7,15 +7,15 @@ using Microsoft.Data.Sqlite;
 namespace Miller.Indexing;
 
 /// <summary>
-/// The <c>references export --jsonl</c> feed (cli-eros-v1): one deterministic JSON line per
-/// <c>identifiers</c> row. This is a fact feed, not a dead-code analysis surface; consumers do any ranking,
-/// suppression, or cross-workspace workflow state outside Miller. Rows are ordered <c>(path, start_byte,
-/// identifier_id)</c> so re-exporting an unchanged artifact is byte-identical. The D5 schema gate runs before
-/// the read (incompatible artifact ⇒ CLI exit 3).
+/// Emits one deterministic canonical assertion for each
+/// <c>(reference_site_id, target, canonical_kind)</c> tuple represented by identifiers, relationships, and
+/// resolution overlays. Producer-owned reference-site identity and provenance are preserved without
+/// consumer span matching. Rows are ordered by path, producer start byte, reference-site ID, canonical kind,
+/// and target identity so re-exporting an unchanged artifact is byte-identical.
 /// </summary>
 public static class ReferenceExportReader
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     public static string ExportJsonLines(string symbolsDbPath)
     {
@@ -34,102 +34,228 @@ public static class ReferenceExportReader
 
         string? artifactId = ReadArtifactId(connection);
         long? workspaceRevision = ReadWorkspaceRevision(connection);
-
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT i.identifier_id, i.name, i.kind, i.language, i.path,
-                   i.start_line, i.end_line, i.start_column, i.end_column, i.start_byte, i.end_byte,
-                   i.containing_symbol_id,
-                   source.name AS source_name, source.kind AS source_kind, source.is_test AS source_is_test,
-                   i.target_symbol_id,
-                   target.name AS target_name, target.kind AS target_kind, target.is_test AS target_is_test,
-                   i.confidence, i.metadata_json
-            FROM identifiers i
-            LEFT JOIN symbols source ON source.symbol_id = i.containing_symbol_id
-            LEFT JOIN symbols target ON target.symbol_id = i.target_symbol_id
-            ORDER BY i.path, i.start_byte, i.identifier_id;
-            """;
-
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        IReadOnlyList<ReferenceAssertionRow> rows = ReadAssertions(connection);
+        foreach (ReferenceAssertionRow row in rows)
         {
-            writer.Write(RenderRow(reader, artifactId, workspaceRevision));
+            writer.Write(RenderRow(row, artifactId, workspaceRevision));
             writer.Write('\n');
         }
     }
 
+    private static IReadOnlyList<ReferenceAssertionRow> ReadAssertions(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
+                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, i.target_symbol_id, COALESCE(target.name, i.name),
+                   target.kind, target.is_test, NULL AS resolution_tier, i.confidence,
+                   'identifier_direct' AS evidence_source, source.name, source.kind, source.is_test
+            FROM identifiers i
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
+            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
+            LEFT JOIN symbols target ON target.symbol_id = i.target_symbol_id
+            UNION ALL
+            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
+                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, i.kind, ir.target_symbol_id, target.name,
+                   target.kind, target.is_test, ir.tier, COALESCE(ir.confidence, i.confidence),
+                   'identifier_resolution', source.name, source.kind, source.is_test
+            FROM identifier_resolutions ir
+            JOIN identifiers i ON i.identifier_id = ir.identifier_id
+            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
+            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
+            JOIN symbols target ON target.symbol_id = ir.target_symbol_id
+            WHERE i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id
+            UNION ALL
+            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
+                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, r.kind, r.to_symbol_id, target.name,
+                   target.kind, target.is_test, NULL, r.confidence,
+                   'relationship', source.name, source.kind, source.is_test
+            FROM relationships r
+            JOIN reference_sites s ON s.reference_site_id = r.reference_site_id
+            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
+            JOIN symbols target ON target.symbol_id = r.to_symbol_id
+            UNION ALL
+            SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
+                   s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
+                   s.start_byte, s.end_byte, p.kind, pr.target_symbol_id,
+                   COALESCE(target.name, p.target_display_name), target.kind, target.is_test,
+                   pr.tier, CASE WHEN pr.confidence IS NULL THEN p.confidence ELSE MIN(p.confidence, pr.confidence) END,
+                   CASE WHEN pr.target_symbol_id IS NULL THEN 'name_fallback' ELSE 'pending_resolution' END,
+                   source.name, source.kind, source.is_test
+            FROM pending_relationships p
+            JOIN reference_sites s ON s.reference_site_id = p.reference_site_id
+            LEFT JOIN pending_resolutions pr ON pr.pending_relationship_id = p.pending_relationship_id
+            LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
+            LEFT JOIN symbols target ON target.symbol_id = pr.target_symbol_id;
+            """;
+
+        var evidence = new List<ReferenceEvidenceExportRow>();
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            evidence.Add(new ReferenceEvidenceExportRow(
+                ReferenceSiteId: reader.GetString(0),
+                IsExact: reader.GetInt64(1) == 1,
+                SiteProvenance: reader.GetString(2),
+                Path: reader.GetString(3),
+                Language: reader.GetString(4),
+                ContainingSymbolId: ReadString(reader, 5),
+                StartLine: ReadInt64(reader, 6),
+                StartColumn: ReadInt64(reader, 7),
+                EndLine: ReadInt64(reader, 8),
+                EndColumn: ReadInt64(reader, 9),
+                StartByte: ReadInt64(reader, 10),
+                EndByte: ReadInt64(reader, 11),
+                CanonicalKind: CanonicalKind(reader.GetString(12)),
+                TargetSymbolId: ReadString(reader, 13),
+                TargetName: reader.GetString(14),
+                TargetKind: ReadString(reader, 15),
+                TargetIsTest: ReadBool(reader, 16),
+                ResolutionTier: ReadInt64(reader, 17),
+                Confidence: reader.GetDouble(18),
+                EvidenceSource: reader.GetString(19),
+                SourceName: ReadString(reader, 20),
+                SourceKind: ReadString(reader, 21),
+                SourceIsTest: ReadBool(reader, 22)));
+        }
+
+        return evidence
+            .GroupBy(static row => new ReferenceAssertionKey(
+                row.ReferenceSiteId,
+                row.TargetSymbolId,
+                row.TargetSymbolId is null ? row.TargetName : null,
+                row.CanonicalKind))
+            .Select(static group =>
+            {
+                ReferenceEvidenceExportRow primary = group
+                    .OrderBy(static row => EvidencePrecedence(row.EvidenceSource))
+                    .ThenByDescending(static row => row.Confidence)
+                    .First();
+                return new ReferenceAssertionRow(
+                    primary,
+                    group.Select(static row => row.EvidenceSource)
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(EvidencePrecedence)
+                        .ThenBy(static source => source, StringComparer.Ordinal)
+                        .ToArray(),
+                    group.Where(static row => row.ResolutionTier is not null)
+                        .Select(static row => row.ResolutionTier)
+                        .Min(),
+                    group.Max(static row => row.Confidence));
+            })
+            .OrderBy(static row => row.Primary.Path, StringComparer.Ordinal)
+            .ThenBy(static row => row.Primary.StartByte ?? long.MaxValue)
+            .ThenBy(static row => row.Primary.ReferenceSiteId, StringComparer.Ordinal)
+            .ThenBy(static row => row.Primary.CanonicalKind, StringComparer.Ordinal)
+            .ThenBy(static row => row.Primary.TargetSymbolId, StringComparer.Ordinal)
+            .ThenBy(static row => row.Primary.TargetName, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     private static string? ReadArtifactId(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'artifact_id' LIMIT 1;";
-        object? value = cmd.ExecuteScalar();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'artifact_id' LIMIT 1;";
+        object? value = command.ExecuteScalar();
         return value is string text ? text : null;
     }
 
     private static long? ReadWorkspaceRevision(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions;";
-        object? value = cmd.ExecuteScalar();
-        return value is null or DBNull ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT MAX(revision_id) FROM extraction_revisions;";
+        object? value = command.ExecuteScalar();
+        return value is null or DBNull
+            ? null
+            : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static string RenderRow(SqliteDataReader reader, string? artifactId, long? workspaceRevision)
+    private static string RenderRow(
+        ReferenceAssertionRow assertion,
+        string? artifactId,
+        long? workspaceRevision)
     {
+        ReferenceEvidenceExportRow row = assertion.Primary;
         var buffer = new ArrayBufferWriter<byte>();
-        using (var w = new Utf8JsonWriter(buffer,
+        using (var writer = new Utf8JsonWriter(buffer,
             new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
-            w.WriteStartObject();
-            w.WriteNumber("schema_version", SchemaVersion);
-            w.WriteString("identifier_id", reader.GetString(0));
-            w.WriteString("name", reader.GetString(1));
-            w.WriteString("reference_kind", reader.GetString(2));
-            w.WriteString("language", reader.GetString(3));
-            w.WriteString("path", reader.GetString(4));
-            ExportJson.WriteNullableLong(w, "start_line", reader, 5);
-            ExportJson.WriteNullableLong(w, "end_line", reader, 6);
-            ExportJson.WriteNullableLong(w, "start_column", reader, 7);
-            ExportJson.WriteNullableLong(w, "end_column", reader, 8);
-            ExportJson.WriteNullableLong(w, "start_byte", reader, 9);
-            ExportJson.WriteNullableLong(w, "end_byte", reader, 10);
-            ExportJson.WriteNullableString(w, "source_symbol_id", reader, 11);
-            ExportJson.WriteNullableString(w, "source_symbol_name", reader, 12);
-            ExportJson.WriteNullableString(w, "source_symbol_kind", reader, 13);
-            WriteNullableBoolFromInteger(w, "source_symbol_is_test", reader, 14);
-            ExportJson.WriteNullableString(w, "target_symbol_id", reader, 15);
-            ExportJson.WriteNullableString(w, "target_symbol_name", reader, 16);
-            ExportJson.WriteNullableString(w, "target_symbol_kind", reader, 17);
-            WriteNullableBoolFromInteger(w, "target_symbol_is_test", reader, 18);
-            w.WriteString("resolution_status", ResolutionStatus(reader));
-            WriteNullableDouble(w, "confidence", reader, 19);
-            ExportJson.WriteNullableString(w, "metadata_json", reader, 20);
-            WriteNullableString(w, "artifact_id", artifactId);
-            WriteNullableLong(w, "workspace_revision", workspaceRevision);
-            w.WriteEndObject();
+            writer.WriteStartObject();
+            writer.WriteNumber("schema_version", SchemaVersion);
+            writer.WriteString("reference_site_id", row.ReferenceSiteId);
+            writer.WriteString("canonical_kind", row.CanonicalKind);
+            writer.WriteString("language", row.Language);
+            writer.WriteString("path", row.Path);
+            WriteNullableString(writer, "source_symbol_id", row.ContainingSymbolId);
+            WriteNullableString(writer, "source_symbol_name", row.SourceName);
+            WriteNullableString(writer, "source_symbol_kind", row.SourceKind);
+            WriteNullableBool(writer, "source_symbol_is_test", row.SourceIsTest);
+            if (row.StartLine is null)
+            {
+                writer.WriteNull("span");
+            }
+            else
+            {
+                writer.WriteStartObject("span");
+                writer.WriteNumber("start_line", row.StartLine.Value);
+                writer.WriteNumber("start_column", row.StartColumn!.Value);
+                writer.WriteNumber("end_line", row.EndLine!.Value);
+                writer.WriteNumber("end_column", row.EndColumn!.Value);
+                writer.WriteNumber("start_byte", row.StartByte!.Value);
+                writer.WriteNumber("end_byte", row.EndByte!.Value);
+                writer.WriteEndObject();
+            }
+            writer.WriteBoolean("is_exact", row.IsExact);
+            writer.WriteString("site_provenance", row.SiteProvenance);
+            WriteNullableString(writer, "target_symbol_id", row.TargetSymbolId);
+            writer.WriteString("target_name", row.TargetName);
+            WriteNullableString(writer, "target_symbol_kind", row.TargetKind);
+            WriteNullableBool(writer, "target_symbol_is_test", row.TargetIsTest);
+            writer.WriteString("resolution_status", row.TargetSymbolId is null ? "unresolved" : "resolved");
+            WriteNullableLong(writer, "resolution_tier", assertion.ResolutionTier);
+            writer.WriteNumber("confidence", assertion.Confidence);
+            writer.WriteStartArray("provenance");
+            foreach (string source in assertion.Provenance)
+                writer.WriteStringValue(source);
+            writer.WriteEndArray();
+            WriteNullableString(writer, "artifact_id", artifactId);
+            WriteNullableLong(writer, "workspace_revision", workspaceRevision);
+            writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    private static string ResolutionStatus(SqliteDataReader reader)
+    private static string CanonicalKind(string kind) => kind switch
     {
-        if (reader.IsDBNull(15))
-            return "unresolved";
-        return reader.IsDBNull(16) ? "dangling_target" : "resolved";
-    }
+        "calls" => "call",
+        "imports" => "import",
+        "references" => "reference",
+        "uses" => "usage",
+        _ => kind,
+    };
 
-    private static void WriteNullableDouble(Utf8JsonWriter writer, string name, SqliteDataReader reader, int ordinal)
+    private static int EvidencePrecedence(string source) => source switch
     {
-        if (reader.IsDBNull(ordinal)) writer.WriteNull(name);
-        else writer.WriteNumber(name, reader.GetDouble(ordinal));
-    }
+        "identifier_direct" => 0,
+        "identifier_resolution" => 1,
+        "relationship" => 2,
+        "pending_resolution" => 3,
+        "name_fallback" => 4,
+        _ => 5,
+    };
 
-    private static void WriteNullableBoolFromInteger(Utf8JsonWriter writer, string name, SqliteDataReader reader, int ordinal)
-    {
-        if (reader.IsDBNull(ordinal)) writer.WriteNull(name);
-        else writer.WriteBoolean(name, reader.GetInt64(ordinal) != 0);
-    }
+    private static string? ReadString(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+
+    private static long? ReadInt64(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+
+    private static bool? ReadBool(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal) != 0;
 
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)
     {
@@ -142,4 +268,47 @@ public static class ReferenceExportReader
         if (value is null) writer.WriteNull(name);
         else writer.WriteNumber(name, value.Value);
     }
+
+    private static void WriteNullableBool(Utf8JsonWriter writer, string name, bool? value)
+    {
+        if (value is null) writer.WriteNull(name);
+        else writer.WriteBoolean(name, value.Value);
+    }
+
+    private sealed record ReferenceEvidenceExportRow(
+        string ReferenceSiteId,
+        bool IsExact,
+        string SiteProvenance,
+        string Path,
+        string Language,
+        string? ContainingSymbolId,
+        long? StartLine,
+        long? StartColumn,
+        long? EndLine,
+        long? EndColumn,
+        long? StartByte,
+        long? EndByte,
+        string CanonicalKind,
+        string? TargetSymbolId,
+        string TargetName,
+        string? TargetKind,
+        bool? TargetIsTest,
+        long? ResolutionTier,
+        double Confidence,
+        string EvidenceSource,
+        string? SourceName,
+        string? SourceKind,
+        bool? SourceIsTest);
+
+    private readonly record struct ReferenceAssertionKey(
+        string ReferenceSiteId,
+        string? TargetSymbolId,
+        string? TargetName,
+        string CanonicalKind);
+
+    private sealed record ReferenceAssertionRow(
+        ReferenceEvidenceExportRow Primary,
+        IReadOnlyList<string> Provenance,
+        long? ResolutionTier,
+        double Confidence);
 }

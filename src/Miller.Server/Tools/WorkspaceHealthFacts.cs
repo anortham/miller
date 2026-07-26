@@ -84,7 +84,7 @@ public sealed record WorkspaceHealthFacts(
         var recommended = new List<string>();
 
         long openCapabilityGaps = extraction.CapabilityGaps.Rows
-            .Where(static row => string.Equals(row.Status, "open", StringComparison.OrdinalIgnoreCase))
+                .Where(static row => string.Equals(row.Status, "open", StringComparison.Ordinal))
             .Sum(static row => row.Count);
         if (openCapabilityGaps > 0)
         {

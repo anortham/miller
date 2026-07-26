@@ -1488,6 +1488,9 @@ public sealed class InspectTool
     private static void WriteInboundReference(Utf8JsonWriter writer, ReferenceEvidence reference)
     {
         writer.WriteStartObject();
+        writer.WriteString("reference_site_id", reference.ReferenceSiteId);
+        writer.WriteBoolean("is_exact", reference.IsExact);
+        writer.WriteString("site_provenance", reference.SiteProvenance);
         writer.WriteString("target_symbol_id", reference.TargetSymbolId);
         writer.WriteString("file", reference.FilePath);
         WriteNullableNumber(writer, "line", reference.StartLine);
@@ -1517,6 +1520,9 @@ public sealed class InspectTool
             ? null
             : index.FindBySymbolId(reference.TargetSymbolId);
         writer.WriteStartObject();
+        writer.WriteString("reference_site_id", reference.ReferenceSiteId);
+        writer.WriteBoolean("is_exact", reference.IsExact);
+        writer.WriteString("site_provenance", reference.SiteProvenance);
         if (reference.TargetSymbolId is null)
             writer.WriteNull("target_symbol_id");
         else

@@ -353,10 +353,10 @@ public sealed class SearchTool
             }
             else if (route.Kind == SearchRouteKind.Markers)
             {
-                WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
+                WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
-                    region.Index,
+                    region.IndexDbPath,
                     route,
                     new SearchRouteExecutionRequest(
                         query,

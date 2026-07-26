@@ -192,21 +192,10 @@ public static class CliDispatch
             return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
         }
 
-        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
-        if (!sidecar.Enabled || !sidecar.RegionOptions.Enabled)
-        {
-            err.WriteLine("region search is disabled. Enable MILLER_SEARCH_SIDECAR and unset MILLER_REGION_INDEX=0, then refresh the workspace.");
-            return 3;
-        }
-
         try
         {
-            using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-            long revision = freshness.LatestRevision();
-            string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
-            FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
             outw.WriteLine(MarkerSearch.Run(
-                regionIndex,
+                ctx.ExtractDbPath,
                 markers,
                 o.Int("limit", MarkerSearch.DefaultLimit),
                 o.Has("exclude-tests"),
@@ -221,7 +210,7 @@ public static class CliDispatch
             ex is FileNotFoundException or InvalidOperationException or IOException
                 or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            err.WriteLine("todos requires a refreshed source-region search sidecar: " + ex.Message);
+            err.WriteLine("todos failed to read code.marker.v1 facts: " + ex.Message);
             return 3;
         }
     }
@@ -422,6 +411,24 @@ public static class CliDispatch
             if (!RequireIndex(ctx, err))
                 return 3;
 
+            if (route.Kind == SearchRouteKind.Markers)
+            {
+                try
+                {
+                    SearchRouteExecutionResult markerResult =
+                        SearchRouteExecutor.RunMarkers(ctx.ExtractDbPath, route, executionRequest);
+                    outw.WriteLine(markerResult.Output);
+                    return 0;
+                }
+                catch (Exception ex) when (
+                    ex is FileNotFoundException or InvalidOperationException or IOException
+                        or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+                {
+                    err.WriteLine("marker search failed to read code.marker.v1 facts: " + ex.Message);
+                    return 3;
+                }
+            }
+
             SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
             if (!sidecar.Enabled || !sidecar.RegionOptions.Enabled)
             {
@@ -435,9 +442,8 @@ public static class CliDispatch
                 long revision = freshness.LatestRevision();
                 string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
                 FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
-                SearchRouteExecutionResult result = route.Kind == SearchRouteKind.Markers
-                    ? SearchRouteExecutor.RunMarkers(regionIndex, route, executionRequest)
-                    : SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
+                SearchRouteExecutionResult result =
+                    SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
                 outw.WriteLine(result.Output);
                 return 0;
             }
@@ -1088,15 +1094,15 @@ public static class CliDispatch
     private static int Patterns(IReadOnlyList<string> args, WorkspaceContext ctx, TextWriter outw, TextWriter err)
     {
         if (args.Count > 0 && args[0] is "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--continuation TOKEN] [--json]");
 
         bool firstTokenIsFlag = args.Count > 0 && args[0].StartsWith("--", StringComparison.Ordinal);
         string operation = args.Count == 0 || firstTokenIsFlag ? "list" : args[0].ToLowerInvariant();
         if (operation is "help" or "--help" or "-h")
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--continuation TOKEN] [--json]");
 
         if (operation is not ("list" or "summary" or "summarize" or "search"))
-            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--json]");
+            return Usage(err, "miller patterns <list|summary|search|export> [--workspace-id SELECTOR] [--workspace DIR] [--pattern ID] [--query TEXT] [--language LANG] [--path GLOB] [--where key=value] [--group-by file|directory|top_directory] [--facet KEY] [--limit N] [--continuation TOKEN] [--json]");
 
         IReadOnlyList<string> argTail = (firstTokenIsFlag ? args : args.Skip(1)).ToArray();
         CliOptions o = CliOptions.Parse(argTail, "json");
@@ -1122,7 +1128,7 @@ public static class CliDispatch
         }
 
         if (operation == "search" && string.IsNullOrWhiteSpace(patternId) && string.IsNullOrWhiteSpace(query))
-            return Usage(err, "miller patterns search --pattern ID | --query TEXT [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--json]");
+            return Usage(err, "miller patterns search --pattern ID | --query TEXT [--workspace-id SELECTOR] [--workspace DIR] [--language LANG] [--path GLOB] [--where key=value] [--limit N] [--continuation TOKEN] [--json]");
 
         if ((operation is "list" or "summary" or "summarize") && !string.IsNullOrWhiteSpace(query))
         {
@@ -1149,7 +1155,9 @@ public static class CliDispatch
                 o.Value("group-by", o.Value("group_by")),
                 o.Value("facet"),
                 o.Int("limit", PatternsTool.DefaultLimit),
-                o.Has("json"));
+                o.Has("json"),
+                workspaceId: ctx.WorkspaceId ?? "current",
+                continuation: o.Value("continuation"));
             WriteOutput(outw, result.Output);
             return 0;
         }

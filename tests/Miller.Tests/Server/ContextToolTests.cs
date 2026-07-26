@@ -834,7 +834,11 @@ public sealed class ContextToolTests
             ReferenceEvidenceSource.IdentifierResolution,
             1,
             0.95,
-            ReferenceResolutionStatus.Exact);
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:controller:100:112",
+            IsExact: true,
+            SiteProvenance: "target_token");
         var outbound = new OutgoingReferenceEvidence(
             ServiceId,
             RepoId,
@@ -851,7 +855,11 @@ public sealed class ContextToolTests
             ReferenceEvidenceSource.IdentifierDirect,
             null,
             1,
-            ReferenceResolutionStatus.Exact);
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:service:200:209",
+            IsExact: true,
+            SiteProvenance: "target_token");
         var dependency = new OutgoingReferenceEvidence(
             ServiceId,
             ControllerId,
@@ -868,7 +876,11 @@ public sealed class ContextToolTests
             ReferenceEvidenceSource.IdentifierDirect,
             null,
             1,
-            ReferenceResolutionStatus.Exact);
+            ReferenceResolutionStatus.Exact,
+            Language: "csharp",
+            ReferenceSiteId: "site:service:220:235",
+            IsExact: true,
+            SiteProvenance: "target_token");
 
         string output = ContextTool.RunReferenceAware(
             index,

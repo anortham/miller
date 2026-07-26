@@ -11,7 +11,7 @@ namespace Miller.Indexing;
 /// </summary>
 public static class PatternFactsExportReader
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     public static string ExportJsonLines(string symbolsDbPath)
     {

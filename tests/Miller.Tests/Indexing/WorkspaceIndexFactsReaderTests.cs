@@ -6,10 +6,9 @@ namespace Miller.Tests.Indexing;
 public sealed class WorkspaceIndexFactsReaderTests
 {
     [Fact]
-    public void Read_ReturnsCountsWithoutReadingGraphTables()
+    public void Read_ReturnsCountsFromSchemaFiveArtifact()
     {
         using var fx = JulieDbFixture.CreateDefault();
-        SqliteFixtureMutator.DropRelationshipsTable(fx.DbPath);
 
         WorkspaceIndexFacts facts = WorkspaceIndexFactsReader.Read(fx.DbPath);
 
