@@ -37,8 +37,9 @@ callees moved to `inspect`; unbounded `content export` should become CLI-only.
 - Phase 2 shipped typed diagnostics and stateless output continuation.
 - Phase 3 migrated every agent-facing reference consumer, made rename exact by default, added bounded reference
   continuation, and removed `trace auto`.
-- Phase 10 Search, Inspect, Context, Trace, and Impact re-audits are locally complete. Impact now pages large MCP
-  results through a stateless byte-identical continuation envelope while preserving complete CLI JSON.
+- Phase 10 Search, Inspect, Context, Trace, Impact, and Patterns re-audits are locally complete. Impact now pages
+  large MCP results through a stateless byte-identical continuation envelope while preserving complete CLI JSON;
+  Patterns required no source or contract change after its full-population and output-bound verification.
 
 ## Replacement Standard
 
