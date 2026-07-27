@@ -152,6 +152,12 @@ semantic ingestion. This is a CLI-only process contract; the MCP `content` tool 
 Rows always end with a literal LF byte, including on Windows.
 See `docs/contracts/content-corpus-v1.md` for field-level guarantees.
 
+An export that covers workspace-derived kinds (`--kind` unset, `all`, or any `workspace_*` value) exits `3`
+with an actionable stderr diagnostic when `content.db` was built from a superseded extract generation — the
+state a full-rebuild promote leaves behind, which revision comparison alone cannot see because the promote
+restarts julie's revision counter. Run `miller workspace refresh` and retry. Import-only exports
+(`--kind external_file|web`) have no `symbols.db` counterpart and are unaffected.
+
 Capabilities advertise this feed as:
 
 ```json

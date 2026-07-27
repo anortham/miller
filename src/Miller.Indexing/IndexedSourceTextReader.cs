@@ -18,7 +18,10 @@ public sealed class IndexedSourceTextReader
             return null;
 
         string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath);
-        if (!File.Exists(contentDbPath))
+        // A hit from a superseded generation would claim the indexed source "still contains" text at a line that
+        // belongs to a rebuild the workspace has moved past, and the caller turns that claim into a stale-target
+        // diagnostic and a converge retry — so an unprovable generation must produce no hit at all.
+        if (!ContentCorpusSidecar.GenerationAgrees(contentDbPath, symbolsDbPath))
             return null;
 
         try

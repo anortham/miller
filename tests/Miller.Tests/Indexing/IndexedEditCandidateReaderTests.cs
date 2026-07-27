@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Xunit;
 
@@ -197,6 +198,57 @@ public sealed class IndexedEditCandidateReaderTests
             Assert.True(candidate.LineEnd - candidate.LineStart + 1 <= ContentCorpusChunker.DefaultChunkLines);
             Assert.DoesNotContain("line 420", candidate.RawText, StringComparison.Ordinal);
         });
+    }
+
+    [Fact]
+    public void FindCandidates_PromoteRestartsRevisionAtTheSameNumber_IsUnavailableRatherThanAimingAtAStaleRegion()
+    {
+        using var fx = CreateFixture("public class Api { public string Version => \"KnownNeedle\"; }\n");
+        BuildContentDb(fx, revision: 1);
+        SetSymbolsArtifactId(fx.DbPath, "artifact-after-full-rebuild");
+
+        var result = new IndexedEditCandidateReader().FindCandidates(
+            fx.DbPath,
+            "src/Api.cs",
+            expectedRevision: 1,
+            oldText: "KnownNeedle",
+            query: null,
+            anchor: null,
+            line: null,
+            limit: 5);
+
+        Assert.Equal(IndexedEditCandidateState.Unavailable, result.State);
+        Assert.Empty(result.Candidates);
+        Assert.Contains("different index generation", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FindLiteral_PromoteRestartsRevisionAtTheSameNumber_ReportsNoIndexedHit()
+    {
+        using var fx = CreateFixture("public class Api { public string Version => \"KnownNeedle\"; }\n");
+        BuildContentDb(fx, revision: 1);
+
+        Assert.NotNull(new IndexedSourceTextReader().FindLiteral(fx.DbPath, "src/Api.cs", "KnownNeedle"));
+
+        SetSymbolsArtifactId(fx.DbPath, "artifact-after-full-rebuild");
+
+        Assert.Null(new IndexedSourceTextReader().FindLiteral(fx.DbPath, "src/Api.cs", "KnownNeedle"));
+    }
+
+    private static void SetSymbolsArtifactId(string symbolsDb, string artifactId)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = symbolsDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE artifact_metadata SET value = $v WHERE key = 'artifact_id';";
+            cmd.Parameters.AddWithValue("$v", artifactId);
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
     }
 
     private static JulieDbFixture CreateFixture(string sourceText) =>

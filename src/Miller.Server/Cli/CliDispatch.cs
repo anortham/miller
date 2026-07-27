@@ -1009,6 +1009,23 @@ public static class CliDispatch
                     return 3;
                 }
             }
+            // Export is a published Eros-facing contract, so workspace-derived rows must not come from a
+            // superseded extract generation. Imported external/web rows have no symbols.db counterpart and stay
+            // exportable regardless.
+            if (ExportCoversWorkspaceKinds(requestedKind)
+                && File.Exists(contentDbPath)
+                && !ContentCorpusSidecar.GenerationAgrees(contentDbPath, ctx.ExtractDbPath))
+            {
+                err.WriteLine(ContentTool.RenderFailure(
+                    "export",
+                    new InvalidOperationException(
+                        $"Content corpus sidecar at '{contentDbPath}' was built from a different index " +
+                        "generation (the workspace was fully rebuilt). Run `miller workspace refresh` before " +
+                        "exporting workspace content."),
+                    json));
+                return 3;
+            }
+
             var reader = new ContentCorpusExportReader();
             reader.WriteJsonLines(
                 contentDbPath,
@@ -1042,6 +1059,18 @@ public static class CliDispatch
         WriteOutput(outw, result.Output);
         return 0;
     }
+
+    // Unset or "all" exports every kind, so both cover workspace-derived rows. An unrecognised value is left to
+    // the reader's own validation rather than silently treated as import-only.
+    private static bool ExportCoversWorkspaceKinds(string? requestedKind) =>
+        string.IsNullOrWhiteSpace(requestedKind) ||
+        requestedKind.Trim().ToLowerInvariant() switch
+        {
+            "all" or "source" or "workspace_source" or "docs" or "doc" or "workspace_docs"
+                or "config" or "workspace_config" => true,
+            "external" or "external_file" or "file" or "web" => false,
+            _ => true,
+        };
 
     private static string? ContentListKind(string? value) =>
         string.IsNullOrWhiteSpace(value)

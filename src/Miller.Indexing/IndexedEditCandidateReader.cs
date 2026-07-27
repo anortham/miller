@@ -27,6 +27,16 @@ public sealed class IndexedEditCandidateReader
         if (!File.Exists(contentDbPath))
             return IndexedEditCandidateResult.Unavailable("missing content.db at " + contentDbPath);
 
+        // Candidates locate the region an edit is planned against, so a corpus from a superseded generation can
+        // aim a plan at the wrong part of the current file. Revision cannot see that: a full-rebuild promote
+        // restarts the counter onto a colliding number.
+        if (!ContentCorpusSidecar.GenerationAgrees(contentDbPath, symbolsDbPath))
+        {
+            return IndexedEditCandidateResult.Unavailable(
+                "content.db was built from a different index generation (the workspace was fully rebuilt); " +
+                "run `miller workspace refresh`");
+        }
+
         try
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder

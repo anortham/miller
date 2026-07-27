@@ -271,27 +271,40 @@ public sealed class ContentCorpusSidecar
     /// worked before artifact stamping existed. Revision is deliberately not re-checked here — the caller has
     /// already gated on the revision it asked for, which may legitimately differ from the live latest.
     /// </remarks>
-    private static bool ReadGateArtifactAgrees(string contentDbPath, string symbolsDbPath)
+    /// <summary>
+    /// Whether the corpus is PROVABLY from a different generation than <paramref name="symbolsDbPath"/>. Use
+    /// from a reader that has its own error path for a missing or damaged corpus.
+    /// </summary>
+    /// <remarks>
+    /// A corpus that cannot be read at all reports agreement here, deliberately. This gate exists to catch a
+    /// SILENT wrong-generation answer; an unreadable corpus is not silent, and pre-empting it would replace an
+    /// accurate "corrupt content.db" diagnostic with a misleading "run refresh, the workspace was rebuilt".
+    /// </remarks>
+    public static bool GenerationAgrees(string contentDbPath, string symbolsDbPath)
     {
-        try
-        {
-            return SymbolsArtifactIdentity.TryRead(symbolsDbPath)
-                .MatchesArtifact(ReadCorpusArtifactId(contentDbPath));
-        }
-        catch (Exception ex) when (
-            ex is SqliteException or InvalidOperationException or IOException
-                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false;
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        if (!File.Exists(contentDbPath))
+            return true;
+
+        return !TryReadCorpusArtifactId(contentDbPath, out string? stamped)
+               || SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(stamped);
     }
+
+    /// <summary>
+    /// The read-gate half of <see cref="IsCurrentFor"/>, applied AFTER a successful open — so unlike
+    /// <see cref="GenerationAgrees"/>, a failed read here is genuinely anomalous and counts as disagreement.
+    /// </summary>
+    private static bool ReadGateArtifactAgrees(string contentDbPath, string symbolsDbPath) =>
+        TryReadCorpusArtifactId(contentDbPath, out string? stamped)
+        && SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(stamped);
 
     private static bool BuiltFromCurrentArtifact(string contentDbPath, string symbolsDbPath)
     {
         try
         {
-            return SymbolsArtifactIdentity.Read(symbolsDbPath)
-                .MatchesArtifact(ReadCorpusArtifactId(contentDbPath));
+            return TryReadCorpusArtifactId(contentDbPath, out string? stamped)
+                   && SymbolsArtifactIdentity.Read(symbolsDbPath).MatchesArtifact(stamped);
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or SqliteException or InvalidOperationException or IOException
@@ -301,18 +314,29 @@ public sealed class ContentCorpusSidecar
         }
     }
 
-    private static string? ReadCorpusArtifactId(string contentDbPath)
+    private static bool TryReadCorpusArtifactId(string contentDbPath, out string? artifactId)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        artifactId = null;
+        try
         {
-            DataSource = Path.GetFullPath(contentDbPath),
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false,
-        }.ToString());
-        connection.Open();
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
-        return cmd.ExecuteScalar() as string;
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(contentDbPath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
+            artifactId = cmd.ExecuteScalar() as string;
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static bool IsFresh(string contentDbPath, long revision)

@@ -360,7 +360,7 @@ public sealed class VectorConvergeService : BackgroundService
 
         using IVectorConvergePort? port = OpenPortWithRecovery(workspace);
         if (port is null)
-            return false;
+            return UnfinishedPromoteAwaitsRecovery(workspace);
 
         EmbeddingClient embedding;
         if (_broker is not null)
@@ -486,6 +486,29 @@ public sealed class VectorConvergeService : BackgroundService
     /// deleted and rebuilt from the corpus, siblings and <c>symbols.db</c> untouched (vectors-v1 §Corruption
     /// recovery). A non-corruption open failure propagates to the drain's own retry.
     /// </summary>
+    /// <summary>
+    /// Whether a null port means "an interrupted promote still needs recovering" rather than "there is no work".
+    /// A leftover shadow with no active artifact is exactly that state, and <see cref="SqliteVectorConvergePort.TryOpen"/>
+    /// declines to open it rather than creating an empty active artifact that would strand the shadow.
+    /// </summary>
+    /// <remarks>
+    /// The distinction is load-bearing: <see cref="DrainOnceAsync"/> returning false schedules no retry, and the
+    /// only other wake comes from index convergence — so on a quiet workspace a recoverable promote would sit
+    /// unrecovered until an unrelated source edit.
+    /// </remarks>
+    private static bool UnfinishedPromoteAwaitsRecovery(WorkspaceContext workspace)
+    {
+        try
+        {
+            var generations = new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+            return File.Exists(generations.ShadowPath) && !File.Exists(generations.ActivePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
     internal IVectorConvergePort? OpenPortWithRecovery(WorkspaceContext workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
