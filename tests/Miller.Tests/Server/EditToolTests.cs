@@ -2096,6 +2096,50 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_ExactMode_AllowsSpanlessRelationshipCoveredByIdentifierSite()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        // A spanless relationship for the SAME (file, containing, target) as the usable identifier site at
+        // billing/Invoice.cs:3 — schema-5 duplicate evidence, not an occurrence the rename would miss.
+        fx.ExecuteWrite("""
+            INSERT INTO reference_sites (
+                reference_site_id, file_id, path, language, containing_symbol_id,
+                start_line, start_column, end_line, end_column, start_byte, end_byte, is_exact, provenance)
+            SELECT
+                'relationship-spanless-duplicate', file_id, path, language,
+                '5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00',
+                NULL, NULL, NULL, NULL, NULL, NULL, 0, 'spanless'
+            FROM files
+            WHERE path = 'billing/Invoice.cs';
+            INSERT INTO relationships (
+                relationship_id, reference_site_id, from_symbol_id, to_symbol_id, file_id, path, kind,
+                start_line, start_column, end_line, end_column,
+                start_byte, end_byte, confidence)
+            SELECT
+                'd1000000000000000000000000000010',
+                'relationship-spanless-duplicate',
+                '5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00',
+                (SELECT symbol_id FROM symbols WHERE name = 'Total' AND path = 'orders/OrderService.cs' LIMIT 1),
+                file_id, path, 'calls',
+                NULL, NULL, NULL, NULL,
+                NULL, NULL, 1.0
+            FROM files
+            WHERE path = 'billing/Invoice.cs';
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.Equal("ok", result.Outcome);
+        Assert.DoesNotContain("incomplete exact reference coverage", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("without usable byte spans", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_DefaultExactMode_RefusesIncompleteCoverage()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);

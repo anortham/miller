@@ -1050,8 +1050,7 @@ public sealed class EditService
             evidenceBounds);
         int oldNameByteLength = Encoding.UTF8.GetByteCount(oldName);
         IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact, oldNameByteLength);
-        int unusableExactSites = evidence.Exact.Count(
-            reference => !HasUsableRenameSpan(reference, oldNameByteLength));
+        int unusableExactSites = CountUnreachableExactSites(evidence.Exact, oldNameByteLength);
         int missingExactFiles = exactSites
             .Select(site => site.FilePath)
             .Distinct(StringComparer.Ordinal)
@@ -1869,6 +1868,26 @@ public sealed class EditService
             .OrderBy(static site => site.FilePath, StringComparer.Ordinal)
             .ThenBy(static site => site.StartByte)
             .ToArray();
+    }
+
+    /// <summary>
+    /// Counts exact-arm references the rename cannot reach. A schema-5 spanless site carries no span by
+    /// design and duplicates identifier evidence for the same occurrence, so it only signals a real gap when
+    /// no usable identifier site covers the same file, containing symbol, and target.
+    /// </summary>
+    private static int CountUnreachableExactSites(
+        IReadOnlyList<ReferenceEvidence> exact,
+        int nameByteLength)
+    {
+        HashSet<(string, string?, string?)> covered = exact
+            .Where(reference => HasUsableRenameSpan(reference, nameByteLength))
+            .Select(reference => (reference.FilePath, reference.ContainingSymbolId, reference.TargetSymbolId))
+            .ToHashSet();
+
+        return exact.Count(reference =>
+            !HasUsableRenameSpan(reference, nameByteLength) &&
+            !(!reference.IsExact &&
+              covered.Contains((reference.FilePath, reference.ContainingSymbolId, reference.TargetSymbolId))));
     }
 
     private static bool HasUsableRenameSpan(ReferenceEvidence reference, int nameByteLength) =>
