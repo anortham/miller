@@ -375,11 +375,6 @@ public sealed class SymbolSearchSidecar
     // staleness/option drift are normal lifecycle states and stay quiet — only damage should reach the writer's
     // warning log.
     /// <summary>
-    /// The extract generation a derived sidecar must match: the caller-supplied <paramref name="revision"/>
-    /// paired with the extract's current <c>artifact_id</c>. An unreadable source yields a null id, which
-    /// <see cref="SymbolsArtifactIdentity.Matches"/> degrades to the historical revision-only comparison.
-    /// </summary>
-    /// <summary>
     /// The build-gate reading of <see cref="SymbolsArtifactIdentity.MatchesArtifact"/>. Read gates refuse what
     /// they cannot prove, because serving a superseded generation is silent and permanent. A build gate has the
     /// opposite obligation: it cannot rebuild from a source it cannot read, so an unreadable artifact must mean
@@ -393,6 +388,11 @@ public sealed class SymbolSearchSidecar
         SymbolsArtifactIdentity identity, long stampedRevision, string? stampedArtifactId) =>
         stampedRevision == identity.Revision && BuildGateAgrees(identity, stampedArtifactId);
 
+    /// <summary>
+    /// The extract generation a derived sidecar must match: the caller-supplied <paramref name="revision"/>
+    /// paired with the extract's current <c>artifact_id</c>. An unreadable source yields a null id, which
+    /// <see cref="SymbolsArtifactIdentity.Matches"/> degrades to the historical revision-only comparison.
+    /// </summary>
     private static SymbolsArtifactIdentity ReadSymbolsIdentity(string symbolsDbPath, long revision)
     {
         try

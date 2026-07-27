@@ -263,15 +263,6 @@ public sealed class ContentCorpusSidecar
     }
 
     /// <summary>
-    /// The read-gate half of <see cref="IsCurrentFor"/>: whether the corpus carries the live artifact's id.
-    /// </summary>
-    /// <remarks>
-    /// Unlike the build gate, an unprovable generation ALLOWS the read. A build gate that cannot prove currency
-    /// should rebuild; a read gate that cannot prove staleness must not start refusing to serve an artifact that
-    /// worked before artifact stamping existed. Revision is deliberately not re-checked here — the caller has
-    /// already gated on the revision it asked for, which may legitimately differ from the live latest.
-    /// </remarks>
-    /// <summary>
     /// Whether the corpus is PROVABLY from a different generation than <paramref name="symbolsDbPath"/>. Use
     /// from a reader that has its own error path for a missing or damaged corpus.
     /// </summary>

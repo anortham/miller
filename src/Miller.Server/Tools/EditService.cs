@@ -1196,7 +1196,8 @@ public sealed class EditService
                 || site.StartByte != definitionSite.StartByte
                 || site.EndByte != definitionSite.EndByte)
             .ToArray();
-        IReadOnlyList<ReferenceEvidence> renderedExactEvidence = evidence.Exact
+        IReadOnlyList<ReferenceEvidence> renderedExactEvidence =
+            WithoutRedundantSpanlessRows(evidence.Exact, oldNameByteLength)
             .Where(reference =>
                 !string.Equals(reference.FilePath, definitionSite.FilePath, StringComparison.Ordinal)
                 || reference.StartByte != definitionSite.StartByte
@@ -1951,6 +1952,24 @@ public sealed class EditService
     /// </summary>
     private static int CountUnreachableExactSites(
         IReadOnlyList<ReferenceEvidence> exact,
+        int nameByteLength) =>
+        WithoutRedundantSpanlessRows(exact, nameByteLength)
+            .Count(reference => !HasUsableRenameSpan(reference, nameByteLength));
+
+    /// <summary>
+    /// Drops schema-5 spanless rows that only duplicate identifier evidence for an occurrence a usable span
+    /// already covers. Everything the reader is shown — coverage counts, the inferred tally, the note — must be
+    /// computed from this, not from the raw exact arm.
+    /// </summary>
+    /// <remarks>
+    /// A spanless row carries no span by design, so it can never appear in the diff. Counting it inflates the
+    /// coverage totals past the number of sites actually edited, and because these rows arrive at julie's
+    /// tier-3 confidence it reports scope-proved bindings as inferred and tells the reader to review lines that
+    /// are not in the diff at all. A spanless row with NO covering identifier site is genuine unreachable
+    /// evidence and is kept — that is the case the warning exists for.
+    /// </remarks>
+    private static IReadOnlyList<ReferenceEvidence> WithoutRedundantSpanlessRows(
+        IReadOnlyList<ReferenceEvidence> exact,
         int nameByteLength)
     {
         HashSet<(string, string?, string?)> covered = exact
@@ -1958,10 +1977,13 @@ public sealed class EditService
             .Select(reference => (reference.FilePath, reference.ContainingSymbolId, reference.TargetSymbolId))
             .ToHashSet();
 
-        return exact.Count(reference =>
-            !HasUsableRenameSpan(reference, nameByteLength) &&
-            !(!reference.IsExact &&
-              covered.Contains((reference.FilePath, reference.ContainingSymbolId, reference.TargetSymbolId))));
+        return exact
+            .Where(reference =>
+                HasUsableRenameSpan(reference, nameByteLength) ||
+                reference.IsExact ||
+                !covered.Contains(
+                    (reference.FilePath, reference.ContainingSymbolId, reference.TargetSymbolId)))
+            .ToArray();
     }
 
     private static bool HasUsableRenameSpan(ReferenceEvidence reference, int nameByteLength) =>

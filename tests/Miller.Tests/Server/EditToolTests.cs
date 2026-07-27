@@ -772,6 +772,45 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_SpanlessRowDuplicatingAProvedSite_IsNotCountedOrCalledInferred()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        LayFiles(EditFixtureFiles);
+        // Schema 5 emits a spanless relationship row ALONGSIDE the spanned identifier row for the same call.
+        // It carries no span, so it can never appear in the diff — counting it inflates coverage past the sites
+        // actually edited and reports a scope-proved binding as a 0.70 heuristic.
+        fx.AddPendingRelationship(
+            "pending-duplicate-of-proved-site",
+            "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00",
+            "billing/Invoice.cs",
+            callerScopeSymbolId: "5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c00",
+            targetDisplayName: "Total",
+            targetTerminalName: "Total",
+            confidence: 0.70);
+        // Without the resolution row the relationship never binds to Total and never reaches the exact arm —
+        // the artifact always carries BOTH, which is what makes the duplicate observable.
+        fx.AddPendingResolution(
+            "pending-duplicate-of-proved-site", JulieDbFixture.TotalMethodId,
+            tier: 3, confidence: 0.70, method: "tier3_static_type");
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            Format = "json",
+        });
+
+        JsonElement renameEvidence = JsonDocument.Parse(result.Output)
+            .RootElement.GetProperty("rename_evidence");
+        int editedSites = renameEvidence.GetProperty("exact_sites_total_count").GetInt32();
+        int coverageSum = renameEvidence.GetProperty("coverage").EnumerateArray()
+            .Sum(row => row.GetProperty("count").GetInt32());
+
+        Assert.Equal(0, renameEvidence.GetProperty("inferred_exact_count").GetInt32());
+        Assert.Equal(editedSites, coverageSum);
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_Json_ReportsInferredCountsPerCoverageRow()
     {
         using var fx = JulieDbFixture.CreateForEdit();

@@ -482,11 +482,6 @@ public sealed class VectorConvergeService : BackgroundService
     }
 
     /// <summary>
-    /// Opens the active generation, recovering it in place when the failure is corruption-shaped: the artifact is
-    /// deleted and rebuilt from the corpus, siblings and <c>symbols.db</c> untouched (vectors-v1 §Corruption
-    /// recovery). A non-corruption open failure propagates to the drain's own retry.
-    /// </summary>
-    /// <summary>
     /// Whether a null port means "an interrupted promote still needs recovering" rather than "there is no work".
     /// A leftover shadow with no active artifact is exactly that state, and <see cref="SqliteVectorConvergePort.TryOpen"/>
     /// declines to open it rather than creating an empty active artifact that would strand the shadow.
@@ -509,6 +504,11 @@ public sealed class VectorConvergeService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Opens the active generation, recovering it in place when the failure is corruption-shaped: the artifact is
+    /// deleted and rebuilt from the corpus, siblings and <c>symbols.db</c> untouched (vectors-v1 §Corruption
+    /// recovery). A non-corruption open failure propagates to the drain's own retry.
+    /// </summary>
     internal IVectorConvergePort? OpenPortWithRecovery(WorkspaceContext workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
@@ -1201,12 +1201,6 @@ public sealed class VectorConvergeService : BackgroundService
 }
 
 /// <summary>
-/// The production port: one writer connection to <c>vectors.db</c> with the pinned sqlite-vec extension loaded,
-/// plus read connections to <c>symbols.db</c> and <c>content.db</c>. It owns the SQL because the commit must be
-/// ONE short transaction spanning the vec0 deletes, the vec0 inserts, the mapping updates and the cursor
-/// advance — an invariant no composition of per-unit writes can provide.
-/// </summary>
-/// <summary>
 /// The production shadow arm: a fresh generation at <c>vectors.db.rebuild</c>, promoted over the live artifact
 /// by <see cref="VectorGenerationManager"/> — which retains the superseded generation under its own tag when the
 /// promote is incompatible, so a matching reader keeps serving through the soak window.
@@ -1296,6 +1290,12 @@ internal sealed class VectorGenerationGc(VectorGenerationManager manager, ILogge
     }
 }
 
+/// <summary>
+/// The production port: one writer connection to <c>vectors.db</c> with the pinned sqlite-vec extension loaded,
+/// plus read connections to <c>symbols.db</c> and <c>content.db</c>. It owns the SQL because the commit must be
+/// ONE short transaction spanning the vec0 deletes, the vec0 inserts, the mapping updates and the cursor
+/// advance — an invariant no composition of per-unit writes can provide.
+/// </summary>
 internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 {
     private static readonly string[] DocsLikeContentKinds =
