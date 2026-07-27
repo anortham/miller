@@ -107,7 +107,13 @@ Mode-specific top-level fields:
 - `exact_references`: target-resolved rows only.
 - `fallback_references`: unresolved same-name rows only.
 - `reference_coverage`: observed, available, returned, and truncated counts for each tier plus
-  `same_name_definition_count` and `fallback_status`.
+  `same_name_definition_count` and `fallback_status`. `exact_observed` counts raw artifact evidence rows;
+  `exact_available` counts logical references, one per occurrence, and is the count to compare against call
+  sites. The two differ by design: julie-extract emits several rows for one occurrence — the same reference
+  site reached through `identifiers`, `identifier_resolutions`, and `relationships`, plus a spanless
+  `pending_resolutions` row carrying its own `reference_site_spanless-` identity. A spanless row that no
+  spanned row covers at the same file, containing symbol, target, and kind is that occurrence's only evidence,
+  so it stays counted and is rendered with `is_exact=false`.
 - `continuation`: opaque artifact-bound token for the next exact/fallback page, or `null`.
 
 Reference row fields:

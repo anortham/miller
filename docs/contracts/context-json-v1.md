@@ -51,9 +51,11 @@ JSON returns a `bundle` array. Normal mode uses `item_type=symbol`; usage mode m
 - `partial` when a pivot or relation is present without authoritative implementation evidence;
 - `insufficient` when no pivot is rendered.
 
-A body found only through the optional semantic arm or an individual query-term rescue remains `partial`; those
-paths are discovery evidence, not authoritative task anchors. `next_actions` appears only when the disposition is
-not `sufficient`.
+A `constant`, `variable`, `field`, or `property` pivot body is the value it was assigned, not an implementation,
+so it never reaches `sufficient` however it ranked; an authoritatively anchored one reports `partial` with reason
+`pivot_value_declaration_only`. A body found only through the optional semantic arm or an individual query-term
+rescue likewise remains `partial`; those paths are discovery evidence, not authoritative task anchors.
+`next_actions` appears only when the disposition is not `sufficient`.
 
 Compact output conveys the same selected items and disposition. Every selected item is rendered; omitted
 candidates are never included in the selected count. The four-pivot ranking cap is deliberate and does not emit a

@@ -691,22 +691,6 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         isWindows || isMacOS ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
-    /// Load the in-memory index, AUTO-HEALING a reused-but-incompatible DB. <paramref name="load"/> runs first; if
-    /// it throws <see cref="IncompatibleExtractException"/> — a stale schema/contract artifact that a root-matching
-    /// reuse (<see cref="DecideBootstrapScan"/>) did not rescan, e.g. after a julie-extract schema bump raised the
-    /// expected version — <paramref name="onIncompatible"/> is notified, <paramref name="forceRescan"/> rebuilds
-    /// the DB from scratch with the bundled julie-extract, and the load is retried EXACTLY once. A second
-    /// incompatibility propagates loudly: a freshly-rebuilt DB that is still incompatible means the bundled tool
-    /// does not match this Miller build (an operator/config error a further rescan cannot fix), so we never loop.
-    /// On the happy path neither <paramref name="forceRescan"/> nor <paramref name="onBeforeRetry"/> is invoked, so
-    /// a healthy startup pays no extra scan. <paramref name="onBeforeRetry"/> runs between the rescan and the retry
-    /// load — <see cref="Run"/> wires it to <c>SqliteConnection.ClearAllPools</c> because a force rebuild REPLACES
-    /// the DB file (new inode), so the pooled read-only connection opened by the failed first load still points at
-    /// the OLD inode and would re-read the stale incompatible snapshot; dropping pooled handles makes the retry open
-    /// a fresh connection bound to the rebuilt file. Pure control flow over injected delegates — the unit test
-    /// drives it with fakes; <see cref="Run"/> wires the real loader, runner, and pool barrier.
-    /// </summary>
-    /// <summary>
     /// Bounded-wait acquisition of the workspace single-writer lock for the bootstrap auto-rebuild promote.
     /// Returns <c>null</c> when another instance still holds it after the wait.
     /// </summary>
@@ -730,6 +714,22 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private static readonly TimeSpan AutoRebuildLockWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AutoRebuildLockPollInterval = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// Load the in-memory index, AUTO-HEALING a reused-but-incompatible DB. <paramref name="load"/> runs first; if
+    /// it throws <see cref="IncompatibleExtractException"/> — a stale schema/contract artifact that a root-matching
+    /// reuse (<see cref="DecideBootstrapScan"/>) did not rescan, e.g. after a julie-extract schema bump raised the
+    /// expected version — <paramref name="onIncompatible"/> is notified, <paramref name="forceRescan"/> rebuilds
+    /// the DB from scratch with the bundled julie-extract, and the load is retried EXACTLY once. A second
+    /// incompatibility propagates loudly: a freshly-rebuilt DB that is still incompatible means the bundled tool
+    /// does not match this Miller build (an operator/config error a further rescan cannot fix), so we never loop.
+    /// On the happy path neither <paramref name="forceRescan"/> nor <paramref name="onBeforeRetry"/> is invoked, so
+    /// a healthy startup pays no extra scan. <paramref name="onBeforeRetry"/> runs between the rescan and the retry
+    /// load — <see cref="Run"/> wires it to <c>SqliteConnection.ClearAllPools</c> because a force rebuild REPLACES
+    /// the DB file (new inode), so the pooled read-only connection opened by the failed first load still points at
+    /// the OLD inode and would re-read the stale incompatible snapshot; dropping pooled handles makes the retry open
+    /// a fresh connection bound to the rebuilt file. Pure control flow over injected delegates — the unit test
+    /// drives it with fakes; <see cref="Run"/> wires the real loader, runner, and pool barrier.
+    /// </summary>
     internal static IndexLoadResult<T> LoadIndexWithAutoRebuild<T>(
         Func<T> load,
         Func<long?> forceRescan,

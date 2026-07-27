@@ -48,12 +48,6 @@ public sealed record CanaryRow(
 /// <summary>A follow-up candidate row for attribution: an <c>inspect</c> or <c>content read</c> that succeeded.</summary>
 public sealed record CanaryFollowUp(string Ts, string? WorkspaceId, string TargetHash, long Sequence);
 
-/// <summary>
-/// Reads the machine-global ledger for the canary export and gate. Yields the canary/shadow rows (columns plus
-/// parsed <c>canary_*</c> metadata, including the three served-result hash arrays) and the follow-up rows the
-/// attribution rule joins against. Opens <c>Mode=ReadOnly</c> like <see cref="TelemetryExportReader"/>; a missing
-/// DB or table yields an empty list rather than throwing.
-/// </summary>
 /// <summary>Both sides of the canary success join, read under one ledger snapshot.</summary>
 public sealed record CanaryLedgerSnapshot(
     IReadOnlyList<CanaryRow> CanaryRows,
@@ -62,6 +56,12 @@ public sealed record CanaryLedgerSnapshot(
     public static CanaryLedgerSnapshot Empty { get; } = new([], []);
 }
 
+/// <summary>
+/// Reads the machine-global ledger for the canary export and gate. Yields the canary/shadow rows (columns plus
+/// parsed <c>canary_*</c> metadata, including the three served-result hash arrays) and the follow-up rows the
+/// attribution rule joins against. Opens <c>Mode=ReadOnly</c> like <see cref="TelemetryExportReader"/>; a missing
+/// DB or table yields an empty list rather than throwing.
+/// </summary>
 public static class CanaryLedgerReader
 {
     private const string CanaryColumns =

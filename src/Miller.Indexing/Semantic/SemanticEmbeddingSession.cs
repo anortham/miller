@@ -156,12 +156,6 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     public int RestartCount { get; private set; }
 
     /// <summary>
-    /// Resolves the sidecar's reported model identity against the pinned encoders and returns the fingerprint a
-    /// generation written from this sidecar must carry. A disagreement on any embedding-affecting field is a
-    /// stated refusal, never a coerced match: writing vectors under a fingerprint the sidecar did not produce
-    /// would make the store's generation identity a lie.
-    /// </summary>
-    /// <summary>
     /// <see cref="MatchEncoder(SemanticSidecarHealth, out string?)"/> plus the stricter requirement that the
     /// sidecar loaded the encoder Miller actually selected. Without this, a sidecar serving a different — but
     /// still pinned — encoder passes the handshake and the mismatch only surfaces as a dimension error at
@@ -207,6 +201,12 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             health.DegradedReason);
     }
 
+    /// <summary>
+    /// Resolves the sidecar's reported model identity against the pinned encoders and returns the fingerprint a
+    /// generation written from this sidecar must carry. A disagreement on any embedding-affecting field is a
+    /// stated refusal, never a coerced match: writing vectors under a fingerprint the sidecar did not produce
+    /// would make the store's generation identity a lie.
+    /// </summary>
     public static SemanticEncoderHandshake? MatchEncoder(SemanticSidecarHealth health, out string? refusalReason)
     {
         ArgumentNullException.ThrowIfNull(health);

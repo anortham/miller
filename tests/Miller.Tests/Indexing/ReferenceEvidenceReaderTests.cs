@@ -156,6 +156,94 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
+    public void Read_SpanlessPendingRowDuplicatingASpannedSite_IsNotAvailableAsASecondReference()
+    {
+        using var fixture = SpanlessPendingSiblingFixture(callerScopeSymbolId: FirstCallerId);
+
+        var result = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            FirstTargetId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        var reference = Assert.Single(result.Exact);
+        Assert.True(reference.IsExact);
+        Assert.Equal("target_token", reference.SiteProvenance);
+        Assert.Equal(3, result.Coverage.ExactObserved);
+        Assert.Equal(1, result.Coverage.ExactAvailable);
+        Assert.False(result.Coverage.ExactTruncated);
+    }
+
+    [Fact]
+    public void Read_SpanlessPendingRowWithNoSpannedSiteAtTheSameBinding_StaysAvailable()
+    {
+        using var fixture = SpanlessPendingSiblingFixture(callerScopeSymbolId: SecondCallerId);
+
+        var result = ReferenceEvidenceReader.Read(
+            fixture.DbPath,
+            FirstTargetId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        Assert.Equal(2, result.Coverage.ExactAvailable);
+        Assert.Contains(result.Exact, row => !row.IsExact && row.ContainingSymbolId == SecondCallerId);
+    }
+
+    [Fact]
+    public void ReadOutgoing_SpanlessPendingRowDuplicatingASpannedSite_IsNotAvailableAsASecondReference()
+    {
+        using var fixture = SpanlessPendingSiblingFixture(callerScopeSymbolId: FirstCallerId);
+
+        var result = ReferenceEvidenceReader.ReadOutgoing(
+            fixture.DbPath,
+            FirstCallerId,
+            new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
+
+        var reference = Assert.Single(result.Exact);
+        Assert.True(reference.IsExact);
+        Assert.Equal(FirstTargetId, reference.TargetSymbolId);
+        Assert.Equal(3, result.Coverage.ExactObserved);
+        Assert.Equal(1, result.Coverage.ExactAvailable);
+    }
+
+    private static JulieDbFixture SpanlessPendingSiblingFixture(string callerScopeSymbolId)
+    {
+        var identifier = new JulieDbFixture.IdentifierRow(
+            "identifier-run",
+            "Run",
+            "call",
+            "csharp",
+            "src/Caller.cs",
+            12,
+            FirstCallerId)
+        {
+            StartByte = 120,
+            EndByte = 123,
+            TargetSymbolId = FirstTargetId,
+        };
+        var fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new(FirstTargetId, "Run", "method", "csharp", "src/Target.cs", "void Run()", 1, null),
+                new(FirstCallerId, "Caller", "method", "csharp", "src/Caller.cs", "void Caller()", 1, null),
+                new(SecondCallerId, "Other", "method", "csharp", "src/Caller.cs", "void Other()", 30, null),
+            ],
+            identifiers: [identifier]);
+        fixture.AddIdentifierResolution("identifier-run", FirstTargetId, tier: 2, confidence: 0.95);
+        fixture.AddPendingRelationship(
+            "pending-run",
+            FirstCallerId,
+            "src/Caller.cs",
+            callerScopeSymbolId: callerScopeSymbolId,
+            kind: "calls",
+            targetDisplayName: "Run",
+            targetTerminalName: "Run",
+            startLine: 12,
+            confidence: 0.9);
+        fixture.AddPendingResolution("pending-run", FirstTargetId, tier: 3, confidence: 0.9);
+        return fixture;
+    }
+
+    [Fact]
     public void Read_ContextToolRunShape_Reports632FallbackCandidatesWithoutAttributingThem()
     {
         var identifiers = Enumerable.Range(1, 632)

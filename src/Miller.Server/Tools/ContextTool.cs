@@ -2128,12 +2128,26 @@ public sealed partial class ContextTool
         if (selected.Any(static candidate =>
                 candidate.IsPivot &&
                 candidate.Body is not null &&
+                CarriesImplementation(candidate.Symbol) &&
                 IsAuthoritativeImplementationReason(candidate.Reason)))
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
+        if (selected.Any(static candidate =>
+                candidate.IsPivot &&
+                candidate.Body is not null &&
+                IsAuthoritativeImplementationReason(candidate.Reason)))
+            return new ContextEvidenceDisposition("partial", "pivot_value_declaration_only");
         if (selected.Any(static candidate => candidate.IsPivot))
             return new ContextEvidenceDisposition("partial", "pivot_signature_only");
         return new ContextEvidenceDisposition("insufficient", "no_pivot_rendered");
     }
+
+    /// <summary>
+    /// Whether a rendered body is an implementation rather than a declared value. A constant, variable, field, or
+    /// property body is the value it was assigned, so it can never be the implementation evidence
+    /// <c>sufficient</c> attests to — and a top-ranked one must not tell the caller to stop looking.
+    /// </summary>
+    private static bool CarriesImplementation(IndexedSymbol symbol) =>
+        symbol.Kind is not ("constant" or "variable" or "field" or "property");
 
     private static ContextEvidenceDisposition DispositionForReference(
         IReadOnlyList<ReferenceContextItem> selected)

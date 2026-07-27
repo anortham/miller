@@ -1963,6 +1963,44 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void Context_TopRankedValueDeclarationBody_LeavesBundleShortOfSufficient()
+    {
+        const string script = "SIDECAR_EXTRACT=\"${STAGING}/sidecar\"\n";
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            [
+                new("aa00000000000000000000000000ff01", "SIDECAR_EXTRACT", "constant", "bash",
+                    "scripts/restore-semantic-sidecar.sh", "SIDECAR_EXTRACT=\"${STAGING}/sidecar\"", 1, null)
+                {
+                    BodyStartByte = script.IndexOf("${STAGING}", StringComparison.Ordinal),
+                    BodyEndByte = script.IndexOf("/sidecar", StringComparison.Ordinal),
+                    BodyStartLine = 1,
+                    BodyEndLine = 1,
+                    BodyHash = "sidecar-extract-body-hash",
+                },
+            ],
+            fileContent: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["scripts/restore-semantic-sidecar.sh"] = script,
+            },
+            workspaceId: "ws-value-declaration");
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
+        var tool = new ContextTool(provider);
+
+        string output = tool.Context("SIDECAR_EXTRACT", max_hops: 0, token_budget: 2000);
+
+        Assert.Contains("SIDECAR_EXTRACT", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("evidence=sufficient", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "evidence=partial  reason=pivot_value_declaration_only",
+            output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Context_SemanticSeedAnchorsConceptualQueryWhenServed()
     {
         var (index, _) = BuildFixture();
