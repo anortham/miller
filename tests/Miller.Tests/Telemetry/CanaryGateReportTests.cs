@@ -462,6 +462,40 @@ public sealed class CanaryGateReportTests : IDisposable
         Assert.Empty(CanaryLedgerReader.ReadFollowUps(Db));
     }
 
+    [Fact]
+    public void Render_LedgerThatSwallowedWrites_SaysTheVerdictPopulationIsIncomplete()
+    {
+        var bad = new TelemetryRecord(
+            Tool: "search", Op: null, WorkspaceId: "ws-a", WorkspaceRoot: null,
+            DurationMs: -5, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+        using (var ledger = TelemetryLedger.Open(Db, workspaceId: "ws-a"))
+            ledger.Record(in bad);
+
+        SqliteConnection.ClearAllPools();
+
+        Assert.Equal(1, CanaryGateReport.Compute(Db).DroppedWrites);
+        Assert.Contains(
+            "1 telemetry write(s) were dropped",
+            CanaryGateReport.Render(Db, json: false),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            JsonDocument.Parse(CanaryGateReport.Render(Db, json: true))
+                .RootElement.GetProperty("dropped_writes").GetInt64());
+    }
+
+    [Fact]
+    public void Render_LedgerWithNoDrops_SaysNothingAboutThem()
+    {
+        SqliteConnection.ClearAllPools();
+
+        Assert.Equal(0, CanaryGateReport.Compute(Db).DroppedWrites);
+        Assert.DoesNotContain(
+            "dropped", CanaryGateReport.Render(Db, json: false), StringComparison.Ordinal);
+    }
+
     private sealed record Served(IReadOnlyList<string> Name, IReadOnlyList<string> Path, IReadOnlyList<string> Qualified);
 
     private bool AttributesFollowUp(Served served, string followUpHash)

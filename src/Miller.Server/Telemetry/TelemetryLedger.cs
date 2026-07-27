@@ -43,12 +43,21 @@ public sealed class TelemetryLedger : IDisposable
         CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_tool_ts_id ON tool_telemetry(workspace_id, tool, ts DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_tool_telemetry_tool_duration ON tool_telemetry(tool, duration_ms);
         CREATE INDEX IF NOT EXISTS idx_tool_telemetry_ws_tool_duration ON tool_telemetry(workspace_id, tool, duration_ms);
+        CREATE TABLE IF NOT EXISTS telemetry_drops (
+            process_id TEXT PRIMARY KEY,
+            dropped_writes INTEGER NOT NULL CHECK (dropped_writes >= 0),
+            recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        ) STRICT;
         """;
 
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
     private readonly SqliteCommand _insert;
     private readonly TimeProvider _clock;
+
+    // Identifies this ledger instance's drop tally, so concurrent hosts sharing the file accumulate rather than
+    // overwrite each other. Not the OS pid: a reused pid would silently reset another host's count.
+    private readonly string _processId = Guid.CreateVersion7().ToString();
     private string? _workspaceId;
     private string? _workspaceRoot;
     private bool _disposed;
@@ -477,12 +486,80 @@ public sealed class TelemetryLedger : IDisposable
         }
     }
 
+    /// <summary>
+    /// Persists this process's swallowed-write count so a later reader can see it. <see cref="DroppedWrites"/> is
+    /// an in-process counter that dies with the host, but every analysis that reads the ledger from another
+    /// invocation — the canary gate above all — needs to know the population it is reading may be incomplete.
+    /// Best-effort by the same rule as <see cref="Record"/>: a failure here is itself a drop, never an error.
+    /// </summary>
+    public void FlushDropCount()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+
+            FlushDropCountLocked();
+        }
+    }
+
+    private void FlushDropCountLocked()
+    {
+        if (DroppedWrites == 0)
+            return;
+
+        try
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText =
+                "INSERT INTO telemetry_drops (process_id, dropped_writes) VALUES ($pid, $dropped) " +
+                "ON CONFLICT(process_id) DO UPDATE SET dropped_writes = excluded.dropped_writes, " +
+                "recorded_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');";
+            command.Parameters.AddWithValue("$pid", _processId);
+            command.Parameters.AddWithValue("$dropped", DroppedWrites);
+            command.ExecuteNonQuery();
+        }
+        catch (Exception)
+        {
+            // The ledger is already failing to write; a failed drop-count write changes nothing but the count.
+            unchecked { DroppedWrites++; }
+        }
+    }
+
+    /// <summary>The swallowed-write counts every process has flushed to this ledger, summed.</summary>
+    public static long ReadPersistedDropCount(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        if (!File.Exists(dbPath))
+            return 0;
+
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT COALESCE(SUM(dropped_writes), 0) FROM telemetry_drops;";
+            object? total = command.ExecuteScalar();
+            return total is null or DBNull ? 0 : Convert.ToInt64(total, CultureInfo.InvariantCulture);
+        }
+        catch (SqliteException)
+        {
+            return 0;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
         {
             if (_disposed)
                 return;
+            FlushDropCountLocked();
             _disposed = true;
             _insert.Dispose();
             _connection.Dispose();

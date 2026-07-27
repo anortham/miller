@@ -611,6 +611,56 @@ public sealed class TelemetryLedgerTests : IDisposable
     }
 
     [Fact]
+    public void DroppedWrites_SurviveTheProcessThatSwallowedThem()
+    {
+        var bad = new TelemetryRecord(
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: -5, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            ledger.Record(in bad);
+            ledger.Record(in bad);
+        }
+
+        Assert.Equal(2, TelemetryLedger.ReadPersistedDropCount(_dbPath));
+    }
+
+    [Fact]
+    public void DroppedWrites_FromSeparateLedgerInstances_Accumulate()
+    {
+        var bad = new TelemetryRecord(
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: -5, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+
+        using (var first = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+            first.Record(in bad);
+        using (var second = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+            second.Record(in bad);
+
+        Assert.Equal(2, TelemetryLedger.ReadPersistedDropCount(_dbPath));
+    }
+
+    [Fact]
+    public void DroppedWrites_CleanLedger_PersistsNothing()
+    {
+        var good = new TelemetryRecord(
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: 5, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+            ledger.Record(in good);
+
+        Assert.Equal(0, TelemetryLedger.ReadPersistedDropCount(_dbPath));
+    }
+
+    [Fact]
     public void Measure_IsAppendOnly_AccumulatingRows()
     {
         using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))

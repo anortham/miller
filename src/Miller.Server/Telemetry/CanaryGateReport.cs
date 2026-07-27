@@ -55,7 +55,13 @@ public sealed record CanaryCohortGate(
         && Shadow.Verdict == CanaryClauseVerdict.Pass;
 }
 
-public sealed record CanaryGate(IReadOnlyList<CanaryCohortGate> Cohorts);
+/// <param name="DroppedWrites">
+/// Telemetry rows that failed to persist and were swallowed, summed across every process that flushed a count
+/// to this ledger. The gate reads whatever reached the ledger, so a non-zero value means the population behind
+/// every verdict below is incomplete by an unknown, possibly arm-correlated amount. Reported, not enforced:
+/// choosing a drop rate that should block a promotion is a policy call, not a measurement.
+/// </param>
+public sealed record CanaryGate(IReadOnlyList<CanaryCohortGate> Cohorts, long DroppedWrites = 0);
 
 /// <summary>
 /// The contract-selected local-authoritative canary gate. Reads raw <c>tool_telemetry</c> rows, computes
@@ -126,7 +132,7 @@ public static class CanaryGateReport
             });
         }
 
-        return new CanaryGate(cohorts);
+        return new CanaryGate(cohorts, TelemetryLedger.ReadPersistedDropCount(dbPath));
     }
 
     private static void ValidateContractVersion(int contractVersion)
@@ -235,6 +241,7 @@ public static class CanaryGateReport
             w.WriteStartObject();
             w.WriteString("experiment_id", CanaryAssignment.HybridExperimentId);
             w.WriteNumber("canary_contract_version", contractVersion);
+            w.WriteNumber("dropped_writes", gate.DroppedWrites);
             w.WriteStartArray("cohorts");
             foreach (CanaryCohortGate cohort in gate.Cohorts)
             {
@@ -286,14 +293,21 @@ public static class CanaryGateReport
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
+    private static string DroppedWritesCaveat(CanaryGate gate) =>
+        gate.DroppedWrites == 0
+            ? string.Empty
+            : $"\nwarning: {gate.DroppedWrites.ToString(CultureInfo.InvariantCulture)} telemetry write(s) were " +
+              "dropped on this ledger; the population behind every verdict below is incomplete.";
+
     private static string RenderHuman(CanaryGate gate)
     {
         if (gate.Cohorts.Count == 0)
-            return "canary gate: no canary rows in the ledger.";
+            return "canary gate: no canary rows in the ledger." + DroppedWritesCaveat(gate);
 
         var sb = new StringBuilder();
         sb.Append("canary gate (").Append(CanaryAssignment.HybridExperimentId)
-            .Append(") — local, authoritative. Reported per complete semantic-identity cohort.");
+            .Append(") — local, authoritative. Reported per complete semantic-identity cohort.")
+            .Append(DroppedWritesCaveat(gate));
 
         foreach (CanaryCohortGate cohort in gate.Cohorts)
         {
