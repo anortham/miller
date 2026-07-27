@@ -22,7 +22,7 @@ public sealed class ContentCorpusExportReader
 
         using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = BuildExportQuery(connection);
+        command.CommandText = BuildExportQuery(connection, kind);
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
 
@@ -57,7 +57,7 @@ public sealed class ContentCorpusExportReader
         string? workspace = string.IsNullOrWhiteSpace(workspaceId) ? null : workspaceId.Trim();
         using var connection = SqliteReadOnlyAccess.Open(contentDbPath);
         using var command = connection.CreateCommand();
-        command.CommandText = BuildExportQuery(connection);
+        command.CommandText = BuildExportQuery(connection, kind);
         command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
         command.Parameters.AddWithValue("$workspace", (object?)workspace ?? DBNull.Value);
 
@@ -149,7 +149,7 @@ public sealed class ContentCorpusExportReader
             reader.GetString(22));
     }
 
-    private static string BuildExportQuery(SqliteConnection connection)
+    private static string BuildExportQuery(SqliteConnection connection, string? requestedKind)
     {
         IReadOnlySet<string> sourceColumns = ReadColumns(connection, "content_sources");
         IReadOnlySet<string> chunkColumns = ReadColumns(connection, "content_chunks");
@@ -164,7 +164,7 @@ public sealed class ContentCorpusExportReader
             ? "($workspace IS NULL OR s.workspace_id = $workspace)"
             : "$workspace IS NULL";
         return $"""
-            SELECT {ReadSchemaVersion(connection)},
+            SELECT {ReadSchemaVersion(connection, requestedKind)},
                    {Source("workspace_id", "NULL")},
                    {Source("workspace_revision", "NULL")},
                    {Chunk("source_id", "''")},
@@ -209,14 +209,40 @@ public sealed class ContentCorpusExportReader
         return columns;
     }
 
-    private static int ReadSchemaVersion(SqliteConnection connection)
+    /// <summary>
+    /// Read <c>content_meta.schema_version</c> and REFUSE anything that is not this build's contract.
+    /// </summary>
+    /// <remarks>
+    /// The column probing below exists for additive forward-compatible columns within a version, never as a
+    /// substitute for the contract itself: without this gate an older corpus exports rows that look complete
+    /// (paths, kinds, line ranges, hashes) while the SQL fallbacks invent fields that never existed on disk.
+    /// Export is the multi-workspace feed consumers treat as authoritative during exactly the upgrade window
+    /// where sidecar ages are heterogeneous, so it fails closed like the symbols.db schema gate rather than
+    /// emitting filled-in defaults.
+    ///
+    /// Scoped to workspace kinds on purpose. Workspace source/docs/config rows are derived from symbols.db, so a
+    /// synthesized column there is a fabricated extraction fact. External and web imports are self-contained
+    /// text with no symbols.db counterpart, and recovering imported text out of an older corpus is a legitimate
+    /// affordance rather than invented data.
+    /// </remarks>
+    private static int ReadSchemaVersion(SqliteConnection connection, string? requestedKind)
     {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT schema_version FROM content_meta LIMIT 1;";
         object? value = command.ExecuteScalar();
         if (value is null or DBNull)
             throw new InvalidOperationException("content.db content_meta has no schema_version.");
-        return checked(Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture));
+
+        int schemaVersion = checked(Convert.ToInt32(value, System.Globalization.CultureInfo.InvariantCulture));
+        if (schemaVersion != ContentCorpusSchema.SchemaVersion && IncludesWorkspaceKinds(requestedKind))
+        {
+            throw new IncompatibleExtractException(
+                $"content.db schema_version {schemaVersion} is not the supported version " +
+                $"{ContentCorpusSchema.SchemaVersion}; workspace content export would synthesize columns that " +
+                "were never extracted. Rebuild the content corpus before exporting workspace kinds.");
+        }
+
+        return schemaVersion;
     }
 
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)
@@ -230,6 +256,14 @@ public sealed class ContentCorpusExportReader
         if (value is null) writer.WriteNull(name);
         else writer.WriteNumber(name, value.Value);
     }
+
+    /// <summary>Whether this export can emit rows derived from <c>symbols.db</c>. A null kind exports every
+    /// kind, so it necessarily includes them.</summary>
+    private static bool IncludesWorkspaceKinds(string? requestedKind) =>
+        requestedKind is null
+        || requestedKind == TextContentKind.WorkspaceSource
+        || requestedKind == TextContentKind.WorkspaceDocs
+        || requestedKind == TextContentKind.WorkspaceConfig;
 
     private static string? NormalizeKind(string? contentKind)
     {

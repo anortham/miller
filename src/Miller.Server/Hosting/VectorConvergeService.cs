@@ -559,7 +559,7 @@ public sealed class VectorConvergeService : BackgroundService
         ArgumentNullException.ThrowIfNull(port);
         ArgumentNullException.ThrowIfNull(diskGate);
 
-        var state = new DrainState(rebuilder, diskGate);
+        var state = new DrainState(rebuilder, diskGate, _signal.TakeFullRebuild());
         VectorCursorOutcome symbols = await DrainCursorAsync(
             port, embedding, VectorUnitKind.Symbol, state, cancellationToken).ConfigureAwait(false);
 
@@ -700,6 +700,7 @@ public sealed class VectorConvergeService : BackgroundService
                 DeltaHistoryComplete = snapshot.DeltaHistoryComplete,
                 ArtifactIdChanged = !string.Equals(
                     snapshot.ArtifactId, port.Meta("artifact_id"), StringComparison.Ordinal),
+                FullRebuildSignalled = state.FullRebuildSignalled,
                 IdentityAction = MillerSemanticContract.ClassifyChange(
                     port.StoredIdentity, MillerSemanticContract.PinnedIdentity(_sidecar.Encoder)),
                 DeferredPaths = deferredPaths,
@@ -1023,9 +1024,17 @@ public sealed class VectorConvergeService : BackgroundService
 
     /// <summary>Per-wake state shared by the two cursors: the shadow arm is attempted at most once, a promote
     /// ends the drain, and a disk refusal is remembered so the pause is resolved once at the end.</summary>
-    private sealed class DrainState(IVectorShadowRebuilder? rebuilder, DiskGate diskGate)
+    private sealed class DrainState(
+        IVectorShadowRebuilder? rebuilder, DiskGate diskGate, bool fullRebuildSignalled = false)
     {
         public IVectorShadowRebuilder? Rebuilder { get; } = rebuilder;
+
+        /// <summary>
+        /// The indexer's own report that this wake follows a full rebuild, consumed once per drain so every
+        /// cursor sees it. Independent of the artifact-id comparison on purpose: that comparison is one reading
+        /// of the artifact, while this is the writer stating what it just did.
+        /// </summary>
+        public bool FullRebuildSignalled { get; } = fullRebuildSignalled;
 
         public DiskGate DiskGate { get; } = diskGate;
 

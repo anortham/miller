@@ -31,6 +31,12 @@ public enum VectorEscalationTrigger
 
     /// <summary>The per-revision commit would be too large for one short transaction.</summary>
     BatchTooLarge,
+
+    /// <summary>The indexer signalled a full rebuild, independent of any identity comparison.</summary>
+    FullRebuildSignalled,
+
+    /// <summary>The live revision moved BACKWARDS under the stored cursor — only a promote does that.</summary>
+    RevisionRegressed,
 }
 
 /// <summary>One live corpus unit as the writer currently constructs it.</summary>
@@ -72,6 +78,14 @@ public sealed record VectorConvergeRequest
 
     /// <summary>True when the <c>symbols.db</c> artifact identity moved under the stored generation.</summary>
     public bool ArtifactIdChanged { get; init; }
+
+    /// <summary>
+    /// True when the indexer reported that this target came from a full rebuild. Independent of
+    /// <see cref="ArtifactIdChanged"/> on purpose: the identity comparison is one reading of the artifact and
+    /// can be defeated by an unreadable or coincidentally-equal id, whereas this is the writer stating what it
+    /// just did.
+    /// </summary>
+    public bool FullRebuildSignalled { get; init; }
 
     /// <summary>The invalidation matrix's verdict on the stored generation identity versus this writer's.</summary>
     public InvalidationAction IdentityAction { get; init; } = InvalidationAction.None;
@@ -344,6 +358,13 @@ public static class VectorConvergePlanner
             return VectorEscalationTrigger.DeltaHistoryMissing;
         if (request.ArtifactIdChanged)
             return VectorEscalationTrigger.ArtifactIdChanged;
+        if (request.FullRebuildSignalled)
+            return VectorEscalationTrigger.FullRebuildSignalled;
+        // A promote restarts julie's revision counter, so the live revision can land BELOW the stored cursor.
+        // Without this the planner sees TargetRevision <= CompletedRevision, plans nothing, and the corpus stays
+        // pinned to a generation that no longer exists.
+        if (request.TargetRevision < request.CompletedRevision)
+            return VectorEscalationTrigger.RevisionRegressed;
         if (request.IdentityAction is InvalidationAction.ShadowRebuild)
             return VectorEscalationTrigger.IdentityChanged;
         return VectorEscalationTrigger.None;

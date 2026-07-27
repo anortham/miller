@@ -113,6 +113,40 @@ public sealed class VectorConvergePlannerTests
     }
 
     [Fact]
+    public void Plan_FullRebuildSignalled_EscalatesEvenWhenArtifactIdStillMatches()
+    {
+        // The artifact-id comparison is one reading of the artifact and can be defeated by an unreadable or
+        // coincidentally-equal id. The indexer's own report that it just rebuilt must escalate on its own.
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(
+            Request([Unit("a", "src/A.cs", "x")], []) with
+            {
+                ArtifactIdChanged = false,
+                FullRebuildSignalled = true,
+            });
+
+        Assert.Equal(VectorEscalationTrigger.FullRebuildSignalled, plan.Trigger);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, plan.Decision);
+    }
+
+    [Fact]
+    public void Plan_LiveRevisionBelowCompletedCursor_EscalatesInsteadOfPlanningNothing()
+    {
+        // A promote restarts julie's revision counter, so the live revision lands BELOW the stored cursor.
+        // Without an escalation the planner takes the TargetRevision <= CompletedRevision no-op branch and the
+        // corpus stays pinned to a generation that no longer exists.
+        VectorConvergePlan plan = VectorConvergePlanner.Plan(
+            Request([Unit("a", "src/A.cs", "x")], []) with
+            {
+                CompletedRevision = 5000,
+                TargetRevision = 1,
+                ArtifactIdChanged = false,
+            });
+
+        Assert.Equal(VectorEscalationTrigger.RevisionRegressed, plan.Trigger);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, plan.Decision);
+    }
+
+    [Fact]
     public void Plan_ShadowRebuildIdentityChange_EscalatesButTargetedReEmbedDoesNot()
     {
         VectorConvergeRequest request = Request(

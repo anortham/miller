@@ -143,6 +143,29 @@ public sealed class ContentCorpusExportReaderTests : IDisposable
         Assert.Equal(JsonValueKind.Null, row.GetProperty("url").ValueKind);
     }
 
+    [Fact]
+    public void ExportJsonLines_LegacySchemaAndWorkspaceKind_FailsClosedInsteadOfSynthesizingColumns()
+    {
+        using var fixture = WriteWorkspaceContent();
+        using (var connection = new SqliteConnection($"Data Source={_contentDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE content_meta SET schema_version = 1;";
+            command.ExecuteNonQuery();
+        }
+
+        // Workspace rows are derived from symbols.db, so a SQL fallback there fabricates an extraction fact.
+        // External imports keep their legacy recovery path; these must not.
+        Assert.Throws<IncompatibleExtractException>(() => new ContentCorpusExportReader().ExportJsonLines(
+            _contentDbPath,
+            contentKind: TextContentKind.WorkspaceSource));
+
+        // A whole-corpus export necessarily includes workspace kinds, so it fails closed too.
+        Assert.Throws<IncompatibleExtractException>(() =>
+            new ContentCorpusExportReader().ExportJsonLines(_contentDbPath));
+    }
+
     private JulieDbFixture WriteWorkspaceContent()
     {
         const string sourceText = """
