@@ -902,10 +902,13 @@ public sealed class TraceTool
             string? candidateNote = candidateContinuation is not null
                 ? "reference page truncated by the 12 KiB output budget; continue with the returned token."
                 : candidateLimitTruncated
-                    ? "reference trace truncated by limit."
+                    ? LimitTruncatedNote(candidateServableAvailable)
                     : candidateFallbackSuppressed
                         ? FallbackSuppressionNote(evidence.Coverage)
                         : null;
+            IReadOnlyList<TraceNextAction> candidateNextActions = candidateLimitTruncated
+                ? RefsLimitTruncatedNextActions(target, normalizedKind, candidateServableAvailable)
+                : [];
             string? candidateDiagnosticCode = candidateContinuation is not null
                 ? "output_page_truncated"
                 : candidateLimitTruncated
@@ -928,6 +931,7 @@ public sealed class TraceTool
                 includeDefinition,
                 candidateNote,
                 candidateDiagnosticCode,
+                candidateNextActions,
                 continuation: candidateContinuation);
             if (Encoding.UTF8.GetByteCount(candidateJson) <= MaxReferencePageBytes)
                 break;
@@ -995,8 +999,14 @@ public sealed class TraceTool
                      ? evidence.Coverage.FallbackAvailable
                      : 0))
         {
-            resultNote = "reference trace truncated by limit.";
+            int reachableLimit =
+                evidence.Coverage.ExactAvailable +
+                (evidence.Coverage.FallbackStatus == ReferenceFallbackStatus.Available
+                    ? evidence.Coverage.FallbackAvailable
+                    : 0);
+            resultNote = LimitTruncatedNote(reachableLimit);
             diagnosticCode = "limit_truncated";
+            resultNextActions = RefsLimitTruncatedNextActions(target, normalizedKind, reachableLimit);
         }
 
         if (json)
@@ -2082,6 +2092,37 @@ public sealed class TraceTool
             ("mode", "source")));
 
         return actions.Take(5).ToArray();
+    }
+
+    private static string LimitTruncatedNote(int reachableLimit) =>
+        $"reference trace truncated by limit. {reachableLimit} reference(s) available — " +
+        $"re-run with limit={reachableLimit.ToString(CultureInfo.InvariantCulture)} to see them all.";
+
+    private static IReadOnlyList<TraceNextAction> RefsLimitTruncatedNextActions(
+        string target,
+        string? normalizedKind,
+        int reachableLimit)
+    {
+        var args = new List<(string, string)>
+        {
+            ("target", target),
+            ("mode", "refs"),
+            ("limit", reachableLimit.ToString(CultureInfo.InvariantCulture)),
+        };
+        if (normalizedKind is not null)
+            args.Add(("reference_kind", normalizedKind));
+
+        return
+        [
+            NextAction(
+                "trace",
+                "raise the limit to return every available reference in one call",
+                [.. args]),
+            NextAction(
+                "impact",
+                "assess the full blast radius instead of enumerating references",
+                ("target", target)),
+        ];
     }
 
     private static IReadOnlyList<TraceNextAction> RefsEmptyNextActions(string target) =>

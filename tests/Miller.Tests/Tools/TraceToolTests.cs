@@ -1165,6 +1165,88 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Refs_Json_LimitTruncationOffersAReachableHigherLimit()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        ReferenceEvidence[] references = Enumerable.Range(1, 39)
+            .Select(line => new ReferenceEvidence(
+                "a",
+                null,
+                $"src/Caller{line}.cs",
+                line,
+                1,
+                line,
+                6,
+                line * 10,
+                line * 10 + 5,
+                ReferenceKind.Call,
+                "call",
+                ReferenceEvidenceSource.IdentifierDirect,
+                null,
+                1,
+                ReferenceResolutionStatus.Exact,
+                "csharp",
+                $"site:caller:{line}",
+                true,
+                "target_token"))
+            .ToArray();
+        var snapshot = new ReferenceEvidenceSnapshot("artifact", 42);
+        ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
+        {
+            ReferenceEvidence[] page = references
+                .Skip(query.ExactOffset)
+                .Take(query.Bounds.ExactLimit)
+                .ToArray();
+            return new ReferenceEvidenceSet(
+                page,
+                [],
+                new ReferenceEvidenceCoverage(
+                    references.Length,
+                    references.Length,
+                    page.Length,
+                    0,
+                    0,
+                    1,
+                    references.Length > query.ExactOffset + page.Length,
+                    false,
+                    ReferenceFallbackStatus.NoCandidates),
+                snapshot);
+        }
+
+        string json = TraceTool.Run(
+            index,
+            ResolverFor(index),
+            target: "Alpha",
+            scope: null,
+            mode: "refs",
+            to: null,
+            depth: 3,
+            limit: 5,
+            fullFormat: false,
+            json: true,
+            referenceKind: null,
+            includeDefinition: true,
+            readReferenceEvidence: ReadPage,
+            workspaceId: "workspace",
+            snapshot,
+            continuation: null,
+            out _,
+            out _);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal("limit_truncated", document.RootElement.GetProperty("diagnostics")[0].GetProperty("code").GetString());
+        Assert.Equal(39, document.RootElement.GetProperty("reference_coverage").GetProperty("exact_available").GetInt32());
+
+        JsonElement actions = document.RootElement.GetProperty("next_actions");
+        Assert.NotEqual(0, actions.GetArrayLength());
+        JsonElement retry = actions.EnumerateArray().Single(action => action.GetProperty("tool").GetString() == "trace");
+        int suggestedLimit = int.Parse(retry.GetProperty("args").GetProperty("limit").GetString()!);
+        Assert.True(suggestedLimit >= 39, $"suggested limit {suggestedLimit} cannot reach all 39 references");
+    }
+
+    [Fact]
     public void Refs_Json_LimitTruncationNeverEscapesTwelveKiBBudget()
     {
         var index = BuildSymbolIndex(
