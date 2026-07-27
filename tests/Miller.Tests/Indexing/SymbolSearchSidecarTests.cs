@@ -668,6 +668,34 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         Assert.False(TableExists(searchDb, "incremental_sentinel"));
     }
 
+    [Fact]
+    public void EnsureCurrent_UnreadableSymbolsDb_LeavesTheSidecarAloneWhileTryOpenRefusesToServeIt()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+
+        string quarantined = julie.DbPath + ".moved";
+        File.Move(julie.DbPath, quarantined);
+        File.WriteAllText(julie.DbPath, "not sqlite");
+
+        try
+        {
+            // The two gates read the same unprovable identity and reach OPPOSITE verdicts on purpose. A build
+            // gate cannot rebuild from a source it cannot read, so it must leave the sidecar alone; a read gate
+            // must not serve what it cannot prove, because a lock is likeliest during the promote that changes
+            // the generation.
+            Assert.False(sidecar.EnsureCurrent(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+            Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 1));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(julie.DbPath);
+            File.Move(quarantined, julie.DbPath);
+        }
+    }
+
     private static void DeleteSymbolsArtifactId(string symbolsDb)
     {
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder

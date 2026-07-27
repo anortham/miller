@@ -7,12 +7,15 @@ namespace Miller.Tests.Indexing;
 public sealed class SymbolsArtifactIdentityTests
 {
     [Fact]
-    public void MatchesArtifact_UnreadableArtifact_ProvesNothingAndKeepsServing()
+    public void MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration()
     {
+        // A lock is most likely during the promote whose rename is the very moment the generations differ, so
+        // reading "cannot prove" as "keep serving" would fail open exactly when it matters. A refusal is loud
+        // and self-healing; a stale answer is silent and permanent. Build gates relax this themselves.
         var unreadable = SymbolsArtifactIdentity.Unprovable(7);
 
-        Assert.True(unreadable.MatchesArtifact(null));
-        Assert.True(unreadable.MatchesArtifact("artifact-anything"));
+        Assert.False(unreadable.MatchesArtifact(null));
+        Assert.False(unreadable.MatchesArtifact("artifact-anything"));
     }
 
     [Fact]
@@ -121,8 +124,8 @@ public sealed class SymbolsArtifactIdentityTests
     }
 
     [Fact]
-    public void MatchesArtifact_ExistingButUnreadableArtifact_KeepsServingRatherThanFailingOnATransientLock() =>
-        Assert.True(SymbolsArtifactIdentity.Unprovable(7).Matches(7, "artifact-anything"));
+    public void Matches_UnreadableArtifactAtTheSameRevision_StillRefuses() =>
+        Assert.False(SymbolsArtifactIdentity.Unprovable(7).Matches(7, "artifact-anything"));
 
     private static void Exec(string dbPath, string sql)
     {

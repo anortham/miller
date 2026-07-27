@@ -285,7 +285,7 @@ public sealed class SymbolSearchSidecar
         long? stampedRevision = ReadFreshArtifactRevision(
             searchDbPath, RegionOptions, out corruptionReason, out string? stampedArtifactId);
         if (stampedRevision is not null &&
-            ReadSymbolsIdentity(symbolsDbPath, revision).Matches(stampedRevision.Value, stampedArtifactId))
+            BuildGateAgrees(ReadSymbolsIdentity(symbolsDbPath, revision), stampedRevision.Value, stampedArtifactId))
         {
             return false;
         }
@@ -320,7 +320,7 @@ public sealed class SymbolSearchSidecar
         long? artifactRevision = ReadFreshArtifactRevision(
             searchDbPath, RegionOptions, out corruptionReason, out string? stampedArtifactId);
         SymbolsArtifactIdentity identity = ReadSymbolsIdentity(symbolsDbPath, revision);
-        if (artifactRevision is not null && identity.Matches(artifactRevision.Value, stampedArtifactId))
+        if (artifactRevision is not null && BuildGateAgrees(identity, artifactRevision.Value, stampedArtifactId))
             return false;
 
         // A sidecar built from a DIFFERENT artifact generation cannot be advanced by julie's changed-file delta:
@@ -329,7 +329,7 @@ public sealed class SymbolSearchSidecar
         // come from MatchesArtifact, not a raw null check on the id: an artifact_metadata table that exists but
         // yields no id also has a null id, and a raw check would apply a delta to a generation the read gates
         // then refuse to serve.
-        bool sameArtifact = identity.MatchesArtifact(stampedArtifactId);
+        bool sameArtifact = BuildGateAgrees(identity, stampedArtifactId);
 
         if (artifactRevision is null || artifactRevision.Value > revision || !sameArtifact)
         {
@@ -379,6 +379,20 @@ public sealed class SymbolSearchSidecar
     /// paired with the extract's current <c>artifact_id</c>. An unreadable source yields a null id, which
     /// <see cref="SymbolsArtifactIdentity.Matches"/> degrades to the historical revision-only comparison.
     /// </summary>
+    /// <summary>
+    /// The build-gate reading of <see cref="SymbolsArtifactIdentity.MatchesArtifact"/>. Read gates refuse what
+    /// they cannot prove, because serving a superseded generation is silent and permanent. A build gate has the
+    /// opposite obligation: it cannot rebuild from a source it cannot read, so an unreadable artifact must mean
+    /// "leave the sidecar alone until the next pass" rather than "rebuild now" — which would only fail harder.
+    /// A MISSING artifact is not relaxed; there is nothing to converge against.
+    /// </summary>
+    private static bool BuildGateAgrees(SymbolsArtifactIdentity identity, string? stampedArtifactId) =>
+        identity.StampState == ArtifactStampState.Unreadable || identity.MatchesArtifact(stampedArtifactId);
+
+    private static bool BuildGateAgrees(
+        SymbolsArtifactIdentity identity, long stampedRevision, string? stampedArtifactId) =>
+        stampedRevision == identity.Revision && BuildGateAgrees(identity, stampedArtifactId);
+
     private static SymbolsArtifactIdentity ReadSymbolsIdentity(string symbolsDbPath, long revision)
     {
         try

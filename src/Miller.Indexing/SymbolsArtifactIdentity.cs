@@ -87,27 +87,29 @@ public readonly record struct SymbolsArtifactIdentity(
     /// A sidecar written before artifact stamping existed carries a null id and can never be proven current, so
     /// it reports stale and rebuilds exactly once.
     ///
-    /// An artifact with no id of its own splits four ways. A provably absent <c>artifact_metadata</c> table is a
-    /// genuine pre-stamping extract: it falls back to revision equality rather than rebuilding forever, but only
-    /// for an equally pre-stamping sidecar — a sidecar that DOES carry a stamp contradicts it, because whatever
-    /// stamped it read an artifact that had metadata. A metadata table that exists but carries no
-    /// <c>artifact_id</c> is something the pinned extractor never emits, so it is refused rather than trusted. An
-    /// unreadable artifact proves nothing either way and keeps serving. A MISSING artifact is not ambiguous at
-    /// all: there is no generation for the sidecar to belong to, so it is refused.
+    /// This is the READ verdict, so it answers "is this PROVED to be the same generation" and refuses everything
+    /// it cannot prove. An artifact that is missing, or that exists but cannot be read, proves nothing — and an
+    /// unreadable artifact is most likely to be encountered during the promote whose rename is the very moment
+    /// the generations differ, so treating "cannot read" as "keep serving" would fail open exactly when it
+    /// matters. A refusal here is loud and self-healing; a stale answer is silent and permanent.
+    ///
+    /// An artifact with no id of its own splits two further ways. A provably absent <c>artifact_metadata</c>
+    /// table is a genuine pre-stamping extract: it falls back to revision equality rather than rebuilding
+    /// forever, but only for an equally pre-stamping sidecar — a sidecar that DOES carry a stamp contradicts it,
+    /// because whatever stamped it read an artifact that had metadata. A metadata table that exists but carries
+    /// no <c>artifact_id</c> is something the pinned extractor never emits, so it is refused rather than trusted.
+    ///
+    /// A BUILD gate must not reuse this verdict for the unreadable case: it cannot rebuild from a source it
+    /// cannot read, so "unprovable" has to mean "leave it alone" there. That relaxation belongs at those call
+    /// sites, stated explicitly, rather than being folded in here where every reader would inherit it.
     /// </remarks>
     public bool MatchesArtifact(string? stampedArtifactId)
     {
-        if (StampState == ArtifactStampState.SourceMissing)
-            return false;
         if (ArtifactId is not null)
-            return string.Equals(stampedArtifactId, ArtifactId, StringComparison.Ordinal);
+            return StampState != ArtifactStampState.SourceMissing
+                   && string.Equals(stampedArtifactId, ArtifactId, StringComparison.Ordinal);
 
-        return StampState switch
-        {
-            ArtifactStampState.Unreadable => true,
-            ArtifactStampState.Absent => stampedArtifactId is null,
-            _ => false,
-        };
+        return StampState == ArtifactStampState.Absent && stampedArtifactId is null;
     }
 
     /// <summary>

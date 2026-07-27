@@ -8,6 +8,13 @@ namespace Miller.Tests.Indexing;
 
 public sealed class FtsRegionSearchIndexTests : IDisposable
 {
+    // Production always stamps the sidecar from the artifact it was built from, and the read gate compares the
+    // two. A fixture that stamps nothing would exercise a shape Miller never writes.
+    private const string LiveArtifactId = "artifact-live";
+
+    private static readonly SymbolsArtifactIdentity LiveIdentity =
+        new(7, LiveArtifactId, ArtifactStampState.Present);
+
     private readonly string _dir;
     private readonly string _dbPath;
 
@@ -36,7 +43,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             },
             symbols: new[] { ("sym-comment", "CommentOwner"), ("sym-code-only", "HiddenTodoMarker") });
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("HiddenTodoMarker", new HashSet<string> { "comment" }, limit: 10, excludeTests: false);
 
@@ -59,7 +66,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("comment-1", "comment", "src/Config.cs", 4,
                 "// literalSecret is also mentioned in a comment"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("literalSecret", new HashSet<string> { "string_literal" }, limit: 10, excludeTests: false);
 
@@ -77,7 +84,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("doc-1", "doc_comment", "src/Two.cs", 8, "/// migration documentation"),
             Region("string-1", "string_literal", "src/Three.cs", 10, "\"migration string\""));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var unionHits = index.Search("migration", new HashSet<string> { "comment", "doc_comment" }, 10, false);
         var commentOnlyHits = index.Search("migration", new HashSet<string> { "comment" }, 10, false);
@@ -93,7 +100,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("prod-1", "comment", "src/Widget.cs", 3, "// fixture token in production"),
             Region("test-1", "comment", "tests/WidgetTests.cs", 4, "// fixture token in test"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var all = index.Search("fixture", new HashSet<string> { "comment" }, 10, excludeTests: false);
         var filtered = index.Search("fixture", new HashSet<string> { "comment" }, 10, excludeTests: true);
@@ -110,7 +117,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("a", "comment", "src/A.cs", 5, "// same rank term"),
             Region("c", "comment", "src/A.cs", 6, "// same rank term"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("same rank", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -125,7 +132,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("alpha-only", "comment", "src/Alpha.cs", 4, "// alpha alone"),
             Region("beta-only", "comment", "src/Beta.cs", 5, "// beta alone"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -140,7 +147,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("reversed", "comment", "src/Reversed.cs", 3, "// beta appears before alpha"),
             Region("partial", "comment", "src/Partial.cs", 4, "// alpha alone"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -153,7 +160,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     {
         WriteSearchDb(Region("single", "comment", "src/Single.cs", 3, "// alpha beta once"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7));
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity);
 
         var hits = index.Search("alpha alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -167,7 +174,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         string missing = Path.Combine(_dir, "missing.db");
 
         var ex = Assert.Throws<FileNotFoundException>(() =>
-            FtsRegionSearchIndex.Open(missing, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(missing, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("search.db", ex.Message);
     }
@@ -178,7 +185,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// stale"), revision: 6);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("revision", ex.Message);
         Assert.Contains("expected 7", ex.Message);
@@ -190,7 +197,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// old schema"), schemaVersion: 2);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("schema_version", ex.Message);
         Assert.Contains(SearchIndexWriter.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), ex.Message);
@@ -202,7 +209,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// future schema"), schemaVersion: SearchIndexWriter.SchemaVersion + 1);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("schema_version", ex.Message);
         Assert.Contains(SearchIndexWriter.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), ex.Message);
@@ -220,14 +227,16 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
                 schema_version INTEGER,
                 region_count INTEGER,
                 region_avgdl REAL,
-                region_index_enabled INTEGER);
+                region_index_enabled INTEGER,
+                artifact_id TEXT);
             INSERT INTO meta(
-                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
-            VALUES (7, 0, 0.0, {SearchIndexWriter.SchemaVersion}, 0, 0.0, 1);
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled,
+                artifact_id)
+            VALUES (7, 0, 0.0, {SearchIndexWriter.SchemaVersion}, 0, 0.0, 1, '{LiveArtifactId}');
             """);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("regions_fts", ex.Message);
     }
@@ -256,7 +265,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             """);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, SymbolsArtifactIdentity.Unprovable(7)));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, LiveIdentity));
 
         Assert.Contains("meta", ex.Message);
     }
@@ -310,7 +319,8 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
                 schema_version INTEGER,
                 region_count INTEGER,
                 region_avgdl REAL,
-                region_index_enabled INTEGER);
+                region_index_enabled INTEGER,
+                artifact_id TEXT);
             """);
 
         if (symbols is not null)
@@ -384,13 +394,15 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         using var metaCommand = connection.CreateCommand();
         metaCommand.CommandText = """
             INSERT INTO meta(
-                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
-            VALUES ($revision, 0, 0.0, $schemaVersion, $regionCount, $regionAvgdl, 1);
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled,
+                artifact_id)
+            VALUES ($revision, 0, 0.0, $schemaVersion, $regionCount, $regionAvgdl, 1, $artifactId);
             """;
         metaCommand.Parameters.AddWithValue("$revision", revision);
         metaCommand.Parameters.AddWithValue("$schemaVersion", schemaVersion);
         metaCommand.Parameters.AddWithValue("$regionCount", regions.Length);
         metaCommand.Parameters.AddWithValue("$regionAvgdl", avgdl);
+        metaCommand.Parameters.AddWithValue("$artifactId", LiveArtifactId);
         metaCommand.ExecuteNonQuery();
     }
 
