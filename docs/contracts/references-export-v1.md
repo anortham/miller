@@ -1,6 +1,9 @@
 # References Export Contract v1
 
-Status: active Eros-facing JSONL export contract.
+Status: **superseded by [`references-export-v2.md`](references-export-v2.md)** as of Miller 1.14.0. This
+document describes the schema-1 export emitted against julie-extract schema 4 / extract contract 3, and is
+retained only as a historical record. `miller references export --jsonl` now emits schema 2; read v2 for the
+active contract.
 
 `miller references export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits deterministic usage facts
 from one workspace's `identifiers` table. The export is a raw fact feed, not a dead-code verdict. Per the

@@ -73,7 +73,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/trace-json-v1.md`](contracts/trace-json-v1.md) - active trace JSON contract for path/refs/bridge output and additive `next_actions`.
 - [`contracts/content-corpus-v1.md`](contracts/content-corpus-v1.md) - active content corpus schema/export contract.
 - [`contracts/content-mcp-v3.md`](contracts/content-mcp-v3.md) - active 12 KiB MCP contract, revision-safe search/read, and CLI-only streaming export boundary.
-- [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - active references/usage JSONL export contract.
+- [`contracts/references-export-v2.md`](contracts/references-export-v2.md) - active references/usage JSONL export contract (schema 2; requires julie-extract schema 5 / extract contract 4).
+- [`contracts/references-export-v1.md`](contracts/references-export-v1.md) - superseded schema-1 export contract, retained as a historical record.
 - [`contracts/references-candidates-v1.md`](contracts/references-candidates-v1.md) - experimental, evidence-gated dead-code candidate listing CLI contract (`references candidates`).
 - [`contracts/patterns-json-v1.md`](contracts/patterns-json-v1.md) - active compact and JSON contract for exact pattern coverage, query fan-out, grouping, ordering, budgets, and diagnostics.
 - [`contracts/metrics-json-v1.md`](contracts/metrics-json-v1.md) - active metrics JSON contract for churn, clone groups, and complexity ranking.
