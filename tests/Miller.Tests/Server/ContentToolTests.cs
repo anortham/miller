@@ -1513,6 +1513,8 @@ public sealed class ContentToolTests : IDisposable
         string result = new ContentTool(_workspace, new ContentCorpusExternalStore()).Content("export");
 
         Assert.StartsWith("content failed:", result, StringComparison.Ordinal);
+        Assert.Equal(1, result.Split('\n').Count(line =>
+            line.StartsWith("diagnostic_code=", StringComparison.Ordinal)));
         Assert.DoesNotContain("export", result, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("export", description, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(method.GetParameters(), static parameter => parameter.Name == "content_workspace_id");

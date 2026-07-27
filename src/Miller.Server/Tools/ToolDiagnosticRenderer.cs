@@ -77,11 +77,8 @@ public static class ToolDiagnosticRenderer
 
     private static void AppendCompactDiagnostic(StringBuilder output, ToolDiagnostic diagnostic)
     {
-        if (output.Length > 0)
-            output.Append('\n');
-        output.Append("diagnostic_code=").Append(diagnostic.Code)
-            .Append('\n')
-            .Append("diagnostic_class=").Append(diagnostic.ClassName());
+        AppendCompactField(output, "diagnostic_code", diagnostic.Code);
+        AppendCompactField(output, "diagnostic_class", diagnostic.ClassName());
         foreach (ToolDiagnosticAction action in diagnostic.NextActions)
         {
             output.Append('\n')
@@ -90,6 +87,23 @@ public static class ToolDiagnosticRenderer
             if (!string.IsNullOrWhiteSpace(action.Reason))
                 output.Append(" — ").Append(action.Reason);
         }
+    }
+
+    private static void AppendCompactField(
+        StringBuilder output,
+        string name,
+        string value)
+    {
+        string prefix = name + "=";
+        if (output.ToString().Split('\n').Any(line =>
+            line.StartsWith(prefix, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        if (output.Length > 0)
+            output.Append('\n');
+        output.Append(prefix).Append(value);
     }
 
     private static string RenderJson(string tool, ToolDiagnostic diagnostic)

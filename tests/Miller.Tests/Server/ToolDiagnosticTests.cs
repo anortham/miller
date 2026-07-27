@@ -89,6 +89,23 @@ public sealed class ToolDiagnosticTests
         Assert.DoesNotContain("\\u", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Attach_CompactDoesNotDuplicateExistingDiagnosticFields()
+    {
+        var diagnostic = ToolDiagnostic.Refusal("invalid_operation", "Operation is invalid.");
+        const string payload =
+            "content failed: operation is invalid.\n" +
+            "diagnostic_code=invalid_operation\n" +
+            "diagnostic_class=refusal";
+
+        string output = ToolDiagnosticRenderer.Attach("content", payload, diagnostic, json: false);
+
+        Assert.Equal(1, output.Split('\n').Count(line =>
+            line.StartsWith("diagnostic_code=", StringComparison.Ordinal)));
+        Assert.Equal(1, output.Split('\n').Count(line =>
+            line.StartsWith("diagnostic_class=", StringComparison.Ordinal)));
+    }
+
     [Theory]
     [InlineData(typeof(IncompatibleExtractException), "schema_incompatible", ToolDiagnosticClass.Corruption)]
     [InlineData(typeof(UnauthorizedAccessException), "permission_denied", ToolDiagnosticClass.Unavailable)]
