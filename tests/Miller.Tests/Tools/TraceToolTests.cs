@@ -995,6 +995,57 @@ public sealed class TraceToolTests
     }
 
     [Fact]
+    public void Refs_Json_ContinuationRejectsTokenFromAPreviousArtifactGeneration()
+    {
+        var index = BuildSymbolIndex(
+            new[] { ("a", "Alpha", "method", "src/A.cs", 1) },
+            Array.Empty<(string, string)>());
+        ReferenceEvidence[] references = Enumerable.Range(1, 30)
+            .Select(line => new ReferenceEvidence(
+                "a", null, $"src/Caller{line}.cs", line, 1, line, 6, line * 10, line * 10 + 5,
+                ReferenceKind.Call, "call", ReferenceEvidenceSource.IdentifierDirect, null, 1,
+                ReferenceResolutionStatus.Exact, "csharp", $"site:caller:{line}", true, "target_token"))
+            .ToArray();
+        var before = new ReferenceEvidenceSnapshot("artifact-before-promote", 1);
+        ReferenceEvidenceSet ReadPage(IndexedSymbol _, ReferenceEvidenceQuery query)
+        {
+            ReferenceEvidence[] page = references
+                .Skip(query.ExactOffset)
+                .Take(query.Bounds.ExactLimit)
+                .ToArray();
+            return new ReferenceEvidenceSet(
+                page,
+                [],
+                new ReferenceEvidenceCoverage(
+                    references.Length, references.Length, page.Length, 0, 0, 1,
+                    references.Length > query.ExactOffset + page.Length, false,
+                    ReferenceFallbackStatus.NoCandidates),
+                before);
+        }
+
+        string first = TraceTool.Run(
+            index, ResolverFor(index), target: "Alpha", scope: null, mode: "refs", to: null, depth: 3,
+            limit: 30, fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
+            readReferenceEvidence: ReadPage, workspaceId: "workspace", before, continuation: null,
+            out _, out _);
+        using var firstDocument = JsonDocument.Parse(first);
+        string token = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+
+        // A promote replaces the artifact and restarts the revision counter, so the SAME revision reappears
+        // under a new artifact id. The token must not silently re-resolve against the replaced index.
+        var afterPromote = new ReferenceEvidenceSnapshot("artifact-after-promote", 1);
+
+        ToolDiagnosticException exception = Assert.Throws<ToolDiagnosticException>(() =>
+            TraceTool.Run(
+                index, ResolverFor(index), target: "Alpha", scope: null, mode: "refs", to: null, depth: 3,
+                limit: 30, fullFormat: false, json: true, referenceKind: null, includeDefinition: true,
+                readReferenceEvidence: ReadPage, workspaceId: "workspace", afterPromote, continuation: token,
+                out _, out _));
+
+        Assert.Equal("stale_continuation", exception.Diagnostic.Code);
+    }
+
+    [Fact]
     public void Refs_Json_ContinuationRejectsChangedReferencePopulation()
     {
         var index = BuildSymbolIndex(

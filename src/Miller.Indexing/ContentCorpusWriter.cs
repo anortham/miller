@@ -491,9 +491,9 @@ public static partial class ContentCorpusWriter
                 INSERT INTO content_meta
                     (schema_version, workspace_revision, chunker_version, source_count, chunk_count,
                      indexed_source_bytes, stored_raw_bytes, updated_at_utc, skipped_status, skipped_scope,
-                     skipped_large, skipped_missing, skipped_hash, skipped_utf8, skipped_io)
+                     skipped_large, skipped_missing, skipped_hash, skipped_utf8, skipped_io, artifact_id)
                 VALUES ($schema, $revision, $chunker, $sources, $chunks, $source_bytes, $stored_bytes, $updated,
-                        $status, $scope, $large, $missing, $hash, $utf8, $io);
+                        $status, $scope, $large, $missing, $hash, $utf8, $io, $artifact);
                 """;
             meta.Parameters.AddWithValue("$schema", ContentCorpusSchema.SchemaVersion);
             meta.Parameters.AddWithValue("$revision", revision);
@@ -510,6 +510,7 @@ public static partial class ContentCorpusWriter
             meta.Parameters.AddWithValue("$hash", skippedHash);
             meta.Parameters.AddWithValue("$utf8", skippedUtf8);
             meta.Parameters.AddWithValue("$io", skippedIo);
+            meta.Parameters.AddWithValue("$artifact", (object?)TryReadArtifactId(symbolsDbPath) ?? DBNull.Value);
             meta.ExecuteNonQuery();
         }
         tx.Commit();
@@ -729,6 +730,23 @@ public static partial class ContentCorpusWriter
 
     private static string SourceId(string? workspaceId, string path, string kind) =>
         (workspaceId ?? "workspace") + ":" + kind + ":" + path;
+
+    /// <summary>
+    /// The <c>artifact_metadata.artifact_id</c> of the extract this corpus is built from, or <c>null</c> when
+    /// unreadable. Stamped into <c>content_meta</c> so a full-rebuild promote — which restarts the revision
+    /// counter — cannot be mistaken for the generation this corpus was built from.
+    /// </summary>
+    private static string? TryReadArtifactId(string symbolsDbPath)
+    {
+        try
+        {
+            return SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private sealed record SourceRow(
         string Path,

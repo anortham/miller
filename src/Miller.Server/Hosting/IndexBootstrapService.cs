@@ -414,6 +414,21 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 load: () => RepositoryIndexLoader.Load(canonicalDbPath),
                 forceRescan: () =>
                 {
+                    // A force scan promotes over the live artifact (FullRebuildPromotion), and
+                    // JulieExtractRunner.Scan's contract is that force-scan callers hold Miller's single-writer
+                    // lock so two instances cannot interleave promotes on the same workspace. Skip the rebuild
+                    // rather than promote unlocked: whoever holds the lock is already healing this artifact, and
+                    // the retry load below either picks up their result or fails loudly.
+                    using SingleWriterLock? writeLock = AcquireWriteLockForAutoRebuild(canonicalDbPath);
+                    if (writeLock is null)
+                    {
+                        _logger.LogWarning(
+                            "Auto-rebuild skipped: another Miller instance holds the write lock for {Db}. " +
+                            "Retrying the load against whatever that instance produced.",
+                            canonicalDbPath);
+                        return null;
+                    }
+
                     var rebuild = runner.Scan(canonicalRoot, canonicalDbPath, force: true);
                     _logger.LogInformation(
                         "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
@@ -691,6 +706,30 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// a fresh connection bound to the rebuilt file. Pure control flow over injected delegates — the unit test
     /// drives it with fakes; <see cref="Run"/> wires the real loader, runner, and pool barrier.
     /// </summary>
+    /// <summary>
+    /// Bounded-wait acquisition of the workspace single-writer lock for the bootstrap auto-rebuild promote.
+    /// Returns <c>null</c> when another instance still holds it after the wait.
+    /// </summary>
+    private static SingleWriterLock? AcquireWriteLockForAutoRebuild(string canonicalDbPath)
+    {
+        string? millerDir = Path.GetDirectoryName(Path.GetFullPath(canonicalDbPath));
+        if (string.IsNullOrEmpty(millerDir))
+            return null;
+
+        var deadline = DateTimeOffset.UtcNow + AutoRebuildLockWait;
+        while (true)
+        {
+            if (SingleWriterLock.TryAcquire(millerDir) is { } acquired)
+                return acquired;
+            if (DateTimeOffset.UtcNow >= deadline)
+                return null;
+            Thread.Sleep(AutoRebuildLockPollInterval);
+        }
+    }
+
+    private static readonly TimeSpan AutoRebuildLockWait = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan AutoRebuildLockPollInterval = TimeSpan.FromMilliseconds(250);
+
     internal static IndexLoadResult<T> LoadIndexWithAutoRebuild<T>(
         Func<T> load,
         Func<long?> forceRescan,

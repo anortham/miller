@@ -139,8 +139,13 @@ Reference row fields:
 `include_definition` is true. `links` is empty because reference occurrences are rows, not graph edges.
 
 Reference pages are capped at 16 KiB of UTF-8 JSON. The stateless continuation identity binds the workspace,
-target symbol, artifact ID, artifact revision, reference-kind filter, definition flag, requested limit, and
-independent exact/fallback offsets. See [Tool Continuation Contract v1](tool-continuation-v1.md).
+target symbol, artifact ID, reference-kind filter, definition flag, requested limit, the fingerprint of the
+reference population itself, and independent exact/fallback offsets. A token issued before a full-rebuild
+promote is refused, because the artifact ID changes even though the promote restarts the revision counter.
+
+The identity deliberately does NOT bind the extraction revision: the population fingerprint already invalidates
+a token whose own reference rows moved, so an unrelated edit elsewhere in the workspace must not invalidate
+in-flight cursors. See [Tool Continuation Contract v1](tool-continuation-v1.md).
 
 ## Bridge mode
 

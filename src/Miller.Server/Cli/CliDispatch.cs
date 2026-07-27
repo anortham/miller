@@ -2016,6 +2016,7 @@ public static class CliDispatch
                             ContextTool.ReferenceRowsPerSymbol)),
                 readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
                     ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath),
+                    ctx.ExtractDbPath,
                     symbols,
                     excludeTests,
                     ContextTool.ContentChunksPerSymbol),

@@ -30,10 +30,11 @@ public static class SearchIndexWriter
     private const int ParameterChunkSize = 500;
 
     /// <summary>
-    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 7→8 so artifacts without
-    /// persisted test-role and evidence-currency fields are rejected and rebuilt.
+    /// The on-disk schema version stamped into <c>meta.schema_version</c>. Bumped 8→9 so artifacts without a
+    /// stamped <c>meta.artifact_id</c> are rejected and rebuilt: revision alone cannot detect a full-rebuild
+    /// promote, which restarts julie's revision counter (see <see cref="SymbolsArtifactIdentity"/>).
     /// </summary>
-    public const int SchemaVersion = 8;
+    public const int SchemaVersion = 9;
 
     private const string SchemaDdl = """
         CREATE VIRTUAL TABLE symbols_fts USING fts5(
@@ -80,7 +81,8 @@ public static class SearchIndexWriter
             schema_version INTEGER,
             region_count INTEGER,
             region_avgdl REAL,
-            region_index_enabled INTEGER);
+            region_index_enabled INTEGER,
+            artifact_id TEXT);
         """;
 
     /// <summary>
@@ -118,7 +120,9 @@ public static class SearchIndexWriter
 
         try
         {
-            BuildInto(tempPath, symbols, revision, symbolsDbPath, workspaceRoot, regionOptions);
+            BuildInto(
+                tempPath, symbols, revision, symbolsDbPath, workspaceRoot, regionOptions,
+                TryReadArtifactId(symbolsDbPath));
             // Release the build connection's file handle from the pool before the move (Windows can't
             // replace/rename a file with an open handle).
             SqliteConnection.ClearAllPools();
@@ -200,7 +204,7 @@ public static class SearchIndexWriter
             }
         }
 
-        RewriteMeta(connection, revision, regionOptions);
+        RewriteMeta(connection, revision, regionOptions, TryReadArtifactId(symbolsDbPath));
         tx.Commit();
     }
 
@@ -210,7 +214,8 @@ public static class SearchIndexWriter
         long revision,
         string? symbolsDbPath,
         string? workspaceRoot,
-        RegionIndexOptions regionOptions)
+        RegionIndexOptions regionOptions,
+        string? artifactId)
     {
         var connectionString = new SqliteConnectionStringBuilder
         {
@@ -249,8 +254,9 @@ public static class SearchIndexWriter
         {
             metaCmd.CommandText = """
                 INSERT INTO meta(
-                    revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
-                VALUES ($rev, $n, $avg, $ver, $rn, $ravg, $regionEnabled);
+                    revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled,
+                    artifact_id)
+                VALUES ($rev, $n, $avg, $ver, $rn, $ravg, $regionEnabled, $artifact);
                 """;
             metaCmd.Parameters.AddWithValue("$rev", revision);
             metaCmd.Parameters.AddWithValue("$n", symbols.Count);
@@ -259,6 +265,7 @@ public static class SearchIndexWriter
             metaCmd.Parameters.AddWithValue("$rn", regionCount);
             metaCmd.Parameters.AddWithValue("$ravg", regionAvgdl);
             metaCmd.Parameters.AddWithValue("$regionEnabled", regionOptions.Enabled ? 1 : 0);
+            metaCmd.Parameters.AddWithValue("$artifact", (object?)artifactId ?? DBNull.Value);
             metaCmd.ExecuteNonQuery();
         }
 
@@ -537,7 +544,8 @@ public static class SearchIndexWriter
             TestEvidenceReason: reader.IsDBNull(14) ? null : reader.GetString(14));
     }
 
-    private static void RewriteMeta(SqliteConnection connection, long revision, RegionIndexOptions regionOptions)
+    private static void RewriteMeta(
+        SqliteConnection connection, long revision, RegionIndexOptions regionOptions, string? artifactId)
     {
         (long docCount, double avgdl) = ReadStats(connection, "search_symbols");
         (long regionCount, double regionAvgdl) = ReadStats(connection, "search_regions");
@@ -546,8 +554,9 @@ public static class SearchIndexWriter
         cmd.CommandText = """
             DELETE FROM meta;
             INSERT INTO meta(
-                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled)
-            VALUES ($rev, $docs, $avg, $ver, $regions, $ravg, $regionEnabled);
+                revision, doc_count, avgdl, schema_version, region_count, region_avgdl, region_index_enabled,
+                artifact_id)
+            VALUES ($rev, $docs, $avg, $ver, $regions, $ravg, $regionEnabled, $artifact);
             """;
         cmd.Parameters.AddWithValue("$rev", revision);
         cmd.Parameters.AddWithValue("$docs", docCount);
@@ -556,7 +565,27 @@ public static class SearchIndexWriter
         cmd.Parameters.AddWithValue("$regions", regionCount);
         cmd.Parameters.AddWithValue("$ravg", regionAvgdl);
         cmd.Parameters.AddWithValue("$regionEnabled", regionOptions.Enabled ? 1 : 0);
+        cmd.Parameters.AddWithValue("$artifact", (object?)artifactId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Read the <c>artifact_metadata.artifact_id</c> of the extract a derived index is being built from, or
+    /// <c>null</c> when unavailable. Best-effort: an unreadable source simply leaves the stamp null, which the
+    /// freshness gate treats as unprovable and rebuilds.
+    /// </summary>
+    private static string? TryReadArtifactId(string? symbolsDbPath)
+    {
+        if (string.IsNullOrWhiteSpace(symbolsDbPath) || !File.Exists(symbolsDbPath))
+            return null;
+        try
+        {
+            return SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static (long Count, double Avgdl) ReadStats(SqliteConnection connection, string table)

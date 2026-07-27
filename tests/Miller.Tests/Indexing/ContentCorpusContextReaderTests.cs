@@ -8,11 +8,20 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "miller-content-context-" + Guid.NewGuid().ToString("N"));
     private readonly string _contentDbPath;
+    private readonly JulieDbFixture _julie;
 
     public ContentCorpusContextReaderTests()
     {
         Directory.CreateDirectory(_dir);
-        _contentDbPath = Path.Combine(_dir, "content.db");
+        _julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("service-id", "OrderService", "class", "csharp",
+                    "src/OrderService.cs", "class OrderService", 1, ParentId: null),
+            });
+        _contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_julie.DbPath);
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = _contentDbPath,
@@ -22,6 +31,20 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = ContentCorpusSchema.SchemaDdl;
         command.ExecuteNonQuery();
+
+        SymbolsArtifactIdentity identity = SymbolsArtifactIdentity.Read(_julie.DbPath);
+        using var meta = connection.CreateCommand();
+        meta.CommandText = """
+            INSERT INTO content_meta
+                (schema_version, workspace_revision, chunker_version, source_count, chunk_count,
+                 indexed_source_bytes, stored_raw_bytes, updated_at_utc, artifact_id)
+            VALUES ($schema, $revision, $chunker, 0, 0, 0, 0, '1970-01-01T00:00:00Z', $artifact);
+            """;
+        meta.Parameters.AddWithValue("$schema", ContentCorpusSchema.SchemaVersion);
+        meta.Parameters.AddWithValue("$revision", identity.Revision);
+        meta.Parameters.AddWithValue("$chunker", ContentCorpusSchema.ChunkerVersion);
+        meta.Parameters.AddWithValue("$artifact", (object?)identity.ArtifactId ?? DBNull.Value);
+        meta.ExecuteNonQuery();
     }
 
     [Fact]
@@ -48,6 +71,7 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
 
         var hits = ContentCorpusContextReader.ReadContainingSymbolChunks(
             _contentDbPath,
+            _julie.DbPath,
             new[] { symbol },
             excludeTests: false,
             limitPerSymbol: 4);
@@ -75,11 +99,43 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
 
         var hits = ContentCorpusContextReader.ReadContainingSymbolChunks(
             _contentDbPath,
+            _julie.DbPath,
             new[] { symbol },
             excludeTests: true,
             limitPerSymbol: 4);
 
         Assert.Empty(hits);
+    }
+
+    [Fact]
+    public void ReadContainingSymbolChunks_CorpusFromAPreviousArtifactGeneration_ContributesNoEvidence()
+    {
+        InsertChunk(
+            chunkId: "chunk-service",
+            path: "src/OrderService.cs",
+            rawText: "public void PlaceOrder() { _repo.Save(); }",
+            containingSymbolId: "service-id",
+            containingSymbolName: "OrderService");
+        var symbol = new IndexedSymbol(0, "service-id", "OrderService", "class OrderService", "class", "csharp",
+            "src/OrderService.cs", 1, 40, null, false);
+
+        Assert.Single(ContentCorpusContextReader.ReadContainingSymbolChunks(
+            _contentDbPath, _julie.DbPath, new[] { symbol }, excludeTests: false, limitPerSymbol: 4));
+
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _julie.DbPath, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE artifact_metadata SET value = 'artifact-promoted' WHERE key = 'artifact_id';";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        Assert.Empty(ContentCorpusContextReader.ReadContainingSymbolChunks(
+            _contentDbPath, _julie.DbPath, new[] { symbol }, excludeTests: false, limitPerSymbol: 4));
     }
 
     [Fact]
@@ -90,6 +146,7 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
 
         var hits = ContentCorpusContextReader.ReadContainingSymbolChunks(
             Path.Combine(_dir, "missing-content.db"),
+            _julie.DbPath,
             new[] { symbol },
             excludeTests: false,
             limitPerSymbol: 4);
@@ -169,6 +226,7 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
         // (POSIX unlink tolerates open handles, which is why this only bit on Windows). Matches the sibling
         // ContentCorpus*Tests teardown convention.
         SqliteConnection.ClearAllPools();
+        _julie.Dispose();
         try
         {
             Directory.Delete(_dir, recursive: true);

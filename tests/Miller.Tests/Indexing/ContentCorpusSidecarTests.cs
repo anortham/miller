@@ -61,6 +61,38 @@ public sealed class ContentCorpusSidecarTests : IDisposable
     }
 
     [Fact]
+    public void EnsureBuilt_PromotedArtifactAtTheSameRevisionAndHashes_RebuildsInsteadOfServingPreRebuildText()
+    {
+        using var fx = SourceFixture();
+        var sidecar = new ContentCorpusSidecar();
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1));
+
+        SetSymbolsArtifactId(fx.DbPath, "artifact-promoted");
+
+        Assert.True(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1));
+        Assert.False(sidecar.EnsureBuilt(fx.DbPath, fx.WorkspaceRoot, "workspace-1", revision: 1));
+    }
+
+    private static void SetSymbolsArtifactId(string symbolsDb, string artifactId)
+    {
+        using (var rw = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = symbolsDb,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite,
+                Pooling = false,
+            }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE artifact_metadata SET value = $v WHERE key = 'artifact_id';";
+            cmd.Parameters.AddWithValue("$v", artifactId);
+            cmd.ExecuteNonQuery();
+        }
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+    }
+
+    [Fact]
     public void EnsureBuilt_SymbolsHashMovedWithoutRevisionAdvance_RebuildsAndReturnsTrue()
     {
         using var fx = SourceFixture();

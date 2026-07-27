@@ -176,7 +176,8 @@ public sealed class ContextToolTests
         string path,
         string rawText,
         string containingSymbolId,
-        string containingSymbolName)
+        string containingSymbolName,
+        string? symbolsDbPath = null)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -188,6 +189,25 @@ public sealed class ContextToolTests
         {
             schema.CommandText = ContentCorpusSchema.SchemaDdl;
             schema.ExecuteNonQuery();
+        }
+
+        // The corpus is only readable when it proves it came from the paired extract generation, so a fixture
+        // that omits content_meta is not a corpus the reader will (or should) answer from.
+        if (symbolsDbPath is not null)
+        {
+            SymbolsArtifactIdentity identity = SymbolsArtifactIdentity.Read(symbolsDbPath);
+            using var meta = connection.CreateCommand();
+            meta.CommandText = """
+                INSERT INTO content_meta
+                    (schema_version, workspace_revision, chunker_version, source_count, chunk_count,
+                     indexed_source_bytes, stored_raw_bytes, updated_at_utc, artifact_id)
+                VALUES ($schema, $revision, $chunker, 0, 0, 0, 0, '1970-01-01T00:00:00Z', $artifact);
+                """;
+            meta.Parameters.AddWithValue("$schema", ContentCorpusSchema.SchemaVersion);
+            meta.Parameters.AddWithValue("$revision", identity.Revision);
+            meta.Parameters.AddWithValue("$chunker", ContentCorpusSchema.ChunkerVersion);
+            meta.Parameters.AddWithValue("$artifact", (object?)identity.ArtifactId ?? DBNull.Value);
+            meta.ExecuteNonQuery();
         }
 
         using var command = connection.CreateCommand();
@@ -1893,7 +1913,8 @@ public sealed class ContextToolTests
             path: "auth/UserService.cs",
             rawText: "public User GetUser(int id)\n{\n    return _repo.Find(id);\n}",
             containingSymbolId: JulieDbFixture.GetUserId,
-            containingSymbolName: "GetUser");
+            containingSymbolName: "GetUser",
+            symbolsDbPath: fx.DbPath);
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));

@@ -830,11 +830,16 @@ public sealed class TraceTool
             exactPopulation,
             fallbackPopulation,
             evidence.Coverage);
+        // trace-json-v1 §continuation: a ref cursor is bound to the artifact GENERATION that issued it, so a
+        // token minted before a full-rebuild promote is refused rather than silently re-resolved against the
+        // replaced index. Deliberately NOT bound to revision: the population fingerprint already invalidates a
+        // token whose own reference rows moved, so an unrelated edit elsewhere must not kill in-flight cursors.
         string requestFingerprint = FingerprintFields(
             targetSymbol.SymbolId,
             normalizedKind ?? "all",
             includeDefinition ? "definition" : "no-definition",
-            limit.ToString(CultureInfo.InvariantCulture));
+            limit.ToString(CultureInfo.InvariantCulture),
+            snapshot?.ArtifactId ?? "no-artifact");
         var continuationIdentity = new ToolPopulationContinuationIdentity(
             "trace_refs",
             workspaceId,

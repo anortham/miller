@@ -163,6 +163,7 @@ public sealed partial class ContextTool
                             new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
                             ContentCorpusSidecar.ContentDbPathFor(context.IndexDbPath),
+                            context.IndexDbPath,
                             symbols,
                             excludeTests,
                             ContentChunksPerSymbol),

@@ -2,7 +2,7 @@ namespace Miller.Indexing;
 
 public static class ContentCorpusSchema
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     public const string ChunkerVersion = "line-v1";
 
     public const string SchemaDdl = """
@@ -64,7 +64,8 @@ public static class ContentCorpusSchema
             skipped_missing INTEGER NOT NULL DEFAULT 0,
             skipped_hash INTEGER NOT NULL DEFAULT 0,
             skipped_utf8 INTEGER NOT NULL DEFAULT 0,
-            skipped_io INTEGER NOT NULL DEFAULT 0);
+            skipped_io INTEGER NOT NULL DEFAULT 0,
+            artifact_id TEXT);
         CREATE INDEX ix_content_sources_kind ON content_sources(content_kind);
         CREATE INDEX ix_content_chunks_kind ON content_chunks(content_kind);
         CREATE INDEX ix_content_chunks_path ON content_chunks(path);

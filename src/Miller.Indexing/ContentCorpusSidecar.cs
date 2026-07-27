@@ -27,8 +27,12 @@ public sealed class ContentCorpusSidecar
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string contentDbPath = ContentDbPathFor(symbolsDbPath);
-        if (IsFresh(contentDbPath, revision) && WorkspaceSourcesAgree(contentDbPath, symbolsDbPath))
+        if (IsFresh(contentDbPath, revision) &&
+            BuiltFromCurrentArtifact(contentDbPath, symbolsDbPath) &&
+            WorkspaceSourcesAgree(contentDbPath, symbolsDbPath))
+        {
             return false;
+        }
 
         ContentCorpusWriter.Write(contentDbPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
         return true;
@@ -202,6 +206,66 @@ public sealed class ContentCorpusSidecar
                 $"Content corpus sidecar at '{contentDbPath}' could not be opened. " +
                 "Run `miller workspace refresh` to rebuild it.",
                 ex);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="contentDbPath"/> is safe to read alongside <paramref name="symbolsDbPath"/>:
+    /// revision-fresh AND built from the extract generation currently on disk. Readers that answer from the
+    /// corpus without this check can serve pre-promote text as if it were current.
+    /// </summary>
+    public static bool IsCurrentFor(string contentDbPath, string symbolsDbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+        if (!File.Exists(contentDbPath) || !File.Exists(symbolsDbPath))
+            return false;
+
+        long revision;
+        try
+        {
+            revision = SymbolsArtifactIdentity.Read(symbolsDbPath).Revision;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+
+        return IsFresh(contentDbPath, revision) && BuiltFromCurrentArtifact(contentDbPath, symbolsDbPath);
+    }
+
+    /// <summary>
+    /// Whether the corpus was built from the extract generation currently on disk. Revision and per-source hash
+    /// agreement cannot see a full-rebuild promote: it restarts julie's revision counter, and an
+    /// extractor-upgrade rebuild of unchanged files reproduces identical <c>content_hash</c> values — so both
+    /// older gates report a pre-promote corpus as current forever. Only the artifact id distinguishes them.
+    /// </summary>
+    private static bool BuiltFromCurrentArtifact(string contentDbPath, string symbolsDbPath)
+    {
+        try
+        {
+            string? expected = SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId;
+            if (expected is null)
+                return true;
+
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(contentDbPath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
+            return string.Equals(cmd.ExecuteScalar() as string, expected, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
         }
     }
 

@@ -378,7 +378,7 @@ public sealed class SearchIndexWriterTests : IDisposable
         SearchIndexWriter.Write(_dbPath, Array.Empty<IndexedSymbol>(), revision: 3);
 
         using var c = OpenRead();
-        Assert.Equal(8, SearchIndexWriter.SchemaVersion);
+        Assert.Equal(9, SearchIndexWriter.SchemaVersion);
         Assert.Equal((long)SearchIndexWriter.SchemaVersion, Long(Scalar(c, "SELECT schema_version FROM meta")));
         Assert.Equal(0L, Long(Scalar(c, "SELECT region_count FROM meta")));
         Assert.Equal(0.0, Convert.ToDouble(Scalar(c, "SELECT region_avgdl FROM meta")), 5);

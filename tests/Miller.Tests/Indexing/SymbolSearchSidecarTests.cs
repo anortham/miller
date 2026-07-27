@@ -572,7 +572,7 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         // sidecar would self-heal to the in-memory index forever at a matching revision (the silent-disable bug
         // class of commit 5362b3d). This pins the two gates in lockstep after a schema bump.
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
-        Assert.Equal(8, SearchIndexWriter.SchemaVersion);
+        Assert.Equal(9, SearchIndexWriter.SchemaVersion);
         SetSchemaVersion(searchDb, 7);
 
         Assert.Null(sidecar.TryOpen(julie.DbPath, expectedRevision: 5));      // read gate now rejects the stale schema
@@ -606,6 +606,47 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$name;";
         cmd.Parameters.AddWithValue("$name", tableName);
         return cmd.ExecuteScalar() is not null;
+    }
+
+    [Fact]
+    public void EnsureBuilt_PromotedArtifactAtTheSameRevision_RebuildsInsteadOfServingPreRebuildSymbols()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+
+        SetSymbolsArtifactId(julie.DbPath, "artifact-promoted");
+
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+    }
+
+    [Fact]
+    public void EnsureCurrent_PromotedArtifactAtTheSameRevision_RebuildsRatherThanApplyingADeltaAcrossTheSwap()
+    {
+        using var julie = JulieDb();
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+
+        SetSymbolsArtifactId(julie.DbPath, "artifact-promoted");
+
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+        Assert.False(sidecar.EnsureCurrent(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+    }
+
+    private static void SetSymbolsArtifactId(string symbolsDb, string artifactId)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = symbolsDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "UPDATE artifact_metadata SET value = $v WHERE key = 'artifact_id';";
+            cmd.Parameters.AddWithValue("$v", artifactId);
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
     }
 
     private static void SetSchemaVersion(string searchDb, int version)

@@ -264,8 +264,13 @@ public sealed class SymbolSearchSidecar
         // rejects a stale-schema artifact, so a revision-ONLY gate here would never rebuild a revision-matching
         // stale-schema artifact and the sidecar would self-heal to the in-memory index forever (the silent-disable
         // bug class of commit 5362b3d). Keeping the two gates in lockstep is the fix.
-        if (ReadFreshArtifactRevision(searchDbPath, RegionOptions, out corruptionReason) == revision)
+        long? stampedRevision = ReadFreshArtifactRevision(
+            searchDbPath, RegionOptions, out corruptionReason, out string? stampedArtifactId);
+        if (stampedRevision is not null &&
+            ReadSymbolsIdentity(symbolsDbPath, revision).Matches(stampedRevision.Value, stampedArtifactId))
+        {
             return false;
+        }
 
         IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
         SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
@@ -294,11 +299,19 @@ public sealed class SymbolSearchSidecar
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
         string searchDbPath = SearchDbPathFor(symbolsDbPath);
-        long? artifactRevision = ReadFreshArtifactRevision(searchDbPath, RegionOptions, out corruptionReason);
-        if (artifactRevision == revision)
+        long? artifactRevision = ReadFreshArtifactRevision(
+            searchDbPath, RegionOptions, out corruptionReason, out string? stampedArtifactId);
+        SymbolsArtifactIdentity identity = ReadSymbolsIdentity(symbolsDbPath, revision);
+        if (artifactRevision is not null && identity.Matches(artifactRevision.Value, stampedArtifactId))
             return false;
 
-        if (artifactRevision is null || artifactRevision.Value > revision)
+        // A sidecar built from a DIFFERENT artifact generation cannot be advanced by julie's changed-file delta:
+        // the delta is expressed against the promoted extract's revision history, not the one that produced this
+        // sidecar. Rebuild across a swap instead of applying a delta, at any revision ordering.
+        bool sameArtifact = identity.ArtifactId is null ||
+            string.Equals(stampedArtifactId, identity.ArtifactId, StringComparison.Ordinal);
+
+        if (artifactRevision is null || artifactRevision.Value > revision || !sameArtifact)
         {
             IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.Read(symbolsDbPath);
             SearchIndexWriter.Write(searchDbPath, symbols, revision, symbolsDbPath, workspaceRoot, RegionOptions);
@@ -341,12 +354,31 @@ public sealed class SymbolSearchSidecar
     // search.db (garbage bytes, missing/duplicated meta row, null revision). A missing file and schema-version
     // staleness/option drift are normal lifecycle states and stay quiet — only damage should reach the writer's
     // warning log.
+    /// <summary>
+    /// The extract generation a derived sidecar must match: the caller-supplied <paramref name="revision"/>
+    /// paired with the extract's current <c>artifact_id</c>. An unreadable source yields a null id, which
+    /// <see cref="SymbolsArtifactIdentity.Matches"/> degrades to the historical revision-only comparison.
+    /// </summary>
+    private static SymbolsArtifactIdentity ReadSymbolsIdentity(string symbolsDbPath, long revision)
+    {
+        try
+        {
+            return new SymbolsArtifactIdentity(revision, SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId);
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException)
+        {
+            return new SymbolsArtifactIdentity(revision, null);
+        }
+    }
+
     private static long? ReadFreshArtifactRevision(
         string searchDbPath,
         RegionIndexOptions regionOptions,
-        out string? corruptionReason)
+        out string? corruptionReason,
+        out string? stampedArtifactId)
     {
         corruptionReason = null;
+        stampedArtifactId = null;
         if (!File.Exists(searchDbPath))
             return null;
 
@@ -397,6 +429,11 @@ public sealed class SymbolSearchSidecar
             bool regionIndexEnabled = Convert.ToInt64(regionEnabledRaw, CultureInfo.InvariantCulture) != 0;
             if (regionIndexEnabled != regionOptions.Enabled)
                 return null;
+
+            // Safe to read only after the schema_version gate above: the column exists from schema 9 onward.
+            using var artifactCmd = connection.CreateCommand();
+            artifactCmd.CommandText = "SELECT artifact_id FROM meta LIMIT 1;";
+            stampedArtifactId = artifactCmd.ExecuteScalar() as string;
 
             return revision;
         }

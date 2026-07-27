@@ -10,15 +10,24 @@ namespace Miller.Indexing;
 /// </summary>
 public static class ContentCorpusContextReader
 {
+    /// <param name="symbolsDbPath">
+    /// The extract the caller is assembling context from. The corpus is read ONLY when it is revision-fresh and
+    /// carries that extract's artifact id; a corpus left behind by a previous artifact generation contributes no
+    /// evidence rather than passing pre-promote source text off as current.
+    /// </param>
     public static IReadOnlyList<TextContentSearchHit> ReadContainingSymbolChunks(
         string contentDbPath,
+        string symbolsDbPath,
         IReadOnlyList<IndexedSymbol> symbols,
         bool excludeTests,
         int limitPerSymbol)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         ArgumentNullException.ThrowIfNull(symbols);
         if (symbols.Count == 0 || limitPerSymbol <= 0 || !File.Exists(contentDbPath))
+            return Array.Empty<TextContentSearchHit>();
+        if (!ContentCorpusSidecar.IsCurrentFor(contentDbPath, symbolsDbPath))
             return Array.Empty<TextContentSearchHit>();
 
         // Pooling=false: content.db is a rebuildable derived artifact whose file can be replaced wholesale;
