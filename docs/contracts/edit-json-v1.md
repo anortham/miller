@@ -31,7 +31,8 @@ Successful preview and applied JSON include:
     "coverage_total_count": 0,
     "coverage_omitted_count": 0,
     "fallback_candidates": 0,
-    "fallback_status": "NoCandidates"
+    "fallback_status": "NoCandidates",
+    "inferred_exact_count": 0
   }
 }
 ```
@@ -44,10 +45,18 @@ then target-proven reference sites. `fallback_sites` contains explicitly selecte
 include unresolved sites or sites belonging to another same-name symbol. Each tier returns at most eight sites;
 the total, returned, and omitted counts state the complete population.
 
-Coverage rows contain `language`, `kind`, `resolution_status`, and `count`. The definition has its own exact
-coverage row. Exact reference rows are grouped by extracted language and source kind; explicit fallback is grouped
-as `language=unknown`, `kind=name_based`, `resolution_status=fallback`.
+Coverage rows contain `language`, `kind`, `resolution_status`, `count`, `inferred_count`, and `min_confidence`.
+The definition has its own exact coverage row. Exact reference rows are grouped by extracted language and source
+kind; explicit fallback is grouped as `language=unknown`, `kind=name_based`, `resolution_status=fallback`.
 Coverage returns at most eight rows and reports its exact total and omitted count.
+
+`inferred_count` and the top-level `inferred_exact_count` report how many exact sites the extractor bound through
+a heuristic resolution tier — julie's tier 3 (`tier3_receiver` 0.65, `tier3_static_type` 0.70), which corroborates
+a receiver no recorded type fact backs, and tier 4 (`tier4_global` 0.55), which binds on global name uniqueness
+alone. They are real references and are renamed, but a rename writes, so they must not render as
+indistinguishable from a scope-proved binding; `min_confidence` states the weakest binding in the row. Compact
+output carries the same facts as a parenthetical on the coverage line plus a review note. Non-heuristic bindings
+(a direct extractor target, a relationship edge, tiers 1 and 2) report `inferred_count` 0.
 
 `fallback_candidates` reports unresolved candidates observed even when exact mode refuses them.
 `fallback_status` reports the evidence reader's fallback state.

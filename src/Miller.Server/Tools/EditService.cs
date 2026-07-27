@@ -1575,6 +1575,8 @@ public sealed class EditService
             writer.WriteString("kind", group.Key.Kind);
             writer.WriteString("resolution_status", "exact");
             writer.WriteNumber("count", group.Count());
+            writer.WriteNumber("inferred_count", group.Count(IsInferredBinding));
+            writer.WriteNumber("min_confidence", group.Min(static reference => reference.Confidence));
             writer.WriteEndObject();
         }
         if (evidence.FallbackSites.Count > 0)
@@ -1592,6 +1594,7 @@ public sealed class EditService
         writer.WriteNumber("coverage_omitted_count", Math.Max(0, coverageTotal - MaxRenameCoverageRows));
         writer.WriteNumber("fallback_candidates", evidence.Coverage.FallbackAvailable);
         writer.WriteString("fallback_status", evidence.Coverage.FallbackStatus.ToString());
+        writer.WriteNumber("inferred_exact_count", evidence.ExactEvidence.Count(IsInferredBinding));
         writer.WriteEndObject();
     }
 
@@ -1893,6 +1896,16 @@ public sealed class EditService
         ReferenceEvidenceCoverage Coverage,
         IReadOnlyList<ReferenceEvidence> ExactEvidence);
 
+    /// <summary>
+    /// Whether a reference's target was proved by scope rather than inferred by a heuristic tier. Tier 3 binds a
+    /// receiver it can corroborate but no recorded type fact backs (julie's <c>tier3_receiver</c> at 0.65,
+    /// <c>tier3_static_type</c> at 0.70); tier 4 binds on global name uniqueness alone at 0.55. Both are real
+    /// references worth renaming, but a rename WRITES, so the preview must not render them as indistinguishable
+    /// from a scope-proved binding. A null tier is a direct extractor target or a relationship edge — proved.
+    /// </summary>
+    private static bool IsInferredBinding(ReferenceEvidence reference) =>
+        reference.ResolutionTier is >= 3;
+
     private static IReadOnlyList<IdentifierSite> RenameIdentifierSites(
         IReadOnlyList<ReferenceEvidence> evidence,
         int nameByteLength)
@@ -1979,8 +1992,25 @@ public sealed class EditService
                      .OrderBy(group => group.Key.Language, StringComparer.Ordinal)
                      .ThenBy(group => group.Key.Kind, StringComparer.Ordinal))
         {
+            int inferred = group.Count(IsInferredBinding);
             sb.Append("  exact ").Append(group.Key.Language).Append('/').Append(group.Key.Kind)
-                .Append('=').Append(group.Count()).Append('\n');
+                .Append('=').Append(group.Count());
+            if (inferred > 0)
+            {
+                sb.Append(" (").Append(inferred)
+                  .Append(" inferred, min confidence ")
+                  .Append(FormattableString.Invariant(
+                      $"{group.Min(static reference => reference.Confidence):0.00}"))
+                  .Append(')');
+            }
+            sb.Append('\n');
+        }
+        int inferredTotal = evidence.ExactEvidence.Count(IsInferredBinding);
+        if (inferredTotal > 0)
+        {
+            sb.Append("  note: ").Append(inferredTotal).Append(" of ").Append(evidence.ExactEvidence.Count)
+              .Append(" exact site(s) are inferred bindings (receiver or global-name tiers), not scope-proved; ")
+              .Append("review those lines in the diff before apply=true.\n");
         }
         if (evidence.FallbackSites.Count > 0)
             sb.Append("  fallback unknown/name_based=").Append(evidence.FallbackSites.Count).Append('\n');

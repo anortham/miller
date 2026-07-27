@@ -723,6 +723,88 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_InferredTierBindings_AreLabelledNotHiddenAmongProvedSites()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        // julie 2.19.0 binds many more C# references through heuristic tiers: tier3_static_type at 0.70 and
+        // tier4_global at 0.55 land in the SAME exact-evidence set as a scope-proved tier-1 binding.
+        foreach (string proved in new[] { "a", "b" })
+        {
+            fx.AddIdentifierResolution(
+                "d10000000000000000000000000000" + "0" + proved, JulieDbFixture.TotalMethodId,
+                tier: 1, confidence: 0.95, method: "tier1_local");
+        }
+        fx.AddIdentifierResolution(
+            "d100000000000000000000000000000c", JulieDbFixture.TotalMethodId,
+            tier: 3, confidence: 0.70, method: "tier3_static_type");
+        fx.AddIdentifierResolution(
+            "d100000000000000000000000000000d", JulieDbFixture.TotalMethodId,
+            tier: 4, confidence: 0.55, method: "tier4_global");
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Contains("2 inferred, min confidence 0.55", result.Output, StringComparison.Ordinal);
+        Assert.Contains(
+            "exact site(s) are inferred bindings (receiver or global-name tiers), not scope-proved",
+            result.Output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_AllBindingsScopeProved_SaysNothingAboutInference()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.DoesNotContain("inferred", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_RenameSymbol_Json_ReportsInferredCountsPerCoverageRow()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        foreach (string proved in new[] { "a", "b", "d" })
+        {
+            fx.AddIdentifierResolution(
+                "d10000000000000000000000000000" + "0" + proved, JulieDbFixture.TotalMethodId,
+                tier: 1, confidence: 0.95, method: "tier1_local");
+        }
+        fx.AddIdentifierResolution(
+            "d100000000000000000000000000000c", JulieDbFixture.TotalMethodId,
+            tier: 3, confidence: 0.70, method: "tier3_static_type");
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+            Format = "json",
+        });
+
+        JsonElement renameEvidence = JsonDocument.Parse(result.Output)
+            .RootElement.GetProperty("rename_evidence");
+        Assert.Equal(1, renameEvidence.GetProperty("inferred_exact_count").GetInt32());
+
+        JsonElement[] exactRows = [.. renameEvidence.GetProperty("coverage").EnumerateArray()
+            .Where(row => row.GetProperty("resolution_status").GetString() == "exact"
+                && row.GetProperty("kind").GetString() != "definition")];
+        Assert.Equal(1, exactRows.Sum(row => row.GetProperty("inferred_count").GetInt32()));
+        Assert.Contains(exactRows, row => row.GetProperty("min_confidence").GetDouble() < 0.75);
+    }
+
+    [Fact]
     public void Execute_ReplaceText_ApplyOutput_IncludesMatchProof()
     {
         using var fx = JulieDbFixture.CreateForEdit();

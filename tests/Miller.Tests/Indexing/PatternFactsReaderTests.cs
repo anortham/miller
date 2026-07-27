@@ -316,7 +316,7 @@ public sealed class PatternFactsReaderTests
             VALUES (
                 (SELECT COALESCE(MAX(revision_id), 0) + 1 FROM extraction_revisions),
                 NULL, 'scan', 'incremental', '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z',
-                '2.18.0', '4', '5', NULL, '{}');
+                '2.19.0', '4', '5', NULL, '{}');
             """);
 
         Assert.NotEqual(before, ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint);

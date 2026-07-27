@@ -287,7 +287,7 @@ public sealed class CliDispatchTests : IDisposable
             Assert.StartsWith("1.14.0", root.GetProperty("miller").GetProperty("version").GetString());
 
         JsonElement julie = root.GetProperty("julie_extract");
-        Assert.Equal("2.18.0", julie.GetProperty("pinned_version").GetString());
+        Assert.Equal("2.19.0", julie.GetProperty("pinned_version").GetString());
         Assert.Equal(5, julie.GetProperty("sqlite_schema_version").GetInt64());
         Assert.Equal(4, julie.GetProperty("extract_contract_version").GetInt64());
         Assert.Equal(3, julie.GetProperty("report_schema_version").GetInt64());
@@ -4209,7 +4209,7 @@ public sealed class CliDispatchTests : IDisposable
         Assert.StartsWith("artifact-", art.GetProperty("artifact_id").GetString());
         Assert.Equal(2, art.GetProperty("revision").GetInt64());
         Assert.Equal("partial", art.GetProperty("reference_resolution_status").GetString());
-        Assert.Equal("2", art.GetProperty("reference_resolution_version").GetString());
+        Assert.Equal("3", art.GetProperty("reference_resolution_version").GetString());
     }
 
     [Fact]
