@@ -1,3 +1,4 @@
+using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Server.Tools;
 using Miller.Tests.Indexing;
@@ -63,6 +64,76 @@ public sealed class SearchGoldenParityTests
 
         Assert.Equal(golden.Expected, result.Output);
         Assert.Equal(golden.ExpectedCount, result.Count);
+    }
+
+    [Theory]
+    [MemberData(nameof(CaseNames))]
+    public void SymbolRoute_ArmPresentButReturningNothing_RendersTheGoldenLexicalBytes(string caseName)
+    {
+        GoldenCase golden = Cases.Single(c => c.Name == caseName);
+
+        SearchRouteExecutionResult result = RunGolden(golden, new SilentArm());
+
+        Assert.Equal(golden.Expected, result.Output);
+        Assert.Equal(golden.ExpectedCount, result.Count);
+    }
+
+    [Fact]
+    public void SymbolRoute_CandidateShapesThatBypassTheArm_StillRenderTheGoldenLexicalBytes()
+    {
+        var bypassed = new List<string>();
+        foreach (GoldenCase golden in Cases)
+        {
+            var tripwire = new TripwireArm();
+            SearchRouteExecutionResult result = RunGolden(golden, tripwire);
+            if (tripwire.Consulted)
+                continue;
+
+            bypassed.Add(golden.Name);
+            Assert.Equal(golden.Expected, result.Output);
+        }
+
+        // File-mode and mixed candidate sets are excluded from fusion at the seam. If this corpus ever stops
+        // covering one, the guard above stops being exercised and the assertion becomes vacuous.
+        Assert.NotEmpty(bypassed);
+    }
+
+    private static SearchRouteExecutionResult RunGolden(GoldenCase golden, ISymbolFusionArm arm)
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fixture.DbPath));
+
+        return SearchRouteExecutor.RunSymbolsCore(
+            index,
+            RouteFor(golden.Mode),
+            new SearchRouteExecutionRequest(
+                Query: golden.Query,
+                Limit: golden.Limit,
+                Json: golden.Json,
+                ExcludeTests: golden.ExcludeTests,
+                CompactBanner: golden.CompactBanner,
+                FilePattern: golden.FilePattern,
+                Language: golden.Language,
+                HasDocLookup: golden.WithDocLookup
+                    ? ids => ids.ToHashSet(StringComparer.Ordinal)
+                    : null),
+            arm).Result;
+    }
+
+    private sealed class SilentArm : ISymbolFusionArm
+    {
+        public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request) => [];
+    }
+
+    private sealed class TripwireArm : ISymbolFusionArm
+    {
+        public bool Consulted { get; private set; }
+
+        public IReadOnlyList<FusedCandidate>? Fuse(ISymbolLookupIndex index, SymbolFusionRequest request)
+        {
+            Consulted = true;
+            return null;
+        }
     }
 
     [Fact]
