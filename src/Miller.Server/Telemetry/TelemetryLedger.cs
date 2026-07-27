@@ -257,6 +257,11 @@ public sealed class TelemetryLedger : IDisposable
                     return;
                 }
 
+                // The counting catch is INSIDE the gate. With it outside, a failing write released the lock on
+                // the way out, so Dispose could take the gate, flush a count that did not yet include this
+                // failure, and close — losing the drop from the persisted total the canary gate reads.
+                try
+                {
                 _insert.Parameters["$id"].Value =
                     string.IsNullOrWhiteSpace(id) ? Guid.CreateVersion7().ToString() : id;
                 _insert.Parameters["$ts"].Value = record.StartedAtUtc is { } startedAt
@@ -290,17 +295,19 @@ public sealed class TelemetryLedger : IDisposable
                 _insert.Parameters["$meta"].Value = record.MetadataJson ?? "{}";
 
                 _insert.ExecuteNonQuery();
+                }
+                catch (Exception)
+                {
+                    // Swallow EVERYTHING — a telemetry failure must not surface to the agent. Count it for the
+                    // dashboard's drop-rate KPI. (We intentionally do not narrow the catch: the ledger is on
+                    // the best-effort side of the seam, so any failure mode is treated identically.)
+                    Interlocked.Increment(ref _droppedWrites);
+                }
             }
         }
         catch (Exception)
         {
-            // Swallow EVERYTHING — a telemetry failure must not surface to the agent. Count it for the
-            // dashboard's drop-rate KPI. (We intentionally do not narrow the catch: the ledger is on the
-            // best-effort side of the seam, so any failure mode is treated identically.)
-            //
-            // Interlocked, not ++: this runs OUTSIDE the gate — the lock is released when control leaves the
-            // try — so concurrent failing writes would otherwise lose increments to a read-modify-write race,
-            // and the canary gate would under-report how incomplete its population is.
+            // Backstop for a failure taking the gate itself, which cannot be counted under it.
             Interlocked.Increment(ref _droppedWrites);
         }
     }

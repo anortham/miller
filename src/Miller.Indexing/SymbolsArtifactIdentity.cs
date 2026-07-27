@@ -12,7 +12,10 @@ namespace Miller.Indexing;
 /// revision 1 again. A derived sidecar that compares only revision reads that collision as "fresh" and serves
 /// pre-rebuild data indefinitely. Every derived artifact must therefore stamp and compare the artifact id too.
 /// </remarks>
-public readonly record struct SymbolsArtifactIdentity(long Revision, string? ArtifactId)
+public readonly record struct SymbolsArtifactIdentity(
+    long Revision,
+    string? ArtifactId,
+    bool MetadataPresent = false)
 {
     /// <summary>Read the current identity of <paramref name="symbolsDbPath"/>.</summary>
     /// <exception cref="ArgumentException"><paramref name="symbolsDbPath"/> is null or blank.</exception>
@@ -20,7 +23,8 @@ public readonly record struct SymbolsArtifactIdentity(long Revision, string? Art
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         using var freshness = new FreshnessReader(symbolsDbPath);
-        return new SymbolsArtifactIdentity(freshness.LatestRevision(), freshness.ArtifactId());
+        return new SymbolsArtifactIdentity(
+            freshness.LatestRevision(), freshness.ArtifactId(), freshness.HasArtifactMetadata());
     }
 
     /// <summary>
@@ -29,8 +33,12 @@ public readonly record struct SymbolsArtifactIdentity(long Revision, string? Art
     /// </summary>
     /// <remarks>
     /// A sidecar written before artifact stamping existed carries a null id and can never be proven current, so
-    /// it reports stale and rebuilds exactly once. An artifact whose own id is unreadable (a pre-artifact_id
-    /// extract) falls back to revision equality — the historical behaviour — rather than rebuilding forever.
+    /// it reports stale and rebuilds exactly once.
+    ///
+    /// An artifact with no id of its own splits two ways. No <c>artifact_metadata</c> at all is a genuine
+    /// pre-stamping extract, so it falls back to revision equality — the historical behaviour — rather than
+    /// rebuilding forever. A metadata table that EXISTS but carries no <c>artifact_id</c> is something the
+    /// pinned extractor never emits, so it is treated as unprovable and refused rather than trusted.
     /// </remarks>
     /// <summary>
     /// Read the current identity of <paramref name="symbolsDbPath"/>, yielding a null <see cref="ArtifactId"/>
@@ -67,7 +75,7 @@ public readonly record struct SymbolsArtifactIdentity(long Revision, string? Art
     public bool MatchesArtifact(string? stampedArtifactId)
     {
         if (ArtifactId is null)
-            return true;
+            return !MetadataPresent;
         return string.Equals(stampedArtifactId, ArtifactId, StringComparison.Ordinal);
     }
 
@@ -76,7 +84,7 @@ public readonly record struct SymbolsArtifactIdentity(long Revision, string? Art
         if (stampedRevision != Revision)
             return false;
         if (ArtifactId is null)
-            return true;
+            return !MetadataPresent;
         return string.Equals(stampedArtifactId, ArtifactId, StringComparison.Ordinal);
     }
 }

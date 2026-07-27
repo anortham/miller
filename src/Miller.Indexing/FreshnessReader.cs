@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Miller.Indexing;
@@ -123,6 +124,27 @@ public sealed class FreshnessReader : IDisposable
     /// (a synthetic/legacy DB) — callers must treat null as "unknown", never as "unchanged".
     /// </summary>
     /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
+    /// <summary>
+    /// Whether this DB carries an <c>artifact_metadata</c> table with rows. Distinguishes a genuine pre-stamping
+    /// extract, where a null <see cref="ArtifactId"/> is expected and harmless, from a metadata table that exists
+    /// but has no id — a shape the pinned extractor never emits, so a null there is not to be trusted.
+    /// </summary>
+    public bool HasArtifactMetadata()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM artifact_metadata);";
+        try
+        {
+            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 /* SQLITE_ERROR: no such table */)
+        {
+            return false;
+        }
+    }
+
     public string? ArtifactId()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

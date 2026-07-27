@@ -611,6 +611,33 @@ public sealed class TelemetryLedgerTests : IDisposable
     }
 
     [Fact]
+    public void DroppedWrites_ConcurrentFailures_AreAllCountedAndAllPersisted()
+    {
+        var bad = new TelemetryRecord(
+            Tool: "search", Op: null, WorkspaceId: "ws1", WorkspaceRoot: null,
+            DurationMs: -5, Outcome: "ok", ErrorKind: null,
+            ResultCount: null, BytesExamined: 0, BytesReturned: 0, SourceBytes: 0,
+            EstTokens: null, IndexFresh: null, TargetHash: null, MetadataJson: "{}");
+
+        const int writers = 8;
+        const int perWriter = 25;
+        using (var ledger = TelemetryLedger.Open(_dbPath, workspaceId: "ws1"))
+        {
+            Parallel.For(0, writers, _ =>
+            {
+                for (int i = 0; i < perWriter; i++)
+                    ledger.Record(in bad);
+            });
+
+            Assert.Equal(writers * perWriter, ledger.DroppedWrites);
+        }
+
+        // The count must reach the ledger a later process reads, not just the in-process field: a drop counted
+        // after the final flush would leave the canary gate under-reporting its own incompleteness.
+        Assert.Equal(writers * perWriter, TelemetryLedger.ReadPersistedDropCount(_dbPath));
+    }
+
+    [Fact]
     public void DroppedWrites_SurviveTheProcessThatSwallowedThem()
     {
         var bad = new TelemetryRecord(
