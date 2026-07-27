@@ -9,7 +9,7 @@ public sealed class SymbolsArtifactIdentityTests
     [Fact]
     public void MatchesArtifact_MetadataTableAbsent_FallsBackToTheHistoricalBehaviour()
     {
-        var preStamping = new SymbolsArtifactIdentity(7, null);
+        var preStamping = SymbolsArtifactIdentity.Unprovable(7);
 
         Assert.True(preStamping.MatchesArtifact(null));
         Assert.True(preStamping.MatchesArtifact("artifact-anything"));
@@ -30,6 +30,22 @@ public sealed class SymbolsArtifactIdentityTests
         var anomalous = new SymbolsArtifactIdentity(7, null, MetadataPresent: true);
 
         Assert.False(anomalous.Matches(7, null));
+    }
+
+    [Fact]
+    public void ReadSymbolsIdentity_RebasedOnACallerRevision_KeepsTheMetadataPresentVerdict()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        Exec(fx.DbPath, "DELETE FROM artifact_metadata WHERE key = 'artifact_id';");
+
+        // Rebasing an identity onto a caller-supplied revision must not quietly drop the fact that the artifact
+        // HAS metadata and simply omitted its id — that is what makes a null id untrustworthy rather than
+        // historical. `with` preserves it; reconstructing positionally did not.
+        SymbolsArtifactIdentity rebased = SymbolsArtifactIdentity.Read(fx.DbPath) with { Revision = 42 };
+
+        Assert.Equal(42, rebased.Revision);
+        Assert.True(rebased.MetadataPresent);
+        Assert.False(rebased.MatchesArtifact("artifact-a"));
     }
 
     [Fact]

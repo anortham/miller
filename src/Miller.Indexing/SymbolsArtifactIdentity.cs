@@ -15,8 +15,12 @@ namespace Miller.Indexing;
 public readonly record struct SymbolsArtifactIdentity(
     long Revision,
     string? ArtifactId,
-    bool MetadataPresent = false)
+    bool MetadataPresent)
 {
+    /// <summary>An identity that cannot prove its generation: no artifact id and no metadata to demand one.
+    /// Read gates treat it as the historical revision-only comparison.</summary>
+    public static SymbolsArtifactIdentity Unprovable(long revision) => new(revision, null, MetadataPresent: false);
+
     /// <summary>Read the current identity of <paramref name="symbolsDbPath"/>.</summary>
     /// <exception cref="ArgumentException"><paramref name="symbolsDbPath"/> is null or blank.</exception>
     public static SymbolsArtifactIdentity Read(string symbolsDbPath)
@@ -52,7 +56,7 @@ public readonly record struct SymbolsArtifactIdentity(
     public static SymbolsArtifactIdentity TryRead(string symbolsDbPath)
     {
         if (string.IsNullOrWhiteSpace(symbolsDbPath) || !File.Exists(symbolsDbPath))
-            return new SymbolsArtifactIdentity(0, null);
+            return Unprovable(0);
 
         try
         {
@@ -61,7 +65,7 @@ public readonly record struct SymbolsArtifactIdentity(
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            return new SymbolsArtifactIdentity(0, null);
+            return Unprovable(0);
         }
     }
 

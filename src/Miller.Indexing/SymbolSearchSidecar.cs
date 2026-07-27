@@ -377,11 +377,12 @@ public sealed class SymbolSearchSidecar
     {
         try
         {
-            return new SymbolsArtifactIdentity(revision, SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId);
+            SymbolsArtifactIdentity live = SymbolsArtifactIdentity.Read(symbolsDbPath);
+            return live with { Revision = revision };
         }
         catch (Exception ex) when (ex is SqliteException or IOException or InvalidOperationException)
         {
-            return new SymbolsArtifactIdentity(revision, null);
+            return SymbolsArtifactIdentity.Unprovable(revision);
         }
     }
 
