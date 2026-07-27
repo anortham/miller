@@ -126,6 +126,14 @@ Reference row fields:
   `pending_name`.
 - `resolution_tier`: extractor resolution tier when available.
 - `confidence`: numeric evidence confidence.
+- `reference_site_id`: producer-owned canonical reference-site identity (julie-extract schema 5 and later).
+  An exact site is the stable hash of `(file_id, start_byte, end_byte)`; a spanless site is the stable hash of
+  `(file_id, row_specific_id)` and is prefixed `reference_site_spanless-`.
+- `is_exact`: producer attestation that the site has a verified source span. Distinct from
+  `resolution_status`, which reports whether Miller resolved the reference to the target symbol — a row may be
+  `resolution_status=exact` with `is_exact=false` when the target is known but the span is not.
+- `site_provenance`: `target_token` when the producer attested an exact token span, `spanless` otherwise.
+  `is_exact=true` implies `target_token`; `is_exact=false` implies `spanless`.
 
 `resolved_target` is still the resolved symbol object. `nodes` contains the target symbol only when
 `include_definition` is true. `links` is empty because reference occurrences are rows, not graph edges.
