@@ -88,7 +88,8 @@ public static class CanaryLedgerReader
 
         using SqliteTransaction snapshot = connection.BeginTransaction();
         IReadOnlyList<CanaryRow> rows = ReadCanaryRows(connection, snapshot);
-        IReadOnlyList<CanaryFollowUp> followUps = ReadFollowUps(connection, snapshot);
+        IReadOnlyList<CanaryFollowUp> followUps =
+            ReadFollowUps(connection, snapshot, CandidateTargets(rows));
         snapshot.Commit();
         return new CanaryLedgerSnapshot(rows, followUps);
     }
@@ -136,18 +137,88 @@ public static class CanaryLedgerReader
         if (!TableExists(connection, "tool_telemetry"))
             return [];
 
-        return ReadFollowUps(connection, transaction: null);
+        using SqliteTransaction snapshot = connection.BeginTransaction();
+        IReadOnlyList<CanaryFollowUp> followUps = ReadFollowUps(
+            connection, snapshot, CandidateTargets(ReadCanaryRows(connection, snapshot)));
+        snapshot.Commit();
+        return followUps;
     }
 
-    private static IReadOnlyList<CanaryFollowUp> ReadFollowUps(
-        SqliteConnection connection, SqliteTransaction? transaction)
+    /// <summary>
+    /// The <c>(workspace_id, target_hash)</c> pairs a follow-up must carry to be creditable at all — the exact
+    /// key set <see cref="AttributedRowIds"/> looks up. Derived here so the read and the join cannot drift apart.
+    /// </summary>
+    public static IReadOnlySet<(string Workspace, string Hash)> CandidateTargets(
+        IReadOnlyList<CanaryRow> canaryRows)
     {
+        ArgumentNullException.ThrowIfNull(canaryRows);
+
+        var candidates = new HashSet<(string Workspace, string Hash)>();
+        foreach (CanaryRow row in canaryRows)
+        {
+            if (row.WorkspaceId is null || !TryParseTs(row.Ts, out _))
+                continue;
+
+            foreach (string hash in row.ResultNameHashes
+                .Concat(row.ResultPathHashes).Concat(row.ResultQualifiedHashes))
+            {
+                candidates.Add((row.WorkspaceId, hash));
+            }
+        }
+        return candidates;
+    }
+
+    /// <summary>
+    /// Reads only the follow-ups that could be credited. The old query pulled every successful
+    /// <c>inspect</c>/<c>content read</c> row the ledger had ever recorded, which on a working ledger dwarfs the
+    /// canary population and grows without bound; a follow-up whose <c>(workspace_id, target_hash)</c> matches
+    /// no canary row is dropped by the join anyway, so pushing that set into SQL is exact, not a heuristic.
+    /// </summary>
+    private static IReadOnlyList<CanaryFollowUp> ReadFollowUps(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        IReadOnlySet<(string Workspace, string Hash)> candidates)
+    {
+        if (candidates.Count == 0)
+            return [];
+
+        // The temp database is writable even when main is opened read-only.
+        using (SqliteCommand create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText =
+                "CREATE TEMP TABLE IF NOT EXISTS canary_candidate_target " +
+                "(workspace_id TEXT NOT NULL, target_hash TEXT NOT NULL, " +
+                "PRIMARY KEY (workspace_id, target_hash)) WITHOUT ROWID;" +
+                "DELETE FROM canary_candidate_target;";
+            create.ExecuteNonQuery();
+        }
+
+        using (SqliteCommand insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText =
+                "INSERT OR IGNORE INTO canary_candidate_target (workspace_id, target_hash) " +
+                "VALUES ($ws, $hash);";
+            SqliteParameter workspace = insert.Parameters.Add("$ws", SqliteType.Text);
+            SqliteParameter hash = insert.Parameters.Add("$hash", SqliteType.Text);
+            foreach ((string candidateWorkspace, string candidateHash) in candidates)
+            {
+                workspace.Value = candidateWorkspace;
+                hash.Value = candidateHash;
+                insert.ExecuteNonQuery();
+            }
+        }
+
         using SqliteCommand cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText =
-            "SELECT ts, workspace_id, target_hash, rowid FROM tool_telemetry " +
-            "WHERE outcome = 'ok' AND target_hash IS NOT NULL " +
-            "AND (tool = 'inspect' OR (tool = 'content' AND op = 'read')) ORDER BY ts ASC, rowid ASC;";
+            "SELECT t.ts, t.workspace_id, t.target_hash, t.rowid FROM tool_telemetry AS t " +
+            "JOIN canary_candidate_target AS c " +
+            "  ON c.workspace_id = t.workspace_id AND c.target_hash = t.target_hash " +
+            "WHERE t.outcome = 'ok' AND t.target_hash IS NOT NULL " +
+            "AND (t.tool = 'inspect' OR (t.tool = 'content' AND t.op = 'read')) " +
+            "ORDER BY t.ts ASC, t.rowid ASC;";
 
         var rows = new List<CanaryFollowUp>();
         using SqliteDataReader reader = cmd.ExecuteReader();

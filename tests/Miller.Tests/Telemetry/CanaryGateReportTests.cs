@@ -428,6 +428,40 @@ public sealed class CanaryGateReportTests : IDisposable
         Assert.Contains("identifier-shadow: underpowered", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ReadFollowUps_SkipsRowsNoCanaryCouldEverCredit_WithoutChangingAttribution()
+    {
+        using (var seeder = new CanarySeeder(Db))
+        {
+            string served = Digest("served");
+            seeder.InsertCanary(
+                "ws-a", "2026-07-14", "prose", "treatment", timeOfDay: "10:00:00.000",
+                nameHashes: [served]);
+            seeder.InsertFollowUp("ws-a", "2026-07-14", served, timeOfDay: "10:01:00.000");
+            seeder.InsertFollowUp("ws-a", "2026-07-14", Digest("never-served"), timeOfDay: "10:01:00.000");
+            seeder.InsertFollowUp("ws-b", "2026-07-14", served, timeOfDay: "10:01:00.000");
+        }
+
+        SqliteConnection.ClearAllPools();
+        IReadOnlyList<CanaryFollowUp> followUps = CanaryLedgerReader.ReadFollowUps(Db);
+
+        CanaryFollowUp only = Assert.Single(followUps);
+        Assert.Equal("ws-a", only.WorkspaceId);
+        Assert.Equal(Digest("served"), only.TargetHash);
+        Assert.Single(Attributed());
+    }
+
+    [Fact]
+    public void ReadFollowUps_LedgerWithNoCanaryRows_ReadsNothing()
+    {
+        using (var seeder = new CanarySeeder(Db))
+            seeder.InsertFollowUp("ws-a", "2026-07-14", Digest("orphan"), timeOfDay: "10:01:00.000");
+
+        SqliteConnection.ClearAllPools();
+
+        Assert.Empty(CanaryLedgerReader.ReadFollowUps(Db));
+    }
+
     private sealed record Served(IReadOnlyList<string> Name, IReadOnlyList<string> Path, IReadOnlyList<string> Qualified);
 
     private bool AttributesFollowUp(Served served, string followUpHash)
