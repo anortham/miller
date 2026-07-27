@@ -909,7 +909,12 @@ public sealed class EditService
             DiskVerified: plan.IsSuccess,
             candidateReason,
             candidate?.LineStart,
-            candidate?.LineEnd);
+            candidate?.LineEnd,
+            plan.MatchedMode == TextMatchMode.Fuzzy
+                ? [.. plan.Matches
+                    .OrderBy(static m => m.StartLine)
+                    .Select(static m => (m.StartLine, m.Distance))]
+                : []);
     }
 
     private long ExpectedWorkspaceRevision()
@@ -1757,6 +1762,12 @@ public sealed class EditService
             notes.Add("old_text did not verify against current disk text");
         if (!string.IsNullOrWhiteSpace(evidence.CandidateReason))
             notes.Add(evidence.CandidateReason);
+        if (evidence.SelectedSiteDistances.Count > 0)
+        {
+            notes.Add("fuzzy sites " + string.Join(", ", evidence.SelectedSiteDistances
+                .Select(static site =>
+                    FormattableString.Invariant($"L{site.Line}~{site.Distance}"))));
+        }
 
         if (notes.Count == 0)
             return;
@@ -1782,6 +1793,18 @@ public sealed class EditService
         w.WriteString("content_index_state", evidence.ContentIndexState);
         if (!string.IsNullOrWhiteSpace(evidence.CandidateReason))
             w.WriteString("content_index_note", evidence.CandidateReason);
+        if (evidence.SelectedSiteDistances.Count > 0)
+        {
+            w.WriteStartArray("fuzzy_sites");
+            foreach ((int line, int distance) in evidence.SelectedSiteDistances)
+            {
+                w.WriteStartObject();
+                w.WriteNumber("line", line);
+                w.WriteNumber("distance", distance);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+        }
     }
 
     private static EditResult StaleBlocked(
@@ -2275,7 +2298,12 @@ public sealed class EditService
         bool DiskVerified,
         string? CandidateReason,
         int? CandidateLineStart,
-        int? CandidateLineEnd);
+        int? CandidateLineEnd,
+        /// <summary>The selected sites as <c>(line, edit distance)</c>, ascending by line. Only meaningful for
+        /// fuzzy matching, where <c>occurrence=all</c> rewrites every site within the distance threshold rather
+        /// than only the closest — so the spread has to be visible before an apply, not inferable after one.
+        /// </summary>
+        IReadOnlyList<(int Line, int Distance)> SelectedSiteDistances);
 
     private sealed record TextWindow(string Text, int StartByte, int StartLine);
 

@@ -679,6 +679,50 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_ReplaceText_FuzzyOccurrenceAll_PreviewShowsEachSitesDistance()
+    {
+        const string relPath = "src/Api.cs";
+        const string source =
+            "var a = Compute(\"target-value\");\n" +
+            "var b = Compute(\"target-value\");\n" +
+            "var c = Compute(\"target-valu\");\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "var a = Compute(\"target-value\");",
+            NewText = "var a = Compute(\"updated\");",
+            Occurrence = "all",
+            MatchMode = "fuzzy",
+        });
+
+        Assert.False(result.Applied);
+        // occurrence=all rewrites every site within the threshold, not only the closest, so the preview has to
+        // show the spread: an exact site and two progressively worse ones are all in this plan.
+        Assert.Contains("fuzzy sites L1~0, L2~1, L3~2", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execute_ReplaceText_ExactMatch_ReportsNoFuzzySiteDistances()
+    {
+        const string relPath = "src/Api.cs";
+        const string source = "var a = Compute(\"target-value\");\n";
+        using var fx = CreateSingleFileFixture(relPath, source);
+        LayFiles(new Dictionary<string, string> { [relPath] = source });
+        var (svc, _) = Build(fx);
+
+        var result = svc.Execute(Req("replace_text", relPath) with
+        {
+            OldText = "var a = Compute(\"target-value\");",
+            NewText = "var a = Compute(\"updated\");",
+        });
+
+        Assert.DoesNotContain("fuzzy sites", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Execute_ReplaceText_ApplyOutput_IncludesMatchProof()
     {
         using var fx = JulieDbFixture.CreateForEdit();

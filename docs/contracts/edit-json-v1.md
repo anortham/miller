@@ -85,6 +85,10 @@ selected tests.
 selected for preview or apply. Normalized and fuzzy `occurrence=all` skip overlapping candidates rather than emit
 corrupting splices; compact output states the selected and skipped counts when they differ. Fuzzy
 `occurrence=first|last` chooses the lowest edit-distance tier before position. Fuzzy `occurrence=all` selects
-lowest-distance non-overlapping candidates from the full threshold population. When the changed region is too
+lowest-distance non-overlapping candidates from the full threshold population — every site within the threshold,
+not only the closest, so a distant-but-admissible site is rewritten alongside an exact one. Fuzzy results
+therefore carry `fuzzy_sites`, one `{line, distance}` per selected site ascending by line, so the spread is
+visible in the preview before an apply; compact output renders the same as a `fuzzy sites L<line>~<distance>`
+match note. Non-fuzzy matches omit the field. When the changed region is too
 large for bounded LCS alignment, the diff still returns a bounded prefix proof plus exact old/new omitted-line
 counts.
