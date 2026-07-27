@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Goal:** Replace the defective extraction, tool, semantic, and process contracts with one verified breaking contract across `julie-extractors`, Miller, and unreleased Eros.
+**Goal:** Replace the defective extraction, tool, and semantic contracts with one verified breaking contract across `julie-extractors` and Miller.
 
-**Architecture:** `julie-extractors` owns source-attested reference-site identity, capability status, and marker facts. Miller consumes those facts through schema-gated readers and exposes strict, lossless, bounded tool/process contracts. Eros moves atomically to the new Miller process shapes without compatibility adapters.
+**Architecture:** `julie-extractors` owns source-attested reference-site identity, capability status, and marker facts. Miller consumes those facts through schema-gated readers and exposes strict, lossless, bounded tool/process contracts. Eros is an unreleased downstream consumer and is repaired only after Miller and its direct producers are optimal.
 
-**Tech Stack:** Rust 1.96, SQLite, JSONL, .NET 10/C#, xUnit, MCP, Miller CLI, Eros process adapters.
+**Tech Stack:** Rust 1.96, SQLite, JSONL, .NET 10/C#, xUnit, MCP, Miller CLI.
 
 **Architecture Quality:** High-risk contract-first change. The artifact and process seams remain the caller-facing interfaces; tests exercise producer artifacts through those interfaces rather than duplicating private normalization in consumers.
 
@@ -14,7 +14,7 @@
 
 - The approved design is `docs/plans/2026-07-26-cross-repo-dogfood-contract-repair-design.md`.
 - SQLite schema is `5`, extract contract is `4`, and JSONL schema is `4`.
-- Eros is unreleased and moves atomically; do not add compatibility parsers, dual fields, version ranges, or `identifier_id` fallback.
+- Eros is unreleased and excluded from this completion gate; downstream breakage is repaired later without compatibility parsers, dual fields, version ranges, or `identifier_id` fallback.
 - Reference-site identity is the producer hash of `(file_id, start_byte, end_byte)` for an attested target-token span; kind and target are not physical-site identity.
 - Exact assertions key by `(reference_site_id, target_symbol_id, canonical_kind)` and fallback assertions by `(reference_site_id, target_name, canonical_kind)`.
 - Spanless evidence stays explicitly non-exact and never merges with spanned or editable evidence.
@@ -29,37 +29,37 @@
 
 ## Architecture Quality
 
-**Affected modules:** `julie-extractors` canonical extraction and artifact writer; Miller artifact readers, tool renderers, continuation codecs, diagnostics, semantic serving/evaluation, and CLI exports; Eros Miller adapters and their callers.
+**Affected modules:** `julie-extractors` canonical extraction and artifact writer; Miller artifact readers, tool renderers, continuation codecs, diagnostics, semantic serving/evaluation, and CLI exports.
 
 **Caller-facing interface:** schema-5 SQLite/JSONL artifacts, Miller's existing nine MCP tools, `patterns --json` schema 2, `references export --jsonl` schema 2, and `capabilities --json`.
 
 **Depth/locality check:** physical occurrence identity and marker intent are decided once by the source owner. Paging policy is centralized around typed population identities. Semantic admission is one pure policy reused by every serving path.
 
-**Test surface:** producer contract/golden artifacts, Miller public tool and CLI entry points, and Eros public `IMillerBridge` behavior.
+**Test surface:** producer contract/golden artifacts plus Miller public tool and CLI entry points.
 
-**Seams/adapters:** the SQLite/JSONL artifact and Miller subprocess JSON are the only cross-language seams. Eros receives the replacement directly; no transitional adapter is introduced.
+**Seams/adapters:** the SQLite/JSONL artifact and Miller subprocess JSON are the only cross-language seams. No transitional adapter is introduced.
 
-**Rejected shortcuts:** consumer overlap deduplication, legacy status aliases, global-revision cursors, duplicate Trace unions, raw-string diagnostics, marker rescanning, one-hit dominance, Eros compatibility lanes.
+**Rejected shortcuts:** consumer overlap deduplication, legacy status aliases, global-revision cursors, duplicate Trace unions, raw-string diagnostics, marker rescanning, one-hit dominance, and downstream compatibility lanes.
 
 **Architecture risk:** high. Contract-first ordering, TDD, real all-language artifacts, exact version gates, and cross-repo branch gates control it.
 
 ## Verification Strategy
 
-**Project source of truth:** Miller `CLAUDE.md`; `julie-extractors` `AGENTS.md`, `docs/testing-strategy.md`, and `docs/contracts/`; Eros `CLAUDE.md`.
+**Project source of truth:** Miller `CLAUDE.md`; `julie-extractors` `AGENTS.md`, `docs/testing-strategy.md`, and `docs/contracts/`.
 
 **Worker red/green scope:** the narrowest named test class/target for the changed interface. Miller uses filtered `dotnet test`; Julie uses `cargo +1.96.0 test -p <crate> <target>`; Eros uses filtered project tests.
 
-**Worker ceiling:** one repo's focused test projects or one Julie default tier. Workers do not own the cross-repo real-artifact gate, Miller scale/all gate, Julie certification, or final Eros full suite.
+**Worker ceiling:** one repo's focused test projects or one Julie default tier. Workers do not own the cross-repo real-artifact gate, Miller scale/all gate, or Julie certification.
 
 **Worker gate invariant:** each focused test must prove the named contract through its caller-facing seam and record its observed RED failure before implementation.
 
-**Lead affected-change scope:** Miller `scripts/test.sh`; Julie `cargo +1.96.0 xtask test default` plus `cargo +1.96.0 xtask test contract`; Eros `dotnet test tests/Eros.Miller.Tests/Eros.Miller.Tests.csproj` and directly impacted caller projects.
+**Lead affected-change scope:** Miller `scripts/test.sh`; Julie `cargo +1.96.0 xtask test default` plus `cargo +1.96.0 xtask test contract`.
 
-**Branch gate:** Miller `dotnet build Miller.slnx -c Release` and `scripts/test.sh all`; Julie `cargo +1.96.0 fmt --check`, `cargo +1.96.0 xtask test default`, `cargo +1.96.0 xtask test contract`, and strict language-quality/certification gates required by shared extraction changes; Eros `dotnet build -c Release` and `dotnet test`.
+**Branch gate:** Miller `dotnet build Miller.slnx -c Release` and fast/scale suites; Julie `cargo +1.96.0 fmt --check`, workspace check/tests/doctests, and strict language-quality/certification gates required by shared extraction changes.
 
 **Replay/metric evidence:** hard gates are schema/status/reference-site invariants, per-language marker disposition, valid/bounded/paged JSON, semantic open+sealed gates, and live nine-tool completion. Token counts, latency, calls, and irrelevant rows are reported alongside hard correctness gates.
 
-**Escalation triggers:** shared extractor normalization requires all-language certification; indexing/pin changes require Miller scale/all and full-rebuild dogfood; semantic changes require open then sealed evaluation; Eros model changes require all exact `MillerReferenceExportRow` callers.
+**Escalation triggers:** shared extractor normalization requires all-language certification; indexing/pin changes require Miller scale/all and full-rebuild dogfood; semantic changes require open then sealed evaluation.
 
 **Assigned verification failure:** Workers stop and report when assigned verification fails unless this plan explicitly changes that gate.
 
@@ -74,7 +74,7 @@
 | Task 3: Miller request, paging, diagnostics, and source hygiene | Batch A | Miller continuation/Inspect/Patterns/Trace/Edit/Content request-rendering files, NUL fixture, focused tests | No | Separate repository from Tasks 1 and 2. |
 | Task 4: Miller semantic admission policy v2 | None - serial after Task 3 | Miller semantic policy, serving/canary/eval wiring, semantic tests | Yes | Shares Search/CLI serving paths with the request-contract audit in Task 3. |
 | Task 5: Miller schema-5 consumer and exports | None - serial after Tasks 1-4 | Miller schema gate, reference/marker/health readers, Julie pin/fixtures, process exports/capabilities, tests/docs | Yes | Requires final producer schema and Miller paging/semantic baseline. |
-| Task 6: Eros atomic process-contract replacement | None - serial after Task 5 | Eros Miller models/parsers/constants/fixtures and all exact impacted callers/tests | Yes | Requires the final Miller schema-2 process envelopes. |
+| Task 6: Eros atomic process-contract replacement | Deferred downstream | Eros Miller models/parsers/constants/fixtures and all exact impacted callers/tests | Yes | Excluded until Miller and its direct producers are complete. |
 
 ### Task 1: Producer reference and artifact contract
 
@@ -110,12 +110,12 @@
 **Approach:** Start with failing schema/writer/CLI tests. Do not infer sites in Miller. Relationship constructors/normalization must expose exact target-token spans; unresolved spanless rows remain non-exact. The producer-created SQLite catalog must compare equal to the checked-in normalized DDL authority.
 
 **Acceptance criteria:**
-- [ ] Schema/contract/JSONL versions are 5/4/4 and incompatible old artifacts fail clearly.
-- [ ] Identifier, relationship, and pending evidence for one attested token share a site; same-line distinct tokens do not.
-- [ ] Same-site distinct targets/kinds survive as separate assertions.
-- [ ] No post-hoc overlap, line-only, or nearest-token identity is required by consumers.
-- [ ] The certified snapshot has exactly 70 `open` reference-resolution gaps and no unknown statuses.
-- [ ] Focused artifact/CLI tests pass and the worker commit/report records RED and GREEN evidence.
+- [x] Schema/contract/JSONL versions are 5/4/4 and incompatible old artifacts fail clearly.
+- [x] Identifier, relationship, and pending evidence for one attested token share a site; same-line distinct tokens do not.
+- [x] Same-site distinct targets/kinds survive as separate assertions.
+- [x] No post-hoc overlap, line-only, or nearest-token identity is required by consumers.
+- [x] The certified snapshot has exactly 70 `open` reference-resolution gaps and no unknown statuses.
+- [x] Focused artifact/CLI tests pass and the worker commit/report records RED and GREEN evidence.
 
 ### Task 2: Producer marker fact contract
 
@@ -145,11 +145,11 @@
 **Approach:** Write failing generic collector and language-matrix tests first. Reuse source-region facts rather than adding per-language regexes. Emit one fact per actionable physical line; normalize marker names and retain exact semantic spans.
 
 **Acceptance criteria:**
-- [ ] Actionable markers emit one exact fact per physical line with the required metadata.
-- [ ] Prose mentioning marker words later in a sentence emits nothing.
-- [ ] Multi-line block/doc comments are classified line by line.
-- [ ] Every supported language is proven applicable with fixtures or explicitly `not_applicable`.
-- [ ] Structural-fact registry/docs stay machine-checked and focused tests pass with RED/GREEN evidence.
+- [x] Actionable markers emit one exact fact per physical line with the required metadata.
+- [x] Prose mentioning marker words later in a sentence emits nothing.
+- [x] Multi-line block/doc comments are classified line by line.
+- [x] Every supported language is proven applicable with fixtures or explicitly `not_applicable`.
+- [x] Structural-fact registry/docs stay machine-checked and focused tests pass with RED/GREEN evidence.
 
 ### Task 3: Miller request, paging, diagnostics, and source hygiene
 
@@ -187,13 +187,13 @@
 **Approach:** Add one failing behavior test at a time. Keep Context's token bound and other stricter bounds; the 12 KiB envelope is universal, not the only bound. Avoid semantic-policy changes in this task.
 
 **Acceptance criteria:**
-- [ ] Unknown Inspect depth and all other invalid enum-like inputs refuse without defaulting.
-- [ ] Inspect file and Patterns pages replay deterministically, survive unrelated revisions, and reject changed populations/kinds.
-- [ ] Free-text Patterns fairly represents matched families.
-- [ ] Trace schema 2 has no duplicate union and advances only emitted rows under 12 KiB.
-- [ ] Edit/Content diagnostics preserve typed outcome/class/channel across MCP, CLI, JSON, and telemetry.
-- [ ] Tracked text contains no disallowed binary control bytes.
-- [ ] Focused tests and `scripts/test.sh` pass with RED/GREEN evidence.
+- [x] Unknown Inspect depth and all other invalid enum-like inputs refuse without defaulting.
+- [x] Inspect file and Patterns pages replay deterministically, survive unrelated revisions, and reject changed populations/kinds.
+- [x] Free-text Patterns fairly represents matched families.
+- [x] Trace schema 2 has no duplicate union and advances only emitted rows under 12 KiB.
+- [x] Edit/Content diagnostics preserve typed outcome/class/channel across MCP, CLI, JSON, and telemetry.
+- [x] Tracked text contains no disallowed binary control bytes.
+- [x] Focused tests and `scripts/test.sh` pass with RED/GREEN evidence.
 
 ### Task 4: Miller semantic admission policy v2
 
@@ -229,12 +229,13 @@
 **Approach:** Start with pure policy tests, then serving tests for one-hit protection and Conceptual multi-hit admission. Run open evaluation before freezing/running the sealed slice. Change weights only if the approved lexical-population ordering hard gate fails.
 
 **Acceptance criteria:**
-- [ ] One-hit evidence is never classified decisive and remains first while semantic expansion stays available.
-- [ ] Decisive multi-hit evidence blocks semantic-only population entry for every hybrid class.
-- [ ] Weak/zero-hit recall remains available; lexical-only route bytes remain identical.
-- [ ] Policy version 2 is explicit in all canary/shadow/cohort/export/eval paths.
-- [ ] Open and sealed semantic gates pass, including Conceptual rerank quality.
-- [ ] Focused tests and `scripts/test.sh` pass with RED/GREEN evidence.
+- [x] One-hit evidence is never classified decisive and remains first while semantic expansion stays available.
+- [x] Decisive multi-hit evidence blocks semantic-only population entry for every hybrid class.
+- [x] Weak/zero-hit recall remains available; lexical-only route bytes remain identical.
+- [x] Policy version 2 is explicit in all canary/shadow/cohort/export/eval paths.
+- [x] Open semantic gates pass, including Conceptual rerank quality.
+- [ ] Sealed semantic gate remains blocked because the user-owned sealed set was not available.
+- [x] Focused tests and `scripts/test.sh` pass with RED/GREEN evidence.
 
 ### Task 5: Miller schema-5 consumer and exports
 
@@ -274,14 +275,16 @@
 **Approach:** Begin with incompatible-schema, exact-site, export-shape, marker, and 70-row health tests. Fixture guards compare normalized DDL and contract fingerprints to producer authority. Do not keep legacy fields or schema-4 compatibility.
 
 **Acceptance criteria:**
-- [ ] Miller hard-requires schema 5/contract 4 and the pin matches the restored producer binary.
-- [ ] Reference readers/renderers/export use site-target-kind assertions and provenance without overlap guesses.
-- [ ] Marker search/report/metric paths consume only `code.marker.v1`.
-- [ ] Workspace health reports 70 open rows on the pinned producer artifact and rejects unknown statuses.
-- [ ] `patterns --json`, `references export --jsonl`, and `capabilities --json` advertise/emit exact schema-2 replacements.
-- [ ] Real producer artifact, focused tests, Release build, fast and scale gates pass.
+- [x] Miller hard-requires schema 5/contract 4 and the pin matches the restored producer binary.
+- [x] Reference readers/renderers/export use site-target-kind assertions and provenance without overlap guesses.
+- [x] Marker search/report/metric paths consume only `code.marker.v1`.
+- [x] Workspace health reports 70 open rows on the pinned producer artifact and rejects unknown statuses.
+- [x] `patterns --json`, `references export --jsonl`, and `capabilities --json` advertise/emit exact schema-2 replacements.
+- [x] Real producer artifact, focused tests, Release build, fast and scale gates pass.
 
-### Task 6: Eros atomic process-contract replacement
+### Deferred downstream: Task 6: Eros atomic process-contract replacement
+
+This task is intentionally excluded from the Miller/direct-producer completion gate. Eros is unreleased and may remain broken until the upstream contracts are final.
 
 **Files:**
 - Modify: `eros/src/Eros.Miller/MillerBridge.cs`
@@ -318,11 +321,12 @@
 
 ## Final Integration Gate
 
-- [ ] Cherry-pick the reviewed marker producer commit into the Julie integration branch and resolve no overlapping ownership.
-- [ ] Build the final producer binary from the Julie integration HEAD and restore it into Miller.
-- [ ] Force a full Miller rebuild and prove schema/status/reference-site/marker invariants with direct SQL and public tools.
-- [ ] Run Miller success, empty, invalid, paging, continuation-kind mismatch, stale-population, output-budget, and cross-workspace paths for all nine tools.
-- [ ] Run open then sealed semantic evaluation without tuning after sealed results are visible.
-- [ ] Run the Julie, Miller, and Eros branch gates and record exact HEADs in the verification ledger.
-- [ ] Run `git diff --check` and worktree/branch/dirty-state checks in every involved worktree.
-- [ ] Produce a concise finding-to-fix matrix with token/call/latency/irrelevance measurements and any genuine blocked or report-only items.
+- [x] Integrate the reviewed marker producer work into the Julie repair branch with no overlapping ownership.
+- [x] Build the final producer binary from Julie HEAD and restore it into Miller.
+- [x] Force a full Miller rebuild and prove schema/status/reference-site/marker invariants with direct SQL and public tools.
+- [x] Run Miller success, empty, invalid, paging, continuation-kind mismatch, stale-population, output-budget, and cross-workspace paths for all nine tools.
+- [x] Run open semantic evaluation without tuning after results are visible.
+- [ ] Run the user-owned sealed semantic evaluation when the sealed set is supplied.
+- [x] Run the Julie and Miller branch gates and record exact HEADs.
+- [x] Run `git diff --check` and final worktree/branch/dirty-state checks in every involved worktree.
+- [x] Produce a concise finding-to-fix matrix with token/call/latency/irrelevance measurements and genuine blocked/report-only items.

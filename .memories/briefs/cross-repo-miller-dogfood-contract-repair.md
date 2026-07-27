@@ -1,13 +1,13 @@
 ---
 id: cross-repo-miller-dogfood-contract-repair
-title: Cross-repo Miller dogfood contract repair
-status: active
+title: Miller and producer dogfood contract repair
+status: completed
 created: 2026-07-26T20:24:11.878Z
-updated: 2026-07-26T20:24:11.878Z
+updated: 2026-07-27T01:48:52.734Z
 tags:
   - miller
   - julie-extractors
-  - eros
+  - semantic-sidecar
   - dogfood
   - contracts
   - semantic-search
@@ -15,26 +15,37 @@ tags:
 
 ## Goal
 
-Fix the structural contract defects found by latest Miller dogfooding across `julie-extractors`, Miller, and unreleased Eros in one breaking cut.
+Make Miller and its shipping dependencies (`julie-extractors` / `julie-extract` and the pinned `julie-semantic-sidecar`) correct, efficient, and fully dogfooded under one intentional breaking contract cut.
 
-## Why now
+## Priority
 
-Three days of testing still exposed producer identity, marker extraction, continuation, output-envelope, semantic admission, and exact Eros consumer defects. All repositories are owned and Eros is unreleased, so compatibility must not dilute the correct fix.
+Miller and its direct producers were the only critical path. Eros remains unreleased and downstream; repair Eros only after the final Miller contracts are proven.
 
-## Constraints
+## Landed contract
 
-- `julie-extractors` owns parser-backed reference spans and marker facts.
-- Miller owns schema gates, bounded agent surfaces, continuations, local semantics, and exports.
-- Eros updates atomically to the new public contracts; no adapters or version ranges.
+- `julie-extract` 2.18.0 owns schema 5 / extract contract 4 / JSONL 4, source-attested reference sites, closed `open | exception` gaps, parser-backed marker facts, and complete mutable-FK indexes.
+- Miller requires those exact contracts and exposes nine strict, lossless, bounded MCP tools plus schema-2 Patterns and References process contracts.
+- Semantic policy version 2 separates routing from admission, preserves lexical-only identity and one-hit protection, and improves open-set recall/nDCG without a guessed cosine threshold.
+- Test fixtures share the current schema builder; no v1 scale-fixture compatibility lane remains.
+
+## Verification
+
+- Julie HEAD `500416af`: fmt/check/workspace tests/doctests green; extractor 3,021 passed and 7 ignored.
+- Miller HEAD `7a1512aa`: Release build clean; fast 5,121 passed/2 skipped; Scale 92 passed/3 optional-runtime skips.
+- Full rebuild: schema 5 / contract 4, 422,081 sites, 70 open gaps, zero missing/orphan/scope-conflicting reference evidence.
+- Converged nine-tool MCP matrix: zero errors, max 7,055 bytes, zero results above 12 KiB.
+- Verification: `docs/findings/2026-07-26-cross-repo-dogfood-contract-repair-verification.md`.
+
+## Remaining external gate
+
+The user-owned sealed semantic set was unavailable. No sealed query text was inspected or tuned against. This does not reopen the implemented Miller/producer contract; run the sealed gate when the set is supplied.
+
+## Downstream
+
+Eros compatibility is a separate follow-up and may currently be broken. No compatibility adapters were added.
+
+## Constraints retained
+
 - Keep nine MCP tools; no new tool.
-- Preserve lexical-only byte identity and `MILLER_SEMANTIC=off` zero work.
-- No push, merge, release, or publish without separate approval.
-
-## Success criteria
-
-Schema 5 / extract 4 / JSONL 4 land together; reference sites are source-attested; marker and gap invariants are exact; every MCP response is bounded and losslessly continuable; semantic routing and admission use policy version 2; Eros consumes the replacement schema exactly; focused and branch gates pass in all three repos.
-
-## References
-
-- `docs/plans/2026-07-26-cross-repo-dogfood-contract-repair-design.md`
-- `docs/plans/2026-07-26-cross-repo-dogfood-contract-repair-implementation.md`
+- Unknown schema-5 vocabulary is a refusal, not a fallback.
+- No push, merge, release, or publish occurred.
