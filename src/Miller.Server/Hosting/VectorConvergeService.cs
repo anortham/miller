@@ -1307,6 +1307,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         // PrepareShadow stops recognising the leftover shadow as a promote to finish and deletes it. Creating
         // the empty file first would therefore turn a one-rename recovery into a full re-embed.
         string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        string activePath = VectorSidecar.PathFor(root);
         try
         {
             new VectorGenerationManager(root).RecoverInterruptedPromote();
@@ -1314,10 +1315,15 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
-            // Recovery is an optimisation over rebuilding; never let it block opening the artifact.
+            // A transient recovery failure with no active artifact is the one case where continuing does damage:
+            // the create below would make the leftover shadow unrecognisable and force a full re-embed. Skipping
+            // this cycle costs nothing — the next converge retries recovery against an untouched shadow. With an
+            // active artifact already present there is no shadow to lose, so the failure is inert.
+            if (!File.Exists(activePath))
+                return null;
         }
 
-        return TryOpenAt(workspace, VectorSidecar.PathFor(root), encoder);
+        return TryOpenAt(workspace, activePath, encoder);
     }
 
     /// <summary>Opens (creating on first run) a generation at an explicit path — the active artifact, or the

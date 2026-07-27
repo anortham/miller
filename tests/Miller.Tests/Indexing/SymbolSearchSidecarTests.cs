@@ -14,23 +14,23 @@ namespace Miller.Tests.Indexing;
 /// </summary>
 public sealed class SymbolSearchSidecarTests : IDisposable
 {
-    private readonly string _dir;
+    private readonly JulieDbFixture _julie;
     private readonly string _symbolsDbPath;
     private readonly string _searchDbPath;
 
     public SymbolSearchSidecarTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "miller-sidecar-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dir);
-        // The symbols.db need not exist — TryOpen only ever touches the sibling search.db.
-        _symbolsDbPath = Path.Combine(_dir, "symbols.db");
-        _searchDbPath = Path.Combine(_dir, "search.db");
+        // A real extract artifact, not a bare path: the routing gate compares the sidecar's stamp against the
+        // live artifact's id, and a symbols.db that does not exist is a state production never serves from.
+        _julie = JulieDbFixture.CreateDefault();
+        _symbolsDbPath = _julie.DbPath;
+        _searchDbPath = SymbolSearchSidecar.SearchDbPathFor(_symbolsDbPath);
     }
 
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
-        try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
+        _julie.Dispose();
     }
 
     private static IndexedSymbol[] Corpus() => new[]
@@ -41,7 +41,9 @@ public sealed class SymbolSearchSidecarTests : IDisposable
             StartLine: 1, EndLine: 2, ParentId: null, IsTest: false),
     };
 
-    private void WriteSearchDb(long revision) => SearchIndexWriter.Write(_searchDbPath, Corpus(), revision);
+    private void WriteSearchDb(long revision) =>
+        SearchIndexWriter.Write(
+            _searchDbPath, Corpus(), revision, _symbolsDbPath, workspaceRoot: null, RegionIndexOptions.Disabled);
 
     // Default-ON semantics (Phase 5): only an explicit falsy token opts out; unset/empty/truthy/unknown stays on.
     [Theory]

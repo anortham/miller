@@ -42,7 +42,8 @@ public sealed class WorkspaceIndexProvider
             dbPath => RepositoryIndexLoader.Load(dbPath),
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
-            (dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision),
+            (dbPath, revision) => ContentCorpusSidecar.OpenGenerationChecked(
+                ContentCorpusSidecar.ContentDbPathFor(dbPath), dbPath, revision),
             (dbPath, revision) => FtsRegionSearchIndex.Open(
                 SymbolSearchSidecar.SearchDbPathFor(dbPath),
                 revision,
@@ -882,7 +883,8 @@ public sealed class WorkspaceIndexProvider
         long Revision,
         long FileWriteStampTicks,
         long FileLength,
-        string? ArtifactId);
+        string? ArtifactId,
+        ArtifactStampState StampState);
 
     // Revision alone cannot be trusted across processes: a force rebuild in ANOTHER process replaces the file,
     // and the fresh artifact's restarted revision counter can land on the number already cached here while this
@@ -897,11 +899,15 @@ public sealed class WorkspaceIndexProvider
     // and it costs one stat.
     private static CacheKey KeyFor(string workspaceId, string dbPath, long revision)
     {
-        string? artifactId = SymbolsArtifactIdentity.TryRead(dbPath).ArtifactId;
+        // A null artifact id has three distinct causes, and folding them together would let a generation whose
+        // identity could not be read share a key with a genuine pre-stamping one.
+        SymbolsArtifactIdentity identity = SymbolsArtifactIdentity.TryRead(dbPath);
         var info = new FileInfo(dbPath);
         return info.Exists
-            ? new CacheKey(workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length, artifactId)
-            : new CacheKey(workspaceId, dbPath, revision, 0, 0, artifactId);
+            ? new CacheKey(
+                workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length,
+                identity.ArtifactId, identity.StampState)
+            : new CacheKey(workspaceId, dbPath, revision, 0, 0, identity.ArtifactId, identity.StampState);
     }
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);

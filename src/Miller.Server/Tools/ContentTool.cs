@@ -416,8 +416,8 @@ public sealed class ContentTool
         long expectedRevision;
         using (var freshness = new FreshnessReader(_workspace.ExtractDbPath))
             expectedRevision = freshness.LatestRevision();
-        return FtsTextContentSearchIndex
-            .Open(contentDbPath, expectedRevision)
+        return ContentCorpusSidecar
+            .OpenGenerationChecked(contentDbPath, _workspace.ExtractDbPath, expectedRevision)
             .Search(query, contentKind, limit, excludeTests: false);
     }
 
@@ -430,6 +430,7 @@ public sealed class ContentTool
         var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
         IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
             contentDbPath,
+            _workspace.ExtractDbPath,
             query,
             limit,
             () =>
@@ -581,6 +582,7 @@ public sealed class ContentTool
             var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
             IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
                 contentDbPath,
+                row.IndexDbPath,
                 query,
                 limit,
                 () => ExpectedWorkspaceRevision(row),
@@ -593,8 +595,8 @@ public sealed class ContentTool
             return _store.Search(contentDbPath, query, contentKind, limit);
 
         long expectedRevision = ExpectedWorkspaceRevision(row);
-        return FtsTextContentSearchIndex
-            .Open(contentDbPath, expectedRevision)
+        return ContentCorpusSidecar
+            .OpenGenerationChecked(contentDbPath, row.IndexDbPath, expectedRevision)
             .Search(query, contentKind, limit, excludeTests: false);
     }
 
@@ -636,6 +638,7 @@ public sealed class ContentTool
 
     private static IReadOnlyList<TextContentSearchHit> SearchAllContentKinds(
         string contentDbPath,
+        string symbolsDbPath,
         string query,
         int limit,
         Func<long> expectedRevision,
@@ -647,7 +650,7 @@ public sealed class ContentTool
         FtsTextContentSearchIndex? index = null;
         try
         {
-            index = FtsTextContentSearchIndex.Open(contentDbPath, expectedRevision());
+            index = ContentCorpusSidecar.OpenGenerationChecked(contentDbPath, symbolsDbPath, expectedRevision());
         }
         catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
         {

@@ -121,8 +121,12 @@ public sealed class SymbolSearchSidecar
         try
         {
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
+            // A status surface that reports "current" on revision alone contradicts the read gates, which refuse
+            // the same sidecar after a promote restarts the revision counter onto a colliding number.
+            bool current = index.Revision == expectedRevision
+                && SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(index.ArtifactId);
             return new SearchSidecarFacts(
-                State: index.Revision == expectedRevision ? "current" : "stale",
+                State: current ? "current" : "stale",
                 Path: searchDbPath,
                 Revision: index.Revision,
                 ExpectedRevision: expectedRevision,

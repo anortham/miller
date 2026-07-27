@@ -190,18 +190,9 @@ public sealed class ContentCorpusSidecar
                 $"Content corpus sidecar is missing at '{contentDbPath}'. Run `miller workspace refresh` to rebuild it.");
         }
 
-        // Revision alone cannot prove the generation: a full-rebuild promote restarts julie's counter, so a
-        // corpus built at revision N from the superseded artifact matches a post-promote revision N exactly.
-        if (!ReadGateArtifactAgrees(contentDbPath, symbolsDbPath))
-        {
-            throw new InvalidOperationException(
-                $"Content corpus sidecar at '{contentDbPath}' is stale: it was built from a different index " +
-                "generation (the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
-        }
-
         try
         {
-            return FtsTextContentSearchIndex.Open(contentDbPath, expectedRevision);
+            return OpenGenerationChecked(contentDbPath, symbolsDbPath, expectedRevision);
         }
         catch (InvalidOperationException)
         {
@@ -216,6 +207,32 @@ public sealed class ContentCorpusSidecar
                 "Run `miller workspace refresh` to rebuild it.",
                 ex);
         }
+    }
+
+    /// <summary>
+    /// Open a content corpus that is both revision-fresh and built from the extract generation currently on
+    /// disk. Every reader that serves workspace-derived text as authoritative must come through here.
+    /// </summary>
+    /// <remarks>
+    /// Revision alone cannot prove the generation: a full-rebuild promote restarts julie's counter, so a corpus
+    /// built at revision N from the superseded artifact matches a post-promote revision N exactly. The revision
+    /// check runs first so an ordinary staleness gets its own more specific message.
+    /// </remarks>
+    public static FtsTextContentSearchIndex OpenGenerationChecked(
+        string contentDbPath, string symbolsDbPath, long expectedRevision)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
+
+        FtsTextContentSearchIndex index = FtsTextContentSearchIndex.Open(contentDbPath, expectedRevision);
+        if (!ReadGateArtifactAgrees(contentDbPath, symbolsDbPath))
+        {
+            throw new InvalidOperationException(
+                $"Content corpus sidecar at '{contentDbPath}' is stale: it was built from a different index " +
+                "generation (the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
+        }
+
+        return index;
     }
 
     /// <summary>
@@ -246,12 +263,6 @@ public sealed class ContentCorpusSidecar
     }
 
     /// <summary>
-    /// Whether the corpus was built from the extract generation currently on disk. Revision and per-source hash
-    /// agreement cannot see a full-rebuild promote: it restarts julie's revision counter, and an
-    /// extractor-upgrade rebuild of unchanged files reproduces identical <c>content_hash</c> values — so both
-    /// older gates report a pre-promote corpus as current forever. Only the artifact id distinguishes them.
-    /// </summary>
-    /// <summary>
     /// The read-gate half of <see cref="IsCurrentFor"/>: whether the corpus carries the live artifact's id.
     /// </summary>
     /// <remarks>
@@ -262,22 +273,10 @@ public sealed class ContentCorpusSidecar
     /// </remarks>
     private static bool ReadGateArtifactAgrees(string contentDbPath, string symbolsDbPath)
     {
-        string? expected = SymbolsArtifactIdentity.TryRead(symbolsDbPath).ArtifactId;
-        if (expected is null)
-            return true;
-
         try
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = Path.GetFullPath(contentDbPath),
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ToString());
-            connection.Open();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
-            return string.Equals(cmd.ExecuteScalar() as string, expected, StringComparison.Ordinal);
+            return SymbolsArtifactIdentity.TryRead(symbolsDbPath)
+                .MatchesArtifact(ReadCorpusArtifactId(contentDbPath));
         }
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException
@@ -291,20 +290,8 @@ public sealed class ContentCorpusSidecar
     {
         try
         {
-            string? expected = SymbolsArtifactIdentity.Read(symbolsDbPath).ArtifactId;
-            if (expected is null)
-                return true;
-
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = Path.GetFullPath(contentDbPath),
-                Mode = SqliteOpenMode.ReadOnly,
-                Pooling = false,
-            }.ToString());
-            connection.Open();
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
-            return string.Equals(cmd.ExecuteScalar() as string, expected, StringComparison.Ordinal);
+            return SymbolsArtifactIdentity.Read(symbolsDbPath)
+                .MatchesArtifact(ReadCorpusArtifactId(contentDbPath));
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or SqliteException or InvalidOperationException or IOException
@@ -312,6 +299,20 @@ public sealed class ContentCorpusSidecar
         {
             return false;
         }
+    }
+
+    private static string? ReadCorpusArtifactId(string contentDbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(contentDbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
+        return cmd.ExecuteScalar() as string;
     }
 
     private static bool IsFresh(string contentDbPath, long revision)

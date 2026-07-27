@@ -1573,7 +1573,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadIndex ?? (path => RepositoryIndexLoader.Load(path)),
             loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
             loadContentSearch ?? ((dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root)),
-            loadTextContentSearch ?? ((dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision)),
+            loadTextContentSearch ?? ((dbPath, revision) => ContentCorpusSidecar.OpenGenerationChecked(
+                ContentCorpusSidecar.ContentDbPathFor(dbPath), dbPath, revision)),
             loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(
                 SymbolSearchSidecar.SearchDbPathFor(dbPath), revision, SymbolsArtifactIdentity.TryRead(dbPath))),
             currentIndexFresh ?? (_ => true),
@@ -1615,6 +1616,35 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
             () => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+        Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveTextContentSearch_PromoteRestartsRevisionAtTheSameNumber_RefusesThePreRebuildCorpus()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSource("target-ws", revision: 1, "KnownSourceError");
+        ContentCorpusWriter.Write(
+            ContentCorpusSidecar.ContentDbPathFor(target.DbPath),
+            target.DbPath,
+            target.WorkspaceRoot,
+            workspaceId: "target-ws",
+            revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", target.WorkspaceRoot, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry);
+
+        Assert.Equal(1, provider.ResolveTextContentSearch("target-ws", ensureFresh: false).Revision);
+
+        ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+            () => provider.ResolveTextContentSearch("target-ws", ensureFresh: false));
         Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
     }
 

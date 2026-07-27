@@ -117,6 +117,27 @@ public sealed class FreshnessReader : IDisposable
     }
 
     /// <summary>
+    /// Whether this DB carries an <c>artifact_metadata</c> TABLE. Distinguishes a genuine pre-stamping extract,
+    /// where a null <see cref="ArtifactId"/> is expected and harmless, from a metadata table that exists but
+    /// yields no id — a shape the pinned extractor never emits, so a null there is not to be trusted.
+    /// </summary>
+    /// <remarks>
+    /// The table's existence is the question, not its row count: an <c>artifact_metadata</c> that exists but is
+    /// empty is an anomaly of exactly the kind this distinction exists to catch, and counting rows would file it
+    /// under "pre-stamping extract" and trust it.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
+    public bool HasArtifactMetadata()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText =
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'artifact_metadata');";
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    }
+
+    /// <summary>
     /// The artifact's identity: <c>artifact_metadata.artifact_id</c>, stamped by julie-extract when the DB file
     /// is CREATED and stable across in-place delta updates — so a changed id means the file was replaced by a
     /// full rebuild (<see cref="FullRebuildPromotion"/>), whose restarted revision counter makes
@@ -124,27 +145,6 @@ public sealed class FreshnessReader : IDisposable
     /// (a synthetic/legacy DB) — callers must treat null as "unknown", never as "unchanged".
     /// </summary>
     /// <exception cref="ObjectDisposedException">The reader has been disposed.</exception>
-    /// <summary>
-    /// Whether this DB carries an <c>artifact_metadata</c> table with rows. Distinguishes a genuine pre-stamping
-    /// extract, where a null <see cref="ArtifactId"/> is expected and harmless, from a metadata table that exists
-    /// but has no id — a shape the pinned extractor never emits, so a null there is not to be trusted.
-    /// </summary>
-    public bool HasArtifactMetadata()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        using var cmd = _connection.CreateCommand();
-        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM artifact_metadata);";
-        try
-        {
-            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
-        }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 /* SQLITE_ERROR: no such table */)
-        {
-            return false;
-        }
-    }
-
     public string? ArtifactId()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

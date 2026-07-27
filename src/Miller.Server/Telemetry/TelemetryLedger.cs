@@ -81,8 +81,11 @@ public sealed class TelemetryLedger : IDisposable
     /// <summary>Count of telemetry rows that failed to persist and were swallowed (never throws).</summary>
     private long _droppedWrites;
 
-    /// <summary>Rows that failed to persist and were swallowed. Incremented outside the write gate, so reads and
-    /// writes both go through <see cref="Interlocked"/>.</summary>
+    /// <summary>
+    /// Rows that failed to persist and were swallowed. Incremented outside the write gate, so reads and writes
+    /// both go through <see cref="Interlocked"/>. This in-process count is always complete; the count PERSISTED
+    /// by <see cref="FlushDropCount"/> is a lower bound (see its remarks).
+    /// </summary>
     public long DroppedWrites => Interlocked.Read(ref _droppedWrites);
 
     private TelemetryLedger(
@@ -507,6 +510,13 @@ public sealed class TelemetryLedger : IDisposable
     /// invocation — the canary gate above all — needs to know the population it is reading may be incomplete.
     /// Best-effort by the same rule as <see cref="Record"/>: a failure here is itself a drop, never an error.
     /// </summary>
+    /// <remarks>
+    /// The persisted number is a LOWER BOUND on this process's drops, by construction and not by oversight. Two
+    /// increments can land after the last write that could carry them: a <see cref="Record"/> that takes the gate
+    /// after <see cref="Dispose"/> has already flushed and closed the connection, and the self-count of a failed
+    /// flush — which cannot be persisted by the very write that just failed. Readers comparing a drop count
+    /// against a row population should treat it as "at least this many", which is all the KPI needs.
+    /// </remarks>
     public void FlushDropCount()
     {
         lock (_gate)
