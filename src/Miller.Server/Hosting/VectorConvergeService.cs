@@ -1040,6 +1040,12 @@ public sealed class VectorConvergeService : BackgroundService
 
         public bool ShadowAttempted { get; set; }
 
+        /// <summary>
+        /// Whether the live port has been disposed for a promote. Set BEFORE the rename returns, on purpose:
+        /// its two readers both need the pre-rename fact. The error path must not record onto a disposed port,
+        /// and the post-promote chunk drain reopens the artifact rather than trusting the old handle. A promote
+        /// that throws after this point leaves the artifact recoverable through the retained generation.
+        /// </summary>
         public bool Promoted { get; set; }
 
         public bool DiskBlocked { get; private set; }

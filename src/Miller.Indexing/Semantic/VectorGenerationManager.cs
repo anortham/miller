@@ -111,6 +111,10 @@ internal interface IVectorGenerationFiles
 
     /// <summary>Folds a WAL into its main file so a file about to be renamed is self-contained.</summary>
     void FoldWal(string path);
+
+    /// <summary>The generation's <c>build_state</c>, or null when the file is absent, unopenable, or carries no
+    /// meta row — every one of which means "do not treat this as a finished generation".</summary>
+    string? ReadBuildState(string path);
 }
 
 /// <summary>
@@ -229,8 +233,35 @@ public sealed class VectorGenerationManager
             MillerSemanticContract.GenerationTag(shadow));
     }
 
-    /// <summary>Deletes any stale shadow trio so the rebuild starts from a genuinely fresh file.</summary>
-    public void PrepareShadow() => DeleteTrio(ShadowPath);
+    /// <summary>Deletes any stale shadow trio so the rebuild starts from a genuinely fresh file, after first
+    /// adopting a shadow left behind by an interrupted promote.</summary>
+    public void PrepareShadow()
+    {
+        RecoverInterruptedPromote();
+        DeleteTrio(ShadowPath);
+    }
+
+    /// <summary>
+    /// Completes a promote that died between its two renames. <see cref="Promote"/> moves the active generation
+    /// to its retained tag and only then moves the shadow into place; a process killed in that window leaves no
+    /// active artifact beside a shadow that is already <c>ready</c>. Adopting it costs one rename, where
+    /// discarding it costs a full re-embed of the whole corpus.
+    /// </summary>
+    /// <returns>Whether a shadow was adopted as the active generation.</returns>
+    public bool RecoverInterruptedPromote()
+    {
+        if (_files.Exists(ActivePath) || !_files.Exists(ShadowPath))
+            return false;
+
+        if (!string.Equals(_files.ReadBuildState(ShadowPath), ReadyState, StringComparison.Ordinal))
+            return false;
+
+        MakeSelfContained(ShadowPath);
+        SqliteConnection.ClearAllPools();
+        _files.Move(ShadowPath, ActivePath);
+        DeleteTrio(ShadowPath);
+        return true;
+    }
 
     /// <summary>
     /// Retain-then-promote, both under one hold of the writer lock. A failed retain leaves the active artifact
@@ -403,6 +434,30 @@ internal sealed class SystemVectorGenerationFiles : IVectorGenerationFiles
 
     public IReadOnlyList<string> EnumerateRetained(string millerDir) =>
         SystemVectorFileProbe.Instance.EnumerateRetainedGenerations(millerDir);
+
+    public string? ReadBuildState(string path)
+    {
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using SqliteCommand command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM vectors_meta WHERE key = 'build_state';";
+            return command.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
 
     public void FoldWal(string path)
     {

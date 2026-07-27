@@ -479,6 +479,48 @@ public sealed class VectorGenerationManagerTests
             Now = Now,
         };
 
+    [Fact]
+    public void PrepareShadow_AfterPromoteDiedBetweenItsRenames_AdoptsTheReadyShadowInsteadOfDiscardingIt()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ShadowPath, "promoted-generation");
+        files.BuildStates[manager.ShadowPath] = "ready";
+        files.Write(manager.RetainedPathFor("old"), "superseded");
+
+        manager.PrepareShadow();
+
+        Assert.True(files.Exists(manager.ActivePath));
+        Assert.Equal("promoted-generation", files.Read(manager.ActivePath));
+        Assert.False(files.Exists(manager.ShadowPath));
+    }
+
+    [Fact]
+    public void PrepareShadow_ShadowFromAnInterruptedBuildRatherThanAnInterruptedPromote_IsStillDiscarded()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ShadowPath, "half-embedded");
+        files.BuildStates[manager.ShadowPath] = "building";
+
+        manager.PrepareShadow();
+
+        Assert.False(files.Exists(manager.ActivePath));
+        Assert.False(files.Exists(manager.ShadowPath));
+    }
+
+    [Fact]
+    public void PrepareShadow_ActiveGenerationPresent_LeavesItAloneAndDropsTheShadow()
+    {
+        (VectorGenerationManager manager, FakeGenerationFiles files) = Manager();
+        files.Write(manager.ActivePath, "live");
+        files.Write(manager.ShadowPath, "stale-shadow");
+        files.BuildStates[manager.ShadowPath] = "ready";
+
+        manager.PrepareShadow();
+
+        Assert.Equal("live", files.Read(manager.ActivePath));
+        Assert.False(files.Exists(manager.ShadowPath));
+    }
+
     private sealed class FakeGenerationFiles : IVectorGenerationFiles
     {
         private readonly Dictionary<string, string> _contents = new(StringComparer.Ordinal);
@@ -541,6 +583,10 @@ public sealed class VectorGenerationManagerTests
         ];
 
         public void FoldWal(string path) => Folded.Add(path);
+
+        public string? ReadBuildState(string path) => BuildStates.GetValueOrDefault(path);
+
+        public Dictionary<string, string> BuildStates { get; } = new(StringComparer.Ordinal);
     }
 }
 
