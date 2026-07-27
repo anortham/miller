@@ -635,6 +635,54 @@ public sealed class SymbolSearchSidecarTests : IDisposable
         Assert.False(sidecar.EnsureCurrent(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
     }
 
+    [Fact]
+    public void EnsureCurrent_ArtifactMetadataWithoutAnId_RebuildsRatherThanDeltaingIntoASidecarTheReadGatesRefuse()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            },
+            revisions: new[]
+            {
+                new JulieDbFixture.RevisionRow(1),
+                new JulieDbFixture.RevisionRow(2, Kind: "single_file"),
+            },
+            fileChanges: new[] { new JulieDbFixture.RevisionFileChangeRow(2, "src/Edit.cs", "updated") });
+        var sidecar = new SymbolSearchSidecar(enabled: true);
+        Assert.True(sidecar.EnsureBuilt(julie.DbPath, revision: 1, workspaceRoot: julie.WorkspaceRoot));
+
+        string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
+        CreateSentinelTable(searchDb);
+
+        // A metadata table that yields no id has a null ArtifactId just like a pre-stamping extract does, so a
+        // raw null check reads it as "same artifact" and applies a delta — into a sidecar the read gates then
+        // refuse. The converge decision has to use the same verdict the read gates do. The sentinel survives an
+        // in-place delta and does not survive a rebuild, so it is what separates the two paths.
+        DeleteSymbolsArtifactId(julie.DbPath);
+
+        Assert.True(sidecar.EnsureCurrent(julie.DbPath, revision: 2, workspaceRoot: julie.WorkspaceRoot));
+        Assert.False(TableExists(searchDb, "incremental_sentinel"));
+    }
+
+    private static void DeleteSymbolsArtifactId(string symbolsDb)
+    {
+        using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = symbolsDb, Mode = SqliteOpenMode.ReadWrite, Pooling = false,
+        }.ToString()))
+        {
+            rw.Open();
+            using var cmd = rw.CreateCommand();
+            cmd.CommandText = "DELETE FROM artifact_metadata WHERE key = 'artifact_id';";
+            cmd.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+    }
+
     private static void SetSymbolsArtifactId(string symbolsDb, string artifactId)
     {
         using (var rw = new SqliteConnection(new SqliteConnectionStringBuilder

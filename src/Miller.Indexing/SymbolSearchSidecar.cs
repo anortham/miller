@@ -325,9 +325,11 @@ public sealed class SymbolSearchSidecar
 
         // A sidecar built from a DIFFERENT artifact generation cannot be advanced by julie's changed-file delta:
         // the delta is expressed against the promoted extract's revision history, not the one that produced this
-        // sidecar. Rebuild across a swap instead of applying a delta, at any revision ordering.
-        bool sameArtifact = identity.ArtifactId is null ||
-            string.Equals(stampedArtifactId, identity.ArtifactId, StringComparison.Ordinal);
+        // sidecar. Rebuild across a swap instead of applying a delta, at any revision ordering. The verdict must
+        // come from MatchesArtifact, not a raw null check on the id: an artifact_metadata table that exists but
+        // yields no id also has a null id, and a raw check would apply a delta to a generation the read gates
+        // then refuse to serve.
+        bool sameArtifact = identity.MatchesArtifact(stampedArtifactId);
 
         if (artifactRevision is null || artifactRevision.Value > revision || !sameArtifact)
         {
