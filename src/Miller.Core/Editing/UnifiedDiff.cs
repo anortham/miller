@@ -135,6 +135,17 @@ public static class UnifiedDiff
         int m = b.Count - prefix - suffix;
         if ((long)(n + 1) * (m + 1) > MaxLcsCells)
         {
+            // An LCS over the cell cap would otherwise degrade to "whole region replaced", which for a
+            // rename in a large file reports every line between the first and last touched one as changed.
+            // Equal-length sides admit an exact positional alignment in O(n), so take it when the sides are
+            // near-identical — beyond that the alignment stops being trustworthy and the bounded fallback is
+            // both smaller and more honest.
+            if (n == m && CountPositionalDifferences(a, b, prefix, n) <= MaxFallbackLinesPerSide)
+            {
+                ops = BuildPositionalOps(a, b, prefix, suffix, n);
+                return true;
+            }
+
             ops = [];
             return false;
         }
@@ -180,6 +191,62 @@ public static class UnifiedDiff
             ops.Add(new DiffOp(OpKind.Equal, a[a.Count - i]));
 
         return true;
+    }
+
+    private static int CountPositionalDifferences(
+        IReadOnlyList<string> a,
+        IReadOnlyList<string> b,
+        int prefix,
+        int length)
+    {
+        var differences = 0;
+        for (var i = 0; i < length; i++)
+        {
+            if (!string.Equals(a[prefix + i], b[prefix + i], StringComparison.Ordinal) &&
+                ++differences > MaxFallbackLinesPerSide)
+            {
+                return differences;
+            }
+        }
+
+        return differences;
+    }
+
+    /// <summary>
+    /// Align two equal-length regions line by line, emitting a delete+insert pair only where the lines
+    /// actually differ. Exact for same-length edits such as renames; used when an LCS would exceed
+    /// <see cref="MaxLcsCells"/>.
+    /// </summary>
+    private static List<DiffOp> BuildPositionalOps(
+        IReadOnlyList<string> a,
+        IReadOnlyList<string> b,
+        int prefix,
+        int suffix,
+        int length)
+    {
+        var ops = new List<DiffOp>(a.Count + b.Count);
+        for (var i = 0; i < prefix; i++)
+            ops.Add(new DiffOp(OpKind.Equal, a[i]));
+
+        for (var i = 0; i < length; i++)
+        {
+            string oldLine = a[prefix + i];
+            string newLine = b[prefix + i];
+            if (string.Equals(oldLine, newLine, StringComparison.Ordinal))
+            {
+                ops.Add(new DiffOp(OpKind.Equal, oldLine));
+            }
+            else
+            {
+                ops.Add(new DiffOp(OpKind.Delete, oldLine));
+                ops.Add(new DiffOp(OpKind.Insert, newLine));
+            }
+        }
+
+        for (var i = suffix; i > 0; i--)
+            ops.Add(new DiffOp(OpKind.Equal, a[a.Count - i]));
+
+        return ops;
     }
 
     private sealed class Hunk

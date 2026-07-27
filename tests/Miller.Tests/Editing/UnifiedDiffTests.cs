@@ -132,6 +132,34 @@ public sealed class UnifiedDiffTests
     }
 
     [Fact]
+    public void Render_LargeFileWithDistantSameLengthEdits_KeepsHunksSmall()
+    {
+        // A rename in a big file: two touched lines ~1200 apart, line count unchanged. The LCS matrix is
+        // over the cell cap here, so this exercises the non-LCS path.
+        var oldLines = Enumerable.Range(0, 2600).Select(i => $"line {i};").ToArray();
+        var newLines = (string[])oldLines.Clone();
+        newLines[900] = "line 900 RENAMED;";
+        newLines[2100] = "line 2100 RENAMED;";
+
+        var diff = UnifiedDiff.Render(
+            string.Join("\n", oldLines) + "\n",
+            string.Join("\n", newLines) + "\n",
+            "big.cs");
+
+        string[] headers = Lines(diff).Where(l => l.StartsWith("@@", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, headers.Length);
+
+        int changed = Lines(diff).Count(l =>
+            (l.StartsWith("+", StringComparison.Ordinal) || l.StartsWith("-", StringComparison.Ordinal)) &&
+            !l.StartsWith("+++", StringComparison.Ordinal) &&
+            !l.StartsWith("---", StringComparison.Ordinal));
+        Assert.Equal(4, changed); // two deletes + two inserts
+
+        Assert.DoesNotContain("omitted", diff, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Lines(diff).Length < 40, $"preview should stay reviewable; got {Lines(diff).Length} lines");
+    }
+
+    [Fact]
     public void Render_AppliedToOldContent_YieldsNewContent_RoundTrip()
     {
         // Sanity: the diff describes exactly the transformation old→new (verified by reconstructing new
