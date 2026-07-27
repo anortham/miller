@@ -548,13 +548,8 @@ public sealed class PatternFactsReader
         if (metadataFilters is { Count: > 0 } && !metadataInSql)
             throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
 
-        command.CommandText = $"""
-            SELECT pattern_id, path, start_byte, structural_fact_id
-            FROM structural_facts
-            {WhereClause(where)}
-            ORDER BY path, start_byte, structural_fact_id;
-            """;
-        (long totalCount, string populationFingerprint) = ReadPageIdentity(command);
+        (long totalCount, string populationFingerprint) =
+            ReadPageIdentity(command, where, ReadArtifactGeneration(connection, transaction));
 
         command.Parameters.AddWithValue("$page_limit", boundedLimit);
         command.Parameters.AddWithValue("$page_offset", offset);
@@ -623,12 +618,8 @@ public sealed class PatternFactsReader
                 {WhereClause(where)}
             )
             """;
-        command.CommandText = rankedCte + """
-            SELECT pattern_id, path, start_byte, structural_fact_id
-            FROM ranked
-            ORDER BY family_rank, pattern_id, path, start_byte, structural_fact_id;
-            """;
-        (long totalCount, string populationFingerprint) = ReadPageIdentity(command);
+        (long totalCount, string populationFingerprint) =
+            ReadPageIdentity(command, where, ReadArtifactGeneration(connection, transaction));
 
         command.Parameters.AddWithValue("$page_limit", boundedLimit);
         command.Parameters.AddWithValue("$page_offset", offset);
@@ -644,26 +635,67 @@ public sealed class PatternFactsReader
         return new PatternMatchPage(totalCount, populationFingerprint, offset, rows);
     }
 
+    /// <summary>
+    /// The page's population identity: how many facts match, and a fingerprint of what determines them.
+    /// </summary>
+    /// <remarks>
+    /// The fingerprint binds the artifact generation, not the matched rows. Within one
+    /// <c>(artifact_id, revision)</c> the query is deterministic, so hashing every matched row proved nothing a
+    /// generation stamp does not — and cost a full scan of the population on every page, turning an offset walk
+    /// into O(pages x population). The caller pairs this with its own request fingerprint, so filters and
+    /// ordering mode are already covered.
+    /// </remarks>
     private static (long TotalCount, string PopulationFingerprint) ReadPageIdentity(
-        SqliteCommand command)
+        SqliteCommand command,
+        IReadOnlyList<string> where,
+        string generation)
     {
-        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        long totalCount = 0;
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            AppendPatternMatchIdentity(
-                fingerprint,
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetInt32(2),
-                reader.GetString(3));
-            totalCount++;
-        }
+        command.CommandText = $"""
+            SELECT COUNT(*)
+            FROM structural_facts
+            {WhereClause(where)};
+            """;
+        object? counted = command.ExecuteScalar();
+        long totalCount = counted is null or DBNull ? 0L : Convert.ToInt64(counted, CultureInfo.InvariantCulture);
 
-        return (
-            totalCount,
-            Convert.ToHexStringLower(fingerprint.GetHashAndReset()));
+        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        fingerprint.AppendData(Encoding.UTF8.GetBytes(generation));
+        fingerprint.AppendData("\u001f"u8);
+        fingerprint.AppendData(
+            Encoding.UTF8.GetBytes(totalCount.ToString(CultureInfo.InvariantCulture)));
+
+        return (totalCount, Convert.ToHexStringLower(fingerprint.GetHashAndReset()));
+    }
+
+    /// <summary>The <c>artifact_id</c> and latest revision of the artifact this connection reads, which together
+    /// determine every structural-fact query's result.</summary>
+    private static string ReadArtifactGeneration(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT
+                (SELECT value FROM artifact_metadata WHERE key = 'artifact_id'),
+                (SELECT MAX(revision_id) FROM extraction_revisions);
+            """;
+        try
+        {
+            using SqliteDataReader reader = command.ExecuteReader();
+            if (!reader.Read())
+                return "unknown-generation";
+
+            string artifactId = reader.IsDBNull(0) ? "no-artifact" : reader.GetString(0);
+            string revision = reader.IsDBNull(1)
+                ? "0"
+                : reader.GetInt64(1).ToString(CultureInfo.InvariantCulture);
+            return artifactId + "@" + revision;
+        }
+        catch (SqliteException)
+        {
+            // A pre-artifact_metadata extract still paginates; it just cannot prove its generation, so every
+            // such artifact shares one fingerprint and the request fingerprint carries the rest.
+            return "unknown-generation";
+        }
     }
 
     private static IReadOnlyList<PatternMatchRow> ReadPayloadPage(
@@ -685,37 +717,6 @@ public sealed class PatternFactsReader
             Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
             offset,
             []);
-    }
-
-    private static void AppendPatternMatchIdentity(IncrementalHash fingerprint, PatternMatchRow row)
-        => AppendPatternMatchIdentity(
-            fingerprint,
-            row.PatternId,
-            row.Path,
-            row.Span.StartByte,
-            row.FactId);
-
-    private static void AppendPatternMatchIdentity(
-        IncrementalHash fingerprint,
-        string patternId,
-        string path,
-        int startByte,
-        string factId)
-    {
-        AppendFingerprintField(fingerprint, patternId);
-        AppendFingerprintField(fingerprint, path);
-        AppendFingerprintField(
-            fingerprint,
-            startByte.ToString(CultureInfo.InvariantCulture));
-        AppendFingerprintField(fingerprint, factId);
-    }
-
-    private static void AppendFingerprintField(IncrementalHash fingerprint, string? field)
-    {
-        string value = field ?? string.Empty;
-        fingerprint.AppendData(Encoding.UTF8.GetBytes(
-            value.Length.ToString(CultureInfo.InvariantCulture) + ":"));
-        fingerprint.AppendData(Encoding.UTF8.GetBytes(value));
     }
 
     public IEnumerable<PatternMatchRow> EnumerateMatches(

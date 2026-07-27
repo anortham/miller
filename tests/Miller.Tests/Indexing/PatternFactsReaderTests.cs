@@ -277,6 +277,64 @@ public sealed class PatternFactsReaderTests
         Assert.Contains("structural_facts", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SearchExactPage_WithinOneArtifactGeneration_KeepsThePopulationFingerprintStableAcrossPages()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+
+        PatternExactSearchPageResult first = ExactPage(reader, fx.DbPath, offset: 0);
+        PatternExactSearchPageResult second = ExactPage(reader, fx.DbPath, offset: 1);
+
+        Assert.Equal(first.Page.PopulationFingerprint, second.Page.PopulationFingerprint);
+        Assert.Equal(first.Page.TotalCount, second.Page.TotalCount);
+    }
+
+    [Fact]
+    public void SearchExactPage_AfterAFullRebuildReplacesTheArtifactId_ChangesThePopulationFingerprint()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+        string before = ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint;
+
+        Exec(fx.DbPath, "UPDATE artifact_metadata SET value = 'artifact-rebuilt' WHERE key = 'artifact_id';");
+
+        Assert.NotEqual(before, ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint);
+    }
+
+    [Fact]
+    public void SearchExactPage_AfterANewExtractionRevision_ChangesThePopulationFingerprint()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+        string before = ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint;
+
+        Exec(fx.DbPath, """
+            INSERT INTO extraction_revisions
+                (revision_id, parent_revision_id, operation, mode, started_at, completed_at,
+                 binary_version, extract_contract_version, sqlite_schema_version, input_root, counts_json)
+            VALUES (
+                (SELECT COALESCE(MAX(revision_id), 0) + 1 FROM extraction_revisions),
+                NULL, 'scan', 'incremental', '1970-01-01T00:00:00Z', '1970-01-01T00:00:00Z',
+                '2.18.0', '4', '5', NULL, '{}');
+            """);
+
+        Assert.NotEqual(before, ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint);
+    }
+
+    private static PatternExactSearchPageResult ExactPage(
+        PatternFactsReader reader,
+        string dbPath,
+        int offset) =>
+        reader.SearchExactPageWithContext(
+            dbPath,
+            "htmx.attribute.v1",
+            language: null,
+            pathGlob: null,
+            metadataFilters: null,
+            offset,
+            limit: 1);
+
     private static JulieDbFixture CreatePatternFixture()
     {
         var fx = JulieDbFixture.Create(
