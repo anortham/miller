@@ -2140,6 +2140,38 @@ public sealed class EditToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_RenameSymbol_DriftedSpanPointingAtOtherBytes_RefusesAndLeavesEveryFileByteIdentical()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        // Drift the billing/Invoice.cs occurrence off the real "Total" token while keeping the span the same
+        // WIDTH, so the splicer would happily overwrite five unrelated bytes if the site reached the plan.
+        fx.ExecuteWrite("""
+            UPDATE identifiers
+            SET start_byte = 60, end_byte = 65
+            WHERE identifier_id = 'd100000000000000000000000000000c';
+            UPDATE reference_sites
+            SET start_byte = 60, end_byte = 65
+            WHERE path = 'billing/Invoice.cs' AND start_byte = 71;
+            """);
+        LayFiles(EditFixtureFiles);
+        var (svc, _) = Build(fx);
+        var before = EditFixtureFiles.Keys.ToDictionary(
+            path => path,
+            path => File.ReadAllText(AbsPath(path)),
+            StringComparer.Ordinal);
+
+        var result = svc.Execute(Req("rename_symbol", "OrderService.Total") with
+        {
+            NewText = "GrandTotal",
+        });
+
+        Assert.False(result.Applied);
+        Assert.Equal("error", result.Outcome);
+        foreach (var (path, original) in before)
+            Assert.Equal(original, File.ReadAllText(AbsPath(path)));
+    }
+
+    [Fact]
     public void Execute_RenameSymbol_DefaultExactMode_RefusesIncompleteCoverage()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);

@@ -1146,6 +1146,26 @@ public sealed class EditService
                         ? FailureNoMatch
                         : FailureStaleTarget);
             }
+
+            // Applying against a stale file whose spans already failed the token check: this plan is known to be
+            // incomplete (the mismatched sites were excluded above). Converge and re-resolve rather than
+            // carrying it forward — the per-file gate below cannot catch this, because another process making
+            // the file fresh in the meantime leaves anyRecovered false and would apply the incomplete plan.
+            TimeSpan invalidRecoveryBudget = _recovery.Timeout;
+            bool invalidRecoveryWait = false;
+            if (allowRecovery && TryRecoverFreshness(
+                    invalidSite.FilePath,
+                    invalidPath,
+                    ReadDisk(invalidPath),
+                    ref invalidRecoveryBudget,
+                    out invalidRecoveryWait))
+            {
+                EditResult replanned = ExecuteRename(request, json, allowRecovery: false);
+                return replanned with { StaleWaitPerformed = replanned.StaleWaitPerformed || invalidRecoveryWait };
+            }
+
+            return StaleBlocked(invalidSite.FilePath, invalidGate.IndexedContentFound, json, allowStaleSafe: false)
+                with { StaleWaitPerformed = invalidRecoveryWait };
         }
         if (definitionSite is null)
         {
@@ -1297,7 +1317,12 @@ public sealed class EditService
                 s.EndByte > fileBytes.Length ||
                 !fileBytes.AsSpan(s.StartByte, s.EndByte - s.StartByte).SequenceEqual(oldNameBytes))
             {
+                // A span whose disk bytes are not the old identifier must never enter the plan: the splicer
+                // replaces whatever sits in range, so carrying it forward would rewrite an unrelated token of
+                // the same length. Callers refuse on invalidSite; excluding it here means even a control-flow
+                // path that reached the splicer could not corrupt the file.
                 invalidSite ??= s;
+                continue;
             }
             if (!byFile.TryGetValue(s.FilePath, out var list))
                 byFile[s.FilePath] = list = [];
