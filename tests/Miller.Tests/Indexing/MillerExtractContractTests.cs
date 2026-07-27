@@ -44,7 +44,9 @@ public sealed class MillerExtractContractTests
             // The pins 'name' carries a literal {VER} placeholder; substitute before asserting (reconciliation #4).
             string? resolvedName = name?.Replace("{VER}", pinnedVersion);
             Assert.Contains($"v{pinnedVersion}", resolvedName, StringComparison.Ordinal); // published assets carry the leading 'v'
-            Assert.True(string.IsNullOrEmpty(sha256), $"unreleased pin must not invent sha256 for {asset.Name}");
+            Assert.True(
+                sha256 is not null && Regex.IsMatch(sha256, "^[0-9a-f]{64}$"),
+                $"published pin must carry a lowercase 64-hex sha256 for {asset.Name}; got '{sha256}'");
         }
     }
 
