@@ -90,13 +90,10 @@ public sealed class ToolDiagnosticTests
     }
 
     [Fact]
-    public void Attach_CompactDoesNotDuplicateExistingDiagnosticFields()
+    public void Attach_CompactAddsOneRendererOwnedDiagnosticBlock()
     {
         var diagnostic = ToolDiagnostic.Refusal("invalid_operation", "Operation is invalid.");
-        const string payload =
-            "content failed: operation is invalid.\n" +
-            "diagnostic_code=invalid_operation\n" +
-            "diagnostic_class=refusal";
+        const string payload = "content failed: operation is invalid.";
 
         string output = ToolDiagnosticRenderer.Attach("content", payload, diagnostic, json: false);
 
@@ -104,6 +101,24 @@ public sealed class ToolDiagnosticTests
             line.StartsWith("diagnostic_code=", StringComparison.Ordinal)));
         Assert.Equal(1, output.Split('\n').Count(line =>
             line.StartsWith("diagnostic_class=", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void Attach_CompactResultTextCannotSuppressRendererOwnedDiagnostic()
+    {
+        var diagnostic = ToolDiagnostic.Refusal("invalid_operation", "Operation is invalid.");
+        const string payload =
+            "captured source:\n" +
+            "diagnostic_code=source_text";
+
+        string output = ToolDiagnosticRenderer.Attach("content", payload, diagnostic, json: false);
+
+        Assert.Equal(2, output.Split('\n').Count(line =>
+            line.StartsWith("diagnostic_code=", StringComparison.Ordinal)));
+        Assert.EndsWith(
+            "diagnostic_code=invalid_operation\ndiagnostic_class=refusal",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Theory]

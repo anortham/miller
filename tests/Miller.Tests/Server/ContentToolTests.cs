@@ -1521,6 +1521,33 @@ public sealed class ContentToolTests : IDisposable
     }
 
     [Fact]
+    public void Execute_FailureReturnsBoundedDiagnosticInsteadOfThrowing()
+    {
+        var tool = new ContentTool(_workspace, new ContentCorpusExternalStore());
+
+        ContentToolExecutionResult result = tool.Execute(
+            operation: "invalid",
+            path: null,
+            query: null,
+            sourceId: null,
+            url: null,
+            displayPath: null,
+            contentKind: null,
+            workspaceId: null,
+            line: null,
+            contextLines: null,
+            limit: 1,
+            maxBytes: null,
+            format: "compact",
+            outputByteBudget: 256);
+
+        Assert.True(result.IsError);
+        Assert.True(Encoding.UTF8.GetByteCount(result.Output) <= 256, result.Output);
+        Assert.Contains("diagnostic_code=invalid_operation", result.Output, StringComparison.Ordinal);
+        Assert.Contains("diagnostic_class=refusal", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Content_SearchAllRegisteredWorkspaces_ReportsWorkspacePerHit()
     {
         string alphaRoot = Path.Combine(_dir, "alpha");

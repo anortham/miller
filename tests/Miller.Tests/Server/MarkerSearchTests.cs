@@ -86,6 +86,76 @@ public sealed class MarkerSearchTests
     }
 
     [Fact]
+    public void FindMarkers_AppliesMarkerFilterBeforeLimit()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        for (int i = 0; i < MarkerSearch.MaxLimit; i++)
+        {
+            fixture.AddStructuralFact(
+                $"marker-todo-{i:D3}",
+                null,
+                $"aaa/{i:D3}.cs",
+                patternId: MarkerFactReader.PatternId,
+                captureName: "marker",
+                nodeKind: "comment",
+                metadataJson: """{"marker":"TODO"}""");
+        }
+        fixture.AddStructuralFact(
+            "marker-hack-target",
+            null,
+            "zzz/Target.cs",
+            patternId: MarkerFactReader.PatternId,
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: """{"marker":"HACK"}""");
+
+        MarkerSearchHit hit = Assert.Single(MarkerSearch.FindMarkers(
+            fixture.DbPath,
+            MarkerSearch.ParseMarkers("HACK"),
+            limit: 1,
+            excludeTests: false,
+            filePattern: null,
+            language: null));
+
+        Assert.Equal("marker-hack-target", hit.Region.RegionId);
+    }
+
+    [Fact]
+    public void FindMarkers_AppliesPathFilterBeforeLimit()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        for (int i = 0; i < MarkerSearch.MaxLimit; i++)
+        {
+            fixture.AddStructuralFact(
+                $"marker-early-{i:D3}",
+                null,
+                $"aaa/{i:D3}.cs",
+                patternId: MarkerFactReader.PatternId,
+                captureName: "marker",
+                nodeKind: "comment",
+                metadataJson: """{"marker":"TODO"}""");
+        }
+        fixture.AddStructuralFact(
+            "marker-path-target",
+            null,
+            "zzz/Target.cs",
+            patternId: MarkerFactReader.PatternId,
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: """{"marker":"TODO"}""");
+
+        MarkerSearchHit hit = Assert.Single(MarkerSearch.FindMarkers(
+            fixture.DbPath,
+            MarkerSearch.ParseMarkers("TODO"),
+            limit: 1,
+            excludeTests: false,
+            filePattern: "zzz/**",
+            language: null));
+
+        Assert.Equal("marker-path-target", hit.Region.RegionId);
+    }
+
+    [Fact]
     public void Reader_ExcludeTests_FiltersTopLevelTestPathsBeforeApplyingLimit()
     {
         using var fixture = JulieDbFixture.CreateDefault();

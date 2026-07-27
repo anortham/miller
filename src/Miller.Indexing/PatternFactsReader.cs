@@ -526,45 +526,52 @@ public sealed class PatternFactsReader
     {
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
-        List<string> where = AddSearchFilters(
-            command,
-            patternId: null,
-            language,
-            pathGlob: null,
-            metadataFilters,
-            out _);
-        where.AddRange(AddFactFilters(command, patternIds, language: null));
+        int parameterIndex = 0;
+        List<string> where = AddFactFilters(command, patternIds, language);
+        bool pathInSql = string.IsNullOrWhiteSpace(pathGlob)
+            || PatternPathGlobSql.TryAddPathPredicate(command, where, pathGlob, ref parameterIndex);
+        if (!pathInSql)
+        {
+            Func<string, bool> pathMatches = PatternPathGlobMatcher.Compile(pathGlob);
+            connection.CreateFunction(
+                "miller_pattern_path_matches",
+                (string candidate) => pathMatches(candidate),
+                isDeterministic: true);
+            where.Add("miller_pattern_path_matches(path)");
+        }
+        bool metadataInSql = metadataFilters is null || metadataFilters.Count == 0
+            || PatternMetadataSql.TryAddMetadataFilters(
+                command,
+                where,
+                metadataFilters,
+                ref parameterIndex);
+        if (metadataFilters is { Count: > 0 } && !metadataInSql)
+            throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
+
+        command.CommandText = $"""
+            SELECT pattern_id, path, start_byte, structural_fact_id
+            FROM structural_facts
+            {WhereClause(where)}
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+        (long totalCount, string populationFingerprint) = ReadPageIdentity(command);
+
+        command.Parameters.AddWithValue("$page_limit", boundedLimit);
+        command.Parameters.AddWithValue("$page_offset", offset);
         command.CommandText = $"""
             SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
                    containing_symbol_id, start_line, start_column, end_line, end_column,
                    start_byte, end_byte, confidence, metadata_json
             FROM structural_facts
             {WhereClause(where)}
-            ORDER BY path, start_byte, structural_fact_id;
+            ORDER BY path, start_byte, structural_fact_id
+            LIMIT $page_limit OFFSET $page_offset;
             """;
-
-        Func<string, bool>? pathMatches = string.IsNullOrWhiteSpace(pathGlob)
-            ? null
-            : PatternPathGlobMatcher.Compile(pathGlob);
-        using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var rows = new List<PatternMatchRow>(boundedLimit);
-        long totalCount = 0;
-        using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            PatternMatchRow row = ReadMatch(reader);
-            if (pathMatches is not null && !pathMatches(row.Path))
-                continue;
-
-            AppendPatternMatchIdentity(fingerprint, row);
-            if (totalCount >= offset && rows.Count < boundedLimit)
-                rows.Add(row);
-            totalCount++;
-        }
+        IReadOnlyList<PatternMatchRow> rows = ReadPayloadPage(command, boundedLimit);
 
         return new PatternMatchPage(
             totalCount,
-            Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
+            populationFingerprint,
             offset,
             rows);
     }
@@ -603,7 +610,7 @@ public sealed class PatternFactsReader
         if (metadataFilters is { Count: > 0 } && !metadataInSql)
             throw new InvalidOperationException("patterns where contains unsupported metadata keys.");
 
-        command.CommandText = $"""
+        string rankedCte = $"""
             WITH ranked AS (
                 SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
                        containing_symbol_id, start_line, start_column, end_line, end_column,
@@ -615,39 +622,59 @@ public sealed class PatternFactsReader
                 FROM structural_facts
                 {WhereClause(where)}
             )
+            """;
+        command.CommandText = rankedCte + """
+            SELECT pattern_id, path, start_byte, structural_fact_id
+            FROM ranked
+            ORDER BY family_rank, pattern_id, path, start_byte, structural_fact_id;
+            """;
+        (long totalCount, string populationFingerprint) = ReadPageIdentity(command);
+
+        command.Parameters.AddWithValue("$page_limit", boundedLimit);
+        command.Parameters.AddWithValue("$page_offset", offset);
+        command.CommandText = rankedCte + """
             SELECT structural_fact_id, pattern_id, language, path, capture_name, node_kind,
                    containing_symbol_id, start_line, start_column, end_line, end_column,
                    start_byte, end_byte, confidence, metadata_json
             FROM ranked
-            ORDER BY family_rank, pattern_id, path, start_byte, structural_fact_id;
+            ORDER BY family_rank, pattern_id, path, start_byte, structural_fact_id
+            LIMIT $page_limit OFFSET $page_offset;
             """;
-
-        return ReadOrderedMatchPage(command, offset, boundedLimit);
+        IReadOnlyList<PatternMatchRow> rows = ReadPayloadPage(command, boundedLimit);
+        return new PatternMatchPage(totalCount, populationFingerprint, offset, rows);
     }
 
-    private static PatternMatchPage ReadOrderedMatchPage(
-        SqliteCommand command,
-        int offset,
-        int boundedLimit)
+    private static (long TotalCount, string PopulationFingerprint) ReadPageIdentity(
+        SqliteCommand command)
     {
         using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var rows = new List<PatternMatchRow>(boundedLimit);
         long totalCount = 0;
         using SqliteDataReader reader = command.ExecuteReader();
         while (reader.Read())
         {
-            PatternMatchRow row = ReadMatch(reader);
-            AppendPatternMatchIdentity(fingerprint, row);
-            if (totalCount >= offset && rows.Count < boundedLimit)
-                rows.Add(row);
+            AppendPatternMatchIdentity(
+                fingerprint,
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                reader.GetString(3));
             totalCount++;
         }
 
-        return new PatternMatchPage(
+        return (
             totalCount,
-            Convert.ToHexStringLower(fingerprint.GetHashAndReset()),
-            offset,
-            rows);
+            Convert.ToHexStringLower(fingerprint.GetHashAndReset()));
+    }
+
+    private static IReadOnlyList<PatternMatchRow> ReadPayloadPage(
+        SqliteCommand command,
+        int boundedLimit)
+    {
+        var rows = new List<PatternMatchRow>(boundedLimit);
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(ReadMatch(reader));
+        return rows;
     }
 
     private static PatternMatchPage EmptyMatchPage(int offset)
@@ -661,13 +688,26 @@ public sealed class PatternFactsReader
     }
 
     private static void AppendPatternMatchIdentity(IncrementalHash fingerprint, PatternMatchRow row)
+        => AppendPatternMatchIdentity(
+            fingerprint,
+            row.PatternId,
+            row.Path,
+            row.Span.StartByte,
+            row.FactId);
+
+    private static void AppendPatternMatchIdentity(
+        IncrementalHash fingerprint,
+        string patternId,
+        string path,
+        int startByte,
+        string factId)
     {
-        AppendFingerprintField(fingerprint, row.PatternId);
-        AppendFingerprintField(fingerprint, row.Path);
+        AppendFingerprintField(fingerprint, patternId);
+        AppendFingerprintField(fingerprint, path);
         AppendFingerprintField(
             fingerprint,
-            row.Span.StartByte.ToString(CultureInfo.InvariantCulture));
-        AppendFingerprintField(fingerprint, row.FactId);
+            startByte.ToString(CultureInfo.InvariantCulture));
+        AppendFingerprintField(fingerprint, factId);
     }
 
     private static void AppendFingerprintField(IncrementalHash fingerprint, string? field)

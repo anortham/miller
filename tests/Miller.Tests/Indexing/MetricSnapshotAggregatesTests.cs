@@ -14,7 +14,7 @@ public sealed class MetricSnapshotAggregatesTests
         using var fx = NewFixture();
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         Assert.Equal(4d, ValueOf(metrics, MetricSnapshotAggregates.SymbolCount));
         Assert.Equal(4d, ValueOf(metrics, MetricSnapshotAggregates.FileCount));
@@ -33,7 +33,7 @@ public sealed class MetricSnapshotAggregatesTests
         using var fx = NewFixture();
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         Assert.Equal(0d, ValueOf(metrics, MetricSnapshotAggregates.MarkerTotal));
     }
@@ -56,7 +56,7 @@ public sealed class MetricSnapshotAggregatesTests
             captureName: "marker", nodeKind: "comment", metadataJson: """{"marker":"FIXME"}""");
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
@@ -65,12 +65,45 @@ public sealed class MetricSnapshotAggregatesTests
     }
 
     [Fact]
-    public void ReadConvergeMetrics_MarkerTotalIsZero_WhenIndexPresentButNoMarkers()
+    public void ReadConvergeMetrics_MarkerCountsAreExactAboveSearchLimit()
+    {
+        using var fx = NewFixture();
+        for (int i = 0; i <= 500; i++)
+        {
+            fx.AddStructuralFact(
+                $"marker-{i:D3}",
+                null,
+                $"src/{i:D3}.cs",
+                patternId: MarkerFactReader.PatternId,
+                captureName: "marker",
+                nodeKind: "comment",
+                metadataJson: """{"marker":"TODO"}""");
+        }
+        fx.AddStructuralFact(
+            "marker-unknown",
+            null,
+            "src/unknown.cs",
+            patternId: MarkerFactReader.PatternId,
+            captureName: "marker",
+            nodeKind: "comment",
+            metadataJson: """{"marker":"NOTE"}""");
+
+        IReadOnlyList<MetricHistoryPoint> metrics =
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
+
+        MetricHistoryPoint marker = Assert.Single(
+            metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
+        Assert.Equal(501d, marker.Value);
+        Assert.Equal("{\"TODO\":501,\"FIXME\":0,\"HACK\":0,\"XXX\":0}", marker.DetailJson);
+    }
+
+    [Fact]
+    public void ReadConvergeMetrics_MarkerTotalIsZero_WhenArtifactHasNoMarkers()
     {
         using var fx = NewFixture();
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, new FakeRegionIndex());
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         MetricHistoryPoint marker = Assert.Single(
             metrics, m => m.Metric == MetricSnapshotAggregates.MarkerTotal);
@@ -85,7 +118,7 @@ public sealed class MetricSnapshotAggregatesTests
             new[] { Row("id-solo", "Solo", "src/Solo.cs") });
 
         IReadOnlyList<MetricHistoryPoint> metrics =
-            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath, regionIndex: null);
+            MetricSnapshotAggregates.ReadConvergeMetrics(fx.DbPath);
 
         // Complexity facts empty ⟹ absent rows, never 0 (absent-vs-zero rule).
         Assert.DoesNotContain(metrics, m => m.Metric == MetricSnapshotAggregates.ComplexityP50);

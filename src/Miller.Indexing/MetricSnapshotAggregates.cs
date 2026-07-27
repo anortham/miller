@@ -13,9 +13,9 @@ namespace Miller.Indexing;
 /// <see cref="RecordConverge"/>). Design: docs/plans/2026-07-07-metric-history-design.md ("Cheap arm").
 ///
 /// <para>The absent-vs-zero rule (design amendment #1) is load-bearing: a metric whose SOURCE is unavailable is an
-/// ABSENT row, never a 0. Complexity facts empty for this workspace ⟹ no complexity metrics; region index not
-/// supplied ⟹ no marker metric. A count that genuinely evaluates to 0 (zero clone groups, zero markers with the
-/// index present) IS recorded — the source was available and the answer was 0.</para>
+/// ABSENT row, never a 0. Complexity facts empty for this workspace ⟹ no complexity metrics. A count that genuinely
+/// evaluates to 0 (zero clone groups or zero producer-owned marker facts) IS recorded — the source was available
+/// and the answer was 0.</para>
 /// </summary>
 public static class MetricSnapshotAggregates
 {
@@ -33,14 +33,12 @@ public static class MetricSnapshotAggregates
     public const string MarkerTotal = "marker_total";
 
     private static readonly string[] MarkerNames = { "TODO", "FIXME", "HACK", "XXX" };
-    private const int MarkerSearchLimit = 500;
-
     /// <summary>
     /// Read the converge metric set from <paramref name="symbolsDbPath"/>, including marker counts from the
     /// producer-owned <c>code.marker.v1</c> structural facts.
     /// </summary>
     public static IReadOnlyList<MetricHistoryPoint> ReadConvergeMetrics(
-        string symbolsDbPath, IRegionSearchIndex? regionIndex)
+        string symbolsDbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
 
@@ -51,9 +49,8 @@ public static class MetricSnapshotAggregates
             AddSymbolCounts(connection, metrics);
             AddCloneGroupCount(connection, metrics);
             AddComplexityPercentiles(connection, metrics);
+            AddMarkerCounts(connection, metrics);
         }
-
-        AddMarkerCounts(symbolsDbPath, metrics);
 
         return metrics;
     }
@@ -72,7 +69,6 @@ public static class MetricSnapshotAggregates
         string? workspaceId,
         long revision,
         string millerVersion,
-        IRegionSearchIndex? regionIndex = null,
         Action<Exception>? onError = null,
         DateTime? recordedAtUtc = null)
     {
@@ -87,7 +83,7 @@ public static class MetricSnapshotAggregates
             if (string.IsNullOrWhiteSpace(artifactId))
                 return null; // no stable artifact identity ⟹ nothing to key/dedup this snapshot on.
 
-            IReadOnlyList<MetricHistoryPoint> metrics = ReadConvergeMetrics(symbolsDbPath, regionIndex);
+            IReadOnlyList<MetricHistoryPoint> metrics = ReadConvergeMetrics(symbolsDbPath);
             if (metrics.Count == 0)
                 return null;
 
@@ -230,20 +226,37 @@ public static class MetricSnapshotAggregates
         return sortedAsc[lo] + ((sortedAsc[hi] - sortedAsc[lo]) * (rank - lo));
     }
 
-    private static void AddMarkerCounts(string symbolsDbPath, List<MetricHistoryPoint> metrics)
+    private static void AddMarkerCounts(SqliteConnection connection, List<MetricHistoryPoint> metrics)
     {
-        var perMarker = new Dictionary<string, int>(StringComparer.Ordinal);
+        var perMarker = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (string marker in MarkerNames)
             perMarker[marker] = 0;
-        IReadOnlyList<MarkerFactRow> rows = MarkerFactReader.Read(symbolsDbPath, excludeTests: false, MarkerSearchLimit);
-        foreach (MarkerFactRow row in rows)
-            if (perMarker.ContainsKey(row.Marker))
-                perMarker[row.Marker]++;
 
-        metrics.Add(new MetricHistoryPoint(MarkerTotal, rows.Count, BuildMarkerDetailJson(perMarker)));
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT UPPER(json_extract(metadata_json, '$.marker')), COUNT(*)
+            FROM structural_facts
+            WHERE pattern_id = $pattern
+              AND json_valid(metadata_json)
+              AND json_type(metadata_json, '$.marker') = 'text'
+              AND UPPER(json_extract(metadata_json, '$.marker')) IN ('TODO', 'FIXME', 'HACK', 'XXX')
+            GROUP BY UPPER(json_extract(metadata_json, '$.marker'));
+            """;
+        command.Parameters.AddWithValue("$pattern", MarkerFactReader.PatternId);
+        using SqliteDataReader reader = command.ExecuteReader();
+        long total = 0;
+        while (reader.Read())
+        {
+            string marker = reader.GetString(0);
+            long count = reader.GetInt64(1);
+            perMarker[marker] = count;
+            total += count;
+        }
+
+        metrics.Add(new MetricHistoryPoint(MarkerTotal, total, BuildMarkerDetailJson(perMarker)));
     }
 
-    private static string BuildMarkerDetailJson(IReadOnlyDictionary<string, int> perMarker)
+    private static string BuildMarkerDetailJson(IReadOnlyDictionary<string, long> perMarker)
     {
         // Fixed, alnum-only marker keys ⟹ no JSON escaping needed; emit in canonical MarkerNames order.
         var sb = new StringBuilder("{");

@@ -75,8 +75,11 @@ internal static class MarkerSearch
 
         ToolSearchFilters filters = ToolSearchFilters.Parse(filePattern, language);
         HashSet<string> wanted = new(markers, StringComparer.OrdinalIgnoreCase);
-        return MarkerFactReader.Read(dbPath, excludeTests, MaxLimit)
-            .Where(hit => wanted.Contains(hit.Marker) && filters.Allows(hit.Path, hit.Language))
+        return MarkerFactReader.Read(
+                dbPath,
+                excludeTests,
+                Math.Min(limit, MaxLimit),
+                hit => wanted.Contains(hit.Marker) && filters.Allows(hit.Path, hit.Language))
             .Select(static hit => new MarkerSearchHit(
                 [hit.Marker.ToUpperInvariant()],
                 new RegionSearchHit(

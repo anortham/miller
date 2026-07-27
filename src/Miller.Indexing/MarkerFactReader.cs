@@ -7,7 +7,11 @@ public static class MarkerFactReader
 {
     public const string PatternId = "code.marker.v1";
 
-    public static IReadOnlyList<MarkerFactRow> Read(string dbPath, bool excludeTests, int limit)
+    public static IReadOnlyList<MarkerFactRow> Read(
+        string dbPath,
+        bool excludeTests,
+        int limit,
+        Func<MarkerFactRow, bool>? predicate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         int boundedLimit = Math.Clamp(limit, 1, 500);
@@ -42,7 +46,7 @@ public static class MarkerFactReader
             if (excludeTests && (containingSymbolIsTest || TestPathClassifier.Check(path)))
                 continue;
 
-            rows.Add(new MarkerFactRow(
+            var row = new MarkerFactRow(
                 FactId: reader.GetString(0),
                 Marker: reader.GetString(1),
                 Owner: reader.IsDBNull(2) ? null : reader.GetString(2),
@@ -57,7 +61,9 @@ public static class MarkerFactReader
                 EndLine: reader.GetInt32(12),
                 EndColumn: reader.GetInt32(13),
                 StartByte: reader.GetInt32(14),
-                EndByte: reader.GetInt32(15)));
+                EndByte: reader.GetInt32(15));
+            if (predicate is null || predicate(row))
+                rows.Add(row);
         }
 
         return rows;

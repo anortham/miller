@@ -158,10 +158,14 @@ public sealed class ContentTool
             ToolDiagnostic diagnostic = ContentDiagnostic(diagnosticCode, ex);
             if (diagnostic.Outcome == ToolDiagnosticOutcome.Error)
                 telemetry?.SetError(ex);
-            int? failureBudget = outputByteBudget is { } configuredBudget
-                ? Math.Max(1, configuredBudget - 2_048)
-                : null;
-            string failure = RenderFailure(op, ex, diagnosticCode, json, sourceId, failureBudget);
+            string failure = RenderFailure(
+                op,
+                ex,
+                diagnosticCode,
+                json,
+                sourceId,
+                outputByteBudget: null,
+                includeCompactDiagnosticCode: false);
             string output = ToolDiagnosticRenderer.Attach(
                 "content",
                 failure,
@@ -169,7 +173,23 @@ public sealed class ContentTool
                 json,
                 telemetry);
             if (outputByteBudget is { } finalBudget)
-                output = ToolOutputBudget.RequireWithinByteBudget(output, finalBudget);
+            {
+                try
+                {
+                    output = ToolOutputBudget.RequireWithinByteBudget(output, finalBudget);
+                }
+                catch (ToolDiagnosticException)
+                {
+                    ToolDiagnostic bounded = diagnostic with
+                    {
+                        Message = $"content {op} failed.",
+                        NextActions = Array.Empty<ToolDiagnosticAction>(),
+                    };
+                    output = ToolOutputBudget.RequireWithinByteBudget(
+                        ToolDiagnosticRenderer.Render("content", bounded, json, telemetry),
+                        finalBudget);
+                }
+            }
             return new ContentToolExecutionResult(output, IsError: true, diagnostic);
         }
     }
@@ -181,7 +201,8 @@ public sealed class ContentTool
             ContentDiagnosticCode(operation, ex),
             json,
             sourceId: null,
-            outputByteBudget: null);
+            outputByteBudget: null,
+            includeCompactDiagnosticCode: true);
 
     private static string RenderFailure(
         string operation,
@@ -189,12 +210,18 @@ public sealed class ContentTool
         string diagnosticCode,
         bool json,
         string? sourceId,
-        int? outputByteBudget)
+        int? outputByteBudget,
+        bool includeCompactDiagnosticCode)
     {
         IReadOnlyList<ContentNextAction> actions = FailureNextActions(operation, diagnosticCode, sourceId);
         string output = json
             ? RenderDiagnosticJson(operation, ex.Message, diagnosticCode, actions)
-            : RenderDiagnosticCompact(operation, ex.Message, diagnosticCode, actions);
+            : RenderDiagnosticCompact(
+                operation,
+                ex.Message,
+                diagnosticCode,
+                actions,
+                includeCompactDiagnosticCode);
         return outputByteBudget is null
             ? output
             : RequireContentMcpBudget(output, outputByteBudget.Value, operation);
@@ -1857,21 +1884,24 @@ public sealed class ContentTool
         string operation,
         string error,
         string diagnosticCode,
-        IReadOnlyList<ContentNextAction> nextActions)
+        IReadOnlyList<ContentNextAction> nextActions,
+        bool includeDiagnosticCode)
     {
         var sb = new StringBuilder();
         sb.Append("content");
         if (string.Equals(operation, "read", StringComparison.Ordinal))
             sb.Append(" read");
-        sb.Append(" failed: ").Append(SearchTool.Truncate(error, MaxDiagnosticErrorChars))
-          .Append('\n')
-          .Append("diagnostic_code=").Append(diagnosticCode);
+        sb.Append(" failed: ").Append(SearchTool.Truncate(error, MaxDiagnosticErrorChars));
+        if (includeDiagnosticCode)
+            sb.Append('\n').Append("diagnostic_code=").Append(diagnosticCode);
         AppendContentNextActions(sb, nextActions);
         string output = sb.ToString();
         return output.Length <= MaxDiagnosticOutputChars
             ? output
-            : $"content failed: {SearchTool.Truncate(error, MaxDiagnosticFallbackErrorChars)}\n" +
-              $"diagnostic_code={diagnosticCode}";
+            : includeDiagnosticCode
+                ? $"content failed: {SearchTool.Truncate(error, MaxDiagnosticFallbackErrorChars)}\n" +
+                  $"diagnostic_code={diagnosticCode}"
+                : $"content failed: {SearchTool.Truncate(error, MaxDiagnosticFallbackErrorChars)}";
     }
 
     private static string ContentDiagnosticCode(string operation, Exception ex)

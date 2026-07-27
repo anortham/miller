@@ -92,7 +92,7 @@ internal sealed class IndexerSidecarConverger
         if (_searchEnabled)
             ConvergeSearch(symbolsDbPath, workspaceRoot, revision, fullRebuild, searchDbPath);
 
-        RecordConvergeHistory(symbolsDbPath, workspaceId, revision, searchDbPath);
+        RecordConvergeHistory(symbolsDbPath, workspaceId, revision);
 
         // Vector convergence is asynchronous by design (vectors-v1 §Cursors): stamp the desired target and wake
         // the drain loop, never embed here. Inert — a single bool check — when semantic retrieval is off.
@@ -102,42 +102,16 @@ internal sealed class IndexerSidecarConverger
     // Metric-history cheap arm: append one source='converge' snapshot AFTER the sidecar converge steps, independent
     // of their success — the aggregates read symbols.db directly, not the sidecars. Best-effort by contract:
     // RecordConverge never throws and never blocks (skip-on-busy), so a history hiccup can never delay indexing.
-    // The marker metric rides the region search index just converged into search.db (opened best-effort below);
-    // when it is unavailable (search disabled, stale, or region tables absent) the marker metric is simply absent.
-    private void RecordConvergeHistory(string symbolsDbPath, string? workspaceId, long revision, string? searchDbPath)
+    private void RecordConvergeHistory(string symbolsDbPath, string? workspaceId, long revision)
     {
         MetricSnapshotAggregates.RecordConverge(
             symbolsDbPath,
             workspaceId,
             revision,
             MillerVersion.Current,
-            TryOpenRegionIndex(searchDbPath, revision),
             onError: ex => _logger.LogWarning(
                 ex, "Metric-history converge snapshot skipped; the trend will have a gap at revision {Revision}.",
                 revision));
-    }
-
-    // Open the region search index just built into search.db, so the converge snapshot can carry marker_total.
-    // FtsRegionSearchIndex.Open THROWS on any unavailability (missing/stale search.db, region tables absent when
-    // region search is disabled) — never returns null — so every failure degrades cleanly to "no region index" and
-    // never affects converge. The index is not IDisposable (per-Search connections are Pooling=false and disposed).
-    private IRegionSearchIndex? TryOpenRegionIndex(string? searchDbPath, long revision)
-    {
-        if (!_searchEnabled || searchDbPath is null)
-            return null;
-
-        try
-        {
-            return FtsRegionSearchIndex.Open(searchDbPath, revision);
-        }
-        catch (Exception ex) when (
-            ex is IOException or InvalidOperationException or SqliteException or ArgumentException)
-        {
-            _logger.LogDebug(
-                ex, "Region search index unavailable at converge; marker metric absent at revision {Revision}.",
-                revision);
-            return null;
-        }
     }
 
     private void ConvergeContentCorpus(

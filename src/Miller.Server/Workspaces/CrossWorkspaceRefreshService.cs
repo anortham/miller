@@ -267,31 +267,10 @@ public sealed class CrossWorkspaceRefreshService
         }
 
         // Metric-history cheap arm on the one-shot refresh path, mirroring the leader converge. Independent of the
-        // sidecar builds above; RecordConverge never throws or blocks. The marker metric rides the region index just
-        // converged into search.db (opened best-effort below); unavailable ⟹ marker metric absent. This service has
-        // no logger, so a swallowed history failure is silent, matching the sidecar best-effort behaviour above.
+        // sidecar builds above; RecordConverge never throws or blocks. This service has no logger, so a swallowed
+        // history failure is silent, matching the sidecar best-effort behaviour above.
         MetricSnapshotAggregates.RecordConverge(
-            symbolsDbPath, workspaceId, revision, MillerVersion.Current, TryOpenRegionIndex(symbolsDbPath, revision));
-    }
-
-    // Open the region search index for the just-converged search.db so the converge snapshot can carry marker_total.
-    // FtsRegionSearchIndex.Open THROWS on any unavailability (never returns null), so every failure — search disabled,
-    // region search disabled, stale/missing sidecar — degrades cleanly to "no region index" and never affects the
-    // refresh. Gated on the sidecar's own enable flags to skip a doomed open when the feature is off.
-    private IRegionSearchIndex? TryOpenRegionIndex(string symbolsDbPath, long revision)
-    {
-        if (!_sidecar.Enabled || !_sidecar.RegionOptions.Enabled)
-            return null;
-
-        try
-        {
-            return FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(symbolsDbPath), revision);
-        }
-        catch (Exception ex) when (
-            ex is IOException or InvalidOperationException or SqliteException or ArgumentException)
-        {
-            return null; // Region index unavailable ⟹ marker metric absent (best-effort, matches sidecar behaviour).
-        }
+            symbolsDbPath, workspaceId, revision, MillerVersion.Current);
     }
 
     private WorkspaceRefreshResult WaitForExternalRevision(

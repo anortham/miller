@@ -72,9 +72,8 @@ public static class ReportTool
     // metric is exact or absent, never misleading. Both fail that bar from the report side:
     //   clone_group_count — the report composes only a top-SectionLimit clone list, while converge records the
     //     EXACT GROUP BY count every revision; a truncated report value would poison the trend into a sawtooth.
-    //   marker_total — the report's MarkerSearch.FindMarkers caps the FINAL collapsed region set at MaxLimit (500),
-    //     while the converge arm caps at 500 PER MARKER KIND with no final cap (up to ~4x500 distinct regions), so
-    //     above 500 marker regions the two diverge under one name. Converge owns the series; the report omits it.
+    //   marker_total — the report composes only a bounded marker display, while converge records the exact producer
+    //     fact count every revision. A bounded report value would poison the exact series. Converge owns it.
     //
     // The metrics that ARE recorded are exact and limit-insensitive across every producer:
     //   symbol/file/language — same WorkspaceIndexFactsReader.ReadSymbolCounts COUNT shape as the converge arm;

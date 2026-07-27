@@ -94,16 +94,9 @@ public static class ToolDiagnosticRenderer
         string name,
         string value)
     {
-        string prefix = name + "=";
-        if (output.ToString().Split('\n').Any(line =>
-            line.StartsWith(prefix, StringComparison.Ordinal)))
-        {
-            return;
-        }
-
         if (output.Length > 0)
             output.Append('\n');
-        output.Append(prefix).Append(value);
+        output.Append(name).Append('=').Append(value);
     }
 
     private static string RenderJson(string tool, ToolDiagnostic diagnostic)

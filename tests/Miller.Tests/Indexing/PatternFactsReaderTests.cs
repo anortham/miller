@@ -116,6 +116,45 @@ public sealed class PatternFactsReaderTests
     }
 
     [Fact]
+    public void SearchExactPage_AllocationTracksPagePayloadInsteadOfPopulationPayload()
+    {
+        using var fx = CreatePatternFixture();
+        Exec(fx.DbPath, """
+            WITH RECURSIVE seq(n) AS (
+                SELECT 1
+                UNION ALL
+                SELECT n + 1 FROM seq WHERE n < 1000
+            )
+            INSERT INTO structural_facts
+                (structural_fact_id, file_id, path, language, pattern_id, capture_name, node_kind,
+                 containing_symbol_id, start_line, start_column, end_line, end_column, start_byte, end_byte,
+                 confidence, metadata_json)
+            SELECT
+                'fact-page-' || printf('%04d', n), 'file:src/Auth.cs', 'src/Page.cs', 'csharp',
+                'page.performance.v1', 'item', 'object', 'sym-auth',
+                n, 1, n, 2, n * 2, n * 2 + 1, 1.0,
+                json_object('payload', printf('%.*c', 32768, 'x'))
+            FROM seq;
+            """);
+        var reader = new PatternFactsReader();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        PatternExactSearchPageResult result = reader.SearchExactPageWithContext(
+            fx.DbPath,
+            patternId: "page.performance.v1",
+            language: null,
+            pathGlob: null,
+            metadataFilters: null,
+            offset: 0,
+            limit: 1);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(1000, result.Page.TotalCount);
+        Assert.Equal("fact-page-0001", Assert.Single(result.Page.Rows).FactId);
+        Assert.True(allocated < 8 * 1024 * 1024, $"Allocated {allocated:N0} bytes.");
+    }
+
+    [Fact]
     public void SearchExactWithContext_ReturnsMatchesExistenceAndScopedSuggestionsFromOneRead()
     {
         using var fx = CreatePatternFixture();
