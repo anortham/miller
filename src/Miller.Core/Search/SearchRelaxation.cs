@@ -15,7 +15,7 @@ public static class SearchRelaxation
         ArgumentNullException.ThrowIfNull(query);
         return query
             .Split(
-                [' ', '\t', '\r', '\n', '-', '.', ':'],
+                [' ', '\t', '\r', '\n', '_', '-', '.', ':'],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
@@ -25,11 +25,13 @@ public static class SearchRelaxation
     public static SearchRelaxationDecision Decide(
         int distinctQueryTerms,
         int strictVisibleResults,
-        int requestedLimit)
+        int requestedLimit,
+        bool allowZeroEvidenceRelaxation)
     {
         bool multiTerm = distinctQueryTerms > 1;
         bool relax =
             multiTerm &&
+            (strictVisibleResults > 0 || allowZeroEvidenceRelaxation) &&
             strictVisibleResults < Math.Max(1, requestedLimit);
         return new SearchRelaxationDecision(
             multiTerm ? SearchMode.And : SearchMode.Or,

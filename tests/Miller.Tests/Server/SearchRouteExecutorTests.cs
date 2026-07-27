@@ -436,6 +436,32 @@ public sealed class SearchRouteExecutorTests
     }
 
     [Fact]
+    public void CollectSymbolCandidates_DoesNotRelaxAnIdentifierQueryWithNoStrictEvidence()
+    {
+        IndexedSymbol noise = Symbol(
+            1,
+            "noise-symbol",
+            "GetUserId",
+            "tests/Fixtures.cs",
+            isTest: false);
+        var index = new ModeAwareSymbolLookupIndex(strict: null, noise);
+        SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
+
+        SymbolCandidateSet candidates = SearchRouteExecutor.CollectSymbolCandidates(
+            index,
+            route,
+            new SearchRouteExecutionRequest(
+                Query: "NoSuchMillerSymbol_7f6e4d3c",
+                Limit: 10,
+                Json: true,
+                ExcludeTests: false));
+
+        Assert.Equal([SearchMode.And, SearchMode.Or], index.Modes);
+        Assert.False(candidates.Relaxed);
+        Assert.Empty(candidates.Candidates);
+    }
+
+    [Fact]
     public void CollectSymbolCandidates_ReranksGeneratedCopyBelowSourceDefinition()
     {
         SearchRoute route = SearchRoutePlanner.Plan("symbol", regions: null);
@@ -988,17 +1014,17 @@ public sealed class SearchRouteExecutorTests
 
     private sealed class ModeAwareSymbolLookupIndex : ISymbolLookupIndex
     {
-        private readonly IndexedSymbol _strict;
+        private readonly IndexedSymbol? _strict;
         private readonly IndexedSymbol _relaxed;
 
-        public ModeAwareSymbolLookupIndex(IndexedSymbol strict, IndexedSymbol relaxed)
+        public ModeAwareSymbolLookupIndex(IndexedSymbol? strict, IndexedSymbol relaxed)
         {
             _strict = strict;
             _relaxed = relaxed;
         }
 
         public List<SearchMode> Modes { get; } = [];
-        public int DocumentCount => 2;
+        public int DocumentCount => _strict is null ? 1 : 2;
         public IReadOnlySet<string> KnownExtensions { get; } =
             new HashSet<string>(StringComparer.Ordinal) { ".cs" };
 
@@ -1009,8 +1035,8 @@ public sealed class SearchRouteExecutorTests
         {
             Modes.Add(mode);
             IndexedSymbol[] rows = mode == SearchMode.And
-                ? [_strict]
-                : [_strict, _relaxed];
+                ? _strict is null ? [] : [_strict]
+                : _strict is null ? [_relaxed] : [_strict, _relaxed];
             return rows
                 .Take(limit)
                 .Select(symbol => new SearchHit(symbol.ToSearchableDocument(), 2.0))
@@ -1018,15 +1044,17 @@ public sealed class SearchRouteExecutorTests
         }
 
         public IndexedSymbol Resolve(int docId) =>
-            docId == _strict.DocId ? _strict : _relaxed;
+            _strict is not null && docId == _strict.DocId ? _strict : _relaxed;
 
         public IReadOnlyList<IndexedSymbol> FindByName(string name) =>
             new[] { _strict, _relaxed }
+                .OfType<IndexedSymbol>()
                 .Where(symbol => string.Equals(symbol.Name, name, StringComparison.Ordinal))
                 .ToArray();
 
         public IndexedSymbol? FindBySymbolId(string symbolId) =>
             new[] { _strict, _relaxed }
+                .OfType<IndexedSymbol>()
                 .FirstOrDefault(symbol =>
                     string.Equals(symbol.SymbolId, symbolId, StringComparison.Ordinal));
 

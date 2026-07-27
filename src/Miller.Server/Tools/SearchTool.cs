@@ -1481,7 +1481,8 @@ public sealed class SearchTool
             SearchRelaxationDecision decision = SearchRelaxation.Decide(
                 distinctTerms,
                 strict.Count,
-                limit);
+                limit,
+                allowZeroEvidenceRelaxation: QueryShapeFor(query) == "natural_language");
             relaxed = decision.Relaxed;
             if (decision.FallbackMode is { } fallbackMode)
             {

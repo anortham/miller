@@ -9,23 +9,30 @@ public sealed class SearchRelaxationTests
     [InlineData("SearchWorkspace", 1)]
     [InlineData("search workspace", 2)]
     [InlineData("Type::Member", 2)]
+    [InlineData("NoSuchMillerSymbol_7f6e4d3c", 2)]
     [InlineData("search search", 1)]
     public void DistinctTermCount_UsesLogicalQueryTerms(string query, int expected) =>
         Assert.Equal(expected, SearchRelaxation.DistinctTermCount(query));
 
     [Theory]
-    [InlineData(1, 0, 6, false)]
-    [InlineData(2, 6, 6, false)]
-    [InlineData(2, 5, 6, true)]
-    [InlineData(3, 0, 1, true)]
+    [InlineData(1, 0, 6, false, false)]
+    [InlineData(2, 6, 6, false, false)]
+    [InlineData(2, 5, 6, false, true)]
+    [InlineData(3, 0, 1, false, false)]
+    [InlineData(3, 0, 1, true, true)]
     public void Decide_RelaxesOnlyMultiTermQueriesThatCannotFillTheRequestedPage(
         int distinctTerms,
         int strictVisibleResults,
         int requestedLimit,
+        bool allowZeroEvidenceRelaxation,
         bool expectedRelaxed)
     {
         SearchRelaxationDecision decision =
-            SearchRelaxation.Decide(distinctTerms, strictVisibleResults, requestedLimit);
+            SearchRelaxation.Decide(
+                distinctTerms,
+                strictVisibleResults,
+                requestedLimit,
+                allowZeroEvidenceRelaxation);
 
         Assert.Equal(
             distinctTerms > 1 ? SearchMode.And : SearchMode.Or,
