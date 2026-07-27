@@ -1558,6 +1558,8 @@ public sealed class EditService
         writer.WriteString("kind", "definition");
         writer.WriteString("resolution_status", "exact");
         writer.WriteNumber("count", 1);
+        writer.WriteNumber("inferred_count", 0);
+        writer.WriteNumber("min_confidence", 1.0);
         writer.WriteEndObject();
         var exactCoverage = evidence.ExactEvidence
             .GroupBy(reference => (
@@ -1586,6 +1588,10 @@ public sealed class EditService
             writer.WriteString("kind", "name_based");
             writer.WriteString("resolution_status", "fallback");
             writer.WriteNumber("count", evidence.FallbackSites.Count);
+            // Name-based fallback is not a binding at all, so no tier corroborates it. It reports as fully
+            // inferred rather than omitting the fields and breaking the every-row contract.
+            writer.WriteNumber("inferred_count", evidence.FallbackSites.Count);
+            writer.WriteNumber("min_confidence", 0.0);
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
@@ -1903,6 +1909,13 @@ public sealed class EditService
     /// references worth renaming, but a rename WRITES, so the preview must not render them as indistinguishable
     /// from a scope-proved binding. A null tier is a direct extractor target or a relationship edge — proved.
     /// </summary>
+    /// <remarks>
+    /// The label can over-warn and never under-warns. A site carrying BOTH a tier-3 resolution and a proved
+    /// relationship edge keeps only the resolution row — <c>Deduplicate</c> ranks identifier evidence above
+    /// relationship evidence because it is more precise about the site — so it reports inferred even though a
+    /// proved edge also reached the target. Erring toward "look at this line" is the right direction for an
+    /// operation that writes; erring the other way would hide a genuinely heuristic rewrite.
+    /// </remarks>
     private static bool IsInferredBinding(ReferenceEvidence reference) =>
         reference.ResolutionTier is >= 3;
 

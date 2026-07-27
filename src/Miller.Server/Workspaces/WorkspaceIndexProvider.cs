@@ -881,21 +881,27 @@ public sealed class WorkspaceIndexProvider
         string IndexDbPath,
         long Revision,
         long FileWriteStampTicks,
-        long FileLength);
+        long FileLength,
+        string? ArtifactId);
 
-    // The symbols.db file identity (last-write ticks + length) is part of every cache key because the revision
-    // alone cannot be trusted across processes: a force rebuild in ANOTHER process deletes and recreates the
-    // file, and the fresh artifact's restarted revision counter can land on the number already cached here
-    // while this process's own scan legitimately reports no_change (sources unchanged after the rebuild). The
-    // in-process eviction in ResolveRegisteredState never sees that rewrite; the file stamp does (2026-06-11
-    // Eros fleet finding, cross-process case). A stat per resolve is cheap; a same-stamp rewrite would need an
-    // identical length AND an identical last-write tick, which a delete+recreate cannot produce in practice.
+    // Revision alone cannot be trusted across processes: a force rebuild in ANOTHER process replaces the file,
+    // and the fresh artifact's restarted revision counter can land on the number already cached here while this
+    // process's own scan legitimately reports no_change (sources unchanged after the rebuild). The in-process
+    // eviction in ResolveRegisteredState never sees that rewrite (2026-06-11 Eros fleet finding, cross-process
+    // case).
+    //
+    // The key therefore carries the artifact id, which names the generation outright, PLUS the file identity
+    // (last-write ticks + length). The file stamp alone was only a probabilistic guard — it argued that a
+    // delete+recreate could not reproduce an identical length and tick — and a probabilistic guard is the wrong
+    // shape for a correctness invariant. The stamp stays because it still catches a same-id in-place rewrite,
+    // and it costs one stat.
     private static CacheKey KeyFor(string workspaceId, string dbPath, long revision)
     {
+        string? artifactId = SymbolsArtifactIdentity.TryRead(dbPath).ArtifactId;
         var info = new FileInfo(dbPath);
         return info.Exists
-            ? new CacheKey(workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length)
-            : new CacheKey(workspaceId, dbPath, revision, FileWriteStampTicks: 0, FileLength: 0);
+            ? new CacheKey(workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length, artifactId)
+            : new CacheKey(workspaceId, dbPath, revision, 0, 0, artifactId);
     }
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);

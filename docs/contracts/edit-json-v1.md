@@ -45,7 +45,9 @@ then target-proven reference sites. `fallback_sites` contains explicitly selecte
 include unresolved sites or sites belonging to another same-name symbol. Each tier returns at most eight sites;
 the total, returned, and omitted counts state the complete population.
 
-Coverage rows contain `language`, `kind`, `resolution_status`, `count`, `inferred_count`, and `min_confidence`.
+Coverage rows contain `language`, `kind`, `resolution_status`, `count`, `inferred_count`, and `min_confidence`
+— every row, including the definition row (`inferred_count` 0, `min_confidence` 1.0) and the name-based fallback
+row, which is not a binding at all and so reports fully inferred at `min_confidence` 0.0.
 The definition has its own exact coverage row. Exact reference rows are grouped by extracted language and source
 kind; explicit fallback is grouped as `language=unknown`, `kind=name_based`, `resolution_status=fallback`.
 Coverage returns at most eight rows and reports its exact total and omitted count.

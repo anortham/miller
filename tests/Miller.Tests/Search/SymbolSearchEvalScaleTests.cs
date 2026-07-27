@@ -76,7 +76,15 @@ public sealed class SymbolSearchEvalScaleTests : IDisposable
 
         string searchDb = Path.Combine(_dir, "search.db");
         var buildSw = Stopwatch.StartNew();
-        SearchIndexWriter.Write(searchDb, corpus, ArtifactRevision);
+        // Passing the symbols path is what production does, and it is what stamps the artifact id the routing
+        // gate below verifies. Without it this builds a sidecar no leader would ever write.
+        SearchIndexWriter.Write(
+            searchDb,
+            corpus,
+            ArtifactRevision,
+            Path.Combine(_dir, "symbols.db"),
+            workspaceRoot: null,
+            RegionIndexOptions.Disabled);
         buildSw.Stop();
         long sizeBytes = new FileInfo(searchDb).Length;
         var candidate = FtsSymbolSearchIndex.Open(searchDb);

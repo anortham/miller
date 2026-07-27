@@ -648,7 +648,7 @@ public sealed class PatternFactsReader
     private static (long TotalCount, string PopulationFingerprint) ReadPageIdentity(
         SqliteCommand command,
         IReadOnlyList<string> where,
-        string generation)
+        string? generation)
     {
         command.CommandText = $"""
             SELECT COUNT(*)
@@ -659,17 +659,51 @@ public sealed class PatternFactsReader
         long totalCount = counted is null or DBNull ? 0L : Convert.ToInt64(counted, CultureInfo.InvariantCulture);
 
         using IncrementalHash fingerprint = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        fingerprint.AppendData(Encoding.UTF8.GetBytes(generation));
+        fingerprint.AppendData(Encoding.UTF8.GetBytes(generation ?? UnknownGeneration));
         fingerprint.AppendData("\u001f"u8);
         fingerprint.AppendData(
             Encoding.UTF8.GetBytes(totalCount.ToString(CultureInfo.InvariantCulture)));
 
+        // An artifact that cannot name its generation cannot distinguish two populations that happen to share a
+        // count, so the stamp alone would let a cursor from one be accepted against the other and silently skip
+        // rows. Only that artifact pays the full scan; a stamped one keeps the cheap path.
+        if (generation is null)
+            AppendRowIdentities(command, where, fingerprint);
+
         return (totalCount, Convert.ToHexStringLower(fingerprint.GetHashAndReset()));
     }
 
+    /// <summary>Appends every matched row's identity, ordered, for an artifact whose generation is unprovable.
+    /// </summary>
+    private static void AppendRowIdentities(
+        SqliteCommand command, IReadOnlyList<string> where, IncrementalHash fingerprint)
+    {
+        command.CommandText = $"""
+            SELECT pattern_id, path, start_byte, structural_fact_id
+            FROM structural_facts
+            {WhereClause(where)}
+            ORDER BY path, start_byte, structural_fact_id;
+            """;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            for (int ordinal = 0; ordinal < 4; ordinal++)
+            {
+                string value = reader.IsDBNull(ordinal)
+                    ? string.Empty
+                    : Convert.ToString(reader.GetValue(ordinal), CultureInfo.InvariantCulture) ?? string.Empty;
+                fingerprint.AppendData(Encoding.UTF8.GetBytes(
+                    value.Length.ToString(CultureInfo.InvariantCulture) + ":" + value));
+            }
+        }
+    }
+
+    /// <summary>The fingerprint stamp for an artifact that cannot name its own generation.</summary>
+    private const string UnknownGeneration = "unknown-generation";
+
     /// <summary>The <c>artifact_id</c> and latest revision of the artifact this connection reads, which together
     /// determine every structural-fact query's result.</summary>
-    private static string ReadArtifactGeneration(SqliteConnection connection, SqliteTransaction transaction)
+    private static string? ReadArtifactGeneration(SqliteConnection connection, SqliteTransaction transaction)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -681,20 +715,17 @@ public sealed class PatternFactsReader
         try
         {
             using SqliteDataReader reader = command.ExecuteReader();
-            if (!reader.Read())
-                return "unknown-generation";
+            if (!reader.Read() || reader.IsDBNull(0))
+                return null;
 
-            string artifactId = reader.IsDBNull(0) ? "no-artifact" : reader.GetString(0);
             string revision = reader.IsDBNull(1)
                 ? "0"
                 : reader.GetInt64(1).ToString(CultureInfo.InvariantCulture);
-            return artifactId + "@" + revision;
+            return reader.GetString(0) + "@" + revision;
         }
         catch (SqliteException)
         {
-            // A pre-artifact_metadata extract still paginates; it just cannot prove its generation, so every
-            // such artifact shares one fingerprint and the request fingerprint carries the rest.
-            return "unknown-generation";
+            return null;
         }
     }
 

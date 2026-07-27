@@ -1301,10 +1301,23 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
-        return TryOpenAt(
-            workspace,
-            VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot),
-            encoder);
+
+        // Recover BEFORE the open. TryOpenAt CREATES an empty artifact when the active path is missing, which is
+        // exactly the state an interrupted promote leaves behind — and once an active file exists,
+        // PrepareShadow stops recognising the leftover shadow as a promote to finish and deletes it. Creating
+        // the empty file first would therefore turn a one-rename recovery into a full re-embed.
+        string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        try
+        {
+            new VectorGenerationManager(root).RecoverInterruptedPromote();
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
+        {
+            // Recovery is an optimisation over rebuilding; never let it block opening the artifact.
+        }
+
+        return TryOpenAt(workspace, VectorSidecar.PathFor(root), encoder);
     }
 
     /// <summary>Opens (creating on first run) a generation at an explicit path — the active artifact, or the

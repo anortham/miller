@@ -79,7 +79,11 @@ public sealed class TelemetryLedger : IDisposable
     public string DbPath { get; }
 
     /// <summary>Count of telemetry rows that failed to persist and were swallowed (never throws).</summary>
-    public long DroppedWrites { get; private set; }
+    private long _droppedWrites;
+
+    /// <summary>Rows that failed to persist and were swallowed. Incremented outside the write gate, so reads and
+    /// writes both go through <see cref="Interlocked"/>.</summary>
+    public long DroppedWrites => Interlocked.Read(ref _droppedWrites);
 
     private TelemetryLedger(
         SqliteConnection connection, string dbPath, string? workspaceId, string? workspaceRoot, TimeProvider clock)
@@ -249,7 +253,7 @@ public sealed class TelemetryLedger : IDisposable
             {
                 if (_disposed)
                 {
-                    DroppedWrites++;
+                    Interlocked.Increment(ref _droppedWrites);
                     return;
                 }
 
@@ -293,7 +297,11 @@ public sealed class TelemetryLedger : IDisposable
             // Swallow EVERYTHING — a telemetry failure must not surface to the agent. Count it for the
             // dashboard's drop-rate KPI. (We intentionally do not narrow the catch: the ledger is on the
             // best-effort side of the seam, so any failure mode is treated identically.)
-            unchecked { DroppedWrites++; }
+            //
+            // Interlocked, not ++: this runs OUTSIDE the gate — the lock is released when control leaves the
+            // try — so concurrent failing writes would otherwise lose increments to a read-modify-write race,
+            // and the canary gate would under-report how incomplete its population is.
+            Interlocked.Increment(ref _droppedWrites);
         }
     }
 
@@ -522,7 +530,7 @@ public sealed class TelemetryLedger : IDisposable
         catch (Exception)
         {
             // The ledger is already failing to write; a failed drop-count write changes nothing but the count.
-            unchecked { DroppedWrites++; }
+            Interlocked.Increment(ref _droppedWrites);
         }
     }
 

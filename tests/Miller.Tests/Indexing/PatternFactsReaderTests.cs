@@ -322,6 +322,31 @@ public sealed class PatternFactsReaderTests
         Assert.NotEqual(before, ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint);
     }
 
+    [Fact]
+    public void SearchExactPage_ArtifactCannotNameItsGeneration_StillSeparatesEqualCountPopulations()
+    {
+        using var fx = CreatePatternFixture();
+        var reader = new PatternFactsReader();
+        Exec(fx.DbPath, "DELETE FROM artifact_metadata WHERE key = 'artifact_id';");
+
+        string before = ExactPage(reader, fx.DbPath, offset: 0).Page.PopulationFingerprint;
+        long countBefore = ExactPage(reader, fx.DbPath, offset: 0).Page.TotalCount;
+
+        // Swap one fact's path for another: same count, same (absent) generation, same request — the stamp alone
+        // cannot tell these apart, so a cursor from the first population would be honoured against the second.
+        Exec(fx.DbPath, """
+            UPDATE structural_facts
+            SET path = 'components/Swapped.razor'
+            WHERE structural_fact_id = (
+                SELECT structural_fact_id FROM structural_facts
+                WHERE pattern_id = 'htmx.attribute.v1' ORDER BY structural_fact_id LIMIT 1);
+            """);
+
+        PatternMatchPage after = ExactPage(reader, fx.DbPath, offset: 0).Page;
+        Assert.Equal(countBefore, after.TotalCount);
+        Assert.NotEqual(before, after.PopulationFingerprint);
+    }
+
     private static PatternExactSearchPageResult ExactPage(
         PatternFactsReader reader,
         string dbPath,
