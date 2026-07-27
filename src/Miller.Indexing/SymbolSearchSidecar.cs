@@ -175,7 +175,10 @@ public sealed class SymbolSearchSidecar
                 return null;
 
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
-            return index.Revision == expectedRevision ? index : null;
+            if (index.Revision != expectedRevision
+                || !SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(index.ArtifactId))
+                return null;
+            return index;
         }
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException
@@ -213,9 +216,20 @@ public sealed class SymbolSearchSidecar
         {
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
             if (index.Revision != expectedRevision)
+            {
                 throw new InvalidOperationException(
                     $"Search sidecar at '{searchDbPath}' is stale: revision {index.Revision}, expected {expectedRevision}. " +
                     "Run `miller workspace refresh` to converge it.");
+            }
+
+            // Revision alone cannot prove the generation: a full-rebuild promote restarts julie's counter, so a
+            // sidecar built at revision N from the PREVIOUS artifact matches a post-promote revision N exactly.
+            if (!SymbolsArtifactIdentity.TryRead(symbolsDbPath).MatchesArtifact(index.ArtifactId))
+            {
+                throw new InvalidOperationException(
+                    $"Search sidecar at '{searchDbPath}' was built from a different index generation " +
+                    "(the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
+            }
             return index;
         }
         catch (InvalidOperationException)

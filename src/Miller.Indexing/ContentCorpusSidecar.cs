@@ -139,7 +139,7 @@ public sealed class ContentCorpusSidecar
         {
             try
             {
-                return ReadFacts(contentDbPath, expectedRevision);
+                return ReadFacts(contentDbPath, symbolsDbPath, expectedRevision);
             }
             catch (Exception ex) when (
                 ex is SqliteException or InvalidOperationException or IOException
@@ -161,7 +161,7 @@ public sealed class ContentCorpusSidecar
 
         try
         {
-            return ReadFacts(contentDbPath, expectedRevision);
+            return ReadFacts(contentDbPath, symbolsDbPath, expectedRevision);
         }
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException
@@ -188,6 +188,15 @@ public sealed class ContentCorpusSidecar
         {
             throw new InvalidOperationException(
                 $"Content corpus sidecar is missing at '{contentDbPath}'. Run `miller workspace refresh` to rebuild it.");
+        }
+
+        // Revision alone cannot prove the generation: a full-rebuild promote restarts julie's counter, so a
+        // corpus built at revision N from the superseded artifact matches a post-promote revision N exactly.
+        if (!ReadGateArtifactAgrees(contentDbPath, symbolsDbPath))
+        {
+            throw new InvalidOperationException(
+                $"Content corpus sidecar at '{contentDbPath}' is stale: it was built from a different index " +
+                "generation (the workspace was fully rebuilt). Run `miller workspace refresh` to converge it.");
         }
 
         try
@@ -242,6 +251,42 @@ public sealed class ContentCorpusSidecar
     /// extractor-upgrade rebuild of unchanged files reproduces identical <c>content_hash</c> values — so both
     /// older gates report a pre-promote corpus as current forever. Only the artifact id distinguishes them.
     /// </summary>
+    /// <summary>
+    /// The read-gate half of <see cref="IsCurrentFor"/>: whether the corpus carries the live artifact's id.
+    /// </summary>
+    /// <remarks>
+    /// Unlike the build gate, an unprovable generation ALLOWS the read. A build gate that cannot prove currency
+    /// should rebuild; a read gate that cannot prove staleness must not start refusing to serve an artifact that
+    /// worked before artifact stamping existed. Revision is deliberately not re-checked here — the caller has
+    /// already gated on the revision it asked for, which may legitimately differ from the live latest.
+    /// </remarks>
+    private static bool ReadGateArtifactAgrees(string contentDbPath, string symbolsDbPath)
+    {
+        string? expected = SymbolsArtifactIdentity.TryRead(symbolsDbPath).ArtifactId;
+        if (expected is null)
+            return true;
+
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.GetFullPath(contentDbPath),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT artifact_id FROM content_meta LIMIT 1;";
+            return string.Equals(cmd.ExecuteScalar() as string, expected, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     private static bool BuiltFromCurrentArtifact(string contentDbPath, string symbolsDbPath)
     {
         try
@@ -287,7 +332,8 @@ public sealed class ContentCorpusSidecar
         }
     }
 
-    private static ContentCorpusFacts ReadFacts(string contentDbPath, long expectedRevision)
+    private static ContentCorpusFacts ReadFacts(
+        string contentDbPath, string symbolsDbPath, long expectedRevision)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -329,7 +375,9 @@ public sealed class ContentCorpusSidecar
             ? "preservation_blocked"
             : workspaceRevision is null
             ? "imports_only"
-            : schemaVersion == ContentCorpusSchema.SchemaVersion && workspaceRevision == expectedRevision
+            : schemaVersion == ContentCorpusSchema.SchemaVersion
+              && workspaceRevision == expectedRevision
+              && ReadGateArtifactAgrees(contentDbPath, symbolsDbPath)
                 ? "current"
                 : "stale";
         return new ContentCorpusFacts(

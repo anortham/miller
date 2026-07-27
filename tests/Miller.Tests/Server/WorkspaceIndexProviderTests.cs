@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
@@ -923,7 +924,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadRegionSearch: (dbPath, revision) =>
             {
                 regionLoadCount++;
-                return FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision);
+                return FtsRegionSearchIndex.Open(
+                    SymbolSearchSidecar.SearchDbPathFor(dbPath),
+                    revision,
+                    SymbolsArtifactIdentity.TryRead(dbPath));
             },
             sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.EnabledDefault));
 
@@ -1570,7 +1574,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSymbolSearch ?? (path => SymbolSearchProjectionLoader.Load(path)),
             loadContentSearch ?? ((dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root)),
             loadTextContentSearch ?? ((dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision)),
-            loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision)),
+            loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(
+                SymbolSearchSidecar.SearchDbPathFor(dbPath), revision, SymbolsArtifactIdentity.TryRead(dbPath))),
             currentIndexFresh ?? (_ => true),
             sidecar ?? SymbolSearchSidecar.Disabled);
 
@@ -1583,11 +1588,62 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
     // Build the on-disk search.db sidecar next to a fixture's symbols.db (the path the router derives), stamped
     // with the given extract revision — the Phase-3 freshness key.
+    [Fact]
+    public void ResolveSymbolSearch_PromoteRestartsRevisionAtTheSameNumber_RefusesThePreRebuildSidecar()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        WriteSearchDbFor(target, revision: 1);
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        registry.UpsertSeen(
+            "target-ws", "target-111111111111", NewRoot("target-promote-collision"), target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadSymbolSearch: _ => throw new InvalidOperationException("fallback must not run while a fresh sidecar exists"),
+            sidecar: new SymbolSearchSidecar(enabled: true, RegionIndexOptions.Disabled));
+
+        Assert.IsType<FtsSymbolSearchIndex>(provider.ResolveSymbolSearch("target-ws", ensureFresh: false).Index);
+
+        // A full rebuild promotes a NEW artifact whose revision counter restarted at 1. Revision comparison alone
+        // reads that as fresh, so the sidecar built from the superseded artifact would keep serving pre-rebuild
+        // results forever. Only the artifact id separates the two generations.
+        ReplaceArtifactId(target.DbPath, "artifact-after-full-rebuild");
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(
+            () => provider.ResolveSymbolSearch("target-ws", ensureFresh: false));
+        Assert.Contains("different index generation", failure.Message, StringComparison.Ordinal);
+    }
+
+    private static void ReplaceArtifactId(string symbolsDbPath, string artifactId)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = symbolsDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE artifact_metadata SET value = $id WHERE key = 'artifact_id';";
+        command.Parameters.AddWithValue("$id", artifactId);
+        command.ExecuteNonQuery();
+    }
+
+    // Passing symbolsDbPath is what makes this faithful: the production writer stamps the artifact id from it,
+    // and the read gates reject a sidecar that carries no stamp when the live artifact has one.
     private static void WriteSearchDbFor(JulieDbFixture fixture, long revision) =>
         SearchIndexWriter.Write(
             SymbolSearchSidecar.SearchDbPathFor(fixture.DbPath),
             SqliteSymbolReader.Read(fixture.DbPath),
-            revision);
+            revision,
+            fixture.DbPath,
+            workspaceRoot: null,
+            RegionIndexOptions.Disabled);
 
     private static void WriteRegionSearchDbFor(JulieDbFixture fixture, long revision) =>
         SearchIndexWriter.Write(

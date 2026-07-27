@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace Miller.Indexing;
 
 /// <summary>
@@ -30,6 +32,45 @@ public readonly record struct SymbolsArtifactIdentity(long Revision, string? Art
     /// it reports stale and rebuilds exactly once. An artifact whose own id is unreadable (a pre-artifact_id
     /// extract) falls back to revision equality — the historical behaviour — rather than rebuilding forever.
     /// </remarks>
+    /// <summary>
+    /// Read the current identity of <paramref name="symbolsDbPath"/>, yielding a null <see cref="ArtifactId"/>
+    /// rather than throwing when the artifact is absent, locked, or carries no id.
+    /// </summary>
+    /// <remarks>
+    /// A read gate must not turn an unreadable artifact into a hard failure: a null id means "cannot prove the
+    /// generation", which <see cref="MatchesArtifact"/> already treats as the historical revision-only
+    /// behaviour. Turning it into a throw would take a pre-artifact_id extract from working to broken.
+    /// </remarks>
+    public static SymbolsArtifactIdentity TryRead(string symbolsDbPath)
+    {
+        if (string.IsNullOrWhiteSpace(symbolsDbPath) || !File.Exists(symbolsDbPath))
+            return new SymbolsArtifactIdentity(0, null);
+
+        try
+        {
+            return Read(symbolsDbPath);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return new SymbolsArtifactIdentity(0, null);
+        }
+    }
+
+    /// <summary>
+    /// Whether a derived sidecar stamped with <paramref name="stampedArtifactId"/> came from this generation,
+    /// ignoring revision. Use when the caller has ALREADY checked the sidecar against its own expected revision:
+    /// that expectation may legitimately differ from the live artifact's latest revision, so re-checking it here
+    /// would reject a sidecar the caller deliberately asked for. The artifact id is the part revision cannot
+    /// prove — a promote restarts the counter, so only the id separates two generations at the same revision.
+    /// </summary>
+    public bool MatchesArtifact(string? stampedArtifactId)
+    {
+        if (ArtifactId is null)
+            return true;
+        return string.Equals(stampedArtifactId, ArtifactId, StringComparison.Ordinal);
+    }
+
     public bool Matches(long stampedRevision, string? stampedArtifactId)
     {
         if (stampedRevision != Revision)

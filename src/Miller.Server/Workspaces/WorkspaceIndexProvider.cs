@@ -43,7 +43,10 @@ public sealed class WorkspaceIndexProvider
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
             (dbPath, revision) => FtsTextContentSearchIndex.Open(ContentCorpusSidecar.ContentDbPathFor(dbPath), revision),
-            (dbPath, revision) => FtsRegionSearchIndex.Open(SymbolSearchSidecar.SearchDbPathFor(dbPath), revision),
+            (dbPath, revision) => FtsRegionSearchIndex.Open(
+                SymbolSearchSidecar.SearchDbPathFor(dbPath),
+                revision,
+                SymbolsArtifactIdentity.TryRead(dbPath)),
             currentIndexFresh: _ => null,
             sidecar)
     {

@@ -35,7 +35,13 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
 
     public long Revision { get; }
 
-    public static FtsRegionSearchIndex Open(string searchDbPath, long expectedRevision)
+    /// <summary>
+    /// Open the region arm of <c>search.db</c>, proving it was built from <paramref name="identity"/>. Revision
+    /// alone is not a generation identity: a full-rebuild promote restarts julie's counter, so a sidecar built at
+    /// revision N from the superseded artifact matches a post-promote revision N exactly.
+    /// </summary>
+    public static FtsRegionSearchIndex Open(
+        string searchDbPath, long expectedRevision, SymbolsArtifactIdentity identity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
 
@@ -65,6 +71,12 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
             throw new InvalidOperationException(
                 $"search.db at '{absPath}' is stale: revision {meta.Revision}, expected {expectedRevision}. " +
                 "Refresh or rebuild the search index.");
+        }
+        if (!identity.MatchesArtifact(TryReadArtifactId(connection)))
+        {
+            throw new InvalidOperationException(
+                $"search.db at '{absPath}' was built from a different index generation (the workspace was " +
+                "fully rebuilt). Refresh or rebuild the search index.");
         }
 
         EnsureRegionSchema(connection, absPath);
@@ -177,6 +189,23 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
         return hits;
     }
 
+    /// <summary>The meta artifact stamp, or null when the column predates artifact stamping. Read separately
+    /// from <see cref="ReadMeta"/> so a schema-version mismatch reports as one rather than as malformed meta.
+    /// </summary>
+    private static string? TryReadArtifactId(SqliteConnection connection)
+    {
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT artifact_id FROM meta LIMIT 1;";
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
     private static RegionMeta ReadMeta(SqliteConnection connection, string absPath)
     {
         try
@@ -199,7 +228,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
             if (regionAvgdl < 0.0)
                 throw MalformedMeta(absPath, "region_avgdl is negative");
 
-            return new RegionMeta(revision, schemaVersion, regionCount, regionAvgdl);
+            return new RegionMeta(revision, schemaVersion, regionCount, regionAvgdl, null);
         }
         catch (SqliteException ex)
         {
@@ -435,7 +464,8 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
         return snippet[..SnippetMaxChars].TrimEnd() + "...";
     }
 
-    private sealed record RegionMeta(long Revision, int SchemaVersion, int RegionCount, double RegionAvgdl);
+    private sealed record RegionMeta(
+        long Revision, int SchemaVersion, int RegionCount, double RegionAvgdl, string? ArtifactId);
 
     private sealed record RegionDocument(
         string RegionId,

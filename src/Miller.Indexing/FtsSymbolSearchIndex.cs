@@ -25,11 +25,13 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
     private readonly Lazy<IReadOnlyList<string>> _paths;
     private readonly Lazy<IReadOnlySet<string>> _knownExtensions;
 
-    private FtsSymbolSearchIndex(string connectionString, double avgdl, long revision, int documentCount)
+    private FtsSymbolSearchIndex(
+        string connectionString, double avgdl, long revision, int documentCount, string? artifactId)
     {
         _connectionString = connectionString;
         _avgdl = avgdl;
         Revision = revision;
+        ArtifactId = artifactId;
         _documentCount = documentCount;
         _paths = new Lazy<IReadOnlyList<string>>(LoadPaths, LazyThreadSafetyMode.ExecutionAndPublication);
         _knownExtensions = new Lazy<IReadOnlySet<string>>(
@@ -39,6 +41,13 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
 
     /// <summary>The julie-extract revision this artifact was built from (freshness key for Phase 3 routing).</summary>
     public long Revision { get; }
+
+    /// <summary>
+    /// The <c>artifact_metadata.artifact_id</c> of the symbols.db this was built from, or null for a sidecar
+    /// written before artifact stamping. Revision alone cannot identify a generation: a full-rebuild promote
+    /// restarts julie's counter, so a revision-1 workspace that rebuilds lands on revision 1 again.
+    /// </summary>
+    public string? ArtifactId { get; }
 
     public int DocumentCount => _documentCount;
 
@@ -67,13 +76,30 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
         using var connection = new SqliteConnection(connectionString);
         connection.Open();
 
-        (long revision, int documentCount, double avgdl) = ReadMeta(connection, absPath);
+        (long revision, int documentCount, double avgdl, string? artifactId) = ReadMeta(connection, absPath);
         ValidateFtsTables(connection);
 
-        return new FtsSymbolSearchIndex(connectionString, avgdl, revision, documentCount);
+        return new FtsSymbolSearchIndex(connectionString, avgdl, revision, documentCount, artifactId);
     }
 
-    private static (long Revision, int DocumentCount, double Avgdl) ReadMeta(SqliteConnection connection, string absPath)
+    /// <summary>The meta artifact stamp, or null when the column predates artifact stamping. Read separately so
+    /// a schema-version mismatch reports as one rather than as malformed meta.</summary>
+    private static string? TryReadArtifactId(SqliteConnection connection)
+    {
+        try
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT artifact_id FROM meta LIMIT 1;";
+            return cmd.ExecuteScalar() as string;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
+    private static (long Revision, int DocumentCount, double Avgdl, string? ArtifactId) ReadMeta(
+        SqliteConnection connection, string absPath)
     {
         try
         {
@@ -100,7 +126,8 @@ public sealed class FtsSymbolSearchIndex : ISymbolLookupIndex
                     $"search.db at '{absPath}' has schema_version {schemaVersion}; " +
                     $"this build expects {SearchIndexWriter.SchemaVersion}. Rebuild the search index.");
 
-            return (revision, documentCount, avgdl);
+            reader.Close();
+            return (revision, documentCount, avgdl, TryReadArtifactId(connection));
         }
         catch (SqliteException ex)
         {

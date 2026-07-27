@@ -36,7 +36,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             },
             symbols: new[] { ("sym-comment", "CommentOwner"), ("sym-code-only", "HiddenTodoMarker") });
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("HiddenTodoMarker", new HashSet<string> { "comment" }, limit: 10, excludeTests: false);
 
@@ -59,7 +59,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("comment-1", "comment", "src/Config.cs", 4,
                 "// literalSecret is also mentioned in a comment"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("literalSecret", new HashSet<string> { "string_literal" }, limit: 10, excludeTests: false);
 
@@ -77,7 +77,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("doc-1", "doc_comment", "src/Two.cs", 8, "/// migration documentation"),
             Region("string-1", "string_literal", "src/Three.cs", 10, "\"migration string\""));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var unionHits = index.Search("migration", new HashSet<string> { "comment", "doc_comment" }, 10, false);
         var commentOnlyHits = index.Search("migration", new HashSet<string> { "comment" }, 10, false);
@@ -93,7 +93,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("prod-1", "comment", "src/Widget.cs", 3, "// fixture token in production"),
             Region("test-1", "comment", "tests/WidgetTests.cs", 4, "// fixture token in test"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var all = index.Search("fixture", new HashSet<string> { "comment" }, 10, excludeTests: false);
         var filtered = index.Search("fixture", new HashSet<string> { "comment" }, 10, excludeTests: true);
@@ -110,7 +110,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("a", "comment", "src/A.cs", 5, "// same rank term"),
             Region("c", "comment", "src/A.cs", 6, "// same rank term"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("same rank", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -125,7 +125,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("alpha-only", "comment", "src/Alpha.cs", 4, "// alpha alone"),
             Region("beta-only", "comment", "src/Beta.cs", 5, "// beta alone"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -140,7 +140,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             Region("reversed", "comment", "src/Reversed.cs", 3, "// beta appears before alpha"),
             Region("partial", "comment", "src/Partial.cs", 4, "// alpha alone"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -153,7 +153,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     {
         WriteSearchDb(Region("single", "comment", "src/Single.cs", 3, "// alpha beta once"));
 
-        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7);
+        var index = FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null));
 
         var hits = index.Search("alpha alpha beta", new HashSet<string> { "comment" }, 10, excludeTests: false);
 
@@ -167,7 +167,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         string missing = Path.Combine(_dir, "missing.db");
 
         var ex = Assert.Throws<FileNotFoundException>(() =>
-            FtsRegionSearchIndex.Open(missing, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(missing, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("search.db", ex.Message);
     }
@@ -178,7 +178,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// stale"), revision: 6);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("revision", ex.Message);
         Assert.Contains("expected 7", ex.Message);
@@ -190,7 +190,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// old schema"), schemaVersion: 2);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("schema_version", ex.Message);
         Assert.Contains(SearchIndexWriter.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), ex.Message);
@@ -202,7 +202,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// future schema"), schemaVersion: SearchIndexWriter.SchemaVersion + 1);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("schema_version", ex.Message);
         Assert.Contains(SearchIndexWriter.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), ex.Message);
@@ -227,7 +227,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             """);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("regions_fts", ex.Message);
     }
@@ -256,7 +256,7 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
             """);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7));
+            FtsRegionSearchIndex.Open(_dbPath, expectedRevision: 7, new SymbolsArtifactIdentity(7, null)));
 
         Assert.Contains("meta", ex.Message);
     }

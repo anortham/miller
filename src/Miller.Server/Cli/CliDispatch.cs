@@ -440,8 +440,9 @@ public static class CliDispatch
             {
                 using var freshness = new FreshnessReader(ctx.ExtractDbPath);
                 long revision = freshness.LatestRevision();
+                var identity = new SymbolsArtifactIdentity(revision, freshness.ArtifactId());
                 string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
-                FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision);
+                FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision, identity);
                 SearchRouteExecutionResult result =
                     SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
                 outw.WriteLine(result.Output);
@@ -1397,7 +1398,9 @@ public static class CliDispatch
                     using var freshness = new FreshnessReader(ctx.ExtractDbPath);
                     long revision = freshness.LatestRevision();
                     regionIndex = FtsRegionSearchIndex.Open(
-                        SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath), revision);
+                        SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath),
+                        revision,
+                        new SymbolsArtifactIdentity(revision, freshness.ArtifactId()));
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or IOException or SqliteException)
                 {

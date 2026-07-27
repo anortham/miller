@@ -67,7 +67,7 @@ public sealed class RegionSearchScaleTests : IDisposable
         long regionRows = Count(searchDb, "SELECT COUNT(*) FROM search_regions;");
         Assert.True(regionRows > 0, "Miller region sidecar should populate search_regions");
 
-        FtsRegionSearchIndex index = FtsRegionSearchIndex.Open(searchDb, revision);
+        FtsRegionSearchIndex index = FtsRegionSearchIndex.Open(searchDb, revision, new SymbolsArtifactIdentity(revision, null));
         string commentOutput = SearchTool.RunRegions(
             index,
             "CommentOnlyNeedle",
