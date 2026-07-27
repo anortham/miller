@@ -274,6 +274,32 @@ public sealed class InspectToolTests
     }
 
     [Fact]
+    public void Inspect_SymbolOverview_JsonReportsTruncatedRelationCollectionsInsteadOfShortArrays()
+    {
+        using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        var (index, _) = Build(fx);
+        var provider = new RecordingWorkspaceIndexProvider(
+            ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "ws-trunc", fx.WorkspaceRoot));
+        var tool = new InspectTool(provider);
+
+        string output = tool.Inspect("OrderService.Total", depth: "overview", format: "json");
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement root = document.RootElement;
+        // A consumer must be able to tell a complete list from a bounded one without guessing from length.
+        foreach (string collection in new[] { "children", "callers", "referenced_by" })
+        {
+            Assert.True(root.TryGetProperty($"{collection}_available", out JsonElement available),
+                $"{collection} must report how many existed before the limit");
+            Assert.True(root.TryGetProperty($"{collection}_truncated", out JsonElement truncated),
+                $"{collection} must report whether it was truncated");
+            int rendered = root.GetProperty(collection).GetArrayLength();
+            Assert.True(available.GetInt32() >= rendered);
+            Assert.Equal(available.GetInt32() > rendered, truncated.GetBoolean());
+        }
+    }
+
+    [Fact]
     public void Inspect_FileSummary_JsonContinuationIsLosslessAndPopulationBound()
     {
         var rows = Enumerable.Range(0, 23)

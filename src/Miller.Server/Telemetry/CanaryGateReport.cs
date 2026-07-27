@@ -89,8 +89,11 @@ public static class CanaryGateReport
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ValidateContractVersion(contractVersion);
 
-        IReadOnlyList<CanaryRow> allRows = CanaryLedgerReader.ReadCanaryRows(dbPath);
-        IReadOnlyList<CanaryFollowUp> followUps = CanaryLedgerReader.ReadFollowUps(dbPath);
+        // One snapshot for both sides: the success join is the whole causal definition, so reading the two
+        // sides independently would let a concurrent writer change the verdict.
+        CanaryLedgerSnapshot ledger = CanaryLedgerReader.ReadSnapshot(dbPath);
+        IReadOnlyList<CanaryRow> allRows = ledger.CanaryRows;
+        IReadOnlyList<CanaryFollowUp> followUps = ledger.FollowUps;
         IReadOnlySet<string> attributed = CanaryLedgerReader.AttributedRowIds(allRows, followUps);
 
         List<CanaryRow> contractRows = allRows

@@ -54,10 +54,44 @@ public sealed record CanaryFollowUp(string Ts, string? WorkspaceId, string Targe
 /// attribution rule joins against. Opens <c>Mode=ReadOnly</c> like <see cref="TelemetryExportReader"/>; a missing
 /// DB or table yields an empty list rather than throwing.
 /// </summary>
+/// <summary>Both sides of the canary success join, read under one ledger snapshot.</summary>
+public sealed record CanaryLedgerSnapshot(
+    IReadOnlyList<CanaryRow> CanaryRows,
+    IReadOnlyList<CanaryFollowUp> FollowUps)
+{
+    public static CanaryLedgerSnapshot Empty { get; } = new([], []);
+}
+
 public static class CanaryLedgerReader
 {
     private const string CanaryColumns =
         "id, ts, workspace_id, op, duration_ms, outcome, result_count, miller_version, metadata_json";
+
+    /// <summary>
+    /// Read the canary rows and their candidate follow-ups under ONE consistent snapshot.
+    /// </summary>
+    /// <remarks>
+    /// The success definition joins canary rows to follow-up rows, so reading the two sides on separate
+    /// connections lets a concurrent writer land a follow-up between them: the join is then computed over two
+    /// different ledger states and the gate verdict depends on write timing. A single read transaction pins one
+    /// snapshot for both SELECTs.
+    /// </remarks>
+    public static CanaryLedgerSnapshot ReadSnapshot(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        if (!File.Exists(dbPath))
+            return CanaryLedgerSnapshot.Empty;
+
+        using SqliteConnection connection = OpenReadOnly(dbPath);
+        if (!TableExists(connection, "tool_telemetry"))
+            return CanaryLedgerSnapshot.Empty;
+
+        using SqliteTransaction snapshot = connection.BeginTransaction();
+        IReadOnlyList<CanaryRow> rows = ReadCanaryRows(connection, snapshot);
+        IReadOnlyList<CanaryFollowUp> followUps = ReadFollowUps(connection, snapshot);
+        snapshot.Commit();
+        return new CanaryLedgerSnapshot(rows, followUps);
+    }
 
     public static IReadOnlyList<CanaryRow> ReadCanaryRows(string dbPath)
     {
@@ -69,7 +103,14 @@ public static class CanaryLedgerReader
         if (!TableExists(connection, "tool_telemetry"))
             return [];
 
+        return ReadCanaryRows(connection, transaction: null);
+    }
+
+    private static IReadOnlyList<CanaryRow> ReadCanaryRows(
+        SqliteConnection connection, SqliteTransaction? transaction)
+    {
         using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText =
             $"SELECT {CanaryColumns}, rowid FROM tool_telemetry " +
             "WHERE metadata_json LIKE '%canary_contract_version%' ORDER BY ts ASC, rowid ASC;";
@@ -95,7 +136,14 @@ public static class CanaryLedgerReader
         if (!TableExists(connection, "tool_telemetry"))
             return [];
 
+        return ReadFollowUps(connection, transaction: null);
+    }
+
+    private static IReadOnlyList<CanaryFollowUp> ReadFollowUps(
+        SqliteConnection connection, SqliteTransaction? transaction)
+    {
         using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText =
             "SELECT ts, workspace_id, target_hash, rowid FROM tool_telemetry " +
             "WHERE outcome = 'ok' AND target_hash IS NOT NULL " +

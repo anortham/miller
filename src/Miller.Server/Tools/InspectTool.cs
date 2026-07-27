@@ -1106,11 +1106,16 @@ public sealed class InspectTool
                     new ReferenceEvidenceBounds(typedRelationLimit, typedRelationLimit),
                     TypedRelationshipKinds);
 
+                // Bounded collections report what they dropped. A short array with no accounting reads as
+                // complete, which is the one thing a structured consumer cannot recover from.
+                int childLimit = depth == InspectDepth.Overview
+                    ? OverviewChildLimit
+                    : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue;
+                IndexedSymbol[] allChildren = index.FindChildren(sym.SymbolId).ToArray();
                 w.WritePropertyName("children");
-                WriteSymbolArray(w, index.FindChildren(sym.SymbolId).Take(
-                    depth == InspectDepth.Overview
-                        ? OverviewChildLimit
-                        : boundAgentOutput ? ToolOutputBudget.McpRowLimit : int.MaxValue));
+                WriteSymbolArray(w, allChildren.Take(childLimit));
+                w.WriteNumber("children_available", allChildren.Length);
+                w.WriteBoolean("children_truncated", allChildren.Length > childLimit);
 
                 ReferenceEvidenceSet referenceEvidence = evidence.Inbound;
                 IReadOnlyList<ReferenceEvidence> refs = referenceEvidence.Exact;
@@ -1127,25 +1132,27 @@ public sealed class InspectTool
                 w.WriteEndArray();
                 WriteInboundCoverage(w, referenceEvidence.Coverage);
 
+                List<ContainingSymbol> callers = ResolveContainingSymbols(
+                    index, referenceEvidence.ExactCallerSymbolIds, refs, relationLimit,
+                    out int callersAvailable);
                 w.WritePropertyName("callers");
                 w.WriteStartArray();
-                foreach (var c in ResolveContainingSymbols(
-                             index,
-                             referenceEvidence.ExactCallerSymbolIds,
-                             refs,
-                             relationLimit))
+                foreach (var c in callers)
                     w.WriteStringValue(c.Name);
                 w.WriteEndArray();
+                w.WriteNumber("callers_available", callersAvailable);
+                w.WriteBoolean("callers_truncated", callersAvailable > callers.Count);
 
+                List<ContainingSymbol> referencedBy = ResolveContainingSymbols(
+                    index, referenceEvidence.ExactReferencedBySymbolIds, refs, relationLimit,
+                    out int referencedByAvailable);
                 w.WritePropertyName("referenced_by");
                 w.WriteStartArray();
-                foreach (var reference in ResolveContainingSymbols(
-                             index,
-                             referenceEvidence.ExactReferencedBySymbolIds,
-                             refs,
-                             relationLimit))
+                foreach (var reference in referencedBy)
                     w.WriteStringValue(reference.Name);
                 w.WriteEndArray();
+                w.WriteNumber("referenced_by_available", referencedByAvailable);
+                w.WriteBoolean("referenced_by_truncated", referencedByAvailable > referencedBy.Count);
 
                 IReadOnlyList<IndexedSymbol> testLocations =
                     ResolveTestLocations(index, referenceEvidence);
@@ -1413,10 +1420,24 @@ public sealed class InspectTool
         ISymbolLookupIndex index,
         IReadOnlyList<string> symbolIds,
         IReadOnlyList<ReferenceEvidence> displayedReferences,
-        int limit)
+        int limit) =>
+        ResolveContainingSymbols(index, symbolIds, displayedReferences, limit, out _);
+
+    /// <summary>
+    /// <see cref="ResolveContainingSymbols(ISymbolLookupIndex,IReadOnlyList{string},IReadOnlyList{ReferenceEvidence},int)"/>,
+    /// additionally reporting how many distinct containing symbols existed BEFORE <paramref name="limit"/> was
+    /// applied, so a bounded render can say it truncated instead of returning a short array that reads as
+    /// complete.
+    /// </summary>
+    private static List<ContainingSymbol> ResolveContainingSymbols(
+        ISymbolLookupIndex index,
+        IReadOnlyList<string> symbolIds,
+        IReadOnlyList<ReferenceEvidence> displayedReferences,
+        int limit,
+        out int availableCount)
     {
         var allowedIds = symbolIds.ToHashSet(StringComparer.Ordinal);
-        string[] selectedIds = displayedReferences
+        string[] distinctIds = displayedReferences
             .Where(reference =>
                 reference.ContainingSymbolId is { } containingId &&
                 allowedIds.Contains(containingId))
@@ -1425,8 +1446,9 @@ public sealed class InspectTool
             .Select(static reference => reference.ContainingSymbolId!)
             .Concat(symbolIds)
             .Distinct(StringComparer.Ordinal)
-            .Take(limit)
             .ToArray();
+        availableCount = distinctIds.Length;
+        string[] selectedIds = distinctIds.Take(limit).ToArray();
         var result = new List<ContainingSymbol>(selectedIds.Length);
         foreach (string containingId in selectedIds)
         {
