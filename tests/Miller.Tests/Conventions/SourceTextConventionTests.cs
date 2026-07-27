@@ -8,10 +8,12 @@ namespace Miller.Tests.Conventions;
 public sealed class SourceTextConventionTests
 {
     [Fact]
-    public void TrackedTextFiles_DoNotContainRawControlBytes()
+    public void WorkingTreeTextFiles_DoNotContainRawControlBytes()
     {
         string repoRoot = ScaleTestSupport.RepoRoot();
-        using var process = Process.Start(new ProcessStartInfo("git", "ls-files -z")
+        using var process = Process.Start(new ProcessStartInfo(
+            "git",
+            "ls-files -z --cached --others --exclude-standard")
         {
             WorkingDirectory = repoRoot,
             RedirectStandardOutput = true,
@@ -24,17 +26,18 @@ public sealed class SourceTextConventionTests
 
         string[] paths = Encoding.UTF8.GetString(output.ToArray())
             .Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Where(IsTrackedTextPath)
+            .Where(IsTextPath)
+            .Where(path => File.Exists(Path.Combine(repoRoot, path)))
             .Where(path => File.ReadAllBytes(Path.Combine(repoRoot, path)).Any(IsDisallowedControlByte))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.True(
             paths.Length == 0,
-            "Tracked text files contain raw control bytes:\n  " + string.Join("\n  ", paths));
+            "Working-tree text files contain raw control bytes:\n  " + string.Join("\n  ", paths));
     }
 
-    private static bool IsTrackedTextPath(string path) =>
+    private static bool IsTextPath(string path) =>
         TextExtensions.Contains(Path.GetExtension(path)) ||
         TextFileNames.Contains(Path.GetFileName(path));
 

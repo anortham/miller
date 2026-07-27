@@ -5,25 +5,21 @@ using Xunit;
 namespace Miller.Tests.Server;
 
 /// <summary>
-/// H7 v1 lock for <see cref="LargeDbWriter"/> — the Scale-only bulk writer behind <see cref="RebuildLatencyTests"/>.
-/// If the writer's DDL drifts off the julie-extract v1 contract, the latency fixture would silently exercise the
-/// wrong schema (or worse, pass the gate but feed the readers stale column names). This asserts the v1 table set +
-/// v1 symbol/relationship column names, that the gate ACCEPTS the writer's output, and that the production read
-/// path (<see cref="SqliteSymbolReader.Read"/>) projects the rows verbatim — including the typed <c>is_test</c>
-/// column.
+/// Locks the Scale-only bulk writer behind <see cref="RebuildLatencyTests"/> to the current julie-extract schema.
+/// The fixture must pass the same gate and production readers as a live artifact.
 ///
 /// <para><c>[Trait("Category","Scale")]</c>: this builds a (small here) bulk DB via the same writer the 50k-symbol
 /// latency test uses; it is grouped with the Scale suite so the fast suite stays pure logic.</para>
 /// </summary>
 [Trait("Category", "Scale")]
-public sealed class LargeDbWriterV1SchemaTests : IDisposable
+public sealed class LargeDbWriterCurrentSchemaTests : IDisposable
 {
     private readonly string _dir;
     private readonly string _dbPath;
 
-    public LargeDbWriterV1SchemaTests()
+    public LargeDbWriterCurrentSchemaTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "miller-largedb-v1-" + Guid.NewGuid().ToString("N"));
+        _dir = Path.Combine(Path.GetTempPath(), "miller-largedb-current-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         _dbPath = Path.Combine(_dir, "symbols.db");
     }
@@ -40,7 +36,6 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
             "class", "csharp", "src/Parent.cs", 1, 20, null, IsTest: false, Visibility: "public"),
         new IndexedSymbol(1, "a0000000000000000000000000000002", "DoWork", "public void DoWork()",
             "method", "csharp", "src/Parent.cs", 5, 9, "a0000000000000000000000000000001", IsTest: false),
-        // A typed-test row in a production-named path: only the is_test column carries the signal in v1.
         new IndexedSymbol(2, "a0000000000000000000000000000003", "DoWork_Smoke", "public void DoWork_Smoke()",
             "method", "csharp", "src/Helper.cs", 3, 7, null, IsTest: true),
     };
@@ -70,21 +65,26 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
     }
 
     [Fact]
-    public void Write_EmitsV1Tables_AndDropsOldSchemaTables()
+    public void Write_EmitsCurrentSchemaTables()
     {
         LargeDbWriter.Write(_dbPath, Sample());
         using var c = Open(_dbPath);
 
-        foreach (var t in new[] { "artifact_metadata", "files", "symbols", "identifiers", "relationships",
-            "type_argument_usages", "type_arguments", "literals", "symbol_annotations", "parse_diagnostics" })
-            Assert.True(TableExists(c, t), $"v1 table '{t}' must exist");
+        foreach (var t in new[]
+        {
+            "artifact_metadata", "files", "symbols", "reference_sites", "identifiers", "relationships",
+            "identifier_resolutions", "pending_relationships", "pending_resolutions", "structural_facts",
+            "language_capability_gaps", "type_argument_usages", "type_arguments", "literals",
+            "symbol_annotations", "parse_diagnostics",
+        })
+            Assert.True(TableExists(c, t), $"current table '{t}' must exist");
 
-        Assert.False(TableExists(c, "schema_version"), "v1 has no schema_version table");
-        Assert.False(TableExists(c, "external_extract_metadata"), "v1 metadata is artifact_metadata");
+        Assert.False(TableExists(c, "schema_version"));
+        Assert.False(TableExists(c, "external_extract_metadata"));
     }
 
     [Fact]
-    public void Write_SymbolsAndRelationships_UseV1ColumnNames()
+    public void Write_UsesCurrentReferenceSiteColumns()
     {
         LargeDbWriter.Write(_dbPath, Sample());
         using var c = Open(_dbPath);
@@ -100,9 +100,14 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         Assert.False(ColumnExists(c, "symbols", "parent_id"), "renamed to parent_symbol_id");
 
         Assert.True(ColumnExists(c, "relationships", "relationship_id"));
+        Assert.True(ColumnExists(c, "relationships", "reference_site_id"));
+        Assert.True(ColumnExists(c, "relationships", "file_id"));
         Assert.True(ColumnExists(c, "relationships", "confidence"));
+        Assert.True(ColumnExists(c, "identifiers", "reference_site_id"));
+        Assert.True(ColumnExists(c, "identifiers", "file_id"));
         Assert.True(ColumnExists(c, "identifiers", "confidence"));
-        Assert.False(ColumnExists(c, "relationships", "id"), "renamed to relationship_id");
+        Assert.True(ColumnExists(c, "reference_sites", "is_exact"));
+        Assert.True(ColumnExists(c, "reference_sites", "provenance"));
     }
 
     [Fact]
@@ -110,8 +115,6 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
     {
         LargeDbWriter.Write(_dbPath, Sample());
 
-        // The gate must ACCEPT the writer's output (it is a faithful v1 artifact), and the production read path
-        // projects every row — including the typed is_test signal — verbatim.
         var symbols = SqliteSymbolReader.Read(_dbPath);
 
         Assert.Equal(3, symbols.Count);
@@ -125,7 +128,7 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
         Assert.Equal("a0000000000000000000000000000001", child.ParentId);
 
         var smoke = symbols.Single(s => s.Name == "DoWork_Smoke");
-        Assert.True(smoke.IsTest, "the typed is_test column must round-trip through the v1 reader");
+        Assert.True(smoke.IsTest);
     }
 
     [Fact]
@@ -133,8 +136,6 @@ public sealed class LargeDbWriterV1SchemaTests : IDisposable
     {
         LargeDbWriter.Write(_dbPath, Sample());
 
-        // The single production build path (RepositoryIndexLoader.Load) must open the writer's DB end-to-end:
-        // gate + symbol read + graph read (the chained 'calls' edges) + bridge read (empty tables).
         var index = RepositoryIndexLoader.Load(_dbPath);
 
         Assert.Equal(3, index.DocumentCount);

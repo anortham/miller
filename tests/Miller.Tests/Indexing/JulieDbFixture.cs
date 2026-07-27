@@ -5,21 +5,9 @@ using Miller.Indexing;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Synthesizes a tiny SQLite file matching the julie-extractors v1 artifact schema
-/// (<c>sqlite_schema_version = 1</c>, <c>extract_contract_version = 1</c>). This is Miller's READ-CONTRACT
-/// harness — it is NOT a re-test of julie's extraction (julie owns that). The DDL is transcribed from
-/// <c>julie-extractors/crates/julie-extract-artifact/src/schema.rs</c>, so the reader is exercised against the
-/// real v1 column set, NULL discipline, and self-FK that a live extract produces.
-///
-/// <para>Remaining deviations from the strict v1 schema (called out where they apply):
-/// <c>files.last_revision_id</c> is a plain column with NO FK to <c>extraction_revisions</c> (the synthetic
-/// DB relaxes the FK so a <c>files</c> row can be seeded with no revision). The fixture is fully v1: <c>files</c>
-/// is content-free (no <c>content</c> column — body text re-sources from DISK under <see cref="WorkspaceRoot"/>,
-/// Phase 5/D2), the freshness cursor reads <c>extraction_revisions</c>/<c>revision_file_changes</c>, the file
-/// hash reads <c>files.content_hash</c> (<c>blake3:</c>-prefixed), and <c>hash_algorithm</c> lives only in
-/// <c>artifact_metadata</c> (Phase 4).</para>
-///
-/// Disposable: deletes the temp directory (and -wal/-shm sidecars) on <see cref="Dispose"/>.
+/// Synthesizes a small SQLite file matching Miller's current pinned julie-extract contract.
+/// Schema ownership is centralized in <see cref="EnsureCurrentSchema"/> so all reader and scale fixtures move
+/// with <see cref="MillerExtractContract"/>.
 /// </summary>
 internal sealed class JulieDbFixture : IDisposable
 {
@@ -28,8 +16,8 @@ internal sealed class JulieDbFixture : IDisposable
     /// <summary>
     /// The schema / extract_contract version this Miller build is pinned to, sourced from
     /// <see cref="MillerExtractContract"/>. Fixtures that just need a *valid* artifact pass these (NOT
-    /// literals) so a julie re-pin needs no per-test edits — only the one constants file changes. In v1 the
-    /// version is an <c>artifact_metadata</c> KEY, not a separate table row.
+    /// literals) so a julie re-pin needs no per-test edits. The version is an
+    /// <c>artifact_metadata</c> key, not a separate table row.
     /// </summary>
     public static readonly long PinnedSchema = MillerExtractContract.ExpectedSchemaVersion;
 
@@ -352,7 +340,7 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the synthesized v1 <c>symbols</c> table. The first eight fields are the M1 read
+    /// A row as written into the synthesized <c>symbols</c> table. The first eight fields are the M1 read
     /// projection; the remaining detail/body columns (M2 <c>ReadDetail</c>/<c>ReadBody</c>) and the typed test
     /// columns are optional init-properties that default to NULL/false, so every existing positional
     /// construction stays valid.
@@ -393,18 +381,18 @@ internal sealed class JulieDbFixture : IDisposable
 
         /// <summary>
         /// Raw <c>symbols.metadata_json</c> (julie's per-language extractor output). NULL by default. Kept
-        /// seedable for any consumer asserting on the JSON mirror; in v1 the test signal is the typed
+        /// seedable for any consumer asserting on the JSON mirror; the test signal is the typed
         /// <see cref="IsTest"/>/<see cref="TestContainer"/>/<see cref="TestLifecycle"/> columns, NOT this JSON.
         /// </summary>
         public string? Metadata { get; init; }
 
-        /// <summary>v1 typed <c>symbols.is_test</c> column (INTEGER NOT NULL DEFAULT 0). The cross-language signal.</summary>
+        /// <summary>Typed <c>symbols.is_test</c> column. The cross-language signal.</summary>
         public bool IsTest { get; init; }
 
-        /// <summary>v1 typed <c>symbols.test_container</c> column (INTEGER NOT NULL DEFAULT 0).</summary>
+        /// <summary>Typed <c>symbols.test_container</c> column.</summary>
         public bool TestContainer { get; init; }
 
-        /// <summary>v1 typed <c>symbols.test_lifecycle</c> column (INTEGER NOT NULL DEFAULT 0).</summary>
+        /// <summary>Typed <c>symbols.test_lifecycle</c> column.</summary>
         public bool TestLifecycle { get; init; }
     }
 
@@ -447,7 +435,7 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the synthesized v1 <c>relationships</c> table (M5 D2 precise edge source).
+    /// A row as written into the synthesized <c>relationships</c> table (M5 D2 precise edge source).
     /// <see cref="FromSymbolId"/> → <see cref="ToSymbolId"/> are BOTH resolved symbol ids
     /// (julie's <c>from_symbol_id</c>/<c>to_symbol_id</c>, NOT NULL); <see cref="Kind"/> is the edge label
     /// (<c>calls</c>/<c>uses</c>/...). Sparse: only the directly-extracted edges (the analyze pass does not run
@@ -489,11 +477,11 @@ internal sealed class JulieDbFixture : IDisposable
         string? MetadataJson);
 
     /// <summary>
-    /// A row as written into the v1 <c>extraction_revisions</c> table (the freshness cursor; schema.rs:28-41).
+    /// A row as written into <c>extraction_revisions</c>.
     /// <see cref="Revision"/> maps to the <c>revision_id</c> PK the FreshnessReader takes MAX of (one DB = one
     /// root, so there is no <c>workspace_id</c>); <see cref="Kind"/> maps to the <c>mode</c> column and defaults
     /// to <c>full</c> (a scan-produced revision is a full extraction). The other NOT-NULL columns are supplied by
-    /// the INSERT from <see cref="MillerExtractContract"/> so the synthetic row is a faithful v1 shape.
+    /// the INSERT from <see cref="MillerExtractContract"/>.
     /// </summary>
     internal sealed record RevisionRow(long Revision, string Kind = "full")
     {
@@ -501,8 +489,7 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// A row as written into the v1 <c>revision_file_changes</c> table (the changed-file delta; schema.rs:43-50).
-    /// v1 has no <c>workspace_id</c> and no CHECK on <c>change_kind</c>. <see cref="Path"/> maps to the v1
+    /// A row as written into <c>revision_file_changes</c>. <see cref="Path"/> maps to the
     /// <c>path</c> column; <see cref="ChangeKind"/> is one of <c>inserted|updated|deleted|unsupported</c>. The
     /// NOT-NULL <c>file_id</c> PK component is DERIVED (via the shared <see cref="FileId"/> helper), not a field.
     /// </summary>
@@ -510,13 +497,13 @@ internal sealed class JulieDbFixture : IDisposable
 
     /// <summary>
     /// Build a fixture with the given schema/contract version values and the supplied symbol rows.
-    /// In v1 the versions are <c>artifact_metadata</c> KEYS, not a separate table: <paramref name="schemaVersion"/>
+    /// Versions are <c>artifact_metadata</c> keys, not a separate table: <paramref name="schemaVersion"/>
     /// is written to the <c>sqlite_schema_version</c> (and mirrored <c>schema_version</c>) key,
     /// <paramref name="contractValue"/> to <c>extract_contract_version</c>, and <paramref name="hashAlgorithm"/>
     /// to <c>hash_algorithm</c> — all as TEXT. Passing <c>null</c> for schema/contract/hash omits that key;
     /// passing <c>createMetadataTable: false</c> omits the whole <c>artifact_metadata</c> table (a non-julie DB).
     /// <paramref name="createSchemaVersionTable"/> is retained for call-site API stability but no longer creates
-    /// a separate table (v1 has none); it gates only whether the version keys are written.
+    /// a separate table; it gates only whether the version keys are written.
     /// </summary>
     public static JulieDbFixture Create(
         long? schemaVersion,
@@ -561,45 +548,9 @@ internal sealed class JulieDbFixture : IDisposable
             Exec(conn, "PRAGMA synchronous=OFF;");
             Exec(conn, "BEGIN;");
 
-            Exec(conn, FilesDdl);
-            Exec(conn, SymbolsDdl);
-            Exec(conn, ReferenceSitesDdl);
-            Exec(conn, ReferenceSitesIndexesDdl);
-            Exec(conn, IdentifiersDdl);
-            // The relationships table is always created so a SymbolGraphReader can open against any fixture.
-            Exec(conn, RelationshipsDdl);
-            Exec(conn, SourceRegionsDdl);
-            Exec(conn, SourceRegionsIndexesDdl);
-            Exec(conn, StructuralFactsDdl);
-            Exec(conn, PatternCatalogDdl);
-            Exec(conn, ComplexityMetricsDdl);
-            // The v1 freshness tables (extraction_revisions/revision_file_changes) so the FreshnessReader can open.
-            Exec(conn, ExtractionRevisionsDdl);
-            Exec(conn, RevisionFileChangesDdl);
-            // The M4 bridge tables are always created (empty by default) so the SqliteBridgeReader — on the single
-            // production RepositoryIndexLoader.Load path (D9) — can open against ANY fixture.
-            Exec(conn, TypeArgumentUsagesDdl);
-            Exec(conn, TypeArgumentsDdl);
-            Exec(conn, LiteralsDdl);
-            Exec(conn, SymbolAnnotationsDdl);
-            // Schema-versioned tables (created empty) so the synthetic artifact is a faithful current shape.
-            Exec(conn, ParserInventoryDdl);
-            Exec(conn, ParseDiagnosticsDdl);
-            Exec(conn, LanguageCapabilitiesDdl);
-            Exec(conn, LanguageCapabilityFixturesDdl);
-            Exec(conn, LanguageCapabilityGapsDdl);
-            Exec(conn, PendingRelationshipsDdl);
-            Exec(conn, PendingRelationshipsIndexesDdl);
-            // v4 reference-resolution overlay tables + their pinned indexes (created empty; seeded by the
-            // AddIdentifierResolution / AddPendingResolution builders when a test needs resolution evidence).
-            Exec(conn, IdentifierResolutionsDdl);
-            Exec(conn, IdentifierResolutionsIndexDdl);
-            Exec(conn, PendingResolutionsDdl);
-            Exec(conn, PendingResolutionsIndexDdl);
-            Exec(conn, TypeFactsDdl);
-            if (createMetadataTable) Exec(conn, MetadataDdl);
+            EnsureCurrentSchema(conn, createMetadataTable);
 
-            // files rows (v1: file_id PK, path UNIQUE, content_hash/content_bytes — content-free, no `content`).
+            // files rows: file_id PK, path UNIQUE, content_hash/content_bytes, and no stored content.
             // identifiers also carry path, so union both sources of paths. The exact bytes hashed into
             // content_hash are ALSO materialized to disk under _dir (the WorkspaceRoot), so the D2 disk-slice
             // path reads a file whose blake3 matches the stored content_hash by construction (reconciliation #3).
@@ -607,7 +558,7 @@ internal sealed class JulieDbFixture : IDisposable
             {
                 string content = fileContent is not null && fileContent.TryGetValue(path, out var c) ? c : "";
                 byte[] bytes = System.Text.Encoding.UTF8.GetBytes(content);
-                string contentHash = "blake3:" + ContentHasher.Blake3Hex(bytes); // v1 content_hash: domain-prefixed
+                string contentHash = "blake3:" + ContentHasher.Blake3Hex(bytes);
 
                 // Materialize the EXACT bytes to disk (parent dirs first) so disk-hash == stored content_hash.
                 string abs = Path.Combine(dir, path);
@@ -817,8 +768,7 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // extraction_revisions rows (v1 freshness cursor). revision_id is an explicit (non-autoincrement) PK;
-            // the NOT-NULL columns v1 requires are supplied from the pinned contract constants for fidelity.
+            // extraction_revisions rows use the pinned contract values.
             if (revisions is not null)
             {
                 foreach (var rev in revisions)
@@ -847,8 +797,7 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // revision_file_changes rows (v1 changed-file delta). file_id is DERIVED from the path (the shared
-            // FileId helper); v1 has no workspace_id / old_hash / new_hash and no CHECK on change_kind.
+            // revision_file_changes file_id is derived from the path.
             if (fileChanges is not null)
             {
                 foreach (var fc in fileChanges)
@@ -865,8 +814,7 @@ internal sealed class JulieDbFixture : IDisposable
                 }
             }
 
-            // v1 artifact_metadata: the full REQUIRED_METADATA_KEYS set so the synthetic fixture is a faithful
-            // v1 artifact (metadata.rs). The gate reads sqlite_schema_version / schema_version /
+            // The gate reads sqlite_schema_version / schema_version /
             // extract_contract_version / hash_algorithm; the rest keep the fixture honest. Fingerprints carry the
             // sha256: domain prefix (NEVER blake3:) — Miller stores but never compares them (hash-domain split).
             if (createMetadataTable)
@@ -917,7 +865,7 @@ internal sealed class JulieDbFixture : IDisposable
         return new JulieDbFixture(dir, dbPath, rows);
     }
 
-    /// <summary>The deterministic synthetic file_id for a path (v1 files PK; symbols/identifiers FK to it).</summary>
+    /// <summary>The deterministic synthetic file_id for a path.</summary>
     private static string FileId(string path) => "file:" + path;
 
     private static string ReferenceSiteId(
@@ -976,8 +924,7 @@ internal sealed class JulieDbFixture : IDisposable
     }
 
     /// <summary>
-    /// The canonical fixture: a v1 artifact with ~12 realistic rows — mixed kinds/languages, some NULL
-    /// signatures, at least one NULL start_line, parent/child pairs, distinct files.
+    /// The canonical fixture has mixed kinds/languages, nullable fields, parent/child pairs, and distinct files.
     /// </summary>
     public static JulieDbFixture CreateDefault() => Create(JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, DefaultRows);
 
@@ -1239,6 +1186,43 @@ internal sealed class JulieDbFixture : IDisposable
         foreach (var r in rows) if (r.ParentId is not null) yield return r;
     }
 
+    public static void EnsureCurrentSchema(
+        SqliteConnection connection,
+        bool includeMetadata = true)
+    {
+        Exec(connection, FilesDdl);
+        Exec(connection, SymbolsDdl);
+        Exec(connection, ReferenceSitesDdl);
+        Exec(connection, ReferenceSitesIndexesDdl);
+        Exec(connection, IdentifiersDdl);
+        Exec(connection, RelationshipsDdl);
+        Exec(connection, SourceRegionsDdl);
+        Exec(connection, SourceRegionsIndexesDdl);
+        Exec(connection, StructuralFactsDdl);
+        Exec(connection, PatternCatalogDdl);
+        Exec(connection, ComplexityMetricsDdl);
+        Exec(connection, ExtractionRevisionsDdl);
+        Exec(connection, RevisionFileChangesDdl);
+        Exec(connection, TypeArgumentUsagesDdl);
+        Exec(connection, TypeArgumentsDdl);
+        Exec(connection, LiteralsDdl);
+        Exec(connection, SymbolAnnotationsDdl);
+        Exec(connection, ParserInventoryDdl);
+        Exec(connection, ParseDiagnosticsDdl);
+        Exec(connection, LanguageCapabilitiesDdl);
+        Exec(connection, LanguageCapabilityFixturesDdl);
+        Exec(connection, LanguageCapabilityGapsDdl);
+        Exec(connection, PendingRelationshipsDdl);
+        Exec(connection, PendingRelationshipsIndexesDdl);
+        Exec(connection, IdentifierResolutionsDdl);
+        Exec(connection, IdentifierResolutionsIndexDdl);
+        Exec(connection, PendingResolutionsDdl);
+        Exec(connection, PendingResolutionsIndexDdl);
+        Exec(connection, TypeFactsDdl);
+        if (includeMetadata)
+            Exec(connection, MetadataDdl);
+    }
+
     public static void EnsureRequiredSchemaFiveTables(SqliteConnection connection)
     {
         Exec(connection, ReferenceSitesDdl);
@@ -1287,7 +1271,7 @@ internal sealed class JulieDbFixture : IDisposable
     // --- DDL transcribed from julie-extractors SQLite schema contract, with only fast-fixture relaxations. ---
     // Remaining deviations: files.last_revision_id has NO FK (so a files row can be seeded with no revision);
     // symbol/identifier position columns are nullable here (the synthetic DB relaxes julie's NOT NULL so the
-    // existing NULL-discipline tests keep coverage). v1 files is content-free — body text re-sources from disk.
+    // existing NULL-discipline tests keep coverage). Files are content-free; body text re-sources from disk.
 
     private const string FilesDdl = """
         CREATE TABLE IF NOT EXISTS files (
@@ -1445,10 +1429,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // ---- M4 bridge tables (v1 schema.rs:192-233) -----------------------------------------------------------
-    // Created empty (the bridge rows are seeded by subsystem-B's SqliteBridgeReaderTests inline DBs, not here).
-    // v1 split: type_argument_usages carries identifier_id/path/language; type_arguments carries usage_id +
-    // ordinal + parent_type_argument_id + type_name. symbol_annotations has NO ordinal (re-keyed to annotation_id).
+    // ---- Bridge tables ------------------------------------------------------------------------------------
 
     private const string TypeArgumentUsagesDdl = """
         CREATE TABLE IF NOT EXISTS type_argument_usages (
@@ -1505,7 +1486,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // ---- v1-only tables (schema.rs:18-26, 155-190, 235-288) — created empty for artifact fidelity ----------
+    // ---- Current artifact tables --------------------------------------------------------------------------
 
     private const string ParserInventoryDdl = """
         CREATE TABLE IF NOT EXISTS parser_inventory (
@@ -1579,9 +1560,6 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // v4 pinned shape: the columns are unchanged from v1, but the FKs (from_symbol_id / caller_scope_symbol_id /
-    // file_id) and the four lookup indexes are added so the synthetic artifact matches the reference-resolution
-    // contract the dead-code reader depends on (schema v4 / product 2.9.0).
     private const string PendingRelationshipsDdl = """
         CREATE TABLE IF NOT EXISTS pending_relationships (
             pending_relationship_id TEXT PRIMARY KEY,
@@ -1697,9 +1675,7 @@ internal sealed class JulieDbFixture : IDisposable
         );
         """;
 
-    // --- v1 freshness DDL (schema.rs:28-50). extraction_revisions has no workspace_id (one DB = one root) and
-    //     revision_id is an explicit PRIMARY KEY (NOT autoincrement); revision_file_changes has no workspace_id
-    //     and no CHECK on change_kind (Miller is the only guard — see FreshnessReader.ParseChangeKind). ---
+    // --- Freshness tables ----------------------------------------------------------------------------------
 
     private const string ExtractionRevisionsDdl = """
         CREATE TABLE IF NOT EXISTS extraction_revisions (
