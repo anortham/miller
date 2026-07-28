@@ -30,6 +30,23 @@ public sealed class WorkspaceRenderTests
         IndexFresh: true,
         QueueEmpty: true);
 
+    private static SemanticBrokerFacts BrokerFacts() => new(
+        State: "ready",
+        EndpointIdentity: "a5d53c7dd92b2107",
+        Role: "owner",
+        ServerVersion: "1",
+        ModelId: "BAAI/bge-small-en-v1.5",
+        ModelSha256: "sha256-model",
+        Backend: "cuda",
+        AcceleratorLeaseHeld: true,
+        ReconnectCount: 2,
+        SpawnAttempts: 1,
+        RetiredOwnerCount: 1,
+        OwnershipDegraded: false,
+        OwnershipDegradedReason: null,
+        BackendDegradedReason: null,
+        OwnerProcessId: 4242);
+
     private static readonly TelemetrySummary Telemetry = new(
         new[]
         {
@@ -160,6 +177,24 @@ public sealed class WorkspaceRenderTests
         Assert.Contains("telemetry:", text);      // concise telemetry summary
         Assert.Contains("search", text);         // top tool by p95
         Assert.Contains("250", text);            // a telemetry metric (p95)
+    }
+
+    [Fact]
+    public void Status_Compact_ShowsBrokerIdentityAndHealthWithoutPathOrPid()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { SemanticBroker = BrokerFacts() },
+            TelemetrySummary.Empty,
+            json: false);
+
+        Assert.Contains(
+            "semantic_broker: ready  endpoint: a5d53c7dd92b2107  role: owner  server: 1  " +
+            "model: BAAI/bge-small-en-v1.5  backend: cuda  accelerator_lease: held  " +
+            "reconnects: 2  spawns: 1  retired_owners: 1",
+            text);
+        Assert.DoesNotContain("4242", text);
+        Assert.DoesNotContain(".sock", text);
+        Assert.DoesNotContain(@"\\.\pipe\", text);
     }
 
     // ---- status role string (version-aware leadership D6) ----
@@ -533,6 +568,28 @@ public sealed class WorkspaceRenderTests
     }
 
     [Fact]
+    public void Status_Json_ExposesExhaustiveBrokerDiagnostics()
+    {
+        JsonElement broker = Json(WorkspaceRender.Status(
+                Facts() with { SemanticBroker = BrokerFacts() },
+                TelemetrySummary.Empty,
+                json: true))
+            .GetProperty("semantic_broker");
+
+        Assert.Equal("ready", broker.GetProperty("state").GetString());
+        Assert.Equal("a5d53c7dd92b2107", broker.GetProperty("endpoint_identity").GetString());
+        Assert.Equal("owner", broker.GetProperty("role").GetString());
+        Assert.Equal("1", broker.GetProperty("server_version").GetString());
+        Assert.Equal("BAAI/bge-small-en-v1.5", broker.GetProperty("model_id").GetString());
+        Assert.Equal("cuda", broker.GetProperty("backend").GetString());
+        Assert.True(broker.GetProperty("accelerator_lease_held").GetBoolean());
+        Assert.Equal(2, broker.GetProperty("reconnect_count").GetInt32());
+        Assert.Equal(1, broker.GetProperty("spawn_attempts").GetInt32());
+        Assert.Equal(1, broker.GetProperty("retired_owner_count").GetInt32());
+        Assert.Equal(4242, broker.GetProperty("owner_pid").GetInt32());
+    }
+
+    [Fact]
     public void Status_Json_IncludesIndexerLeaderFactsWhenProvided()
     {
         var leader = new LeaderHealthFacts(
@@ -857,6 +914,43 @@ public sealed class WorkspaceRenderTests
         Assert.True(complexity.GetProperty("available").GetBoolean());
         Assert.Equal("parse_diagnostics", root.GetProperty("warnings")[0].GetProperty("code").GetString());
         Assert.Equal("inspect parse diagnostics", root.GetProperty("recommended_actions")[0].GetString());
+    }
+
+    [Fact]
+    public void Health_Json_ExposesBrokerCpuDegradationTruth()
+    {
+        SemanticBrokerFacts broker = BrokerFacts() with
+        {
+            Role = "non_owner",
+            Backend = "cpu",
+            AcceleratorLeaseHeld = false,
+            OwnershipDegraded = false,
+            OwnershipDegradedReason = null,
+            BackendDegradedReason = "accelerator lease held by another model",
+            OwnerProcessId = null,
+        };
+        var health = new WorkspaceHealthFacts(
+            StatusFacts: Facts() with { SemanticBroker = broker },
+            Telemetry: TelemetrySummary.Empty,
+            TelemetryHealth: new TelemetryHealthFacts(0, 0, 0),
+            Extraction: ExtractionHealth(),
+            Warnings: [],
+            RecommendedActions: [],
+            State: HealthState.Ready,
+            Summary: "ready");
+
+        JsonElement rendered = Json(WorkspaceRender.Health(health, json: true))
+            .GetProperty("semantic_broker");
+
+        Assert.Equal("non_owner", rendered.GetProperty("role").GetString());
+        Assert.Equal("cpu", rendered.GetProperty("backend").GetString());
+        Assert.False(rendered.GetProperty("accelerator_lease_held").GetBoolean());
+        Assert.False(rendered.GetProperty("ownership_degraded").GetBoolean());
+        Assert.Equal(
+            "accelerator lease held by another model",
+            rendered.GetProperty("backend_degraded_reason").GetString());
+        Assert.Equal(JsonValueKind.Null, rendered.GetProperty("ownership_degraded_reason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, rendered.GetProperty("owner_pid").ValueKind);
     }
 
     [Fact]

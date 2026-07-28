@@ -36,7 +36,8 @@ public sealed record SemanticEncoderHandshake(
     int Dims,
     bool Accelerated,
     string ResolvedBackend,
-    string? DegradedReason);
+    string? DegradedReason,
+    bool AcceleratorLeaseHeld = false);
 
 /// <summary>
 /// The outcome of one embed call. A failure carries a stated <see cref="FailureReason"/> rather than throwing,
@@ -136,6 +137,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     private readonly SemanticEncoderPin? _expectedEncoder;
     private int _consecutiveFatals;
     private long _requestSequence;
+    private bool _runtimeHealthRefreshSuppressed;
     private bool _disposed;
 
     public SemanticEmbeddingSession(
@@ -206,7 +208,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             health.Dims,
             health.Accelerated,
             health.ResolvedBackend,
-            health.DegradedReason);
+            health.DegradedReason,
+            health.AcceleratorLeaseHeld ?? health.Accelerated);
     }
 
     /// <summary>
@@ -247,7 +250,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             health.Dims,
             health.Accelerated,
             health.ResolvedBackend,
-            health.DegradedReason);
+            health.DegradedReason,
+            health.AcceleratorLeaseHeld ?? health.Accelerated);
     }
 
     public Task<SemanticEmbedOutcome> EmbedBatchAsync(
@@ -403,6 +407,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                     {
                         SemanticEmbedOutcome outcome = ReadVectors(method, texts.Count, response.Result!.Value);
                         _consecutiveFatals = 0;
+                        if (Handshake?.Accelerated == true && !_runtimeHealthRefreshSuppressed)
+                            await RefreshRuntimeHealthAsync(cancellationToken).ConfigureAwait(false);
                         return outcome;
                     }
                     catch (SidecarTransportException ex)
@@ -438,6 +444,45 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
         blockedReason = null;
         return true;
+    }
+
+    private async Task RefreshRuntimeHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using SidecarResponse response =
+                await ExchangeAsync("health", "{}", _options.RequestTimeout, cancellationToken).ConfigureAwait(false);
+            if (response.Error is not null)
+                return;
+
+            SemanticSidecarHealth health = SemanticSidecarHealth.Parse(response.Result!.Value);
+            SemanticEncoderHandshake? handshake = _expectedEncoder is null
+                ? MatchEncoder(health, out _)
+                : MatchEncoder(health, _expectedEncoder, out _);
+            if (handshake is null || handshake == Handshake)
+                return;
+
+            Handshake = handshake;
+            if (_connectionFactory is ISemanticBrokerSnapshotRecorder recorder)
+                recorder.RecordHandshake(handshake);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await QuarantineRuntimeHealthRefreshAsync("canceled").ConfigureAwait(false);
+        }
+        catch (SidecarTransportException ex)
+        {
+            await QuarantineRuntimeHealthRefreshAsync(ex.Message).ConfigureAwait(false);
+        }
+    }
+
+    private async Task QuarantineRuntimeHealthRefreshAsync(string reason)
+    {
+        _runtimeHealthRefreshSuppressed = true;
+        await CloseConnectionAsync(abort: true).ConfigureAwait(false);
+        RestartCount++;
+        State = SemanticSessionState.Restarting;
+        UnavailableReason = $"sidecar runtime health refresh failed: {reason}";
     }
 
     private async Task<bool> StartIfNeededAsync(CancellationToken cancellationToken)
@@ -507,6 +552,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         Handshake = handshake;
         if (_connectionFactory is ISemanticBrokerSnapshotRecorder recorder)
             recorder.RecordHandshake(handshake);
+        _runtimeHealthRefreshSuppressed = false;
         State = SemanticSessionState.Ready;
         UnavailableReason = null;
         // The fatal counter is NOT reset here: reconnecting is what a fault costs, so a connection that handshakes
@@ -802,7 +848,8 @@ public sealed record SemanticSidecarHealth(
     string Normalization,
     string ResolvedBackend,
     bool Accelerated,
-    string? DegradedReason)
+    string? DegradedReason,
+    bool? AcceleratorLeaseHeld = null)
 {
     internal static SemanticSidecarHealth Parse(JsonElement result)
     {
@@ -835,7 +882,11 @@ public sealed record SemanticSidecarHealth(
             Text(result, "resolved_backend"),
             result.TryGetProperty("accelerated", out JsonElement accelerated)
                 && accelerated.ValueKind == JsonValueKind.True,
-            NullableText(result, "degraded_reason"));
+            NullableText(result, "degraded_reason"),
+            result.TryGetProperty("accelerator_lease_held", out JsonElement lease)
+                && lease.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? lease.GetBoolean()
+                    : null);
 
         static string Text(JsonElement element, string property) =>
             element.TryGetProperty(property, out JsonElement value) && value.ValueKind == JsonValueKind.String

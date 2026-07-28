@@ -16,9 +16,9 @@ public enum SemanticMode
 }
 
 /// <summary>
-/// Parses the <c>MILLER_SEMANTIC</c> activation switch. Semantic retrieval is opt-in: an unset, empty, or
-/// unrecognized value is <see cref="SemanticMode.Off"/>, so a value typo can never silently start doing work
-/// the off-guarantee forbids.
+/// Parses the <c>MILLER_SEMANTIC</c> activation switch. Semantic retrieval is on by default; explicit
+/// <c>off</c>, <c>0</c>, or <c>false</c> preserves the permanent zero-work guarantee, while an unrecognized
+/// value fails closed to <see cref="SemanticMode.Off"/>.
 /// </summary>
 public static class SemanticActivation
 {
@@ -32,12 +32,13 @@ public static class SemanticActivation
     public static SemanticMode FromEnvValue(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
-            return SemanticMode.Off;
+            return SemanticMode.On;
 
         return raw.Trim().ToLowerInvariant() switch
         {
+            "off" or "0" or "false" => SemanticMode.Off,
             "shadow" => SemanticMode.Shadow,
-            "on" => SemanticMode.On,
+            "on" or "1" or "true" => SemanticMode.On,
             _ => SemanticMode.Off,
         };
     }

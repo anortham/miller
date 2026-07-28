@@ -58,8 +58,19 @@ public sealed class SemanticEmbeddingSessionBroker : IAsyncDisposable, IDisposab
         }
     }
 
-    public SemanticBrokerSnapshot? BrokerSnapshot =>
-        _enabled && !IsDisposed() ? _snapshotProvider() : null;
+    public SemanticBrokerSnapshot? BrokerSnapshot
+    {
+        get
+        {
+            lock (_sync)
+            {
+                if (!_enabled || _disposed || !_factoryInvoked)
+                    return null;
+            }
+
+            return _snapshotProvider();
+        }
+    }
 
     public bool Available => GetSession() is not null;
 

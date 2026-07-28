@@ -29,12 +29,15 @@ namespace Miller.Tests.Server.Cli;
 [Collection(SemanticActivationEnvironmentCollection.Name)]
 public sealed class CliDispatchTests : IDisposable
 {
+    private const string BrokerCounterVariable = "MILLER_FAKE_SHARED_BROKER_COUNTER";
+    private const string BrokerDelayVariable = "MILLER_FAKE_SHARED_BROKER_DELAY_MS";
+
     private readonly string _dir;
     private readonly string _registryDb;
 
     public CliDispatchTests()
     {
-        _dir = Path.Combine(Path.GetTempPath(), "miller-cli-" + Guid.NewGuid().ToString("N"));
+        _dir = Path.Combine(Path.GetTempPath(), "mc-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_dir);
         _registryDb = Path.Combine(_dir, "workspaces.db");
     }
@@ -737,6 +740,8 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Contains("--pattern ID] [--query TEXT]", outText);
         Assert.Contains("--depth summary|overview|full", outText);
         Assert.Contains("canary combine <export.json>... [--json]", outText);
+        Assert.Contains("semantic retrieval is on by default", outText);
+        Assert.DoesNotContain("need MILLER_SEMANTIC=on", outText);
         Assert.Contains("serve", outText);
     }
 
@@ -3086,6 +3091,130 @@ public sealed class CliDispatchTests : IDisposable
     }
 
     [Fact]
+    public void WorkspaceStatus_UnsetSemanticReportsNotStartedWithoutCreatingBrokerState()
+    {
+        string? previous = Environment.GetEnvironmentVariable(SemanticActivation.EnvVar);
+        Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, null);
+        try
+        {
+            using var fx = JulieDbFixture.CreateDefault();
+
+            var (code, outText, errText) =
+                Run(["workspace", "status", "--json"], Context(fx.DbPath));
+
+            Assert.Equal(0, code);
+            Assert.Empty(errText);
+            using JsonDocument document = JsonDocument.Parse(outText);
+            JsonElement broker = document.RootElement.GetProperty("semantic_broker");
+            Assert.Equal("not_started", broker.GetProperty("state").GetString());
+            Assert.Equal(JsonValueKind.Null, broker.GetProperty("endpoint_identity").ValueKind);
+            Assert.Equal(JsonValueKind.Null, broker.GetProperty("owner_pid").ValueKind);
+            Assert.False(Directory.Exists(Path.Combine(_dir, "semantic")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, previous);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("shadow")]
+    public async Task WorkspaceStatus_DefaultOnAndShadowPassivelyObserveAnExistingSharedBroker(
+        string? semanticValue)
+    {
+        string? previous = Environment.GetEnvironmentVariable(SemanticActivation.EnvVar);
+        Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, semanticValue);
+        string counter = Path.Combine(_dir, "broker-loads.txt");
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [BrokerCounterVariable] = counter,
+            [BrokerDelayVariable] = "0",
+        };
+        await using var ownerFactory = new SharedSemanticBrokerConnectionFactory(
+            RequireBrokerHostExecutable(),
+            toolsRoot: _dir,
+            millerHome: _dir,
+            pin: SemanticEncoderSelection.Active,
+            environment,
+            directConnectTimeout: TimeSpan.FromMilliseconds(30),
+            initializationTimeout: TimeSpan.FromSeconds(10),
+            pollInterval: TimeSpan.FromMilliseconds(20),
+            requireWindowsJob: false,
+            attachWindowsJob: null);
+        await using var ownerSession = new SemanticEmbeddingSession(
+            ownerFactory,
+            expectedEncoder: SemanticEncoderSelection.Active,
+            ownsConnectionFactory: false);
+
+        try
+        {
+            Assert.True(
+                await ownerSession.EnsureStartedAsync(TestContext.Current.CancellationToken) is not null,
+                ownerSession.UnavailableReason);
+            using var fx = JulieDbFixture.CreateDefault();
+
+            var (code, outText, errText) =
+                Run(["workspace", "status", "--json"], Context(fx.DbPath));
+            var (healthCode, healthOut, healthErr) =
+                Run(["workspace", "health", "--json"], Context(fx.DbPath));
+
+            Assert.Equal(0, code);
+            Assert.Empty(errText);
+            Assert.Equal(0, healthCode);
+            Assert.Empty(healthErr);
+            using JsonDocument document = JsonDocument.Parse(outText);
+            using JsonDocument healthDocument = JsonDocument.Parse(healthOut);
+            JsonElement broker = document.RootElement.GetProperty("semantic_broker");
+            JsonElement healthBroker = healthDocument.RootElement.GetProperty("semantic_broker");
+            Assert.Equal("ready", broker.GetProperty("state").GetString());
+            Assert.Equal("ready", healthBroker.GetProperty("state").GetString());
+            Assert.Equal("non_owner", broker.GetProperty("role").GetString());
+            Assert.Equal("cpu", broker.GetProperty("backend").GetString());
+            Assert.False(broker.GetProperty("accelerator_lease_held").GetBoolean());
+            Assert.Equal(0, broker.GetProperty("spawn_attempts").GetInt32());
+            Assert.Single(File.ReadAllLines(counter));
+            SemanticEmbedOutcome afterObservation = await ownerSession.EmbedQueryAsync(
+                "still owned",
+                TestContext.Current.CancellationToken);
+            Assert.True(afterObservation.Succeeded, afterObservation.FailureReason);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, previous);
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatus_ExplicitSemanticOffReportsOffAndCreatesNoBrokerDirectory()
+    {
+        string? previous = Environment.GetEnvironmentVariable(SemanticActivation.EnvVar);
+        Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, "off");
+        try
+        {
+            using var fx = JulieDbFixture.CreateDefault();
+            WorkspaceContext context = Context(fx.DbPath) with { ToolsRoot = "" };
+
+            var (code, outText, errText) =
+                Run(["workspace", "status", "--json"], context);
+
+            Assert.Equal(0, code);
+            Assert.Empty(errText);
+            using JsonDocument document = JsonDocument.Parse(outText);
+            JsonElement broker = document.RootElement.GetProperty("semantic_broker");
+            Assert.Equal("off", broker.GetProperty("state").GetString());
+            Assert.Equal(JsonValueKind.Null, broker.GetProperty("endpoint_identity").ValueKind);
+            Assert.False(Directory.Exists(Path.Combine(
+                Path.GetDirectoryName(context.RegistryDbPath)!,
+                "semantic")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(SemanticActivation.EnvVar, previous);
+        }
+    }
+
+    [Fact]
     public void WorkspaceStatus_CurrentWorkspacePrefersStableIdWhenLegacyDuplicateExists()
     {
         using var fx = JulieDbFixture.CreateDefault();
@@ -3131,7 +3260,7 @@ public sealed class CliDispatchTests : IDisposable
         using JsonDocument doc = JsonDocument.Parse(outText);
         JsonElement root = doc.RootElement;
         Assert.Equal("target-ws", root.GetProperty("workspace").GetProperty("workspace_id").GetString());
-        Assert.Equal("usable_with_warnings", root.GetProperty("verdict").GetProperty("state").GetString());
+        Assert.Equal("degraded", root.GetProperty("verdict").GetProperty("state").GetString());
         Assert.Equal(2, root.GetProperty("extraction_quality")
             .GetProperty("parse_diagnostics").GetProperty("rows")[0].GetProperty("count").GetInt64());
         Assert.Equal("capability_gaps", root.GetProperty("warnings")[0].GetProperty("code").GetString());
@@ -4748,6 +4877,28 @@ public sealed class CliDispatchTests : IDisposable
                 RestartBackoffCap = TimeSpan.Zero,
                 Delay = static (_, _) => Task.CompletedTask,
             });
+
+    private static string RequireBrokerHostExecutable()
+    {
+        string configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        string executable = OperatingSystem.IsWindows()
+            ? "Miller.SharedBrokerTestHost.exe"
+            : "Miller.SharedBrokerTestHost";
+        string hostRoot = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "Miller.SharedBrokerTestHost",
+            "bin"));
+        string? candidate = new[] { configuration, "Release", "Debug" }
+            .Distinct(StringComparer.Ordinal)
+            .Select(value => Path.Combine(hostRoot, value, "net10.0", executable))
+            .FirstOrDefault(File.Exists);
+        Assert.True(candidate is not null, $"The shared broker test host was not built under {hostRoot}.");
+        return candidate!;
+    }
 
     private static StubSymbolLookupIndex TwoSymbolIndex() =>
         new(

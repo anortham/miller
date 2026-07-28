@@ -1,7 +1,11 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Net.Sockets;
+using System.Text.Json;
+using Miller.Indexing;
 using Miller.Indexing.Semantic;
+using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -14,6 +18,10 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         "MILLER_FAKE_SHARED_BROKER_CRASH_FIRST_MARKER";
     private const string ExitDuringDelayVariable =
         "MILLER_FAKE_SHARED_BROKER_EXIT_ON_OWNER_CLOSE_DURING_DELAY";
+    private const string DegradedReasonVariable =
+        "MILLER_FAKE_SHARED_BROKER_DEGRADED_REASON";
+    private const string HealthDelayVariable =
+        "MILLER_FAKE_SHARED_BROKER_HEALTH_DELAY_MS";
 
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "mb-" + Guid.NewGuid().ToString("N")[..10]);
@@ -50,6 +58,115 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
                 SemanticEncoderSelection.Active.ModelSha256,
                 factory.Snapshot.ModelSha256);
         });
+    }
+
+    [Fact]
+    public async Task CpuFallbackHandshake_FlowsThroughSnapshotFactsAndRenderWithoutOwnershipConfusion()
+    {
+        const string degradedReason = "accelerator resource exhausted; demoted to cpu";
+        string counter = Path.Combine(_root, "cpu-fallback-loads.txt");
+        await using SharedSemanticBrokerConnectionFactory factory =
+            CreateFactory(counter, loadDelayMs: 0, degradedReason: degradedReason);
+        await using var session = new SemanticEmbeddingSession(
+            factory,
+            expectedEncoder: SemanticEncoderSelection.Active,
+            ownsConnectionFactory: false);
+
+        SemanticEncoderHandshake? handshake = await session.EnsureStartedAsync(
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(handshake);
+        SemanticBrokerSnapshot snapshot = factory.Snapshot;
+        Assert.Equal("cpu", snapshot.Backend);
+        Assert.False(snapshot.AcceleratorLeaseHeld);
+        Assert.False(snapshot.OwnershipDegraded);
+        Assert.Null(snapshot.OwnershipDegradedReason);
+        Assert.Equal(degradedReason, snapshot.BackendDegradedReason);
+
+        SemanticBrokerFacts brokerFacts = SemanticBrokerFacts.From(SemanticMode.On, snapshot);
+        var facts = new WorkspaceFacts(
+            "/repo",
+            "repo-id",
+            "/repo/.miller/symbols.db",
+            true,
+            1,
+            1,
+            1,
+            1,
+            true,
+            true,
+            SemanticBroker: brokerFacts);
+        string compact = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+        string json = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true);
+
+        Assert.Contains("backend: cpu", compact);
+        Assert.Contains("accelerator_lease: not_held", compact);
+        Assert.Contains($"backend_degraded: {degradedReason}", compact);
+        Assert.DoesNotContain("ownership_degraded:", compact);
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement broker = doc.RootElement.GetProperty("semantic_broker");
+        Assert.False(broker.GetProperty("ownership_degraded").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, broker.GetProperty("ownership_degraded_reason").ValueKind);
+        Assert.Equal(
+            degradedReason,
+            broker.GetProperty("backend_degraded_reason").GetString());
+    }
+
+    [Fact]
+    public async Task PassiveObservation_DisposesAConnectedStreamCanceledBeforeSessionAcceptance()
+    {
+        string counter = Path.Combine(_root, "passive-cancel-loads.txt");
+        await using SharedSemanticBrokerConnectionFactory owner =
+            CreateFactory(counter, loadDelayMs: 0);
+        await using ISemanticSidecarConnection ownerConnection =
+            await owner.ConnectAsync(TestContext.Current.CancellationToken);
+        using var cancellation = new CancellationTokenSource();
+        int disposedConnections = 0;
+        await using var observer = new SharedSemanticBrokerConnectionFactory(
+            RequireBrokerHostExecutable(),
+            toolsRoot: _root,
+            millerHome: _root,
+            pin: SemanticEncoderSelection.Active,
+            environment: EnvironmentFor(
+                counter,
+                loadDelayMs: 0,
+                crashFirstMarker: null,
+                exitOnOwnerCloseDuringDelay: false),
+            directConnectTimeout: TimeSpan.FromMilliseconds(30),
+            initializationTimeout: TimeSpan.FromSeconds(10),
+            pollInterval: TimeSpan.FromMilliseconds(20),
+            requireWindowsJob: false,
+            attachWindowsJob: null,
+            passiveConnectionAccepted: cancellation.Cancel,
+            connectionDisposed: () => Interlocked.Increment(ref disposedConnections));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await observer.ObserveExistingAsync(TimeSpan.FromMilliseconds(500), cancellation.Token));
+
+        Assert.Equal(1, disposedConnections);
+        Assert.Equal(0, observer.Snapshot.SpawnAttempts);
+    }
+
+    [Fact]
+    public async Task PassiveObservation_HealthSilenceRespectsTheTotalWallClockBound()
+    {
+        string counter = Path.Combine(_root, "passive-timeout-loads.txt");
+        await using SharedSemanticBrokerConnectionFactory owner =
+            CreateFactory(counter, loadDelayMs: 0, healthDelayMs: 5_000);
+        await using ISemanticSidecarConnection ownerConnection =
+            await owner.ConnectAsync(TestContext.Current.CancellationToken);
+        await using SharedSemanticBrokerConnectionFactory observer =
+            CreateFactory(counter, loadDelayMs: 0, healthDelayMs: 5_000);
+        var elapsed = Stopwatch.StartNew();
+
+        SemanticBrokerSnapshot? snapshot = await observer.ObserveExistingAsync(
+            TimeSpan.FromMilliseconds(100),
+            TestContext.Current.CancellationToken);
+
+        elapsed.Stop();
+        Assert.Null(snapshot);
+        Assert.InRange(elapsed.Elapsed, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
+        Assert.Equal(0, observer.Snapshot.SpawnAttempts);
     }
 
     [Fact]
@@ -200,7 +317,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         Assert.Equal("ready", factory.Snapshot.State);
         Assert.True(factory.Snapshot.IsOwner);
         Assert.True(factory.Snapshot.OwnershipDegraded);
-        Assert.Equal("job attach denied", factory.Snapshot.DegradedReason);
+        Assert.Equal("job attach denied", factory.Snapshot.OwnershipDegradedReason);
         int ownerPid = Assert.IsType<int>(factory.Snapshot.OwnerProcessId);
         SemanticBrokerEndpoint endpoint = SemanticBrokerEndpoint.Create(
             _root,
@@ -243,7 +360,9 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         bool requireWindowsJob = false,
         Func<Process, WindowsBrokerJobAttachment>? attachWindowsJob = null,
         string? crashFirstMarker = null,
-        bool exitOnOwnerCloseDuringDelay = false)
+        bool exitOnOwnerCloseDuringDelay = false,
+        string? degradedReason = null,
+        int healthDelayMs = 0)
     {
         string executable = RequireBrokerHostExecutable();
         return new SharedSemanticBrokerConnectionFactory(
@@ -255,7 +374,9 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
                 counter,
                 loadDelayMs,
                 crashFirstMarker,
-                exitOnOwnerCloseDuringDelay),
+                exitOnOwnerCloseDuringDelay,
+                degradedReason,
+                healthDelayMs),
             directConnectTimeout: TimeSpan.FromMilliseconds(30),
             initializationTimeout: TimeSpan.FromSeconds(10),
             pollInterval: TimeSpan.FromMilliseconds(20),
@@ -267,7 +388,9 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         string counter,
         int loadDelayMs,
         string? crashFirstMarker,
-        bool exitOnOwnerCloseDuringDelay)
+        bool exitOnOwnerCloseDuringDelay,
+        string? degradedReason = null,
+        int healthDelayMs = 0)
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
@@ -279,6 +402,11 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             environment[CrashFirstMarkerVariable] = crashFirstMarker;
         if (exitOnOwnerCloseDuringDelay)
             environment[ExitDuringDelayVariable] = "1";
+        if (degradedReason is not null)
+            environment[DegradedReasonVariable] = degradedReason;
+        if (healthDelayMs > 0)
+            environment[HealthDelayVariable] = healthDelayMs.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
         return environment;
     }
 

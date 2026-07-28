@@ -560,8 +560,9 @@ public static class CliDispatch
 
     /// <summary>
     /// Runs the symbol route under the requested arm. The absent flag composes exactly what the MCP host
-    /// composes — the policy-routed production arm, which under <c>MILLER_SEMANTIC=off</c> is never built at
-    /// all — so a CLI run and a tool call answer one query the same way.
+        /// composes — the policy-routed production arm. Semantic retrieval is on by default; explicit
+        /// <c>MILLER_SEMANTIC=off</c> prevents the semantic arm from being built at all, so a CLI run and a tool
+        /// call answer one query the same way.
     /// </summary>
     /// <remarks>
     /// <c>--arm</c> is an evaluation lever, so a forced semantic/hybrid run that cannot reach a serving artifact
@@ -2480,6 +2481,8 @@ public static class CliDispatch
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
         var contentSidecar = new ContentCorpusSidecar();
+        VectorSidecar vectors = VectorSidecar.FromEnvironment();
+        SemanticBrokerFacts semanticBroker = CliSemanticBrokerFacts(ctx, vectors.Mode);
 
         // A registry-targeted status (an --id or --path) renders the registered row's index facts.
         if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
@@ -2499,7 +2502,9 @@ public static class CliDispatch
                     row,
                     WorkspaceRegisteredFactsProfile.CliStatus,
                     sidecar,
-                    contentSidecar);
+                    contentSidecar,
+                    vectors,
+                    semanticBroker);
             outw.WriteLine(WorkspaceRender.Status(
                 selectedFacts,
                 TelemetrySummary.Empty,
@@ -2517,7 +2522,9 @@ public static class CliDispatch
                     currentRow,
                     WorkspaceRegisteredFactsProfile.CliStatus,
                     sidecar,
-                    contentSidecar);
+                    contentSidecar,
+                    vectors,
+                    semanticBroker);
             outw.WriteLine(WorkspaceRender.Status(
                 currentFacts,
                 TelemetrySummary.Empty,
@@ -2533,7 +2540,9 @@ public static class CliDispatch
             ctx,
             indexFacts,
             sidecar,
-            contentSidecar);
+            contentSidecar,
+            vectors,
+            semanticBroker);
         outw.WriteLine(WorkspaceRender.Status(
             facts,
             TelemetrySummary.Empty,
@@ -2553,6 +2562,8 @@ public static class CliDispatch
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
         SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
         var contentSidecar = new ContentCorpusSidecar();
+        VectorSidecar vectors = VectorSidecar.FromEnvironment();
+        SemanticBrokerFacts semanticBroker = CliSemanticBrokerFacts(ctx, vectors.Mode);
 
         if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
         {
@@ -2572,7 +2583,9 @@ public static class CliDispatch
                 row,
                 WorkspaceRegisteredFactsProfile.CliHealth,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                vectors,
+                semanticBroker);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -2591,7 +2604,9 @@ public static class CliDispatch
                 currentRow,
                 WorkspaceRegisteredFactsProfile.CliHealth,
                 sidecar,
-                contentSidecar);
+                contentSidecar,
+                vectors,
+                semanticBroker);
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -2609,7 +2624,9 @@ public static class CliDispatch
             ctx,
             indexFacts,
             sidecar,
-            contentSidecar);
+            contentSidecar,
+            vectors,
+            semanticBroker);
         outw.WriteLine(WorkspaceRender.Health(
             WorkspaceHealthFacts.Create(
                 localFacts,
@@ -2626,6 +2643,35 @@ public static class CliDispatch
     // never throws — absent/unreadable degrades to a status the render can show.
     private static MetricHistoryStatus CliHistoryStatus(string indexDbPath) =>
         MetricHistoryStore.ReadStatus(MetricSnapshotAggregates.HistoryDbPathFor(indexDbPath));
+
+    private static SemanticBrokerFacts CliSemanticBrokerFacts(
+        WorkspaceContext context,
+        SemanticMode mode)
+    {
+        if (mode is SemanticMode.Off)
+            return SemanticBrokerFacts.From(mode, null);
+
+        string millerHome = Path.GetDirectoryName(context.RegistryDbPath)
+            ?? throw new InvalidOperationException(
+                $"Registry path '{context.RegistryDbPath}' has no parent directory.");
+        var factory = new SharedSemanticBrokerConnectionFactory(
+            context.ToolsRoot,
+            millerHome,
+            SemanticEncoderSelection.Active);
+        try
+        {
+            SemanticBrokerSnapshot? snapshot = factory
+                .ObserveExistingAsync(TimeSpan.FromMilliseconds(500))
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+            return SemanticBrokerFacts.From(mode, snapshot);
+        }
+        finally
+        {
+            factory.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
 
     private static int WorkspaceLeader(
         WorkspaceContext ctx,
@@ -3407,7 +3453,7 @@ public static class CliDispatch
           search <query>     Find code by name, identifier, or phrase.
                              [--workspace-id SELECTOR] [--workspace DIR] [--mode auto|text|symbol|file|markers|content|source|external|web|all-text] [--regions KINDS] [--file-pattern GLOB] [--language LANG] [--arm auto|lexical|semantic|hybrid] [--limit N] [--json] [--include-tests|--exclude-tests]
                              --arm selects the retrieval policy for this call (symbol route only); absent or auto = normal policy routing.
-                             semantic|hybrid need MILLER_SEMANTIC=on and a serving vector artifact — they fail loudly rather than answering lexically.
+                             semantic retrieval is on by default; semantic|hybrid need a serving vector artifact and fail loudly rather than answering lexically.
           todos              CLI alias for search --mode markers over TODO/FIXME/HACK/XXX comment markers.
                              [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]
           content <op>       Import/search/read/shape/list/remove/export external and web text in content.db.

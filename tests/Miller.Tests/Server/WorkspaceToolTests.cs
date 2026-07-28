@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
@@ -77,7 +78,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Func<string, IDisposable?>? acquireLock = null,
         Func<string, long>? readLatestRevision = null,
         IDashboardLauncher? dashboardLauncher = null,
-        VectorSidecar? vectors = null)
+        VectorSidecar? vectors = null,
+        SemanticEmbeddingSessionBroker? semanticBroker = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -147,7 +149,7 @@ public sealed class WorkspaceToolTests : IDisposable
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
-            vectors ?? VectorSidecar.FromEnvironment(),
+            vectors ?? VectorSidecar.Disabled,
             openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
@@ -155,7 +157,8 @@ public sealed class WorkspaceToolTests : IDisposable
                 new Uri("http://127.0.0.1:4977/workspace?workspace_id=ws-tool-001"),
                 ProcessId: null,
                 Message: "already running")),
-            NullLogger<WorkspaceTool>.Instance);
+            NullLogger<WorkspaceTool>.Instance,
+            semanticBroker);
         return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry, bootstrap);
     }
 
@@ -441,6 +444,49 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void StatusAndHealth_PropagateTheLiveBrokerSnapshotWithoutCompactPidLeakage()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var snapshot = new SemanticBrokerSnapshot(
+            "ready",
+            "a5d53c7dd92b2107",
+            IsOwner: true,
+            OwnershipDegraded: false,
+            OwnershipDegradedReason: null,
+            ReconnectCount: 3,
+            SpawnAttempts: 1,
+            OwnerProcessId: 4242,
+            ModelId: "BAAI/bge-small-en-v1.5",
+            ModelSha256: "sha256-model",
+            Backend: "cuda",
+            Accelerated: true,
+            RetiredOwnerCount: 2,
+            ServerVersion: "1",
+            AcceleratorLeaseHeld: true);
+        var broker = new SemanticEmbeddingSessionBroker(
+            enabled: true,
+            sessionFactory: () => null,
+            snapshotProvider: () => snapshot);
+        Assert.False(broker.Available);
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            vectors: new VectorSidecar(SemanticMode.On),
+            semanticBroker: broker);
+
+        string compact = harness.Tool.Workspace(operation: "status");
+        using var status = JsonDocument.Parse(harness.Tool.Workspace(operation: "status", format: "json"));
+        using var health = JsonDocument.Parse(harness.Tool.Workspace(operation: "health", format: "json"));
+
+        Assert.Contains("semantic_broker: ready", compact, StringComparison.Ordinal);
+        Assert.Contains("endpoint: a5d53c7dd92b2107", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("4242", compact, StringComparison.Ordinal);
+        Assert.Equal(4242, status.RootElement.GetProperty("semantic_broker").GetProperty("owner_pid").GetInt32());
+        Assert.Equal("cuda", health.RootElement.GetProperty("semantic_broker").GetProperty("backend").GetString());
+    }
+
+    [Fact]
     public void Health_Markdown_RefusesAndPointsToTheExhaustiveCli()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);
@@ -460,7 +506,11 @@ public sealed class WorkspaceToolTests : IDisposable
         try
         {
             using var fx = CreateSynth(revision: 4, workspaceId: Ws);
-            var (tool, _, _, _) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+            WorkspaceTool tool = BuildHarness(
+                fx,
+                builtRevision: 4,
+                workspaceId: Ws,
+                vectors: VectorSidecar.FromEnvironment()).Tool;
 
             string status = tool.Workspace(operation: "status");
             string health = tool.Workspace(operation: "health");

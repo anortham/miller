@@ -6,7 +6,7 @@ build focused context, trace relationships, assess change impact, and check work
 an agent to grep and reread the repo by hand.
 
 Miller is the free local core in the Miller/Eros product split. It stays deterministic, lexical/structural,
-daemon-light, and local-first, with **optional local semantic retrieval** that is off-switchable and leaves
+daemon-light, and local-first, with **default-on local semantic retrieval** that is off-switchable and leaves
 lexical-only results byte-identical. Eros sits above it for fleet-level semantics: cross-workspace ranking,
 higher-level guidance, confidence/evidence views, and commercial orchestration.
 
@@ -734,10 +734,11 @@ Warnings are errors (`Directory.Build.props`).
 
 ## Known limits
 
-- Local semantic/vector retrieval is owned by Miller but **off by default**: the default retrieval path is
-  lexical and structural only, and `MILLER_SEMANTIC=off` (the default) is a permanent zero-work guarantee.
-  Optional local semantics is opt-in and experimental — set `MILLER_SEMANTIC=shadow` (build/measure, never
-  fuse) or `MILLER_SEMANTIC=on` (fuse the semantic arm into results); `MILLER_SEMANTIC_MODEL` selects the
+- Local semantic/vector retrieval is owned by Miller and **on by default**. Set
+  `MILLER_SEMANTIC=off` for the permanent zero-work path: no broker path derivation, model access, process,
+  accelerator probe, vector read/write, or semantic telemetry. `MILLER_SEMANTIC=shadow` builds and measures
+  without fusing; `MILLER_SEMANTIC=on` explicitly selects the default serving behavior.
+  `MILLER_SEMANTIC_MODEL` selects the
   embedding encoder (`bge-small-en-v1.5-f32` default — 134 MB, 384-dim; `qwen3-0.6b-f16` optional — 1.2 GB,
   512-dim, marginally stronger raw-semantic quality at ~8× the build time), downloaded with
   `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on uses
@@ -749,6 +750,9 @@ Warnings are errors (`Directory.Build.props`).
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md) and the
   program design is
   [`docs/plans/2026-07-19-miller-semantic-integration-design.md`](docs/plans/2026-07-19-miller-semantic-integration-design.md).
+  Concurrent Miller sessions using the same broker/protocol/model identity share one user-local broker and
+  one loaded model. A user-global accelerator lease allows at most one broker identity to own acceleration;
+  other identities use CPU, and accelerator resource exhaustion demotes the holder to CPU.
   Fleet-level semantics (cross-workspace ranking, embeddings-as-a-service) remain Eros-reserved.
 - Region search is explicit at query time and indexed by default: call
   `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_INDEX=0` to opt out, or

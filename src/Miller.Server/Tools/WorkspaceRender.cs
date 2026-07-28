@@ -57,7 +57,61 @@ public readonly record struct WorkspaceFacts(
     SearchSidecarFacts? SearchSidecar = null,
     ContentCorpusFacts? ContentCorpus = null,
     string? ArtifactId = null,
-    VectorSidecarFacts? Vectors = null);
+    VectorSidecarFacts? Vectors = null,
+    SemanticBrokerFacts? SemanticBroker = null);
+
+public sealed record SemanticBrokerFacts(
+    string State,
+    string? EndpointIdentity,
+    string? Role,
+    string ServerVersion,
+    string? ModelId,
+    string? ModelSha256,
+    string? Backend,
+    bool AcceleratorLeaseHeld,
+    int ReconnectCount,
+    int SpawnAttempts,
+    int RetiredOwnerCount,
+    bool OwnershipDegraded,
+    string? OwnershipDegradedReason,
+    string? BackendDegradedReason,
+    int? OwnerProcessId)
+{
+    public static SemanticBrokerFacts From(SemanticMode mode, SemanticBrokerSnapshot? snapshot)
+    {
+        if (mode == SemanticMode.Off)
+        {
+            return new SemanticBrokerFacts(
+                "off", null, null, SemanticEmbeddingSession.ProtocolVersion.ToString(CultureInfo.InvariantCulture),
+                null, null, null, false, 0, 0, 0, false, null, null, null);
+        }
+
+        if (snapshot is null)
+        {
+            return new SemanticBrokerFacts(
+                "not_started", null, null,
+                SemanticEmbeddingSession.ProtocolVersion.ToString(CultureInfo.InvariantCulture),
+                null, null, null, false, 0, 0, 0, false, null, null, null);
+        }
+
+        return new SemanticBrokerFacts(
+            snapshot.State,
+            snapshot.EndpointIdentity,
+            snapshot.IsOwner ? "owner" : "non_owner",
+            snapshot.ServerVersion,
+            snapshot.ModelId,
+            snapshot.ModelSha256,
+            snapshot.Backend,
+            snapshot.AcceleratorLeaseHeld,
+            snapshot.ReconnectCount,
+            snapshot.SpawnAttempts,
+            snapshot.RetiredOwnerCount,
+            snapshot.OwnershipDegraded,
+            snapshot.OwnershipDegradedReason,
+            snapshot.BackendDegradedReason,
+            snapshot.OwnerProcessId);
+    }
+}
 
 /// <summary>A registry-backed row rendered by <c>workspace list</c>.</summary>
 /// <remarks><see cref="LastSeenAt"/> drives recency ordering (current first, then most-recently-seen); it is
@@ -316,6 +370,8 @@ public static class WorkspaceRender
             sb.Append("content_db: ").Append(ContentCorpusLabel(corpus, facts.BuiltRevision)).Append('\n');
         if (VectorsLabel(facts.Vectors) is { } vectorsLabel)
             sb.Append("vectors: ").Append(vectorsLabel).Append('\n');
+        if (facts.SemanticBroker is { } broker)
+            sb.Append("semantic_broker: ").Append(SemanticBrokerLabel(broker)).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -366,6 +422,29 @@ public static class WorkspaceRender
             : $"unavailable ({facts.Reason})",
         _ => facts.State,
     };
+
+    private static string SemanticBrokerLabel(SemanticBrokerFacts facts)
+    {
+        var label = new StringBuilder(facts.State);
+        if (!string.IsNullOrWhiteSpace(facts.EndpointIdentity))
+            label.Append("  endpoint: ").Append(facts.EndpointIdentity);
+        if (!string.IsNullOrWhiteSpace(facts.Role))
+            label.Append("  role: ").Append(facts.Role);
+        label.Append("  server: ").Append(facts.ServerVersion);
+        if (!string.IsNullOrWhiteSpace(facts.ModelId))
+            label.Append("  model: ").Append(facts.ModelId);
+        if (!string.IsNullOrWhiteSpace(facts.Backend))
+            label.Append("  backend: ").Append(facts.Backend);
+        label.Append("  accelerator_lease: ").Append(facts.AcceleratorLeaseHeld ? "held" : "not_held")
+             .Append("  reconnects: ").Append(facts.ReconnectCount)
+             .Append("  spawns: ").Append(facts.SpawnAttempts)
+             .Append("  retired_owners: ").Append(facts.RetiredOwnerCount);
+        if (!string.IsNullOrWhiteSpace(facts.OwnershipDegradedReason))
+            label.Append("  ownership_degraded: ").Append(facts.OwnershipDegradedReason);
+        if (!string.IsNullOrWhiteSpace(facts.BackendDegradedReason))
+            label.Append("  backend_degraded: ").Append(facts.BackendDegradedReason);
+        return label.ToString();
+    }
 
     // Serving from a retained generation is still `ready`: which generation answers queries is a JSON fact. A
     // pending shadow rebuild — surfaced through the chunk cursor's hold reason, already in JSON — outranks the
@@ -513,6 +592,12 @@ public static class WorkspaceRender
             w.WritePropertyName("indexer_leader");
             WriteLeaderJson(w, facts, leader);
 
+            if (facts.SemanticBroker is { } broker)
+            {
+                w.WritePropertyName("semantic_broker");
+                WriteSemanticBrokerJson(w, broker, includeOwnerPid: true);
+            }
+
             w.WritePropertyName("index");
             w.WriteStartObject();
             w.WriteNumber("document_count", facts.DocumentCount);
@@ -544,6 +629,41 @@ public static class WorkspaceRender
             w.WriteEndObject();
         }
         return Utf8(buffer);
+    }
+
+    private static void WriteSemanticBrokerJson(
+        Utf8JsonWriter writer,
+        SemanticBrokerFacts facts,
+        bool includeOwnerPid)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("state", facts.State);
+        if (facts.EndpointIdentity is null) writer.WriteNull("endpoint_identity");
+        else writer.WriteString("endpoint_identity", facts.EndpointIdentity);
+        if (facts.Role is null) writer.WriteNull("role");
+        else writer.WriteString("role", facts.Role);
+        writer.WriteString("server_version", facts.ServerVersion);
+        if (facts.ModelId is null) writer.WriteNull("model_id");
+        else writer.WriteString("model_id", facts.ModelId);
+        if (facts.ModelSha256 is null) writer.WriteNull("model_sha256");
+        else writer.WriteString("model_sha256", facts.ModelSha256);
+        if (facts.Backend is null) writer.WriteNull("backend");
+        else writer.WriteString("backend", facts.Backend);
+        writer.WriteBoolean("accelerator_lease_held", facts.AcceleratorLeaseHeld);
+        writer.WriteNumber("reconnect_count", facts.ReconnectCount);
+        writer.WriteNumber("spawn_attempts", facts.SpawnAttempts);
+        writer.WriteNumber("retired_owner_count", facts.RetiredOwnerCount);
+        writer.WriteBoolean("ownership_degraded", facts.OwnershipDegraded);
+        if (facts.OwnershipDegradedReason is null) writer.WriteNull("ownership_degraded_reason");
+        else writer.WriteString("ownership_degraded_reason", facts.OwnershipDegradedReason);
+        if (facts.BackendDegradedReason is null) writer.WriteNull("backend_degraded_reason");
+        else writer.WriteString("backend_degraded_reason", facts.BackendDegradedReason);
+        if (includeOwnerPid)
+        {
+            if (facts.OwnerProcessId is { } ownerPid) writer.WriteNumber("owner_pid", ownerPid);
+            else writer.WriteNull("owner_pid");
+        }
+        writer.WriteEndObject();
     }
 
     private static void WriteSearchSidecarJson(Utf8JsonWriter w, SearchSidecarFacts? facts)
@@ -809,6 +929,8 @@ public static class WorkspaceRender
               .Append(HealthCompactValue(ContentCorpusLabel(corpus, status.BuiltRevision))).Append('\n');
         if (VectorsLabel(status.Vectors) is { } vectorsLabel)
             sb.Append("vectors: ").Append(HealthCompactValue(vectorsLabel)).Append('\n');
+        if (status.SemanticBroker is { } broker)
+            sb.Append("semantic_broker: ").Append(HealthCompactValue(SemanticBrokerLabel(broker))).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -974,6 +1096,12 @@ public static class WorkspaceRender
             w.WritePropertyName("indexer_leader");
             WriteLeaderJson(w, status, facts.Leader);
 
+            if (status.SemanticBroker is { } broker)
+            {
+                w.WritePropertyName("semantic_broker");
+                WriteSemanticBrokerJson(w, broker, includeOwnerPid: true);
+            }
+
             w.WritePropertyName("index");
             w.WriteStartObject();
             w.WriteNumber("document_count", status.DocumentCount);
@@ -1061,6 +1189,12 @@ public static class WorkspaceRender
             if (status.ServerVersion is null) writer.WriteNull("server_version");
             else writer.WriteString("server_version", status.ServerVersion);
             writer.WriteEndObject();
+
+            if (status.SemanticBroker is { } broker)
+            {
+                writer.WritePropertyName("semantic_broker");
+                WriteSemanticBrokerJson(writer, broker, includeOwnerPid: false);
+            }
 
             writer.WriteStartObject("index");
             writer.WriteNumber("document_count", status.DocumentCount);

@@ -37,6 +37,15 @@ public enum FakeSidecarFault
 
     /// <summary>Echoes a wrong <c>request_id</c>, the stream desync the consumer must never accept.</summary>
     RequestIdDesync,
+
+    /// <summary>Reports acceleration until the first embed, then reports a permanent CPU demotion.</summary>
+    AcceleratorDemotion,
+
+    /// <summary>Reports acceleration, then corrupts the optional post-embed health response.</summary>
+    AcceleratorRefreshFailure,
+
+    /// <summary>Reports acceleration, then delays the optional post-embed health response.</summary>
+    AcceleratorRefreshDelay,
 }
 
 /// <summary>
@@ -189,6 +198,7 @@ public static class FakeSemanticSidecar
         SemanticEncoderPin? encoder = null)
     {
         SemanticEncoderPin pin = encoder ?? MillerSemanticContract.DefaultEncoder;
+        bool acceleratorDemoted = false;
 
         while (input.ReadLine() is { } line)
         {
@@ -268,7 +278,11 @@ public static class FakeSemanticSidecar
 
                 string response = method switch
                 {
-                    "health" => HealthResponse(requestId, pin, fault),
+                    "health" when fault == FakeSidecarFault.AcceleratorRefreshFailure && acceleratorDemoted =>
+                        "not json",
+                    "health" when fault == FakeSidecarFault.AcceleratorRefreshDelay && acceleratorDemoted =>
+                        DelayedHealthResponse(requestId, pin, fault),
+                    "health" => HealthResponse(requestId, pin, fault, acceleratorDemoted),
                     "embed_query" => EmbedQueryResponse(requestId, pin, parameters, fault),
                     "embed_batch" => EmbedBatchResponse(requestId, pin, parameters, fault, poisonIndices),
                     "shutdown" => ResultEnvelope(requestId, "{\"stopping\":true}"),
@@ -280,6 +294,13 @@ public static class FakeSemanticSidecar
                         StringComparison.Ordinal);
 
                 Write(output, response);
+                if ((fault is FakeSidecarFault.AcceleratorDemotion
+                            or FakeSidecarFault.AcceleratorRefreshFailure
+                            or FakeSidecarFault.AcceleratorRefreshDelay)
+                    && method is "embed_query" or "embed_batch")
+                {
+                    acceleratorDemoted = true;
+                }
 
                 if (method == "shutdown")
                     return;
@@ -287,7 +308,11 @@ public static class FakeSemanticSidecar
         }
     }
 
-    private static string HealthResponse(string requestId, SemanticEncoderPin pin, FakeSidecarFault fault)
+    private static string HealthResponse(
+        string requestId,
+        SemanticEncoderPin pin,
+        FakeSidecarFault fault,
+        bool acceleratorDemoted)
     {
         if (fault == FakeSidecarFault.ModelNotPrepared)
             return ResultEnvelope(requestId, "{\"ready\":false,\"degraded_reason\":\"model_not_prepared\"}");
@@ -303,10 +328,18 @@ public static class FakeSemanticSidecar
             writer.WriteString("pooling", pin.Pooling);
             writer.WriteString("normalization", "l2");
             writer.WriteString("runtime", "fake");
-            writer.WriteString("device", "cpu");
-            writer.WriteString("resolved_backend", "cpu");
-            writer.WriteBoolean("accelerated", false);
-            writer.WriteNull("degraded_reason");
+            bool accelerated = (fault is FakeSidecarFault.AcceleratorDemotion
+                    or FakeSidecarFault.AcceleratorRefreshFailure
+                    or FakeSidecarFault.AcceleratorRefreshDelay)
+                && !acceleratorDemoted;
+            writer.WriteString("device", accelerated ? "cuda" : "cpu");
+            writer.WriteString("resolved_backend", accelerated ? "cuda" : "cpu");
+            writer.WriteBoolean("accelerated", accelerated);
+            writer.WriteBoolean("accelerator_lease_held", accelerated);
+            if (fault == FakeSidecarFault.AcceleratorDemotion && acceleratorDemoted)
+                writer.WriteString("degraded_reason", "accelerator resource exhausted; permanently demoted to CPU");
+            else
+                writer.WriteNull("degraded_reason");
             writer.WriteStartObject("capabilities");
             foreach (string backend in (string[])["cpu", "cuda", "directml", "mps", "metal", "vulkan"])
             {
@@ -317,13 +350,25 @@ public static class FakeSemanticSidecar
 
             writer.WriteEndObject();
             writer.WriteStartObject("load_policy");
-            writer.WriteString("requested_device_backend", "cpu");
-            writer.WriteString("resolved_device_backend", "cpu");
-            writer.WriteBoolean("accelerated", false);
-            writer.WriteNull("degraded_reason");
+            writer.WriteString("requested_device_backend", accelerated ? "cuda" : "cpu");
+            writer.WriteString("resolved_device_backend", accelerated ? "cuda" : "cpu");
+            writer.WriteBoolean("accelerated", accelerated);
+            if (fault == FakeSidecarFault.AcceleratorDemotion && acceleratorDemoted)
+                writer.WriteString("degraded_reason", "accelerator resource exhausted; permanently demoted to CPU");
+            else
+                writer.WriteNull("degraded_reason");
             writer.WriteEndObject();
             writer.WriteEndObject();
         }));
+    }
+
+    private static string DelayedHealthResponse(
+        string requestId,
+        SemanticEncoderPin pin,
+        FakeSidecarFault fault)
+    {
+        Thread.Sleep(250);
+        return HealthResponse(requestId, pin, fault, acceleratorDemoted: true);
     }
 
     private static string EmbedQueryResponse(

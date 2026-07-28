@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Semantic;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
@@ -31,6 +32,7 @@ public sealed class WorkspaceTool
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar = new();
     private readonly VectorSidecar _vectors;
+    private readonly SemanticEmbeddingSessionBroker? _semanticBroker;
     private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
@@ -51,7 +53,8 @@ public sealed class WorkspaceTool
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
         VectorSidecar vectors,
-        ILogger<WorkspaceTool> logger)
+        ILogger<WorkspaceTool> logger,
+        SemanticEmbeddingSessionBroker? semanticBroker = null)
         : this(
             holder,
             workspace,
@@ -68,7 +71,8 @@ public sealed class WorkspaceTool
             (root, db, force) => runner.Scan(root, db, force),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             new DashboardCliLauncher(),
-            logger)
+            logger,
+            semanticBroker)
     {
     }
 
@@ -88,7 +92,8 @@ public sealed class WorkspaceTool
         Func<string, string, bool, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
         IDashboardLauncher dashboardLauncher,
-        ILogger<WorkspaceTool> logger)
+        ILogger<WorkspaceTool> logger,
+        SemanticEmbeddingSessionBroker? semanticBroker = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(workspace);
@@ -117,6 +122,7 @@ public sealed class WorkspaceTool
         _crossWorkspaceRefresh = crossWorkspaceRefresh;
         _sidecar = sidecar;
         _vectors = vectors;
+        _semanticBroker = semanticBroker;
         _scanForOpen = scanForOpen;
         _acquireWriterLock = acquireWriterLock;
         _dashboardLauncher = dashboardLauncher;
@@ -508,7 +514,9 @@ public sealed class WorkspaceTool
             row,
             WorkspaceRegisteredFactsProfile.McpStatus,
             _sidecar,
-            _contentSidecar);
+            _contentSidecar,
+            _vectors,
+            CurrentSemanticBrokerFacts());
         LeaderHealthFacts leader = ReadLeaderFacts(row.IndexDbPath, ownWorkspace: false);
         return StatusResult(
             WorkspaceRender.Status(
@@ -561,7 +569,9 @@ public sealed class WorkspaceTool
             row,
             WorkspaceRegisteredFactsProfile.McpHealth,
             _sidecar,
-            _contentSidecar);
+            _contentSidecar,
+            _vectors,
+            CurrentSemanticBrokerFacts());
         WorkspaceExtractionHealthFacts extraction;
         if (statusFacts.FreshnessStatus is "missing_index" or "unreadable_index")
         {
@@ -581,7 +591,9 @@ public sealed class WorkspaceTool
                     WorkspaceRegisteredFactsProfile.McpHealth,
                     _sidecar,
                     _contentSidecar,
-                    ex);
+                    ex,
+                    _vectors,
+                    CurrentSemanticBrokerFacts());
                 extraction = UnavailableExtraction(statusFacts.WarningText ?? ex.Message);
             }
         }
@@ -614,7 +626,9 @@ public sealed class WorkspaceTool
             row,
             WorkspaceRegisteredFactsProfile.McpHealth,
             _sidecar,
-            _contentSidecar);
+            _contentSidecar,
+            _vectors,
+            CurrentSemanticBrokerFacts());
         WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
             statusFacts,
             _ledger.DbPath,
@@ -812,8 +826,12 @@ public sealed class WorkspaceTool
             ContentCorpus: _contentSidecar.Inspect(_workspace.ExtractDbPath, builtRevision),
             Vectors: WorkspaceFactsAssembler.WithPendingFiles(
                 _vectors.Inspect(_workspace.WorkspaceRoot),
-                _workspace.ExtractDbPath));
+                _workspace.ExtractDbPath),
+            SemanticBroker: CurrentSemanticBrokerFacts());
     }
+
+    private SemanticBrokerFacts CurrentSemanticBrokerFacts() =>
+        SemanticBrokerFacts.From(_vectors.Mode, _semanticBroker?.BrokerSnapshot);
 
     private (string Status, string? Warning) CurrentIndexDiskStatus()
     {

@@ -20,7 +20,8 @@ internal static class WorkspaceFactsAssembler
         WorkspaceRegisteredFactsProfile profile,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
-        VectorSidecar? vectors = null)
+        VectorSidecar? vectors = null,
+        SemanticBrokerFacts? semanticBroker = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
@@ -51,15 +52,18 @@ internal static class WorkspaceFactsAssembler
                 ServerProcessId: Environment.ProcessId,
                 SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
                 ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
-                Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
+                Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
+                SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null));
         }
         catch (FileNotFoundException)
         {
-            return MissingIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision);
+            return MissingIndexFacts(
+                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, semanticBroker);
         }
         catch (Exception ex) when (IsHealthProfile(profile) && IsIndexReadException(ex))
         {
-            return UnreadableIndexFacts(registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex);
+            return UnreadableIndexFacts(
+                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex, semanticBroker);
         }
     }
 
@@ -68,12 +72,14 @@ internal static class WorkspaceFactsAssembler
         WorkspaceIndexFacts indexFacts,
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
-        VectorSidecar? vectors = null)
+        VectorSidecar? vectors = null,
+        SemanticBrokerFacts? semanticBroker = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(sidecar);
         ArgumentNullException.ThrowIfNull(contentSidecar);
 
+        VectorSidecar resolvedVectors = vectors ?? VectorSidecar.FromEnvironment();
         return new WorkspaceFacts(
             Root: context.WorkspaceRoot,
             WorkspaceId: null,
@@ -92,8 +98,9 @@ internal static class WorkspaceFactsAssembler
             SearchSidecar: sidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
             ContentCorpus: contentSidecar.Inspect(context.ExtractDbPath, expectedRevision: 0),
             Vectors: WithPendingFiles(
-                (vectors ?? VectorSidecar.FromEnvironment()).Inspect(context.WorkspaceRoot),
-                context.ExtractDbPath));
+                resolvedVectors.Inspect(context.WorkspaceRoot),
+                context.ExtractDbPath),
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -103,7 +110,8 @@ internal static class WorkspaceFactsAssembler
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
         Exception exception,
-        VectorSidecar? vectors = null)
+        VectorSidecar? vectors = null,
+        SemanticBrokerFacts? semanticBroker = null)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (!IsHealthProfile(profile))
@@ -117,7 +125,8 @@ internal static class WorkspaceFactsAssembler
             contentSidecar,
             vectors ?? VectorSidecar.FromEnvironment(),
             row.LastRevision ?? 0,
-            exception);
+            exception,
+            semanticBroker);
     }
 
     public static IReadOnlyList<WorkspaceListEntry> ToListEntries(
@@ -200,7 +209,8 @@ internal static class WorkspaceFactsAssembler
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
         VectorSidecar vectors,
-        long revision)
+        long revision,
+        SemanticBrokerFacts? semanticBroker)
     {
         string warning = UsesMcpWarning(profile)
             ? $"Workspace index DB not found: {row.IndexDbPath}"
@@ -227,7 +237,8 @@ internal static class WorkspaceFactsAssembler
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
-            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
+            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
@@ -238,7 +249,8 @@ internal static class WorkspaceFactsAssembler
         ContentCorpusSidecar contentSidecar,
         VectorSidecar vectors,
         long revision,
-        Exception exception)
+        Exception exception,
+        SemanticBrokerFacts? semanticBroker)
     {
         string warning = $"could not read workspace index DB '{row.IndexDbPath}': {exception.Message}";
         if (profile == WorkspaceRegisteredFactsProfile.McpHealth)
@@ -262,7 +274,8 @@ internal static class WorkspaceFactsAssembler
             ServerProcessId: Environment.ProcessId,
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
-            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath));
+            Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null));
     }
 
     /// <summary>

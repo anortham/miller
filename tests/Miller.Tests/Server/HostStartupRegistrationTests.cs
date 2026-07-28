@@ -91,8 +91,12 @@ public sealed class HostStartupRegistrationTests : IDisposable
 
         using var provider = services.BuildServiceProvider();
         _ = provider.GetServices<IHostedService>().ToArray();
+        SemanticEmbeddingSessionBroker broker =
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>();
 
         Assert.Null(provider.GetService<SharedSemanticBrokerConnectionFactory>());
+        Assert.Null(broker.BrokerSnapshot);
+        Assert.Equal(SemanticSessionState.NotStarted, broker.State);
     }
 
     [Fact]
@@ -109,7 +113,11 @@ public sealed class HostStartupRegistrationTests : IDisposable
 
         using var provider = services.BuildServiceProvider();
         _ = provider.GetServices<IHostedService>().ToArray();
-        Assert.NotNull(provider.GetRequiredService<SemanticEmbeddingSessionBroker>());
+        SemanticEmbeddingSessionBroker broker =
+            provider.GetRequiredService<SemanticEmbeddingSessionBroker>();
+
+        Assert.Equal(SemanticSessionState.NotStarted, broker.State);
+        Assert.Null(broker.BrokerSnapshot);
     }
 
     [Fact]

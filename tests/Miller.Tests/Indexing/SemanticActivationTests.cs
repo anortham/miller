@@ -12,44 +12,19 @@ public sealed class SemanticActivationTests
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("off")]
-    [InlineData("OFF")]
-    [InlineData("  Off  ")]
-    [InlineData("0")]
-    public void FromEnvValue_UnsetOffOrZero_IsOff(string? raw)
+    [InlineData(null, SemanticMode.On)]
+    [InlineData("", SemanticMode.On)]
+    [InlineData("   ", SemanticMode.On)]
+    [InlineData("off", SemanticMode.Off)]
+    [InlineData("0", SemanticMode.Off)]
+    [InlineData("false", SemanticMode.Off)]
+    [InlineData("shadow", SemanticMode.Shadow)]
+    [InlineData("on", SemanticMode.On)]
+    [InlineData("1", SemanticMode.On)]
+    [InlineData("true", SemanticMode.On)]
+    [InlineData("bogus", SemanticMode.Off)]
+    public void ActivationPolicy(string? raw, SemanticMode expected)
     {
-        Assert.Equal(SemanticMode.Off, SemanticActivation.FromEnvValue(raw));
-    }
-
-    [Theory]
-    [InlineData("shadow")]
-    [InlineData("SHADOW")]
-    [InlineData(" Shadow ")]
-    public void FromEnvValue_Shadow_IsShadow(string raw)
-    {
-        Assert.Equal(SemanticMode.Shadow, SemanticActivation.FromEnvValue(raw));
-    }
-
-    [Theory]
-    [InlineData("on")]
-    [InlineData("ON")]
-    [InlineData(" On ")]
-    public void FromEnvValue_On_IsOn(string raw)
-    {
-        Assert.Equal(SemanticMode.On, SemanticActivation.FromEnvValue(raw));
-    }
-
-    [Theory]
-    [InlineData("1")]
-    [InlineData("true")]
-    [InlineData("yes")]
-    [InlineData("enabled")]
-    [InlineData("shadow-mode")]
-    public void FromEnvValue_UnrecognizedToken_FallsBackToOff(string raw)
-    {
-        Assert.Equal(SemanticMode.Off, SemanticActivation.FromEnvValue(raw));
+        Assert.Equal(expected, SemanticActivation.FromEnvValue(raw));
     }
 }

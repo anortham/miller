@@ -23,9 +23,9 @@ public sealed class SemanticOffGuaranteeTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null)]
     [InlineData("off")]
     [InlineData("0")]
+    [InlineData("false")]
     public void OffModes_NeverAskTheFilesystemAnything(string? envValue)
     {
         var probe = new RecordingProbe();

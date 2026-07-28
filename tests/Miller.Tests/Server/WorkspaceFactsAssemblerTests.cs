@@ -240,7 +240,7 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     }
 
     [Fact]
-    public void SemanticOff_FactsReportDisabledAndRenderNowhere()
+    public void SemanticOff_FactsReportDisabledVectorsAndAnOffBrokerWithoutDerivingAnEndpoint()
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "workspaces.db"));
         WorkspaceRegistryRow row = registry.UpsertSeen(
@@ -259,9 +259,19 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             VectorSidecar.Disabled);
 
         Assert.Equal("disabled", facts.Vectors!.State);
+        Assert.Equal("off", facts.SemanticBroker!.State);
+        Assert.Null(facts.SemanticBroker.EndpointIdentity);
         Assert.DoesNotContain("vectors:", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false), StringComparison.Ordinal);
+        Assert.Contains(
+            "semantic_broker: off",
+            WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false),
+            StringComparison.Ordinal);
         using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
         Assert.False(doc.RootElement.GetProperty("index").TryGetProperty("vectors", out _));
+        JsonElement broker = doc.RootElement.GetProperty("semantic_broker");
+        Assert.Equal("off", broker.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, broker.GetProperty("endpoint_identity").ValueKind);
+        Assert.Equal(JsonValueKind.Null, broker.GetProperty("owner_pid").ValueKind);
     }
 
     [Fact]
@@ -284,7 +294,12 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
             new VectorSidecar(SemanticMode.On));
 
         Assert.Equal("unavailable", facts.Vectors!.State);
+        Assert.Equal("not_started", facts.SemanticBroker!.State);
         Assert.Contains("vectors: unavailable (", WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false), StringComparison.Ordinal);
+        Assert.Contains(
+            "semantic_broker: not_started",
+            WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false),
+            StringComparison.Ordinal);
 
         using var doc = JsonDocument.Parse(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
         JsonElement vectors = doc.RootElement.GetProperty("index").GetProperty("vectors");

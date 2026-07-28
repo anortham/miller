@@ -78,6 +78,100 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public async Task AcceleratedEmbed_RefreshesSnapshotWhenTheBrokerDemotesToCpu()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.InProcessLauncher(FakeSidecarFault.AcceleratorDemotion));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+
+        SemanticEmbedOutcome outcome =
+            await session.EmbedQueryAsync("workspace refresh", TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.FailureReason);
+        Assert.Equal(2, factory.Handshakes.Count);
+        Assert.True(factory.Handshakes[0].Accelerated);
+        Assert.True(factory.Handshakes[0].AcceleratorLeaseHeld);
+        Assert.False(factory.Handshakes[1].Accelerated);
+        Assert.False(factory.Handshakes[1].AcceleratorLeaseHeld);
+        Assert.Equal("cpu", factory.Handshakes[1].ResolvedBackend);
+        Assert.Equal(
+            "accelerator resource exhausted; permanently demoted to CPU",
+            factory.Handshakes[1].DegradedReason);
+        Assert.Same(factory.Handshakes[1], session.Handshake);
+    }
+
+    [Fact]
+    public async Task AcceleratedEmbed_RefreshFailureReconnectsOnceWithoutChargingTheCircuit()
+    {
+        await using var session = new SemanticEmbeddingSession(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.AcceleratorRefreshFailure,
+                FakeSidecarFault.None),
+            FastOptions);
+
+        SemanticEmbedOutcome first =
+            await session.EmbedQueryAsync("first", TestContext.Current.CancellationToken);
+        SemanticEmbedOutcome second =
+            await session.EmbedQueryAsync("second", TestContext.Current.CancellationToken);
+
+        Assert.True(first.Succeeded, first.FailureReason);
+        Assert.True(second.Succeeded, second.FailureReason);
+        Assert.Equal(1, session.RestartCount);
+        Assert.Equal(SemanticSessionState.Ready, session.State);
+    }
+
+    [Fact]
+    public async Task AcceleratedReconnect_RefreshesALaterCpuDemotion()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.AcceleratorRefreshFailure,
+                FakeSidecarFault.AcceleratorDemotion));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+
+        SemanticEmbedOutcome first =
+            await session.EmbedQueryAsync("first", TestContext.Current.CancellationToken);
+        SemanticEmbedOutcome second =
+            await session.EmbedQueryAsync("second", TestContext.Current.CancellationToken);
+
+        Assert.True(first.Succeeded, first.FailureReason);
+        Assert.True(second.Succeeded, second.FailureReason);
+        SemanticEncoderHandshake handshake = Assert.IsType<SemanticEncoderHandshake>(session.Handshake);
+        Assert.Equal("cpu", handshake.ResolvedBackend);
+        Assert.False(handshake.Accelerated);
+        Assert.False(handshake.AcceleratorLeaseHeld);
+        Assert.Equal(
+            "accelerator resource exhausted; permanently demoted to CPU",
+            handshake.DegradedReason);
+    }
+
+    [Fact]
+    public async Task CanceledRuntimeHealth_AbortsTheStreamAndTheNextEmbedReconnects()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.SequencedLauncher(
+                FakeSidecarFault.AcceleratorRefreshDelay,
+                FakeSidecarFault.None));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        SemanticEmbedOutcome first =
+            await session.EmbedQueryAsync("first", cancellation.Token);
+
+        Assert.True(first.Succeeded, first.FailureReason);
+        Assert.Equal(1, session.RestartCount);
+        Assert.Equal(SemanticSessionState.Restarting, session.State);
+
+        SemanticEmbedOutcome second =
+            await session.EmbedQueryAsync("second", TestContext.Current.CancellationToken);
+
+        Assert.True(second.Succeeded, second.FailureReason);
+        Assert.Equal(2, factory.ConnectCount);
+        Assert.Equal(1, session.RestartCount);
+        Assert.Equal(SemanticSessionState.Ready, session.State);
+    }
+
+    [Fact]
     public async Task EmptyBatch_IsNotAnError()
     {
         await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
@@ -423,11 +517,13 @@ public sealed class SemanticEmbeddingSessionTests
         Math.Sqrt(vector.Sum(component => (double)component * component));
 
     private sealed class RecordingConnectionFactory(ISemanticSidecarConnectionFactory inner)
-        : ISemanticSidecarConnectionFactory
+        : ISemanticSidecarConnectionFactory, ISemanticBrokerSnapshotRecorder
     {
         public List<RecordingConnection> Connections { get; } = [];
 
         public List<string> Methods { get; } = [];
+
+        public List<SemanticEncoderHandshake> Handshakes { get; } = [];
 
         public int ConnectCount { get; private set; }
 
@@ -447,6 +543,8 @@ public sealed class SemanticEmbeddingSessionTests
             Disposed = true;
             await inner.DisposeAsync();
         }
+
+        public void RecordHandshake(SemanticEncoderHandshake handshake) => Handshakes.Add(handshake);
     }
 
     private sealed class RecordingConnection : ISemanticSidecarConnection

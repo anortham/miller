@@ -173,6 +173,14 @@ static async Task ServeAsync(Stream stream, CancellationToken cancellationToken)
                 using JsonDocument request = JsonDocument.Parse(line);
                 JsonElement id = request.RootElement.GetProperty("request_id").Clone();
                 string method = request.RootElement.GetProperty("method").GetString()!;
+                if (method == "health"
+                    && int.TryParse(
+                        Environment.GetEnvironmentVariable("MILLER_FAKE_SHARED_BROKER_HEALTH_DELAY_MS"),
+                        out int healthDelay)
+                    && healthDelay > 0)
+                {
+                    await Task.Delay(healthDelay, cancellationToken);
+                }
                 object result = method == "health" ? Health() : Embedding();
                 await writer.WriteLineAsync(JsonSerializer.Serialize(new
                 {
@@ -206,7 +214,8 @@ static object Health()
         normalization = "l2",
         resolved_backend = "cpu",
         accelerated = false,
-        degraded_reason = (string?)null,
+        degraded_reason = Environment.GetEnvironmentVariable(
+            "MILLER_FAKE_SHARED_BROKER_DEGRADED_REASON"),
     };
 }
 

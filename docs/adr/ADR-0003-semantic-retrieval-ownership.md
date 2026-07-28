@@ -40,12 +40,14 @@ not have.
 
 ## Decision
 
-**Miller owns optional local semantic retrieval; Eros owns fleet-level semantics: cross-workspace
+**Miller owns default-on, off-switchable local semantic retrieval; Eros owns fleet-level semantics: cross-workspace
 ranking, guidance/confidence views, embeddings-as-a-service orchestration.**
 
 Concretely, for Miller:
 
-- Semantic retrieval is **local, optional, and off-switchable**. `MILLER_SEMANTIC=off` is a
+- Semantic retrieval is **local, on by default, and off-switchable**. An unset or blank
+  `MILLER_SEMANTIC` selects `on`; `on|1|true` selects `on`, `shadow` selects non-serving measurement,
+  and `off|0|false` selects `off`. Unknown values fail closed to `off`. `MILLER_SEMANTIC=off` is a
   permanent guarantee — no model download, no child process, no `vectors.db` writes, no GPU probe,
   zero added latency.
 - **Lexical parity is preserved.** The lexical-only path stays byte-identical to today. Semantic
@@ -88,16 +90,17 @@ deterministic-signals absorption did.
 
 ### Other consequences
 
-- Miller is no longer describable as "embedding-free". It is **embedding-optional**: deterministic
-  and lexical by default in behavior and byte-identical when semantic is off, with a semantic arm
+- Miller is no longer describable as "embedding-free". It is **embedding-capable by default**:
+  deterministic and byte-identical to the lexical path when semantic is off, with a semantic arm
   that fails visibly rather than silently.
 - Miller gains a second pinned binary dependency and its failure modes (missing, stale, corrupt,
   wrong-fingerprint vector artifacts). All of them degrade to lexical with the reason surfaced in
   `workspace status` / `health` and telemetry — the same fail-visible discipline as the search
   sidecar.
-- Concurrent Miller sessions share one service broker for the same frozen
+- Concurrent Miller sessions share one service broker and one loaded model for the same frozen
   broker-contract/protocol/model identity. A user-global accelerator lease prevents multiple
-  model identities from overcommitting the GPU; non-holders use CPU and proven runtime resource
+  model identities from overcommitting the GPU: at most one broker identity owns acceleration,
+  non-holders use CPU, and proven runtime resource
   exhaustion demotes the accelerated broker to CPU. Broker unavailability remains fail-open to
   lexical retrieval.
 - Model weights are **not** shipped in release archives. Acquisition is an explicit prefetch verb
@@ -127,7 +130,7 @@ deterministic-signals absorption did.
   requires a Julie compatibility check with that owner before it ships. Additive,
   backward-compatible changes do not.
 - **Do not read this ADR as "Miller now owns semantics."** It authorizes local, single-workspace,
-  optional semantic retrieval. Fleet ranking, guidance/confidence views, suppression persistence,
+  default-on and off-switchable semantic retrieval. Fleet ranking, guidance/confidence views, suppression persistence,
   and embeddings-as-a-service stay reserved (see the inventory above).
 - **`MILLER_SEMANTIC=off` is a guarantee, not a default-tuning knob.** If a change makes `off` do
   any work — probe a GPU, touch a model cache, add a millisecond — the change is wrong, not the

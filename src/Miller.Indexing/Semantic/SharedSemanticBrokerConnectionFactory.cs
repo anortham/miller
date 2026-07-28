@@ -10,7 +10,7 @@ public sealed record SemanticBrokerSnapshot(
     string EndpointIdentity,
     bool IsOwner,
     bool OwnershipDegraded,
-    string? DegradedReason,
+    string? OwnershipDegradedReason,
     int ReconnectCount,
     int SpawnAttempts,
     int? OwnerProcessId,
@@ -18,7 +18,10 @@ public sealed record SemanticBrokerSnapshot(
     string? ModelSha256 = null,
     string? Backend = null,
     bool Accelerated = false,
-    int RetiredOwnerCount = 0);
+    int RetiredOwnerCount = 0,
+    string ServerVersion = "1",
+    bool AcceleratorLeaseHeld = false,
+    string? BackendDegradedReason = null);
 
 public sealed class SharedSemanticBrokerConnectionFactory :
     ISemanticSidecarConnectionFactory,
@@ -32,12 +35,15 @@ public sealed class SharedSemanticBrokerConnectionFactory :
     private readonly object _sync = new();
     private readonly string _executable;
     private readonly SemanticBrokerEndpoint _endpoint;
+    private readonly SemanticEncoderPin _pin;
     private readonly IReadOnlyDictionary<string, string?> _environment;
     private readonly TimeSpan _directConnectTimeout;
     private readonly TimeSpan _initializationTimeout;
     private readonly TimeSpan _pollInterval;
     private readonly bool _requireWindowsJob;
     private readonly Func<Process, WindowsBrokerJobAttachment> _attachWindowsJob;
+    private readonly Action? _passiveConnectionAccepted;
+    private readonly Action? _connectionDisposed;
     private readonly SemaphoreSlim _spawnGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly HashSet<BrokerConnection> _connections = [];
@@ -79,7 +85,9 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         TimeSpan initializationTimeout,
         TimeSpan pollInterval,
         bool requireWindowsJob,
-        Func<Process, WindowsBrokerJobAttachment>? attachWindowsJob)
+        Func<Process, WindowsBrokerJobAttachment>? attachWindowsJob,
+        Action? passiveConnectionAccepted = null,
+        Action? connectionDisposed = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executable);
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
@@ -88,12 +96,15 @@ public sealed class SharedSemanticBrokerConnectionFactory :
 
         _executable = executable;
         _endpoint = SemanticBrokerEndpoint.Create(millerHome, pin);
+        _pin = pin;
         _environment = environment ?? new Dictionary<string, string?>();
         _directConnectTimeout = directConnectTimeout;
         _initializationTimeout = initializationTimeout;
         _pollInterval = pollInterval;
         _requireWindowsJob = requireWindowsJob;
         _attachWindowsJob = attachWindowsJob ?? WindowsBrokerJob.Attach;
+        _passiveConnectionAccepted = passiveConnectionAccepted;
+        _connectionDisposed = connectionDisposed;
         _snapshot = new SemanticBrokerSnapshot(
             "disconnected",
             _endpoint.Identity,
@@ -140,6 +151,52 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         finally
         {
             ExitConnect();
+        }
+    }
+
+    public async ValueTask<SemanticBrokerSnapshot?> ObserveExistingAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        ThrowIfDisposed();
+
+        using var observation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        observation.CancelAfter(timeout);
+        BrokerConnection? connection;
+        try
+        {
+            connection = await TryConnectAsync(timeout, observation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        if (connection is null)
+            return null;
+
+        await using var passiveFactory = new PassiveConnectionFactory(connection, this);
+        _passiveConnectionAccepted?.Invoke();
+        await using var session = new SemanticEmbeddingSession(
+            passiveFactory,
+            new SemanticSessionOptions
+            {
+                InitTimeout = timeout,
+                RequestTimeout = timeout,
+                ShutdownTimeout = timeout,
+            },
+            _pin);
+        try
+        {
+            SemanticEncoderHandshake? handshake =
+                await session.EnsureStartedAsync(observation.Token).ConfigureAwait(false);
+            return handshake is null ? null : Snapshot;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return null;
         }
     }
 
@@ -283,6 +340,8 @@ public sealed class SharedSemanticBrokerConnectionFactory :
                 ModelSha256 = handshake.Pin.ModelSha256,
                 Backend = handshake.ResolvedBackend,
                 Accelerated = handshake.Accelerated,
+                AcceleratorLeaseHeld = handshake.AcceleratorLeaseHeld,
+                BackendDegradedReason = handshake.DegradedReason,
             };
         }
     }
@@ -346,7 +405,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
                     OwnerProcessId = process.Id,
                     SpawnAttempts = _snapshot.SpawnAttempts + 1,
                     OwnershipDegraded = _requireWindowsJob && !attachment.IsAttached,
-                    DegradedReason = attachment.FailureReason,
+                    OwnershipDegradedReason = attachment.FailureReason,
                 };
             }
         }
@@ -500,6 +559,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         {
             _connections.Remove(connection);
         }
+        _connectionDisposed?.Invoke();
     }
 
     private static async Task DrainAsync(StreamReader reader)
@@ -554,6 +614,32 @@ public sealed class SharedSemanticBrokerConnectionFactory :
             TaskCreationOptions.RunContinuationsAsynchronously);
         completion.SetResult(true);
         return completion;
+    }
+
+    private sealed class PassiveConnectionFactory(
+        BrokerConnection connection,
+        ISemanticBrokerSnapshotRecorder recorder)
+        : ISemanticSidecarConnectionFactory, ISemanticBrokerSnapshotRecorder
+    {
+        private BrokerConnection? _connection = connection;
+
+        public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BrokerConnection? accepted = Interlocked.Exchange(ref _connection, null);
+            if (accepted is null)
+                throw new InvalidOperationException("The passive broker connection has already been consumed.");
+            return ValueTask.FromResult<ISemanticSidecarConnection>(accepted);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            BrokerConnection? unclaimed = Interlocked.Exchange(ref _connection, null);
+            if (unclaimed is not null)
+                await unclaimed.DisposeAsync().ConfigureAwait(false);
+        }
+
+        public void RecordHandshake(SemanticEncoderHandshake handshake) => recorder.RecordHandshake(handshake);
     }
 
     private sealed class BrokerConnection : ISemanticSidecarConnection

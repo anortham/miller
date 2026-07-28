@@ -246,7 +246,9 @@ internal static class BrokerProbe
             dims = handshake?.Dims,
             backend = handshake?.ResolvedBackend ?? snapshot.Backend,
             accelerated = handshake?.Accelerated ?? snapshot.Accelerated,
-            degradedReason = handshake?.DegradedReason ?? snapshot.DegradedReason,
+            degradedReason = handshake?.DegradedReason
+                ?? snapshot.BackendDegradedReason
+                ?? snapshot.OwnershipDegradedReason,
             endpointIdentity = snapshot.EndpointIdentity,
             brokerState = snapshot.State,
             isOwner = snapshot.IsOwner,
