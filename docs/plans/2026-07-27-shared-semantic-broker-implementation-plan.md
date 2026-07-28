@@ -483,7 +483,7 @@ Run focused broker tests, all four sidecar fast gates, and `cargo test --release
 - Consumes: Task 4 transport module/Unix adapter and Task 1 identity-derived full server pipe name.
 - Produces: the narrow listener/connection transport trait shared with Unix, plus an overlapped `CreateNamedPipeW` server with cancellation, `PIPE_REJECT_REMOTE_CLIENTS`, byte-mode NDJSON, and current-user ACL.
 
-**Contract inputs:** External API Grounding URLs; `windows-sys = 0.61.2` target-specific features `Win32_Foundation`, `Win32_Security`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`.
+**Contract inputs:** External API Grounding URLs; `windows-sys = 0.61.2` target-specific features `Win32_Foundation`, `Win32_Security`, `Win32_Storage_FileSystem`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`. `ReadFile` and `WriteFile` are exposed through `Win32_Storage_FileSystem` in this exact crate version.
 
 **File ownership:** Sidecar transport abstraction, its Unix adaptation, Windows transport, CLI/broker platform dispatch, target dependency, and Windows tests/CI only.
 
