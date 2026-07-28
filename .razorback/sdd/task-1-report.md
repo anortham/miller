@@ -1,94 +1,391 @@
-# Task 1 report — CodeRankEmbed feasibility spike
+# Task 1 report: freeze the broker lifecycle and transport contract
 
-**Status: DROP — drop reason `converter` (Stage 2).**
-**One-line:** Pinned llama.cpp `b10068` `convert_hf_to_gguf.py` recognizes `NomicBertModel` but crashes with `KeyError: ['num_local_experts','num_experts']` at `conversion/bert.py:372` for this non-MoE model — no f16 GGUF produced, so the sanity and parity gates never run. No overlay written.
+## Status
 
-> Note to lead: this file previously held a stale report titled "Encoder pin registry + `MILLER_SEMANTIC_MODEL` swap seam" from an earlier plan iteration (timestamped with the 12:07 worktree reset). It did not match `task-1-brief.md` (the CodeRankEmbed spike). Overwritten with the correct Task 1 report per your instruction to write here.
+Complete on `codex/shared-semantic-broker-plan`.
 
-Worktree: `/Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval`, branch `worktree-fusion-v2-eval`, HEAD `067c1f7`.
+- Commit: `fff0f306de28ce353dd2dd19fe2e529ba17b1ebd`
+- Commit message: `docs: freeze shared semantic broker contract`
+- No push or release action was performed.
+- Lead-owned `.razorback/sdd/progress.md` and `.razorback/sdd/task-1-brief.md` were not edited by
+  this worker and were not staged or committed.
 
----
+## Implemented contract
 
-## Stages executed
+`docs/contracts/semantic-broker-v1.md` now freezes:
 
-### Stage 1 — download + license — PASS
-- `hf download nomic-ai/CodeRankEmbed --revision 3c4b60807d71f79b43f3c4363786d9493691f8b1 --local-dir .cache/hf/CodeRankEmbed`
-- **HF revision pinned:** `3c4b60807d71f79b43f3c4363786d9493691f8b1`
-- **License: MIT** — `cardData.license = mit` AND repo tag `license:mit` (from `https://huggingface.co/api/models/nomic-ai/CodeRankEmbed`). This clears the stale `bench-pins.json` `rejected_candidates` note ("community GGUF with unclear license"): the **base model** is unambiguously MIT. The objection only ever applied to third-party GGUF repackagings, not to a first-party conversion of the MIT weights.
-- Config confirms the T1 contract: `architectures=["NomicBertModel"]`, `model_type=nomic_bert`, `n_embd=768`, `1_Pooling/config.json → pooling_mode_cls_token=true` (CLS pooling), `n_positions=8192`, `max_trained_positions=2048`, `activation_function=swiglu`, non-MoE (no `moe_every_n_layers`).
-- Pinned llama.cpp `b10068` **binary** archive downloaded and **sha256 verified** against `bench-pins.json` (`13aa2d40c76ad1dcb8ebeec5f0d2814bf3b2f84a66935c7d4dc6f7cca8e38d68` — exact match). Source tarball for tag `b10068` downloaded to obtain `convert_hf_to_gguf.py` (not shipped in the prebuilt binary archive).
-- Converter venv built from the pin's own `requirements/requirements-convert_hf_to_gguf.txt` (torch 2.11.0, transformers 4.57.6, gguf, numpy 1.26.4, sentencepiece) via `uv pip install --index-strategy unsafe-best-match`.
+- Pure compute over the separately frozen `julie.embedding.sidecar` v1 methods; no
+  workspace/index/database/watcher/HTTP/PID/state/token/self-update control plane.
+- Exact identity input
+  `julie.semantic.broker|1|julie.embedding.sidecar|1|<model_id>|<model_sha256>`, SHA-256
+  truncation, and binary-version exclusion.
+- The approved flat `<miller-home>/semantic/` layout:
+  `broker-<identity>.lock`, `broker-<identity>.sock`, `accelerator-v1.lock`,
+  `miller-semantic-<identity>`, and `\\.\pipe\miller-semantic-<identity>`.
+- Unix `0700` directory / `0600` socket permissions and service-lock-holder-only stale unlink.
+- Windows full server versus short .NET client names, current-user ACL,
+  `PIPE_REJECT_REMOTE_CLIENTS`, overlapped cancellable I/O, and visible degraded ownership if Job
+  Object attachment fails.
+- Owner stdin watcher before model load, authoritative stdin EOF, Windows
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and distinct owner/non-owner disposal.
+- Spawn-loser polling through the 120-second initialization budget, capacity 64, 8:1
+  interactive-to-waiting-batch fairness, and the 60-second active-request watchdog.
+- One user-global accelerator lock, direct CPU startup for non-holders, and one CPU retry only
+  after typed `ResourceExhausted` (`ContextAlloc` initially); ordinary `Decode`, `Encode`,
+  protocol, and application failures do not demote.
+- Broker-mode connection-scoped `shutdown` while stdio `shutdown` retains process-loop behavior.
+- `MILLER_SEMANTIC=off` zero work, lexical fail-open without a hidden per-process model fallback,
+  no new MCP tool, and approval-gated releases.
 
-### Stage 2 — convert (`convert_hf_to_gguf.py --outtype f16`) — **FAIL → HARD STOP**
+The ADR, 2026-07-19 program design, and 2026-07-21 production-readiness design explicitly
+supersede process-local embedding ownership with this broker while preserving Miller's vector
+artifact ownership. `docs/README.md` lists the new contract as current.
+
+## TDD evidence
+
+### RED
+
 Command:
+
+```text
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
 ```
-python .cache/src/llama.cpp-b10068/convert_hf_to_gguf.py \
-  .cache/hf/CodeRankEmbed --outtype f16 \
-  --outfile .cache/gguf/coderankembed-f16.gguf
+
+Observed before the contract file existed:
+
+- Exit code: `1`
+- Failed: `3`
+- Passed: `0`
+- All three failures were `FileNotFoundException` for
+  `docs/contracts/semantic-broker-v1.md`.
+- The failure was the intended missing-production-contract failure, not a compile error or test
+  typo.
+
+### GREEN
+
+The same command after the contract and supersession docs:
+
+- Exit code: `0`
+- Failed: `0`
+- Passed: `3`
+- Skipped: `0`
+
+This proves the contract contains the exact lifecycle, identity, transport, security, scheduling,
+OOM, activation, and approval literals guarded by `SemanticBrokerContractTests`.
+
+### Worker ceiling
+
+Command:
+
+```text
+scripts/test.sh
 ```
-Output tail (evidence — `.cache/gguf/convert.log`):
+
+Fresh result at committed HEAD `fff0f306`:
+
+- Exit code: `0`
+- Failed: `0`
+- Passed: `5,214`
+- Skipped: `2`
+- Total: `5,216`
+- Wall time: `26s`, below the enforced `30s` ceiling.
+
+This proves the new docs guard participates in the default fast suite without breaking existing
+Miller behavior or test conventions. `git diff --check` also passed.
+
+## Acceptance criteria
+
+- [x] **No forbidden mechanism:** The contract explicitly rejects PID/state/token/HTTP/port,
+  workspace/index/watcher, database, self-update, and broker-initiated restart mechanisms. The
+  broker owns embedding compute only.
+- [x] **Frozen sidecar protocol remains separate:** The contract consumes and links
+  `docs/contracts/semantic-sidecar-protocol-v1.md`; it does not alter that protocol or a sidecar
+  file.
+- [x] **Ownership supersession is explicit:** ADR-0003 and both named historical designs point to
+  `semantic-broker-v1` and state that it supersedes process-local resident-child ownership.
+- [x] **Focused guard passes:** 3/3 tests passed at committed HEAD.
+- [x] **No new MCP tool:** The contract states the prohibition and no runtime/tool surface changed.
+- [x] **Off remains zero work:** Broker paths and resources are derived only after semantic
+  activation is enabled.
+- [x] **Release boundary preserved:** No push, publish, tag, or release occurred; releases remain
+  approval-gated.
+
+## Architecture quality
+
+**Affected modules:** Documentation contracts and a file-content guard only.
+
+**Caller-facing interface:** The new contract is smaller than the later runtime behavior it
+unlocks: frozen protocol envelopes remain unchanged while lifecycle, IPC, ownership, scheduling,
+security, and failure policy are specified separately.
+
+**Depth/locality check:** No runtime code, sidecar code, vector artifact, MCP surface, or extraction
+surface changed.
+
+**Test surface:** Tests read the same published Markdown contract later implementers and reviewers
+consume.
+
+**Seams/adapters:** No runtime seam was introduced in this task.
+
+**Rejected shortcuts:** Per-process stdio fallback, a general machine daemon, PID/state files,
+HTTP/token control planes, model duplication after spawn races, unbounded queues, and untyped OOM
+demotion.
+
+**Architecture risk:** Low for this documentation-only slice; the frozen contract governs later
+high-risk cross-process implementation.
+
+## Miller evidence
+
+Every Miller call made for this task and the shape it proved:
+
+1. `workspace onboarding(path=<worktree>)` — proved the worktree was not registered and required
+   an explicit `workspace open`; no code assumption was made from the failed onboarding.
+2. `workspace open(path=<worktree>)` — registered and primed the exact worktree index at revision
+   1.
+3. `context(query="Contract-first documentation and test slice ...")` — located the existing
+   process-scoped `SemanticEmbeddingSessionBroker` and semantic implementation area; disposition
+   was partial, so targeted doc/test discovery followed.
+4. `search(query="semantic broker ownership sidecar lifecycle", mode=content, docs/**)` — proved
+   the implementation-plan prose is the only existing broker-oriented document before this task.
+5. `inspect(ADR-0003...)` — proved the ADR path exists and is Markdown with no code-symbol API.
+6. `inspect(2026-07-19...design.md)` — proved the historical program-design path exists.
+7. `inspect(2026-07-21...design.md)` — proved the repair-design path exists.
+8. `inspect(docs/README.md)` — proved the current documentation-map path exists.
+9. `search(...ContractTests RepoFile File.ReadAllText..., mode=source)` — no combined phrase hit;
+   this prevented inventing a test helper.
+10. `search(RepoFile, tests/Miller.Tests/Docs/**)` — proved no existing `RepoFile` helper in the
+    requested test area.
+11. `search("docs contracts documentation guard", tests/Miller.Tests/Docs/**)` — proved no
+    pre-existing Docs contract-test convention at that path.
+12. `search(File.ReadAllText, mode=source, tests/Miller.Tests/**)` — proved file-content contract
+    guards use direct `File.ReadAllText`.
+13. `search("docs/contracts/", mode=source, tests/Miller.Tests/**)` — proved existing tests assert
+    public contract paths.
+14. `search(AppContext.BaseDirectory, mode=source, tests/Miller.Tests/**)` — located existing
+    repo-root resolution patterns rather than guessing one.
+15. `search("tests/Miller.Tests/Docs", mode=file)` — proved the Docs test directory did not yet
+    exist.
+16. `search(RepoRoot, tests/Miller.Tests/**)` — resolved the public
+    `ScaleTestSupport.RepoRoot()` helper and its test callers.
+17. `search(Miller.slnx, mode=source, tests/Miller.Tests/**)` — proved the repository-root sentinel
+    used by the helper.
+18. `search("docs/adr/", mode=source, tests/Miller.Tests/**)` — found the existing docs/ADR
+    reference convention in `AgentInstructionsTests`.
+19. `search(LocateRepoRoot, tests/Miller.Tests/**)` — resolved the helper's implementation and
+    tests.
+20. `inspect(MillerExtractContractTests.cs)` — listed the existing contract-test class and
+    fact/theory organization before reading its convention.
+21. `inspect(MillerExtractContractTests, depth=overview)` — proved its public xUnit class/fact
+    surface.
+22. `inspect(Miller.Tests.csproj)` — proved the project is an XML test project with no indexed
+    code symbols; the bounded file read then confirmed xUnit v3 and default fast filtering.
+23. `inspect(ScaleTestSupport.RepoRoot, depth=full)` — proved the exact public, zero-argument
+    helper and its multi-fallback behavior.
+24. `impact(changed_paths=[six Task 1 paths])` before editing — classified the four existing docs
+    as having no graph dependents and the two new paths as not yet indexed; risk was documentation
+    local.
+25. `workspace refresh` after editing — indexed the new contract/test at revision 2.
+26. `inspect(SemanticBrokerContractTests.cs)` — listed the three public facts and shared contract
+    path.
+27. `inspect(SemanticBrokerContractTests, depth=full)` — proved the complete caller-facing test
+    shape and exact use of `ScaleTestSupport.RepoRoot()`.
+28. `search(exact identity prefix, mode=content, semantic-broker-v1.md)` — proved the normative
+    identity input is present in the published contract.
+29. `search(process-local supersession phrase, mode=content)` — returned the ADR and historical
+    design supersession text outside the brace-style file glob, proving the prose while exposing
+    the glob mismatch rather than treating it as absence.
+30. `impact(git=true)` after editing — seeded all tracked documentation changes and reported no
+    dependent runtime symbols; parent-owned orchestration files were unseeded.
+31. `impact(git=true, base=HEAD^)` after commit — seeded all six Task 1 contract/test paths and
+    confirmed no runtime dependents or additional test candidates.
+
+## Commit scope
+
+Committed Task 1 files:
+
+- `docs/contracts/semantic-broker-v1.md`
+- `docs/adr/ADR-0003-semantic-retrieval-ownership.md`
+- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
+- `docs/plans/2026-07-21-semantic-production-readiness-repair-design.md`
+- `docs/README.md`
+- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
+
+Sole system-required ownership extension:
+
+- `.memories/2026-07-28/030241_c802.md` — Goldfish pre-commit checkpoint, explicitly approved by
+  the lead for inclusion because project instructions require checkpoints to ride with commits.
+
+No extra product, runtime, sidecar, plan, progress, brief, or orchestration file was committed.
+This report is intentionally written after the commit so it can record the SHA; it is an
+uncommitted SDD handoff artifact for the lead.
+
+## Review fix round 1
+
+Lead inline review identified four contract ambiguities. They are fixed in commit
+`4fcca1020b9b3ad71c6bfa6cd4acafb798c53b08`
+(`docs: tighten semantic broker invariants`).
+
+### Corrections
+
+- **Ownership vocabulary:** `owner` now means only the spawning Miller factory/process that holds
+  stdin and Windows Job ownership. The sidecar is the `service broker` / `service-lock holder`;
+  it holds the model service lock and, when accelerated, the accelerator lock.
+- **Queue saturation:** A full queue returns the existing protocol-v1 `internal_error` envelope.
+  The contract forbids a new method, field, or error code for saturation.
+- **Owner EOF:** The watcher is armed before model load, and stdin EOF must terminate the broker
+  even when load is blocked. Cooperative cancellation is preferred; process-fatal exit is
+  permitted for non-cancellable load so the OS releases locks and no orphan remains.
+- **Identity and privacy:** The ADR and both supersession designs use
+  `broker-contract/protocol/model identity`. Diagnostics, logs, and telemetry forbid query,
+  document, and source text; workspace paths; symbols; snippets; vectors; and authentication
+  material.
+
+### Review TDD evidence
+
+Focused command:
+
+```text
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
 ```
-INFO:hf-to-gguf:Model architecture: NomicBertModel      <- architecture IS registered/recognized
-INFO:hf-to-gguf:Exporting model...
-  File ".../conversion/bert.py", line 372, in modify_tensors
-    n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-  File ".../conversion/base.py", line 198, in find_hparam
-    raise KeyError(f"could not find any of: {keys}")
-KeyError: "could not find any of: ['num_local_experts', 'num_experts']"
+
+RED before documentation fixes:
+
+- Exit code: `1`
+- Failed: `4`
+- Passed: `3`
+- Each new review assertion failed on its intended missing guarantee: owner/service-lock
+  separation, frozen `internal_error`, fatal EOF/privacy, and complete identity vocabulary.
+
+GREEN at committed HEAD `4fcca102`:
+
+- Exit code: `0`
+- Failed: `0`
+- Passed: `7`
+- Skipped: `0`
+
+Worker ceiling at committed HEAD:
+
+- `scripts/test.sh`
+- Exit code: `0`
+- Failed: `0`
+- Passed: `5,218`
+- Skipped: `2`
+- Total: `5,220`
+- Wall time: `25s`, below the `30s` ceiling.
+
+### Review Miller evidence
+
+1. `inspect(SemanticBrokerContractTests, depth=full)` proved the pre-review seven-path contract
+   test surface and exact helper use.
+2. Four targeted content searches proved the ambiguous owner sentence, generic queue-error
+   wording, overstated orderly EOF guarantee, and incomplete privacy vocabulary at current HEAD.
+3. `impact(changed_paths=[contract, ADR, two designs, test])` reported a documentation/test-local
+   change with no runtime dependents.
+4. `search(owner, semantic-broker-v1.md)` plus the bounded exact-text audit located all
+   owner-sensitive clauses before editing.
+5. `workspace refresh` indexed the corrected contract/test at revision 4.
+6. Post-edit `inspect` proved all seven fact methods; searches proved service-broker ownership,
+   fatal EOF, complete privacy, and complete identity vocabulary.
+7. The broad queue search missed because Miller content search is literal; the required follow-up
+   `search(internal_error, mode=content)` proved the existing protocol error and no-new-code clause.
+8. `impact(git=true)` after edits and `impact(git=true, base=HEAD^)` after commit both reported no
+   runtime dependents; the five owned task paths were seeded.
+
+### Review commit scope
+
+Committed owned files:
+
+- `docs/contracts/semantic-broker-v1.md`
+- `docs/adr/ADR-0003-semantic-retrieval-ownership.md`
+- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
+- `docs/plans/2026-07-21-semantic-production-readiness-repair-design.md`
+- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
+
+System-required checkpoint:
+
+- `.memories/2026-07-28/031104_b3e8.md`
+
+Lead-owned SDD brief/progress, the implementation plan, and this report were not included in the
+fix commit.
+
+## Concerns
+
+- Real Windows named-pipe/Job Object behavior and Windows/NVIDIA VRAM exhaustion are intentionally
+  not claimed by this contract-only task; later implementation and soak tasks must prove them.
+- The fast suite completed close to its 30-second tripwire (25 seconds at current HEAD), though
+  it passed.
+
+## Review fix round 2
+
+Grok's progress review found one remaining ownership-terminology contradiction. It is fixed in
+commit `3d0e61731ac629a91a915f7ff38192d76e87f120`
+(`docs: separate broker service arbitration`) on branch
+`codex/shared-semantic-broker-plan`.
+
+### Correction
+
+- Miller owner recovery now occurs through factory lifecycle: a new Miller process establishes the
+  owner stdin lease and Windows Job Object, then starts a service-broker contender.
+- The model service lock separately arbitrates only which sidecar service broker may load and
+  serve.
+- The historical integration-design summary uses the same division and describes losing factories
+  as polling rather than acquiring ownership through the service lock.
+
+### TDD and verification
+
+Focused command:
+
+```text
+dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
 ```
-No `.cache/gguf/*.gguf` produced. Exit code 1.
 
-**Root cause (pinned-source-verified, `conversion/bert.py:371-388`):** `NomicBertModel.modify_tensors` calls `find_hparam(["num_local_experts","num_experts"])` **unconditionally** at the top of the method. That value is only consumed inside the MoE tensor branches (`"mlp.experts.mlp.w1/w2" in name`). CodeRankEmbed is non-MoE (`self.is_moe = bool(hparams.get("moe_every_n_layers"))` → `False`), so no experts hparam exists and the lookup raises `KeyError` on the **first** tensor. The lookup should be `optional=True` or moved inside the MoE branch. This is a converter bug in the pinned `b10068` build that trips **every** non-MoE `NomicBertModel` (nomic-embed-text-v1 class), not a CodeRankEmbed-specific gap.
+RED:
 
-### Stage 3 — sanity gate — NOT RUN (blocked by Stage 2, no GGUF).
-### Stage 4 — parity gate — NOT RUN (blocked by Stage 2, no GGUF).
+- Exit code: `1`
+- Failed: `1`
+- Passed: `7`
+- The new test failed because the contract lacked the required factory-lifecycle sentence; the
+  seven previous contract guards stayed green.
 
-The sanity/parity harness was fully staged before the stop and is ready if the converter is unblocked: `.cache/parity/` holds `texts.json` (20 non-empty conformance rows: 12 documents, 8 queries), `parity_llama.py` (reuses `bench.py`'s `LlamaServer`, CLS pooling, `--embd-normalize 2`), `parity_ref.py` (`SentenceTransformer(..., trust_remote_code=True)`, `normalize_embeddings=True`, query prefix applied to `role=query` rows only), and `compare.py` (per-row cosine, min/mean, 0.99 gate). A reference venv (`sentence-transformers` + `einops`) is also built. None of this executed because there is no f16 GGUF to embed with.
+GREEN at committed HEAD `3d0e6173`:
 
-## What each gate would have proven (unreached)
-- **sanity** ⟹ CLS pooling is wired correctly in the GGUF (anchor↔similar minus anchor↔dissimilar ≥ 0.10 margin, dims == 768).
-- **parity** ⟹ conversion preserved the reference model's geometry (min cosine ≥ 0.99 between llama-server f16 and sentence-transformers fp32 over the 20 conformance texts).
+- Exit code: `0`
+- Failed: `0`
+- Passed: `8`
+- Skipped: `0`
 
-## Decision
-Per the T1 contract, converter failure is an enumerated HARD STOP and the budget is one session with "any ambiguity → drop with reason, do not extend." Patching the pinned converter to get past line 372 would (a) violate "do not extend" and (b) make any resulting overlay dishonest — it would claim conversion by the pinned `b10068` release when the model in fact required a source patch. So: **no `bench-pins.local.json` overlay written; `eval/model-bench/.gitignore` left unchanged** (nothing machine-specific was produced to ignore; `.cache/` is already gitignored).
+Fast suite at committed HEAD:
 
-## Remediation options for the plan (not acted on — needs a pin/approval decision)
-- Bump the benchmark's llama.cpp pin to a `b#####` build where `bert.py`'s MoE-hparam lookup is guarded (`optional=True` / moved into the MoE branch), then re-run this spike end to end. This is the clean path — CodeRankEmbed is a standard non-MoE NomicBert, so once the converter bug is gone conversion should be uneventful.
-- Or track the one-line upstream fix explicitly as a pinned patch (documented, sha-recorded) if a converter bump is undesirable — heavier process, same result.
-- License is **not** a blocker (clean MIT, verified above); the only blocker is the converter build.
+- Exit code: `0`
+- Failed: `0`
+- Passed: `5,219`
+- Skipped: `2`
+- Total: `5,221`
+- Wall time: `25s`, below the `30s` ceiling.
 
-## Miller MCP calls used
-None. The brief pre-named every essential file (`bench-pins.json`, `bench.py`, `README.md`, `run-bench.sh`, corpus) and they are small, so direct reads located them without a search. Given CAVEAT 2 (shared MCP connection; abandon on >60s hang) and that no discovery was needed, direct file reads were the lower-risk path. Reported honestly rather than manufacturing a search call.
+### Miller evidence
 
-## API-shape evidence (`bench-pins.json` `candidates[]` shape, copied exactly)
-Candidate objects use these keys: `id`, `tier`, `model`, `hf_repo`, `hf_repo_owner`, `license`, `license_verified_from`, `file`, `url`, `sha256`, `size_bytes`, `native_dims`, `pooling`, `mrl`, `mrl_lanes`, `instruction_aware`, `query_instruction`, `document_instruction`, `context_length`. The pooling gate reads `pooling`, `native_dims`, `context_length`; the query-prefix field consumed by `bench.py` (`prep_query`) is **`query_instruction`**, not `query_prefix`. The T1 brief names the overlay field `query_prefix`; had the gates passed, the overlay would have carried **both** (`query_prefix` for the T1 contract and `query_instruction` = same value for `bench.py` compatibility), plus the recorded `hf_revision` and `converter_command`. Recorded here so Task 4 inherits the exact shape decision even though no overlay was emitted.
+- Pre-edit content searches proved both misleading phrases exactly.
+- `inspect(BrokerContract_SeparatesFactoryRecoveryFromServiceBrokerArbitration, depth=full)` proved
+  the new caller-facing test surface.
+- Post-edit searches proved factory-lifecycle recovery in the contract and sidecar-only service
+  arbitration in both docs.
+- Pre-edit, post-edit, and committed-diff impact checks seeded all three owned paths and reported
+  no runtime dependents.
 
-## Judgment calls
-- `conversion/bert.py:372` (pinned b10068): classified the failure as drop reason **`converter`** — the architecture is registered (`Model architecture: NomicBertModel` logged) but the pinned converter cannot emit a GGUF for this non-MoE config. Same terminal stage the brief labels "converter"; the specific mechanism (MoE-hparam lookup bug) is narrower than "unsupported architecture" and is reported as such.
-- Did **not** patch the pinned converter to continue to Stages 3–4 — see Decision above (pin fidelity + "do not extend").
-- Parity text selection (`.cache/parity/texts.json`): first 20 non-empty `text` rows of `eval/sidecar-conformance/corpus.jsonl` (12 documents / 8 queries), query prefix applied to `role=query` only, matching CodeRankEmbed's queries-only prefix rule.
+### Commit scope and dirty state
 
----
+Committed:
 
-# Retry round (lead-sanctioned pin-bump attempt) — FINAL DROP stands
+- `docs/contracts/semantic-broker-v1.md`
+- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
+- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
+- `.memories/2026-07-28/031810_513f.md`
 
-**Status: DROP — drop reason `converter` (both reasons: MIT-clean license, converter unfixed in all releases). No pin bump, no overlay, no converter patch.**
+After the commit, no task implementation file is dirty or staged. The remaining dirty paths are
+lead-owned SDD orchestration artifacts:
 
-Lead sanctioned one bounded round under remediation option 1: bump the bench `llama_cpp` pin to the earliest released tag > b10068 where `conversion/bert.py`'s MoE-hparam lookup is guarded, then re-run Stages 2–4. Term 2 was explicit: if NO released build contains the fix, STOP with final DROP.
-
-## Finding: no released build fixes the lookup — the bug is live on master today
-
-- **The offending line is byte-identical from b10068 through the current newest release.** `conversion/bert.py:372` reads `n_experts = self.find_hparam(["num_local_experts", "num_experts"])` — unconditional, only consumed by the MoE tensor branches — on the pinned b10068 source AND on `master` HEAD (fetched raw, cache-busted). Newest release at check time: **`b10076`** (published `2026-07-21T15:52:50Z`), i.e. *after* b10068; it snapshots the same unfixed master.
-- **The file has not been touched since before b10068.** GitHub API (`/repos/ggml-org/llama.cpp/commits?path=conversion/bert.py`) shows the last three commits to that file are `bfb4308b` (2026-06-02, granite embeddings R2), `d4c8e2c2` (2026-05-31, jina-v2-zh tokenizer), `cc7200bf` (2026-05-15, "Refactor: convert_hf_to_gguf.py"). None post-dates b10068; none guards the experts lookup. Releases are build-numbered snapshots of master, so every tag in `(b10068, b10076]` carries the identical unguarded line.
-- **The crash is architecture-wide, not CodeRankEmbed-specific.** `nomic-ai/nomic-embed-text-v1`'s `config.json` (the canonical non-MoE NomicBert) also has **no** `num_experts`/`num_local_experts` (verified live); only `nomic-embed-text-v2-moe` carries them (`num_experts: 8`, `moe_every_n_layers: 2`). Probing CodeRankEmbed's hparams with the **pinned loader itself** (`ModelBase.load_hparams`, read-only, no patch) returns zero moe/expert keys and `is_moe=False`. So `modify_tensors`'s first line KeyErrors on any non-MoE NomicBert. The fix is a one-liner upstream (`optional=True` / move into the MoE branch) but it has not shipped in any release.
-
-## Decision
-Term 2's STOP condition is met: no released build > b10068 contains the fix, and patching converter source is out of bounds (would produce a dishonest overlay claiming conversion by a pinned release). **Final DROP stands.** Stages 3 (sanity) and 4 (parity) remain unreached; the `.cache/parity/` harness is still staged for the day a fixed llama.cpp release exists — at which point this spike re-runs unchanged with only the `llama_cpp` pin swapped.
-
-## File changes this round
-- **`eval/model-bench/bench-pins.json`** — `llama_cpp`/`runtime` entry **left unchanged** (no fixed release to point at). Updated the `rejected_candidates` CodeRankEmbed note (lead-sanctioned): corrected the stale "unclear license" reason to record MIT-clean license at revision `3c4b6080…` and the true converter blocker with the `bert.py:372` mechanism and the b10068→b10076 release span. JSON re-validated.
-- **No `bench-pins.local.json` overlay** (fail path). **`.gitignore` unchanged.** No `git add`/`commit`.
-
-## Retry judgment calls
-- Did not bump the `llama_cpp` pin: the earliest-fixed-release search terminates with "no fixed release exists" because master itself is unfixed — an existence proof, no per-tag enumeration needed.
-- Applied the `rejected_candidates` correction even though the round STOPped before a pin bump: the lead sanctioned it independently and it is evidence-backed. Kept CodeRankEmbed in `rejected_candidates` (still rejected) but replaced the false reason with the accurate one rather than deleting the entry.
+- `.razorback/sdd/progress.md`
+- `.razorback/sdd/task-1-brief.md`
+- `.razorback/sdd/task-1-report.md`
+- `.razorback/sdd/task-2-brief.md`
+- `.razorback/sdd/task-3-brief.md`

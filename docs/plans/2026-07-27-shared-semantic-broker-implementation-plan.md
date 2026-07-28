@@ -184,6 +184,19 @@ identity_input = "julie.semantic.broker|1|julie.embedding.sidecar|1|" + model_id
 identity = lowercase_hex(sha256(UTF8(identity_input)))[0..16]
 ```
 
+The deterministic layout is:
+
+```text
+<miller-home>/semantic/broker-<identity>.lock
+<miller-home>/semantic/broker-<identity>.sock
+<miller-home>/semantic/accelerator-v1.lock
+miller-semantic-<identity>
+\\.\pipe\miller-semantic-<identity>
+```
+
+The fourth form is the short pipe name passed to `.NET NamedPipeClientStream`; the fifth is the
+full server pipe name passed to `CreateNamedPipeW`.
+
 It must say:
 
 - Each IPC connection carries frozen protocol-v1 NDJSON, one request in flight per connection, and multiple connections per broker.
@@ -203,10 +216,10 @@ Expected: PASS with all lifecycle exclusions and exact literals present.
 `serial-worker-commit`: commit the owned documentation/tests after focused verification and record the SHA.
 
 **Acceptance criteria:**
-- [ ] Contract contains no PID, state, token, HTTP, port, workspace, DB, or self-update mechanism.
-- [ ] Existing sidecar protocol remains frozen and separately referenced.
-- [ ] ADR and historical design explicitly supersede process-local ownership with the approved broker.
-- [ ] Focused contract guard passes.
+- [x] Contract contains no PID, state, token, HTTP, port, workspace, DB, or self-update mechanism.
+- [x] Existing sidecar protocol remains frozen and separately referenced.
+- [x] ADR and historical design explicitly supersede process-local ownership with the approved broker.
+- [x] Focused contract guard passes.
 
 ### Task 2: Extract a reusable sidecar protocol processor without changing stdio
 

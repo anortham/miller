@@ -210,3 +210,12 @@ Canary Task 3: complete (serial-worker-commit 23e12a5c, lead inline review clean
 
 Branch gate @ 26dc98d: Release build PASS 0W/0E; fast PASS 4551/0 (2 skip, 22s); live scale PASS 87/87 after pinned tool restore; evaluator PASS 66/66; Python runner PASS 4/4.
 Corrected visible replay: complete (clean pinned corpora, 82/82 each arm, zero missing/unknown, content modes 4; production recall 0.6892 vs lexical 0.5365, nDCG 0.6434 vs 0.5054, markdown 0.75 vs 0.25, zero rows 0 vs 3, identifier ranked lists exact; cold p95 782.215ms vs 195.558ms; negative FPR remains report-only 1.0).
+
+## Shared semantic broker execution
+
+Plan: `docs/plans/2026-07-27-shared-semantic-broker-implementation-plan.md`
+Reviewed-plan base: `636238ef`
+
+Task 1: complete (`serial-worker-commit`; worker commits `fff0f306`, `4fcca102`, and
+`3d0e6173`; Lead inline review clean; Grok progress review GO for Tasks 2 and 3; focused contract
+tests 8/8; Miller fast suite 5,219 passed, 2 skipped in 25s).
