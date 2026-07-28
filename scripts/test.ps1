@@ -43,9 +43,16 @@ Environment:
 }
 
 function Invoke-FastSuite {
+    Write-Host '==> building fast suite'
+    & dotnet build $Solution -c $Config
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        exit $code
+    }
+
     Write-Host "==> fast suite (Category!=Scale), budget ${FastBudgetSeconds}s"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    & dotnet test $Solution -c $Config --filter 'Category!=Scale' @DotnetArgs
+    & dotnet test $Solution -c $Config --no-build --no-restore --filter 'Category!=Scale' @DotnetArgs
     $code = $LASTEXITCODE
     $sw.Stop()
     if ($code -ne 0) {

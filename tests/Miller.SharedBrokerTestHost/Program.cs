@@ -7,6 +7,7 @@ using Miller.Indexing.Semantic;
 Dictionary<string, string> arguments = ParseArguments(args);
 string endpoint = arguments["--endpoint"];
 string lockPath = arguments["--lock"];
+string modelId = arguments["--model"];
 Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
 
 FileStream serviceLock;
@@ -66,7 +67,7 @@ await using (serviceLock)
 
     if (OperatingSystem.IsWindows())
     {
-        await RunWindowsAsync(endpoint);
+        await RunWindowsAsync(endpoint, modelId);
         return;
     }
 
@@ -85,7 +86,7 @@ await using (serviceLock)
         while (!stop.IsCancellationRequested)
         {
             Socket socket = await listener.AcceptAsync(stop.Token);
-            _ = ServeAsync(new NetworkStream(socket, ownsSocket: true), stop.Token);
+            _ = ServeAsync(new NetworkStream(socket, ownsSocket: true), stop.Token, modelId);
         }
     }
     catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -101,7 +102,7 @@ await using (serviceLock)
     }
 }
 
-static async Task RunWindowsAsync(string endpoint)
+static async Task RunWindowsAsync(string endpoint, string modelId)
 {
     string prefix = @"\\.\pipe\";
     string pipeName = endpoint.StartsWith(prefix, StringComparison.Ordinal)
@@ -122,7 +123,7 @@ static async Task RunWindowsAsync(string endpoint)
             try
             {
                 await pipe.WaitForConnectionAsync(stop.Token);
-                _ = ServeAsync(pipe, stop.Token);
+                _ = ServeAsync(pipe, stop.Token, modelId);
             }
             catch
             {
@@ -153,7 +154,7 @@ static async Task WatchUnixOwnerAsync(CancellationTokenSource stop, Socket liste
     listener.Dispose();
 }
 
-static async Task ServeAsync(Stream stream, CancellationToken cancellationToken)
+static async Task ServeAsync(Stream stream, CancellationToken cancellationToken, string modelId)
 {
     using (stream)
     using (var reader = new StreamReader(stream, new UTF8Encoding(false), leaveOpen: true))
@@ -181,7 +182,7 @@ static async Task ServeAsync(Stream stream, CancellationToken cancellationToken)
                 {
                     await Task.Delay(healthDelay, cancellationToken);
                 }
-                object result = method == "health" ? Health() : Embedding();
+                object result = method == "health" ? Health(modelId) : Embedding();
                 await writer.WriteLineAsync(JsonSerializer.Serialize(new
                 {
                     schema = SemanticEmbeddingSession.Schema,
@@ -200,14 +201,14 @@ static async Task ServeAsync(Stream stream, CancellationToken cancellationToken)
     }
 }
 
-static object Health()
+static object Health(string modelId)
 {
     SemanticEncoderPin pin = SemanticEncoderSelection.Active;
     return new
     {
         ready = true,
         dims = pin.Dims,
-        model_id = pin.ModelId,
+        model_id = modelId,
         model_sha256 = pin.ModelSha256,
         model_revision = pin.ModelRevision,
         pooling = pin.Pooling,

@@ -39,10 +39,13 @@ SUITE="${1:-fast}"
 shift || true   # drop the suite arg if present; remaining "$@" passes through to dotnet test
 
 run_fast() {
+  echo "==> building fast suite"
+  dotnet build "${SOLUTION}" -c "${CONFIG}"
+
   echo "==> fast suite (Category!=Scale), budget ${FAST_BUDGET_SECONDS}s"
   local start elapsed
   start=$(date +%s)
-  dotnet test "${SOLUTION}" -c "${CONFIG}" --filter "Category!=Scale" "$@"
+  dotnet test "${SOLUTION}" -c "${CONFIG}" --no-build --no-restore --filter "Category!=Scale" "$@"
   elapsed=$(( $(date +%s) - start ))
   echo "    fast suite wall time: ${elapsed}s (local target <10s, ceiling ${FAST_BUDGET_SECONDS}s)"
   if [ "${elapsed}" -gt "${FAST_BUDGET_SECONDS}" ]; then

@@ -71,4 +71,22 @@ public sealed class ScriptPlatformConventionTests
         Assert.Contains("$DotnetArgs = [string[]]@($args[1..($args.Count - 1)])", content);
         Assert.DoesNotContain("@($args | Select-Object -Skip 1)", content);
     }
+
+    [Fact]
+    public void TestWrappers_ExcludeBuildAndRestoreFromFastSuiteBudget()
+    {
+        string scriptsDir = Path.Combine(ScaleTestSupport.RepoRoot(), "scripts");
+        string shell = File.ReadAllText(Path.Combine(scriptsDir, "test.sh"));
+        string powershell = File.ReadAllText(Path.Combine(scriptsDir, "test.ps1"));
+
+        int shellBuild = shell.IndexOf("dotnet build \"${SOLUTION}\" -c \"${CONFIG}\"", StringComparison.Ordinal);
+        int shellTimer = shell.IndexOf("start=$(date +%s)", StringComparison.Ordinal);
+        int shellTest = shell.IndexOf("dotnet test \"${SOLUTION}\" -c \"${CONFIG}\" --no-build --no-restore", StringComparison.Ordinal);
+        Assert.True(shellBuild >= 0 && shellBuild < shellTimer && shellTimer < shellTest);
+
+        int powershellBuild = powershell.IndexOf("& dotnet build $Solution -c $Config", StringComparison.Ordinal);
+        int powershellTimer = powershell.IndexOf("$sw = [System.Diagnostics.Stopwatch]::StartNew()", StringComparison.Ordinal);
+        int powershellTest = powershell.IndexOf("& dotnet test $Solution -c $Config --no-build --no-restore", StringComparison.Ordinal);
+        Assert.True(powershellBuild >= 0 && powershellBuild < powershellTimer && powershellTimer < powershellTest);
+    }
 }

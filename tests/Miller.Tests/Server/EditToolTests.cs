@@ -166,7 +166,8 @@ public sealed class EditToolTests : IDisposable
 
     private static EditRequest Req(string op, string target) => new(op, target);
 
-    private string AbsPath(string rel) => Path.Combine(_root, rel);
+    private string AbsPath(string rel) =>
+        Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
 
     private JulieDbFixture CreateSingleFileFixture(string relPath, string content) =>
         JulieDbFixture.Create(

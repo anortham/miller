@@ -386,8 +386,9 @@ public sealed class ContentToolTests : IDisposable
 
     private static string SearchBody(string compact)
     {
-        int handoff = compact.IndexOf("\n\nread: ", StringComparison.Ordinal);
-        return handoff < 0 ? compact : compact[..handoff];
+        string normalized = compact.ReplaceLineEndings("\n");
+        int handoff = normalized.IndexOf("\n\nread: ", StringComparison.Ordinal);
+        return handoff < 0 ? normalized : normalized[..handoff];
     }
 
     [Fact]
@@ -411,7 +412,8 @@ public sealed class ContentToolTests : IDisposable
         ContentTool tool = ToolWithNeedleSource("logs/app.log", 5, 350);
         string sourceId = ImportedSourceId(tool, "logs/app.log");
 
-        string compact = tool.Content("search", query: "GroupNeedle", limit: 10);
+        string compact = tool.Content("search", query: "GroupNeedle", limit: 10)
+            .ReplaceLineEndings("\n");
 
         Assert.Matches($@"\n\nread: content read source_id={Regex.Escape(sourceId)} line=(5|350)$", compact);
     }

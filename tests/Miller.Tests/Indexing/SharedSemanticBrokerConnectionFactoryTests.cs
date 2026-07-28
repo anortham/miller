@@ -25,6 +25,10 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
 
     private readonly string _root =
         Path.Combine(Path.GetTempPath(), "mb-" + Guid.NewGuid().ToString("N")[..10]);
+    private readonly SemanticEncoderPin _pin = SemanticEncoderSelection.Active with
+    {
+        ModelId = SemanticEncoderSelection.Active.ModelId + "-test-" + Guid.NewGuid().ToString("N"),
+    };
 
     public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
@@ -69,7 +73,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             CreateFactory(counter, loadDelayMs: 0, degradedReason: degradedReason);
         await using var session = new SemanticEmbeddingSession(
             factory,
-            expectedEncoder: SemanticEncoderSelection.Active,
+            expectedEncoder: _pin,
             ownsConnectionFactory: false);
 
         SemanticEncoderHandshake? handshake = await session.EnsureStartedAsync(
@@ -126,7 +130,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             RequireBrokerHostExecutable(),
             toolsRoot: _root,
             millerHome: _root,
-            pin: SemanticEncoderSelection.Active,
+            pin: _pin,
             environment: EnvironmentFor(
                 counter,
                 loadDelayMs: 0,
@@ -202,7 +206,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         await nonOwners[0].DisposeAsync();
         await using (var proof = new SemanticEmbeddingSession(
             nonOwners[1],
-            expectedEncoder: SemanticEncoderSelection.Active))
+            expectedEncoder: _pin))
         {
             Assert.True(
                 await proof.EnsureStartedAsync(TestContext.Current.CancellationToken) is not null,
@@ -227,7 +231,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             CreateFactory(counter, loadDelayMs: 0);
         var firstSession = new SemanticEmbeddingSession(
             factory,
-            expectedEncoder: SemanticEncoderSelection.Active,
+            expectedEncoder: _pin,
             ownsConnectionFactory: false);
         Assert.NotNull(await firstSession.EnsureStartedAsync(
             TestContext.Current.CancellationToken));
@@ -247,7 +251,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
 
         await using var replacementSession = new SemanticEmbeddingSession(
             factory,
-            expectedEncoder: SemanticEncoderSelection.Active,
+            expectedEncoder: _pin,
             ownsConnectionFactory: false);
         Assert.NotNull(await replacementSession.EnsureStartedAsync(
             TestContext.Current.CancellationToken));
@@ -312,7 +316,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             });
         await using var session = new SemanticEmbeddingSession(
             factory,
-            expectedEncoder: SemanticEncoderSelection.Active,
+            expectedEncoder: _pin,
             ownsConnectionFactory: false);
 
         Assert.True(
@@ -326,7 +330,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         int ownerPid = Assert.IsType<int>(factory.Snapshot.OwnerProcessId);
         SemanticBrokerEndpoint endpoint = SemanticBrokerEndpoint.Create(
             _root,
-            SemanticEncoderSelection.Active);
+            _pin);
 
         await factory.DisposeAsync();
         await WaitUntilAsync(
@@ -353,7 +357,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         var sessions = factories
             .Select(factory => new SemanticEmbeddingSession(
                 factory,
-                expectedEncoder: SemanticEncoderSelection.Active,
+                expectedEncoder: _pin,
                 ownsConnectionFactory: false))
             .ToList();
         return new BrokerFactoryGroup(factories, sessions);
@@ -374,7 +378,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             executable,
             toolsRoot: _root,
             millerHome: _root,
-            pin: SemanticEncoderSelection.Active,
+            pin: _pin,
             environment: EnvironmentFor(
                 counter,
                 loadDelayMs,
