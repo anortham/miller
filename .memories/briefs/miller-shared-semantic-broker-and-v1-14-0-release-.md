@@ -1,9 +1,9 @@
 ---
 id: miller-shared-semantic-broker-and-v1-14-0-release-
 title: Miller shared semantic broker and v1.14.0 release gate
-status: active
+status: completed
 created: 2026-07-28T02:32:01.919Z
-updated: 2026-07-28T09:34:34.853Z
+updated: 2026-07-28T21:23:35.203Z
 tags:
   - miller
   - semantic-search
