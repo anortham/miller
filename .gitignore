@@ -26,6 +26,12 @@ models/*.bin
 # Local implementation worktrees
 .worktrees/
 
+# Soak/eval run output. Never committed, and ignoring it also keeps the indexer from converging on it:
+# scripts/semantic-broker-soak.* writes JSONL here for ~30 minutes, and on a machine indexing this workspace
+# those writes trigger vector convergence, which respawns a semantic broker that then owns the machine-global
+# Windows pipe and silently absorbs the soak's own probes (see the foreign-broker preflight in that script).
+artifacts/
+
 # IDE
 .idea/
 .vscode/

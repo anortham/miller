@@ -115,6 +115,43 @@ function Get-BrokerCount {
     ).Count
 }
 
+# Windows named pipes live in a machine-global namespace and the broker pipe is keyed only by model identity
+# (docs/contracts/semantic-broker-v1.md: `\\.\pipe\miller-semantic-<identity>`), so -MillerHome does NOT isolate this
+# run the way the Unix socket path under <miller-home>/semantic/ does. A broker owned by any other Miller session for
+# the same model silently absorbs every probe: they connect as isOwner:false / spawnAttempts:0, Get-BrokerCount finds
+# nothing under THIS run's home, and the ownership scenarios die on the opaque "Could not identify the broker process."
+#
+# Checked before the run AND after each probe, because the race is not only at startup: a live Miller indexing a
+# workspace respawns its broker whenever a file change triggers vector convergence, so one can appear mid-run. That is
+# how a 30-minute gate run was lost — the soak's own JSONL output was landing inside the indexed workspace and kept
+# waking the indexer, which is why `artifacts/` is now gitignored.
+function Assert-NoForeignBroker([string]$When) {
+    # Match on the image name, not the command line: a shell or editor whose command line merely MENTIONS
+    # julie-semantic-sidecar (this script, a grep, a CI step) would otherwise register as a foreign broker.
+    $foreign = @(
+        Get-CimInstance Win32_Process |
+            Where-Object {
+                $_.Name -like 'julie-semantic-sidecar*' -and
+                $_.CommandLine -like '* broker *' -and
+                $_.CommandLine -notlike "*$MillerHome\semantic\*"
+            }
+    )
+    if ($foreign.Count -eq 0) { return }
+
+    $detail = ($foreign | ForEach-Object { "  pid $($_.ProcessId): $($_.CommandLine)" }) -join [Environment]::NewLine
+    throw @"
+$($foreign.Count) semantic broker(s) from another Miller session are running ($When). On Windows they own the
+machine-global pipe for their model identity, so this soak's probes attach to them instead of spawning the brokers
+these scenarios need to own and kill. Results would be invalid.
+
+$detail
+
+Stop the other Miller session (or start it with MILLER_SEMANTIC=off) and re-run, and keep the workspace quiet for the
+duration. On Unix this cannot happen: the endpoint is a socket path under <miller-home>/semantic/, which -MillerHome
+already isolates.
+"@
+}
+
 function Start-Probe(
     [string]$Label,
     [int]$RunSeconds,
@@ -146,7 +183,10 @@ function Wait-Ready([string]$Label) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         if ((Test-Path $path) -and
-            (Select-String -Quiet -SimpleMatch '"event":"ready"' $path)) { return }
+            (Select-String -Quiet -SimpleMatch '"event":"ready"' $path)) {
+            Assert-NoForeignBroker "when probe $Label became ready"
+            return
+        }
         Start-Sleep -Milliseconds 100
     }
     throw "Probe $Label did not become ready within $TimeoutSeconds seconds."
@@ -174,12 +214,15 @@ function Record-NormalProbe(
     [int]$AllowedSeconds = $TimeoutSeconds
 ) {
     $exitCode = Wait-Probe $Process $AllowedSeconds
+    Assert-NoForeignBroker "after probe $Label completed"
     $normalExitCodes.Add($exitCode)
     $script:normalProbeExpectedCount++
     if (@(Read-Events $Label | Where-Object event -eq complete).Count -eq 1) {
         $script:normalProbeCompleteCount++
     }
 }
+
+Assert-NoForeignBroker 'before starting'
 
 $gpuBefore = Get-GpuMemory
 Save-BrokerTree 'process-tree-before.json'
