@@ -88,6 +88,34 @@ public sealed class CliDispatchTests : IDisposable
         return (code, stdout.ToString(), stderr.ToString());
     }
 
+    private static (int Code, string Out, string Err) RunUntilSemanticBrokerReady(
+        IReadOnlyList<string> args,
+        WorkspaceContext ctx,
+        TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        (int Code, string Out, string Err) result;
+        do
+        {
+            result = Run(args, ctx);
+            if (result.Code == 0 && result.Err.Length == 0)
+            {
+                using JsonDocument document = JsonDocument.Parse(result.Out);
+                if (document.RootElement
+                    .GetProperty("semantic_broker")
+                    .GetProperty("state")
+                    .GetString() == "ready")
+                {
+                    return result;
+                }
+            }
+
+            Thread.Sleep(20);
+        } while (DateTime.UtcNow < deadline);
+
+        return result;
+    }
+
     private static JulieDbFixture DbWithRegion(string path, string text)
     {
         int newline = text.IndexOf('\n', StringComparison.Ordinal);
@@ -3154,10 +3182,14 @@ public sealed class CliDispatchTests : IDisposable
                 ownerSession.UnavailableReason);
             using var fx = JulieDbFixture.CreateDefault();
 
-            var (code, outText, errText) =
-                Run(["workspace", "status", "--json"], Context(fx.DbPath));
-            var (healthCode, healthOut, healthErr) =
-                Run(["workspace", "health", "--json"], Context(fx.DbPath));
+            var (code, outText, errText) = RunUntilSemanticBrokerReady(
+                ["workspace", "status", "--json"],
+                Context(fx.DbPath),
+                TimeSpan.FromSeconds(5));
+            var (healthCode, healthOut, healthErr) = RunUntilSemanticBrokerReady(
+                ["workspace", "health", "--json"],
+                Context(fx.DbPath),
+                TimeSpan.FromSeconds(5));
 
             Assert.Equal(0, code);
             Assert.Empty(errText);
