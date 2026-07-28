@@ -369,6 +369,7 @@ Run the three semantic session test classes, then `scripts/test.sh`.
 **Files:**
 - Modify: sidecar `src/lib.rs`
 - Modify: sidecar `src/main.rs`
+- Modify: sidecar `src/protocol.rs`
 - Modify: sidecar `AGENTS.md`
 - Modify: sidecar `README.md`
 - Create: sidecar `src/broker/mod.rs`
@@ -455,15 +456,15 @@ Run focused broker tests, all four sidecar fast gates, and `cargo test --release
 `serial-worker-commit`: commit after lead review and record the SHA.
 
 **Acceptance criteria:**
-- [ ] Eight concurrent starts produce one model-loaded broker; losing processes exit before engine load.
-- [ ] Closing owner stdin ends the broker and releases endpoint/service lock.
-- [ ] A killed owner leaves no child or cleanup requirement.
-- [ ] A stale Unix endpoint is removed only by the next service-lock holder.
-- [ ] `shutdown` closes one broker connection without releasing the service or accelerator lease.
-- [ ] Owner EOF during model load terminates before endpoint bind and releases both locks.
-- [ ] While batch work waits, one batch is dequeued after at most eight interactive dequeues.
-- [ ] Queue-full and expired requests receive `internal_error`; connections remain usable.
-- [ ] Stdio conformance is unchanged.
+- [x] Eight concurrent starts produce one model-loaded broker; losing processes exit before engine load.
+- [x] Closing owner stdin ends the broker and releases endpoint/service lock.
+- [x] A killed owner leaves no child or cleanup requirement.
+- [x] A stale Unix endpoint is removed only by the next service-lock holder.
+- [x] `shutdown` closes one broker connection without releasing the service or accelerator lease.
+- [x] Owner EOF during model load terminates before endpoint bind and releases both locks.
+- [x] While batch work waits, one batch is dequeued after at most eight interactive dequeues.
+- [x] Queue-full and expired requests receive `internal_error`; connections remain usable.
+- [x] Stdio conformance is unchanged.
 
 ### Task 5: Add cancellable, current-user Windows named-pipe transport
 

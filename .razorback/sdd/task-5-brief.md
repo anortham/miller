@@ -1,31 +1,73 @@
-## Task 5: Align workspace facts, health, refresh, and normal CLI search
+### Task 5: Add cancellable, current-user Windows named-pipe transport
 
-**Depends on:** Tasks 1 and 2.
+**Files:**
+- Modify: sidecar `Cargo.toml`
+- Modify: sidecar `Cargo.lock`
+- Modify: sidecar `src/broker/transport/mod.rs`
+- Create: sidecar `src/broker/transport/windows.rs`
+- Test: sidecar `tests/broker_windows_tests.rs`
+- Modify: sidecar `.github/workflows/ci.yml`
 
-**Owns:**
+**Interfaces:**
+- Consumes: Task 4 transport trait and Task 1 identity-derived full server pipe name.
+- Produces: overlapped `CreateNamedPipeW` server with cancellation, `PIPE_REJECT_REMOTE_CLIENTS`, byte-mode NDJSON, and current-user ACL.
 
-- `src/Miller.Server/Tools/WorkspaceTool.cs`
-- `src/Miller.Server/Tools/WorkspaceFactsAssembler.cs`
-- `src/Miller.Server/Tools/WorkspaceHealthFacts.cs`
-- `src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs`
-- `src/Miller.Server/Cli/CliDispatch.cs`
-- focused workspace and CLI tests
+**Contract inputs:** External API Grounding URLs; `windows-sys = 0.61.2` target-specific features `Win32_Foundation`, `Win32_Security`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`.
 
-**Red tests:**
+**File ownership:** Sidecar Windows transport, target dependency, Windows tests/CI only.
 
-1. Current-workspace status/health JSON and compact output show ready, stale, unavailable, pending, and semantic-off states truthfully.
-2. Stale or failed vectors affect health warning/action; semantic off does not make lexical workspace health fail.
-3. Current-workspace CLI refresh advances vectors when allowed or returns the resident-leader requirement; foreign refresh never generates.
-4. Normal eligible CLI search matches MCP production-arm output for symbol and content queries.
-5. Forced CLI arms remain explicit evaluation-only behavior and retain loud validation for unsupported modes.
-6. Eligible normal CLI searches write privacy-preserving canary telemetry; lexical-off output stays byte-identical.
+**Serialization required:** Yes.
 
-**Implementation:**
+**Dependency reason:** Extends Task 4's transport seam.
 
-- Reuse `VectorSidecar` facts already used for registered workspaces, including pending files.
-- Add vector health rules without making optional/off semantic state unhealthy.
-- Route current refresh through the shared vector convergence boundary or report the actual leader requirement.
-- Compose normal CLI semantic/canary behavior from the same policy and arm implementations as the server; do not fork ranking logic.
+**Step 1: Write Windows-only failing tests**
 
-**Worker verification:** focused `WorkspaceToolTests`, `WorkspaceRenderTests`, workspace-health tests, `CliDispatchTests`, and CLI semantic/canary tests.
+```rust
+#[cfg(windows)]
+#[test]
+fn cancelled_read_releases_the_pipe_instance_within_one_second() { /* real named pipe */ }
+
+#[cfg(windows)]
+#[test]
+fn pipe_rejects_a_security_token_outside_the_current_user_acl() { /* ACL inspection */ }
+```
+
+Also start three clients, kill one mid-line, and prove the other two still complete requests.
+
+**Step 2: Verify red on `windows-2022`**
+
+Run: `cargo test --test broker_windows_tests -- --nocapture`
+
+**Step 3: Implement overlapped transport**
+
+```rust
+let handle = CreateNamedPipeW(
+    name,
+    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_UNLIMITED_INSTANCES,
+    64 * 1024,
+    64 * 1024,
+    0,
+    &security_attributes,
+);
+```
+
+Every pending connect/read/write owns an `OVERLAPPED` event and is completed or canceled with `CancelIoEx` before its buffers/events are dropped. Do not use `std::fs::File` blocking reads and do not document a timeout as a no-op.
+
+The sidecar receives the full server form `\\.\pipe\<name>`. Miller derives the short `<name>` from the same identity for `NamedPipeClientStream(".", name, ...)`; no caller passes the full Win32 path into the .NET client.
+
+**Step 4: Run Windows broker, fast, and package-layout gates**
+
+Add an explicit `windows-x64 broker lifecycle` CI step before model-backed conformance.
+
+**Step 5: Apply commit mode**
+
+`serial-worker-commit`: commit after Windows evidence is attached to the ledger.
+
+**Acceptance criteria:**
+- [ ] Connect, read, and write cancellation complete within one second in tests.
+- [ ] Remote clients are rejected and ACL is current-user scoped.
+- [ ] Client death mid-line cannot wedge an instance or another client.
+- [ ] Windows broker lifecycle runs on every push to `main`, not only workflow dispatch.
 

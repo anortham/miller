@@ -224,3 +224,6 @@ Grok Batch A review GO; sidecar 219 Rust tests and 30 Python tests passed; clipp
 Task 3: complete (`parallel-lead-commit`; Miller lead commits `c163e129` and Grok fix
 `bf729714`; Lead inline review clean; Grok ownership finding fixed; focused 55 passed, 2 skipped;
 Miller fast suite 5,223 passed, 2 skipped in 23s).
+Task 4: complete (`serial-worker-commit`; sidecar worker commit `847cba5b`; Lead inline review
+clean after framing/cross-platform fixes; Grok progress review GO; focused broker 15/15; full
+sidecar/Python gates green; release conformance 9/9 including both golden lanes).
