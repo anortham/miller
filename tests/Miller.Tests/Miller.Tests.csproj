@@ -42,6 +42,7 @@
     <ProjectReference Include="../../src/Miller.Indexing/Miller.Indexing.csproj" />
     <ProjectReference Include="../../src/Miller.Server/Miller.Server.csproj" />
     <ProjectReference Include="../../scripts/Miller.PackageSemanticSmoke/Miller.PackageSemanticSmoke.csproj" />
+    <ProjectReference Include="../../scripts/Miller.SemanticBrokerProbe/Miller.SemanticBrokerProbe.csproj" />
     <ProjectReference Include="../../tools/Miller.SearchQuality/Miller.SearchQuality.csproj" />
   </ItemGroup>
 </Project>
