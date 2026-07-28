@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Miller.Indexing.Semantic;
 using Miller.Tests.Support;
 using Xunit;
@@ -153,10 +154,16 @@ public sealed class SemanticEmbeddingSessionTests
                 FakeSidecarFault.AcceleratorRefreshDelay,
                 FakeSidecarFault.None));
         await using var session = new SemanticEmbeddingSession(factory, FastOptions);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        Assert.NotNull(await session.EnsureStartedAsync(TestContext.Current.CancellationToken));
+        await factory.WaitForMethodAsync("health", TestContext.Current.CancellationToken);
 
-        SemanticEmbedOutcome first =
-            await session.EmbedQueryAsync("first", cancellation.Token);
+        using var cancellation = new CancellationTokenSource();
+        Task<SemanticEmbedOutcome> firstTask =
+            session.EmbedQueryAsync("first", cancellation.Token);
+        await factory.WaitForMethodAsync("embed_query", TestContext.Current.CancellationToken);
+        await factory.WaitForMethodAsync("health", TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        SemanticEmbedOutcome first = await firstTask;
 
         Assert.True(first.Succeeded, first.FailureReason);
         Assert.Equal(1, session.RestartCount);
@@ -519,6 +526,8 @@ public sealed class SemanticEmbeddingSessionTests
     private sealed class RecordingConnectionFactory(ISemanticSidecarConnectionFactory inner)
         : ISemanticSidecarConnectionFactory, ISemanticBrokerSnapshotRecorder
     {
+        private readonly Channel<string> _observedMethods = Channel.CreateUnbounded<string>();
+
         public List<RecordingConnection> Connections { get; } = [];
 
         public List<string> Methods { get; } = [];
@@ -533,9 +542,23 @@ public sealed class SemanticEmbeddingSessionTests
         {
             ConnectCount++;
             ISemanticSidecarConnection connection = await inner.ConnectAsync(cancellationToken);
-            var recording = new RecordingConnection(connection, Methods);
+            var recording = new RecordingConnection(connection, RecordMethod);
             Connections.Add(recording);
             return recording;
+        }
+
+        public async Task WaitForMethodAsync(string method, CancellationToken cancellationToken)
+        {
+            while (await _observedMethods.Reader.WaitToReadAsync(cancellationToken))
+            {
+                while (_observedMethods.Reader.TryRead(out string? observed))
+                {
+                    if (observed == method)
+                        return;
+                }
+            }
+
+            throw new InvalidOperationException($"Method '{method}' was not observed.");
         }
 
         public async ValueTask DisposeAsync()
@@ -545,16 +568,23 @@ public sealed class SemanticEmbeddingSessionTests
         }
 
         public void RecordHandshake(SemanticEncoderHandshake handshake) => Handshakes.Add(handshake);
+
+        private void RecordMethod(string method)
+        {
+            Methods.Add(method);
+            if (!_observedMethods.Writer.TryWrite(method))
+                throw new InvalidOperationException($"Method '{method}' could not be recorded.");
+        }
     }
 
     private sealed class RecordingConnection : ISemanticSidecarConnection
     {
         private readonly ISemanticSidecarConnection _inner;
 
-        public RecordingConnection(ISemanticSidecarConnection inner, List<string> methods)
+        public RecordingConnection(ISemanticSidecarConnection inner, Action<string> methodObserved)
         {
             _inner = inner;
-            Input = new RecordingWriter(inner.Input, methods);
+            Input = new RecordingWriter(inner.Input, methodObserved);
         }
 
         public TextWriter Input { get; }
@@ -580,7 +610,7 @@ public sealed class SemanticEmbeddingSessionTests
         }
     }
 
-    private sealed class RecordingWriter(TextWriter inner, List<string> methods) : TextWriter
+    private sealed class RecordingWriter(TextWriter inner, Action<string> methodObserved) : TextWriter
     {
         private readonly StringBuilder _pending = new();
 
@@ -599,7 +629,7 @@ public sealed class SemanticEmbeddingSessionTests
             string request = _pending.ToString().TrimEnd('\r', '\n');
             _pending.Clear();
             using JsonDocument json = JsonDocument.Parse(request);
-            methods.Add(json.RootElement.GetProperty("method").GetString()!);
+            methodObserved(json.RootElement.GetProperty("method").GetString()!);
             await inner.FlushAsync(cancellationToken);
         }
     }

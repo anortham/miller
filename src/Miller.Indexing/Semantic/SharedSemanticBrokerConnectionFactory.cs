@@ -120,6 +120,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
     {
         get
         {
+            ClearExitedOwner();
             lock (_sync)
             {
                 return _snapshot;

@@ -238,6 +238,11 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             child.Kill(entireProcessTree: true);
             await child.WaitForExitAsync(TestContext.Current.CancellationToken);
         }
+
+        Assert.False(factory.Snapshot.IsOwner);
+        Assert.Null(factory.Snapshot.OwnerProcessId);
+        Assert.Equal(1, factory.Snapshot.RetiredOwnerCount);
+
         await firstSession.DisposeAsync();
 
         await using var replacementSession = new SemanticEmbeddingSession(
