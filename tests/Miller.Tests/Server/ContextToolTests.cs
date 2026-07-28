@@ -2443,6 +2443,163 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void TaskQueryAffinity_PathOnlyDoesNotExceedNameOnlyForSameTerms()
+    {
+        var nameOnly = new IndexedSymbol(
+            0, "0000000000000000000000000000a101", "SidecarLoader", "class SidecarLoader", "class", "csharp",
+            "src/Loader.cs", 1, 20, null, false);
+        var pathOnly = new IndexedSymbol(
+            1, "0000000000000000000000000000a102", "Generate", "def generate()", "function", "python",
+            "eval/sidecar/generate.py", 1, 40, null, false);
+        string[] terms = ["sidecar"];
+
+        int nameAffinity = ContextTool.TaskQueryAffinity(nameOnly, terms);
+        int pathAffinity = ContextTool.TaskQueryAffinity(pathOnly, terms);
+
+        Assert.True(pathAffinity <= nameAffinity, $"path-only {pathAffinity} should be ≤ name-only {nameAffinity}");
+        Assert.Equal(12, nameAffinity);
+        Assert.Equal(8, pathAffinity);
+    }
+
+    [Fact]
+    public void RunActionable_NameMatchOutranksPathOnlyPeerForSameTerm()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "0000000000000000000000000000a201", "SidecarLoader", "class SidecarLoader", "class", "csharp",
+                "src/Loader.cs", 1, 40, null, false),
+            new(1, "0000000000000000000000000000a202", "LoaderUtil", "class LoaderUtil", "class", "python",
+                "eval/sidecar/loader_util.py", 1, 40, null, false),
+            new(2, "0000000000000000000000000000a203", "UnrelatedHelper", "class UnrelatedHelper", "class", "csharp",
+                "util/Helper.cs", 1, 10, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "sidecar loader",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        string[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .Select(item => item.GetProperty("name").GetString()!)
+            .ToArray();
+
+        Assert.Contains("SidecarLoader", pivots);
+        int nameIdx = Array.IndexOf(pivots, "SidecarLoader");
+        int pathIdx = Array.IndexOf(pivots, "LoaderUtil");
+        Assert.True(nameIdx >= 0, "name-match SidecarLoader should be a pivot");
+        if (pathIdx >= 0)
+            Assert.True(nameIdx < pathIdx, "name match must outrank path-boosted peer");
+    }
+
+    [Fact]
+    public void RunActionable_TermRescueInheritsParentNlAutoHideTests()
+    {
+        var (index, resolver) = BuildFixture();
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "how does order service work",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        Assert.DoesNotContain(pivots, item => item.GetProperty("name").GetString() == "OrderServiceTests");
+        Assert.DoesNotContain(
+            pivots,
+            item => (item.GetProperty("reason").GetString() ?? string.Empty).StartsWith("query_term_", StringComparison.Ordinal)
+                    && (item.GetProperty("file").GetString() ?? string.Empty).Contains("tests/", StringComparison.Ordinal));
+        Assert.Contains(pivots, item => item.GetProperty("name").GetString() == "OrderService");
+    }
+
+    [Fact]
+    public void RunActionable_TermRescueCannotOutrankFullQueryAffinityBand()
+    {
+        IndexedSymbol[] symbols =
+        [
+            new(0, "0000000000000000000000000000a301", "AlphaBetaGamma", "class AlphaBetaGamma", "class", "csharp",
+                "src/AlphaBetaGamma.cs", 1, 40, null, false),
+            new(1, "0000000000000000000000000000a302", "DeltaWidget", "class DeltaWidget", "class", "csharp",
+                "src/DeltaWidget.cs", 1, 40, null, false),
+            new(2, "0000000000000000000000000000a303", "AlphaHelper", "class AlphaHelper", "class", "csharp",
+                "src/AlphaHelper.cs", 1, 20, null, false),
+            new(3, "0000000000000000000000000000a304", "BetaHelper", "class BetaHelper", "class", "csharp",
+                "src/BetaHelper.cs", 1, 20, null, false),
+            new(4, "0000000000000000000000000000a305", "GammaHelper", "class GammaHelper", "class", "csharp",
+                "src/GammaHelper.cs", 1, 20, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: "alpha beta gamma delta",
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            readBody: null,
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        JsonElement full = Assert.Single(pivots, item => item.GetProperty("name").GetString() == "AlphaBetaGamma");
+        Assert.StartsWith("query_rank_", full.GetProperty("reason").GetString());
+
+        int fullIdx = Array.FindIndex(pivots, item => item.GetProperty("name").GetString() == "AlphaBetaGamma");
+        int termOnlyIdx = Array.FindIndex(
+            pivots,
+            item => item.GetProperty("name").GetString() == "DeltaWidget"
+                    && (item.GetProperty("reason").GetString() ?? string.Empty).StartsWith("query_term_", StringComparison.Ordinal));
+        if (termOnlyIdx >= 0)
+            Assert.True(fullIdx < termOnlyIdx, "full-query affinity band must outrank term-rescue strength cap");
+        Assert.Equal(0, fullIdx);
+    }
+
+    [Fact]
     public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();

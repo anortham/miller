@@ -274,6 +274,13 @@ public sealed partial class ContextTool
     private const int ReachCap = 500;
     internal const int ReferenceRowsPerSymbol = 12;
     internal const int ContentChunksPerSymbol = 2;
+    /// <summary>Term-rescue <see cref="ContextPivotSignal.AnchorStrength"/> ceiling (below full-query affinity band).</summary>
+    internal const int TermRescueStrengthCap = 18;
+    private const int TaskQueryNameWeight = 12;
+    private const int TaskQueryPathWeight = 8;
+    private const int TaskQuerySignatureWeight = 5;
+    private const int TaskQueryKindWeight = 15;
+    private const int TaskQueryAffinityCap = 50;
     private static readonly HashSet<string> ContextQueryStopWords = new(
         [
             "assemble", "change", "context", "current", "does", "edit", "explain", "find", "give",
@@ -814,12 +821,15 @@ public sealed partial class ContextTool
 
         if (!string.IsNullOrWhiteSpace(query))
         {
+            // Parent-query auto policy for both arms: one-word term rescue must not reintroduce
+            // tests when the original natural-language query would hide them.
+            bool excludeTests = SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
             SymbolCandidateSet retrieved = SearchTool.CollectSymbolCandidates(
                 index,
                 query,
                 SearchToolMode.Symbol,
                 SearchSeedLimit,
-                excludeTests: null);
+                excludeTests);
             int retrievedCount = Math.Min(retrieved.Candidates.Count, SearchSeedLimit);
             for (int rank = 0; rank < retrievedCount; rank++)
             {
@@ -843,7 +853,7 @@ public sealed partial class ContextTool
                     term,
                     SearchToolMode.Symbol,
                     limit: 6,
-                    excludeTests: null);
+                    excludeTests);
                 int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
                 for (int rank = 0; rank < termCandidateCount; rank++)
                 {
@@ -855,7 +865,7 @@ public sealed partial class ContextTool
                             symbol,
                             rank + 1,
                             candidate.Score,
-                            TaskQueryAffinity(symbol, queryTerms),
+                            Math.Min(TaskQueryAffinity(symbol, queryTerms), TermRescueStrengthCap),
                             $"query_term_{term}");
                     }
                 }
@@ -1160,7 +1170,11 @@ public sealed partial class ContextTool
         return term;
     }
 
-    private static int TaskQueryAffinity(IndexedSymbol symbol, IReadOnlyList<string> terms)
+    /// <summary>
+    /// Lexical affinity of a symbol to task-query terms. Name weight is at least path weight so
+    /// path-token matches cannot outrank pure name matches for the same term set.
+    /// </summary>
+    internal static int TaskQueryAffinity(IndexedSymbol symbol, IReadOnlyList<string> terms)
     {
         var nameTokens = new List<string>();
         var signatureTokens = new List<string>();
@@ -1176,20 +1190,20 @@ public sealed partial class ContextTool
         foreach (string term in terms)
         {
             if (string.Equals(symbol.Kind, term, StringComparison.OrdinalIgnoreCase))
-                score += 15;
+                score += TaskQueryKindWeight;
             else if (names.Contains(term))
             {
-                score += 10;
+                score += TaskQueryNameWeight;
                 matchedNameTerms++;
             }
             else if (signatures.Contains(term))
-                score += 5;
+                score += TaskQuerySignatureWeight;
             else if (paths.Contains(term))
-                score += 12;
+                score += TaskQueryPathWeight;
         }
         if (matchedNameTerms > 1)
             score += (matchedNameTerms - 1) * 10;
-        return Math.Min(score, 50);
+        return Math.Min(score, TaskQueryAffinityCap);
     }
 
     private static string ContextPivotDiversityKey(string name)

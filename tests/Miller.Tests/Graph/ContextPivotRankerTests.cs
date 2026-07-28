@@ -19,6 +19,19 @@ public sealed class ContextPivotRankerTests
     }
 
     [Fact]
+    public void Rank_FullQueryAffinityBandBeatsTermRescueCapDespiteBetterRetrievalRank()
+    {
+        ContextPivot[] ranked = [.. ContextPivotRanker.Rank(
+            [
+                new ContextPivotSignal("term_rescue", 1, 10, 18, 2),
+                new ContextPivotSignal("full_query", 3, 5, 24, 1),
+            ],
+            4)];
+
+        Assert.Equal(["full_query", "term_rescue"], ranked.Select(static pivot => pivot.SymbolId));
+    }
+
+    [Fact]
     public void Rank_LineDistanceDisambiguatesEqualStackFrameAnchors()
     {
         ContextPivot[] ranked = [.. ContextPivotRanker.Rank(
