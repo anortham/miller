@@ -471,18 +471,21 @@ Run focused broker tests, all four sidecar fast gates, and `cargo test --release
 **Files:**
 - Modify: sidecar `Cargo.toml`
 - Modify: sidecar `Cargo.lock`
+- Modify: sidecar `src/main.rs`
+- Modify: sidecar `src/broker/mod.rs`
 - Modify: sidecar `src/broker/transport/mod.rs`
+- Modify: sidecar `src/broker/transport/unix.rs`
 - Create: sidecar `src/broker/transport/windows.rs`
 - Test: sidecar `tests/broker_windows_tests.rs`
 - Modify: sidecar `.github/workflows/ci.yml`
 
 **Interfaces:**
-- Consumes: Task 4 transport trait and Task 1 identity-derived full server pipe name.
-- Produces: overlapped `CreateNamedPipeW` server with cancellation, `PIPE_REJECT_REMOTE_CLIENTS`, byte-mode NDJSON, and current-user ACL.
+- Consumes: Task 4 transport module/Unix adapter and Task 1 identity-derived full server pipe name.
+- Produces: the narrow listener/connection transport trait shared with Unix, plus an overlapped `CreateNamedPipeW` server with cancellation, `PIPE_REJECT_REMOTE_CLIENTS`, byte-mode NDJSON, and current-user ACL.
 
 **Contract inputs:** External API Grounding URLs; `windows-sys = 0.61.2` target-specific features `Win32_Foundation`, `Win32_Security`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`.
 
-**File ownership:** Sidecar Windows transport, target dependency, Windows tests/CI only.
+**File ownership:** Sidecar transport abstraction, its Unix adaptation, Windows transport, CLI/broker platform dispatch, target dependency, and Windows tests/CI only.
 
 **Serialization required:** Yes.
 
