@@ -122,9 +122,10 @@ scripts/test.ps1 all
   binary used to build fine and fail at runtime instead; that deferral is what let a no-restore machine look
   healthy until first use, and with semantic retrieval now default-on it meant the DEFAULT install served
   lexical-only with no `vectors.db` and a clean build. Escape hatches for a deliberate offline/no-semantic
-  build: `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1` and `MILLER_ALLOW_MISSING_SEMANTIC=1` (`ci.yml` sets the
-  latter, because CI restores julie-extract but not the ~50MB sidecar package — so CI never exercises
-  semantic; the shared-broker gate is `scripts/semantic-broker-soak.*`, run by hand).
+  build: `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1` and `MILLER_ALLOW_MISSING_SEMANTIC=1` (`ci.yml` sets both
+  for jobs that intentionally build without restored tool packages; Windows/Scale jobs restore julie-extract,
+  while `release.yml` restores both packages and sets neither override. CI never exercises semantic; the
+  shared-broker gate is `scripts/semantic-broker-soak.*`, run by hand).
   To build from source, use
   `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
   or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';

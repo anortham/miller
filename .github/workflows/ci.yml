@@ -8,11 +8,11 @@ on:
     - cron: '17 9 * * *'
   workflow_dispatch:
 
-# CI restores julie-extract but deliberately not the ~50MB semantic sidecar package, so it opts out of the
-# missing-sidecar build guard in Miller.Server.csproj. release.yml restores both and must NOT set this.
-# Consequence worth knowing: CI never exercises semantic retrieval; the shared-broker gate is
-# scripts/semantic-broker-soak.* run by hand.
+# Fast CI and the sqlite-vec spike intentionally build without restoring the pinned tool packages. Windows/Scale
+# jobs restore julie-extract explicitly; release.yml restores both packages and must NOT set either override.
+# CI never exercises semantic retrieval; the shared-broker gate is scripts/semantic-broker-soak.* run by hand.
 env:
+  MILLER_ALLOW_MISSING_JULIE_EXTRACT: '1'
   MILLER_ALLOW_MISSING_SEMANTIC: '1'
 
 jobs:
