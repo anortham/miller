@@ -662,7 +662,6 @@ public sealed partial class ContextTool
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
-    // (reference-aware renderers also take query for discovery next_actions — see RunReferenceAwareActionable)
 
     internal static string RunReferenceAware(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
