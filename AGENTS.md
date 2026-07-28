@@ -113,12 +113,18 @@ scripts/test.ps1 all
   unit-tested in milliseconds.
 - The build COPIES `.tools/julie-extract` next to the output binary (`<out>/.tools/`, via a `Content`
   item in [`Miller.Server.csproj`](src/Miller.Server/Miller.Server.csproj)) because production locates it
-  at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. A no-restore machine
-  still builds; the runtime then fails loudly with the restore-script message. The copy takes whatever sits
+  at `AppContext.BaseDirectory/.tools` (`WorkspaceContext.ToolsRoot`), NOT the repo. The copy takes whatever sits
   in `.tools` with no version check, so the `VerifyPinnedJulieExtractVersion` build guard (in
   `Miller.Server.csproj`) runs the restored binary's `--version` and FAILS the build offline if it does not
   match `scripts/julie-pins.json` — this catches a stale binary left over from before a pin bump (missing ⟹
-  builds, runtime fails loud; stale ⟹ build fails; current ⟹ silent pass). After a pin bump, re-run restore.
+  build fails; stale ⟹ build fails; current ⟹ silent pass). After a pin bump, re-run restore.
+  `VerifyPinnedSemanticSidecarVersion` guards `.tools/julie-semantic-sidecar-runtime` the same way. A MISSING
+  binary used to build fine and fail at runtime instead; that deferral is what let a no-restore machine look
+  healthy until first use, and with semantic retrieval now default-on it meant the DEFAULT install served
+  lexical-only with no `vectors.db` and a clean build. Escape hatches for a deliberate offline/no-semantic
+  build: `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1` and `MILLER_ALLOW_MISSING_SEMANTIC=1` (`ci.yml` sets the
+  latter, because CI restores julie-extract but not the ~50MB sidecar package — so CI never exercises
+  semantic; the shared-broker gate is `scripts/semantic-broker-soak.*`, run by hand).
   To build from source, use
   `MILLER_JULIE_SOURCE=/path/to/julie-extractors scripts/restore-julie-extract.sh --from-source`
   or, on Windows, `$env:MILLER_JULIE_SOURCE='C:\path\to\julie-extractors';

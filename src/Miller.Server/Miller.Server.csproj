@@ -87,12 +87,13 @@
        schema behind). This target asks the restored binary for its reported version and FAILS the build with a
        restore instruction when it does not match scripts/julie-pins.json. It is OFFLINE (reads the local pin file and
        runs the binary's version flag; no network, integrity vs the GitHub release is already verified at restore
-       time) and a NO-OP when the binary is absent (same Exists gate as the copy), preserving the no-restore/offline
-       build guarantee:
-         missing  => builds (runtime fails loud);  stale => build fails loud HERE;  current => silent pass.
+       time):
+         missing  => build fails loud HERE;  stale => build fails loud HERE;  current => silent pass.
+       A MISSING binary used to build fine and fail at runtime instead. That deferral is what let a no-restore machine
+       look healthy until first use, so the missing case is now a build error too; set
+       MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 to restore the old fail-at-runtime behaviour for a deliberate offline build.
        Guarded by ServerProjectGuardsAgainstStaleJulieExtractVersion in MillerExtractContractTests. -->
-  <Target Name="VerifyPinnedJulieExtractVersion" BeforeTargets="Build;Publish"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../.tools/julie-extract.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-extract')">
+  <Target Name="VerifyPinnedJulieExtractVersion" BeforeTargets="Build;Publish">
     <PropertyGroup>
       <_JulieExtractBinary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\..\.tools\julie-extract.exe</_JulieExtractBinary>
       <_JulieExtractBinary Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)../../.tools/julie-extract</_JulieExtractBinary>
@@ -103,6 +104,9 @@
 
     <Error Condition="'$(_JuliePinnedJulieExtractVersion)' == ''"
            Text="Could not read the pinned julie-extract version from scripts/julie-pins.json; the stale-binary build guard cannot verify .tools/julie-extract." />
+
+    <Error Condition="!Exists('$(_JulieExtractBinary)') And '$(MILLER_ALLOW_MISSING_JULIE_EXTRACT)' != '1'"
+           Text="Pinned julie-extract v$(_JuliePinnedJulieExtractVersion) is not restored: '$(_JulieExtractBinary)' does not exist. Miller cannot index without it. Run scripts/restore-julie-extract.ps1 (Windows) or scripts/restore-julie-extract.sh, then rebuild. To build anyway and defer the failure to runtime, set MILLER_ALLOW_MISSING_JULIE_EXTRACT=1." />
 
     <!-- IgnoreExitCode so a binary that cannot self-report version raises the clear Error below, not a raw MSB3073. -->
     <Exec Condition="Exists('$(_JulieExtractBinary)')"
@@ -155,13 +159,18 @@
 
   <!-- Stale-sidecar build guard, mirroring VerifyPinnedJulieExtractVersion: the Content copy above takes whatever sits
        in .tools with no version check, so a sidecar left over from before a pin bump ships silently and its encoder
-       fingerprint no longer matches the vectors.db generation identity. Semantics stay
-         missing => builds (runtime fails OPEN, the optionality contract);  stale => build fails loud HERE;  current => silent pass.
+       fingerprint no longer matches the vectors.db generation identity. Semantics are
+         missing => build fails loud HERE;  stale => build fails loud HERE;  current => silent pass.
+       ADR-0003 made a missing sidecar fail OPEN at runtime, which was right while semantic retrieval was opt-in. It is
+       now default-on, so failing open silently means the DEFAULT install is quietly degraded — exactly how a machine
+       ran for weeks with no vectors and a clean build. Failing the build keeps the fail-open path for people who
+       genuinely do not want semantic, but makes them ASK for it: set MILLER_ALLOW_MISSING_SEMANTIC=1 (ci.yml does,
+       because it deliberately does not restore the sidecar).
        The version regex admits a prerelease suffix because sidecar pins are release candidates — julie-extract's bare
        [0-9]+\.[0-9]+\.[0-9]+ would truncate that to 0.1.0 and false-pass a later rc. MILLER_SEMANTIC_PINS overrides the
        pin file path, matching the restore scripts, so the guard can be exercised without editing the committed pins. -->
   <Target Name="VerifyPinnedSemanticSidecarVersion" BeforeTargets="Build;Publish"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar')">
+          Condition="'$(MILLER_ALLOW_MISSING_SEMANTIC)' != '1' Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar.exe') Or Exists('$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar')">
     <PropertyGroup>
       <_SemanticSidecarBinary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\..\.tools\julie-semantic-sidecar-runtime\julie-semantic-sidecar.exe</_SemanticSidecarBinary>
       <_SemanticSidecarBinary Condition="!$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)../../.tools/julie-semantic-sidecar-runtime/julie-semantic-sidecar</_SemanticSidecarBinary>
@@ -180,6 +189,9 @@
 
     <Error Condition="'$(_PinnedSemanticSidecarVersion)' == ''"
            Text="Could not read the pinned julie-semantic-sidecar version from '$(_SemanticPinsFile)'; the stale-sidecar build guard cannot verify the .tools/julie-semantic-sidecar-runtime package." />
+
+    <Error Condition="!Exists('$(_SemanticSidecarBinary)') And '$(MILLER_ALLOW_MISSING_SEMANTIC)' != '1'"
+           Text="Pinned julie-semantic-sidecar v$(_PinnedSemanticSidecarVersion) is not restored: '$(_SemanticSidecarBinary)' does not exist. Semantic retrieval is ON by default, so this build would start, report healthy, and silently serve lexical-only results with no vectors.db. Run scripts/restore-semantic-sidecar.ps1 (Windows) or scripts/restore-semantic-sidecar.sh, then rebuild. To build without semantic on purpose, set MILLER_ALLOW_MISSING_SEMANTIC=1." />
 
     <!-- IgnoreExitCode so a binary that cannot self-report version raises the clear Error below, not a raw MSB3073. -->
     <Exec Condition="Exists('$(_SemanticSidecarBinary)')"
