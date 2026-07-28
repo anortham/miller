@@ -7,6 +7,8 @@ to Eros (user-approved reversal, 2026-07-19)
 
 Design: [`docs/plans/2026-07-19-miller-semantic-integration-design.md`](../plans/2026-07-19-miller-semantic-integration-design.md).
 Phase-0 plan: [`docs/plans/2026-07-19-p0-governance-and-gates-plan.md`](../plans/2026-07-19-p0-governance-and-gates-plan.md).
+Current process contract:
+[`docs/contracts/semantic-broker-v1.md`](../contracts/semantic-broker-v1.md).
 
 ## Context
 
@@ -52,6 +54,11 @@ Concretely, for Miller:
 - **Miller does not own embedding generation.** A shared `julie-semantic-sidecar` binary — pinned,
   restored, and version-guarded exactly like `julie-extract` — produces embeddings. Miller consumes
   its output the same way it consumes extractor artifacts.
+- **Embedding compute is user-local and shared across Miller processes.** The frozen
+  [`semantic-broker-v1`](../contracts/semantic-broker-v1.md) contract supersedes the original
+  process-local resident-child design. One lease-owned broker per protocol/model identity exposes
+  pure compute over local IPC; it owns no workspace, index, database, watcher, or network service.
+  `julie.embedding.sidecar` protocol v1 remains separately frozen and unchanged on each connection.
 - **No new MCP tools.** The surface grows only as improved behavior of existing tools, new
   field/mode values, CLI verbs, dashboard count-level panels, skills, and docs. The MCP-stinginess
   rule is unchanged and still requires explicit user approval for any new tool.
@@ -86,6 +93,10 @@ deterministic-signals absorption did.
   wrong-fingerprint vector artifacts). All of them degrade to lexical with the reason surfaced in
   `workspace status` / `health` and telemetry — the same fail-visible discipline as the search
   sidecar.
+- Concurrent Miller sessions share one broker for the same frozen protocol/model identity. A
+  user-global accelerator lease prevents multiple model identities from overcommitting the GPU;
+  non-holders use CPU and proven runtime resource exhaustion demotes the accelerated broker to
+  CPU. Broker unavailability remains fail-open to lexical retrieval.
 - Model weights are **not** shipped in release archives. Acquisition is an explicit prefetch verb
   or a consented first-use download with a pinned sha256.
 - The guidance channels are untouched: ADR-0001 still governs, and the ServerInstructions core
@@ -100,6 +111,8 @@ deterministic-signals absorption did.
   that stated Miller has no semantic retrieval.
 - `docs/plans/2026-07-19-miller-semantic-integration-design.md` — the authoritative program design
   this ADR records the boundary decision for.
+- `docs/contracts/semantic-broker-v1.md` — the current lifecycle, transport, scheduling, security,
+  compatibility, and fail-open contract for shared local embedding compute.
 - Every later phase of the semantic program: this ADR is the citable authority for Miller holding
   local semantic capability at all.
 

@@ -7,6 +7,12 @@ design; per-phase implementation plans derive from it via razorback:writing-plan
 **Architecture risk:** HIGH (recorded via architecture-quality gate; four adversarial Codex reviews
 folded in per section, plus a whole-document doubt pass before user sign-off).
 
+> **Historical lifecycle note (2026-07-27):** Section 4.2's original process-local resident-child
+> design is superseded by the frozen
+> [`semantic-broker-v1`](../contracts/semantic-broker-v1.md) contract. The broker shares pure
+> embedding compute across concurrent Miller processes while keeping the sidecar protocol v1 and
+> Miller's vector-artifact ownership unchanged.
+
 ---
 
 ## 1. Context and problem
@@ -130,24 +136,30 @@ stamping — see §9.4). This reliability work rides the program as an independe
   shapes) selects Metal/Vulkan/CPU per machine and caches the choice keyed by shim version + model
   hash + GPU/driver identity. "Vulkan slower than CPU" is a normal cached fallback, not an error.
 
-### 4.2 Miller's process lifecycle (resident child, not a daemon)
+### 4.2 Miller's process lifecycle (shared compute broker)
 
-- `SemanticEmbeddingSession` (Miller.Server): one sidecar child per Miller server process, stdio
-  transport, owned for the process lifetime. Lazy single-flight start on first semantic use
-  (query or converge). Child exits on stdin EOF when Miller dies — no sockets, no named pipes, no
-  singleton locks, no PID files, no detached processes.
-- Per-request deadlines; one automatic restart after transport failure; then a circuit breaker
-  (`FATAL_THRESHOLD`-style cap) that opens → all semantic features degrade to lexical with reason
-  `circuit_open`. Application-level embed errors do not trip the breaker (Julie's distinction).
-- Query-priority scheduling: converge work runs in bounded batches (250 texts/RPC) and yields to
-  query embeds; a minimum background quota prevents queries starving convergence forever.
-- Warm query embeds target 10–150ms. CLI one-shot invocations pay cold start (0.3–3s) when they
-  need semantic; acceptable and noted in CLI output. Multi-process swarms: lazy start bounds
-  resident copies; an idle-unload policy (or a proven concurrency envelope) is validated by
-  multi-process RAM tests in phase 3 before default-on.
-- Julie adoption path: same binary via `JULIE_EMBEDDING_SIDECAR_PROGRAM` (+ raw-program flag),
-  drop-in for its `SidecarEmbeddingProvider`; Julie's own host/daemon remains Julie's business.
-  CI pins a Julie version for compatibility tests (not "current branch").
+The current normative lifecycle is
+[`docs/contracts/semantic-broker-v1.md`](../contracts/semantic-broker-v1.md). It supersedes the
+original resident-child proposal above rather than extending it:
+
+- One non-detached, lease-owned `julie-semantic-sidecar broker` is shared by concurrent Miller
+  processes for a deterministic protocol/model identity. The owner stdin watcher is armed before
+  model load; stdin EOF is authoritative, and Windows also attempts kill-on-close Job Object
+  ownership.
+- Local IPC carries the unchanged `julie.embedding.sidecar` protocol v1. The broker owns pure
+  `health`, `embed_query`, and `embed_batch` compute only; it owns no workspace, artifact, database,
+  watcher, HTTP service, PID registry, or update control plane.
+- A per-model service lock arbitrates ownership. Spawn losers poll through the initialization
+  budget instead of loading a second model. One user-global accelerator lock prevents different
+  model identities from loading onto the accelerator concurrently; non-holders use CPU.
+- A bounded scheduler prioritizes interactive queries without starving batch convergence. Proven
+  resource exhaustion demotes the accelerated engine to CPU and retries once; ordinary
+  application failures do not.
+- Broker connection, initialization, or compatibility failures degrade to lexical retrieval.
+  Production does not hide a per-process stdio model fallback behind the broker.
+- Julie may consume the same frozen protocol and binary, but Julie's own host lifecycle remains
+  Julie's responsibility. This broker is intentionally narrower than a general Julie or Miller
+  daemon.
 
 ### 4.3 Packaging and pinning (mirrors julie-extract exactly)
 

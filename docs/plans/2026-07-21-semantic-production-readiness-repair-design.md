@@ -2,6 +2,11 @@
 
 **Status:** Approved for implementation on 2026-07-21 by the user's direction to fix the audited defects and determine whether semantic retrieval is helping.
 
+> **Historical lifecycle note (2026-07-27):** The process-local singleton repair below shipped as
+> an interim ownership fix. It is superseded for cross-process operation by
+> [`semantic-broker-v1`](../contracts/semantic-broker-v1.md), which preserves one in-process Miller
+> session broker while connecting it to shared, lease-owned embedding compute.
+
 ## Decision
 
 Keep lexical retrieval as the production default while repairing the semantic experiment. Semantic stays optional and off-switchable. Promotion requires clean evidence from a corpus without nested-worktree duplication; failure to show useful lift ends the expansion rather than moving the gate.
@@ -33,11 +38,17 @@ Content hybrid becomes retrieval, not reranking-only. The semantic arm may intro
 
 Opening a ready vector generation is not sufficient evidence that it matches the live `symbols.db`. Before embedding, semantic query execution compares the generation's artifact identity and relevant cursor with the current workspace search context. After embedding, it repeats the check before KNN results can serve. An artifact change or unacceptable cursor lag returns the typed `VectorsStale` fallback. Other non-ready classifications retain their own typed fallback instead of collapsing to `VectorsMissing`.
 
-### One process-local semantic session
+### One shared semantic compute broker
 
-One singleton broker owns the lazy sidecar session, circuit/restart state, and disposal for a Miller process. Both query and convergence paths borrow that broker. Concurrent convergence and query demand must launch at most one child. Semantic off constructs no session and performs no model work.
+One Miller singleton still owns local connection, circuit, and disposal state for a process. Both
+query and convergence paths borrow it, but its transport connects to the shared broker defined by
+[`semantic-broker-v1`](../contracts/semantic-broker-v1.md). Concurrent Miller processes with the
+same protocol/model identity share one loaded model. Semantic off constructs no session, derives
+no broker path, and performs no model work.
 
-The longer-term machine-wide shared service remains deferred. This repair removes the accidental two-child cost inside one server process without changing cross-process ownership.
+The prior deferral of cross-process ownership is superseded. This is not the general machine-wide
+Miller service proposed elsewhere: the broker owns only frozen embedding compute and no workspace,
+index, database, watcher, HTTP endpoint, PID registry, or self-update behavior.
 
 ### Rebinding
 
