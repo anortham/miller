@@ -156,16 +156,46 @@ public sealed class SemanticEvaluationAdapterTests : IDisposable
             ResolvedBackend: "cpu",
             Accelerated: false,
             DegradedReason: "requested mps backend is unavailable");
-        await using SemanticEmbeddingSession session = adapter.CreateSession(
-            new SingleHealthLauncher(health));
+        var factory = new SingleHealthLauncher(health);
+        SemanticEmbeddingSession session = adapter.CreateSession(factory);
 
         SemanticEncoderHandshake? handshake =
             await session.EnsureStartedAsync(TestContext.Current.CancellationToken);
+        await session.DisposeAsync();
 
         Assert.NotNull(handshake);
         Assert.Equal("cpu", handshake.ResolvedBackend);
         Assert.False(handshake.Accelerated);
         Assert.Equal("requested mps backend is unavailable", handshake.DegradedReason);
+        Assert.True(factory.Disposed);
+    }
+
+    [Fact]
+    public async Task CreateSession_BorrowedFactoryRemainsAliveAfterSessionDisposal()
+    {
+        string path = WriteConfig();
+        SemanticEvaluationAdapter adapter = SemanticEvaluationAdapter.Load(path);
+        SemanticEncoderPin pin = adapter.Encoder;
+        var health = new SemanticSidecarHealth(
+            Ready: true,
+            Dims: pin.Dims,
+            ModelId: pin.ModelId,
+            ModelSha256: pin.ModelSha256,
+            ModelRevision: pin.ModelRevision,
+            Pooling: pin.Pooling,
+            Normalization: "l2",
+            ResolvedBackend: "cpu",
+            Accelerated: false,
+            DegradedReason: null);
+        await using var factory = new SingleHealthLauncher(health);
+        SemanticEmbeddingSession session = adapter.CreateSession(
+            factory,
+            ownsConnectionFactory: false);
+
+        await session.EnsureStartedAsync(TestContext.Current.CancellationToken);
+        await session.DisposeAsync();
+
+        Assert.False(factory.Disposed);
     }
 
     [Theory]
@@ -337,6 +367,8 @@ public sealed class SemanticEvaluationAdapterTests : IDisposable
     private sealed class SingleHealthLauncher(SemanticSidecarHealth health)
         : ISemanticSidecarConnectionFactory
     {
+        public bool Disposed { get; private set; }
+
         public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -363,7 +395,11 @@ public sealed class SemanticEvaluationAdapterTests : IDisposable
                 new SingleHealthConnection(response));
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class SingleHealthConnection(string response) : ISemanticSidecarConnection

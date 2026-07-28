@@ -139,14 +139,15 @@ public sealed class SemanticEvaluationAdapter
 
     public SemanticEmbeddingSession CreateSession(
         ISemanticSidecarConnectionFactory connectionFactory,
-        SemanticSessionOptions? options = null)
+        SemanticSessionOptions? options = null,
+        bool ownsConnectionFactory = true)
     {
         ArgumentNullException.ThrowIfNull(connectionFactory);
         return new SemanticEmbeddingSession(
             connectionFactory,
             options,
             Encoder,
-            ownsConnectionFactory: true);
+            ownsConnectionFactory);
     }
 
     public void WriteEvidence(string path)
