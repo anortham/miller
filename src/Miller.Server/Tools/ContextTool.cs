@@ -109,10 +109,18 @@ public sealed partial class ContextTool
             int candidatesExamined;
             string output;
             ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
+            bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
+                ? exclude_tests
+                : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
             IReadOnlyList<ContextSemanticSeed> semanticSeeds = LoadSemanticSeeds(
                 context,
                 query,
                 parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
+            IReadOnlyList<ContextSourceSeed> sourceSeeds = LoadSourceRescueSeeds(
+                context.Index,
+                TryResolveTextContentIndex(workspace_id, ensureFresh),
+                query,
+                rescueExcludeTests);
             switch (parsedReferenceMode)
             {
                 case ReferenceMode.Off:
@@ -128,6 +136,7 @@ public sealed partial class ContextTool
                         failing_test,
                         stack_trace,
                         semanticSeeds,
+                        sourceSeeds,
                         readBody: symbol => ReadPivotBody(
                             context.IndexDbPath,
                             context.WorkspaceRoot,
@@ -148,6 +157,7 @@ public sealed partial class ContextTool
                         failing_test,
                         stack_trace,
                         semanticSeeds,
+                        sourceSeeds,
                         readBody: symbol => ReadPivotBody(
                             context.IndexDbPath,
                             context.WorkspaceRoot,
@@ -200,6 +210,7 @@ public sealed partial class ContextTool
                 telemetry.SetMetadata("has_stack_trace", !string.IsNullOrWhiteSpace(stack_trace));
                 telemetry.SetMetadata("has_edited_files", edited_files is { Length: > 0 });
                 telemetry.SetMetadata("semantic_seed_count", semanticSeeds.Count);
+                telemetry.SetMetadata("source_rescue_seed_count", sourceSeeds.Count);
                 telemetry.SetMetadata("reference_depth_bucket", HopsBucket(reference_depth));
                 telemetry.SetMetadata("exclude_tests", exclude_tests);
             }
@@ -276,6 +287,15 @@ public sealed partial class ContextTool
     internal const int ContentChunksPerSymbol = 2;
     /// <summary>Term-rescue <see cref="ContextPivotSignal.AnchorStrength"/> ceiling (below full-query affinity band).</summary>
     internal const int TermRescueStrengthCap = 18;
+    /// <summary>Source/doc content rescue fixed <see cref="ContextPivotSignal.AnchorStrength"/> (discovery tier).</summary>
+    internal const int SourceRescueStrength = 35;
+    internal const int SourceRescueHitLimit = 6;
+    internal const int SourceRescueSeedLimit = 3;
+    private static readonly string[] SourceRescueContentKinds =
+    [
+        TextContentKind.WorkspaceSource,
+        TextContentKind.WorkspaceDocs,
+    ];
     private const int TaskQueryNameWeight = 12;
     private const int TaskQueryPathWeight = 8;
     private const int TaskQuerySignatureWeight = 5;
@@ -375,6 +395,90 @@ public sealed partial class ContextTool
         return seeds;
     }
 
+    private ITextContentSearchIndex? TryResolveTextContentIndex(string? workspaceId, bool ensureFresh)
+    {
+        if (_workspaceProvider is not IWorkspaceTextContentSearchProvider textProvider)
+            return null;
+
+        try
+        {
+            return textProvider.ResolveTextContentSearch(workspaceId, ensureFresh).Index;
+        }
+        catch (Exception)
+        {
+            // Fail-soft: missing/unconfigured content corpus must not break context.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Map a bounded source/doc content search onto unique containing symbols for NL context queries.
+    /// Fail-soft: missing content index or search errors yield no seeds.
+    /// </summary>
+    internal static IReadOnlyList<ContextSourceSeed> LoadSourceRescueSeeds(
+        ISymbolLookupIndex index,
+        ITextContentSearchIndex? contentIndex,
+        string query,
+        bool excludeTests)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        if (contentIndex is null ||
+            string.IsNullOrWhiteSpace(query) ||
+            !IsNaturalLanguagePhrase(query))
+        {
+            return [];
+        }
+
+        IReadOnlyList<TextContentSearchHit> hits;
+        try
+        {
+            hits = contentIndex.Search(query, SourceRescueContentKinds, SourceRescueHitLimit, excludeTests);
+        }
+        catch (Exception ex) when (
+            ex is InvalidOperationException or FileNotFoundException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return [];
+        }
+
+        var seeds = new List<ContextSourceSeed>(SourceRescueSeedLimit);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        int rank = 0;
+        foreach (TextContentSearchHit hit in hits)
+        {
+            if (hit.ContainingSymbolId is not { Length: > 0 } symbolId ||
+                index.FindBySymbolId(symbolId) is not { } symbol)
+            {
+                continue;
+            }
+
+            symbol = PreferDefinitionPivot(index, symbol);
+            if (!IsQueryPivot(symbol) ||
+                excludeTests && (symbol.IsTest || IsTestPath.Check(symbol.FilePath)) ||
+                !seen.Add(symbol.SymbolId))
+            {
+                continue;
+            }
+
+            rank++;
+            seeds.Add(new ContextSourceSeed(symbol, rank));
+            if (seeds.Count >= SourceRescueSeedLimit)
+                break;
+        }
+
+        return seeds;
+    }
+
+    /// <summary>
+    /// A natural-language phrase is multiple whitespace-delimited words (mirrors SearchTool policy).
+    /// </summary>
+    private static bool IsNaturalLanguagePhrase(string query)
+    {
+        int words = query.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries).Length;
+        return words >= 2;
+    }
+
     /// <summary>
     /// Build task-ranked pivots, expand graph and file neighbours, attach optional implementation evidence, and
     /// pack the rendered bundle within <paramref name="tokenBudget"/>. <paramref name="selectedCount"/> is the
@@ -413,6 +517,7 @@ public sealed partial class ContextTool
             failingTest,
             stackTrace,
             semanticSeeds: null,
+            sourceSeeds: null,
             readBody: null,
             json,
             out selectedCount,
@@ -434,6 +539,41 @@ public sealed partial class ContextTool
         Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
         bool json,
         out int selectedCount,
+        out int candidatesExamined) =>
+        RunActionable(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds: null,
+            readBody,
+            json,
+            out selectedCount,
+            out candidatesExamined);
+
+    internal static string RunActionable(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        bool json,
+        out int selectedCount,
         out int candidatesExamined)
     {
         IReadOnlyList<Candidate> candidates = BuildCandidates(
@@ -447,6 +587,7 @@ public sealed partial class ContextTool
             failingTest,
             stackTrace,
             semanticSeeds,
+            sourceSeeds,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined);
 
@@ -499,6 +640,7 @@ public sealed partial class ContextTool
             failingTest,
             stackTrace,
             semanticSeeds: null,
+            sourceSeeds: null,
             readBody: null,
             referenceDepth,
             excludeTests,
@@ -521,6 +663,51 @@ public sealed partial class ContextTool
         string? failingTest,
         string? stackTrace,
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        int referenceDepth,
+        bool excludeTests,
+        bool json,
+        Func<IndexedSymbol, ReferenceEvidenceSet> readReferenceEvidence,
+        Func<IndexedSymbol, OutgoingReferenceEvidenceSet> readOutgoingEvidence,
+        Func<IReadOnlyList<IndexedSymbol>, bool, IReadOnlyList<TextContentSearchHit>> readContentChunks,
+        out int selectedCount,
+        out int candidatesExamined) =>
+        RunReferenceAwareActionable(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds: null,
+            readBody,
+            referenceDepth,
+            excludeTests,
+            json,
+            readReferenceEvidence,
+            readOutgoingEvidence,
+            readContentChunks,
+            out selectedCount,
+            out candidatesExamined);
+
+    internal static string RunReferenceAwareActionable(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
         Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
         int referenceDepth,
         bool excludeTests,
@@ -552,6 +739,7 @@ public sealed partial class ContextTool
             failingTest,
             stackTrace,
             semanticSeeds,
+            sourceSeeds,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined);
 
@@ -719,6 +907,8 @@ public sealed partial class ContextTool
 
     internal sealed record ContextSemanticSeed(IndexedSymbol Symbol, int Rank, double Score);
 
+    internal sealed record ContextSourceSeed(IndexedSymbol Symbol, int Rank);
+
     private sealed record ContextEvidenceDisposition(string Status, string Reason);
 
     private sealed record ContextNextAction(string Call, string Reason);
@@ -762,6 +952,7 @@ public sealed partial class ContextTool
             failingTest,
             stackTrace,
             semanticSeeds: null,
+            sourceSeeds: null,
             out _,
             out candidatesExamined);
 
@@ -776,6 +967,35 @@ public sealed partial class ContextTool
         string? failingTest,
         string? stackTrace,
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        out int candidatesExamined) =>
+        BuildCandidates(
+            index,
+            graph,
+            resolver,
+            query,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds: null,
+            out anchorDiagnostics,
+            out candidatesExamined);
+
+    private static IReadOnlyList<Candidate> BuildCandidates(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
         out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         out int candidatesExamined)
     {
@@ -1014,6 +1234,20 @@ public sealed partial class ContextTool
             !stackSymbolsTruncated)
         {
             diagnostics.Add(new ContextAnchorDiagnostic("stack_trace", stackTrace, "no_frame_match"));
+        }
+
+        if (sourceSeeds is not null)
+        {
+            foreach (ContextSourceSeed seed in sourceSeeds.Where(static seed => IsQueryPivot(seed.Symbol)))
+            {
+                IndexedSymbol symbol = PreferDefinitionPivot(index, seed.Symbol);
+                AddSignal(
+                    symbol,
+                    SearchSeedLimit + seed.Rank,
+                    retrievalScore: 0,
+                    SourceRescueStrength,
+                    $"source_rescue_{seed.Rank}");
+            }
         }
 
         if (semanticSeeds is not null)

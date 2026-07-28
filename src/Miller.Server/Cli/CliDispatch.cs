@@ -2029,6 +2029,15 @@ public static class CliDispatch
         string? failingTest = o.Value("failing-test");
         string? stackTrace = o.Value("stack-trace");
         bool json = o.Has("json");
+        bool excludeTestsFlag = o.Has("exclude-tests");
+        bool rescueExcludeTests = string.Equals(referenceMode, "usage", StringComparison.OrdinalIgnoreCase)
+            ? excludeTestsFlag
+            : SearchTool.ResolveExcludeTests(null, o.Query, SearchToolMode.Symbol);
+        IReadOnlyList<ContextTool.ContextSourceSeed> sourceSeeds = LoadContextSourceRescueSeeds(
+            index,
+            ctx,
+            o.Query,
+            rescueExcludeTests);
         int selectedCount;
         int candidatesExamined;
         string output;
@@ -2037,11 +2046,12 @@ public static class CliDispatch
             output = ContextTool.RunReferenceAwareActionable(
                 index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
                     entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
+                    sourceSeeds: sourceSeeds,
                     readBody: symbol => ContextTool.ReadPivotBody(
                         ctx.ExtractDbPath,
                         ctx.WorkspaceRoot,
                         symbol),
-                    referenceDepth: o.Int("reference-depth", 1), excludeTests: o.Has("exclude-tests"), json,
+                    referenceDepth: o.Int("reference-depth", 1), excludeTests: excludeTestsFlag, json,
                     readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
                         ctx.ExtractDbPath,
                         symbol.SymbolId,
@@ -2067,6 +2077,7 @@ public static class CliDispatch
             output = ContextTool.RunActionable(
                 index, graph, resolver, query: o.Query, tokenBudget, maxHops: o.Int("max-hops", 1),
                 entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
+                sourceSeeds: sourceSeeds,
                 readBody: symbol => ContextTool.ReadPivotBody(
                     ctx.ExtractDbPath,
                     ctx.WorkspaceRoot,
@@ -2090,6 +2101,37 @@ public static class CliDispatch
         }
         outw.WriteLine(output);
         return 0;
+    }
+
+    /// <summary>
+    /// Open the content corpus for context source-rescue seeds when present; fail soft to empty seeds.
+    /// </summary>
+    private static IReadOnlyList<ContextTool.ContextSourceSeed> LoadContextSourceRescueSeeds(
+        ISymbolLookupIndex index,
+        WorkspaceContext ctx,
+        string query,
+        bool excludeTests)
+    {
+        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+        if (!File.Exists(contentDbPath))
+            return ContextTool.LoadSourceRescueSeeds(index, contentIndex: null, query, excludeTests);
+
+        try
+        {
+            using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+            long revision = freshness.LatestRevision();
+            FtsTextContentSearchIndex contentIndex = new ContentCorpusSidecar().OpenRequired(
+                ctx.ExtractDbPath,
+                revision);
+            return ContextTool.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                or Microsoft.Data.Sqlite.SqliteException)
+        {
+            return [];
+        }
     }
 
     private static string[]? OptionValues(string? value) =>

@@ -2629,6 +2629,226 @@ public sealed class ContextToolTests
     }
 
     [Fact]
+    public void RunActionable_SourceRescueMapsContentHitToImplementationPivot()
+    {
+        const string distractorId = "0000000000000000000000000000b101";
+        const string correctId = "0000000000000000000000000000b102";
+        IndexedSymbol[] symbols =
+        [
+            new(0, distractorId, "SidecarExtract", "class SidecarExtract", "class", "csharp",
+                "src/SidecarExtract.cs", 1, 40, null, false),
+            new(1, correctId, "SymbolsArtifactIdentity", "class SymbolsArtifactIdentity", "class", "csharp",
+                "src/SymbolsArtifactIdentity.cs", 1, 80, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does a derived sidecar prove which extract generation it was built from";
+        ITextContentSearchIndex content = new StubTextContentSearchIndex(
+            SourceHit(
+                "src/SymbolsArtifactIdentity.cs",
+                20,
+                "derived sidecar proves which extract generation it was built from",
+                sourceId: "src-b1",
+                chunkId: "chunk-b1",
+                containingSymbolId: correctId,
+                containingSymbolName: "SymbolsArtifactIdentity"));
+
+        IReadOnlyList<ContextTool.ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+            index, content, query, excludeTests: true);
+        Assert.Contains(seeds, seed => seed.Symbol.SymbolId == correctId);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: seeds,
+            readBody: symbol => symbol.SymbolId == correctId
+                ? ExtractReader.BodyReadResult.Available(
+                    "class SymbolsArtifactIdentity { public static bool MatchesArtifact() => true; }")
+                : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+        JsonElement rescued = Assert.Single(
+            pivots,
+            item => item.GetProperty("name").GetString() == "SymbolsArtifactIdentity");
+        Assert.Equal("source_rescue_1", rescued.GetProperty("reason").GetString());
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void RunActionable_SourceRescueWorksWithoutSemanticSeeds()
+    {
+        const string correctId = "0000000000000000000000000000b201";
+        var symbol = new IndexedSymbol(
+            0, correctId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+            "src/Identity.cs", 10, 40, null, false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does artifact generation matching work for sidecars";
+        var seeds = ContextTool.LoadSourceRescueSeeds(
+            index,
+            new StubTextContentSearchIndex(
+                SourceHit(
+                    "src/Identity.cs",
+                    12,
+                    "artifact generation matching for sidecars",
+                    containingSymbolId: correctId,
+                    containingSymbolName: "MatchesArtifact")),
+            query,
+            excludeTests: true);
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 2000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: seeds,
+            readBody: _ => ExtractReader.BodyReadResult.Available("bool MatchesArtifact() { return true; }"),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement pivot = Assert.Single(
+            document.RootElement.GetProperty("bundle").EnumerateArray(),
+            item => item.GetProperty("role").GetString() == "pivot");
+        Assert.Equal("MatchesArtifact", pivot.GetProperty("name").GetString());
+        Assert.StartsWith("source_rescue_", pivot.GetProperty("reason").GetString());
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void LoadSourceRescueSeeds_SkipsNonPhraseIdentifierQuery()
+    {
+        const string correctId = "0000000000000000000000000000b301";
+        var symbol = new IndexedSymbol(
+            0, correctId, "OrderRepo", "class OrderRepo", "class", "csharp",
+            "src/OrderRepo.cs", 1, 30, null, false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        ITextContentSearchIndex content = new StubTextContentSearchIndex(
+            SourceHit(
+                "src/OrderRepo.cs",
+                5,
+                "order repository persistence",
+                containingSymbolId: correctId,
+                containingSymbolName: "OrderRepo"));
+
+        Assert.Empty(ContextTool.LoadSourceRescueSeeds(index, content, "OrderRepo", excludeTests: false));
+        Assert.Empty(ContextTool.LoadSourceRescueSeeds(index, contentIndex: null, "how does order work", excludeTests: false));
+    }
+
+    [Fact]
+    public void RunActionable_SourceRescueBodyDoesNotAuthorizeSufficient()
+    {
+        const string correctId = "0000000000000000000000000000b401";
+        var symbol = new IndexedSymbol(
+            0, correctId, "RebuildPromotion", "method RebuildPromotion", "method", "csharp",
+            "src/RebuildPromotion.cs", 1, 50, null, false);
+        var index = MillerRepositoryIndex.Build([symbol]);
+        var resolver = new SmartTargetResolver(index);
+        var seeds = new ContextTool.ContextSourceSeed[]
+        {
+            new(symbol, Rank: 1),
+        };
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query: string.Empty,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: seeds,
+            readBody: _ => ExtractReader.BodyReadResult.Available(
+                "public void RebuildPromotion() { Promote(rebuildPath); }"),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement pivot = Assert.Single(
+            document.RootElement.GetProperty("bundle").EnumerateArray(),
+            item => item.TryGetProperty("body", out _));
+        Assert.Equal("source_rescue_1", pivot.GetProperty("reason").GetString());
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void LoadSourceRescueSeeds_MapsUniqueSymbolsCapsAtThreeAndPrefersDefinition()
+    {
+        const string exportId = "0000000000000000000000000000b501";
+        const string defId = "0000000000000000000000000000b502";
+        const string secondId = "0000000000000000000000000000b503";
+        const string thirdId = "0000000000000000000000000000b504";
+        const string fourthId = "0000000000000000000000000000b505";
+        const string testId = "0000000000000000000000000000b506";
+        IndexedSymbol[] symbols =
+        [
+            new(0, exportId, "Promote", "export Promote", "export", "typescript",
+                "src/promote.ts", 10, 10, null, false),
+            new(1, defId, "Promote", "function Promote", "function", "typescript",
+                "src/promote.ts", 10, 40, null, false),
+            new(2, secondId, "Alpha", "function Alpha", "function", "typescript",
+                "src/a.ts", 1, 20, null, false),
+            new(3, thirdId, "Beta", "function Beta", "function", "typescript",
+                "src/b.ts", 1, 20, null, false),
+            new(4, fourthId, "Gamma", "function Gamma", "function", "typescript",
+                "src/c.ts", 1, 20, null, false),
+            new(5, testId, "PromoteTests", "function PromoteTests", "function", "typescript",
+                "tests/promote.test.ts", 1, 20, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        ITextContentSearchIndex content = new StubTextContentSearchIndex(
+            SourceHit("src/promote.ts", 12, "promotion prose", "s1", "c1", exportId, "Promote"),
+            SourceHit("src/promote.ts", 13, "promotion prose again", "s1", "c2", exportId, "Promote"),
+            SourceHit("src/a.ts", 2, "alpha prose", "s2", "c3", secondId, "Alpha"),
+            SourceHit("src/b.ts", 2, "beta prose", "s3", "c4", thirdId, "Beta"),
+            SourceHit("src/c.ts", 2, "gamma prose", "s4", "c5", fourthId, "Gamma"),
+            SourceHit("tests/promote.test.ts", 2, "test prose", "s5", "c6", testId, "PromoteTests"));
+
+        IReadOnlyList<ContextTool.ContextSourceSeed> seeds = ContextTool.LoadSourceRescueSeeds(
+            index,
+            content,
+            "how does promotion prose work",
+            excludeTests: true);
+
+        Assert.Equal(3, seeds.Count);
+        Assert.Equal(defId, seeds[0].Symbol.SymbolId);
+        Assert.Equal(1, seeds[0].Rank);
+        Assert.Equal(secondId, seeds[1].Symbol.SymbolId);
+        Assert.Equal(thirdId, seeds[2].Symbol.SymbolId);
+        Assert.DoesNotContain(seeds, seed => seed.Symbol.IsTest || seed.Symbol.SymbolId == testId);
+        Assert.DoesNotContain(seeds, seed => seed.Symbol.SymbolId == fourthId);
+    }
+
+    [Fact]
     public void Ctor_RequiresWorkspaceIndexProvider()
     {
         var (index, _) = BuildFixture();
@@ -2639,6 +2859,29 @@ public sealed class ContextToolTests
         Assert.NotNull(tool);
 
         Assert.Throws<ArgumentNullException>(() => new ContextTool(null!));
+    }
+
+    private sealed class StubTextContentSearchIndex(params TextContentSearchHit[] hits) : ITextContentSearchIndex
+    {
+        public int DocumentCount => hits.Length;
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query,
+            string contentKind,
+            int limit = 10,
+            bool excludeTests = false) =>
+            Search(query, new[] { contentKind }, limit, excludeTests);
+
+        public IReadOnlyList<TextContentSearchHit> Search(
+            string query,
+            IReadOnlyCollection<string> contentKinds,
+            int limit = 10,
+            bool excludeTests = false) =>
+            hits
+                .Where(hit => contentKinds.Contains(hit.ContentKind))
+                .Where(hit => !excludeTests || !IsTestPath.Check(hit.Path ?? hit.DisplayPath))
+                .Take(limit)
+                .ToArray();
     }
 
     private sealed class RecordingContextSemanticArm(SemanticQueryResult result) : ISemanticTextArm
