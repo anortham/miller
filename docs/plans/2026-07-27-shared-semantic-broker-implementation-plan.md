@@ -8,7 +8,7 @@
 
 **Tech Stack:** .NET 10, C# `System.IO.Pipes` and Unix-domain sockets, Native-AOT-safe Win32 interop, Rust 1.82, `windows-sys` 0.61.2, `fs4`, frozen NDJSON sidecar protocol v1, llama.cpp, xUnit, Cargo tests, GitHub Actions, PowerShell hardware soak.
 
-**Architecture Quality:** Approved shape: a narrow compute broker with one engine thread, one user/model/protocol service identity, one user-global accelerator lease, no workspace awareness, and no durable control plane. The main risks are cancellable Windows named-pipe I/O, owner-death cleanup, multi-version coexistence, and GPU resource exhaustion. If live code requires HTTP, PID files, state files, token files, detached ownership, broker-initiated version restarts, or access to `vectors.db`, report a plan mismatch instead of adding that machinery.
+**Architecture Quality:** Approved shape: a narrow compute broker with one engine thread, one user/broker-contract/protocol/model service identity, one user-global accelerator lease, no workspace awareness, and no durable control plane. The main risks are cancellable Windows named-pipe I/O, owner-death cleanup, multi-version coexistence, and GPU resource exhaustion. If live code requires HTTP, PID files, state files, token files, detached ownership, broker-initiated version restarts, or access to `vectors.db`, report a plan mismatch instead of adding that machinery.
 
 ## Global Constraints
 
@@ -18,18 +18,21 @@
 - No new MCP tool is added.
 - `docs/contracts/semantic-sidecar-protocol-v1.md` remains frozen. Broker transport and lifecycle live in the separate `docs/contracts/semantic-broker-v1.md` contract.
 - Existing sidecar `serve` stdio behavior and conformance remain byte-compatible for Julie, evaluation, package smoke, and tests.
-- The broker serves only `health`, `embed_query`, `embed_batch`, and the existing protocol `shutdown`; it never receives a workspace root, database path, vector artifact, symbol identity, or retrieval policy.
+- The broker serves only `health`, `embed_query`, `embed_batch`, and the existing protocol `shutdown`; it never receives a workspace root, database path, vector artifact, symbol identity, or retrieval policy. In broker mode, `shutdown` writes the normal response and closes only that client connection; it never stops the accept loop or broker process.
 - `<workspace>/.miller/vectors.db` remains a Miller-owned, per-workspace derived artifact. The broker is stateless across process restarts except for existing sidecar model/backend caches.
-- One user/model/protocol identity has at most one live model-loaded broker. Identity is SHA-256 over `julie.embedding.sidecar|1|<model_id>|<model_sha256>`, rendered as the first 16 lowercase hex characters.
+- One user/broker-contract/protocol/model identity has at most one live model-loaded broker. Identity is SHA-256 over `julie.semantic.broker|1|julie.embedding.sidecar|1|<model_id>|<model_sha256>`, rendered as the first 16 lowercase hex characters. Binary version is deliberately excluded.
 - All model identities share one user-global accelerator lock at `<miller-home>/semantic/accelerator-v1.lock`; only its holder may load an accelerated backend.
 - A model-specific broker that does not hold the accelerator lock loads CPU directly. It never probes or allocates the GPU first.
-- Runtime `ResourceExhausted` from an accelerated engine releases the accelerator lease, reloads the same model on CPU, retries the idempotent request once, and stays on CPU for the rest of that broker lifetime.
-- The broker queue capacity is 64 total requests. Interactive `health`/`embed_query` traffic receives weighted 8:1 service over `embed_batch`; full or expired work returns an `internal_error` envelope without closing the connection.
+- Runtime `ResourceExhausted` from an accelerated engine releases the accelerator lease, reloads the same model on CPU, retries the idempotent request once, and stays on CPU for the rest of that broker lifetime. Classification is typed and initially covers proven allocation failures such as `ContextAlloc`; ordinary `Decode`, `Encode`, item, or application failures do not demote unless separately proven and typed.
+- The broker queue capacity is 64 total requests. While batch work is waiting, the scheduler dequeues at most eight interactive `health`/`embed_query` requests and then one `embed_batch`; full or expired work returns an `internal_error` envelope without closing the connection.
 - Existing protocol budgets remain: 120 seconds for cold `health`, 30 seconds per embedding request, and 500 ms for stdio `shutdown`. Broker connect probing uses 250 ms; owner recovery must converge within 30 seconds on the target Windows laptop.
 - A broker request active longer than 60 seconds causes the broker watchdog to terminate its own process so the OS releases the service and accelerator locks.
 - IPC is current-user-only: Unix broker directory mode `0700`, socket mode `0600`; Windows pipe rejects remote clients and uses a current-user security descriptor.
+- Only a service-lock holder may remove a stale Unix socket, and it does so before binding. Windows named pipes have no stale path and never use PID/state cleanup.
 - Windows named-pipe connect, read, and write operations must be genuinely cancellable. A documented no-op timeout is a release blocker.
-- The broker is not detached. Its stdin is a lifetime pipe; stdin EOF terminates the broker. On Windows the owning Miller process also assigns it to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object.
+- The broker is not detached. Its stdin watcher is armed before model load; stdin EOF terminates the broker even during cold load. On Windows the owning Miller process attempts to assign it to a `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job Object before use; attach failure is visible as degraded ownership, while stdin EOF remains authoritative.
+- The factory that successfully spawns retains broker ownership for its process lifetime. Owner disposal closes owner stdin and the Job handle; non-owner disposal closes only its client connections and never signals broker death.
+- A client that loses the spawn race polls the deterministic endpoint through the full 120-second initialization budget before failing open to lexical.
 - Version or model disagreement never restarts or kills an existing broker. Compatible clients connect to their deterministic identity; incompatible identities use another CPU broker or fail open to lexical.
 - Every semantic failure returns a stated failed outcome to Miller; search continues lexically. No broker error may fault the MCP call or corrupt lexical byte identity.
 - Sidecar logs and Miller telemetry never record query text, document text, paths, symbols, snippets, or vectors.
@@ -46,7 +49,7 @@
 |---|---|
 | `docs/contracts/semantic-broker-v1.md` | Frozen broker identity, IPC, owner lease, scheduling, failure, and compatibility contract. |
 | `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs` | Transport-neutral semantic connection/session state machine; stdio remains one implementation. |
-| `src/Miller.Indexing/Semantic/SemanticBrokerEndpoint.cs` | Deterministic model/protocol identity, paths, and Windows pipe name. |
+| `src/Miller.Indexing/Semantic/SemanticBrokerEndpoint.cs` | Deterministic broker-contract/protocol/model identity, paths, and Windows pipe name. |
 | `src/Miller.Indexing/Semantic/SharedSemanticBrokerConnectionFactory.cs` | Connect-first, spawn-on-demand, reconnect, owner-process lifetime, and snapshot. |
 | `src/Miller.Indexing/Semantic/WindowsBrokerJob.cs` | Native-AOT-safe Job Object setup and kill-on-close ownership. |
 | `src/Miller.Indexing/Semantic/SemanticEmbeddingSessionBroker.cs` | Process-local query/batch fairness over the shared remote connection; no process ownership. |
@@ -54,6 +57,7 @@
 | `src/Miller.Server/Hosting/MillerServiceRegistration.cs` | Singleton production wiring using `ToolsRoot` and machine Miller home. |
 | `src/Miller.Indexing/SemanticActivation.cs` | Default-on activation policy after all broker gates pass. |
 | `src/Miller.Server/Tools/WorkspaceRender.cs` | Additive broker health in existing workspace status/health output. |
+| `docs/contracts/vectors-v1.md` and `tests/Miller.Tests/Indexing/SemanticOffGuaranteeTests.cs` | Default-on wording plus explicit Off zero-work coverage for broker construction and path access. |
 | `scripts/Miller.SemanticBrokerProbe/` | Real-process probe used by multi-session soak scripts. |
 | `scripts/semantic-broker-soak.sh` / `.ps1` | Concurrent start, owner crash, model/version, process-count, latency, and GPU-memory gates. |
 
@@ -73,6 +77,7 @@
 | `src/engine_trait.rs` | Typed `ResourceExhausted` classification while preserving wire messages. |
 | `src/engine.rs` | Explicit backend policy and resource-exhaustion classification. |
 | `src/main.rs` | Additive `broker` CLI verb; existing verbs unchanged. |
+| `AGENTS.md` and `README.md` | Additive broker CLI/lifecycle documentation without expanding the existing environment surface. |
 | `.github/workflows/ci.yml` | Windows broker lifecycle lane and cross-platform broker contract tests. |
 
 ## External API Grounding
@@ -153,6 +158,8 @@ public void BrokerContract_LocksTheFailureProneLifecycleOut()
     Assert.Contains("No PID file", text, StringComparison.Ordinal);
     Assert.Contains("No broker-initiated restart", text, StringComparison.Ordinal);
     Assert.Contains("PIPE_REJECT_REMOTE_CLIENTS", text, StringComparison.Ordinal);
+    Assert.Contains("julie.semantic.broker|1|julie.embedding.sidecar|1|", text, StringComparison.Ordinal);
+    Assert.Contains("shutdown closes only the requesting connection", text, StringComparison.Ordinal);
 }
 ```
 
@@ -173,11 +180,19 @@ julie-semantic-sidecar broker \
   --lock <model-service-lock-path> \
   --accelerator-lock <user-global-accelerator-lock-path>
 
-identity_input = "julie.embedding.sidecar|1|" + model_id + "|" + model_sha256
+identity_input = "julie.semantic.broker|1|julie.embedding.sidecar|1|" + model_id + "|" + model_sha256
 identity = lowercase_hex(sha256(UTF8(identity_input)))[0..16]
 ```
 
-It must say that each IPC connection carries frozen protocol-v1 NDJSON, one request in flight per connection, multiple connections per broker, and no client sends `shutdown` during normal disposal.
+It must say:
+
+- Each IPC connection carries frozen protocol-v1 NDJSON, one request in flight per connection, and multiple connections per broker.
+- Unix endpoints are absolute socket paths. Windows derives both `\\.\pipe\<name>` for `CreateNamedPipeW` and the short `<name>` for `NamedPipeClientStream`.
+- `shutdown` preserves stdio process-stop behavior but closes only the requesting broker connection.
+- The stdin watcher is armed before model load; only the service-lock holder may unlink a stale Unix endpoint.
+- Owner disposal closes stdin/Job ownership; non-owner disposal closes only client connections.
+- Spawn losers poll the endpoint through the full initialization budget.
+- While a batch waits, at most eight interactive dequeues precede one batch dequeue.
 
 **Step 4: Run the focused docs gate**
 
@@ -234,7 +249,7 @@ Expected: FAIL because the reusable processor does not exist.
 ```rust
 pub struct ProtocolReply {
     pub line: String,
-    pub stop: bool,
+    pub stop_connection: bool,
 }
 
 pub fn process_line<E: EmbedEngine>(
@@ -244,7 +259,7 @@ pub fn process_line<E: EmbedEngine>(
 ) -> std::io::Result<Option<ProtocolReply>>;
 ```
 
-`run_loop_with_limits` becomes only capped line reading plus `process_line` plus write/flush. Blank lines return `Ok(None)`. No envelope or error literal changes.
+`run_loop_with_limits` becomes only capped line reading plus `process_line` plus write/flush. Blank lines return `Ok(None)`. In stdio mode, `stop_connection` exits the process loop exactly as today. In broker mode, the response is flushed and only that connection handler exits; the accept loop, service lock, accelerator lease, and engine remain live. No envelope or error literal changes.
 
 **Step 4: Run focused and full fast sidecar gates**
 
@@ -259,6 +274,7 @@ Then: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --al
 **Acceptance criteria:**
 - [ ] Existing stdio output is byte-identical for every fixture row.
 - [ ] EOF and `shutdown` retain existing behavior in stdio mode.
+- [ ] Broker `shutdown` closes only the requesting connection after its response is flushed.
 - [ ] No new protocol field, method, or error code exists.
 
 ### Task 3: Make Miller semantic sessions connection-factory based
@@ -319,7 +335,7 @@ public interface ISemanticSidecarConnection : IAsyncDisposable
 }
 ```
 
-`SemanticEmbeddingSession.StartIfNeededAsync` awaits `ConnectAsync`. Fatal recovery aborts only the connection. Session disposal closes the connection and factory; only the stdio factory terminates its owned child.
+`SemanticEmbeddingSession.StartIfNeededAsync` awaits `ConnectAsync`. Fatal recovery aborts only the connection. Session disposal always closes its connection. It disposes the factory only when constructed with explicit factory ownership for stdio/evaluation/test use; production broker sessions borrow the server/CLI-owned factory and never dispose it. The server host disposes its DI singleton, while `CliSemanticSession` disposes its invocation-wide factory after disposing the session.
 
 **Step 4: Run focused and Miller fast gates**
 
@@ -332,6 +348,7 @@ Run the three semantic session test classes, then `scripts/test.sh`.
 **Acceptance criteria:**
 - [ ] All existing retry, circuit, handshake, application-error, timeout, and byte-identity tests remain green.
 - [ ] A connection factory may represent either a child process or shared IPC without session branching.
+- [ ] Session disposal cannot tear down a borrowed shared factory or broker owner lease.
 - [ ] Disposal has no implicit global `shutdown`.
 
 ### Task 4: Build the lease-owned Unix broker and bounded scheduler
@@ -339,6 +356,8 @@ Run the three semantic session test classes, then `scripts/test.sh`.
 **Files:**
 - Modify: sidecar `src/lib.rs`
 - Modify: sidecar `src/main.rs`
+- Modify: sidecar `AGENTS.md`
+- Modify: sidecar `README.md`
 - Create: sidecar `src/broker/mod.rs`
 - Create: sidecar `src/broker/queue.rs`
 - Create: sidecar `src/broker/lease.rs`
@@ -372,7 +391,16 @@ fn concurrent_broker_starts_load_one_engine_and_losers_exit() { /* 8 processes *
 fn owner_stdin_eof_removes_socket_and_releases_lock() { /* close owner pipe */ }
 
 #[test]
-fn interactive_work_runs_with_at_most_one_batch_between_eight_queries() { /* fake engine */ }
+fn waiting_batch_runs_after_at_most_eight_interactive_dequeues() { /* fake engine */ }
+
+#[test]
+fn stale_socket_is_unlinked_only_after_service_lock_acquisition() { /* hard-kill first owner */ }
+
+#[test]
+fn shutdown_response_closes_only_its_connection() { /* second connection remains healthy */ }
+
+#[test]
+fn owner_eof_during_model_load_terminates_before_endpoint_bind() { /* blocking fake loader */ }
 ```
 
 **Step 2: Verify red**
@@ -391,12 +419,13 @@ pub struct BrokerConfig {
 
 pub fn serve(config: BrokerConfig) -> std::io::Result<()> {
     let service_lease = ServiceLease::try_acquire(&config.service_lock)?;
+    let owner = OwnerWatchdog::start(std::io::stdin())?;
     let engine = BrokerEngine::load(&config)?;
-    BrokerServer::new(config, service_lease, engine).run()
+    BrokerServer::bind(config, service_lease, owner, engine)?.run()
 }
 ```
 
-The service lock is acquired before engine construction. `BrokerQueue` uses `Mutex<State>` plus `Condvar`, rejects at 64, and schedules at most eight interactive items before one batch item when both exist. A dedicated watchdog reads owner stdin; EOF signals shutdown, while an active request older than 60 seconds calls `std::process::abort()`.
+The service lock is acquired before owner-watchdog startup and engine construction. The lock holder removes any stale Unix socket immediately before bind. `BrokerQueue` uses `Mutex<State>` plus `Condvar`, rejects at 64, and, while batch work waits, schedules at most eight interactive dequeues before one batch dequeue. The dedicated watchdog is armed before model load; owner EOF terminates even a blocked cold load, while an active request older than 60 seconds calls `std::process::abort()`. Sidecar `AGENTS.md` and `README.md` document the additive `broker` verb without adding environment knobs.
 
 **Step 4: Run broker and existing conformance gates**
 
@@ -410,6 +439,10 @@ Run focused broker tests, all four sidecar fast gates, and `cargo test --release
 - [ ] Eight concurrent starts produce one model-loaded broker; losing processes exit before engine load.
 - [ ] Closing owner stdin ends the broker and releases endpoint/service lock.
 - [ ] A killed owner leaves no child or cleanup requirement.
+- [ ] A stale Unix endpoint is removed only by the next service-lock holder.
+- [ ] `shutdown` closes one broker connection without releasing the service or accelerator lease.
+- [ ] Owner EOF during model load terminates before endpoint bind and releases both locks.
+- [ ] While batch work waits, one batch is dequeued after at most eight interactive dequeues.
 - [ ] Queue-full and expired requests receive `internal_error`; connections remain usable.
 - [ ] Stdio conformance is unchanged.
 
@@ -424,7 +457,7 @@ Run focused broker tests, all four sidecar fast gates, and `cargo test --release
 - Modify: sidecar `.github/workflows/ci.yml`
 
 **Interfaces:**
-- Consumes: Task 4 transport trait and Task 1 full pipe name.
+- Consumes: Task 4 transport trait and Task 1 identity-derived full server pipe name.
 - Produces: overlapped `CreateNamedPipeW` server with cancellation, `PIPE_REJECT_REMOTE_CLIENTS`, byte-mode NDJSON, and current-user ACL.
 
 **Contract inputs:** External API Grounding URLs; `windows-sys = 0.61.2` target-specific features `Win32_Foundation`, `Win32_Security`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`.
@@ -469,6 +502,8 @@ let handle = CreateNamedPipeW(
 ```
 
 Every pending connect/read/write owns an `OVERLAPPED` event and is completed or canceled with `CancelIoEx` before its buffers/events are dropped. Do not use `std::fs::File` blocking reads and do not document a timeout as a no-op.
+
+The sidecar receives the full server form `\\.\pipe\<name>`. Miller derives the short `<name>` from the same identity for `NamedPipeClientStream(".", name, ...)`; no caller passes the full Win32 path into the .NET client.
 
 **Step 4: Run Windows broker, fast, and package-layout gates**
 
@@ -521,6 +556,7 @@ fn accelerated_resource_exhaustion_reloads_cpu_retries_once_and_releases_lease()
 ```
 
 Also prove two model identities cannot both construct an accelerated engine.
+Prove ordinary `Decode`, `Encode`, item, and application failures do not demote or retry.
 
 **Step 2: Verify red**
 
@@ -535,7 +571,7 @@ pub enum EngineFailureClass { Application, ResourceExhausted }
 pub enum BackendPolicy { Auto, CpuOnly }
 ```
 
-`ContextAlloc` construction uses `ResourceExhausted`; string rendering remains exactly `"ContextAlloc: <message>"`. `BrokerEngine` holds the mutable engine only on its scheduler thread, drops the accelerated engine before releasing the accelerator lock, loads `CpuOnly`, updates additive health metadata, and retries once.
+`EngineError` gains a typed failure-class field while preserving its existing kind/message wire rendering. `ContextAlloc` construction uses `ResourceExhausted`; string rendering remains exactly `"ContextAlloc: <message>"`. Do not classify all `Decode`/`Encode` failures by prefix or message—only separately proven allocation variants may be added later with their own tests. `BrokerEngine` holds the mutable engine only on its scheduler thread, drops the accelerated engine before releasing the accelerator lock, loads `CpuOnly`, updates additive health metadata, and retries once.
 
 **Step 4: Run engine, broker, conformance, and hardware smoke**
 
@@ -549,6 +585,7 @@ Run all four fast gates plus the model-backed engine tests and existing hardware
 - [ ] A second model broker starts CPU without probing/allocating GPU.
 - [ ] Accelerated resource exhaustion retries once on CPU and all later calls remain CPU.
 - [ ] CPU resource exhaustion returns an application failure without retry loop.
+- [ ] Non-allocation `Decode`, `Encode`, item, and application failures never trigger demotion.
 - [ ] Health truthfully reports resolved CPU backend and degradation reason.
 
 ### Task 7: Connect, spawn, and supervise the broker from Miller
@@ -561,15 +598,18 @@ Run all four fast gates plus the model-backed engine tests and existing hardware
 - Modify: Miller `src/Miller.Indexing/Semantic/SemanticSearchArm.cs:232-246`
 - Modify: Miller `src/Miller.Indexing/Semantic/SemanticEmbeddingSessionBroker.cs`
 - Modify: Miller `src/Miller.Server/Hosting/MillerServiceRegistration.cs:73-96`
+- Modify: Miller `src/Miller.Server/Cli/CliDispatch.cs:3516-3532`
 - Test: Miller `tests/Miller.Tests/Indexing/SemanticBrokerEndpointTests.cs`
 - Test: Miller `tests/Miller.Tests/Indexing/SharedSemanticBrokerConnectionFactoryTests.cs`
+- Test: Miller `tests/Miller.Tests/Indexing/SemanticOffGuaranteeTests.cs`
 - Test: Miller `tests/Miller.Tests/Server/HostStartupRegistrationTests.cs`
+- Test: Miller `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
 
 **Interfaces:**
 - Consumes: Tasks 1 and 3-6 broker argv, endpoint identity, IPC, and connection factory.
 - Produces: connect-first/spawn-on-demand production factory, retained owner process/stdin, Windows Job Object, reconnect, and broker snapshot.
 
-**Contract inputs:** Machine Miller home is `Path.GetDirectoryName(WorkspaceContext.RegistryDbPath)`; executable remains `SemanticSidecarLayout.ExecutablePath(ToolsRoot)`.
+**Contract inputs:** `Miller.Indexing` receives pure `millerHome` and `toolsRoot` strings and never references Server-layer `WorkspaceContext`. Server/CLI callers derive `millerHome` from the parent of `WorkspaceContext.RegistryDbPath`; executable remains `SemanticSidecarLayout.ExecutablePath(ToolsRoot)`.
 
 **File ownership:** Miller endpoint, shared connection factory, Windows Job Object, DI wiring, tests.
 
@@ -590,6 +630,7 @@ public async Task EightFactories_ConvergeOnOneBrokerAndAllHandshake()
 ```
 
 Windows tests close the owner's Job handle and assert broker exit; Unix tests close owner stdin.
+Add a cold-load race in which one factory wins spawn, seven lose the service lock, and every loser continues endpoint polling until the winning broker handshakes. Add owner/non-owner disposal tests and an Off host-registration test that proves no broker factory/path/directory work occurs.
 
 **Step 2: Verify red**
 
@@ -608,7 +649,11 @@ public sealed class SharedSemanticBrokerConnectionFactory :
 }
 ```
 
-Connection order is: 250 ms direct connect; process-local spawn gate; retry direct connect; spawn `broker` with exact Task 1 argv and redirected stdin; on Windows attach the child to a kill-on-close Job Object; poll/handshake within the existing 120-second init budget. Losing children exit on the sidecar service lock. The owner object retains `Process`, stdin, and Job handle until Miller disposal. A transport failure closes only that client connection and re-enters connect-first logic.
+Connection order is: 250 ms direct connect; process-local spawn gate; retry direct connect; spawn `broker` with exact Task 1 argv and redirected stdin; on Windows attempt to attach the child to a kill-on-close Job Object before broker use; poll/handshake through the existing 120-second init budget. Losing children exit on the sidecar service lock, and their factories keep polling the deterministic endpoint instead of failing after the 250 ms probe. A Job attach failure is recorded in `SemanticBrokerSnapshot` as degraded ownership; stdin EOF remains authoritative.
+
+The server registers one lazy `SharedSemanticBrokerConnectionFactory` singleton and gives it pure `toolsRoot`/`millerHome` inputs only on first semantic use. The one-shot CLI creates one invocation-wide factory inside its single `CliSemanticSession`. Do not use a static global. Production MCP/CLI paths do not call `ProcessSemanticSidecarLauncher.ForServe`; stdio remains only for explicit evaluation, conformance, package-smoke, and test paths.
+
+The factory that successfully spawns owns `Process`, stdin, and Job handle until factory disposal. Owner disposal closes stdin and then the Job handle; a factory that only connected is a non-owner and closes only its client connections. Ownership belongs to the factory, not to an individual connection. A transport failure closes only that client connection and re-enters connect-first logic.
 
 Use `NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous)` with `ConnectAsync(TimeSpan, CancellationToken)` on Windows and `Socket(AddressFamily.Unix, ...)` with cancellation on Unix.
 
@@ -622,10 +667,14 @@ Run focused tests, `scripts/test.sh`, then the semantic Scale class with a from-
 
 **Acceptance criteria:**
 - [ ] Production DI has one process-local client broker but no process-local model child.
+- [ ] Server DI owns one lazy factory singleton; the CLI owns one invocation-wide factory; no static global or production MCP/CLI `ForServe` path remains.
 - [ ] Eight independent factories share one same-model broker.
+- [ ] Spawn losers wait through cold initialization and handshake instead of prematurely falling back.
+- [ ] Owner disposal terminates its broker; non-owner disposal never does.
+- [ ] Windows Job attachment occurs before broker use, and attach failure is visible as degraded ownership with stdin EOF still authoritative.
 - [ ] Owner death releases the broker; surviving clients reconnect/re-elect within 30 seconds.
 - [ ] Missing, incompatible, or failed broker returns lexical outcomes, never MCP failures.
-- [ ] Semantic Off never resolves workspace/tools/home or calls the factory.
+- [ ] Semantic Off never constructs the factory, derives an endpoint, creates `semantic/`, resolves workspace/tools/home, connects, or launches.
 
 ### Task 8: Prove multi-session, crash, version, and GPU behavior
 
@@ -674,9 +723,10 @@ The probe opens production connections, handshakes, embeds query/batch traffic, 
 5. Kill the owner Miller process mid-request.
 6. Kill the broker process mid-request.
 7. Start old/new model identities concurrently.
-8. Inject `ResourceExhausted` through the test-only broker engine.
+8. Exercise `ResourceExhausted` only through fake-engine unit/integration tests; do not add production test hooks or environment variables.
 9. Windows sleep/resume and rapid reconnect loop.
-10. Thirty-minute soak; extend to overnight before release if any retry/recovery row fails once.
+10. Let a short-lived CLI own the broker, connect a long-lived MCP client, then exit the CLI during an MCP request and prove bounded reconnect/re-election.
+11. Thirty-minute soak; extend to overnight before release if any retry/recovery row fails once.
 
 **Step 4: Run and record all hard gates**
 
@@ -692,6 +742,7 @@ Use `nvidia-smi` global memory before/after plus broker PID/process tree. WDDM p
 - [ ] GPU memory is effectively constant with N same-model sessions.
 - [ ] Every crash unblocks the active request and later requests recover or remain lexical.
 - [ ] No orphan broker remains after owner termination.
+- [ ] Short-lived CLI ownership is diagnosed and recovers without hanging a surviving MCP client.
 - [ ] Windows named-pipe operations honor deadlines under sleep/resume and process death.
 
 ### Task 9: Publish sidecar rc.5, pin it, switch semantic default-on, and expose health
@@ -702,6 +753,8 @@ Use `nvidia-smi` global memory before/after plus broker PID/process tree. WDDM p
 - Create: sidecar `docs/release-notes/v0.1.0-rc.5.md`
 - Modify: Miller `scripts/semantic-pins.json`
 - Modify: Miller `src/Miller.Indexing/SemanticActivation.cs:23-47`
+- Modify: Miller `docs/adr/ADR-0003-semantic-retrieval-ownership.md`
+- Modify: Miller `docs/contracts/vectors-v1.md`
 - Modify: Miller `src/Miller.Server/Tools/WorkspaceRender.cs`
 - Modify: Miller `src/Miller.Server/Tools/WorkspaceTool.cs`
 - Modify: Miller `src/Miller.Server/Tools/WorkspaceFactsAssembler.cs`
@@ -715,6 +768,7 @@ Use `nvidia-smi` global memory before/after plus broker PID/process tree. WDDM p
 - Modify: Miller `docs/README.md`
 - Modify: Miller `docs/release-notes/v1.14.0.md`
 - Test: Miller `tests/Miller.Tests/Indexing/SemanticActivationTests.cs`
+- Test: Miller `tests/Miller.Tests/Indexing/SemanticOffGuaranteeTests.cs`
 - Test: Miller `tests/Miller.Tests/Server/WorkspaceRenderTests.cs`
 - Test: Miller `tests/Miller.Tests/Server/WorkspaceFactsAssemblerTests.cs`
 - Test: Miller `tests/Miller.Tests/Server/WorkspaceToolTests.cs`
@@ -724,7 +778,7 @@ Use `nvidia-smi` global memory before/after plus broker PID/process tree. WDDM p
 - Consumes: published, downloaded, checksum-verified `julie-semantic-sidecar v0.1.0-rc.5` assets and Task 7 snapshot.
 - Produces: live rc.5 pins, default-on activation, additive broker health, and exact public docs.
 
-**Contract inputs:** This task has a hard approval boundary before sidecar push/tag/release. Asset names/digests come from live release facts; never guess or prefill hashes.
+**Contract inputs:** This task has a hard approval boundary before sidecar push/tag/release. Asset names/digests come from live release facts; never guess or prefill hashes. Default-on wording must replace current opt-in/default-Off claims in the active ADR, vector contract, README, agent guidance, CLI help/status copy, and tests; historical findings/plans remain historical unless they claim current behavior.
 
 **File ownership:** Sidecar version/release files; Miller pins, activation, status/health, docs/release notes.
 
@@ -755,12 +809,16 @@ After approval, push/tag/release rc.5, download all assets, verify checksums and
 [InlineData("false", SemanticMode.Off)]
 [InlineData("shadow", SemanticMode.Shadow)]
 [InlineData("on", SemanticMode.On)]
+[InlineData("1", SemanticMode.On)]
+[InlineData("true", SemanticMode.On)]
 [InlineData("bogus", SemanticMode.Off)]
 public void ActivationPolicy(string? raw, SemanticMode expected) =>
     Assert.Equal(expected, SemanticActivation.FromEnvValue(raw));
 ```
 
 Status/health adds broker state, endpoint identity, owner/non-owner role, server version/model, backend, accelerator lease, reconnect count, and degraded reason. It never emits full pipe/socket paths or PIDs in compact MCP output; exhaustive JSON may include PID for local diagnosis.
+
+Update `SemanticOffGuaranteeTests` so unset/blank are no longer Off cases, while explicit `off|0|false` prove that host registration never constructs the broker factory, derives an endpoint, creates `<miller-home>/semantic`, resolves semantic workspace/tools/home inputs, connects, launches, reads vectors, or writes semantic telemetry.
 
 **Step 5: Run Miller restore/build/fast/Scale/docs gates**
 
@@ -769,7 +827,7 @@ Restore from published rc.5, build Release, run `scripts/test.sh all`, package s
 **Acceptance criteria:**
 - [ ] Miller pins only live, downloaded, checksum-verified rc.5 assets.
 - [ ] Default-on policy exactly matches Global Constraints.
-- [ ] Explicit Off performs zero semantic work.
+- [ ] Explicit `off|0|false` performs zero semantic work, and unset/blank no longer appears in an Off test or current-behavior contract.
 - [ ] Existing status/health reports enough broker facts to diagnose sharing and CPU degradation.
 - [ ] Public docs state that sessions share a broker and only one broker may own acceleration.
 
@@ -837,7 +895,7 @@ The packet includes candidate commit, tag `v1.14.0`, exact live rc.5 pin, all ha
 - Porting Julie's current embedding-host verbatim: its Windows named-pipe timeout is explicitly a no-op and the path is not exercised on its CI/dev host.
 - HTTP loopback plus token/discovery files: adds failure surfaces without helping local compute sharing.
 - PID/state files for liveness: OS locks, connection state, owner stdin, and Job Objects are authoritative.
-- Newer-client-wins restarts: recreates Julie's version flap; deterministic model/protocol identities coexist instead.
+- Newer-client-wins restarts: recreates Julie's version flap; deterministic broker-contract/protocol/model identities coexist instead.
 - Silent per-process stdio fallback when broker connection fails: reintroduces the VRAM problem. Production falls back to lexical.
 - Message-string OOM detection: resource exhaustion is typed at the engine boundary.
 - Treating Windows CI compilation as Windows lifecycle proof: cancellation, owner death, and process/GPU soak run on Windows.
@@ -846,7 +904,7 @@ The packet includes candidate commit, tag `v1.14.0`, exact live rc.5 pin, all ha
 
 - Semantic retrieval is On when `MILLER_SEMANTIC` is unset and Off remains a zero-work guarantee.
 - Concurrent same-model Miller sessions share one model-loaded broker and one GPU allocation.
-- Different model/protocol identities cannot simultaneously own acceleration.
+- Different broker-contract/protocol/model identities cannot simultaneously own acceleration.
 - Owner, client, or broker death never leaves a hanging MCP request or orphan model process.
 - Accelerated resource exhaustion demotes to CPU and retries once; subsequent calls remain healthy on CPU.
 - Windows named-pipe connect/read/write cancellation is tested and bounded.
