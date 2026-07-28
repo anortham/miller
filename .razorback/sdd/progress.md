@@ -219,3 +219,8 @@ Reviewed-plan base: `636238ef`
 Task 1: complete (`serial-worker-commit`; worker commits `fff0f306`, `4fcca102`, and
 `3d0e6173`; Lead inline review clean; Grok progress review GO for Tasks 2 and 3; focused contract
 tests 8/8; Miller fast suite 5,219 passed, 2 skipped in 25s).
+Task 2: complete (`parallel-lead-commit`; sidecar lead commit `a7b55c1`; Lead inline review clean;
+Grok Batch A review GO; sidecar 219 Rust tests and 30 Python tests passed; clippy/fmt clean).
+Task 3: complete (`parallel-lead-commit`; Miller lead commits `c163e129` and Grok fix
+`bf729714`; Lead inline review clean; Grok ownership finding fixed; focused 55 passed, 2 skipped;
+Miller fast suite 5,223 passed, 2 skipped in 23s).

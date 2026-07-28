@@ -118,7 +118,7 @@
 | Task 3: Make Miller sessions connection-factory based | Batch A | Miller session abstractions and existing fake/session tests only | No | None - safe parallel batch. |
 | Task 4: Build Unix broker and scheduler | None - serial | Sidecar broker core, Unix transport, CLI/lib exports, broker tests | Yes | Requires Task 2's processor contract. |
 | Task 5: Add hardened Windows transport | None - serial | Sidecar Windows transport, target dependency, Windows tests/CI only | Yes | Extends Task 4's transport seam. |
-| Task 6: Add accelerator lease and OOM demotion | None - serial | Sidecar broker engine/lease, engine classification, recovery tests | Yes | Requires the working broker lifecycle. |
+| Task 6: Add accelerator policy and OOM demotion | None - serial | Sidecar broker engine/lease, engine classification, recovery tests | Yes | Requires the working broker lifecycle and Task 4 lock primitive. |
 | Task 7: Connect and supervise the broker from Miller | None - serial | Miller endpoint, shared connection factory, Windows Job Object, DI wiring, tests | Yes | Requires Tasks 3-6 interfaces. |
 | Task 8: Prove multi-session behavior and dogfood | None - serial | Cross-repo integration tests, probe/soak scripts, verification ledger | Yes | Requires both repos integrated. |
 | Task 9: Publish rc.5, pin it, switch default-on, expose health | None - serial | Sidecar version/release files; Miller pins, activation, status/health, docs/release notes | Yes | Requires Task 8 hard gates and explicit publish approval. |
@@ -285,10 +285,10 @@ Then: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --al
 `parallel-lead-commit`: hand the verified diff to the lead; do not commit from this lane.
 
 **Acceptance criteria:**
-- [ ] Existing stdio output is byte-identical for every fixture row.
-- [ ] EOF and `shutdown` retain existing behavior in stdio mode.
-- [ ] Broker `shutdown` closes only the requesting connection after its response is flushed.
-- [ ] No new protocol field, method, or error code exists.
+- [x] Existing stdio output is byte-identical for every fixture row.
+- [x] EOF and `shutdown` retain existing behavior in stdio mode.
+- [x] Broker `shutdown` exposes connection-scoped stop only after its response is serialized; Task 4 proves multi-connection survival after flush.
+- [x] No new protocol field, method, or error code exists.
 
 ### Task 3: Make Miller semantic sessions connection-factory based
 
@@ -359,10 +359,10 @@ Run the three semantic session test classes, then `scripts/test.sh`.
 `parallel-lead-commit`: hand the verified diff to the lead; do not commit from this lane.
 
 **Acceptance criteria:**
-- [ ] All existing retry, circuit, handshake, application-error, timeout, and byte-identity tests remain green.
-- [ ] A connection factory may represent either a child process or shared IPC without session branching.
-- [ ] Session disposal cannot tear down a borrowed shared factory or broker owner lease.
-- [ ] Disposal has no implicit global `shutdown`.
+- [x] All existing retry, circuit, handshake, application-error, timeout, and byte-identity tests remain green.
+- [x] A connection factory may represent either a child process or shared IPC without session branching.
+- [x] Session disposal cannot tear down a borrowed shared factory or broker owner lease.
+- [x] Disposal has no implicit global `shutdown`.
 
 ### Task 4: Build the lease-owned Unix broker and bounded scheduler
 
@@ -393,6 +393,12 @@ Run the three semantic session test classes, then `scripts/test.sh`.
 **Serialization required:** Yes.
 
 **Dependency reason:** Requires Task 2's processor contract.
+
+**Task 4/Task 6 boundary:** Task 4 owns both OS-lock lifetimes: it creates the service-lock and
+accelerator-lock primitives, holds any acquired handles for the broker lifetime, and proves owner EOF
+releases both. Task 6 owns accelerator policy: only the accelerator-lock holder may select `Auto`, a
+non-holder selects `CpuOnly` without a GPU probe, and typed runtime resource exhaustion demotes and
+retries once. Task 4 must not invent Task 6's backend-selection or demotion policy.
 
 **Step 1: Write failing real-process tests**
 
@@ -544,7 +550,7 @@ Add an explicit `windows-x64 broker lifecycle` CI step before model-backed confo
 - Test: sidecar `tests/broker_accelerator_tests.rs`
 
 **Interfaces:**
-- Consumes: user-global accelerator lock and current backend selection/load fallback.
+- Consumes: Task 4's user-global accelerator-lock primitive and current backend selection/load fallback.
 - Produces: `EngineFailureClass::ResourceExhausted`, explicit `BackendPolicy`, accelerator lease health, permanent broker-lifetime CPU demotion, and one idempotent retry.
 
 **Contract inputs:** Only a typed resource-exhaustion error triggers retry; ordinary item/application errors remain v1 `internal_error` without engine reload.
