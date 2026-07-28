@@ -140,9 +140,11 @@ Windows it also closes its Job Object ownership handle. Non-owner disposal close
 Miller process's client connections; it never closes the owner lease, service lock, endpoint, or
 Job Object.
 
-If the owner dies, existing connections close and another Miller process may recover ownership
-through the service-lock protocol. Clients do not kill an old process and do not use a PID-based
-reaper.
+If the owner dies, existing connections close. Miller owner recovery occurs through factory lifecycle:
+another Miller process becomes the spawning factory, establishes a new owner stdin lease and
+Windows Job Object when applicable, then starts a service-broker contender. The model service lock
+separately arbitrates which sidecar service broker may load and serve. Clients do not kill an old
+process and do not use a PID-based reaper.
 
 ## Wire behavior
 

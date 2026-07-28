@@ -149,9 +149,11 @@ original resident-child proposal above rather than extending it:
 - Local IPC carries the unchanged `julie.embedding.sidecar` protocol v1. The broker owns pure
   `health`, `embed_query`, and `embed_batch` compute only; it owns no workspace, artifact, database,
   watcher, HTTP service, PID registry, or update control plane.
-- A per-model service lock arbitrates ownership. Spawn losers poll through the initialization
-  budget instead of loading a second model. One user-global accelerator lock prevents different
-  model identities from loading onto the accelerator concurrently; non-holders use CPU.
+- A per-model service lock arbitrates which sidecar service broker may load and serve. Miller
+  owner recovery remains a factory-lifecycle operation; factories whose contenders lose the
+  service lock poll through the initialization budget instead of loading a second model. One
+  user-global accelerator lock prevents different model identities from loading onto the
+  accelerator concurrently; non-holders use CPU.
 - A bounded scheduler prioritizes interactive queries without starving batch convergence. Proven
   resource exhaustion demotes the accelerated engine to CPU and retries once; ordinary
   application failures do not.

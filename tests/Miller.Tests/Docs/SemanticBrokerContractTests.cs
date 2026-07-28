@@ -142,4 +142,32 @@ public sealed class SemanticBrokerContractTests
             Assert.DoesNotContain("same protocol/model identity", text, StringComparison.Ordinal);
         }
     }
+
+    [Fact]
+    public void BrokerContract_SeparatesFactoryRecoveryFromServiceBrokerArbitration()
+    {
+        string contract = File.ReadAllText(ContractPath);
+        string design = File.ReadAllText(Path.Combine(
+            ScaleTestSupport.RepoRoot(),
+            "docs",
+            "plans",
+            "2026-07-19-miller-semantic-integration-design.md"));
+
+        Assert.Contains(
+            "Miller owner recovery occurs through factory lifecycle",
+            contract,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "recover ownership through the service-lock protocol",
+            contract,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "service lock arbitrates which sidecar service broker may load and serve",
+            design,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "service lock arbitrates ownership",
+            design,
+            StringComparison.Ordinal);
+    }
 }
