@@ -227,3 +227,21 @@ Miller fast suite 5,223 passed, 2 skipped in 23s).
 Task 4: complete (`serial-worker-commit`; sidecar worker commit `847cba5b`; Lead inline review
 clean after framing/cross-platform fixes; Grok progress review GO; focused broker 15/15; full
 sidecar/Python gates green; release conformance 9/9 including both golden lanes).
+Task 5: complete (`parallel-lead-commit`; sidecar commit `d468402`; Windows named-pipe transport,
+current-user ACL, cancellation, owner-stdin shutdown, and CI lifecycle lane; Windows metadata
+cross-checks clean).
+Task 6: complete (`parallel-lead-commit`; sidecar commit `741850a`; user-global accelerator lease,
+typed resource-exhaustion demotion to CPU, and visible backend degradation; Grok review GO).
+Task 7: complete (`serial-worker-commit`; Miller commit `687011f5`; production DI uses the shared
+factory, Windows Job Object attachment precedes broker use, and no production stdio fallback remains).
+Task 8: complete (`serial-worker-commit`; Miller commit `fc87effd`; same-model sharing, model
+isolation, owner/client/broker recovery, process cleanup, and false-pass-resistant soak validation).
+Task 9: complete through public dependency pinning (`serial-worker-commit`; Miller commit `8af45ddf`
+plus the Task 10 live RC5 pin/evidence follow-up; sidecar `v0.1.0-rc.5` published from
+`13fff87`; semantic default-on and explicit-Off zero-work gates pass).
+Task 10: in progress at the approval boundary. Local fast 5,254/5,254, Scale 94/94 applicable,
+plugin 48/48, Python 104/104, Release 0W/0E, Apple arm64 Native AOT semantic package smoke, real
+two-session default-on dogfood, impact review, and Grok RC5 pin/evidence review pass. The 30-minute
+macOS production-connector soak passed with zero hangs/failures, 17/17 normal completions, sub-second
+broker/owner recovery, and zero final broker processes; hosted candidate-branch Windows/package gates
+and the physical 6GB NVIDIA gate remain before final main/tag/release approval.

@@ -848,11 +848,11 @@ Update `SemanticOffGuaranteeTests` so unset/blank are no longer Off cases, while
 Restore from published rc.5, build Release, run `scripts/test.sh all`, package smoke, sync `CLAUDE.md` → `AGENTS.md`, and verify no global config is required for semantic activation.
 
 **Acceptance criteria:**
-- [ ] Miller pins only live, downloaded, checksum-verified rc.5 assets.
-- [ ] Default-on policy exactly matches Global Constraints.
-- [ ] Explicit `off|0|false` performs zero semantic work, and unset/blank no longer appears in an Off test or current-behavior contract.
-- [ ] Existing status/health reports enough broker facts to diagnose sharing and CPU degradation.
-- [ ] Public docs state that sessions share a broker and only one broker may own acceleration.
+- [x] Miller pins only live, downloaded, checksum-verified rc.5 assets.
+- [x] Default-on policy exactly matches Global Constraints.
+- [x] Explicit `off|0|false` performs zero semantic work, and unset/blank no longer appears in an Off test or current-behavior contract.
+- [x] Existing status/health reports enough broker facts to diagnose sharing and CPU degradation.
+- [x] Public docs state that sessions share a broker and only one broker may own acceleration.
 
 ### Task 10: Run final release gates and close evidence
 
@@ -904,9 +904,9 @@ Report current path, branch, commit, `git status --short --branch`, and `git wor
 The packet includes candidate commit, tag `v1.14.0`, exact live rc.5 pin, all hard-gate results, report-only retrieval metrics, and remaining risks. After approval, follow `docs/release-process.md` through push, tag, GitHub release notes, asset verification, and plugin-marketplace verification in the same session.
 
 **Acceptance criteria:**
-- [ ] No hidden per-process production sidecar path remains.
+- [x] No hidden per-process production sidecar path remains.
 - [ ] All hard gates and complete review pass.
-- [ ] Retrieval value is preserved and default-on dogfood needs no enabling env var.
+- [x] Retrieval value is preserved and default-on dogfood needs no enabling env var.
 - [ ] Both repos and every related worktree are reconciled before approval.
 - [ ] Release occurs only after fresh approval of the verified final state.
 

@@ -3,19 +3,57 @@
 Date: 2026-07-28
 
 This ledger covers the Task 8 process, crash, model-isolation, and accelerator proof for the shared semantic
-broker. It is pre-release evidence from the pinned Miller worktree at `687011f5` and the sidecar worktree at
-`741850a`; it is not rc.5 release evidence.
+broker, followed by the published RC5 and Miller default-on closure evidence. The original process proof used
+the Miller worktree at `687011f5` and sidecar worktree at `741850a`; the release dependency is the published
+sidecar commit `13fff87bcaa9cc93feac465141756f4fc36183f5`.
 
 ## Candidate
 
-- Source-built sidecar reports `julie-semantic-sidecar 0.1.0-rc.4` because the rc.5 version bump belongs to
-  Task 9.
+- The original Task 8 source-built candidate reported `julie-semantic-sidecar 0.1.0-rc.4`; version publication
+  belonged to Task 9.
 - Tested macOS binary SHA-256:
   `6d2fa03c08d051d9be28bd32570d06e233492987310352a26ee52ac9f10d21b9`.
 - Both pinned models were prepared and checksum-verified by the sidecar before the run.
-- Miller's published pin remains rc.4 and the repo-local runtime was absent. The Scale harness skips that path
-  with an actionable instruction to restore rc.5 or supply a from-source tools root. It must not be counted as
-  broker-capable evidence.
+- The original Task 8 Miller pin remained RC4 and the repo-local runtime was absent. That skip remains historical
+  pre-release evidence and is not counted as broker-capable proof.
+
+## Published RC5 dependency
+
+- GitHub release: <https://github.com/anortham/julie-semantic-sidecar/releases/tag/v0.1.0-rc.5>
+- Target commit: `13fff87bcaa9cc93feac465141756f4fc36183f5`
+- Protected package runs:
+  [30360072357](https://github.com/anortham/julie-semantic-sidecar/actions/runs/30360072357) and
+  [30360964021](https://github.com/anortham/julie-semantic-sidecar/actions/runs/30360964021)
+- Both runs produced byte-identical archives for all four targets. The second run passed every lane, including
+  the exact Apple arm64 checksum guard and Linux/Windows Vulkan half-float zero-store verification.
+- Fresh public downloads matched their SHA-256 sidecars and the retained successful-run archives. Every unpacked
+  manifest verified the same v4 native-build identity.
+- The public Apple arm64 package passed artifact validation and a direct broker lifecycle smoke: current-user
+  Unix bind, frozen health request/response, owner-stdin EOF shutdown, empty stdout, and endpoint removal.
+
+Miller now pins those public assets exactly:
+
+| Target | SHA-256 |
+|---|---|
+| Apple arm64 | `4c62e729124ba30640a0b3a8c0f8a4d9f5b8cc4e02a6de640b5baa9039ff2ddc` |
+| Apple x64 | `959ab0e1869f0eeb68f237f1ca1266f0440f33a1b42ebbfe370d2e3fb8be8a6e` |
+| Linux x64 Vulkan | `a2f0bcd0135cc056465d12353572462f877e9ae7ca5a988a0012de1038a4a36f` |
+| Windows x64 Vulkan | `47f9b1bcc149c781d6d95d74e3e0207142d3f587210872758e5b208fef3b091a` |
+
+## Miller default-on production dogfood
+
+Two real Miller MCP servers were started from the Release build with `MILLER_SEMANTIC` absent and a shared,
+isolated Miller home. Both completed explicit semantic searches with ten results. Status from the two live
+sessions reported:
+
+- the same endpoint identity, `90bf0aac063d5036`;
+- exactly the complementary `owner` and `non_owner` roles;
+- the same `bge-small-en-v1.5-f32` model and `metal` backend;
+- one accelerated broker identity; and
+- `ready` state for both sessions.
+
+The focused RC5 package/broker gate passed 12 tests with two hardware-recording skips. The Scale harness's
+eight same-model real-process test passed against the restored public RC5 package.
 
 ## RED evidence
 
@@ -66,16 +104,16 @@ or batch text.
 
 | Row | State | Evidence or remaining gate |
 |---|---|---|
-| Same-model N sessions use one model-loaded broker | Passed on macOS | Production-connector short soak and sidecar process test |
+| Same-model N sessions use one model-loaded broker | Passed on macOS | Production-connector short soak, sidecar process test, and two real default-on Miller MCP sessions |
 | Different model identities use separate endpoints | Passed on macOS | Two distinct endpoint identities |
 | At most one model owns acceleration | Passed deterministically | Sidecar fake-engine process test shares the production lease/serve seam; this is lifecycle evidence, not model or VRAM evidence |
 | Client/owner/broker death unblocks and recovers within 30 seconds | Passed on macOS | No hung requests; post-kill recovery events at 0.789 and 0.880 seconds |
 | No orphan broker after owner termination | Passed on macOS | Candidate-scoped final process count was zero |
-| GPU residency remains effectively constant | Pending release gate | Run on the 6GB NVIDIA Windows laptop; warm must be accelerated with one broker and at least a 64 MiB global delta, then many-session delta must be no more than warm plus 256 MiB |
-| Linux process and portable accelerator behavior | Pending release gate | Run the same script on the release Linux candidate |
+| GPU residency remains effectively constant | Pending 6GB NVIDIA hardware gate | Warm must be accelerated with one broker and at least a 64 MiB global delta, then many-session delta must be no more than warm plus 256 MiB |
+| Linux process and portable accelerator behavior | RC5 package guard passed; process soak pending | Protected Linux Vulkan package lane passed; run the same process script on a Linux host |
 | Windows rapid reconnect and sleep/resume | Pending release gate | PowerShell runs eight rapid reconnects; pass `-SleepResumeWindowSeconds` and sleep/resume the laptop during that window |
 | Windows Job Object cleanup | Pending release gate | Confirm candidate-scoped final broker count is zero |
-| Thirty-minute soak | Pending release gate | Default runner duration is 30 minutes; extend overnight if any recovery row fails once |
+| Thirty-minute soak | Passed on macOS | 1,800.012 seconds of traffic; zero hangs/failures; 17/17 normal completions; broker/owner recovery in 0.818/0.967 seconds; final broker count zero |
 | PowerShell runner parse/execution | Pending Windows gate | `pwsh` was not installed on this macOS host |
 
 WDDM per-process `N/A` is not accepted for the NVIDIA row. The PowerShell runner records global
