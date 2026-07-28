@@ -1990,14 +1990,43 @@ public sealed class ContextToolTests
             ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
         var tool = new ContextTool(provider);
 
-        string output = tool.Context("SIDECAR_EXTRACT", max_hops: 0, token_budget: 2000);
+        string compact = tool.Context("SIDECAR_EXTRACT", max_hops: 0, token_budget: 2000);
 
-        Assert.Contains("SIDECAR_EXTRACT", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("evidence=sufficient", output, StringComparison.Ordinal);
+        Assert.Contains("SIDECAR_EXTRACT", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("evidence=sufficient", compact, StringComparison.Ordinal);
         Assert.Contains(
             "evidence=partial  reason=pivot_value_declaration_only",
-            output,
+            compact,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "search(query=\"SIDECAR_EXTRACT\", mode=\"source\")",
+            compact,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "inspect(target=\"SIDECAR_EXTRACT\"",
+            compact,
+            StringComparison.Ordinal);
+
+        string json = tool.Context("SIDECAR_EXTRACT", max_hops: 0, token_budget: 2000, format: "json");
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(
+            "partial",
+            document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+        Assert.Equal(
+            "pivot_value_declaration_only",
+            document.RootElement.GetProperty("disposition").GetProperty("reason").GetString());
+        JsonElement[] actions = document.RootElement.GetProperty("next_actions").EnumerateArray().ToArray();
+        Assert.Contains(
+            actions,
+            action => action.GetProperty("call").GetString()!
+                .Contains("mode=\"source\"", StringComparison.Ordinal));
+        Assert.Equal(
+            "search(query=\"SIDECAR_EXTRACT\", mode=\"source\")",
+            actions[0].GetProperty("call").GetString());
+        Assert.DoesNotContain(
+            actions,
+            action => action.GetProperty("call").GetString()!
+                .StartsWith("inspect(", StringComparison.Ordinal));
     }
 
     [Fact]

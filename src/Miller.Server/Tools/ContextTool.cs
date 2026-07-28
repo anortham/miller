@@ -470,11 +470,11 @@ public sealed partial class ContextTool
 
         IReadOnlyList<Candidate> selected = ContextPacker.PackAllocated(packCandidates, tokenBudget);
         Func<IReadOnlyList<Candidate>, string> renderer = json
-            ? selected => RenderJson(selected, anchorDiagnostics, boundOptionalFields: false)
-            : selected => RenderCompact(selected, anchorDiagnostics);
+            ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: false)
+            : selected => RenderCompact(selected, anchorDiagnostics, query);
         Func<IReadOnlyList<Candidate>, string> boundedRenderer = json
-            ? selected => RenderJson(selected, anchorDiagnostics, boundOptionalFields: true)
-            : selected => RenderCompact(selected, anchorDiagnostics);
+            ? selected => RenderJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
+            : selected => RenderCompact(selected, anchorDiagnostics, query);
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
@@ -720,6 +720,8 @@ public sealed partial class ContextTool
     internal sealed record ContextSemanticSeed(IndexedSymbol Symbol, int Rank, double Score);
 
     private sealed record ContextEvidenceDisposition(string Status, string Reason);
+
+    private sealed record ContextNextAction(string Call, string Reason);
 
     private sealed record ReferenceContextItem(
         string ItemType,
@@ -1641,11 +1643,17 @@ public sealed partial class ContextTool
     private const int NextInspectCount = 3;
 
     private static string RenderCompact(IReadOnlyList<Candidate> selected) =>
-        RenderCompact(selected, []);
+        RenderCompact(selected, [], query: string.Empty);
 
     private static string RenderCompact(
         IReadOnlyList<Candidate> selected,
-        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics)
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics) =>
+        RenderCompact(selected, anchorDiagnostics, query: string.Empty);
+
+    private static string RenderCompact(
+        IReadOnlyList<Candidate> selected,
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        string query)
     {
         if (selected.Count == 0)
         {
@@ -1737,12 +1745,12 @@ public sealed partial class ContextTool
             .Append(disposition.Reason)
             .Append('\n');
 
-        if (pivots.Count > 0 && disposition.Status != "sufficient")
+        ContextNextAction[] nextActions = BuildDiscoveryNextActions(pivots, disposition, query);
+        if (nextActions.Length > 0)
         {
             sb.Append("## next inspect\n");
-            int inspectCount = Math.Min(NextInspectCount, pivots.Count);
-            for (int i = 0; i < inspectCount; i++)
-                sb.Append(NextInspectLine(pivots[i].Symbol)).Append('\n');
+            foreach (ContextNextAction action in nextActions)
+                sb.Append(action.Call).Append('\n');
         }
 
         return sb.ToString().TrimEnd('\n');
@@ -1755,6 +1763,52 @@ public sealed partial class ContextTool
         "inspect(target=\"" + EscapeCallString(name) +
         "\", scope=\"" + EscapeCallString(filePath) +
         "\", depth=\"overview\")";
+
+    private static string NextSourceSearchLine(string query) =>
+        "search(query=\"" + EscapeDiagnosticQuery(query) + "\", mode=\"source\")";
+
+    private static ContextNextAction[] BuildDiscoveryNextActions(
+        IReadOnlyList<Candidate> pivots,
+        ContextEvidenceDisposition disposition,
+        string query)
+    {
+        if (disposition.Status == "sufficient" || pivots.Count == 0)
+            return [];
+
+        bool anyImplementation = pivots.Any(static pivot => CarriesImplementation(pivot.Symbol));
+        bool suggestSource =
+            !string.IsNullOrWhiteSpace(query) &&
+            (!anyImplementation || disposition.Reason == "pivot_value_declaration_only");
+
+        var actions = new List<ContextNextAction>(NextInspectCount + 1);
+        if (!anyImplementation)
+        {
+            if (suggestSource)
+            {
+                actions.Add(new ContextNextAction(
+                    NextSourceSearchLine(query),
+                    "source or docs may hold conceptual language beyond value declarations"));
+            }
+            return actions.ToArray();
+        }
+
+        int inspectCount = Math.Min(NextInspectCount, pivots.Count);
+        for (int i = 0; i < inspectCount; i++)
+        {
+            actions.Add(new ContextNextAction(
+                NextInspectLine(pivots[i].Symbol),
+                "inspect a pivot implementation"));
+        }
+
+        if (suggestSource)
+        {
+            actions.Add(new ContextNextAction(
+                NextSourceSearchLine(query),
+                "source or docs may hold conceptual language beyond value declarations"));
+        }
+
+        return actions.ToArray();
+    }
 
     private static string EscapeCallString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
@@ -1779,14 +1833,21 @@ public sealed partial class ContextTool
     }
 
     private static string RenderJson(IReadOnlyList<Candidate> selected) =>
-        RenderJson(selected, [], boundOptionalFields: false);
+        RenderJson(selected, [], query: string.Empty, boundOptionalFields: false);
 
     private static string RenderBoundedJson(IReadOnlyList<Candidate> selected) =>
-        RenderJson(selected, [], boundOptionalFields: true);
+        RenderJson(selected, [], query: string.Empty, boundOptionalFields: true);
 
     private static string RenderJson(
         IReadOnlyList<Candidate> selected,
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        bool boundOptionalFields) =>
+        RenderJson(selected, anchorDiagnostics, query: string.Empty, boundOptionalFields);
+
+    private static string RenderJson(
+        IReadOnlyList<Candidate> selected,
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        string query,
         bool boundOptionalFields)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -1835,17 +1896,17 @@ public sealed partial class ContextTool
             {
                 Candidate[] pivots = selected
                     .Where(static candidate => candidate.IsPivot)
-                    .Take(NextInspectCount)
                     .ToArray();
-                if (pivots.Length > 0)
+                ContextNextAction[] nextActions = BuildDiscoveryNextActions(pivots, disposition, query);
+                if (nextActions.Length > 0)
                 {
                     w.WritePropertyName("next_actions");
                     w.WriteStartArray();
-                    foreach (Candidate pivot in pivots)
+                    foreach (ContextNextAction action in nextActions)
                     {
                         w.WriteStartObject();
-                        w.WriteString("call", NextInspectLine(pivot.Symbol));
-                        w.WriteString("reason", "inspect a pivot implementation");
+                        w.WriteString("call", action.Call);
+                        w.WriteString("reason", action.Reason);
                         w.WriteEndObject();
                     }
                     w.WriteEndArray();
