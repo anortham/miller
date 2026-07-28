@@ -131,18 +131,22 @@ public sealed class SemanticEvaluationAdapter
 
     public SemanticEmbeddingSession CreateSession(SemanticSessionOptions? options = null) =>
         CreateSession(
-            new ProcessSemanticSidecarLauncher(
+            new StdioSemanticSidecarConnectionFactory(
                 ProducerExecutable,
                 ProducerArguments,
                 ProducerEnvironment),
             options);
 
     public SemanticEmbeddingSession CreateSession(
-        ISemanticSidecarLauncher launcher,
+        ISemanticSidecarConnectionFactory connectionFactory,
         SemanticSessionOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(launcher);
-        return new SemanticEmbeddingSession(launcher, options, Encoder);
+        ArgumentNullException.ThrowIfNull(connectionFactory);
+        return new SemanticEmbeddingSession(
+            connectionFactory,
+            options,
+            Encoder,
+            ownsConnectionFactory: true);
     }
 
     public void WriteEvidence(string path)

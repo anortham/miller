@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using Miller.Indexing.Semantic;
 using Miller.Tests.Support;
 using Xunit;
@@ -193,6 +195,49 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
+    public async Task TransportFailure_AbortsOnlyTheConnectionThenReconnectsThroughTheFactory()
+    {
+        await using var factory = new RecordingConnectionFactory(
+            FakeSemanticSidecar.SequencedLauncher(FakeSidecarFault.CrashMidBatch, FakeSidecarFault.None));
+        await using var session = new SemanticEmbeddingSession(factory, FastOptions);
+
+        SemanticEmbedOutcome outcome =
+            await session.EmbedBatchAsync(["alpha"], TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.FailureReason);
+        Assert.Equal(2, factory.ConnectCount);
+        Assert.True(factory.Connections[0].Aborted);
+        Assert.True(factory.Connections[0].Disposed);
+        Assert.False(factory.Connections[1].Aborted);
+    }
+
+    [Fact]
+    public async Task Dispose_ClosesTheConnectionWithoutDisposingABorrowedFactoryOrSendingShutdown()
+    {
+        await using var factory = new RecordingConnectionFactory(FakeSemanticSidecar.InProcessLauncher());
+        var session = new SemanticEmbeddingSession(factory, FastOptions, ownsConnectionFactory: false);
+        await session.EnsureStartedAsync(TestContext.Current.CancellationToken);
+
+        await session.DisposeAsync();
+
+        Assert.True(Assert.Single(factory.Connections).Disposed);
+        Assert.False(factory.Disposed);
+        Assert.DoesNotContain("shutdown", factory.Methods);
+    }
+
+    [Fact]
+    public async Task Dispose_DisposesAnExplicitlyOwnedFactory()
+    {
+        var factory = new RecordingConnectionFactory(FakeSemanticSidecar.InProcessLauncher());
+        var session = new SemanticEmbeddingSession(factory, FastOptions, ownsConnectionFactory: true);
+        await session.EnsureStartedAsync(TestContext.Current.CancellationToken);
+
+        await session.DisposeAsync();
+
+        Assert.True(factory.Disposed);
+    }
+
+    [Fact]
     public async Task ThreeConsecutiveTransportFailures_OpenTheCircuitWithAStatedReason()
     {
         await using var session = new SemanticEmbeddingSession(
@@ -342,11 +387,11 @@ public sealed class SemanticEmbeddingSessionTests
     }
 
     [Fact]
-    public void ForServe_LauncherPassesTheExplicitServeVerbAndSelectedModel()
+    public void ForServe_StdioFactoryPassesTheExplicitServeVerbAndSelectedModel()
     {
-        var launcher = ProcessSemanticSidecarLauncher.ForServe("/tools/julie-semantic-sidecar", Pin);
+        var factory = StdioSemanticSidecarConnectionFactory.ForServe("/tools/julie-semantic-sidecar", Pin);
 
-        Assert.Equal(["serve", "--model", Pin.ModelId], launcher.Arguments);
+        Assert.Equal(["serve", "--model", Pin.ModelId], factory.Arguments);
     }
 
     [Fact]
@@ -376,6 +421,90 @@ public sealed class SemanticEmbeddingSessionTests
 
     private static double Norm(float[] vector) =>
         Math.Sqrt(vector.Sum(component => (double)component * component));
+
+    private sealed class RecordingConnectionFactory(ISemanticSidecarConnectionFactory inner)
+        : ISemanticSidecarConnectionFactory
+    {
+        public List<RecordingConnection> Connections { get; } = [];
+
+        public List<string> Methods { get; } = [];
+
+        public int ConnectCount { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public async ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
+        {
+            ConnectCount++;
+            ISemanticSidecarConnection connection = await inner.ConnectAsync(cancellationToken);
+            var recording = new RecordingConnection(connection, Methods);
+            Connections.Add(recording);
+            return recording;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            await inner.DisposeAsync();
+        }
+    }
+
+    private sealed class RecordingConnection : ISemanticSidecarConnection
+    {
+        private readonly ISemanticSidecarConnection _inner;
+
+        public RecordingConnection(ISemanticSidecarConnection inner, List<string> methods)
+        {
+            _inner = inner;
+            Input = new RecordingWriter(inner.Input, methods);
+        }
+
+        public TextWriter Input { get; }
+
+        public TextReader Output => _inner.Output;
+
+        public bool IsClosed => _inner.IsClosed;
+
+        public bool Aborted { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public void Abort()
+        {
+            Aborted = true;
+            _inner.Abort();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            await _inner.DisposeAsync();
+        }
+    }
+
+    private sealed class RecordingWriter(TextWriter inner, List<string> methods) : TextWriter
+    {
+        private readonly StringBuilder _pending = new();
+
+        public override Encoding Encoding => inner.Encoding;
+
+        public override async Task WriteAsync(
+            ReadOnlyMemory<char> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            _pending.Append(buffer.Span);
+            await inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override async Task FlushAsync(CancellationToken cancellationToken)
+        {
+            string request = _pending.ToString().TrimEnd('\r', '\n');
+            _pending.Clear();
+            using JsonDocument json = JsonDocument.Parse(request);
+            methods.Add(json.RootElement.GetProperty("method").GetString()!);
+            await inner.FlushAsync(cancellationToken);
+        }
+    }
 }
 
 /// <summary>

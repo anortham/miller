@@ -334,10 +334,12 @@ public sealed class SemanticEvaluationAdapterTests : IDisposable
         }
     }
 
-    private sealed class SingleHealthLauncher(SemanticSidecarHealth health) : ISemanticSidecarLauncher
+    private sealed class SingleHealthLauncher(SemanticSidecarHealth health)
+        : ISemanticSidecarConnectionFactory
     {
-        public ISemanticSidecarChannel Launch()
+        public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string response = JsonSerializer.Serialize(new
             {
                 schema = SemanticEmbeddingSession.Schema,
@@ -357,29 +359,33 @@ public sealed class SemanticEvaluationAdapterTests : IDisposable
                     degraded_reason = health.DegradedReason,
                 },
             });
-            return new SingleHealthChannel(response);
+            return ValueTask.FromResult<ISemanticSidecarConnection>(
+                new SingleHealthConnection(response));
         }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class SingleHealthChannel(string response) : ISemanticSidecarChannel
+    private sealed class SingleHealthConnection(string response) : ISemanticSidecarConnection
     {
         private readonly StringWriter _input = new();
         private readonly StringReader _output = new(response + Environment.NewLine);
 
-        public TextWriter StandardInput => _input;
+        public TextWriter Input => _input;
 
-        public TextReader StandardOutput => _output;
+        public TextReader Output => _output;
 
-        public bool HasExited => false;
+        public bool IsClosed => false;
 
-        public void Terminate()
+        public void Abort()
         {
         }
 
-        public void Dispose()
+        public ValueTask DisposeAsync()
         {
             _input.Dispose();
             _output.Dispose();
+            return ValueTask.CompletedTask;
         }
     }
 }

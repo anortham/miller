@@ -113,7 +113,7 @@ public static class FakeSemanticSidecar
     }
 
     /// <summary>A launcher that spawns the fake as a real child process with the requested fault injected.</summary>
-    public static ISemanticSidecarLauncher ProcessLauncher(
+    public static ISemanticSidecarConnectionFactory ProcessLauncher(
         string executable,
         FakeSidecarFault fault = FakeSidecarFault.None,
         IReadOnlyList<int>? poisonIndices = null)
@@ -130,7 +130,7 @@ public static class FakeSemanticSidecar
     }
 
     /// <summary>A launcher that runs the same protocol loop in-process over pipes — no subprocess, fast suite safe.</summary>
-    public static ISemanticSidecarLauncher InProcessLauncher(
+    public static ISemanticSidecarConnectionFactory InProcessLauncher(
         FakeSidecarFault fault = FakeSidecarFault.None,
         IReadOnlyList<int>? poisonIndices = null,
         SemanticEncoderPin? encoder = null) =>
@@ -140,7 +140,7 @@ public static class FakeSemanticSidecar
     /// A launcher whose faults change per launch, so a test can prove recovery: launch <c>n</c> gets
     /// <c>faults[n]</c>, and the tail value repeats once the sequence is exhausted.
     /// </summary>
-    public static ISemanticSidecarLauncher SequencedLauncher(params FakeSidecarFault[] faults) =>
+    public static ISemanticSidecarConnectionFactory SequencedLauncher(params FakeSidecarFault[] faults) =>
         new PipeLauncher(faults);
 
     /// <summary>The vector this fake produces for a text in a role. The session's round-trip asserts against it.</summary>
@@ -478,7 +478,7 @@ public static class FakeSemanticSidecar
     }
 
     /// <summary>Runs <see cref="Serve"/> over an in-memory pipe pair, one instance per launch.</summary>
-    private sealed class PipeLauncher : ISemanticSidecarLauncher
+    private sealed class PipeLauncher : ISemanticSidecarConnectionFactory
     {
         private readonly FakeSidecarFault[] _faults;
         private readonly IReadOnlyList<int> _poisonIndices;
@@ -502,27 +502,31 @@ public static class FakeSemanticSidecar
             _encoder = MillerSemanticContract.DefaultEncoder;
         }
 
-        public ISemanticSidecarChannel Launch()
+        public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             FakeSidecarFault fault = _faults[Math.Min(_launches++, _faults.Length - 1)];
-            return new PipeChannel(fault, _poisonIndices, _encoder);
+            return ValueTask.FromResult<ISemanticSidecarConnection>(
+                new PipeConnection(fault, _poisonIndices, _encoder));
         }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class PipeChannel : ISemanticSidecarChannel
+    private sealed class PipeConnection : ISemanticSidecarConnection
     {
         private readonly AnonymousPipeServerStreamPair _toChild = new();
         private readonly AnonymousPipeServerStreamPair _fromChild = new();
         private readonly CancellationTokenSource _stopping = new();
         private readonly Thread _loop;
 
-        public PipeChannel(
+        public PipeConnection(
             FakeSidecarFault fault,
             IReadOnlyList<int> poisonIndices,
             SemanticEncoderPin encoder)
         {
-            StandardInput = new StreamWriter(_toChild.Writer, new UTF8Encoding(false)) { AutoFlush = false };
-            StandardOutput = new StreamReader(_fromChild.Reader, new UTF8Encoding(false));
+            Input = new StreamWriter(_toChild.Writer, new UTF8Encoding(false)) { AutoFlush = false };
+            Output = new StreamReader(_fromChild.Reader, new UTF8Encoding(false));
 
             var childIn = new StreamReader(_toChild.Reader, new UTF8Encoding(false));
             var childOut = new StreamWriter(_fromChild.Writer, new UTF8Encoding(false)) { AutoFlush = false };
@@ -541,7 +545,7 @@ public static class FakeSemanticSidecar
                 }
                 finally
                 {
-                    HasExited = true;
+                    IsClosed = true;
                     Quietly(childOut.Dispose);
                     Quietly(childIn.Dispose);
                     // Closing the write end is what gives the reader EOF, which is how a crashed child looks.
@@ -555,13 +559,13 @@ public static class FakeSemanticSidecar
             _loop.Start();
         }
 
-        public TextWriter StandardInput { get; }
+        public TextWriter Input { get; }
 
-        public TextReader StandardOutput { get; }
+        public TextReader Output { get; }
 
-        public bool HasExited { get; private set; }
+        public bool IsClosed { get; private set; }
 
-        public void Terminate()
+        public void Abort()
         {
             _stopping.Cancel();
             // Closing the child's stdin write end is what ends a blocking ReadLine; closing its stdout write
@@ -570,16 +574,17 @@ public static class FakeSemanticSidecar
             Quietly(_fromChild.CloseWriteEnd);
         }
 
-        public void Dispose()
+        public ValueTask DisposeAsync()
         {
-            Terminate();
+            Abort();
             _loop.Join(TimeSpan.FromSeconds(2));
 
-            Quietly(StandardInput.Dispose);
-            Quietly(StandardOutput.Dispose);
+            Quietly(Input.Dispose);
+            Quietly(Output.Dispose);
             Quietly(_toChild.Dispose);
             Quietly(_fromChild.Dispose);
             _stopping.Dispose();
+            return ValueTask.CompletedTask;
         }
 
         private static void Quietly(Action action)

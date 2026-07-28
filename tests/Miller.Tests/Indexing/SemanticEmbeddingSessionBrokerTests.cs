@@ -103,7 +103,8 @@ public sealed class SemanticEmbeddingSessionBrokerTests
         Assert.Equal(["health", "embed_batch", "embed_query", "embed_batch"], launcher.Methods);
     }
 
-    private sealed class GatedLauncher(ISemanticSidecarLauncher inner) : ISemanticSidecarLauncher
+    private sealed class GatedLauncher(ISemanticSidecarConnectionFactory inner)
+        : ISemanticSidecarConnectionFactory
     {
         private readonly TaskCompletionSource _firstBatchWaiting =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -114,22 +115,27 @@ public sealed class SemanticEmbeddingSessionBrokerTests
 
         public Task FirstBatchWaiting => _firstBatchWaiting.Task;
 
-        public ISemanticSidecarChannel Launch() => new GatedChannel(inner.Launch(), this);
+        public async ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken) =>
+            new GatedConnection(await inner.ConnectAsync(cancellationToken), this);
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
 
         public void ReleaseFirstBatch() => _releaseFirstBatch.TrySetResult();
 
-        private sealed class GatedChannel(ISemanticSidecarChannel inner, GatedLauncher owner)
-            : ISemanticSidecarChannel
+        private sealed class GatedConnection(
+            ISemanticSidecarConnection inner,
+            GatedLauncher owner)
+            : ISemanticSidecarConnection
         {
-            public TextWriter StandardInput { get; } = new GatedWriter(inner.StandardInput, owner);
+            public TextWriter Input { get; } = new GatedWriter(inner.Input, owner);
 
-            public TextReader StandardOutput => inner.StandardOutput;
+            public TextReader Output => inner.Output;
 
-            public bool HasExited => inner.HasExited;
+            public bool IsClosed => inner.IsClosed;
 
-            public void Terminate() => inner.Terminate();
+            public void Abort() => inner.Abort();
 
-            public void Dispose() => inner.Dispose();
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
         }
 
         private sealed class GatedWriter(TextWriter inner, GatedLauncher owner) : TextWriter

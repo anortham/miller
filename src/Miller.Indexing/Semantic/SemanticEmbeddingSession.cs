@@ -9,13 +9,13 @@ namespace Miller.Indexing.Semantic;
 /// <summary>The lifecycle states a <see cref="SemanticEmbeddingSession"/> reports to status/health surfaces.</summary>
 public enum SemanticSessionState
 {
-    /// <summary>No child has been launched yet — the session is start-on-demand.</summary>
+    /// <summary>No connection has been opened yet — the session is start-on-demand.</summary>
     NotStarted,
 
-    /// <summary>A child is live and its handshake was accepted.</summary>
+    /// <summary>A connection is live and its handshake was accepted.</summary>
     Ready,
 
-    /// <summary>The last call failed at the transport level; the next call relaunches after a backoff.</summary>
+    /// <summary>The last call failed at the transport level; the next call reconnects after a backoff.</summary>
     Restarting,
 
     /// <summary>Consecutive transport failures reached the threshold. Permanently degraded, with a reason.</summary>
@@ -56,22 +56,22 @@ public sealed record SemanticEmbedOutcome(
         new(false, [], [], reason, timedOut);
 }
 
-/// <summary>One live child process, reduced to the two pipes and the kill switch the session needs.</summary>
-public interface ISemanticSidecarChannel : IDisposable
+/// <summary>One transport-neutral protocol-v1 connection.</summary>
+public interface ISemanticSidecarConnection : IAsyncDisposable
 {
-    TextWriter StandardInput { get; }
+    TextWriter Input { get; }
 
-    TextReader StandardOutput { get; }
+    TextReader Output { get; }
 
-    bool HasExited { get; }
+    bool IsClosed { get; }
 
-    void Terminate();
+    void Abort();
 }
 
-/// <summary>Launches one child sidecar. The seam that lets the session be tested without a process.</summary>
-public interface ISemanticSidecarLauncher
+/// <summary>Opens sidecar connections without exposing whether the transport is stdio or shared IPC.</summary>
+public interface ISemanticSidecarConnectionFactory : IAsyncDisposable
 {
-    ISemanticSidecarChannel Launch();
+    ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>Tunable budgets and the injectable delay that keeps backoff testable without real sleeps.</summary>
@@ -83,7 +83,7 @@ public sealed record SemanticSessionOptions
     /// <summary>First <c>health</c> probe budget, which must cover a cold model load.</summary>
     public TimeSpan InitTimeout { get; init; } = TimeSpan.FromSeconds(120);
 
-    /// <summary>Hard budget for a graceful <c>shutdown</c> before the child is terminated regardless.</summary>
+    /// <summary>Hard budget for an explicit <c>shutdown</c> response before closing the connection.</summary>
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromMilliseconds(500);
 
     /// <summary>Consecutive transport failures that open the circuit permanently.</summary>
@@ -97,16 +97,16 @@ public sealed record SemanticSessionOptions
 }
 
 /// <summary>
-/// Miller's client half of the <c>julie.embedding.sidecar</c> v1 relationship: start-on-demand launch, the
+/// Miller's client half of the <c>julie.embedding.sidecar</c> v1 relationship: start-on-demand connection, the
 /// <c>health</c> handshake that pins encoder identity, one-in-flight request/response over newline-delimited
-/// JSON, restart-with-backoff after a transport fault, and a circuit that opens after
+/// JSON, reconnect-with-backoff after a transport fault, and a circuit that opens after
 /// <see cref="SemanticSessionOptions.FatalThreshold"/> consecutive faults.
 /// </summary>
 /// <remarks>
 /// The contract's central distinction is preserved verbatim: a well-formed <c>error</c> envelope means the
-/// protocol loop survived, so it fails the request WITHOUT restarting the child or counting toward the circuit.
+/// protocol loop survived, so it fails the request WITHOUT reconnecting or counting toward the circuit.
 /// Everything the contract calls connection-fatal — unwritable stdin, closed stdout, response timeout,
-/// undecodable line, envelope/request-id/dims/count violation — resets the child instead.
+/// undecodable line, envelope/request-id/dims/count violation — aborts that connection instead.
 /// Failures are returned as outcomes rather than thrown: the caller's correct response is always to degrade to
 /// lexical with a stated reason, never to fault the converge pass.
 /// </remarks>
@@ -121,11 +121,12 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
     private const int MaxAttemptsPerCall = 2;
 
-    private readonly ISemanticSidecarLauncher _launcher;
+    private readonly ISemanticSidecarConnectionFactory _connectionFactory;
+    private readonly bool _ownsConnectionFactory;
     private readonly SemanticSessionOptions _options;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    private ISemanticSidecarChannel? _channel;
+    private ISemanticSidecarConnection? _connection;
     private SidecarLineReader? _reader;
     private readonly SemanticEncoderPin? _expectedEncoder;
     private int _consecutiveFatals;
@@ -133,12 +134,14 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     private bool _disposed;
 
     public SemanticEmbeddingSession(
-        ISemanticSidecarLauncher launcher,
+        ISemanticSidecarConnectionFactory connectionFactory,
         SemanticSessionOptions? options = null,
-        SemanticEncoderPin? expectedEncoder = null)
+        SemanticEncoderPin? expectedEncoder = null,
+        bool ownsConnectionFactory = false)
     {
-        ArgumentNullException.ThrowIfNull(launcher);
-        _launcher = launcher;
+        ArgumentNullException.ThrowIfNull(connectionFactory);
+        _connectionFactory = connectionFactory;
+        _ownsConnectionFactory = ownsConnectionFactory;
         _options = options ?? new SemanticSessionOptions();
         _expectedEncoder = expectedEncoder;
     }
@@ -152,7 +155,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     /// <summary>Encoder identity from the accepted handshake, or <c>null</c> before the first successful start.</summary>
     public SemanticEncoderHandshake? Handshake { get; private set; }
 
-    /// <summary>How many times a fault forced a relaunch. Surfaced as a status fact, not wired to telemetry here.</summary>
+    /// <summary>How many times a fault forced a reconnect. Surfaced as a status fact, not wired to telemetry here.</summary>
     public int RestartCount { get; private set; }
 
     /// <summary>
@@ -277,15 +280,15 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     }
 
     /// <summary>
-    /// Graceful stop: the explicit <c>shutdown</c> call the contract says <c>Drop</c> must never rely on. The
-    /// child is terminated regardless once <see cref="SemanticSessionOptions.ShutdownTimeout"/> elapses.
+    /// Explicit protocol stop. Disposal never sends <c>shutdown</c>; this method sends it only for this
+    /// connection and closes the connection once <see cref="SemanticSessionOptions.ShutdownTimeout"/> elapses.
     /// </summary>
     public async Task ShutdownAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_channel is not null)
+            if (_connection is not null)
             {
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 budget.CancelAfter(_options.ShutdownTimeout);
@@ -301,7 +304,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                 }
             }
 
-            ResetChild();
+            await CloseConnectionAsync(abort: false).ConfigureAwait(false);
             State = SemanticSessionState.Stopped;
             UnavailableReason ??= "session stopped";
         }
@@ -320,7 +323,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            ResetChild();
+            await CloseConnectionAsync(abort: false).ConfigureAwait(false);
             State = SemanticSessionState.Stopped;
             UnavailableReason ??= "session disposed";
         }
@@ -328,6 +331,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         {
             _gate.Release();
             _gate.Dispose();
+            if (_ownsConnectionFactory)
+                await _connectionFactory.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -374,7 +379,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                 catch (SidecarTransportException ex)
                 {
                     lastTimedOut = ex.TimedOut;
-                    if (RecordFatal(ex.Message))
+                    if (await RecordFatalAsync(ex.Message).ConfigureAwait(false))
                         return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     continue;
                 }
@@ -398,7 +403,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
                     catch (SidecarTransportException ex)
                     {
                         lastTimedOut = ex.TimedOut;
-                        if (RecordFatal(ex.Message))
+                        if (await RecordFatalAsync(ex.Message).ConfigureAwait(false))
                             return SemanticEmbedOutcome.Fail(UnavailableReason!, lastTimedOut);
                     }
                 }
@@ -432,20 +437,19 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
     private async Task<bool> StartIfNeededAsync(CancellationToken cancellationToken)
     {
-        if (_channel is not null && !_channel.HasExited)
+        if (_connection is not null && !_connection.IsClosed)
             return true;
 
-        ResetChild();
+        await CloseConnectionAsync(abort: false).ConfigureAwait(false);
 
         try
         {
-            _channel = _launcher.Launch();
-            _reader = new SidecarLineReader(_channel.StandardOutput);
+            _connection = await _connectionFactory.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            _reader = new SidecarLineReader(_connection.Output);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            ResetChild();
-            RecordFatal($"could not launch the semantic sidecar: {ex.Message}");
+            await RecordFatalAsync($"could not connect to the semantic sidecar: {ex.Message}").ConfigureAwait(false);
             return false;
         }
 
@@ -457,7 +461,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         }
         catch (SidecarTransportException ex)
         {
-            RecordFatal($"sidecar health probe failed: {ex.Message}");
+            await RecordFatalAsync($"sidecar health probe failed: {ex.Message}").ConfigureAwait(false);
             return false;
         }
 
@@ -466,7 +470,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         {
             if (response.Error is not null)
             {
-                RecordFatal($"sidecar health probe returned [{response.Error.Code}] {response.Error.Message}");
+                await RecordFatalAsync(
+                    $"sidecar health probe returned [{response.Error.Code}] {response.Error.Message}")
+                    .ConfigureAwait(false);
                 return false;
             }
 
@@ -476,7 +482,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             }
             catch (SidecarTransportException ex)
             {
-                RecordFatal(ex.Message);
+                await RecordFatalAsync(ex.Message).ConfigureAwait(false);
                 return false;
             }
         }
@@ -486,8 +492,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
             : MatchEncoder(health, _expectedEncoder, out refusal);
         if (handshake is null)
         {
-            // A not-ready or wrong-encoder sidecar is a stated refusal, not a transport fault worth restarting.
-            ResetChild();
+            // A not-ready or wrong-encoder sidecar is a stated refusal, not a transport fault worth reconnecting.
+            await CloseConnectionAsync(abort: false).ConfigureAwait(false);
             State = SemanticSessionState.CircuitOpen;
             UnavailableReason = refusal;
             return false;
@@ -496,7 +502,7 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         Handshake = handshake;
         State = SemanticSessionState.Ready;
         UnavailableReason = null;
-        // The fatal counter is NOT reset here: relaunching is what a fault costs, so a child that handshakes
+        // The fatal counter is NOT reset here: reconnecting is what a fault costs, so a connection that handshakes
         // and then faults again must still march toward the circuit. Only a completed request clears it.
         return true;
     }
@@ -514,9 +520,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
     }
 
     /// <summary>Records a connection-fatal condition. Returns true once the circuit has opened for good.</summary>
-    private bool RecordFatal(string reason)
+    private async Task<bool> RecordFatalAsync(string reason)
     {
-        ResetChild();
+        await CloseConnectionAsync(abort: true).ConfigureAwait(false);
         RestartCount++;
         _consecutiveFatals++;
 
@@ -533,24 +539,27 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         return false;
     }
 
-    private void ResetChild()
+    private async ValueTask CloseConnectionAsync(bool abort)
     {
         _reader?.Dispose();
         _reader = null;
 
-        if (_channel is not null)
+        ISemanticSidecarConnection? connection = _connection;
+        _connection = null;
+        if (connection is not null)
         {
-            try
+            if (abort)
             {
-                _channel.Terminate();
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException or NotSupportedException)
-            {
-                // An already-dead child is the normal case on this path.
+                try
+                {
+                    connection.Abort();
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or IOException or NotSupportedException)
+                {
+                }
             }
 
-            _channel.Dispose();
-            _channel = null;
+            await connection.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -560,8 +569,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        ISemanticSidecarChannel channel = _channel
-            ?? throw new SidecarTransportException("the sidecar channel is not open");
+        ISemanticSidecarConnection connection = _connection
+            ?? throw new SidecarTransportException("the sidecar connection is not open");
         SidecarLineReader reader = _reader
             ?? throw new SidecarTransportException("the sidecar reader is not open");
 
@@ -570,9 +579,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
         try
         {
-            await channel.StandardInput.WriteAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
-            await channel.StandardInput.WriteAsync("\n".AsMemory(), cancellationToken).ConfigureAwait(false);
-            await channel.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await connection.Input.WriteAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await connection.Input.WriteAsync("\n".AsMemory(), cancellationToken).ConfigureAwait(false);
+            await connection.Input.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or NotSupportedException)
         {
@@ -1008,14 +1017,14 @@ internal sealed class SidecarLineReader : IDisposable
     }
 }
 
-/// <summary>Launches the real sidecar binary as a child process wired to Miller's stdio contract.</summary>
-public sealed class ProcessSemanticSidecarLauncher : ISemanticSidecarLauncher
+/// <summary>Opens a protocol-v1 connection by launching the sidecar as a stdio child process.</summary>
+public sealed class StdioSemanticSidecarConnectionFactory : ISemanticSidecarConnectionFactory
 {
     private readonly string _executable;
     private readonly IReadOnlyList<string> _arguments;
     private readonly IReadOnlyDictionary<string, string> _environment;
 
-    public ProcessSemanticSidecarLauncher(
+    public StdioSemanticSidecarConnectionFactory(
         string executable,
         IReadOnlyList<string>? arguments = null,
         IReadOnlyDictionary<string, string>? environment = null)
@@ -1027,21 +1036,22 @@ public sealed class ProcessSemanticSidecarLauncher : ISemanticSidecarLauncher
     }
 
     /// <summary>
-    /// The serve-mode launcher for <paramref name="pin"/>: the verb and model id are passed explicitly so the
+    /// The serve-mode factory for <paramref name="pin"/>: the verb and model id are passed explicitly so the
     /// child can never silently serve a different encoder than the one Miller selected. The sidecar reads no
     /// environment for model selection — <c>serve --model</c> is the only channel.
     /// </summary>
-    public static ProcessSemanticSidecarLauncher ForServe(string executable, SemanticEncoderPin pin)
+    public static StdioSemanticSidecarConnectionFactory ForServe(string executable, SemanticEncoderPin pin)
     {
         ArgumentNullException.ThrowIfNull(pin);
-        return new ProcessSemanticSidecarLauncher(executable, ["serve", "--model", pin.ModelId]);
+        return new StdioSemanticSidecarConnectionFactory(executable, ["serve", "--model", pin.ModelId]);
     }
 
     /// <summary>The argv passed to the sidecar, exposed so launch wiring is provable without spawning.</summary>
     public IReadOnlyList<string> Arguments => _arguments;
 
-    public ISemanticSidecarChannel Launch()
+    public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo(_executable)
         {
             RedirectStandardInput = true,
@@ -1064,40 +1074,70 @@ public sealed class ProcessSemanticSidecarLauncher : ISemanticSidecarLauncher
         process.ErrorDataReceived += static (_, _) => { };
         process.BeginErrorReadLine();
 
-        return new ProcessChannel(process);
+        return ValueTask.FromResult<ISemanticSidecarConnection>(new ProcessConnection(process));
     }
 
-    private sealed class ProcessChannel : ISemanticSidecarChannel
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private sealed class ProcessConnection : ISemanticSidecarConnection
     {
         private readonly Process _process;
 
-        public ProcessChannel(Process process) => _process = process;
+        public ProcessConnection(Process process) => _process = process;
 
-        public TextWriter StandardInput => _process.StandardInput;
+        public TextWriter Input => _process.StandardInput;
 
-        public TextReader StandardOutput => _process.StandardOutput;
+        public TextReader Output => _process.StandardOutput;
 
-        public bool HasExited => _process.HasExited;
+        public bool IsClosed => _process.HasExited;
 
-        public void Terminate()
+        public void Abort()
         {
             if (!_process.HasExited)
                 _process.Kill(entireProcessTree: true);
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             try
             {
-                Terminate();
-                _process.WaitForExit(2000);
+                Abort();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException
+                or OperationCanceledException)
             {
-                // Already gone.
             }
 
             _process.Dispose();
         }
     }
+}
+
+/// <summary>Compatibility name for callers migrating from the original process-launch seam.</summary>
+public sealed class ProcessSemanticSidecarLauncher : ISemanticSidecarConnectionFactory
+{
+    private readonly StdioSemanticSidecarConnectionFactory _inner;
+
+    public ProcessSemanticSidecarLauncher(
+        string executable,
+        IReadOnlyList<string>? arguments = null,
+        IReadOnlyDictionary<string, string>? environment = null)
+    {
+        _inner = new StdioSemanticSidecarConnectionFactory(executable, arguments, environment);
+    }
+
+    public static ProcessSemanticSidecarLauncher ForServe(string executable, SemanticEncoderPin pin)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        return new ProcessSemanticSidecarLauncher(executable, ["serve", "--model", pin.ModelId]);
+    }
+
+    public IReadOnlyList<string> Arguments => _inner.Arguments;
+
+    public ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken) =>
+        _inner.ConnectAsync(cancellationToken);
+
+    public ValueTask DisposeAsync() => _inner.DisposeAsync();
 }

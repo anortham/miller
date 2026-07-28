@@ -164,8 +164,9 @@ public sealed class ProcessPackageSemanticSession : IPackageSemanticSession
     public ProcessPackageSemanticSession(string executable, SemanticEncoderPin pin)
     {
         _session = new SemanticEmbeddingSession(
-            ProcessSemanticSidecarLauncher.ForServe(executable, pin),
-            expectedEncoder: pin);
+            StdioSemanticSidecarConnectionFactory.ForServe(executable, pin),
+            expectedEncoder: pin,
+            ownsConnectionFactory: true);
     }
 
     public string? UnavailableReason => _session.UnavailableReason;
