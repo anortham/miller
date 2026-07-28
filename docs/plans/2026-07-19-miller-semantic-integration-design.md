@@ -142,10 +142,10 @@ The current normative lifecycle is
 [`docs/contracts/semantic-broker-v1.md`](../contracts/semantic-broker-v1.md). It supersedes the
 original resident-child proposal above rather than extending it:
 
-- One non-detached, lease-owned `julie-semantic-sidecar broker` is shared by concurrent Miller
-  processes for a deterministic protocol/model identity. The owner stdin watcher is armed before
-  model load; stdin EOF is authoritative, and Windows also attempts kill-on-close Job Object
-  ownership.
+- One non-detached `julie-semantic-sidecar broker` service broker is shared by concurrent Miller
+  processes for a deterministic broker-contract/protocol/model identity. Its spawning Miller
+  factory retains the owner stdin lease and Windows Job Object ownership; the service broker arms
+  the stdin watcher before model load, and stdin EOF is authoritative.
 - Local IPC carries the unchanged `julie.embedding.sidecar` protocol v1. The broker owns pure
   `health`, `embed_query`, and `embed_batch` compute only; it owns no workspace, artifact, database,
   watcher, HTTP service, PID registry, or update control plane.

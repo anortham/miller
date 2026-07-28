@@ -85,10 +85,14 @@ Windows short pipe:    miller-semantic-<identity>
 Windows server pipe:   \\.\pipe\miller-semantic-<identity>
 ```
 
-There is one model service lock per identity. A contender probes the endpoint first, then starts
-a broker contender only when it cannot connect. The contender that acquires the service lock is
-the owner and may load the model. Spawn losers do not start another model and do not fail
-immediately: they poll the endpoint through the full 120-second initialization budget.
+The spawning Miller factory is the owner: it retains the owner stdin lease and, on Windows, the
+Job Object ownership handle. The sidecar process is the service broker. A Miller factory probes
+the endpoint first, then starts a service-broker contender only when it cannot connect. The
+contender that acquires the model service lock becomes the service-lock holder and may load the
+model. The service broker holds the model service lock and, when accelerated, the
+user-global accelerator lock; the spawning Miller factory retains the owner stdin lease. Spawn
+losers do not start another model and do not fail immediately: they poll the endpoint through the
+full 120-second initialization budget.
 
 Only the service-lock holder may unlink a stale Unix endpoint, and it does so before binding.
 No non-holder may infer ownership from endpoint age, a process lookup, or a persisted record.
@@ -103,8 +107,8 @@ The Unix endpoint is an absolute Unix domain socket path. Before binding, the se
 ensures `<miller-home>/semantic/` has mode `0700`. After binding, it ensures the socket has mode
 `0600`. A permission failure prevents broker readiness; it does not relax permissions.
 
-The socket is local to the current user. The owner removes its socket on orderly shutdown.
-Crash residue is removed only by the next service-lock holder.
+The socket is local to the current user. The service-lock holder removes its socket on orderly
+shutdown. Crash residue is removed only by the next service-lock holder.
 
 ## Windows transport and ownership
 
@@ -124,9 +128,12 @@ owner-stdin lease remains authoritative.
 
 ## Owner lease and disposal
 
-The broker arms its owner stdin watcher before model load. Owner stdin EOF is authoritative and
-begins orderly broker shutdown even while initialization is still running. This lifetime rule
-requires no process polling and covers normal owner exit, crash, and terminal teardown.
+The service broker arms its watcher for the owner's stdin before model load. Owner stdin EOF is
+authoritative: stdin EOF must terminate the broker even while model load is blocked.
+Cooperative cancellation is preferred. When engine load cannot be cancelled,
+process-fatal exit is permitted so the OS releases the model service and accelerator locks and no
+orphan broker remains. This lifetime rule requires no process polling and covers normal owner
+exit, crash, and terminal teardown.
 
 Owner disposal closes its client connections and then closes the inherited stdin lease. On
 Windows it also closes its Job Object ownership handle. Non-owner disposal closes only that
@@ -157,7 +164,8 @@ entered. Requests are classified as interactive (`health`, `embed_query`) or bat
 (`embed_batch`).
 
 - The admitted queue capacity is 64 requests across all connections.
-- A full queue rejects new work with a typed application error; it does not grow without bound.
+- A full queue rejects new work with the existing protocol-v1 `internal_error` envelope; it does
+  not grow without bound. No new method, field, or error code is introduced for saturation.
 - While a batch request waits, at most eight interactive dequeues occur before one batch dequeue.
 - When no batch waits, interactive work may continue without artificial batch slots.
 - A 60-second active-request watchdog terminates a wedged broker so ownership can recover.
@@ -192,7 +200,8 @@ demote the engine and are not retried as out-of-memory failures. A second
   a typed semantic-unavailable result and lexical fallback.
 - Production Miller has no hidden per-process stdio fallback. Falling back to another model
   process would defeat the single-model ownership guarantee.
-- Broker diagnostics contain no query text, source text, or authentication material.
+- Broker diagnostics, logs, and telemetry never record query text, document text, source text,
+  workspace paths, symbols, snippets, vectors, or authentication material.
 - Broker adoption does not change vector-artifact ownership: Miller continues to own
   `<workspace>/.miller/vectors.db`.
 

@@ -56,9 +56,11 @@ Concretely, for Miller:
   its output the same way it consumes extractor artifacts.
 - **Embedding compute is user-local and shared across Miller processes.** The frozen
   [`semantic-broker-v1`](../contracts/semantic-broker-v1.md) contract supersedes the original
-  process-local resident-child design. One lease-owned broker per protocol/model identity exposes
-  pure compute over local IPC; it owns no workspace, index, database, watcher, or network service.
-  `julie.embedding.sidecar` protocol v1 remains separately frozen and unchanged on each connection.
+  process-local resident-child design. One service broker per
+  broker-contract/protocol/model identity exposes pure compute over local IPC while its spawning
+  Miller factory retains the owner lease; the service broker owns no workspace, index, database,
+  watcher, or network service. `julie.embedding.sidecar` protocol v1 remains separately frozen and
+  unchanged on each connection.
 - **No new MCP tools.** The surface grows only as improved behavior of existing tools, new
   field/mode values, CLI verbs, dashboard count-level panels, skills, and docs. The MCP-stinginess
   rule is unchanged and still requires explicit user approval for any new tool.
@@ -93,10 +95,11 @@ deterministic-signals absorption did.
   wrong-fingerprint vector artifacts). All of them degrade to lexical with the reason surfaced in
   `workspace status` / `health` and telemetry — the same fail-visible discipline as the search
   sidecar.
-- Concurrent Miller sessions share one broker for the same frozen protocol/model identity. A
-  user-global accelerator lease prevents multiple model identities from overcommitting the GPU;
-  non-holders use CPU and proven runtime resource exhaustion demotes the accelerated broker to
-  CPU. Broker unavailability remains fail-open to lexical retrieval.
+- Concurrent Miller sessions share one service broker for the same frozen
+  broker-contract/protocol/model identity. A user-global accelerator lease prevents multiple
+  model identities from overcommitting the GPU; non-holders use CPU and proven runtime resource
+  exhaustion demotes the accelerated broker to CPU. Broker unavailability remains fail-open to
+  lexical retrieval.
 - Model weights are **not** shipped in release archives. Acquisition is an explicit prefetch verb
   or a consented first-use download with a pinned sha256.
 - The guidance channels are untouched: ADR-0001 still governs, and the ServerInstructions core

@@ -43,8 +43,8 @@ Opening a ready vector generation is not sufficient evidence that it matches the
 One Miller singleton still owns local connection, circuit, and disposal state for a process. Both
 query and convergence paths borrow it, but its transport connects to the shared broker defined by
 [`semantic-broker-v1`](../contracts/semantic-broker-v1.md). Concurrent Miller processes with the
-same protocol/model identity share one loaded model. Semantic off constructs no session, derives
-no broker path, and performs no model work.
+same broker-contract/protocol/model identity share one loaded model. Semantic off constructs no
+session, derives no broker path, and performs no model work.
 
 The prior deferral of cross-process ownership is superseded. This is not the general machine-wide
 Miller service proposed elsewhere: the broker owns only frozen embedding compute and no workspace,

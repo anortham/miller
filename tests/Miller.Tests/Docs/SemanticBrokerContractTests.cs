@@ -76,4 +76,70 @@ public sealed class SemanticBrokerContractTests
         Assert.Contains("No new MCP tool", text, StringComparison.Ordinal);
         Assert.Contains("approval-gated", text, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void BrokerContract_SeparatesOwnerLeaseFromServiceAndAcceleratorLocks()
+    {
+        string text = File.ReadAllText(ContractPath);
+
+        Assert.Contains("The spawning Miller factory is the owner", text, StringComparison.Ordinal);
+        Assert.Contains("The sidecar process is the service broker", text, StringComparison.Ordinal);
+        Assert.Contains("service broker holds the model service lock", text, StringComparison.Ordinal);
+        Assert.Contains("spawning Miller factory retains the owner stdin lease", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "contender that acquires the service lock is the owner",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrokerContract_ReusesTheFrozenWireErrorForQueueSaturation()
+    {
+        string text = File.ReadAllText(ContractPath);
+
+        Assert.Contains("existing protocol-v1 `internal_error` envelope", text, StringComparison.Ordinal);
+        Assert.Contains("No new method, field, or error code", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrokerContract_MakesOwnerEofFatalAndDiagnosticsContentFree()
+    {
+        string text = File.ReadAllText(ContractPath);
+
+        Assert.Contains(
+            "stdin EOF must terminate the broker even while model load is blocked",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("Cooperative cancellation is preferred", text, StringComparison.Ordinal);
+        Assert.Contains("process-fatal exit is permitted", text, StringComparison.Ordinal);
+        Assert.Contains("query text", text, StringComparison.Ordinal);
+        Assert.Contains("document text", text, StringComparison.Ordinal);
+        Assert.Contains("source text", text, StringComparison.Ordinal);
+        Assert.Contains("workspace paths", text, StringComparison.Ordinal);
+        Assert.Contains("symbols", text, StringComparison.Ordinal);
+        Assert.Contains("snippets", text, StringComparison.Ordinal);
+        Assert.Contains("vectors", text, StringComparison.Ordinal);
+        Assert.Contains("authentication material", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SupersessionDocs_UseTheCompleteBrokerIdentityVocabulary()
+    {
+        string repo = ScaleTestSupport.RepoRoot();
+        string[] paths =
+        [
+            Path.Combine(repo, "docs", "adr", "ADR-0003-semantic-retrieval-ownership.md"),
+            Path.Combine(repo, "docs", "plans", "2026-07-19-miller-semantic-integration-design.md"),
+            Path.Combine(repo, "docs", "plans", "2026-07-21-semantic-production-readiness-repair-design.md")
+        ];
+
+        foreach (string path in paths)
+        {
+            string text = File.ReadAllText(path);
+            Assert.Contains("broker-contract/protocol/model identity", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("per protocol/model identity", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("deterministic protocol/model identity", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("same protocol/model identity", text, StringComparison.Ordinal);
+        }
+    }
 }
