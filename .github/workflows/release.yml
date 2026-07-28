@@ -384,7 +384,10 @@ jobs:
           $archive = Join-Path $releaseDir "$packageName.zip"
           Compress-Archive -Path $packageDir -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-          "$hash  $packageName.zip" | Set-Content -Encoding ascii (Join-Path $releaseDir "$packageName.zip.sha256")
+          [System.IO.File]::WriteAllText(
+            (Join-Path $releaseDir "$packageName.zip.sha256"),
+            "$hash  $packageName.zip`n",
+            [System.Text.UTF8Encoding]::new($false))
           Get-ChildItem $releaseDir | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v7.0.1

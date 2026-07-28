@@ -20,12 +20,12 @@ The practical difference from a one-time graph dump is that Miller is built for 
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v1.13.0.** Miller ships as agent plugins, self-contained per-platform release archives,
+> **Current release: v1.14.0.** Miller ships as agent plugins, self-contained per-platform release archives,
 > and a source-checkout workflow. Plugin and release-archive installs include the pinned `julie-extract`
 > binary; users do not install it separately.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
-> [v1.13.0](https://github.com/anortham/miller/releases/tag/v1.13.0)
+> [v1.14.0](https://github.com/anortham/miller/releases/tag/v1.14.0)
 
 ## Quickstart
 
