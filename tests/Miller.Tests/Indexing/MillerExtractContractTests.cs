@@ -157,7 +157,7 @@ public sealed class MillerExtractContractTests
 
         var expectedNativeRunners = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["aarch64-apple-darwin"] = "macos-14",
+            ["aarch64-apple-darwin"] = "macos-15",
             ["x86_64-apple-darwin"] = "macos-15-intel",
             ["x86_64-unknown-linux-gnu"] = "ubuntu-24.04",
             ["x86_64-pc-windows-msvc"] = "windows-2025",
