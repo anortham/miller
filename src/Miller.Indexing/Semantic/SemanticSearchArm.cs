@@ -229,17 +229,33 @@ public sealed class SemanticSearchArm
     /// The production session locator, mirroring the converge service's: a start-on-demand session over the
     /// pinned sidecar runtime package under the tools root, or null when that package is not installed.
     /// </summary>
-    public static SemanticEmbeddingSession? ProcessSession(string toolsRoot)
+    public static SemanticEmbeddingSession? ProcessSession(
+        string toolsRoot,
+        string millerHome)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(millerHome);
 
         string executable = SemanticSidecarLayout.ExecutablePath(toolsRoot);
         SemanticEncoderPin active = SemanticEncoderSelection.Active;
         return File.Exists(executable)
             ? new SemanticEmbeddingSession(
-                ProcessSemanticSidecarLauncher.ForServe(executable, active),
-                expectedEncoder: active)
+                new SharedSemanticBrokerConnectionFactory(toolsRoot, millerHome, active),
+                expectedEncoder: active,
+                ownsConnectionFactory: true)
             : null;
+    }
+
+    public static SemanticEmbeddingSession ProcessSession(
+        ISemanticSidecarConnectionFactory connectionFactory,
+        SemanticEncoderPin? expectedEncoder = null,
+        bool ownsConnectionFactory = false)
+    {
+        ArgumentNullException.ThrowIfNull(connectionFactory);
+        return new SemanticEmbeddingSession(
+            connectionFactory,
+            expectedEncoder: expectedEncoder ?? SemanticEncoderSelection.Active,
+            ownsConnectionFactory: ownsConnectionFactory);
     }
 
     /// <summary>KNN over the symbol-card corpus.</summary>

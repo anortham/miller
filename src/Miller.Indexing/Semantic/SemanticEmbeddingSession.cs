@@ -74,6 +74,11 @@ public interface ISemanticSidecarConnectionFactory : IAsyncDisposable
     ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken);
 }
 
+internal interface ISemanticBrokerSnapshotRecorder
+{
+    void RecordHandshake(SemanticEncoderHandshake handshake);
+}
+
 /// <summary>Tunable budgets and the injectable delay that keeps backoff testable without real sleeps.</summary>
 public sealed record SemanticSessionOptions
 {
@@ -500,6 +505,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
         }
 
         Handshake = handshake;
+        if (_connectionFactory is ISemanticBrokerSnapshotRecorder recorder)
+            recorder.RecordHandshake(handshake);
         State = SemanticSessionState.Ready;
         UnavailableReason = null;
         // The fatal counter is NOT reset here: reconnecting is what a fault costs, so a connection that handshakes

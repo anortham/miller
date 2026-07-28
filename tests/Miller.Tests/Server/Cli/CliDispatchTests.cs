@@ -45,6 +45,19 @@ public sealed class CliDispatchTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
+    [Fact]
+    public void CliSemanticSession_WithoutOpen_PerformsNoBrokerPathWork()
+    {
+        string millerHome = Path.Combine(_dir, "home");
+        string toolsRoot = Path.Combine(_dir, "tools");
+
+        using (new CliSemanticSession(toolsRoot, millerHome))
+        {
+        }
+
+        Assert.False(Directory.Exists(Path.Combine(millerHome, "semantic")));
+    }
+
     private WorkspaceContext Context(string extractDbPath, string? workspaceRoot = null) =>
         new(
             WorkspaceRoot: workspaceRoot ?? _dir,
@@ -4637,6 +4650,9 @@ public sealed class CliDispatchTests : IDisposable
             Assert.Equal(lexical.Out, normal.Out);
             Assert.Equal(lexical.Err, normal.Err);
             Assert.False(File.Exists(context.TelemetryDbPath));
+            Assert.False(Directory.Exists(Path.Combine(
+                Path.GetDirectoryName(context.RegistryDbPath)!,
+                "semantic")));
         }
         finally
         {

@@ -1,128 +1,77 @@
-# Task 7 — Identifier shadow population (P5)
+# Task 7 report — shared semantic broker client
 
-## Worktree state (verified)
-- pwd: `/Users/murphy/source/miller/.claude/worktrees/worktree-semantic-p5`
-- branch: `worktree-semantic-p5`
-- HEAD at start: `44f3b36` (T6 commit)
+## State
 
-## Status: COMPLETE
+- Worktree: `/Users/murphy/source/miller/.worktrees/shared-semantic-broker-plan`
+- Branch: `codex/shared-semantic-broker-plan`
+- Baseline/HEAD: `2befa4b48a5a3c7acf45a64c2ede6ec937ad9565`
+- Sidecar dependency: `741850a`
+- Commit/push: none
+- Task brief updated from its stale prior-plan contents to the current shared-broker Task 7 contract.
 
-The identifier non-inferiority shadow population is live. For a canary-on, semantic shadow|on call whose query
-classifies as `identifier` (ops auto/text/symbol), 10% of assignment units (`bucket < 10` under
-`semantic_identifier_noninferiority_v1`) upgrade from the ordinary `arm=ineligible` row to a shadow row: the
-lexical result is finalized first, then a forced-hybrid pass runs off to the side, is discarded, and its ranking
-is compared against the served one. The row records `arm=shadow`, the bucket, the status, and — on the `ok` path
-— the three comparison counters, plus the generation identity when vectors were opened. Nothing the shadow does
-can change the served bytes, the result count, or the row's `outcome`. This closes the Field Reference: every
-frozen field is now writable by a real code path (identity + shadow counters here; all others in T1–T6).
+## RED evidence
 
-## API shape evidence (worktree reads)
-- `RunSymbolsWithCanary` flow / ineligible identifier stamp: `SearchTool.cs:1235`; the ineligible early-return in
-  `BuildCanaryFacts` at `:1293` (identifier ⇒ `eligibility=ineligible_query_class`, `arm=ineligible` via `Stamp`).
-- `SymbolExecution.ServedPage`: `SearchRouteExecutor.cs:57` (`RunSymbolsCore` returns served page + fusion map).
-- `BuildTreatmentArmFactory` forced-On pattern: `SearchTool.cs:1542`.
-- `CanaryAssignment.IdentifierExperimentId` + `Bucket`: `CanaryTelemetry.cs:199`, `:201` (SHA-256 → uint32 %100).
-- `CanaryShadowStatus` values: `CanaryTelemetry.cs:154` — `ok/timeout/error/skipped` (named constants added).
-- `TelemetryScope.SetMetadata` overloads (string/bool/long/list): `TelemetryScope.cs:130-163`.
-- `SemanticFallbackKind` values for status mapping: `SemanticSearchArm.cs:18`.
-- Critical finding: `SemanticSymbolFusionArm.Fuse` abstains on `!route.IsHybrid` (`SearchRouteExecutor.cs:296`),
-  and `SemanticQueryPolicy.Route` routes every identifier lexical-only (`SemanticQueryPolicy.cs:117-121`). The
-  production treatment arm therefore CANNOT produce a hybrid ranking for an identifier — see judgment call 1.
+- Endpoint test first failed with CS0246/CS0103 because `SemanticBrokerEndpoint` did not exist.
+- Factory tests first failed with CS0246 because `SharedSemanticBrokerConnectionFactory` and `WindowsBrokerJobAttachment` did not exist.
+- The first real-process factory run failed 3/3 with a 10-second broker-connect timeout. Boundary diagnostics proved the test child wrote its load counter but stalled before socket bind because it performed async work from a module initializer. Replacing that harness with a normal console test host retained the real OS process/service-lock race.
+- Host/CLI wiring tests then failed with CS1729 because `CliSemanticSession` did not yet accept `millerHome`; Off/On factory registration was also absent.
 
 ## Implementation
 
-### CanaryTelemetry.cs (owned)
-- Added named constants `Ok/Timeout/Error/Skipped` to `CanaryShadowStatus` (was `All`-only).
-- New `CanaryShadowFacts` record: the shadow facts of one sampled call — status, the three comparison counters
-  (nullable, present only at `ok`), and the generation identity (nullable, present only when vectors opened).
-- New `StampShadow(TelemetryScope, CanaryShadowFacts)`, mirroring `Stamp`'s style: writes the standard
-  version/class keys under the fixed `IdentifierExperimentId`, `arm=shadow`, `canary_bucket`,
-  `canary_shadow_status`; the identity trio when present; and — only when `status=ok` — the three shadow
-  counters. Backend/warmth/latency and lexical/semantic counters are deliberately never written (shadow rows are
-  not eligible rows).
+- Added deterministic endpoint identity, Unix socket/Windows pipe paths, service/accelerator locks, and exact broker argv.
+- Added connect-first shared IPC with a 250 ms direct probe, instance spawn gate, retry, broker spawn, 120-second cold-start polling, owner/non-owner lifetime, reconnect/re-election, and a handshake-populated immutable snapshot.
+- Added Windows kill-on-close Job Object attachment through NativeAOT-safe `LibraryImport`; attachment failure is visible while retained stdin remains authoritative.
+- Server DI registers one lazy shared factory singleton only for enabled production semantics. Off and evaluation graphs do not register it.
+- CLI creates one invocation-scoped factory only when a semantic arm can run and derives `millerHome` from the registry parent at that point.
+- Production MCP/CLI no longer call `ProcessSemanticSidecarLauncher.ForServe`; stdio remains available for evaluation, package-smoke, conformance, and tests.
+- Added a cross-platform real-process broker test host for cold-load concurrency, ownership, reconnect, Unix sockets, and Windows named pipes.
 
-### SearchTool.cs (owned)
-- `SymbolCanaryOutcome` gained `CanaryShadowFacts? ShadowFacts`. New `ShadowExecution` record (served flag,
-  fallback, ordered hybrid symbol ids, identity).
-- `RunSymbolsWithCanary` gained an optional `shadowRunner` param and a post-finalize hook: after the lexical
-  `execution`, `ShadowSampled(...)` gates on `eligibility==ineligible_query_class && class==identifier &&
-  Bucket(IdentifierExperimentId,…) < 10`; a sample calls `RunIdentifierShadow` and returns a shadow outcome.
-- `RunIdentifierShadow`: try/catch around the shadow thunk (any throw ⇒ `error`), identity lifted when vectors
-  opened, `MapShadowStatus` on abstain, `CompareShadow` on serve.
-- `CompareShadow`: top-10 overlap by symbol id, `top1_changed`, and the 1-based rank of the served lexical top-1
-  within the hybrid top 50 (0 when absent).
-- `ShadowSymbolArm` (private `ISymbolFusionArm`): forces the semantic consult + `RrfFusion` **regardless of the
-  lexical-only route**, reusing the same recall clamp, allow predicate, and fusion the served path uses;
-  captures the ordered fused ranking. `ShadowRunnerFor(openArm)` (internal, test seam) drives it through
-  `RunSymbolsCore` and discards the render. `BuildShadowRunner` supplies the production opener or null.
-- Dispatch: passes `BuildShadowRunner`, and stamps via `StampShadow` when `ShadowFacts` is present (else `Stamp`).
+## GREEN evidence
 
-## Judgment calls (contract → plan → code)
-1. **Forced fusion, not the production treatment arm.** The task note says the hybrid ranking comes from the
-   T5 treatment arm forced On. But `SemanticSymbolFusionArm.Fuse` abstains on `!route.IsHybrid`, and every
-   identifier routes lexical-only — so that arm returns lexical-unchanged for exactly this class, which would
-   make every shadow row a degenerate `overlap=10 / top1_changed=false / rank=1`. Contract §Shadow step 3 is
-   explicit ("Embed the query, run the semantic arm, fuse — producing a hybrid ranking"), which outranks the
-   note. Resolved with a small owned `ShadowSymbolArm` that forces the consult+fusion past the policy gate,
-   reusing the same `SemanticSearchArm` + `RrfFusion` primitives (not a serving-pipeline copy). The production
-   arm is correctly left untouched (it must keep abstaining for served identifier queries).
-2. **`canary_semantic_result_count` intentionally omitted from shadow rows.** The Field Reference row lists
-   `arm ∈ {treatment,shadow}` for it, but §Shadow step 4 and this task both say the shadow row records ONLY the
-   three comparison counters. Followed the §Shadow enumeration + task ("records ONLY"): shadow writes no
-   lexical/semantic/fused/contribution counter. The field stays writable via the treatment path (T5), so the
-   "every field writable" close still holds.
-3. **`off` ⇒ zero shadow work, for free.** Under `MILLER_SEMANTIC=off`, `semanticDisabled` makes the eligibility
-   ladder stop at `ineligible_semantic_disabled` before the query-class rung — so the shadow gate
-   (`ineligible_query_class`) is never met and the runner is never invoked. No extra guard needed; proved by
-   `SemanticDisabled_RunsNoShadowWorkAndRecordsPlainIneligible` (runner invocation count 0).
-4. **Serve-first covers cancellation too.** The shadow runs inside `RunSymbolsWithCanary`, whose caller wraps
-   everything in a `catch (Exception) ⇒ outcome=Error`. A propagating shadow exception would discard the already
-   finalized served bytes and flip `outcome`. So `RunIdentifierShadow` catches **all** exceptions (including
-   `OperationCanceledException`) → `status=error`; the served result and outcome are provably untouched. Pinned
-   by `ShadowCancels_...` and `ShadowArmThrows_...`.
+- Endpoint/factory/DI/CLI focused gate: 8/8 passed.
+- Broader semantic, host, CLI, and search-arm gate: 258/258 passed.
+- Clean-helper focused factory rerun: 3/3 passed.
+- `scripts/test.sh`: 5234 passed, 2 pre-existing skips, 0 failed; 26 seconds.
+- `dotnet build Miller.slnx -c Release --no-restore`: 0 warnings, 0 errors.
+- `git diff --check`: clean.
+- Miller final impact completed for all production and test paths; the full fast suite covered the reported broad CLI/search/convergence blast radius.
 
-## Status mapping table (fallback → `canary_shadow_status`)
-| `SemanticFallbackKind` | status | rationale |
-|---|---|---|
-| served, hits fused (`None`) | `ok` | hybrid executed, comparison valid |
-| `EmbedTimeout` | `timeout` | embed deadline |
-| `VectorsMissing / VectorsStale / VectorsIncompatible / VectorsBuilding / ModelNotPrepared / CircuitOpen / DiskBlocked / Disabled` | `skipped` | prerequisites (vectors/circuit/model) unavailable |
-| `EmbedError / KnnError / Unknown` | `error` | execution failure |
-| thrown exception (any) | `error` | serve-first catch-all |
-| null runner (semantic graph absent) | `skipped` | cannot run |
+## Acceptance
 
-## Verification (all from the worktree, branch `worktree-semantic-p5`)
-- worker-red-green: `dotnet test … --filter FullyQualifiedName~CanaryShadowPopulationTests` → **31 passed, 0 failed**.
-  The `ok` path drives the real `ShadowSymbolArm` + `RrfFusion` over a 3-symbol index with one semantic hit on
-  the lowest-ranked symbol; hand-computed hybrid `[C,A,B]` yields `overlap=3, top1_changed=true, rank=2`, matched
-  exactly. Fault taxonomy (throw/cancel/timeout/skipped×6/error×3), sampling (pinned buckets 0/1/3/5 in, 28/51
-  out), off + semantic-disabled zero-work, and the exact key-set (15 present / 15 absent) are all pinned.
-- Regression (Canary*/SearchGolden/SearchDeterminism/HybridSearch/SearchRouteExecutor/SearchToolTests/
-  AgentInstructions/SemanticQueryDiagnostics): **476 passed, 0 failed**.
-- worker-ceiling: `scripts/test.sh` → **4389 passed, 2 skipped, 0 failed** (warm run 15s wall, < 30s ceiling; a
-  first cold-build run reported 34s purely from build + machine load — the second warm run was 15s).
-- Diagnostic: `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors**.
-- Known pre-existing flake (`RepositoryIndexLoaderBridgeTests`) not triggered.
+- PASS: production server has one process-local client factory and no per-session production model child.
+- PASS: server factory is lazy singleton; CLI factory is invocation-scoped; no static global.
+- PASS: eight independent factories converge on one model-loading broker and all handshake through a cold start.
+- PASS: non-owner disposal leaves the broker running; owner disposal stops it; a survivor reconnects and re-elects.
+- PASS: Job attachment is attempted before broker use; failure is surfaced and stdin EOF stops the owner.
+- PASS: connection/spawn/handshake failures remain stated semantic failures consumed as lexical fallback, not host failures.
+- PASS: semantic Off registers no factory and performs no broker/session/path/directory work.
 
-## Acceptance criteria
-- [x] Sampling honors `bucket < 10` under the noninferiority experiment id (pinned vectors: 0/1/3/5 sampled,
-      28/51 not; `IdentifierBucket_MatchesTheFrozenNoninferiorityDerivation`, `BucketBelowTen_…`, `BucketAtOrAbove…`).
-- [x] Ok path records exactly the shadow key set; overlap/top1/rank verified against a fixture with known lexical
-      and hybrid rankings, hand-computed (`ShadowOk_RecordsHandComputed…`, `StampShadow_OkPath_WritesExactly…`).
-- [x] Timeout/error/skipped paths record status only; served output and `outcome` provably untouched
-      (`ShadowArmThrows_…`, `ShadowCancels_…`, `ShadowEmbedTimeout_…`, `ShadowPrerequisiteUnavailable_…`,
-      `RealArm_KnnFailure_…` all assert `outcome.Result.Output == LexicalOutput`).
-- [x] Worker-scope verification passes; committed per serial-worker-commit.
+## Remaining platform boundary
 
-## Files
-- `src/Miller.Server/Tools/SearchTool.cs` (post-finalize shadow hook + forced-hybrid arm — owned)
-- `src/Miller.Server/Telemetry/CanaryTelemetry.cs` (StampShadow + CanaryShadowFacts + status constants — owned)
-- `tests/Miller.Tests/Server/CanaryShadowPopulationTests.cs` (new — owned)
-- `.razorback/sdd/task-7-report.md` (this report)
+- Native Windows Job Object and named-pipe runtime execution was not available on this macOS host. The Windows P/Invoke compiled with warnings-as-errors, the injected attach-order/degradation seam passed, and the test host implements the Windows named-pipe protocol. A Windows CI/runtime pass must still prove real Job assignment and kill-on-close behavior.
+- The broker-aware semantic Scale gate was not run because this worktree has no restored semantic runtime and its checked-in pin is still rc.4, which predates the broker contract. Task 9 owns the rc.5 restore/pin boundary.
 
-## Concerns
-None blocking. Judgment call 1 (forced fusion in an owned arm rather than the production treatment arm) is the
-one deviation from the task's approach note, and it is required by contract §Shadow step 3 — noted rather than
-redesigned. Judgment call 2 (no `canary_semantic_result_count` on shadow rows) follows the §Shadow enumeration
-over the permissive Field Reference "written when"; if the analysis layer wants that counter on shadow rows, it
-is a one-line addition to `StampShadow` — but it would exceed the task's "records ONLY" spec.
+## Post-Grok lifecycle review
+
+Four Important lifecycle findings were validated and fixed:
+
+1. A cold-load lock holder could die while every waiter only polled until timeout. RED: all eight handshakes were null after the 10-second test budget. The factory now performs bounded one-second re-election attempts inside the existing initialization budget. GREEN: the first holder exits during model load, one replacement loads, and all eight factories handshake in about one second.
+2. An exited owner could be overwritten without retiring its process/stdin/Job handles. RED: the lifecycle test could not observe any retirement and initially failed to compile against the missing fact. `EnsureOwnerCandidateAsync` now clears and disposes an exited owner before replacement and snapshots `RetiredOwnerCount`. GREEN: the replacement has a new PID and exactly one retired owner.
+3. Disposal did not serialize with active/waiting connects and disposed their semaphore underneath them. RED: owner-aware teardown returned in 228 ms while both connect tasks were still incomplete. Connects now hold an active-operation lease linked to factory lifetime; disposal marks/cancels, waits for all connects to drain, then cleans owned resources. The spawn semaphore is never disposed. GREEN: disposal waits for both tasks, both receive factory-scoped `ObjectDisposedException`, and the test completes in about 225 ms.
+4. The old Windows assertion checked Unix socket absence and was vacuous. The test now captures the owner PID, proves that process exits, and then performs a platform-specific named-pipe or Unix-socket connection probe proving the endpoint is unavailable.
+
+Post-review gates:
+
+- Factory lifecycle suite: 6/6 passed.
+- Broader semantic/host/CLI/search gate: 261/261 passed.
+- One full-suite run exposed an unrelated parallel-order failure in `SearchToolRescueTests`; its isolated three-case rerun passed. The immediate full rerun passed 5234 with 2 pre-existing skips and 0 failures.
+- Release build: 0 warnings, 0 errors.
+
+## Architecture quality
+
+- Affected module: `SharedSemanticBrokerConnectionFactory` and its real-process test host.
+- Caller-facing interface: unchanged (`ConnectAsync`, `DisposeAsync`, immutable `Snapshot`).
+- Locality: election, owner retirement, and connect/dispose serialization remain inside the factory.
+- Test surface: public connect/dispose behavior plus broker PID/endpoint and immutable snapshot facts.
+- Rejected shortcut: respawning on every 20 ms poll; bounded one-second election avoids a tight loser-spawn loop during healthy cold loads.
+- Risk: medium because lifecycle concurrency changed; deterministic process tests and the full fast suite cover the seam.

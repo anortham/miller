@@ -44,12 +44,18 @@ public sealed class SemanticEmbeddingSessionBrokerTests
     public async Task DisabledBroker_NeverInvokesTheSessionFactory()
     {
         int sessions = 0;
+        int snapshots = 0;
         await using var broker = new SemanticEmbeddingSessionBroker(
             enabled: false,
             () =>
             {
                 sessions++;
                 return new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher(), FastOptions);
+            },
+            () =>
+            {
+                snapshots++;
+                return null;
             });
 
         SemanticEmbedOutcome query = await broker.EmbedQueryAsync(
@@ -60,6 +66,8 @@ public sealed class SemanticEmbeddingSessionBrokerTests
         Assert.False(query.Succeeded);
         Assert.False(batch.Succeeded);
         Assert.Equal(0, sessions);
+        Assert.Null(broker.BrokerSnapshot);
+        Assert.Equal(0, snapshots);
         Assert.Equal(SemanticSessionState.NotStarted, broker.State);
     }
 

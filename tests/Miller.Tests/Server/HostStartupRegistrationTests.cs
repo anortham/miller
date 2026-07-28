@@ -79,6 +79,40 @@ public sealed class HostStartupRegistrationTests : IDisposable
     }
 
     [Fact]
+    public void SemanticOff_DoesNotRegisterOrResolveTheSharedBrokerFactory()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.Off);
+
+        Assert.DoesNotContain(
+            services,
+            descriptor => descriptor.ServiceType == typeof(SharedSemanticBrokerConnectionFactory));
+
+        using var provider = services.BuildServiceProvider();
+        _ = provider.GetServices<IHostedService>().ToArray();
+
+        Assert.Null(provider.GetService<SharedSemanticBrokerConnectionFactory>());
+    }
+
+    [Fact]
+    public void SemanticOn_RegistersOneLazySharedBrokerFactorySingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices(semanticMode: SemanticMode.On);
+
+        ServiceDescriptor descriptor = Assert.Single(
+            services,
+            candidate => candidate.ServiceType == typeof(SharedSemanticBrokerConnectionFactory));
+        Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+
+        using var provider = services.BuildServiceProvider();
+        _ = provider.GetServices<IHostedService>().ToArray();
+        Assert.NotNull(provider.GetRequiredService<SemanticEmbeddingSessionBroker>());
+    }
+
+    [Fact]
     public void EvaluationGraph_UsesTheInjectedEncoderWithoutChangingTheProductionSelection()
     {
         string configPath = Path.Combine(CreateTempRoot(), "coderank.json");

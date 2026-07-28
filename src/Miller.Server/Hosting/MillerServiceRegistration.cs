@@ -71,11 +71,39 @@ public static class MillerServiceRegistration
             evaluationAdapter?.CreateVectorSidecar(activeSemanticMode)
             ?? new VectorSidecar(activeSemanticMode));
         services.AddSingleton(_ => VectorConvergeSignal.Shared);
+        if (evaluationAdapter is null && activeSemanticMode is not SemanticMode.Off)
+        {
+            services.AddSingleton(sp =>
+            {
+                WorkspaceContext workspace =
+                    sp.GetRequiredService<IndexBootstrapService>().Workspace;
+                string millerHome = Path.GetDirectoryName(workspace.RegistryDbPath)
+                    ?? throw new InvalidOperationException(
+                        $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
+                return new SharedSemanticBrokerConnectionFactory(
+                    workspace.ToolsRoot,
+                    millerHome,
+                    SemanticEncoderSelection.Active);
+            });
+        }
+
         services.AddSingleton(sp => new SemanticEmbeddingSessionBroker(
             sp.GetRequiredService<VectorSidecar>().Enabled,
-            () => evaluationAdapter?.CreateSession()
-                ?? SemanticSearchArm.ProcessSession(
-                    sp.GetRequiredService<IndexBootstrapService>().Workspace.ToolsRoot)));
+            () =>
+            {
+                if (evaluationAdapter is not null)
+                    return evaluationAdapter.CreateSession();
+
+                WorkspaceContext workspace =
+                    sp.GetRequiredService<IndexBootstrapService>().Workspace;
+                string executable = SemanticSidecarLayout.ExecutablePath(workspace.ToolsRoot);
+                return File.Exists(executable)
+                    ? SemanticSearchArm.ProcessSession(
+                        sp.GetRequiredService<SharedSemanticBrokerConnectionFactory>(),
+                        SemanticEncoderSelection.Active)
+                    : null;
+            },
+            () => sp.GetService<SharedSemanticBrokerConnectionFactory>()?.Snapshot));
         services.AddSingleton<VectorConvergeService>();
         services.AddHostedService(sp => sp.GetRequiredService<VectorConvergeService>());
 

@@ -481,16 +481,18 @@ public static class CliDispatch
                 CanaryMode canaryMode = CanaryActivation.FromEnvironment();
                 using TelemetryLedger? ledger = TryOpenCliCanaryLedger(ctx, canaryMode, vectors.Mode);
                 using TelemetryScope? telemetry = ledger?.Measure("search", CliModeName(route.Mode));
-                using var semanticSession = new CliSemanticSession(ctx.ToolsRoot);
+                using CliSemanticSession? semanticSession = vectors.Mode is SemanticMode.On
+                    ? CreateCliSemanticSession(ctx)
+                    : null;
                 ISemanticTextArm? productionArm = vectors.Mode is SemanticMode.On
                     ? new SemanticTextArm(
                         SemanticMode.On,
-                        root => new SemanticSearchArm(root, vectors, semanticSession.Open))
+                        root => new SemanticSearchArm(root, vectors, semanticSession!.Open))
                     : null;
                 Func<ISemanticTextArm?>? treatmentArmFactory = vectors.Mode is SemanticMode.On
                     ? () => new SemanticTextArm(
                         SemanticMode.On,
-                        root => new SemanticSearchArm(root, vectors, semanticSession.Open))
+                        root => new SemanticSearchArm(root, vectors, semanticSession!.Open))
                     : null;
                 SearchTool.ContentCanaryOutcome outcome = RunNormalContentRoute(
                     contentIndex,
@@ -585,12 +587,14 @@ public static class CliDispatch
         var sidecar = VectorSidecar.FromEnvironment();
         if (requestedArm is CliSearchArm.Policy)
         {
-            using var policySession = new CliSemanticSession(ctx.ToolsRoot);
+            using CliSemanticSession? policySession = sidecar.Mode is SemanticMode.Off
+                ? null
+                : CreateCliSemanticSession(ctx);
             Func<SemanticSymbolFusionArm>? armFactory = sidecar.Mode is SemanticMode.Off
                 ? null
                 : () => new SemanticSymbolFusionArm(
                     sidecar.Mode,
-                    root => new SemanticSearchArm(root, sidecar, policySession.Open));
+                    root => new SemanticSearchArm(root, sidecar, policySession!.Open));
             CanaryMode canaryMode = CanaryActivation.FromEnvironment();
             using TelemetryLedger? ledger = TryOpenCliCanaryLedger(ctx, canaryMode, sidecar.Mode);
             using TelemetryScope? telemetry = ledger?.Measure("search", CliModeName(route.Mode));
@@ -629,7 +633,7 @@ public static class CliDispatch
             }
         }
 
-        using var session = new CliSemanticSession(ctx.ToolsRoot);
+        using var session = CreateCliSemanticSession(ctx);
         if (session.Open() is null)
         {
             err.WriteLine(
@@ -3463,6 +3467,14 @@ public static class CliDispatch
           serve              Run the MCP stdio server (the default when launched with no arguments).
         """;
 
+    private static CliSemanticSession CreateCliSemanticSession(WorkspaceContext workspace)
+    {
+        string millerHome = Path.GetDirectoryName(workspace.RegistryDbPath)
+            ?? throw new InvalidOperationException(
+                $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
+        return new CliSemanticSession(workspace.ToolsRoot, millerHome);
+    }
+
     private const string WorkspaceHelpText =
         """
         miller workspace — index lifecycle for the current (or a selected) workspace.
@@ -3513,7 +3525,7 @@ internal enum CliSearchArm
 /// count and an open circuit are state a per-query session would silently reset — a CLI process has no queries
 /// after this one, so the same reasoning ends at disposal.
 /// </summary>
-internal sealed class CliSemanticSession(string toolsRoot) : IDisposable
+internal sealed class CliSemanticSession(string toolsRoot, string millerHome) : IDisposable
 {
     private SemanticEmbeddingSession? _session;
     private bool _opened;
@@ -3524,7 +3536,7 @@ internal sealed class CliSemanticSession(string toolsRoot) : IDisposable
             return _session;
 
         _opened = true;
-        _session = SemanticSearchArm.ProcessSession(toolsRoot);
+        _session = SemanticSearchArm.ProcessSession(toolsRoot, millerHome);
         return _session;
     }
 

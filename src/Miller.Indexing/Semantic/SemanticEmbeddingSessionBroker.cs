@@ -5,6 +5,7 @@ public sealed class SemanticEmbeddingSessionBroker : IAsyncDisposable, IDisposab
 {
     private readonly bool _enabled;
     private readonly Func<SemanticEmbeddingSession?> _sessionFactory;
+    private readonly Func<SemanticBrokerSnapshot?> _snapshotProvider;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _operationGate = new(1, 1);
 
@@ -15,11 +16,13 @@ public sealed class SemanticEmbeddingSessionBroker : IAsyncDisposable, IDisposab
 
     public SemanticEmbeddingSessionBroker(
         bool enabled,
-        Func<SemanticEmbeddingSession?> sessionFactory)
+        Func<SemanticEmbeddingSession?> sessionFactory,
+        Func<SemanticBrokerSnapshot?>? snapshotProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sessionFactory);
         _enabled = enabled;
         _sessionFactory = sessionFactory;
+        _snapshotProvider = snapshotProvider ?? (() => null);
     }
 
     public SemanticSessionState State
@@ -54,6 +57,9 @@ public sealed class SemanticEmbeddingSessionBroker : IAsyncDisposable, IDisposab
                 return _session?.Handshake;
         }
     }
+
+    public SemanticBrokerSnapshot? BrokerSnapshot =>
+        _enabled && !IsDisposed() ? _snapshotProvider() : null;
 
     public bool Available => GetSession() is not null;
 
