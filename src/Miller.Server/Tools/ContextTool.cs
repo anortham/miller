@@ -662,6 +662,8 @@ public sealed partial class ContextTool
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
+    // (reference-aware renderers also take query for discovery next_actions — see RunReferenceAwareActionable)
+
     internal static string RunReferenceAware(
         ISymbolLookupIndex index, ISymbolGraphReachability graph, SmartTargetResolver resolver,
         string query, int tokenBudget, int maxHops,
@@ -823,11 +825,11 @@ public sealed partial class ContextTool
         IReadOnlyList<ReferenceContextItem> selected =
             ContextPacker.PackAllocated(packCandidates, tokenBudget);
         Func<IReadOnlyList<ReferenceContextItem>, string> renderer = json
-            ? selected => RenderReferenceJson(selected, anchorDiagnostics, boundOptionalFields: false)
-            : selected => RenderReferenceCompact(selected, anchorDiagnostics);
+            ? selected => RenderReferenceJson(selected, anchorDiagnostics, query, boundOptionalFields: false)
+            : selected => RenderReferenceCompact(selected, anchorDiagnostics, query);
         Func<IReadOnlyList<ReferenceContextItem>, string> boundedRenderer = json
-            ? selected => RenderReferenceJson(selected, anchorDiagnostics, boundOptionalFields: true)
-            : selected => RenderReferenceCompact(selected, anchorDiagnostics);
+            ? selected => RenderReferenceJson(selected, anchorDiagnostics, query, boundOptionalFields: true)
+            : selected => RenderReferenceCompact(selected, anchorDiagnostics, query);
         return RenderWithinBudget(selected, tokenBudget, renderer, boundedRenderer, out selectedCount);
     }
 
@@ -1550,7 +1552,24 @@ public sealed partial class ContextTool
 
         foreach (TermRescueTestHit hit in hits.Values)
         {
-            OutgoingReferenceEvidenceSet outgoing = readOutgoing(hit.Test.SymbolId);
+            OutgoingReferenceEvidenceSet outgoing;
+            try
+            {
+                outgoing = readOutgoing(hit.Test.SymbolId);
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or IOException or UnauthorizedAccessException
+                    or ArgumentException or NotSupportedException
+                    or Microsoft.Data.Sqlite.SqliteException)
+            {
+                // Promotion is optional enrichment; a read failure must not abort context.
+                continue;
+            }
+
+            // Truncated exact pages can hide a second subject — refuse to promote on incomplete evidence.
+            if (outgoing.Coverage.ExactTruncated)
+                continue;
+
             var subjectIds = new HashSet<string>(StringComparer.Ordinal);
             IndexedSymbol? soleSubject = null;
             foreach (OutgoingReferenceEvidence edge in outgoing.Exact)
@@ -2309,6 +2328,58 @@ public sealed partial class ContextTool
     private static string NextSourceSearchLine(string query) =>
         "search(query=\"" + EscapeDiagnosticQuery(query) + "\", mode=\"source\")";
 
+    private static ContextNextAction[] BuildReferenceDiscoveryNextActions(
+        IReadOnlyList<ReferenceContextItem> selected,
+        ContextEvidenceDisposition disposition,
+        string query)
+    {
+        ReferenceContextItem[] pivots = selected
+            .Where(static item => item.ItemType == "symbol" && item.Role == "pivot")
+            .ToArray();
+        if (disposition.Status == "sufficient" || pivots.Length == 0)
+            return [];
+
+        ReferenceContextItem[] implementationPivots = pivots
+            .Where(static item => CarriesImplementationKind(item.Kind))
+            .ToArray();
+        bool anyImplementation = implementationPivots.Length > 0;
+        bool suggestSource =
+            !string.IsNullOrWhiteSpace(query) &&
+            (!anyImplementation ||
+             disposition.Reason is "pivot_value_declaration_only" or "discovery_implementation_present"
+                 or "symbol_and_relation_evidence_only");
+
+        var actions = new List<ContextNextAction>(NextInspectCount + 1);
+        if (!anyImplementation)
+        {
+            if (suggestSource)
+            {
+                actions.Add(new ContextNextAction(
+                    NextSourceSearchLine(query),
+                    "source or docs may hold conceptual language beyond value declarations"));
+            }
+            return actions.ToArray();
+        }
+
+        int inspectCount = Math.Min(NextInspectCount, implementationPivots.Length);
+        for (int i = 0; i < inspectCount; i++)
+        {
+            ReferenceContextItem pivot = implementationPivots[i];
+            actions.Add(new ContextNextAction(
+                NextInspectLine(pivot.Name, pivot.File),
+                "inspect a pivot implementation"));
+        }
+
+        if (suggestSource)
+        {
+            actions.Add(new ContextNextAction(
+                NextSourceSearchLine(query),
+                "source or docs may hold conceptual language beyond value declarations"));
+        }
+
+        return actions.ToArray();
+    }
+
     private static ContextNextAction[] BuildDiscoveryNextActions(
         IReadOnlyList<Candidate> pivots,
         ContextEvidenceDisposition disposition,
@@ -2545,11 +2616,17 @@ public sealed partial class ContextTool
     }
 
     private static string RenderReferenceCompact(IReadOnlyList<ReferenceContextItem> selected) =>
-        RenderReferenceCompact(selected, []);
+        RenderReferenceCompact(selected, [], query: string.Empty);
 
     private static string RenderReferenceCompact(
         IReadOnlyList<ReferenceContextItem> selected,
-        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics)
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics) =>
+        RenderReferenceCompact(selected, anchorDiagnostics, query: string.Empty);
+
+    private static string RenderReferenceCompact(
+        IReadOnlyList<ReferenceContextItem> selected,
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        string query)
     {
         if (selected.Count == 0)
         {
@@ -2594,31 +2671,32 @@ public sealed partial class ContextTool
             .Append("  reason=")
             .Append(disposition.Reason)
             .Append('\n');
-        if (disposition.Status != "sufficient")
+        ContextNextAction[] nextActions = BuildReferenceDiscoveryNextActions(selected, disposition, query);
+        if (nextActions.Length > 0)
         {
-            ReferenceContextItem[] pivots = selected
-                .Where(static item => item.ItemType == "symbol" && item.Role == "pivot")
-                .Take(NextInspectCount)
-                .ToArray();
-            if (pivots.Length > 0)
-            {
-                sb.Append("## next inspect\n");
-                foreach (ReferenceContextItem pivot in pivots)
-                    sb.Append(NextInspectLine(pivot.Name, pivot.File)).Append('\n');
-            }
+            sb.Append("## next inspect\n");
+            foreach (ContextNextAction action in nextActions)
+                sb.Append(action.Call).Append('\n');
         }
         return sb.ToString().TrimEnd('\n');
     }
 
     private static string RenderReferenceJson(IReadOnlyList<ReferenceContextItem> selected) =>
-        RenderReferenceJson(selected, [], boundOptionalFields: false);
+        RenderReferenceJson(selected, [], query: string.Empty, boundOptionalFields: false);
 
     private static string RenderBoundedReferenceJson(IReadOnlyList<ReferenceContextItem> selected) =>
-        RenderReferenceJson(selected, [], boundOptionalFields: true);
+        RenderReferenceJson(selected, [], query: string.Empty, boundOptionalFields: true);
 
     private static string RenderReferenceJson(
         IReadOnlyList<ReferenceContextItem> selected,
         IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        bool boundOptionalFields) =>
+        RenderReferenceJson(selected, anchorDiagnostics, query: string.Empty, boundOptionalFields);
+
+    private static string RenderReferenceJson(
+        IReadOnlyList<ReferenceContextItem> selected,
+        IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        string query,
         bool boundOptionalFields)
     {
         var buffer = new ArrayBufferWriter<byte>();
@@ -2680,19 +2758,17 @@ public sealed partial class ContextTool
             WriteDispositionJson(w, disposition);
             if (disposition.Status != "sufficient")
             {
-                ReferenceContextItem[] pivots = selected
-                    .Where(static item => item.ItemType == "symbol" && item.Role == "pivot")
-                    .Take(NextInspectCount)
-                    .ToArray();
-                if (pivots.Length > 0)
+                ContextNextAction[] nextActions =
+                    BuildReferenceDiscoveryNextActions(selected, disposition, query);
+                if (nextActions.Length > 0)
                 {
                     w.WritePropertyName("next_actions");
                     w.WriteStartArray();
-                    foreach (ReferenceContextItem pivot in pivots)
+                    foreach (ContextNextAction action in nextActions)
                     {
                         w.WriteStartObject();
-                        w.WriteString("call", NextInspectLine(pivot.Name, pivot.File));
-                        w.WriteString("reason", "inspect a pivot implementation");
+                        w.WriteString("call", action.Call);
+                        w.WriteString("reason", action.Reason);
                         w.WriteEndObject();
                     }
                     w.WriteEndArray();
@@ -2777,20 +2853,52 @@ public sealed partial class ContextTool
     /// <c>sufficient</c> attests to — and a top-ranked one must not tell the caller to stop looking.
     /// </summary>
     private static bool CarriesImplementation(IndexedSymbol symbol) =>
-        symbol.Kind is not ("constant" or "variable" or "field" or "property");
+        CarriesImplementationKind(symbol.Kind);
+
+    private static bool CarriesImplementationKind(string? kind) =>
+        kind is not ("constant" or "variable" or "field" or "property");
 
     private static ContextEvidenceDisposition DispositionForReference(
         IReadOnlyList<ReferenceContextItem> selected)
     {
+        // Authoritative implementation body only — value declarations never authorize sufficient.
+        if (selected.Any(static item =>
+                item.ItemType == "implementation" &&
+                CarriesImplementationKind(item.Kind) &&
+                IsAuthoritativeImplementationReason(item.AnchorReason)))
+            return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
+        // Exact containing chunks authorize sufficient only when the matched pivot is itself
+        // authoritative (entry/edited/stack/full-query). Discovery pivots (source_rescue_*,
+        // semantic_rank_*, query_term_*) must not complete via a free content-chunk ride-along.
+        if (selected.Any(item =>
+                item.ItemType == "content_chunk" &&
+                item.Confidence == "exact" &&
+                HasAuthoritativePivotForSymbol(selected, item.ContainingSymbolId)))
+            return new ContextEvidenceDisposition("sufficient", "exact_containing_content_present");
+        if (selected.Any(static item =>
+                item.ItemType == "implementation" &&
+                CarriesImplementationKind(item.Kind)))
+            return new ContextEvidenceDisposition("partial", "discovery_implementation_present");
         if (selected.Any(static item =>
                 item.ItemType == "implementation" &&
                 IsAuthoritativeImplementationReason(item.AnchorReason)))
-            return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
-        if (selected.Any(static item => item.ItemType == "content_chunk" && item.Confidence == "exact"))
-            return new ContextEvidenceDisposition("sufficient", "exact_containing_content_present");
+            return new ContextEvidenceDisposition("partial", "pivot_value_declaration_only");
         if (selected.Any(static item => item.ItemType == "symbol"))
             return new ContextEvidenceDisposition("partial", "symbol_and_relation_evidence_only");
         return new ContextEvidenceDisposition("insufficient", "no_pivot_rendered");
+    }
+
+    private static bool HasAuthoritativePivotForSymbol(
+        IReadOnlyList<ReferenceContextItem> selected,
+        string? symbolId)
+    {
+        if (string.IsNullOrEmpty(symbolId))
+            return false;
+        return selected.Any(item =>
+            item.ItemType == "symbol" &&
+            item.Role == "pivot" &&
+            string.Equals(item.SymbolId, symbolId, StringComparison.Ordinal) &&
+            IsAuthoritativeImplementationReason(item.Reason));
     }
 
     private static bool IsAuthoritativeImplementationReason(string? reason) =>
