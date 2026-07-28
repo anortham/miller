@@ -13,15 +13,15 @@ const ROUTING_BLOCK_MAX_CHARS = 3000;
 const BARE_NOT_SHOUTING = /\b(do NOT|Never use|MANDATORY|BLOCKED)\b/;
 
 const ROUTING_CANARIES = [
-  { tool: 'search', anchor: 'source-body text' },
+  { tool: 'search', anchor: 'auto may use semantics' },
   { tool: 'inspect', anchor: 'you can already NAME' },
   { tool: 'context', anchor: 'FIRST call in an unfamiliar area' },
-  { tool: 'trace', anchor: 'shortest dependency paths' },
+  { tool: 'trace', anchor: 'exact refs' },
   { tool: 'impact', anchor: 'impacted symbols plus likely tests' },
   { tool: 'edit', anchor: 'diff preview and match proof' },
   { tool: 'patterns', anchor: 'code-shape facts' },
   { tool: 'content', anchor: 'without full-file reads' },
-  { tool: 'workspace', anchor: 'index lifecycle' },
+  { tool: 'workspace', anchor: 'semantic-broker health' },
 ];
 
 function readNormalized(relativePath) {
@@ -61,6 +61,16 @@ test('routing block routes every tool the way the instruction core does', () => 
       block.includes(anchor),
       `${ROUTING_BLOCK_PATH} should keep ${tool}'s routing anchor "${anchor}" so it never routes differently from the core`,
     );
+  }
+});
+
+test('routing block preserves exact-reference workflow guidance', () => {
+  const block = readNormalized(ROUTING_BLOCK_PATH);
+  const core = readNormalized(INSTRUCTION_CORE_PATH);
+
+  for (const anchor of ['trace refs|path|bridge', 'use `inspect` for callers/callees', 'exact refs']) {
+    assert.ok(core.includes(anchor), `${INSTRUCTION_CORE_PATH} should say "${anchor}"`);
+    assert.ok(block.includes(anchor), `${ROUTING_BLOCK_PATH} should say "${anchor}"`);
   }
 });
 

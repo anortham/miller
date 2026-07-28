@@ -284,7 +284,9 @@ public sealed class SearchTool
     [Description(
         "Search indexed code and return ranked results — use this before shell rg/grep/cat or reading whole " +
         "files. Pass a symbol name, identifier, or natural-language phrase; test code is auto-hidden for phrase " +
-        "queries unless exclude_tests=false. Modes: mode=markers audits TODO/FIXME/HACK/XXX in comments; " +
+        "queries unless exclude_tests=false. Semantic retrieval is on by default; retrieval=lexical performs zero " +
+        "vector work for that call, and MILLER_SEMANTIC=off is the permanent process-wide zero-work switch. " +
+        "Modes: mode=markers audits TODO/FIXME/HACK/XXX in comments; " +
         "mode=content (alias docs) searches docs/config prose; mode=source searches source-body text; " +
         "mode=external/web/all-text search imported corpus text. regions=comment,doc_comment,string_literal " +
         "restricts to those source regions. Scope with file_pattern/language/limit. NOT for: a symbol you can " +

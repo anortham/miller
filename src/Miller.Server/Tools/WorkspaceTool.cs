@@ -132,7 +132,8 @@ public sealed class WorkspaceTool
     [McpServerTool(Name = "workspace")]
     [Description(
         "Manage the workspace index. Defaults to status (freshness, revision, leader). refresh updates stale " +
-        "files; full forces a rebuild; health reports readiness + extraction quality; onboarding gives " +
+        "files; full forces a rebuild; health reports readiness + extraction quality; status/health expose vector " +
+        "and semantic-broker readiness, role, backend, accelerator lease, reconnects, and degradation; onboarding gives " +
         "telemetry-derived guidance for this repo; list shows registered workspaces (filter/limit, " +
         "recency-ordered); open registers another repo for cross-workspace reads; prune removes registry rows " +
         "whose roots are gone; leader diagnoses/hands off the indexer lock; dashboard starts/opens the local " +

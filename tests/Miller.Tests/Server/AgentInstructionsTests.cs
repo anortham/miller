@@ -101,6 +101,36 @@ public sealed class AgentInstructionsTests
         Assert.Contains("beats re-checking by hand", instructions);
     }
 
+    [Fact]
+    public void Load_PinsSemanticDiscoveryRouting()
+    {
+        string instructions = AgentInstructions.Load();
+
+        Assert.Contains("auto may use semantics", instructions);
+        Assert.Contains("lexical does zero vector work", instructions);
+        Assert.Contains("semantic-broker health", instructions);
+    }
+
+    [Fact]
+    public void ToolDescriptions_PinSemanticActivationAndBrokerDiagnostics()
+    {
+        IReadOnlyDictionary<string, string> descriptions = DiscoverToolMethods()
+            .ToDictionary(
+                ToolName,
+                static method => method.GetCustomAttribute<DescriptionAttribute>()?.Description ?? string.Empty,
+                StringComparer.Ordinal);
+
+        Assert.Contains("on by default", descriptions["search"]);
+        Assert.Contains("MILLER_SEMANTIC=off", descriptions["search"]);
+        Assert.Contains("permanent process-wide zero-work", descriptions["search"]);
+
+        Assert.Contains("semantic-broker readiness", descriptions["workspace"]);
+        Assert.Contains("role", descriptions["workspace"]);
+        Assert.Contains("backend", descriptions["workspace"]);
+        Assert.Contains("accelerator lease", descriptions["workspace"]);
+        Assert.Contains("degradation", descriptions["workspace"]);
+    }
+
     [Theory]
     [MemberData(nameof(ToolNames))]
     public void Load_RoutingTableNamesEveryTool(string toolName)

@@ -13,7 +13,7 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 
 ## When to reach for each tool
 
-- search — find code or text by symbol name, identifier, phrase, marker (TODO/FIXME audit), docs/config prose, or source-body text.
+- search — ranked symbol, natural-language, marker, docs/config, or source-body search; auto may use semantics, lexical does zero vector work.
 - inspect — a file or symbol you can already NAME: definition, signature, docs, refs, callers, body.
 - context — FIRST call in an unfamiliar area: a token-budgeted bundle of entry-point symbols for a task, with reasons.
 - trace — exact refs, shortest dependency paths, or cross-language route chains.
@@ -21,6 +21,6 @@ Fresh index of this workspace's code. One Miller call beats shell greps and full
 - edit — index-aware replace/rename/body-rewrite with a diff preview and match proof.
 - patterns — pre-extracted code-shape facts (routes, config keys, doc structure) across 36 languages.
 - content — import then search/read logs, CI output, web markdown, and other large text without full-file reads.
-- workspace — index lifecycle: status, refresh, health, list, onboarding, dashboard.
+- workspace — index lifecycle and semantic-broker health: status, refresh, health, list, onboarding, dashboard.
 
 Run `workspace onboarding` early for telemetry-derived guidance about THIS repo.
