@@ -1,115 +1,247 @@
-# Task 5 — Symbol-route canary go-live (P5)
+# Task 5 report: Windows named-pipe broker transport
 
-## Worktree state (verified)
-- pwd: `/Users/murphy/source/miller/.claude/worktrees/worktree-semantic-p5`
-- branch: `worktree-semantic-p5`
-- HEAD at start: `5b7b946`
+## Repository state
 
-## Status: COMPLETE
+- Worktree: `/Users/murphy/source/julie-semantic-sidecar/.worktrees/shared-semantic-broker`
+- Branch: `codex/shared-semantic-broker`
+- Baseline HEAD: `847cba5b9ee5972124b42735b123ddba6c8322b6`
+- Task 5 commit: `d468402` (`feat: add Windows semantic broker transport`)
+- No push was made.
+- The commit contains only the Task 5 owned files:
+  - `.github/workflows/ci.yml`
+  - `Cargo.lock`
+  - `Cargo.toml`
+  - `src/main.rs`
+  - `src/broker/mod.rs`
+  - `src/broker/transport/mod.rs`
+  - `src/broker/transport/unix.rs`
+  - `src/broker/transport/windows.rs`
+  - `tests/broker_windows_tests.rs`
 
-The randomized-holdout canary is live on the symbol route (ops `auto`/`text`/`symbol`, plus `file` -> off-surface).
-With `MILLER_SEMANTIC_CANARY` off the symbol path is the untouched pre-program code path (no keys, byte-identical).
-With it on, every symbol-route call records the frozen contract row: eligible units split 50/50, treatment serves the
-production hybrid path, control and every ineligible call serve today's lexical bytes.
+## RED
+
+The Windows-only integration tests were written before the production transport. They cover:
+
+- connect cancellation within one second;
+- read cancellation within one second;
+- write cancellation within one second;
+- a one-ACE DACL whose SID equals the process token's `TOKEN_USER`;
+- rejection of a `\\localhost\pipe\...` client while the local current-user client connects;
+- three clients where one dies mid-line and the other two continue;
+- owner stdin EOF with no Windows endpoint/PID cleanup files;
+- connection-scoped `shutdown`.
+
+Attempted RED command:
+
+```text
+cargo check --target x86_64-pc-windows-msvc --test broker_windows_tests
+```
+
+The target standard library installed successfully, but this macOS host could not reach the Rust
+test compilation. The transitive `ring` C build invoked Clang for
+`--target=x86_64-pc-windows-msvc` and failed because the MSVC SDK headers are not installed:
+
+```text
+ring-core/check.h:27:11: fatal error: 'assert.h' file not found
+```
+
+Therefore no Windows RED runtime result is claimed. The test was demonstrably absent from the
+baseline and referenced the not-yet-existing Windows transport/API, but only a Windows runner can
+execute the required behavioral RED/GREEN cycle. CI execution requires a push and remains
+approval-gated.
 
 ## Implementation
 
-### CanaryTelemetry.cs (owned)
-- Assignment flip (`CanaryAssignment.ResolveArm`): placeholder control-always -> frozen `bucket < 50 ? control : treatment`.
-- Eligibility ladder (`CanaryEligibility.Resolve`): first-match-wins over the frozen order -- off-surface -> semantic-disabled ->
-  query-class -> vectors-unavailable (absent/building/downloading/disk-blocked) -> vectors-incompatible -> circuit-open ->
-  cross-workspace-no-generation -> eligible. Pure, primitive params (no Indexing dependency); reusable by Tasks 6/7.
-- `CanaryEligibility.RequiresVectorProbe` lets the caller skip the filesystem probe on a call already ineligible by a cheaper rung.
+- Added a platform-neutral broker `Listener`/`Connection` seam. The common broker knows only
+  `bind`, `accept`, `Read`, and `Write`; platform details remain in adapters.
+- Adapted Unix sockets to the seam. The existing Unix endpoint setup, stale-socket removal,
+  permissions, framing, queueing, and connection-scoped shutdown behavior remain unchanged.
+- Added Windows `BrokerEndpoint::Windows(String)` and CLI dispatch for the full server endpoint
+  `\\.\pipe\<name>`.
+- Added target-specific `windows-sys = 0.61.2`.
+- Added an overlapped `CreateNamedPipeW` server using:
+  - `PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED`;
+  - `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS`;
+  - `PIPE_UNLIMITED_INSTANCES`;
+  - 64 KiB input and output buffers.
+- Added a current-process-token-user DACL with one `ACCESS_ALLOWED_ACE`.
+- Added cancellable overlapped connect/read/write operations with one manual-reset event and one
+  pinned `OVERLAPPED` allocation per operation.
+- Corrected the Win32 immediate-completion paths after lead review against Microsoft documentation:
+  - a nonzero `ConnectNamedPipe` result is already complete and now calls
+    `finish_without_wait` instead of `GetOverlappedResult`;
+  - `ReadFile` and `WriteFile` receive non-null immediate byte-count pointers;
+  - a nonzero read/write result returns that immediate byte count without calling
+    `GetOverlappedResult`;
+  - only `ERROR_IO_PENDING` reaches the blocking `GetOverlappedResult` path;
+  - `GetOverlappedResult` receives the mutable pointer to the pinned `OVERLAPPED`.
+- Closed a cancellation/last-error race found during Grok review. A failed
+  `ConnectNamedPipe`, `ReadFile`, or `WriteFile` now captures `GetLastError` immediately after the
+  Win32 call and before checking the atomic cancellation latch or calling `CancelIoEx`.
+  `finish_io` receives that captured `Option<u32>` instead of reading thread-local last-error
+  after cancellation could overwrite it.
+- Added an atomic cancellation latch so cancellation requested just before the worker issues its
+  Win32 call is consumed immediately after issuance; this closes the scheduling race where
+  `CancelIoEx` could otherwise observe no pending request.
+- Added a `windows-x64 broker lifecycle` job. It runs before model-backed conformance because the
+  conformance job now depends on it. The lifecycle job runs for pull requests, pushes to `main`,
+  and manual dispatches, which is stronger than the required every-main-push rule.
 
-### CanaryQueryClassifier.cs (new, Miller.Core, I/O-free)
-- `Classify(op, query, route) : string` -> one of the six frozen classes. Reason map: Empty/Short->short_token,
-  IdentifierLike/CodeSyntax->identifier, PathLike->path, Prose->docs_like when op==content or the query carries a docs-vocabulary
-  word (readme, docs, documentation, config, configuration, guide, install, setup, changelog, license, tutorial, faq) else prose,
-  Ambiguous*->mixed. Whole-word, case-insensitive vocabulary match.
+## External API grounding
 
-### SearchTool.cs (owned)
-- Retains the injected VectorSidecar + Lazy<SemanticEmbeddingSession?> (previously consumed and discarded by the greediest public
-  ctor that DI selects) so the tool can build a treatment arm and probe vector state.
-- `RunSymbolsWithCanary(...)` -- the single orchestration seam (Tasks 6/7 reuse for content): classify (route computed with
-  LexicalEvidence.None), walk the ladder, assign, pick the arm, execute, assemble facts. Off / empty-workspace-id ->
-  request.FusionArm untouched, no facts.
-- Treatment arm = production SemanticSymbolFusionArm forced to SemanticMode.On (mode gate bypassed) so treatment behaves exactly
-  like MILLER_SEMANTIC=on even under shadow. Control and every ineligible call pass a null arm -> pure lexical.
-- ExecuteSymbols mirrors SearchRouteExecutor.RunSymbols byte-for-byte (collect -> optional fuse -> render) plus the served page
-  slice and pre-fusion lexical count.
-- RenderSymbolCandidates gained an overload returning the served page slice (out IReadOnlyList<SymbolCandidate>); the old
-  signature delegates. Served-result hashes cover exactly the rendered page; parent names resolved at stamp time via
-  FindBySymbolId(SymbolId).ParentId -> parent Name (one-level Parent.Member only).
-- Facts assembly maps Task 3's SemanticQueryDiagnostics -> contract fields: fallback (SemanticFallbackKind -> 13 snake_case
-  strings), backend, warmth (cold/warm/none), embed+KNN latency, identity (fingerprint/schema/generation when vectors opened),
-  fusion profile; counters (lexical always; semantic/fused/contribution only when fusion ran).
-- Symbol branch of Search now calls the orchestrator, then the existing auto-rescue block, then stamps (so canary_rescue_kind
-  reflects the rescue outcome for op=auto).
+Primary sources checked before implementation:
 
-## Judgment calls (contract -> plan -> code evidence)
-1. UtcDate: the row ts is a SQLite now DEFAULT set at insert (Dispose); the scope holds no timestamp. UtcDate is DateTime.UtcNow
-   date at stamp time -- identical to the persisted ts date except a sub-millisecond midnight straddle. canary_bucket is
-   persisted so a rendered row stays self-auditing regardless.
-2. Cross-workspace rung: the symbol route passes crossWorkspaceNoGeneration: false. Per the frozen ladder order, a foreign read
-   with unavailable vectors is already caught by ineligible_vectors_unavailable (rung 4, before rung 8); a foreign read whose own
-   vectors.db probes ready genuinely has a ready generation. The distinct rung is retained, ordered, and unit-tested for when a
-   future corpus-generation compat signal exists (design 5.3). No behavioral gap for v1's same-/foreign-workspace paths.
-3. canary_rescue_kind: copies the auto-rescue outcome into the frozen 7-value enum; the lexical docs_config rung (absent from the
-   canary enum) folds into source -- the nearest frozen lexical text rescue (file is a filename rescue, wrong shape).
-   null -> none; semantic rungs pass through.
-4. Backend normalization: diagnostics.Backend passes through when in the frozen 5-value set, else none. The sidecar resolves to
-   metal/vulkan/cuda/cpu so this is defensive.
-5. Scope: only the symbol route is wired (Task 5's stated scope). Non-symbol non-content surfaces
-   (markers/regions/source/external/web) do not yet stamp ineligible_surface; that follows the plan's per-route rollout. op=file
-   reaches the symbol branch and exercises the ineligible_surface rung in production and tests.
+- `CreateNamedPipeW`, including `FILE_FLAG_OVERLAPPED`, `PIPE_REJECT_REMOTE_CLIENTS`, unlimited
+  instances, and security-attribute behavior:
+  <https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createnamedpipew>
+- `ConnectNamedPipe`, including the required non-null `OVERLAPPED`, manual-reset event,
+  `ERROR_IO_PENDING`, and the valid `ERROR_PIPE_CONNECTED` race:
+  <https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-connectnamedpipe>
+- `CancelIoEx`, including the rule that the `OVERLAPPED` cannot be freed or reused until the I/O
+  itself completes:
+  <https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelioex>
+- `GetOverlappedResult`:
+  <https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-getoverlappedresult>
+- `ReadFile` and `WriteFile`, including buffer lifetime and `lpNumberOfBytes* = NULL` for
+  overlapped handles:
+  <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile>
+  <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile>
+- Named-pipe security and DACL access checks:
+  <https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights>
+- Process token and `TOKEN_USER` retrieval:
+  <https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens>
+- Exact `windows-sys` 0.61.2 generated signatures:
+  <https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/Pipes/fn.CreateNamedPipeW.html>
+  <https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/Pipes/fn.ConnectNamedPipe.html>
+  <https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/System/IO/fn.CancelIoEx.html>
+  <https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/Storage/FileSystem/fn.ReadFile.html>
+  <https://docs.rs/windows-sys/0.61.2/windows_sys/Win32/Storage/FileSystem/fn.WriteFile.html>
 
-## Necessary edit outside the strict ownership list
-tests/Miller.Tests/Server/CanaryTelemetryTests.cs::Assignment_ArmStaysControlForEveryBucketUntilP5 asserted control for every
-bucket -- the exact P2 "until P5" behavior this task flips. Rewrote it to Assignment_SplitsFiftyFiftyOnBucketFiftyAtP5 (control
-<50, treatment >=50). This is the explicit criteria revision the flip requires. The other two control-asserting tests still pass
-unchanged: their fixture (ws-hex/prose) lands in bucket 23 -> control post-flip.
+Plan correction: `windows-sys` 0.61.2 places `ReadFile`, `WriteFile`,
+`FILE_FLAG_OVERLAPPED`, and `PIPE_ACCESS_DUPLEX` under
+`Win32::Storage::FileSystem`. The implementation therefore adds the target-specific
+`Win32_Storage_FileSystem` feature in addition to the five features listed in the plan. Omitting
+it cannot compile the required nonblocking server.
 
-## Verification
-- worker-red-green: CanaryQueryClassifierTests + CanarySearchTests -> 46 passed, 0 failed.
-- Regression suites: CanaryTelemetryTests, HybridSearchTests, SearchGoldenParityTests, SearchDeterminismTests, CanaryExportTests,
-  CanaryGateReportTests, SemanticQueryDiagnosticsTests -> 112 passed, 0 failed.
-- worker-ceiling: scripts/test.sh -> 4351 passed, 2 skipped, 0 failed, 17s wall (< 30s ceiling).
-- Diagnostic: dotnet build Miller.slnx -c Release -> 0 warnings / 0 errors.
-- Known pre-existing flake (RepositoryIndexLoaderBridgeTests) not triggered.
+## Win32 safety invariants
 
-## Acceptance criteria
-- [x] Canary off => no canary_* keys, byte-identical output (CanaryOff_..., off path = pre-program code path).
-- [x] Eligible: arm from the frozen derivation (bucket 23->control, 94->treatment pinned); control lexical byte-identical;
-      treatment fused identical to MILLER_SEMANTIC=on over the same fixture.
-- [x] Facts per the field table: counters, fallback/backend/warmth/latency, identity, three hash arrays + shared truncation flag
-      (11-result fixture).
-- [x] CanaryQueryClassifier table test pins all six classes incl. docs vocabulary and op=content promotion.
-- [x] Ineligible rows record exactly arm/eligibility/query_class (+ contract/experiment/assignment/policy version) -- Stamp
-      enforces; OffSurfaceCall_... verifies no bucket/counters/hashes.
-- [x] Worker-scope verification passes; committed per serial-worker-commit.
+- No server I/O uses `std::fs::File`; all server connect/read/write calls are overlapped Win32 I/O.
+- Each operation owns a separately allocated manual-reset event.
+- Each `OVERLAPPED` is pinned before its address reaches Win32.
+- Read/write caller buffers stay borrowed until the Win32 call reports immediate completion or
+  `GetOverlappedResult` reports pending-operation completion.
+- Immediate `ReadFile`/`WriteFile` completions return the byte count written through the non-null
+  `lpNumberOfBytesRead`/`lpNumberOfBytesWritten` pointer; they never query a completed operation
+  through `GetOverlappedResult`.
+- Failed connect/read/write calls snapshot thread-local last-error before any cancellation call;
+  later error classification uses only the snapshot.
+- `PendingIo::drop` calls `CancelIoEx` and then waits in `GetOverlappedResult` before the event or
+  `OVERLAPPED` allocation can be dropped.
+- `Connection` clones share an `Arc`-owned pipe handle, so a handle cannot close while another
+  clone has a pending operation.
+- A client EOF/broken-pipe error ends only that connection thread; dropping the last connection
+  clone disconnects and closes only that named-pipe instance.
+- The accept loop creates a fresh unlimited-instance server handle for each client.
+- Pending accept handles are registered under a mutex before waiting; cancellation holds that
+  mutex while issuing `CancelIoEx`, preventing close/reuse races.
+- Token and ACL buffers use `Vec<usize>`, not `Vec<u8>`, so casts to `TOKEN_USER`, `ACL`, and ACE
+  structures are aligned.
+- The token buffer remains live until the SID has been copied into the ACL.
+- The ACL allocation remains live for the whole security-descriptor/CreateNamedPipeW call.
+- Windows never unlinks an endpoint and creates no endpoint, PID, state, token, or cleanup file.
 
-## Concerns
-None blocking. The two documented limitations (UtcDate midnight straddle; cross-workspace rung awaiting a corpus-generation compat
-signal) are noted judgment calls, not gaps for v1.
+## GREEN and verification
 
-## Fix round 1 — unify the duplicated serving pipeline
+Fresh local gates:
 
-Lead finding: SearchTool.ExecuteSymbols mirrored SearchRouteExecutor.RunSymbols line-for-line (two copies of the same
-load-bearing pipeline that would drift). Now own SearchRouteExecutor.cs for this round.
+```text
+cargo test
+```
 
-Change (no behavior change anywhere):
-- Extracted the symbol-route pipeline into one `SearchRouteExecutor.RunSymbolsCore(index, route, request, armOverride)`
-  returning `SymbolExecution` (result, served page slice, pre-fusion lexical count, fusion map). `SymbolExecution` now lives
-  next to it in SearchRouteExecutor.cs (moved from SearchTool).
-- `SearchRouteExecutor.RunSymbols` is now a thin wrapper: `RunSymbolsCore(index, route, request, request.FusionArm).Result`
-  (public signature + behavior unchanged for all existing callers).
-- `SearchTool.RunSymbolsWithCanary` calls `RunSymbolsCore` directly (treatment arm, or request.FusionArm on the off path);
-  `SearchTool.ExecuteSymbols` and its private record are deleted.
+- 236 passed
+- 0 failed
+- 25 ignored model-backed tests
+- Windows-only target compiled as 0 tests on macOS, as expected
 
-Verification:
-- red-green + regression (golden parity, determinism, hybrid, canary telemetry/export/gate, diagnostics, SearchRouteExecutor)
-  -> 165 passed, 0 failed.
-- scripts/test.sh -> 4351 passed, 2 skipped, 0 failed, 16s.
-- dotnet build Miller.slnx -c Release -> 0W/0E.
+```text
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+python3 -B -m unittest discover -s scripts/tests -p 'test_*.py'
+```
 
-Owned files touched this round: SearchTool.cs, SearchRouteExecutor.cs (report is documentation).
+- Clippy: pass
+- Formatting: pass
+- Python harness: 30 passed
+
+Focused Unix regression:
+
+```text
+cargo test --test broker_lifecycle_tests --test broker_protocol_tests
+```
+
+- 12 passed
+- 0 failed
+
+Cross-target static evidence:
+
+- Installed `x86_64-pc-windows-msvc` with `rustup target add`.
+- Compiled `src/broker/transport/windows.rs` directly as Windows metadata against an exact-feature
+  `windows-sys` 0.61.2 metadata build with `-D warnings`: pass.
+- Compiled `tests/broker_windows_tests.rs` as Windows test metadata with `-D warnings`, exact
+  Windows dependency metadata, and a shape-only stub of the sidecar seam: pass.
+- Re-ran both isolated Windows metadata checks after the immediate-completion fix: pass with
+  `-D warnings`.
+- Re-ran both isolated Windows metadata checks after the captured-last-error race fix: pass with
+  `-D warnings`.
+- `buffered_read_and_write_return_the_exact_immediate_byte_counts` now exercises buffered
+  read/write traffic and requires exact immediate byte counts.
+- `git diff --check`: pass.
+- Miller `impact` maps the platform seam to the Unix lifecycle/protocol suites and the new Windows
+  lifecycle suite; those are the selected verification surfaces.
+
+Missing evidence:
+
+- No Windows runtime test ran on this Mac.
+- Full-package `cargo check --target x86_64-pc-windows-msvc` is blocked by the missing MSVC C SDK
+  headers before it reaches sidecar Rust code.
+- The new `windows-2022` lifecycle job cannot run without an approval-gated push.
+
+## Architecture Quality
+
+- **Affected modules:** broker orchestration, transport seam, Unix adapter, new Windows adapter,
+  Windows CLI dispatch, Windows lifecycle CI.
+- **Caller-facing interface:** common broker callers see only `transport::bind`,
+  `Listener::accept`, and a connection implementing `Read + Write`.
+- **Depth/locality check:** ACL construction, handle ownership, overlapped state, cancellation, and
+  named-pipe flags are all local to `transport/windows.rs`.
+- **Test surface:** Unix callers use the same broker lifecycle/protocol tests; Windows tests use
+  the real Windows adapter and full broker process seam.
+- **Seams/adapters:** the seam now has two concrete adapters and earns its keep. Deleting it would
+  spread platform branches through connection framing and queue orchestration.
+- **Rejected shortcuts:** blocking `std::fs::File` server I/O, default DACLs, NULL DACLs, polling
+  timeouts, PID/state files, stale-path cleanup, environment knobs, leaked events, and dropping
+  pending `OVERLAPPED` buffers.
+- **Architecture risk:** medium until the `windows-2022` runtime lifecycle job passes; low for the
+  Unix regression surface based on fresh local gates.
+
+Checklist:
+
+- Keeps platform complexity local: yes.
+- Caller-facing interface is smaller than the behavior unlocked: yes.
+- Tests use the same adapter/broker interfaces as production: yes.
+- The seam has two real adapters: yes.
+- No speculative transport framework or extra endpoint type was added: yes.
+- The structural cause was fixed by making transport explicit, not by adding Windows branches
+  throughout broker framing/scheduling: yes.
+
+## Judgment calls
+
+- Used a single current-token-user allow ACE with `GENERIC_ALL`. The DACL contains no Everyone,
+  anonymous, administrator, or LocalSystem ACE; `PIPE_REJECT_REMOTE_CLIENTS` independently rejects
+  remote clients.
+- Kept Windows cancellation controls on the Windows adapter. The common broker seam remains
+  platform-neutral.
+- Made the Windows lifecycle job run on all CI events so a pull request can catch Windows
+  regressions before merge, while still satisfying every push to `main`.
+- Did not amend the Miller plan or contract from the sidecar task. The extra required
+  `Win32_Storage_FileSystem` feature is reported here for lead-owned plan reconciliation.
