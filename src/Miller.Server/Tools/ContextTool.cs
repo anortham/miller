@@ -141,6 +141,10 @@ public sealed partial class ContextTool
                             context.IndexDbPath,
                             context.WorkspaceRoot,
                             symbol),
+                        readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
+                            context.IndexDbPath,
+                            symbolId,
+                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         json,
                         out selectedCount, out candidatesExamined);
                     break;
@@ -576,6 +580,43 @@ public sealed partial class ContextTool
         Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
         bool json,
         out int selectedCount,
+        out int candidatesExamined) =>
+        RunActionable(
+            index,
+            graph,
+            resolver,
+            query,
+            tokenBudget,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readBody,
+            readOutgoing: null,
+            json,
+            out selectedCount,
+            out candidatesExamined);
+
+    internal static string RunActionable(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int tokenBudget,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<IndexedSymbol, ExtractReader.BodyReadResult>? readBody,
+        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
+        bool json,
+        out int selectedCount,
         out int candidatesExamined)
     {
         IReadOnlyList<Candidate> candidates = BuildCandidates(
@@ -590,9 +631,9 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds,
+            readOutgoing,
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined);
-
         candidates = AttachPivotBodies(candidates, tokenBudget, readBody);
 
         if (candidates.Count == 0)
@@ -742,6 +783,18 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds,
+            readOutgoing: symbolId =>
+            {
+                if (index.FindBySymbolId(symbolId) is not { } symbol)
+                {
+                    return new OutgoingReferenceEvidenceSet(
+                        [],
+                        [],
+                        new OutgoingReferenceEvidenceCoverage(0, 0, 0, 0, 0, false, false));
+                }
+
+                return readOutgoingEvidence(symbol);
+            },
             out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
             out candidatesExamined);
 
@@ -955,6 +1008,7 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds: null,
             sourceSeeds: null,
+            readOutgoing: null,
             out _,
             out candidatesExamined);
 
@@ -983,6 +1037,7 @@ public sealed partial class ContextTool
             stackTrace,
             semanticSeeds,
             sourceSeeds: null,
+            readOutgoing: null,
             out anchorDiagnostics,
             out candidatesExamined);
 
@@ -998,6 +1053,37 @@ public sealed partial class ContextTool
         string? stackTrace,
         IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
         IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
+        out int candidatesExamined) =>
+        BuildCandidates(
+            index,
+            graph,
+            resolver,
+            query,
+            maxHops,
+            entrySymbols,
+            editedFiles,
+            failingTest,
+            stackTrace,
+            semanticSeeds,
+            sourceSeeds,
+            readOutgoing: null,
+            out anchorDiagnostics,
+            out candidatesExamined);
+
+    private static IReadOnlyList<Candidate> BuildCandidates(
+        ISymbolLookupIndex index,
+        ISymbolGraphReachability graph,
+        SmartTargetResolver resolver,
+        string query,
+        int maxHops,
+        IReadOnlyList<string>? entrySymbols,
+        IReadOnlyList<string>? editedFiles,
+        string? failingTest,
+        string? stackTrace,
+        IReadOnlyList<ContextSemanticSeed>? semanticSeeds,
+        IReadOnlyList<ContextSourceSeed>? sourceSeeds,
+        Func<string, OutgoingReferenceEvidenceSet>? readOutgoing,
         out IReadOnlyList<ContextAnchorDiagnostic> anchorDiagnostics,
         out int candidatesExamined)
     {
@@ -1093,6 +1179,20 @@ public sealed partial class ContextTool
                             $"query_term_{term}");
                     }
                 }
+            }
+
+            if (readOutgoing is not null && !HasTestOrDefIntent(query))
+            {
+                PromoteTermRescueTestSubjects(
+                    index,
+                    queryTerms,
+                    excludeTests,
+                    readOutgoing,
+                    signals,
+                    symbols,
+                    reasons,
+                    (symbol, rank, score, strength, reason) =>
+                        AddSignal(symbol, rank, score, strength, reason));
             }
         }
 
@@ -1335,6 +1435,212 @@ public sealed partial class ContextTool
         candidatesExamined = candidates.Count;
         return candidates;
     }
+
+    /// <summary>
+    /// When term rescue surfaces a test on a non-test-intent query, replace it with its sole
+    /// exact non-test outgoing subject (discovery-tier <c>query_term_*_subject</c>).
+    /// </summary>
+    private static void PromoteTermRescueTestSubjects(
+        ISymbolLookupIndex index,
+        IReadOnlyList<string> queryTerms,
+        bool excludeTests,
+        Func<string, OutgoingReferenceEvidenceSet> readOutgoing,
+        List<ContextPivotSignal> signals,
+        Dictionary<string, IndexedSymbol> symbols,
+        Dictionary<string, (int Strength, int Order, string Reason, int? Line)> reasons,
+        Action<IndexedSymbol, int, double, int, string> addSignal)
+    {
+        var hits = new Dictionary<string, TermRescueTestHit>(StringComparer.Ordinal);
+
+        void Consider(
+            IndexedSymbol testSymbol,
+            string term,
+            int retrievalRank,
+            double retrievalScore,
+            int strength)
+        {
+            if (!(testSymbol.IsTest || IsTestPath.Check(testSymbol.FilePath)))
+                return;
+            if (!IsQueryPivot(testSymbol))
+                return;
+
+            if (hits.TryGetValue(testSymbol.SymbolId, out TermRescueTestHit existing))
+            {
+                if (strength > existing.Strength ||
+                    strength == existing.Strength && retrievalRank < existing.RetrievalRank)
+                {
+                    hits[testSymbol.SymbolId] = existing with
+                    {
+                        Term = term,
+                        RetrievalRank = retrievalRank,
+                        RetrievalScore = retrievalScore,
+                        Strength = strength,
+                    };
+                }
+
+                return;
+            }
+
+            hits[testSymbol.SymbolId] = new TermRescueTestHit(
+                testSymbol,
+                term,
+                retrievalRank,
+                retrievalScore,
+                strength);
+        }
+
+        foreach ((string symbolId, (int Strength, int Order, string Reason, int? Line) reason) in reasons)
+        {
+            if (!reason.Reason.StartsWith("query_term_", StringComparison.Ordinal) ||
+                reason.Reason.EndsWith("_subject", StringComparison.Ordinal) ||
+                !symbols.TryGetValue(symbolId, out IndexedSymbol? symbol))
+            {
+                continue;
+            }
+
+            string term = reason.Reason["query_term_".Length..];
+            ContextPivotSignal? signal = null;
+            foreach (ContextPivotSignal candidate in signals)
+            {
+                if (candidate.SymbolId == symbolId &&
+                    candidate.AnchorStrength == reason.Strength)
+                {
+                    signal = candidate;
+                    break;
+                }
+            }
+
+            Consider(
+                symbol,
+                term,
+                signal?.RetrievalRank ?? NoRetrievalRank,
+                signal?.RetrievalScore ?? 0,
+                reason.Strength);
+        }
+
+        // Parent NL auto-hide keeps tests out of term rescue; re-scan tests only for promotion.
+        if (excludeTests)
+        {
+            foreach (string term in queryTerms)
+            {
+                SymbolCandidateSet termCandidates = SearchTool.CollectSymbolCandidates(
+                    index,
+                    term,
+                    SearchToolMode.Symbol,
+                    limit: 6,
+                    excludeTests: false);
+                int termCandidateCount = Math.Min(termCandidates.Candidates.Count, 6);
+                for (int rank = 0; rank < termCandidateCount; rank++)
+                {
+                    SymbolCandidate candidate = termCandidates.Candidates[rank];
+                    if (index.FindBySymbolId(candidate.SymbolId) is not { } symbol)
+                        continue;
+                    symbol = PreferDefinitionPivot(index, symbol);
+                    if (!(symbol.IsTest || IsTestPath.Check(symbol.FilePath)))
+                        continue;
+                    Consider(
+                        symbol,
+                        term,
+                        rank + 1,
+                        candidate.Score,
+                        Math.Min(TaskQueryAffinity(symbol, queryTerms), TermRescueStrengthCap));
+                }
+            }
+        }
+
+        foreach (TermRescueTestHit hit in hits.Values)
+        {
+            OutgoingReferenceEvidenceSet outgoing = readOutgoing(hit.Test.SymbolId);
+            var subjectIds = new HashSet<string>(StringComparer.Ordinal);
+            IndexedSymbol? soleSubject = null;
+            foreach (OutgoingReferenceEvidence edge in outgoing.Exact)
+            {
+                if (string.IsNullOrEmpty(edge.TargetSymbolId) || !edge.IsExact)
+                    continue;
+                if (index.FindBySymbolId(edge.TargetSymbolId) is not { } target)
+                    continue;
+                if (target.IsTest || IsTestPath.Check(target.FilePath))
+                    continue;
+                if (!subjectIds.Add(target.SymbolId))
+                    continue;
+                if (subjectIds.Count > 1)
+                {
+                    soleSubject = null;
+                    break;
+                }
+
+                soleSubject = target;
+            }
+
+            if (soleSubject is null || subjectIds.Count != 1)
+                continue;
+
+            IndexedSymbol subject = PreferContainerSubject(index, soleSubject);
+            subject = PreferDefinitionPivot(index, subject);
+            if (!IsQueryPivot(subject) || subject.IsTest || IsTestPath.Check(subject.FilePath))
+                continue;
+
+            signals.RemoveAll(signal => signal.SymbolId == hit.Test.SymbolId);
+            symbols.Remove(hit.Test.SymbolId);
+            reasons.Remove(hit.Test.SymbolId);
+
+            addSignal(
+                subject,
+                hit.RetrievalRank,
+                hit.RetrievalScore,
+                hit.Strength,
+                $"query_term_{hit.Term}_subject");
+        }
+    }
+
+    private static IndexedSymbol PreferContainerSubject(
+        ISymbolLookupIndex index,
+        IndexedSymbol subject)
+    {
+        if (!IsMemberKind(subject.Kind) ||
+            string.IsNullOrEmpty(subject.ParentId) ||
+            index.FindBySymbolId(subject.ParentId) is not { } parent ||
+            parent.IsTest ||
+            IsTestPath.Check(parent.FilePath) ||
+            !IsContainerKind(parent.Kind) ||
+            !IsQueryPivot(parent))
+        {
+            return subject;
+        }
+
+        return parent;
+    }
+
+    private static bool IsMemberKind(string kind) =>
+        kind is "method" or "function" or "property" or "field" or "constructor" or "constant";
+
+    private static bool IsContainerKind(string kind) =>
+        kind is "class" or "struct" or "interface" or "enum" or "record" or "type" or "module" or
+            "namespace" or "trait" or "impl" or "object";
+
+    /// <summary>Mirrors SearchTool test/def intent: whole words test/tests/spec/specs.</summary>
+    private static bool HasTestOrDefIntent(string query)
+    {
+        foreach (string word in query.Split(' ', '\t', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("tests", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("spec", StringComparison.OrdinalIgnoreCase) ||
+                word.Equals("specs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private readonly record struct TermRescueTestHit(
+        IndexedSymbol Test,
+        string Term,
+        int RetrievalRank,
+        double RetrievalScore,
+        int Strength);
 
     private static bool IsPivotKind(string kind) =>
         kind is not (

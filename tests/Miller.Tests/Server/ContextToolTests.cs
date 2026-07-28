@@ -140,6 +140,35 @@ public sealed class ContextToolTests
             true,
             "target_token");
 
+    private static OutgoingReferenceEvidence ExactOutgoing(
+        string containingSymbolId,
+        string targetSymbolId,
+        string targetName,
+        string path,
+        int line,
+        ReferenceKind kind = ReferenceKind.Call) =>
+        new(
+            containingSymbolId,
+            targetSymbolId,
+            targetName,
+            path,
+            line,
+            0,
+            line,
+            1,
+            line * 100,
+            line * 100 + 1,
+            kind,
+            kind == ReferenceKind.Call ? "call" : "type_usage",
+            ReferenceEvidenceSource.IdentifierDirect,
+            null,
+            1.0,
+            ReferenceResolutionStatus.Exact,
+            "csharp",
+            $"site:{containingSymbolId}:{line}",
+            IsExact: true,
+            SiteProvenance: "target_token");
+
     private static ReferenceEvidenceSet InboundSet(params ReferenceEvidence[] fallback) =>
         new(
             [],
@@ -170,6 +199,18 @@ public sealed class ContextToolTests
                 false,
                 false));
 
+    private static OutgoingReferenceEvidenceSet ExactOutgoingSet(params OutgoingReferenceEvidence[] exact) =>
+        new(
+            exact,
+            [],
+            new OutgoingReferenceEvidenceCoverage(
+                exact.Length,
+                exact.Length,
+                exact.Length,
+                0,
+                0,
+                false,
+                false));
     private static void WriteContentChunk(
         string contentDbPath,
         string chunkId,
@@ -2912,6 +2953,320 @@ public sealed class ContextToolTests
         Assert.Equal(thirdId, seeds[2].Symbol.SymbolId);
         Assert.DoesNotContain(seeds, seed => seed.Symbol.IsTest || seed.Symbol.SymbolId == testId);
         Assert.DoesNotContain(seeds, seed => seed.Symbol.SymbolId == fourthId);
+    }
+
+    [Fact]
+    public void RunActionable_TermRescueTestWithOneExactSubject_PromotesSubject()
+    {
+        const string subjectId = "0000000000000000000000000000c101";
+        const string testId = "0000000000000000000000000000c102";
+        const string distractorId = "0000000000000000000000000000c103";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/SymbolsArtifactIdentity.cs", 40, 80, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/SymbolsArtifactIdentityTests.cs", 10, 40, null, true),
+            new(2, distractorId, "SidecarExtract", "class SidecarExtract", "class", "csharp",
+                "src/SidecarExtract.cs", 1, 20, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does unreadable artifact refuse generation proof";
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: symbol => symbol.SymbolId == subjectId
+                ? ExtractReader.BodyReadResult.Available(
+                    "static bool MatchesArtifact(path) { return Prove(path); }")
+                : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
+            readOutgoing: id => id == testId
+                ? ExactOutgoingSet(ExactOutgoing(
+                    testId,
+                    subjectId,
+                    "MatchesArtifact",
+                    "tests/SymbolsArtifactIdentityTests.cs",
+                    20))
+                : ExactOutgoingSet(),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        Assert.DoesNotContain(
+            pivots,
+            item => (item.GetProperty("name").GetString() ?? string.Empty).Contains(
+                "UnreadableArtifact",
+                StringComparison.Ordinal));
+        JsonElement subject = Assert.Single(
+            pivots,
+            item => item.GetProperty("symbol_id").GetString() == subjectId
+                    || item.GetProperty("name").GetString() == "MatchesArtifact");
+        string reason = subject.GetProperty("reason").GetString() ?? string.Empty;
+        Assert.StartsWith("query_term_", reason);
+        Assert.EndsWith("_subject", reason);
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public void RunActionable_TermRescueTestWithTwoExactSubjects_DoesNotPromote()
+    {
+        const string subjectAId = "0000000000000000000000000000c201";
+        const string subjectBId = "0000000000000000000000000000c202";
+        const string testId = "0000000000000000000000000000c203";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectAId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 30, null, false),
+            new(1, subjectBId, "Unprovable", "method Unprovable", "method", "csharp",
+                "src/Identity.cs", 40, 60, null, false),
+            new(2, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does unreadable artifact refuse generation proof";
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoing: id => id == testId
+                ? ExactOutgoingSet(
+                    ExactOutgoing(testId, subjectAId, "MatchesArtifact", "tests/IdentityTests.cs", 20),
+                    ExactOutgoing(testId, subjectBId, "Unprovable", "tests/IdentityTests.cs", 25))
+                : ExactOutgoingSet(),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        Assert.DoesNotContain(
+            pivots,
+            item => (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith(
+                "_subject",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RunActionable_TermRescueTestWithUnresolvedOnly_DoesNotPromote()
+    {
+        const string subjectId = "0000000000000000000000000000c301";
+        const string testId = "0000000000000000000000000000c302";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 30, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does unreadable artifact refuse generation proof";
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoing: id => id == testId
+                ? OutgoingSet(FallbackOutgoing(
+                    "site:test:unresolved",
+                    testId,
+                    "MatchesArtifact",
+                    "tests/IdentityTests.cs",
+                    20,
+                    ReferenceKind.Call))
+                : ExactOutgoingSet(),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        Assert.DoesNotContain(
+            pivots,
+            item => (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith(
+                "_subject",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(pivots, item => item.GetProperty("symbol_id").GetString() == subjectId
+            && (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith("_subject", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RunActionable_TestIntentQuery_DoesNotPromoteTermRescueTest()
+    {
+        const string subjectId = "0000000000000000000000000000c401";
+        const string testId = "0000000000000000000000000000c402";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 30, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "which tests cover unreadable artifact refuse generation";
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: null,
+            readOutgoing: id => id == testId
+                ? ExactOutgoingSet(ExactOutgoing(
+                    testId,
+                    subjectId,
+                    "MatchesArtifact",
+                    "tests/IdentityTests.cs",
+                    20))
+                : ExactOutgoingSet(),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+
+        Assert.DoesNotContain(
+            pivots,
+            item => (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith(
+                "_subject",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            pivots,
+            item => item.GetProperty("symbol_id").GetString() == testId
+                    || (item.GetProperty("name").GetString() ?? string.Empty).Contains(
+                        "UnreadableArtifact",
+                        StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RunActionable_PromotedSubjectReason_RemainsNonAuthoritativeForDisposition()
+    {
+        const string subjectId = "0000000000000000000000000000c501";
+        const string testId = "0000000000000000000000000000c502";
+        IndexedSymbol[] symbols =
+        [
+            new(0, subjectId, "MatchesArtifact", "method MatchesArtifact", "method", "csharp",
+                "src/Identity.cs", 10, 40, null, false),
+            new(1, testId,
+                "MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method MatchesArtifact_UnreadableArtifact_RefusesBecauseItCannotProveTheGeneration",
+                "method", "csharp",
+                "tests/IdentityTests.cs", 10, 50, null, true),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "how does unreadable artifact refuse generation proof";
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: null,
+            sourceSeeds: null,
+            readBody: _ => ExtractReader.BodyReadResult.Available(
+                "static bool MatchesArtifact(path) { return Prove(path); }"),
+            readOutgoing: id => id == testId
+                ? ExactOutgoingSet(ExactOutgoing(
+                    testId,
+                    subjectId,
+                    "MatchesArtifact",
+                    "tests/IdentityTests.cs",
+                    20))
+                : ExactOutgoingSet(),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+        Assert.Contains(
+            pivots,
+            item => (item.GetProperty("reason").GetString() ?? string.Empty).EndsWith(
+                "_subject",
+                StringComparison.Ordinal));
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
     }
 
     [Fact]

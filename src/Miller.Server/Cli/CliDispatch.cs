@@ -2082,6 +2082,12 @@ public static class CliDispatch
                     ctx.ExtractDbPath,
                     ctx.WorkspaceRoot,
                     symbol),
+                readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
+                    ctx.ExtractDbPath,
+                    symbolId,
+                    new ReferenceEvidenceBounds(
+                        ContextTool.ReferenceRowsPerSymbol,
+                        ContextTool.ReferenceRowsPerSymbol)),
                 json, out selectedCount, out candidatesExamined);
         }
         else
