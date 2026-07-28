@@ -7,10 +7,12 @@
 | Status | COMPLETE PRE-PUBLICATION; stopped at fresh approval boundary |
 | Miller worktree | `/Users/murphy/source/miller/.worktrees/shared-semantic-broker-plan` |
 | Miller branch / baseline | `codex/shared-semantic-broker-plan` / `fc87effd0883fec40ded10adc2730ab02304167a` |
+| Miller Task 9 implementation commit | `8af45ddf39b064b05d7880c3467da159fb8a1094` |
+| Miller release-gate evidence parent | `4f8be055b272e99f2fb5abbdf6e639f12131919c` |
 | Sidecar worktree | `/Users/murphy/source/julie-semantic-sidecar/.worktrees/shared-semantic-broker` |
 | Sidecar branch / baseline | `codex/shared-semantic-broker` / `8718b39cb4eaaacdf421667f0b9a89d64ce112b1` |
-| Candidate commits | None by design; both candidates remain baseline HEAD plus the task-owned working-tree changes pending lead review |
-| Publication | No commit, push, tag, release, publication, or live pin update performed |
+| Sidecar rc.5 candidate commit | `312e261457e6f2eafcd67ad1949766bb2853bb5d` |
+| Publication | Candidates are committed locally. No push, tag, release, publication, or live pin update was performed. |
 
 ## Result
 
@@ -93,14 +95,16 @@ One full-suite run transiently failed in `JulieDbFixtureCurrentSchemaTests` with
 
 ## Fresh approval packet
 
-The candidate is ready for lead review, but it is not releasable from an immutable source commit yet because the task explicitly forbids committing before that review.
+The candidate passed lead and Grok review and now exists as immutable local commits. It remains
+unpublished: the sidecar branch is absent from `origin`, and GitHub has no `v0.1.0-rc.5` tag or release.
 
-Fresh approval must cover this changed post-Task-9 state and the following sequence:
+Fresh approval must cover the exact clean local heads reported with the approval request and the
+following sequence:
 
-1. Review and commit the Miller and sidecar working-tree candidates.
-2. Push/tag/publish sidecar `v0.1.0-rc.5`.
-3. Build all four platform assets on their matching hosts.
-4. Download every live asset, verify its checksum and manifest, and smoke the runtime.
+1. Push the sidecar candidate branch and run the approval-gated four-platform artifact workflow.
+2. Download and verify every workflow artifact against its checksum, manifest, and runtime smoke.
+3. Tag/publish sidecar `v0.1.0-rc.5` from the verified candidate commit.
+4. Re-download every public release asset and verify it matches the approved workflow candidate.
 5. Only then update Miller `scripts/semantic-pins.json` with the live rc.5 asset names and verified digests.
 6. Restore and re-run Miller release/package verification before any Miller release.
 
