@@ -1,120 +1,96 @@
-# Task 6 — Real-artifact adopter-cost measurement
+# Task 6 — Enforce one accelerator and recover runtime OOM to CPU
 
-> **STALE-CONTENT COLLISION (flagged):** this file previously held a *P5-era "Content-route canary"*
-> report from worktree `worktree-semantic-p5` (HEAD `ceb8dd8`) — an unrelated Task 6 from a different
-> plan. It has been overwritten with the correct Task 6 (Real-artifact adopter cost) from
-> `docs/plans/2026-07-21-encoder-comparison-fusion-v2-plan.md`. The stale `task-6-brief.md` was likewise
-> regenerated from the encoder-comparison plan.
+## Worktree state
 
-## Worktree state (verified)
-- Repo edits: `/Users/murphy/source/miller/.claude/worktrees/fusion-v2-eval` — branch
-  `worktree-fusion-v2-eval`, HEAD `c3f7e58`.
-- Measurement target (untouched by edits): frozen-miller at
-  `/private/tmp/claude-501/-Users-murphy-source-miller/df49671d-.../scratchpad/frozen-miller` — its own
-  `.miller/`, own leadership. The live `/Users/murphy/source/miller/.miller/` and the user's live Miller
-  sessions were NOT touched.
+- Repository: `/Users/murphy/source/julie-semantic-sidecar/.worktrees/shared-semantic-broker`
+- Branch: `codex/shared-semantic-broker`
+- Baseline HEAD: `d4684028306c652faf3a13593f48e0e64ce26d36`
+- Task 6 commit: `741850a` (`feat: recover semantic broker OOM on CPU`)
+- Dirty state after commit: clean.
+- Task 5 transport files and unrelated files were not modified.
 
-## Status: COMPLETE — both encoders measured (n=2 clean each + warm-query)
+## RED evidence
 
-qwen3 and bge-small both fully measured. bge required commit `bf58afd` (sidecar `--model` forwarding) before
-it could build — that bug was discovered by this task (see below). Findings §"Real-artifact cost (Task 6)"
-filled: cost table with qwen3↔bge ratios, raw runs (incl. discarded), warm-query, gate amendment, and the
-build-blocker write-up. **bge is far cheaper on every axis; the Task-5 pin move to bge-small is
-well-supported on cost, conditional on `bf58afd` shipping.**
+1. Initial contract RED:
+   - Command: `cargo test broker_accelerator`
+   - Exit: `101`
+   - Expected compile failures proved the interfaces did not exist:
+     `BackendPolicy`, `EngineFailureClass`, `EmbedEngine::is_accelerated`,
+     `EngineError::resource_exhausted`, `EncodeFailure::resource_exhausted`,
+     `EngineError.failure_class`, and `BrokerEngine::load_with`.
+2. Lead-review regression RED:
+   - Command:
+     `cargo test broker_accelerator_static_engine_without_recovery_loader_returns_the_original_failure`
+   - Exit: `101`
+   - Expected runtime failure: panic at `src/broker/engine.rs` with
+     `recoverable broker engine has a loader`.
+   - The production guard was then added so `BrokerEngine::new` safely returns the original typed
+     failure when it has no recovery loader.
 
-Gate history: two early qwen3 runs were discarded (overlapped real model-bench lanes). The lead then
-replaced the loadavg<4 gate (miscalibration — ambient 6–10 on this 24-core box at ~77% idle) with a direct
-criterion: no benchmark workloads live AND CPU idle ≥ 60%. All four clean runs pass that gate.
+## Implementation
 
-## qwen3 vs bge-small — adopter cost (medians, n=2 each)
+- Added typed `EngineFailureClass::{Application, ResourceExhausted}` while keeping
+  `EngineError` display and protocol rendering unchanged.
+- Added explicit `BackendPolicy::{Auto, CpuOnly}` and `LlamaEngine::load_with_policy`.
+  `CpuOnly` enters the existing forced-CPU path before accelerator discovery or benchmarking.
+- Marked only `ContextAlloc` construction as typed resource exhaustion. Decode, encode, item,
+  application, and message text do not classify OOM.
+- Added resolved-backend truth through `EmbedEngine::is_accelerated`.
+- Added a broker-owned typed policy loader and single-scheduler-thread mutable state.
+  No accelerator lease selects `CpuOnly` on the initial load.
+- An accelerated typed resource exhaustion:
+  1. drops the accelerated engine;
+  2. releases the accelerator lease;
+  3. loads `CpuOnly`;
+  4. records permanent broker-lifetime degradation;
+  5. retries exactly once.
+- CPU resource exhaustion and the CPU retry result are returned normally without another reload.
+  Later calls remain on CPU.
+- Auto loads that resolve CPU, plus unready loads, release the accelerator lease immediately.
+- Health adds truthful `accelerator_lease_held`; after recovery it reports resolved CPU,
+  `accelerated: false`, and
+  `accelerator resource exhausted; permanently demoted to CPU` at both top level and
+  `load_policy.degraded_reason`.
 
-| metric | qwen3-0.6b-f16 | bge-small-en-v1.5-f32 | bge advantage |
-|---|---|---|---|
-| E2E build (both cursors) | 312.7 s | 40.4 s | 7.7× faster |
-| symbol throughput | 55 cards/s | 452 cards/s | 8.2× |
-| sidecar peak RSS (holds model) | 12.34 GiB | 470 MiB | ~27× less |
-| warm query (warm) | 4048 ms | 802 ms | 5.0× faster |
-| model download | 1.198 GB | 133.6 MB | 9.0× smaller |
-| `vectors.db` | 10.27 MiB | 8.89 MiB | 1.15× |
-| host peak footprint | ~337 MiB | ~336 MiB | ~equal (model-agnostic host) |
+## Lead findings fixed
 
-The memory story is the **sidecar child**, not the `miller` host (`time -l` sees only the host, ~336 MiB
-either way). bge's 470 MiB vs qwen3's 12.3 GiB resident footprint is the headline adopter-cost difference.
+- Accelerated Decode, Encode, Item, and Application failures now run under a real held lease in
+  tests. They retain `[BackendPolicy::Auto]`, keep the lease, never load CPU, and use
+  `"out of memory"` as the message to prove classification is typed rather than textual.
+- `BrokerEngine::new` cannot panic on typed exhaustion: recovery requires both a held lease and a
+  recovery loader; otherwise the original failure and lease are preserved.
+- Resolved CPU and unready engines explicitly prove that an acquired lease is released.
 
-### Done
-- Harness (`scratchpad/run.sh`) validated end-to-end: `MILLER_SEMANTIC=shadow` serve rooted at frozen,
-  FIFO-held stdin (so the MCP stdio transport does not EOF-shutdown mid-build), cursor-completion
-  detection via `vectors_meta` (`symbol_completed_revision`/`chunk_completed_revision` vs
-  `*_target_revision` + `build_state=ready`), symbol-promote line + chunk-converge line parsed from
-  `<frozen>/.miller/logs/`, host peak from `/usr/bin/time -l`, sidecar-child peak RSS sampled separately,
-  `vectors.db` size, encoder-identity confirmation, and clean SIGTERM + vector-generation cleanup between
-  runs.
-- **Load guard** (lead instruction 3): each run records the gate reading; amended mid-task from loadavg<4
-  to "no bench workloads + CPU idle ≥ 60%" (see Concerns).
-- Non-timed facts captured: model download sizes; vectors.db size and card/chunk counts; served-model
-  identity confirmation for both encoders.
-- Two harness safety bugs found and fixed (see Concerns); the load-bearing bge build bug discovered and
-  handed to the lead (fixed in `bf58afd`).
+## GREEN evidence
 
-### Discarded (kept raw, never averaged)
-- **qwen3-run1**, **qwen3-run2** — ran inside the real model-bench window (contention).
-- **bge-clean-1 (pre-fix)** — build-blocked by the `--model` bug (the discovery), not a protocol failure.
+- `cargo test broker_accelerator`: 7 passed, 0 failed.
+- `cargo test context_allocation_resource_exhaustion_is_typed_without_changing_wire_rendering`:
+  1 passed, 0 failed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- `cargo test`: passed across all fast suites; 244 passed, 0 failed, 25 ignored.
+- `python3 -B -m unittest discover -s scripts/tests -p 'test_*.py'`: 30 passed.
+- `git diff --check`: passed.
+- Miller post-edit impact completed at revision 28. It identified the expected broker,
+  protocol, engine, backend-selection, health, and test consumers; focused accelerator,
+  engine, manifest, protocol, broker lifecycle/scheduler, and full fast gates cover them.
 
-### Remaining
-- None. Both lanes measured; findings + report filled. Commit of owned files pending commit-mode
-  clarification with lead (dispatch said `parallel-lead-commit`, later note said `serial-worker-commit`;
-  the findings doc is co-owned with Task 5).
+## Hardware and model-backed boundary
 
-## qwen3 (default) — COMPLETE, clean, gate-valid (n=2)
-Both runs: no bench workloads, CPU idle 84%/82%. Default identity `MILLER_SEMANTIC_MODEL` unset →
-**qwen3-0.6b-f16** (512-dim, `vec0-int8-512-cosine-v1`, fp `sha256:237a776b…`). Corpus 49,276 symbols →
-**10,063 embeddable cards** + **792 doc chunks**.
+- No real OOM was induced and no hardware archive smoke is claimed. The hardware smoke requires
+  an exact checksum-bound packaged archive, which this uncommitted worktree does not provide.
+- The first prepared-model ignored engine run used the test harness default parallelism and was
+  invalid because llama's process-global backend rejected concurrent initialization with
+  `BackendAlreadyInitialized`; that run is not counted as evidence.
+- `cargo test --test engine_tests -- --ignored --test-threads=1`: passed on Apple M2 Ultra;
+  11 passed, 0 failed, 9 filtered out in 369.50 seconds. This directly covered the CPU-only
+  model load path introduced by Task 6.
+- Windows/NVIDIA low-VRAM runtime recovery remains release-gate evidence, not local Task 6 evidence.
 
-| metric | median | range | source |
-|---|---|---|---|
-| E2E build (both cursors) | 312.7 s | [306.2, 319.1] | harness |
-| symbol converge | 190.5 s | [184.1, 196.9] | cursor + promote |
-| symbol throughput | 55 cards/s | [53, 57] | promote line |
-| chunk phase | ~122 s | — | chunk converge line |
-| `vectors.db` size | 10.27 MiB | 10,768,384 B (deterministic) | stat |
-| host peak footprint | ~336 MiB | [336, 337] | `time -l` |
-| **sidecar child peak RSS** | **12.34 GiB** | [12.33, 12.34] | sampled `ps` |
-| warm query embed | 4118 ms cold / 4048 ms warm | — | 3 CLI searches |
-| model download | 1.198 GB | — | cache file size |
+## Result
 
-Memory note: the `miller` .NET host is cheap (~337 MiB, `time -l`); the real cost is the sidecar child
-holding the 1.2 GB model + embedding working set (~12.34 GiB), which `time -l` never sees. macOS `time -l`
-"maximum resident set size" (~12.34 GiB for the host) over-counts mapped pages and is not used.
-
-## bge-small — measured post-fix; the build bug was this task's load-bearing finding
-The first bge attempt (bge-clean-1 pre-fix) could not build: the sidecar was launched with no `--model` so
-it served qwen3 (512-dim) into Miller's 384-dim bge lane → `VectorStoreException: embedding has 512 dims but
-lane 'vec0-int8-384-cosine-v1' declares 384`, retrying forever. Root cause + evidence in findings
-§"bge-small build blocker". Broader implication: **`MILLER_SEMANTIC_MODEL` never worked on the live
-serve/CLI path for any non-default encoder** (the handshake validated the sidecar against itself, not the
-request), silent because the shipping default lane only exercised qwen3.
-
-Fixed in commit **`bf58afd`** (lead; serve/CLI forward `serve --model <Active.ModelId>` + handshake refuses
-a known-but-not-selected encoder; fast suite 4406/0). On the rebuilt binary, bge builds correctly (384-dim
-lane, fp `sha256:3e8b7e8a…`) and was measured with 2 clean runs + warm-query. **The Task-5 pin move to
-bge-small is inseparable from `bf58afd` — shipping the bge pin requires that fix in the release.**
-
-## Concerns / decisions
-1. **Contamination + gate recalibration.** Two early qwen3 runs overlapped real model-bench lanes →
-   discarded. The loadavg<4 gate was a miscalibration (ambient 6–10 on 24-core @ ~77% idle); replaced by
-   "no bench workloads + CPU idle ≥ 60%". Clean qwen3 runs pass it. Contention effect was modest — clean
-   (53–57 cards/s, 12.34 GiB) tracked the contaminated runs (50–56 cards/s, 12.2 GiB); qwen3 is simply
-   heavy.
-2. **bge build blocker (diagnosed here; fix owned by lead).** See above — the load-bearing finding of this
-   task.
-3. **Harness safety bug (fixed).** The initial cleanup/kill patterns matched *any* `net10.0/miller serve`,
-   which would have killed the user's **live main-checkout Miller sessions** (`…/source/miller/src/…`).
-   Scoped every process match to `fusion-v2-eval`. An earlier probe's unscoped `pkill` is the likely cause
-   of a transient Miller MCP disconnect seen early in the session; the user's session is alive now.
-4. **Phantom-DB bug (fixed).** A rw `sqlite3` open of a not-yet-created `vectors.db` *creates* an empty
-   file, which broke the leader's own store init (VectorStore.ReadMeta threw). `-readonly` avoids creation
-   but fails with CANTOPEN(14) on this WAL-mode db when no `-shm` exists. Fix: `meta()` opens only when the
-   file already exists, then rw (WAL-safe).
-5. **Cursor semantics.** `build_state` flips to `ready` when the **symbol** generation is queryable while
-   the **chunk** cursor is still 0/1; completion therefore requires *both* cursors at target, not
-   `build_state=ready` alone. The harness gates on both.
+- Grok's final focused review returned GO with no Critical or Important findings after the recovery
+  gate, engine-before-lease drop order, one-retry limit, permanent CPU mode, terminal reload
+  failure, health overlay, and public-constructor safety were checked.
+- Task 6 implementation and local verification are complete and committed locally; nothing was
+  pushed.
