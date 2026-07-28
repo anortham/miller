@@ -2905,6 +2905,9 @@ public sealed class ContextToolTests
             item => item.TryGetProperty("body", out _));
         Assert.Equal("source_rescue_1", pivot.GetProperty("reason").GetString());
         Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
+        Assert.Equal(
+            "discovery_implementation_present",
+            document.RootElement.GetProperty("disposition").GetProperty("reason").GetString());
     }
 
     [Fact]

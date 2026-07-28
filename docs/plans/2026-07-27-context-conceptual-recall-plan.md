@@ -137,11 +137,11 @@ Commit mode: `serial-worker-commit` per task after worker verification, or lead 
 4. Implement weight + cap + `excludeTests: parentPolicy` (compute once from full `query`).
 
 **Acceptance criteria:**
-- [ ] Path-only affinity ≤ name-only affinity for the same term set (path weight ≤ name weight).
-- [ ] Term-rescue pivots use strength ≤ 18; full-query `query_rank_*` still uses uncapped `TaskQueryAffinity` (≤50).
-- [ ] On NL queries without test intent, term rescue does not reintroduce test pivots via one-word auto policy.
-- [ ] Existing context tests still pass.
-- [ ] Worker-scope verification passes; commit or hand off per commit mode.
+- [x] Path-only affinity ≤ name-only affinity for the same term set (path weight ≤ name weight).
+- [x] Term-rescue pivots use strength ≤ 18; full-query `query_rank_*` still uses uncapped `TaskQueryAffinity` (≤50).
+- [x] On NL queries without test intent, term rescue does not reintroduce test pivots via one-word auto policy.
+- [x] Existing context tests still pass.
+- [x] Worker-scope verification passes; commit or hand off per commit mode.
 
 ### Task 2: Discovery-aware next_actions
 
@@ -166,9 +166,9 @@ Commit mode: `serial-worker-commit` per task after worker verification, or lead 
 **Approach:** Prefer deterministic rule: if every pivot fails `CarriesImplementation`, lead with source-search next action; else keep inspect-first but append source-search when disposition reason is `pivot_value_declaration_only`.
 
 **Acceptance criteria:**
-- [ ] Value-declaration-only bundle includes a `mode=source` (or CLI-equivalent) next action.
-- [ ] `sufficient` bundles still omit `next_actions`.
-- [ ] Worker-scope verification passes; commit or hand off per commit mode.
+- [x] Value-declaration-only bundle includes a `mode=source` (or CLI-equivalent) next action.
+- [x] `sufficient` bundles still omit `next_actions`.
+- [x] Worker-scope verification passes; commit or hand off per commit mode.
 
 ### Task 3: Bounded source/doc content rescue into pivots
 

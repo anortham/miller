@@ -2317,10 +2317,15 @@ public sealed partial class ContextTool
         if (disposition.Status == "sufficient" || pivots.Count == 0)
             return [];
 
-        bool anyImplementation = pivots.Any(static pivot => CarriesImplementation(pivot.Symbol));
+        IndexedSymbol[] implementationPivots = pivots
+            .Where(static pivot => CarriesImplementation(pivot.Symbol))
+            .Select(static pivot => pivot.Symbol)
+            .ToArray();
+        bool anyImplementation = implementationPivots.Length > 0;
         bool suggestSource =
             !string.IsNullOrWhiteSpace(query) &&
-            (!anyImplementation || disposition.Reason == "pivot_value_declaration_only");
+            (!anyImplementation ||
+             disposition.Reason is "pivot_value_declaration_only" or "discovery_implementation_present");
 
         var actions = new List<ContextNextAction>(NextInspectCount + 1);
         if (!anyImplementation)
@@ -2334,11 +2339,11 @@ public sealed partial class ContextTool
             return actions.ToArray();
         }
 
-        int inspectCount = Math.Min(NextInspectCount, pivots.Count);
+        int inspectCount = Math.Min(NextInspectCount, implementationPivots.Length);
         for (int i = 0; i < inspectCount; i++)
         {
             actions.Add(new ContextNextAction(
-                NextInspectLine(pivots[i].Symbol),
+                NextInspectLine(implementationPivots[i]),
                 "inspect a pivot implementation"));
         }
 
@@ -2748,6 +2753,14 @@ public sealed partial class ContextTool
                 CarriesImplementation(candidate.Symbol) &&
                 IsAuthoritativeImplementationReason(candidate.Reason)))
             return new ContextEvidenceDisposition("sufficient", "pivot_implementation_present");
+        // Discovery-tier implementation bodies (source_rescue_*, semantic_rank_*, query_term_*_subject)
+        // beat an authoritative value-declaration sibling for the reason label — they still cannot
+        // authorize sufficient, but must not be masked as pivot_value_declaration_only.
+        if (selected.Any(static candidate =>
+                candidate.IsPivot &&
+                candidate.Body is not null &&
+                CarriesImplementation(candidate.Symbol)))
+            return new ContextEvidenceDisposition("partial", "discovery_implementation_present");
         if (selected.Any(static candidate =>
                 candidate.IsPivot &&
                 candidate.Body is not null &&

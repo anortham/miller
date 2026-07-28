@@ -53,9 +53,15 @@ JSON returns a `bundle` array. Normal mode uses `item_type=symbol`; usage mode m
 
 A `constant`, `variable`, `field`, or `property` pivot body is the value it was assigned, not an implementation,
 so it never reaches `sufficient` however it ranked; an authoritatively anchored one reports `partial` with reason
-`pivot_value_declaration_only`. A body found only through the optional semantic arm or an individual query-term
-rescue likewise remains `partial`; those paths are discovery evidence, not authoritative task anchors.
-`next_actions` appears only when the disposition is not `sufficient`.
+`pivot_value_declaration_only`. Discovery-tier pivots remain `partial` even when they carry a real implementation
+body: reasons include `source_rescue_N` (content/source corpus rescue mapped to a containing symbol),
+`semantic_rank_N` (optional semantic seed), `query_term_<term>` (per-term symbol rescue), and
+`query_term_<term>_subject` (exactly one resolved non-test subject promoted from a term-rescue test hit). When a
+discovery pivot supplies an implementation body, disposition reason is `discovery_implementation_present` rather
+than masking the bundle as value-declaration-only. Those paths are not authoritative task anchors.
+`next_actions` appears only when the disposition is not `sufficient`. When every pivot is a value declaration,
+`next_actions` leads with `search(query=…, mode=source)` instead of inspect-on-constants; when discovery or other
+implementation pivots are present, inspect targets those kinds and may still append a source-search recovery.
 
 Compact output conveys the same selected items and disposition. Every selected item is rendered; omitted
 candidates are never included in the selected count. The four-pivot ranking cap is deliberate and does not emit a
@@ -97,6 +103,14 @@ banners, diagnostics, disposition, and next actions.
   conservative reserve protects the complete response against the byte-based estimator while the final bound
   still enforces the caller's full budget.
 - Bounded strings do not split valid UTF-16 surrogate pairs.
+
+## Ranking and discovery seed strengths
+
+Explicit anchors (entry/edited/failing/stack) stay in the 65–100 band. Full-query symbol hits use
+`TaskQueryAffinity` (0–50) with name weight ≥ path weight. Bounded content/source rescue seeds use fixed
+strength 35 (`source_rescue_N`). Optional semantic seeds use fixed strength 26 (`semantic_rank_N`). Term
+rescue is capped at 18 (`query_term_<term>`). Term rescue inherits the parent query’s auto-hide-tests policy
+so one-word terms cannot reintroduce tests on natural-language queries.
 
 ## Semantic and reference guarantees
 
