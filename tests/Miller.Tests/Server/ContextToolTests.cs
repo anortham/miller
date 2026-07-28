@@ -2051,7 +2051,73 @@ public sealed class ContextToolTests
         JsonElement first = document.RootElement.GetProperty("bundle")[0];
         Assert.Equal("OrderRepo", first.GetProperty("name").GetString());
         Assert.Equal("semantic_rank_1", first.GetProperty("reason").GetString());
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
         Assert.Equal(1, arm.SymbolCalls);
+        Assert.Equal(26, ContextTool.SemanticSeedStrength);
+    }
+
+    [Fact]
+    public void RunActionable_SemanticSeedBeatsWeakLexicalAffinityNoise()
+    {
+        const string trueId = "0000000000000000000000000000c101";
+        IndexedSymbol[] symbols =
+        [
+            new(0, "0000000000000000000000000000c102", "DurableHelper", "class DurableHelper", "class", "csharp",
+                "src/DurableHelper.cs", 1, 20, null, false),
+            new(1, "0000000000000000000000000000c103", "PersistenceUtil", "class PersistenceUtil", "class", "csharp",
+                "src/PersistenceUtil.cs", 1, 20, null, false),
+            new(2, "0000000000000000000000000000c104", "BoundaryConfig", "class BoundaryConfig", "class", "csharp",
+                "src/BoundaryConfig.cs", 1, 20, null, false),
+            new(3, "0000000000000000000000000000c105", "DurableWidget", "class DurableWidget", "class", "csharp",
+                "src/DurableWidget.cs", 1, 20, null, false),
+            new(4, "0000000000000000000000000000c106", "BoundaryMarker", "class BoundaryMarker", "class", "csharp",
+                "src/BoundaryMarker.cs", 1, 20, null, false),
+            new(5, trueId, "SymbolsArtifactIdentity", "class SymbolsArtifactIdentity", "class", "csharp",
+                "src/SymbolsArtifactIdentity.cs", 1, 80, null, false),
+        ];
+        var index = MillerRepositoryIndex.Build(symbols);
+        var resolver = new SmartTargetResolver(index);
+        const string query = "durable persistence boundary";
+        IndexedSymbol trueSymbol = Assert.Single(index.FindByName("SymbolsArtifactIdentity"));
+        string[] terms = ["durable", "persistence", "boundary"];
+        int junkAffinity = ContextTool.TaskQueryAffinity(symbols[0], terms);
+        Assert.InRange(junkAffinity, 12, 18);
+        Assert.True(ContextTool.SemanticSeedStrength > junkAffinity);
+        Assert.Equal(0, ContextTool.TaskQueryAffinity(trueSymbol, terms));
+
+        string output = ContextTool.RunActionable(
+            index,
+            index.Graph,
+            resolver,
+            query,
+            tokenBudget: 4000,
+            maxHops: 0,
+            entrySymbols: null,
+            editedFiles: null,
+            failingTest: null,
+            stackTrace: null,
+            semanticSeeds: [new ContextTool.ContextSemanticSeed(trueSymbol, 1, 0.91)],
+            readBody: symbol => symbol.SymbolId == trueId
+                ? ExtractReader.BodyReadResult.Available(
+                    "class SymbolsArtifactIdentity { public static bool MatchesArtifact() => true; }")
+                : ExtractReader.BodyReadResult.Unavailable(ExtractReader.BodyUnavailableReason.NoSpanRecorded),
+            json: true,
+            out _,
+            out _);
+
+        using var document = JsonDocument.Parse(output);
+        JsonElement[] pivots = document.RootElement.GetProperty("bundle")
+            .EnumerateArray()
+            .Where(item => item.GetProperty("role").GetString() == "pivot")
+            .ToArray();
+        Assert.True(pivots.Length <= 4);
+        JsonElement seeded = Assert.Single(
+            pivots,
+            item => item.GetProperty("name").GetString() == "SymbolsArtifactIdentity");
+        Assert.Equal("semantic_rank_1", seeded.GetProperty("reason").GetString());
+        int seededIdx = Array.FindIndex(pivots, item => item.GetProperty("name").GetString() == "SymbolsArtifactIdentity");
+        Assert.True(seededIdx >= 0 && seededIdx < 4, "semantic seed must enter top-4 against weak lexical noise");
+        Assert.Equal("partial", document.RootElement.GetProperty("disposition").GetProperty("status").GetString());
     }
 
     [Fact]

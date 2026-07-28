@@ -289,6 +289,8 @@ public sealed partial class ContextTool
     internal const int TermRescueStrengthCap = 18;
     /// <summary>Source/doc content rescue fixed <see cref="ContextPivotSignal.AnchorStrength"/> (discovery tier).</summary>
     internal const int SourceRescueStrength = 35;
+    /// <summary>Optional semantic seed fixed <see cref="ContextPivotSignal.AnchorStrength"/> (discovery tier).</summary>
+    internal const int SemanticSeedStrength = 26;
     internal const int SourceRescueHitLimit = 6;
     internal const int SourceRescueSeedLimit = 3;
     private static readonly string[] SourceRescueContentKinds =
@@ -1259,7 +1261,7 @@ public sealed partial class ContextTool
                     symbol,
                     SearchSeedLimit + seed.Rank,
                     seed.Score,
-                    0,
+                    SemanticSeedStrength,
                     $"semantic_rank_{seed.Rank}");
             }
         }
