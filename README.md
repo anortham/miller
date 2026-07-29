@@ -5,10 +5,18 @@ workspace, then answers structural questions through MCP and a matching CLI: fin
 build focused context, trace relationships, assess change impact, and check workspace freshness without asking
 an agent to grep and reread the repo by hand.
 
-Miller is the free local core in the Miller/Eros product split. It stays deterministic, lexical/structural,
-daemon-light, and local-first, with **default-on local semantic retrieval** that is off-switchable and leaves
-lexical-only results byte-identical. Eros sits above it for fleet-level semantics: cross-workspace ranking,
-higher-level guidance, confidence/evidence views, and commercial orchestration.
+**Measured, not asserted:** in a paired benchmark, the same agent got **2.2× more tasks right with Miller
+than with grep and file reads** (11/15 vs 5/15), with a 0% vs 27% wrong-action rate — and doubling the bare
+agent's call/token budget made it worse, not better. Method, caveats, and raw evidence:
+[the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md) ·
+[summary page](https://anortham.github.io/miller/benchmark.html).
+
+Miller stays deterministic, daemon-light, and local-first, with **default-on local semantic retrieval** that
+is off-switchable and leaves lexical-only results byte-identical. Its extraction layer
+([`julie-extractors`](https://github.com/anortham/julie-extractors), hand-written across 36 languages) is
+deepest where shell search fails hardest — the Microsoft stack: C# DI registrations become graph edges,
+partial classes are linked, and Razor/Blazor, T-SQL, VB.NET, and PowerShell are first-class languages with
+owned grammar forks.
 
 The practical difference from a one-time graph dump is that Miller is built for active agent work:
 
@@ -317,9 +325,10 @@ The replacement has explicit component boundaries:
   history` and dashboard trend sparklines) over those recorded facts.
 - **`julie-extractors` / `julie-extract`** owns parser-backed extraction. Miller consumes its artifacts and ships a
   pinned extractor for its own indexing workflow; standalone extraction workflows belong in `julie-extractors`.
-- **Eros** owns what requires fleet state: cross-workspace/fleet ranking, guidance, confidence/evidence views,
-  embeddings-as-a-service orchestration, suppression persistence, and commercial orchestration. Local,
-  single-workspace semantic retrieval belongs to Miller — see
+- **Out of scope by design** (formerly reserved for the archived Eros project): cross-workspace/fleet
+  ranking, fleet guidance, confidence/evidence views, embeddings-as-a-service orchestration, and commercial
+  orchestration. Miller deliberately does not grow these. Local, single-workspace semantic retrieval belongs
+  to Miller — see
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md).
 
 That boundary is deliberate. Miller stays predictable and local; the product layer above it decides what the
@@ -345,8 +354,7 @@ docs/
 
 Miller keeps only the local operational dashboard: registered workspaces, freshness, read-only aggregate facts
 from workspace artifacts, telemetry, sidecar health, and refresh/troubleshooting actions. Miller tools may return
-immediate recovery hints for the next useful local call; Eros owns richer product UX such as fleet-level
-semantic ranking, workflow guidance, confidence/evidence views, and commercial workflows.
+immediate recovery hints for the next useful local call; richer fleet-level product UX stays out of scope.
 
 ## The tool surface
 
@@ -753,7 +761,7 @@ Warnings are errors (`Directory.Build.props`).
   Concurrent Miller sessions using the same broker/protocol/model identity share one user-local broker and
   one loaded model. A user-global accelerator lease allows at most one broker identity to own acceleration;
   other identities use CPU, and accelerator resource exhaustion demotes the holder to CPU.
-  Fleet-level semantics (cross-workspace ranking, embeddings-as-a-service) remain Eros-reserved.
+  Fleet-level semantics (cross-workspace ranking, embeddings-as-a-service) remain out of scope.
 - Region search is explicit at query time and indexed by default: call
   `search --regions comment|doc_comment|string_literal`. Set `MILLER_REGION_INDEX=0` to opt out, or
   `MILLER_REGION_MAX_BYTES=<n>` to lower or raise the per-region byte cap for very large comment/string-literal
