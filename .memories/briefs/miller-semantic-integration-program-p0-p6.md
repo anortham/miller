@@ -1,9 +1,9 @@
 ---
 id: miller-semantic-integration-program-p0-p6
 title: Miller Julie takeover program
-status: active
+status: completed
 created: 2026-07-19T21:20:23.364Z
-updated: 2026-07-26T02:24:24.188Z
+updated: 2026-07-29T00:13:27.798Z
 tags:
   - miller
   - julie

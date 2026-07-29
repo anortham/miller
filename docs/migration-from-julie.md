@@ -1,9 +1,10 @@
 # Migrating From Julie To Miller
 
-This guide is frozen with the Miller 1.14.0 release candidate and becomes operative only if the complete visible,
-review, package, and sealed takeover gates pass. It must not be published from a failed candidate.
+This guide is operative for Miller 1.14.0 (released 2026-07-28). The takeover shipped on the visible,
+review, and package gates; the sealed paired gate was cancelled as superseded — see
+[`docs/findings/2026-07-28-sealed-gate-disposition.md`](findings/2026-07-28-sealed-gate-disposition.md).
 
-Miller 1.14.0 is the supported local-agent replacement for Julie after that activation gate. Miller owns deterministic code navigation,
+Miller 1.14.0 is the supported local-agent replacement for Julie. Miller owns deterministic code navigation,
 retrieval, impact analysis, editing, workspace lifecycle, content, structural facts, telemetry, and local
 reports. The packaged `julie-extract` binary still owns parser-backed extraction, and Eros remains the owner of
 fleet-level ranking, guidance, confidence views, suppression persistence, and commercial orchestration.
@@ -115,5 +116,7 @@ and is not a production surface or default.
 4. Report the Miller version, `workspace health --json`, the failing tool call, and its typed diagnostic. Do not
    send private sealed-evaluation artifacts.
 
-Keep Julie as a rollback option until its separate retirement announcement defines the final support window.
-New feature work belongs in Miller, `julie-extractors`, or Eros according to the ownership boundary above.
+Julie's retirement announcement (in the Julie repository README) defines the final support window: v7.17.0
+is the final release, it remains available as-is, and no further fixes ship. Keep it as a rollback option
+for as long as your own verification needs it. New feature work belongs in Miller, `julie-extractors`, or
+Eros according to the ownership boundary above.
