@@ -1294,6 +1294,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", default=PINNED_MODEL)
     parser.add_argument("--reasoning", default=PINNED_REASONING)
     parser.add_argument("--runtime-identity", required=True)
+    parser.add_argument("--max-calls", type=int, default=8)
+    parser.add_argument("--max-output-tokens", type=int, default=12000)
+    parser.add_argument("--timeout-seconds", type=float, default=120)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--codex-home", default=str(Path.home() / ".codex"))
     parser.add_argument("--preflight-only", action="store_true")
@@ -1370,6 +1373,9 @@ def _run_cli(args: argparse.Namespace) -> int:
         reasoning=args.reasoning,
         seed=args.seed,
         selection=selection,
+        max_calls=args.max_calls,
+        max_output_tokens=args.max_output_tokens,
+        timeout_seconds=args.timeout_seconds,
     )
     exports = out / "exports"
     identity_hash = str(identity["run_identity_sha256"])
@@ -1379,7 +1385,14 @@ def _run_cli(args: argparse.Namespace) -> int:
         print(_pretty_json(identity), end="")
         return 0
     proxy = (sys.executable, str(SCRIPT_ROOT / "benchlib" / "recording_mcp_proxy.py"))
-    runner = CodexAgentRunner(args.codex, proxy, args.codex_home)
+    runner = CodexAgentRunner(
+        args.codex,
+        proxy,
+        args.codex_home,
+        timeout_seconds=args.timeout_seconds,
+        max_calls=args.max_calls,
+        max_output_tokens=args.max_output_tokens,
+    )
     execution = execute_paired_tasks(
         tasks=selection.tasks,
         snapshots=agent_snapshots,
@@ -1406,6 +1419,9 @@ def preflight_run(
     reasoning: str,
     seed: int,
     selection: SelectionIdentity | None = None,
+    max_calls: int = 8,
+    max_output_tokens: int = 12000,
+    timeout_seconds: float = 120,
 ) -> tuple[dict[str, Any], dict[str, AgentArm], dict[str, AgentSnapshot]]:
     normalized_runtime = normalize_runtime(runtime, selection)
     if model != PINNED_MODEL or reasoning != PINNED_REASONING:
@@ -1565,6 +1581,11 @@ def preflight_run(
         "seed": seed,
         "model": model,
         "reasoning": reasoning,
+        "budgets": {
+            "tool_calls": max_calls,
+            "tool_output_tokens": max_output_tokens,
+            "timeout_seconds": timeout_seconds,
+        },
         "prompt_contract_sha256": prompt_contract_sha256(),
         "codex": {"version": codex_version, "binary_sha256": _sha256(codex_path)},
         "tokenizer": {"package": "tiktoken", "version": tokenizer_version, "encoding": PINNED_TOKENIZER},

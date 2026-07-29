@@ -118,15 +118,21 @@ class CodexAgentRunner:
         proxy_command: Sequence[str],
         source_codex_home: str | Path,
         timeout_seconds: float = 120,
+        max_calls: int = 8,
+        max_output_tokens: int = 12000,
     ) -> None:
         self._codex_executable = str(codex_executable)
         self._proxy_command = tuple(str(value) for value in proxy_command)
         self._source_codex_home = Path(source_codex_home)
         self._timeout_seconds = timeout_seconds
+        self._max_calls = max_calls
+        self._max_output_tokens = max_output_tokens
         if not self._proxy_command:
             raise ValueError("proxy command must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("timeout must be positive")
+        if max_calls < 1 or max_output_tokens < 1:
+            raise ValueError("budgets must be positive")
 
     def run(
         self,
@@ -284,9 +290,9 @@ class CodexAgentRunner:
             "--tokenizer",
             "o200k_base",
             "--max-calls",
-            "8",
+            str(self._max_calls),
             "--max-output-tokens",
-            "12000",
+            str(self._max_output_tokens),
             "--cwd",
             str(snapshot_root.resolve()),
         ]

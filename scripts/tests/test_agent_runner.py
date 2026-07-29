@@ -685,5 +685,48 @@ class AgentRunnerTests(unittest.TestCase):
             self.assertFalse(capture.exists())
 
 
+class BudgetParameterTests(unittest.TestCase):
+    def _proxy_args(self, runner: CodexAgentRunner, root: Path) -> list[str]:
+        command = runner._command(
+            AgentArm(role="baseline", adapter_name="fixture", product_command=("miller", "serve")),
+            root,
+            root / "work",
+            root / "schema.json",
+            root / "proxy.jsonl",
+        )
+        import tomllib
+
+        configs = {
+            command[index + 1].split("=", 1)[0]: command[index + 1].split("=", 1)[1]
+            for index, value in enumerate(command[:-1])
+            if value == "-c"
+        }
+        return tomllib.loads("value=" + configs["mcp_servers.benchmark.args"])["value"]
+
+    def test_default_budgets_remain_frozen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexAgentRunner("codex", ("proxy",), root)
+            args = self._proxy_args(runner, root)
+            self.assertEqual("8", args[args.index("--max-calls") + 1])
+            self.assertEqual("12000", args[args.index("--max-output-tokens") + 1])
+
+    def test_custom_budgets_reach_the_proxy_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = CodexAgentRunner("codex", ("proxy",), root, max_calls=16, max_output_tokens=24000)
+            args = self._proxy_args(runner, root)
+            self.assertEqual("16", args[args.index("--max-calls") + 1])
+            self.assertEqual("24000", args[args.index("--max-output-tokens") + 1])
+
+    def test_non_positive_budgets_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(ValueError):
+                CodexAgentRunner("codex", ("proxy",), root, max_calls=0)
+            with self.assertRaises(ValueError):
+                CodexAgentRunner("codex", ("proxy",), root, max_output_tokens=0)
+
+
 if __name__ == "__main__":
     unittest.main()
