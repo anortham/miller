@@ -41,9 +41,9 @@
       <p class="eyebrow">Free local code intelligence for coding agents</p>
       <h1>Miller</h1>
       <p class="hero-lede">
-        The same agent gets 2.2× more tasks right with Miller than with grep and file reads — measured,
-        not asserted. Exact references, call paths, rename proof, and token-budgeted context from a
-        local SQLite index that is always current.
+        In a paired benchmark, the same agent got 2.2× more tasks right with Miller than with grep and
+        file reads. It gives agents exact references, call paths, rename proof, and token-budgeted
+        context from a local SQLite index that stays current while you work.
       </p>
       <div class="hero-actions">
         <a class="button primary" href="#install">Try Miller</a>
@@ -57,19 +57,19 @@
     <section id="why" class="section intro-section">
       <div class="section-heading">
         <p class="eyebrow">What it is</p>
-        <h2>Built for active agent work, not one-time graph dumps.</h2>
+        <h2>Built for active agent work.</h2>
       </div>
       <div class="split-copy">
         <p>
           Miller consumes <code>julie-extract</code> SQLite artifacts and exposes deterministic local read paths
-          through MCP and a matching CLI. It stays structural, daemon-light, and local-first, with default-on
-          local semantic retrieval that is off-switchable and never changes lexical output.
+          through MCP and a matching CLI. It is local-first and runs without a daemon. Semantic retrieval is
+          on by default and fully local; you can switch it off, and doing so never changes lexical output.
         </p>
         <p>
-          <code>julie-extractors</code> owns parser-backed extraction — hand-written extractors across 36
-          languages, one quality bar for all of them, reaching structure that query-file-based tools do
-          not (framework routes, DI graph edges, cross-file linkage, typed structural facts). Miller owns the
-          local agent-tool core on top of it: search, inspect, context, refs, trace, impact, editing, and
+          <code>julie-extractors</code> owns the extraction: a hand-written parser-backed extractor for each
+          of 36 languages, held to one quality bar, which is how the index gets framework routes, DI graph
+          edges, cross-file linkage, and typed structural facts that query-file tools miss. Miller is the
+          agent-tool layer on top: search, inspect, context, refs, trace, impact, editing, and
           deterministic repo-quality reports like <code>metrics risk</code> and <code>miller report</code>.
         </p>
       </div>
@@ -202,23 +202,23 @@
 
     <section id="languages" class="section intro-section">
       <div class="section-heading">
-        <p class="eyebrow">36 languages, no shortcuts</p>
+        <p class="eyebrow">36 languages, one quality bar</p>
         <h2>Every language gets a hand-written extractor.</h2>
       </div>
       <div class="split-copy">
         <p>
           Most tree-sitter tools drive extraction with query files, which caps how much a language can express.
-          Miller's extraction layer is imperative code per language — TypeScript, Python, Rust, Go, Java, C,
+          Miller's extraction layer is imperative code per language. TypeScript, Python, Rust, Go, Java, C,
           C++, Ruby, PHP, Swift, Kotlin, and the rest all get the same treatment: symbols with real signatures
           and doc comments, reference sites, relationships, complexity metrics, and typed structural facts.
         </p>
         <p>
-          That depth shows up in places query files can't reach: web-framework route facts across Express,
-          FastAPI, Flask, Django, Rails, Spring, Next.js, Nuxt, Vue, React and ~25 framework families; SQL
-          DDL/DML shapes; C# dependency-injection registrations that become real graph edges; partial classes
-          linked across files; and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. If
-          your stack is unusual, that's exactly where the hand-written approach pays off. The full case is
-          on the extraction layer's own site:
+          That depth shows up in places query files can't reach. Route facts cover Express, FastAPI, Flask,
+          Django, Rails, Spring, Next.js, Nuxt, Vue, React, and about 25 framework families in total. SQL
+          DDL/DML statements become shape facts. C# dependency-injection registrations become real graph
+          edges, and partial classes are linked across files. Where the ecosystem lacked a usable grammar
+          (Razor, T-SQL, C#), the project maintains its own forks. If your stack is unusual, that's exactly
+          where the hand-written approach pays off. The full argument is on the extraction layer's own site:
           <a href="https://anortham.github.io/julie-extractors/extractors.html" target="_blank" rel="noopener">hand-written
           extractors, not query files</a>.
         </p>
@@ -304,8 +304,8 @@
           <h3>Other install paths</h3>
           <ul>
             <li>Claude Code and Codex plugin manifests ship in this repo.</li>
-            <li>For Cursor, install the Miller plugin or add <code>miller serve</code> to <code>~/.cursor/mcp.json</code> — Miller binds the open project via MCP roots on the first tool call.</li>
-            <li><a href="https://github.com/anortham/miller/releases/latest" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup — it ships the extractor and embedding sidecar.</li>
+            <li>For Cursor, install the Miller plugin or add <code>miller serve</code> to <code>~/.cursor/mcp.json</code>. Miller binds the open project via MCP roots on the first tool call.</li>
+            <li><a href="https://github.com/anortham/miller/releases/latest" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup; it ships the extractor and embedding sidecar.</li>
             <li>After installing, add the <a href="https://github.com/anortham/miller/blob/main/docs/agent-setup-snippet.md" target="_blank" rel="noopener">agent instructions snippet</a> to your CLAUDE.md / AGENTS.md so agents reach for Miller before shell grep.</li>
             <li>Use the source checkout only for Miller development or unreleased local changes.</li>
             <li>Semantic retrieval is default-on, fully local, and off-switchable: <code>MILLER_SEMANTIC=off</code> is a permanent zero-work guarantee, and lexical output stays byte-identical either way.</li>

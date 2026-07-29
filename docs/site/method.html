@@ -4,12 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Auditing your own tool with adversarial agents</title>
-  <meta name="description" content="The process behind Miller's validation: fresh, read-only agent reviewers per tool, no claim accepted without local evidence, and a replacement standard where capability presence is not parity.">
+  <meta name="description" content="How Miller was audited before it replaced its predecessor: a fresh read-only agent reviewer for each tool, every claim checked against local evidence, and a written replacement standard.">
   <link rel="canonical" href="https://anortham.github.io/miller/method.html">
 
   <meta property="og:type" content="article">
   <meta property="og:title" content="Auditing your own tool with adversarial agents">
-  <meta property="og:description" content="How a tool the author believed was done gave up two P0 and ten P1 defects: ephemeral reviewers, evidence-only acceptance, and a parity bar that counts calls and tokens, not features.">
+  <meta property="og:description" content="Twelve defects found in a tool the author believed was finished, using ephemeral read-only reviewers and a parity bar that counts calls, tokens, and correctness.">
   <meta property="og:url" content="https://anortham.github.io/miller/method.html">
 
   <link rel="stylesheet" href="style.css">
@@ -36,16 +36,15 @@
       <div class="split-copy">
         <p>
           Every benchmark a tool author runs on their own tool flatters it. You wrote the tasks, you know
-          the happy paths, and you stop investigating when the numbers look good. Before Miller replaced
-          its predecessor, it went through a different exercise: a structured adversarial audit in which
-          independent agent reviewers were pointed at the code and asked, in effect, to prove the
-          replacement should not happen. It worked — a tool the author believed was finished gave up
-          twelve prioritized defects, two of them P0.
+          the happy paths, and you stop investigating once the numbers look good. So before Miller replaced
+          its predecessor, independent agent reviewers were pointed at the code and asked, in effect, to
+          prove the replacement should not happen. A tool the author believed was finished gave up twelve
+          prioritized defects, two of them P0.
         </p>
         <p>
-          The method is not specific to Miller. It needs a candidate tool, a comparison target, agent
-          sessions you can make genuinely fresh, and the discipline to accept nothing without evidence.
-          This page records the recipe, what it caught, and where it fits relative to benchmarking.
+          Nothing about the method is specific to Miller. You need a candidate tool, a comparison target,
+          agent sessions you can make genuinely fresh, and the discipline to accept nothing without
+          evidence. This page records the process so someone else can run it.
         </p>
       </div>
     </section>
@@ -53,24 +52,23 @@
     <section class="section">
       <div class="section-heading">
         <p class="eyebrow">The setup</p>
-        <h2>Fresh eyes, read-only hands.</h2>
+        <h2>A fresh reviewer for every tool, with read-only access.</h2>
       </div>
       <div class="split-copy">
         <p>
-          The audit compared Miller tool-by-tool against the tool it aimed to replace: one broad review of
-          product boundaries and cross-cutting risks, then nine separate reviews — one per MCP tool —
-          each against its counterpart. Every review ran in an <strong>ephemeral session</strong>: no
-          session persistence, no memory of earlier passes, strict MCP isolation, and read-only access
-          (<code>Read</code>, <code>Grep</code>, <code>Glob</code> — nothing that could run or index
-          either product). The broad review did not count toward any tool-specific pass; each tool got
-          its own fresh reviewer.
+          The audit compared Miller tool by tool against the tool it aimed to replace: one broad review of
+          product boundaries and cross-cutting risks, then nine separate reviews, one per MCP tool, each
+          against its counterpart. Every review ran in an ephemeral session with no persistence, no memory
+          of earlier passes, and strict MCP isolation. Reviewers had <code>Read</code>, <code>Grep</code>,
+          and <code>Glob</code> and nothing that could run or index either product. The broad review did
+          not count toward any tool-specific pass; each tool got its own fresh reviewer.
         </p>
         <p>
           Isolation matters in both directions. A reviewer with session history inherits the author's
-          framing; a reviewer with write or execute access starts "fixing" instead of auditing. And the
-          comparison target was never built, indexed, or modified during the audit — its behavior was
-          established from source and recorded artifacts, so the audit could not perturb the thing it was
-          measuring against.
+          framing, and a reviewer with write or execute access starts "fixing" instead of auditing. The
+          comparison target was never built, indexed, or modified during the audit either; its behavior
+          was established from source and recorded artifacts, so the audit could not disturb the thing it
+          was measuring against.
         </p>
       </div>
     </section>
@@ -82,20 +80,19 @@
       </div>
       <div class="split-copy">
         <p>
-          Reviewer output was treated as hypotheses, not findings. The lead accepted no claim — flattering
-          or damning — until local source, artifact, telemetry, or observed behavior supported it, and
-          every material claim was classified one of four ways: <strong>accepted</strong>,
-          <strong>corrected</strong>, <strong>rejected</strong>, or <strong>unproven</strong>. The
-          rejected and corrected buckets are the point: agent reviewers confidently mis-read code, and an
-          audit that transcribes reviewer output unverified just swaps one bias for another.
+          Reviewer output was treated as a set of hypotheses to check. No claim was accepted, flattering
+          or damning, until local source, artifact, telemetry, or observed behavior supported it, and
+          every material claim was classified as accepted, corrected, rejected, or unproven. The rejected
+          and corrected buckets matter most here. Agent reviewers misread code with complete confidence,
+          and an audit that transcribes reviewer output unverified just swaps one bias for another.
         </p>
         <p>
-          The bar for "Miller replaces the old tool" was written down before the audit and is the part
-          most worth stealing: <em>the replacement stands only when an agent obtains the evidence needed
-          to act correctly with equal or better relevance, fewer calls, fewer returned tokens, lower
-          wall-clock time, explicit uncertainty, and no correctness loss.</em> Capability presence is not
-          parity — "we also have a rename tool" means nothing if the rename can touch a homonym the old
-          tool would have excluded.
+          The bar for "Miller replaces the old tool" was written down before the audit started: <em>the
+          replacement stands only when an agent obtains the evidence needed to act correctly with equal
+          or better relevance, fewer calls, fewer returned tokens, lower wall-clock time, explicit
+          uncertainty, and no correctness loss.</em> In other words, capability presence is not parity.
+          "We also have a rename tool" means nothing if the rename can touch a homonym the old tool would
+          have excluded.
         </p>
       </div>
     </section>
@@ -107,18 +104,18 @@
       </div>
       <div class="split-copy">
         <p>
-          The highest-severity finding was structural, not cosmetic: reference workflows resolved a symbol
-          to an exact identity and then <strong>threw the identity away</strong>, querying references by
-          bare name — so four tools could return homonym results and a rename could over-reach. It had
-          survived every author-run benchmark because the benchmarks never asked a homonym question.
-          Other accepted findings included hard failures returned as successful plain text (breaking
-          automation's ability to distinguish success from failure), context bundles that omitted
-          implementation bodies, and payloads that bounded rows but not delivered tokens.
+          The worst finding was structural. Reference workflows resolved a symbol to an exact identity and
+          then threw the identity away, querying references by bare name, so four tools could return
+          homonym results and a rename could over-reach. It had survived every author-run benchmark
+          because the benchmarks never asked a homonym question. Other accepted findings included hard
+          failures returned as successful plain text (automation could not tell success from failure),
+          context bundles that omitted implementation bodies, and payloads that bounded rows but not
+          delivered tokens.
         </p>
         <p>
           Every finding got a written disposition, the fixes became a phased remediation program, and each
-          tool was then <strong>re-audited</strong> — fresh session again — before its finding closed.
-          The full audit matrix, source proofs included, is
+          tool was re-audited in another fresh session before its finding closed. The full audit matrix,
+          source proofs included, is
           <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-07-22-miller-julie-takeover-matrix.md" target="_blank" rel="noopener">committed in the repository</a>.
         </p>
       </div>
@@ -127,25 +124,25 @@
     <section class="section">
       <div class="section-heading">
         <p class="eyebrow">Where it fits</p>
-        <h2>Audit for defects, benchmark for value.</h2>
+        <h2>What the audit can and cannot tell you.</h2>
       </div>
       <div class="split-copy">
         <p>
-          The audit answers "is this tool correct and complete enough to ship?" It cannot answer "is this
-          tool worth installing?" — that needs measurement against the baseline users actually have, which
-          for a code tool in 2026 is a capable agent with shell access, not a rival product. After
-          remediation, Miller ran that experiment too: same agent, same tasks, same budgets, with and
-          without the tool. The result — 2.2× correct tasks, 0% vs 27% wrong actions — is written up on
-          the <a href="benchmark.html">benchmark page</a>.
+          The audit answers whether the tool is correct and complete enough to ship. It cannot answer
+          whether the tool is worth installing. That takes measurement against the baseline users
+          actually have, which for a code tool in 2026 is a capable agent with shell access rather than a
+          rival product. After remediation, Miller ran that experiment too: same agent, same tasks, same
+          budgets, with and without the tool. The agent got 2.2× more tasks right with Miller and made no
+          wrong-action errors, against a 27% wrong-action rate without it. The details are on the
+          <a href="benchmark.html">benchmark page</a>.
         </p>
         <p>
-          The recipe, compressed: define the replacement standard in writing first, counting calls,
-          tokens, and correctness — not features. Run one broad plus one-per-surface reviews in fresh,
-          read-only, isolated sessions. Treat reviewer claims as hypotheses; classify every one as
-          accepted, corrected, rejected, or unproven against local evidence. Turn accepted findings into
-          a remediation program; re-audit each surface before closing it. Then benchmark against the
-          honest baseline. None of it requires special tooling — only the willingness to let something
-          try to talk you out of shipping.
+          To run this on your own tool: write the replacement standard down first, counting calls,
+          tokens, and correctness rather than features. Run one broad review plus one per surface, each
+          in a fresh, read-only, isolated session. Treat reviewer claims as hypotheses and classify each
+          one against local evidence. Turn the accepted findings into a remediation program and re-audit
+          each surface before closing it. Then benchmark against the honest baseline. None of this needs
+          special tooling, just the willingness to let a reviewer argue against shipping.
         </p>
       </div>
     </section>
@@ -164,7 +161,7 @@ docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md
 docs/findings/agent-efficiency/2026-07-29-bare-agent/</code></pre>
         <div class="limits">
           <ul>
-            <li>The audit's rejected-claims record is preserved alongside the accepted findings — the method is only credible if the misfires are visible too.</li>
+            <li>The audit's rejected-claims record is preserved alongside the accepted findings; the misfires are part of the evidence.</li>
             <li>The benchmark harness is in-repo (<code>scripts/bench-agent-efficiency.py</code>) so the follow-up experiment can be rerun.</li>
             <li>The extraction layer under Miller has its own depth story: <a href="https://anortham.github.io/julie-extractors/extractors.html" target="_blank" rel="noopener">hand-written extractors, not query files</a>.</li>
           </ul>
