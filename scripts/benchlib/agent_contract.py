@@ -1446,6 +1446,9 @@ def _snapshot_facts(
                     ".",
                     ":(top,exclude,glob).miller/**",
                     ":(top,exclude,glob).julie/**",
+                    # Miller >=1.14 seeds a top-level .julieignore on first scan of a
+                    # workspace that lacks one; a prepared root may carry it untracked.
+                    ":(top,exclude).julieignore",
                 ]
             )
         status = _run_git(resolved, *status_args)
@@ -1468,6 +1471,8 @@ def _has_ignored_untracked_source(root: Path) -> bool:
         if not path_bytes:
             continue
         path = PurePosixPath(os.fsdecode(path_bytes))
+        if path.parts == (".julieignore",):
+            continue
         if not path.parts or path.parts[0] not in _PREPARED_ARTIFACT_DIRECTORIES:
             return True
     return False

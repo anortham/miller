@@ -1089,6 +1089,20 @@ class AgentContractTests(unittest.TestCase):
             )
             self.assertFalse(identity.verify_root(root).passed)
 
+    def test_prepared_snapshot_accepts_an_untracked_seeded_julieignore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = _create_snapshot(root)
+            (root / ".miller").mkdir()
+            (root / ".julie").mkdir()
+            (root / ".julieignore").write_text("# seeded by Miller\n.miller/\n", encoding="utf-8")
+
+            self.assertEqual(
+                VerificationResult(True, (), ()),
+                identity.verify_prepared_root(root),
+            )
+            self.assertFalse(identity.verify_root(root).passed)
+
     def test_prepared_snapshot_requires_both_artifact_directories(self) -> None:
         for present, missing in [(".miller", ".julie"), (".julie", ".miller")]:
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
