@@ -25,8 +25,8 @@
     <a class="brand" href="#top">Miller</a>
     <div class="nav-links">
       <a href="#why">Why</a>
+      <a href="benchmark.html">Benchmark</a>
       <a href="#metrics">Metrics</a>
-      <a href="#proof">Proof</a>
       <a href="#tools">Tools</a>
       <a href="#dashboard">Dashboard</a>
       <a href="#install">Install</a>
@@ -45,7 +45,7 @@
       </p>
       <div class="hero-actions">
         <a class="button primary" href="#install">Try Miller</a>
-        <a class="button secondary" href="https://github.com/anortham/miller" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="button secondary" href="benchmark.html">See the benchmark: 2.2× vs a bare agent</a>
       </div>
     </div>
     <a class="scroll-cue" href="#why">Release shape</a>
@@ -60,13 +60,15 @@
       <div class="split-copy">
         <p>
           Miller consumes <code>julie-extract</code> SQLite artifacts and exposes deterministic local read paths
-          through MCP and a matching CLI. It stays lexical, structural, daemon-light, and embedding-free.
+          through MCP and a matching CLI. It stays structural, daemon-light, and local-first, with default-on
+          local semantic retrieval that is off-switchable and never changes lexical output.
         </p>
         <p>
-          Miller is one piece of the Julie replacement story: <code>julie-extractors</code> owns parser-backed
-          extraction, Miller owns the local deterministic agent-tool core — including deterministic repo-quality
-          reports like <code>metrics risk</code>, <code>miller report</code>, and <code>metrics history</code> trends — and Eros owns semantic retrieval,
-          guidance, confidence views, and commercial workflow orchestration.
+          <code>julie-extractors</code> owns parser-backed extraction — hand-written extractors across 36
+          languages, including deep Microsoft-stack coverage (C# with DI and partial-class semantics,
+          Razor/Blazor, VB.NET, T-SQL, PowerShell) that query-file-based tools do not reach. Miller owns the
+          local agent-tool core on top of it: search, inspect, context, refs, trace, impact, editing, and
+          deterministic repo-quality reports like <code>metrics risk</code> and <code>miller report</code>.
         </p>
       </div>
       <div class="feature-strip" aria-label="Miller product pillars">
@@ -258,7 +260,7 @@
         <img src="assets/dashboard-index.png" alt="Miller dashboard showing registered workspaces, file counts, symbol counts, languages, and local telemetry controls.">
         <figcaption>
           The dashboard is intentionally narrow: registered workspaces, index facts, telemetry, latency and failure
-          signals, and troubleshooting. Eros owns the richer product UI above this local core.
+          signals, and troubleshooting. Everything it shows comes from local artifacts on your machine.
         </figcaption>
       </figure>
     </section>
@@ -276,11 +278,10 @@
           <ul>
             <li>Claude Code and Codex plugin manifests ship in this repo.</li>
             <li>For Cursor, install the Miller plugin or add <code>miller serve</code> to <code>~/.cursor/mcp.json</code> — Miller binds the open project via MCP roots on the first tool call.</li>
-            <li><a href="https://github.com/anortham/miller/releases/tag/v1.9.0" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup.</li>
+            <li><a href="https://github.com/anortham/miller/releases/latest" target="_blank" rel="noopener">Download a release archive</a> for manual MCP setup — it ships the extractor and embedding sidecar.</li>
             <li>After installing, add the <a href="https://github.com/anortham/miller/blob/main/docs/agent-setup-snippet.md" target="_blank" rel="noopener">agent instructions snippet</a> to your CLAUDE.md / AGENTS.md so agents reach for Miller before shell grep.</li>
             <li>Use the source checkout only for Miller development or unreleased local changes.</li>
-            <li>No embeddings or semantic/vector retrieval in Miller.</li>
-            <li>Source-region indexing is default-on; opt out with <code>MILLER_REGION_INDEX=0</code>.</li>
+            <li>Semantic retrieval is default-on, fully local, and off-switchable: <code>MILLER_SEMANTIC=off</code> is a permanent zero-work guarantee, and lexical output stays byte-identical either way.</li>
           </ul>
         </div>
       </div>
@@ -290,7 +291,7 @@
   <footer class="site-footer">
     <span>Miller</span>
     <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.9.0.md" target="_blank" rel="noopener">Release notes</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.14.0.md" target="_blank" rel="noopener">Release notes</a>
   </footer>
 
   <script src="script.js"></script>

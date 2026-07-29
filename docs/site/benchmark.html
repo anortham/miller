@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Miller vs a bare agent - measured</title>
+  <meta name="description" content="Paired benchmark: the same coding agent with Miller v1.14.0 versus generic grep/read tools, at two budgets. 2.2x correct tasks, 0% vs 27% wrong actions, and doubling the bare agent's budget made it worse.">
+  <link rel="canonical" href="https://anortham.github.io/miller/benchmark.html">
+
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Miller vs a bare agent - measured">
+  <meta property="og:description" content="Same agent, same tasks, same budgets: 11/15 correct with Miller vs 5/15 with grep and file reads.">
+  <meta property="og:url" content="https://anortham.github.io/miller/benchmark.html">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav id="site-nav" class="site-nav" aria-label="Main navigation">
+    <a class="brand" href="index.html">Miller</a>
+    <div class="nav-links">
+      <a href="index.html#why">Why</a>
+      <a href="benchmark.html">Benchmark</a>
+      <a href="index.html#tools">Tools</a>
+      <a href="index.html#install">Install</a>
+      <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <main>
+    <section class="section intro-section">
+      <div class="section-heading">
+        <p class="eyebrow">Measured 2026-07-29 · Miller v1.14.0</p>
+        <h2>Same agent, same tasks, same budgets — with and without Miller.</h2>
+      </div>
+      <div class="split-copy">
+        <p>
+          Most code-intelligence tools benchmark against each other. The question that actually matters is
+          different: <strong>what does the tool add over an agent that just greps and reads files?</strong>
+          Modern coding agents are good with shell tools, so the honest baseline is a bare agent, not a rival
+          product.
+        </p>
+        <p>
+          We ran the same agent (Codex, <code>gpt-5.6-sol</code>) on 15 real code-navigation tasks across five
+          pinned repositories, in paired runs: one arm with only <code>grep</code> / <code>read_file</code> /
+          <code>list_files</code>, one arm with the published Miller v1.14.0 archive in its default
+          configuration. Identical prompts, identical tool-call and token budgets enforced by a recording
+          proxy, identical scoring. Then we doubled the bare agent's budget to rule out starvation.
+        </p>
+      </div>
+    </section>
+
+    <section class="section metrics-section">
+      <div class="section-heading">
+        <p class="eyebrow">Headline</p>
+        <h2>2.2× correct tasks. Zero wrong actions. Strict dominance.</h2>
+      </div>
+      <div class="metrics-summary" aria-label="Benchmark summary">
+        <div>
+          <strong>11 vs 5</strong>
+          <span>tasks correct out of 15 — Miller vs bare agent, same 8-call budget</span>
+        </div>
+        <div>
+          <strong>0% vs 27%</strong>
+          <span>wrong-action rate at the frozen budget</span>
+        </div>
+        <div>
+          <strong>0</strong>
+          <span>tasks the bare agent solved that Miller missed, across all four runs</span>
+        </div>
+      </div>
+      <div class="metrics-table-wrap">
+        <table class="metrics-table">
+          <caption>Bare agent vs Miller v1.14.0, 15 visible tasks, seed-paired runs.</caption>
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">bare · 8 calls</th>
+              <th scope="col">Miller · 8 calls</th>
+              <th scope="col">bare · 16 calls</th>
+              <th scope="col">Miller · 16 calls</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>correct tasks / 15</td><td>5</td><td><strong>11</strong></td><td>4</td><td><strong>10</strong></td></tr>
+            <tr><td>wrong-action rate</td><td>26.7%</td><td><strong>0%</strong></td><td>40.0%</td><td>20.0%</td></tr>
+            <tr><td>evidence recall@6</td><td>28.2%</td><td><strong>67.9%</strong></td><td>23.1%</td><td>55.1%</td></tr>
+            <tr><td>hard errors</td><td>4</td><td>1</td><td>4</td><td>0</td></tr>
+            <tr><td>budget-exhausted failures</td><td>12</td><td>2</td><td>7</td><td>0</td></tr>
+          </tbody>
+        </table>
+        <p class="metrics-note">
+          Doubling the bare agent's calls and tokens made it <em>worse</em> (5 → 4 correct, wrong actions
+          26.7% → 40%). The gap is capability, not budget starvation.
+        </p>
+      </div>
+    </section>
+
+    <section class="section intro-section">
+      <div class="section-heading">
+        <p class="eyebrow">The honest decomposition</p>
+        <h2>Where the advantage actually comes from.</h2>
+      </div>
+      <div class="split-copy">
+        <p>
+          <strong>A third of the tasks are structurally impossible for grep.</strong> Five tasks require exact
+          symbol identity — who references <em>this</em> function (not everything sharing its name), the call
+          path between two symbols, proof a rename touches every site. The bare agent went 0-for-20 on those
+          across all runs. On the ten product-neutral tasks Miller still wins, 7 vs 5.
+        </p>
+        <p>
+          <strong>The bare agent often finds the evidence — then fumbles it.</strong> Counting evidence found
+          regardless of answer quality, the arms are closer (0.59–0.66 vs 0.73–0.81). Miller's edge is exact
+          identity plus disciplined action on evidence under a bounded context, not "grep can't find things."
+          And Miller is not the cheap option: it spends more calls and tokens per task than a baseline that
+          fails fast. It buys correctness, not cheapness.
+        </p>
+        <p>
+          <strong>The lexical core carries the product.</strong> With semantic retrieval disabled Miller still
+          scored 11/15. The default-on semantic arm adds one to two more correct tasks and 8–13 points of
+          recall, and never lost a task the lexical arm solved.
+        </p>
+      </div>
+      <div class="metrics-table-wrap">
+        <p class="metrics-note">
+          Full method, per-run aggregates, and raw scorer rows are committed in the repository:
+          <a href="https://github.com/anortham/miller/blob/main/docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md" target="_blank" rel="noopener">the calibration finding</a>
+          and <a href="https://github.com/anortham/miller/tree/main/docs/findings/agent-efficiency/2026-07-29-bare-agent" target="_blank" rel="noopener">the evidence exports</a>.
+          Caveats stated there apply: one model, 15 author-written tasks, five author-controlled repos. The
+          harness is in-repo (<code>scripts/bench-agent-efficiency.py</code>) so the runs can be reproduced.
+        </p>
+      </div>
+    </section>
+
+    <section class="section install-section">
+      <div class="section-heading">
+        <p class="eyebrow">Try it</p>
+        <h2>Run your own comparison.</h2>
+      </div>
+      <div class="install-panel">
+        <pre><code>/plugin marketplace add anortham/miller
+/plugin install miller@miller</code></pre>
+        <div class="limits">
+          <ul>
+            <li>Miller is local-first: SQLite artifacts in your workspace, no hosted service, no telemetry leaves the machine.</li>
+            <li>Semantic retrieval is default-on and fully local; <code>MILLER_SEMANTIC=off</code> is a permanent zero-work switch.</li>
+            <li><a href="https://github.com/anortham/miller/releases/latest" target="_blank" rel="noopener">Release archives</a> ship the extractor and embedding sidecar — nothing else to install.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Miller</span>
+    <a href="https://github.com/anortham/miller" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/anortham/miller/blob/main/docs/release-notes/v1.14.0.md" target="_blank" rel="noopener">Release notes</a>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
