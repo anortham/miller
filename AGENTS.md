@@ -10,7 +10,12 @@ current-vs-historical documentation map.
 
 ## 1.0 replacement boundary
 
-The Julie replacement story is Miller + `julie-extractors` + Eros, not Miller alone. Miller replaces Julie's
+The Julie replacement story is Miller + `julie-extractors`, not Miller alone. Julie is retired as of
+2026-07-28 (v7.17.0 final, retirement note in its README, migration doc operative; sealed gate cancelled —
+`docs/findings/2026-07-28-sealed-gate-disposition.md`). Eros is archived as of 2026-07-29 (banner in its
+README); the ownership boundaries below still stand — do not absorb the fleet-level surfaces it reserved.
+The decisive baseline for Miller's value is recorded in
+`docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md`. Miller replaces Julie's
 deterministic local agent-tool core: search, inspect, context, refs, trace/path, impact, editing, workspace
 lifecycle, content/web/text import, patterns, marker audits, telemetry, JSON/JSONL feeds, **and deterministic
 local analysis reports** (`metrics churn|clones|complexity|risk`, the composed `miller report` rollup).
