@@ -30,12 +30,16 @@ benchmark compared Miller to Julie instead of to a bare agent.
    doubling the bare budget made it WORSE. Lexical core carries it (off 11/15); semantic +1..2 correct.
    Per the decision rule: **this is the marketing story — Step 3 leads with it.** Honest frame: exact
    identity + act-on-evidence discipline at higher per-task cost, not "grep can't find things."
-3. **NEXT — distribution month (writing, not code):** publish (a) the calibration, (b) the
-   "hand-written extractors vs tree-sitter query files" depth piece (the personal-achievement artifact),
-   (c) the adversarial-audit method piece; README/site positioning is BREADTH-FIRST per user direction
-   2026-07-29 ("I don't want the site to say 'Built for the Microsoft stack'") — 36 hand-written
-   languages / ~25 framework families for 95% of users, .NET depth one proof point among several; surface
-   julie-extractors standalone (push its 11 unpushed commits, cut a release).
+3. **Distribution write-ups DONE 2026-07-29, all live:** (a) calibration →
+   anortham.github.io/miller/benchmark.html; (b) depth piece → the NEW julie-extractors Pages site
+   (anortham.github.io/julie-extractors/, extractors.html, workflow-build Pages enabled via API,
+   all numbers code-verified: 125,527 LOC, 0 .scm, 195 pattern IDs/60 families, tier1-4 fail-closed);
+   (c) adversarial-audit method piece → anortham.github.io/miller/method.html. Sites/READMEs
+   cross-linked; julie-extractors README release block refreshed to live v2.20.0 + evidence doc.
+   README/site positioning is BREADTH-FIRST per user direction 2026-07-29 ("I don't want the site to
+   say 'Built for the Microsoft stack'") — 36 hand-written languages for 95% of users, .NET depth one
+   proof point among several. Remaining Step 3: external venue posting (HN/lobste.rs/r/dotnet) is the
+   USER'S call, not an agent action.
 4. Standing rule: extractor grinding frozen except experiment-driven gaps + resolution tiers.
    NEW fix candidates from the calibration prep: static-workspace chunk-cursor hold (restart re-embeds
    all cards, chunks never converge) and .julieignore seeding surprise — both are Miller bugs, fair game.
