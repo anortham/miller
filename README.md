@@ -13,10 +13,11 @@ agent's call/token budget made it worse, not better. Method, caveats, and raw ev
 
 Miller stays deterministic, daemon-light, and local-first, with **default-on local semantic retrieval** that
 is off-switchable and leaves lexical-only results byte-identical. Its extraction layer
-([`julie-extractors`](https://github.com/anortham/julie-extractors), hand-written across 36 languages) is
-deepest where shell search fails hardest — the Microsoft stack: C# DI registrations become graph edges,
-partial classes are linked, and Razor/Blazor, T-SQL, VB.NET, and PowerShell are first-class languages with
-owned grammar forks.
+([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all 36 supported
+languages — no tree-sitter query-file shortcuts — so it reaches structure shell search cannot: framework
+route facts across ~25 framework families (Express, Rails, Django, Spring, Next.js, Vue, React, ASP.NET, …),
+dependency-injection registrations as real graph edges, partial classes linked across files, SQL DDL/DML
+shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps.
 
 The practical difference from a one-time graph dump is that Miller is built for active agent work:
 
@@ -303,9 +304,10 @@ snippets, guarded by extractor hashes and spans:
 ```
 
 Design choices that follow from this:
-- **No embeddings in the default path** — ranking stays deterministic in C#. Symbol search uses Miller's BM25
-  over candidates recalled from the on-disk symbol sidecar, with an in-memory fallback. Explicit file/text search
-  uses the content corpus sidecar.
+- **Lexical ranking stays deterministic in C#** — symbol search uses Miller's BM25 over candidates recalled
+  from the on-disk symbol sidecar, with an in-memory fallback; explicit file/text search uses the content
+  corpus sidecar. The default-on semantic arm lives in a separate `vectors.db` and is fused after ranking, so
+  disabling it (`MILLER_SEMANTIC=off`) leaves lexical output byte-identical.
 - **No standalone daemon to manage** — SQLite WAL is the read-concurrency primitive, so many reader instances
   (agent teams, git worktrees, the dashboard) share local artifacts. Refresh and sidecar writes are explicit
   Miller operations; if no writer is active, reads still work but freshness does not advance.

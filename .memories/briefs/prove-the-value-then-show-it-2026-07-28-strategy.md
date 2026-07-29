@@ -32,7 +32,9 @@ benchmark compared Miller to Julie instead of to a bare agent.
    identity + act-on-evidence discipline at higher per-task cost, not "grep can't find things."
 3. **NEXT — distribution month (writing, not code):** publish (a) the calibration, (b) the
    "hand-written extractors vs tree-sitter query files" depth piece (the personal-achievement artifact),
-   (c) the adversarial-audit method piece; lead README/site with the Microsoft-stack wedge; surface
+   (c) the adversarial-audit method piece; README/site positioning is BREADTH-FIRST per user direction
+   2026-07-29 ("I don't want the site to say 'Built for the Microsoft stack'") — 36 hand-written
+   languages / ~25 framework families for 95% of users, .NET depth one proof point among several; surface
    julie-extractors standalone (push its 11 unpushed commits, cut a release).
 4. Standing rule: extractor grinding frozen except experiment-driven gaps + resolution tiers.
    NEW fix candidates from the calibration prep: static-workspace chunk-cursor hold (restart re-embeds

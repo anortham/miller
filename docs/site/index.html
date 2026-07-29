@@ -27,7 +27,7 @@
       <a href="#why">Why</a>
       <a href="benchmark.html">Benchmark</a>
       <a href="#metrics">Metrics</a>
-      <a href="#dotnet">.NET</a>
+      <a href="#languages">Languages</a>
       <a href="#tools">Tools</a>
       <a href="#dashboard">Dashboard</a>
       <a href="#install">Install</a>
@@ -67,8 +67,8 @@
         </p>
         <p>
           <code>julie-extractors</code> owns parser-backed extraction — hand-written extractors across 36
-          languages, including deep Microsoft-stack coverage (C# with DI and partial-class semantics,
-          Razor/Blazor, VB.NET, T-SQL, PowerShell) that query-file-based tools do not reach. Miller owns the
+          languages, one quality bar for all of them, reaching structure that query-file-based tools do
+          not (framework routes, DI graph edges, cross-file linkage, typed structural facts). Miller owns the
           local agent-tool core on top of it: search, inspect, context, refs, trace, impact, editing, and
           deterministic repo-quality reports like <code>metrics risk</code> and <code>miller report</code>.
         </p>
@@ -200,23 +200,24 @@
       </div>
     </section>
 
-    <section id="dotnet" class="section intro-section">
+    <section id="languages" class="section intro-section">
       <div class="section-heading">
-        <p class="eyebrow">Deepest where grep fails hardest</p>
-        <h2>Built for the Microsoft stack.</h2>
+        <p class="eyebrow">36 languages, no shortcuts</p>
+        <h2>Every language gets a hand-written extractor.</h2>
       </div>
       <div class="split-copy">
         <p>
-          Most AI dev tooling is TypeScript-and-Python-first. Miller's extraction layer is deepest exactly
-          where shell search breaks down: C# dependency-injection registrations become real graph edges, so
-          DI-resolved classes aren't invisible; partial classes are linked across files; Razor and Blazor are
-          parsed with a dedicated grammar instead of being skipped as markup.
+          Most tree-sitter tools drive extraction with query files, which caps how much a language can express.
+          Miller's extraction layer is imperative code per language — TypeScript, Python, Rust, Go, Java, C,
+          C++, Ruby, PHP, Swift, Kotlin, and the rest all get the same treatment: symbols with real signatures
+          and doc comments, reference sites, relationships, complexity metrics, and typed structural facts.
         </p>
         <p>
-          T-SQL, VB.NET, and PowerShell are first-class languages — with owned tree-sitter grammar forks
-          where the ecosystem had none worth using. ASP.NET routes, minimal APIs, htmx and Alpine attributes,
-          and SQL DDL/DML shapes ship as pre-extracted, typed structural facts an agent can query directly.
-          All 36 languages get the same hand-written extractor treatment — no query-file shortcuts.
+          That depth shows up in places query files can't reach: web-framework route facts across Express,
+          FastAPI, Flask, Django, Rails, Spring, Next.js, Nuxt, Vue, React and ~25 framework families; SQL
+          DDL/DML shapes; C# dependency-injection registrations that become real graph edges; partial classes
+          linked across files; and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. If
+          your stack is unusual, that's exactly where the hand-written approach pays off.
         </p>
       </div>
     </section>
