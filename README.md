@@ -9,7 +9,9 @@ an agent to grep and reread the repo by hand.
 than with grep and file reads** (11/15 vs 5/15), with a 0% vs 27% wrong-action rate — and doubling the bare
 agent's call/token budget made it worse, not better. Method, caveats, and raw evidence:
 [the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md) ·
-[summary page](https://anortham.github.io/miller/benchmark.html).
+[summary page](https://anortham.github.io/miller/benchmark.html). The adversarial audit process that
+preceded the benchmark is written up at
+[the method page](https://anortham.github.io/miller/method.html).
 
 Miller stays deterministic, daemon-light, and local-first, with **default-on local semantic retrieval** that
 is off-switchable and leaves lexical-only results byte-identical. Its extraction layer
@@ -17,7 +19,8 @@ is off-switchable and leaves lexical-only results byte-identical. Its extraction
 languages — no tree-sitter query-file shortcuts — so it reaches structure shell search cannot: framework
 route facts across ~25 framework families (Express, Rails, Django, Spring, Next.js, Vue, React, ASP.NET, …),
 dependency-injection registrations as real graph edges, partial classes linked across files, SQL DDL/DML
-shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps.
+shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. The full depth case is
+[hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
 The practical difference from a one-time graph dump is that Miller is built for active agent work:
 
