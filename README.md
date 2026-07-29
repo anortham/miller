@@ -5,21 +5,20 @@ workspace, then answers structural questions through MCP and a matching CLI: fin
 build focused context, trace relationships, assess change impact, and check workspace freshness without asking
 an agent to grep and reread the repo by hand.
 
-**Measured, not asserted:** in a paired benchmark, the same agent got **2.2× more tasks right with Miller
-than with grep and file reads** (11/15 vs 5/15), with a 0% vs 27% wrong-action rate — and doubling the bare
-agent's call/token budget made it worse, not better. Method, caveats, and raw evidence:
-[the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md) ·
-[summary page](https://anortham.github.io/miller/benchmark.html). The adversarial audit process that
-preceded the benchmark is written up at
-[the method page](https://anortham.github.io/miller/method.html).
+In a paired benchmark, the same agent got 2.2× more tasks right with Miller than with grep and file reads
+(11/15 vs 5/15), with a 0% vs 27% wrong-action rate. Doubling the bare agent's call and token budget made
+it worse, not better. Method, caveats, and raw evidence are in
+[the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md) and on the
+[summary page](https://anortham.github.io/miller/benchmark.html); the adversarial audit that preceded the
+benchmark is written up on [the method page](https://anortham.github.io/miller/method.html).
 
-Miller stays deterministic, daemon-light, and local-first, with **default-on local semantic retrieval** that
-is off-switchable and leaves lexical-only results byte-identical. Its extraction layer
+Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default, fully
+local, and off-switchable, and lexical-only results stay byte-identical either way. The extraction layer
 ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all 36 supported
-languages — no tree-sitter query-file shortcuts — so it reaches structure shell search cannot: framework
-route facts across ~25 framework families (Express, Rails, Django, Spring, Next.js, Vue, React, ASP.NET, …),
-dependency-injection registrations as real graph edges, partial classes linked across files, SQL DDL/DML
-shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. The full depth case is
+languages, without tree-sitter query-file shortcuts, so it reaches structure shell search cannot: framework
+route facts across ~25 framework families (Express, Rails, Django, Spring, Next.js, Vue, React, ASP.NET, and
+others), dependency-injection registrations as real graph edges, partial classes linked across files, SQL
+DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. The full argument is
 [hand-written extractors, not query files](https://anortham.github.io/julie-extractors/extractors.html).
 
 The practical difference from a one-time graph dump is that Miller is built for active agent work:
@@ -46,7 +45,7 @@ Miller release archive, verifies its `.sha256` sidecar, caches it under `~/.mill
 `miller serve` as an MCP server. That archive includes Miller's pinned `.tools/julie-extract` binary, so plugin
 users do not install `julie-extract` or the .NET SDK separately.
 
-> **Plugin installs require [Node.js](https://nodejs.org/) on `PATH`** — the launcher is a Node script. If
+> **Plugin installs require [Node.js](https://nodejs.org/) on `PATH`**: the launcher is a Node script. If
 > Node.js is missing (common with Claude Code's native installer, which does not need Node itself), the plugin
 > fails to connect with the opaque MCP error `-32000` and writes no Miller log. Install Node.js LTS and restart
 > your agent. The manual install paths below run the `miller` binary directly and do not need Node.js.
@@ -123,18 +122,18 @@ truncates merged server instructions at roughly 2KB). The full workflow catalog,
 per-tool parameter detail live in [`docs/agent-guidance.md`](docs/agent-guidance.md); plugin users also get the
 same depth through the `miller-*` skills.
 
-### Making Agents Actually Use Miller
+### Getting agents to use Miller
 
 Installing the MCP server does not guarantee an agent will use it. Newer harnesses (including current Claude Code)
 defer MCP tool schemas behind on-demand tool search, so Miller's tool descriptions may not be in the model's
-context when it picks an exploration strategy — and the built-in grep/read tools always are, so agents often fall
+context when it picks an exploration strategy. The built-in grep and read tools always are, so agents often fall
 back to shell searches even when Miller is faster and cheaper. Miller's embedded server instructions cannot fix
 this alone: clients truncate them, and they only load after the server connects.
 
 The reliable fix is a short routing block in instructions that are always in the model's context: user-level
 `~/.claude/CLAUDE.md` or a project `CLAUDE.md` for Claude Code, `AGENTS.md` for Codex and other AGENTS.md-aware
 harnesses, or a Cursor rule. `miller rules --harness <name>` prints that block already framed for a given
-harness's rules file — see [Other Harnesses](#other-harnesses-instruction-tier) below. To paste it by hand, copy
+harness's rules file; see [Other Harnesses](#other-harnesses-instruction-tier) below. To paste it by hand, copy
 this snippet (also kept at [`docs/agent-setup-snippet.md`](docs/agent-setup-snippet.md) for linking):
 
 ```markdown
@@ -210,7 +209,7 @@ Use this path when your MCP client does not use Miller's plugin package.
    ```
 
    On Windows, use the full path to `miller.exe` as `command`. For Cursor, put this in `~/.cursor/mcp.json` or
-   install the Miller plugin — Miller resolves the open project via MCP `roots/list` on the first tool call.
+   install the Miller plugin. Miller resolves the open project via MCP `roots/list` on the first tool call.
 
 ### Other Harnesses (instruction tier)
 
@@ -230,12 +229,12 @@ miller rules --harness cursor > .cursor/rules/miller.mdc
 ```
 
 `miller rules` prints the block to stdout and the target path to stderr, so a redirect produces a usable file; run
-it with no flag to print the bare block for pasting anywhere. Miller only prints — it never writes into your
+it with no flag to print the bare block for pasting anywhere. Miller only prints. It never writes into your
 project, and it never updates a block you already wrote, so re-run the command after a Miller upgrade to pick up
 routing changes.
 
 Supported harnesses: `cursor`, `windsurf`, `cline`, `kiro`, `copilot`, `agents`. Each one's target path and file
-format — with the official doc URL it was verified against — lives in
+format (with the official doc URL it was verified against) lives in
 [`docs/contracts/rules-v1.md`](docs/contracts/rules-v1.md); `miller rules --harness <name>` prints the same target
 path to stderr.
 
@@ -272,9 +271,9 @@ dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvi
 
 ## How it works
 
-Miller does not own tree-sitter extraction and does **not** use embeddings. Parser-backed extraction is
+Miller does not own tree-sitter extraction or embedding generation. Parser-backed extraction is
 delegated to a prebuilt `julie-extract` binary (Rust + tree-sitter) that writes symbols, identifiers, files,
-and relationships into a SQLite database. Plugin and release-archive installs bundle the matching extractor
+and relationships into a SQLite database; embeddings come from the pinned `julie-semantic-sidecar` binary. Plugin and release-archive installs bundle the matching extractor
 under `.tools/`; source checkouts restore it with `scripts/restore-julie-extract.*`. Miller is the pure-.NET
 host on top; it can re-read workspace source text for explicit content/source search and source-region
 snippets, guarded by extractor hashes and spans:
@@ -307,15 +306,16 @@ snippets, guarded by extractor hashes and spans:
 ```
 
 Design choices that follow from this:
-- **Lexical ranking stays deterministic in C#** — symbol search uses Miller's BM25 over candidates recalled
+- Lexical ranking stays deterministic in C#. Symbol search uses Miller's BM25 over candidates recalled
   from the on-disk symbol sidecar, with an in-memory fallback; explicit file/text search uses the content
   corpus sidecar. The default-on semantic arm lives in a separate `vectors.db` and is fused after ranking, so
   disabling it (`MILLER_SEMANTIC=off`) leaves lexical output byte-identical.
-- **No standalone daemon to manage** — SQLite WAL is the read-concurrency primitive, so many reader instances
-  (agent teams, git worktrees, the dashboard) share local artifacts. Refresh and sidecar writes are explicit
-  Miller operations; if no writer is active, reads still work but freshness does not advance.
-- **Hard logic↔infrastructure seam** — `Miller.Core` has zero I/O dependencies, so the ranking and the resolver
-  are unit-tested in milliseconds with no live DB, subprocess, or transport. This keeps the default test suite fast.
+- There is no standalone daemon to manage. SQLite WAL is the read-concurrency primitive, so many reader
+  instances (agent teams, git worktrees, the dashboard) share local artifacts. Refresh and sidecar writes are
+  explicit Miller operations; if no writer is active, reads still work but freshness does not advance.
+- The logic/infrastructure seam is hard. `Miller.Core` has zero I/O dependencies, so the ranking and the
+  resolver are unit-tested in milliseconds with no live DB, subprocess, or transport. This keeps the default
+  test suite fast.
 
 ## Replacing Julie
 
@@ -333,7 +333,7 @@ The replacement has explicit component boundaries:
 - **Out of scope by design** (formerly reserved for the archived Eros project): cross-workspace/fleet
   ranking, fleet guidance, confidence/evidence views, embeddings-as-a-service orchestration, and commercial
   orchestration. Miller deliberately does not grow these. Local, single-workspace semantic retrieval belongs
-  to Miller — see
+  to Miller; see
   [`docs/adr/ADR-0003-semantic-retrieval-ownership.md`](docs/adr/ADR-0003-semantic-retrieval-ownership.md).
 
 That boundary is deliberate. Miller stays predictable and local; the product layer above it decides what the
@@ -376,7 +376,7 @@ route references to file routes/definitions, Blazor navigation references to Raz
 Next.js/Nuxt route handlers, and client requests
 (fetch/axios/`requests`/`httpx`/`net/http`/`Net::HTTP`/`HttpClient`/Ktor/Guzzle/Req/reqwest) to
 Express/Fastify/FastAPI/Flask/Django/Spring/Go/gin/echo/Rails/NestJS/Laravel/Phoenix/axum/actix/
-Symfony/Ktor route templates — not every framework route shape.
+Symfony/Ktor route templates. It does not cover every framework route shape.
 No-path, unsupported bridge, and ambiguous-target results include bounded next actions; JSON callers get the same
 guidance in additive `next_actions` rows.
 
@@ -420,8 +420,8 @@ miller metrics clones --min-count 2
 miller metrics complexity --min-severity moderate --exclude-tests
 ```
 
-`miller metrics history` reads a per-workspace record of how those signals move over time — symbol count,
-complexity p90, clone groups, markers, and dead-code candidate counts — recorded automatically after each index
+`miller metrics history` reads a per-workspace record of how those signals move over time (symbol count,
+complexity p90, clone groups, markers, and dead-code candidate counts), recorded automatically after each index
 converge and when the heavy commands run. It only reads the recorded trend (append-only `.miller/history.db`); the
 same trends render as sparklines on the dashboard workspace detail view, and `workspace health` reports the history
 sidecar's status and size. The `--json` envelope is a stable contract
@@ -436,7 +436,7 @@ miller metrics history --metric complexity_p90,dead_code_candidate_count --limit
 
 The single `miller` binary runs two ways:
 
-- **MCP server (default).** With no arguments — or the explicit `serve` verb — Miller speaks the MCP protocol
+- **MCP server (default).** With no arguments, or the explicit `serve` verb, Miller speaks the MCP protocol
   over stdio. This is how an MCP client (Claude Code, Cursor, Codex, etc.) connects; see
   [`mcp-config.json`](mcp-config.json):
 
@@ -447,7 +447,7 @@ The single `miller` binary runs two ways:
   This source-checkout config uses `dotnet run`, so the MCP client machine needs the .NET 10 SDK installed.
 
 - **CLI (one-shot).** Any other verb runs a single command over the current directory's `.miller/symbols.db`
-  and exits — for shells, CI, and integration tests. Read verbs also accept `--workspace-id <selector>`
+  and exits, which suits shells, CI, and integration tests. Read verbs also accept `--workspace-id <selector>`
   (`--workspace <path>` is a path alias) for registered workspaces, so dogfood and CI calls can target another
   indexed repo without changing directories. The CLI reuses the *same* tool cores the server exposes, so output
   matches a tool call.
@@ -486,7 +486,7 @@ The single `miller` binary runs two ways:
   `trace`, `dashboard`, `workspace`, `version`, `help`, and `serve`.
 
 **Dogfooding the server.** Because MCP runs over stdio, a new build takes effect only after the MCP client
-restarts the subprocess. A build made inside the repo carries its git short SHA — `miller version` prints
+restarts the subprocess. A build made inside the repo carries its git short SHA: `miller version` prints
 `<version>+<sha>` (just `<version>` for a build with no `.git`), and the same string heads the `# workspace` block of
 `workspace status`. The status header also includes the process id (`pid <n>`), which is the quickest way to
 confirm a restarted MCP client is talking to a new Miller subprocess when you rebuilt uncommitted changes and
@@ -553,7 +553,7 @@ That writes `~/.cursor/mcp.json` with your Release build path and retires legacy
 copies.
 
 Then reload Cursor and confirm Miller appears under Settings > Tools & MCP. The plugin launcher no longer guesses
-workspace cwd — Miller binds from MCP roots per open window. Use `MILLER_WORKSPACE_ROOT` in the MCP env block only
+workspace cwd; Miller binds from MCP roots per open window. Use `MILLER_WORKSPACE_ROOT` in the MCP env block only
 for clients without roots support (for example Codex per-project config).
 
 For the GitHub-hosted plugin source, use:
@@ -704,12 +704,12 @@ dotnet test  Miller.slnx -c Release           # fast suite only — Scale tests 
 The test suite is split in two so the dev loop stays fast (the lesson from julie, whose suite grew to
 30+ minutes once slow integration tests ran on every change):
 
-- **fast** (`Category!=Scale`) — pure logic + contract tests, no `julie-extract` subprocess. Target <10s.
-  This is the default: a bare `dotnet test` runs only this suite (the test project sets
+- fast (`Category!=Scale`): pure logic and contract tests with no `julie-extract` subprocess, targeting
+  under 10 seconds. This is the default: a bare `dotnet test` runs only this suite (the test project sets
   `VSTestTestCaseFilter=Category!=Scale`, the MSBuild default for `--filter`; a command-line `--filter`
   overrides it).
-- **scale** (`Category=Scale`) — live tests that spawn the real pinned `julie-extract` or build large
-  fixtures. Run before a commit/PR. They **skip** (not fail) if `.tools/julie-extract` is absent.
+- scale (`Category=Scale`): live tests that spawn the real pinned `julie-extract` or build large
+  fixtures. Run them before a commit or PR. They skip rather than fail if `.tools/julie-extract` is absent.
 
 The friendly wrapper sets a wall-clock budget tripwire on the fast suite and handles the filters:
 
@@ -752,8 +752,8 @@ Warnings are errors (`Directory.Build.props`).
   accelerator probe, vector read/write, or semantic telemetry. `MILLER_SEMANTIC=shadow` builds and measures
   without fusing; `MILLER_SEMANTIC=on` explicitly selects the default serving behavior.
   `MILLER_SEMANTIC_MODEL` selects the
-  embedding encoder (`bge-small-en-v1.5-f32` default — 134 MB, 384-dim; `qwen3-0.6b-f16` optional — 1.2 GB,
-  512-dim, marginally stronger raw-semantic quality at ~8× the build time), downloaded with
+  embedding encoder (the default `bge-small-en-v1.5-f32` at 134 MB and 384 dimensions, or the optional
+  `qwen3-0.6b-f16` at 1.2 GB and 512 dimensions, marginally stronger at ~8× the build time), downloaded with
   `miller semantic prepare --model <id>`. A randomized-holdout canary that gates default-on uses
   `MILLER_SEMANTIC_CANARY=on` for the legacy v2 profile or `decision` for the bounded v3 decision profile
   (requires semantic on/shadow), and is read with `miller telemetry canary --contract 2|3` / `--gate`; see the
@@ -800,7 +800,7 @@ Warnings are errors (`Directory.Build.props`).
 
 - Plugin install shows `failed` in `/mcp` with error `-32000` and no Miller log is written: Node.js is missing
   from `PATH`. The plugin launcher is a Node script, and Claude Code's native installer does not itself require
-  Node — install Node.js LTS (for example `winget install OpenJS.NodeJS.LTS` on Windows), then fully restart the
+  Node. Install Node.js LTS (for example `winget install OpenJS.NodeJS.LTS` on Windows), then fully restart the
   agent so the new `PATH` is picked up; an in-session reconnect keeps the old environment and still fails.
 - `no Miller index`: run `miller workspace full`, or open the folder in the Miller MCP server so the
   index can be created. If the missing target is another repo, run `miller workspace open --path /absolute/repo --full`
@@ -809,7 +809,7 @@ Warnings are errors (`Directory.Build.props`).
   entries from `~/.cursor/mcp.json`, move aside `~/.cursor/plugins/local/miller` if it exists, and reload Cursor.
 - Cursor Miller fails with `Could not determine a Miller workspace root`: open a project folder (Miller binds via
   MCP `roots/list` on the first tool call), or set `MILLER_WORKSPACE_ROOT` to an absolute project path in the MCP
-  server env. Do not use `${workspaceFolder}` in user-global config — it often stays unresolved.
+  server env. Do not use `${workspaceFolder}` in user-global config; it often stays unresolved.
 - Cursor search results come from the wrong repo: reload the window or run `workspace status` and confirm the
   header root matches the open project. Pass an explicit `workspace_id` for another registered workspace when needed.
 - Missing `julie-extract` from a plugin or release-archive install: reinstall or re-extract the full Miller
