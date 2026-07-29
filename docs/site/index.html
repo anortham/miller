@@ -27,6 +27,7 @@
       <a href="#why">Why</a>
       <a href="benchmark.html">Benchmark</a>
       <a href="#metrics">Metrics</a>
+      <a href="#dotnet">.NET</a>
       <a href="#tools">Tools</a>
       <a href="#dashboard">Dashboard</a>
       <a href="#install">Install</a>
@@ -37,18 +38,19 @@
   <header id="top" class="hero">
     <div class="hero-overlay" aria-hidden="true"></div>
     <div class="hero-content">
-      <p class="eyebrow">Free local code-intelligence core</p>
+      <p class="eyebrow">Free local code intelligence for coding agents</p>
       <h1>Miller</h1>
       <p class="hero-lede">
-        A current, local view of your codebase for coding agents that need to search, inspect, trace,
-        and assess impact without burning the context window on broad file reads.
+        The same agent gets 2.2× more tasks right with Miller than with grep and file reads — measured,
+        not asserted. Exact references, call paths, rename proof, and token-budgeted context from a
+        local SQLite index that is always current.
       </p>
       <div class="hero-actions">
         <a class="button primary" href="#install">Try Miller</a>
         <a class="button secondary" href="benchmark.html">See the benchmark: 2.2× vs a bare agent</a>
       </div>
     </div>
-    <a class="scroll-cue" href="#why">Release shape</a>
+    <a class="scroll-cue" href="#why">What it is</a>
   </header>
 
   <main>
@@ -171,30 +173,51 @@
         <h2>Real commands, same read cores as MCP.</h2>
       </div>
       <div class="command-grid">
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- workspace status">
+        <button class="command-line" type="button" data-copy="miller workspace status">
           <span>workspace status</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- workspace status</code>
+          <code>miller workspace status</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json">
+        <button class="command-line" type="button" data-copy="miller workspace onboarding --json">
           <span>workspace onboarding</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- workspace onboarding --json</code>
+          <code>miller workspace onboarding --json</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;WorkspaceIndexProvider&quot; --limit 5">
+        <button class="command-line" type="button" data-copy="miller search &quot;WorkspaceIndexProvider&quot; --limit 5">
           <span>symbol search</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvider" --limit 5</code>
+          <code>miller search "WorkspaceIndexProvider" --limit 5</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- search &quot;release archive&quot; --mode content --limit 5">
+        <button class="command-line" type="button" data-copy="miller search &quot;release archive&quot; --mode content --limit 5">
           <span>content search</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- search "release archive" --mode content --limit 5</code>
+          <code>miller search "release archive" --mode content --limit 5</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- patterns --json">
+        <button class="command-line" type="button" data-copy="miller patterns --json">
           <span>patterns</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- patterns --json</code>
+          <code>miller patterns --json</code>
         </button>
-        <button class="command-line" type="button" data-copy="dotnet run --project src/Miller.Server -c Release -- context &quot;dashboard telemetry and workspace registry&quot; --token-budget 1200">
+        <button class="command-line" type="button" data-copy="miller context &quot;dashboard telemetry and workspace registry&quot; --token-budget 1200">
           <span>context bundle</span>
-          <code>dotnet run --project src/Miller.Server -c Release -- context "dashboard telemetry and workspace registry" --token-budget 1200</code>
+          <code>miller context "dashboard telemetry and workspace registry" --token-budget 1200</code>
         </button>
+      </div>
+    </section>
+
+    <section id="dotnet" class="section intro-section">
+      <div class="section-heading">
+        <p class="eyebrow">Deepest where grep fails hardest</p>
+        <h2>Built for the Microsoft stack.</h2>
+      </div>
+      <div class="split-copy">
+        <p>
+          Most AI dev tooling is TypeScript-and-Python-first. Miller's extraction layer is deepest exactly
+          where shell search breaks down: C# dependency-injection registrations become real graph edges, so
+          DI-resolved classes aren't invisible; partial classes are linked across files; Razor and Blazor are
+          parsed with a dedicated grammar instead of being skipped as markup.
+        </p>
+        <p>
+          T-SQL, VB.NET, and PowerShell are first-class languages — with owned tree-sitter grammar forks
+          where the ecosystem had none worth using. ASP.NET routes, minimal APIs, htmx and Alpine attributes,
+          and SQL DDL/DML shapes ship as pre-extracted, typed structural facts an agent can query directly.
+          All 36 languages get the same hand-written extractor treatment — no query-file shortcuts.
+        </p>
       </div>
     </section>
 
