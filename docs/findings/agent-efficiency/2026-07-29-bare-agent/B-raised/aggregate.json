@@ -1,0 +1,87 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 10,
+    "baseline_only": 0,
+    "candidate_only": 2,
+    "neither_correct": 3
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 8,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 0,
+      "wrong_answer": 5
+    },
+    "candidate": {
+      "success": 10,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 0,
+      "wrong_answer": 3
+    }
+  },
+  "relevance": {
+    "verdict": "pass",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.5256410256410257,
+      "ndcg_at_6": 0.5422995309444142,
+      "mrr": 0.6153846153846154,
+      "top_1": 0.6153846153846154
+    },
+    "candidate": {
+      "recall_at_6": 0.6538461538461539,
+      "ndcg_at_6": 0.6805989658289875,
+      "mrr": 0.7692307692307693,
+      "top_1": 0.7692307692307693
+    }
+  },
+  "correctness": {
+    "verdict": "pass",
+    "baseline_correct_count": 10,
+    "candidate_correct_count": 12,
+    "critical_loss_count": 0,
+    "baseline_wrong_action_task_count": 2,
+    "candidate_wrong_action_task_count": 1,
+    "baseline_wrong_action_rate": 0.13333333333333333,
+    "candidate_wrong_action_rate": 0.06666666666666667
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": true,
+    "both_correct_task_count": 10,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": true
+  },
+  "baseline": {
+    "median_tool_output_tokens": 5381,
+    "median_tool_calls": 6,
+    "p75_duration_ms": 49015
+  },
+  "candidate": {
+    "median_tool_output_tokens": 5268,
+    "median_tool_calls": 5.75,
+    "p75_duration_ms": 54617
+  },
+  "failure_counts": {
+    "baseline": {
+      "incorrect": 8
+    },
+    "candidate": {
+      "incorrect": 4,
+      "insufficient_evidence": 1
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}

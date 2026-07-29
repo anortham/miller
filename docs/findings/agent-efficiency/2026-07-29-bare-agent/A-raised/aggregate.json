@@ -1,0 +1,88 @@
+{
+  "contract_id": "takeover-evaluation-v1",
+  "schema_version": 1,
+  "decision_scope": "full",
+  "decision_verdict": "not_decisional",
+  "action_verdict": "fail",
+  "task_count": 15,
+  "completion": {
+    "both_correct": 4,
+    "baseline_only": 0,
+    "candidate_only": 6,
+    "neither_correct": 5
+  },
+  "outcome_counts": {
+    "baseline": {
+      "success": 3,
+      "empty": 1,
+      "refusal": 0,
+      "hard_error": 4,
+      "wrong_answer": 7
+    },
+    "candidate": {
+      "success": 8,
+      "empty": 1,
+      "refusal": 1,
+      "hard_error": 0,
+      "wrong_answer": 5
+    }
+  },
+  "relevance": {
+    "verdict": "pass",
+    "task_count": 13,
+    "baseline": {
+      "recall_at_6": 0.23076923076923078,
+      "ndcg_at_6": 0.23076923076923078,
+      "mrr": 0.23076923076923078,
+      "top_1": 0.23076923076923078
+    },
+    "candidate": {
+      "recall_at_6": 0.5512820512820513,
+      "ndcg_at_6": 0.5675775253656985,
+      "mrr": 0.6153846153846154,
+      "top_1": 0.6153846153846154
+    }
+  },
+  "correctness": {
+    "verdict": "pass",
+    "baseline_correct_count": 4,
+    "candidate_correct_count": 10,
+    "critical_loss_count": 0,
+    "baseline_wrong_action_task_count": 6,
+    "candidate_wrong_action_task_count": 3,
+    "baseline_wrong_action_rate": 0.4,
+    "candidate_wrong_action_rate": 0.2
+  },
+  "efficiency": {
+    "verdict": "fail",
+    "measurable": true,
+    "both_correct_task_count": 4,
+    "token_route_passed": false,
+    "call_route_passed": false,
+    "wall_guard_passed": false
+  },
+  "baseline": {
+    "median_tool_output_tokens": 3570,
+    "median_tool_calls": 1.5,
+    "p75_duration_ms": 19798
+  },
+  "candidate": {
+    "median_tool_output_tokens": 4525.25,
+    "median_tool_calls": 4.5,
+    "p75_duration_ms": 39338
+  },
+  "failure_counts": {
+    "baseline": {
+      "budget_exceeded": 7,
+      "incorrect": 13,
+      "insufficient_evidence": 4
+    },
+    "candidate": {
+      "incorrect": 7
+    }
+  },
+  "by_workflow": {},
+  "by_capability": {},
+  "by_repo": {},
+  "by_language": {}
+}
