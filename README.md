@@ -36,7 +36,7 @@ The practical difference from a one-time graph dump is that Miller is built for 
 > binary; users do not install it separately.
 >
 > Website: [anortham.github.io/miller](https://anortham.github.io/miller/) · Release:
-> [v1.14.0](https://github.com/anortham/miller/releases/tag/v1.14.0)
+> [v1.14.1](https://github.com/anortham/miller/releases/tag/v1.14.1)
 
 ## Quickstart
 
