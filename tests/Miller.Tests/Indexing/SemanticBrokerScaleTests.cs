@@ -44,16 +44,12 @@ public sealed class SemanticBrokerScaleTests : IDisposable
     }
 
     [Fact]
-    public void MissingOrRc4CandidateSkipsWithAnActionableBrokerReason()
+    public void MissingBrokerCandidateSkipsWithPinnedRestoreGuidance()
     {
         string? candidate = ScaleTestSupport.LocateSemanticSidecar();
         Assert.SkipWhen(candidate is null,
-            "Broker-capable julie-semantic-sidecar is absent. Build rc.5 from source into " +
-            ".tools/julie-semantic-sidecar-runtime or run scripts/restore-semantic-sidecar.sh after rc.5 publishes.");
-        string pin = File.ReadAllText(Path.Combine(ScaleTestSupport.RepoRoot(), "scripts", "semantic-pins.json"));
-        Assert.SkipWhen(pin.Contains("\"version\": \"0.1.0-rc.4\"", StringComparison.Ordinal),
-            "Miller is pinned to julie-semantic-sidecar rc.4, which has no shared broker command. " +
-            "Use a from-source rc.5 candidate for Task 8; do not count rc.4 as passing broker evidence.");
+            "Broker-capable julie-semantic-sidecar is absent. Restore the pinned package with " +
+            "scripts/restore-semantic-sidecar.sh or scripts/restore-semantic-sidecar.ps1.");
     }
 
     [Fact]
@@ -106,7 +102,8 @@ public sealed class SemanticBrokerScaleTests : IDisposable
         Assert.SkipWhen(
             process.ExitCode != 2
                 || !error.Contains("broker requires --model", StringComparison.Ordinal),
-            $"The restored sidecar is not broker-capable ({error.Trim()}). Build the Task 8 source candidate.");
+            $"The restored sidecar is not broker-capable ({error.Trim()}). Restore the pinned package with " +
+            "scripts/restore-semantic-sidecar.sh or scripts/restore-semantic-sidecar.ps1.");
         return new BrokerCandidate(toolsRoot, candidate);
     }
 

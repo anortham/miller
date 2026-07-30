@@ -49,7 +49,7 @@ write_skip() {
 }
 
 [[ -x "$candidate" ]] ||
-  write_skip "Broker-capable julie-semantic-sidecar not found at $candidate. Restore rc.5 or stage a from-source broker candidate under the requested tools root."
+  write_skip "Broker-capable julie-semantic-sidecar not found at $candidate. Restore the pinned package with scripts/restore-semantic-sidecar.sh."
 
 capability_error="$output_dir/broker-capability.stderr"
 set +e
@@ -57,7 +57,7 @@ set +e
 capability_exit=$?
 set -e
 if [[ $capability_exit -ne 2 ]] || ! grep -q "broker requires --model" "$capability_error"; then
-  write_skip "The candidate does not expose the shared broker CLI. Current rc.4 packages are expected to skip; stage the Task 8 from-source candidate."
+  write_skip "The candidate does not expose the shared broker CLI. Restore the pinned package with scripts/restore-semantic-sidecar.sh."
 fi
 
 dotnet build "$repo_root/scripts/Miller.SemanticBrokerProbe/Miller.SemanticBrokerProbe.csproj" \

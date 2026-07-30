@@ -39,7 +39,7 @@ function Write-Skip([string]$Reason) {
 }
 
 if (-not (Test-Path $candidate)) {
-    Write-Skip "Broker-capable julie-semantic-sidecar not found at $candidate. Restore rc.5 or stage a from-source broker candidate under the requested tools root."
+    Write-Skip "Broker-capable julie-semantic-sidecar not found at $candidate. Restore the pinned package with scripts/restore-semantic-sidecar.ps1."
 }
 
 $capabilityError = Join-Path $OutputDirectory 'broker-capability.stderr'
@@ -48,7 +48,7 @@ $capability = Start-Process -FilePath $candidate -ArgumentList 'broker' -NoNewWi
     -RedirectStandardOutput $capabilityOutput -RedirectStandardError $capabilityError
 if ($capability.ExitCode -ne 2 -or
     -not (Select-String -Quiet -SimpleMatch 'broker requires --model' $capabilityError)) {
-    Write-Skip 'The candidate does not expose the shared broker CLI. Current rc.4 packages are expected to skip; stage the Task 8 from-source candidate.'
+    Write-Skip 'The candidate does not expose the shared broker CLI. Restore the pinned package with scripts/restore-semantic-sidecar.ps1.'
 }
 
 $probeProject = Join-Path $repoRoot 'scripts/Miller.SemanticBrokerProbe/Miller.SemanticBrokerProbe.csproj'

@@ -66,7 +66,7 @@ public sealed class SemanticRestoreScriptScaleTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         string pins = Path.Combine(_root, "pins.json");
-        File.WriteAllText(pins, """{"sidecar":{"version":"0.1.0-rc.4"}}""");
+        File.WriteAllText(pins, """{"sidecar":{"version":"0.1.0"}}""");
 
         string exact = CreatePackage("exact", triple, executableName);
         ProcessResult accepted = RunVerifier(
@@ -91,7 +91,7 @@ public sealed class SemanticRestoreScriptScaleTests : IDisposable
             StringComparison.OrdinalIgnoreCase);
 
         string missing = CreatePackage("missing", triple, executableName);
-        File.Delete(Path.Combine(missing, "LICENSE"));
+        File.Delete(Path.Combine(missing, "THIRD_PARTY-LICENSES.html"));
         ProcessResult missingResult = RunVerifier(
             command, commandPrefix, missing, triple, pins, powerShell);
         Assert.NotEqual(0, missingResult.ExitCode);
@@ -108,18 +108,21 @@ public sealed class SemanticRestoreScriptScaleTests : IDisposable
         Write(root, executableName, "binary\n");
         Write(root, "LICENSE", "license\n");
         Write(root, "README.md", "readme\n");
+        Write(root, "THIRD_PARTY-LICENSES.html", "third-party licenses\n");
 
         var files = new[]
         {
             Entry(root, executableName, "executable"),
             Entry(root, "LICENSE", "license"),
-            Entry(root, "README.md", "documentation"),
+            Entry(root, "README.md", "readme"),
+            Entry(root, "THIRD_PARTY-LICENSES.html", "third_party_licenses"),
         };
         File.WriteAllText(
             Path.Combine(root, "package-manifest.json"),
             JsonSerializer.Serialize(new
             {
-                sidecar_version = "0.1.0-rc.4",
+                schema_version = 2,
+                sidecar_version = "0.1.0",
                 rust_target = triple,
                 files,
             }));

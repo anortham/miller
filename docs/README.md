@@ -86,6 +86,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`contracts/metrics-history-v1.md`](contracts/metrics-history-v1.md) - active metric-history JSON contract for `miller metrics history` trend reads over the append-only `history.db` sidecar.
 - [`contracts/rules-v1.md`](contracts/rules-v1.md) - active `miller rules` output contract for the instruction tier, plus the per-harness rules-file formats with the official doc URL each was verified against.
 - [`plans/2026-07-19-miller-semantic-integration-design.md`](plans/2026-07-19-miller-semantic-integration-design.md) - authoritative program design for Miller's default-on, off-switchable local semantic layer (sidecar binary, vector artifact, hybrid retrieval, phases P0-P6).
+- [`plans/2026-07-30-julie-2-20-sidecar-0-1-adoption-design.md`](plans/2026-07-30-julie-2-20-sidecar-0-1-adoption-design.md) - approved compatible adoption record for julie-extract 2.20.0 and the stable semantic sidecar 0.1.0 package.
 - [`plans/2026-07-19-p0-governance-and-gates-plan.md`](plans/2026-07-19-p0-governance-and-gates-plan.md) - approved phase-0 plan for the semantic program: boundary docs, telemetry stamping, gates, eval harness, and model benchmark.
 - [`findings/2026-07-19-sqlite-vec-aot-spike.md`](findings/2026-07-19-sqlite-vec-aot-spike.md) - P0 hard-gate evidence: sqlite-vec v0.1.9 under Native AOT per release RID (osx-arm64 PASS; other RIDs via the isolated CI matrix job).
 - [`plans/2026-07-07-metric-history-design.md`](plans/2026-07-07-metric-history-design.md) - design record for the P4 metric-history/trends slice (`history.db` sidecar, hybrid converge/heavy-arm snapshots, dashboard sparklines).
@@ -103,7 +104,8 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`plans/2026-06-09-patterns-tool-design.md`](plans/2026-06-09-patterns-tool-design.md) - design record for the `patterns` tool over extractor structural facts.
 - [`plans/2026-06-09-patterns-tool-implementation-plan.md`](plans/2026-06-09-patterns-tool-implementation-plan.md) - implementation plan for the `patterns` MCP/CLI surface.
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
-- [`release-notes/v1.14.0.md`](release-notes/v1.14.0.md) - latest published release notes.
+- [`release-notes/v1.14.1.md`](release-notes/v1.14.1.md) - latest release notes.
+- [`release-notes/v1.14.0.md`](release-notes/v1.14.0.md) - historical `v1.14.0` release notes.
 - [`findings/2026-07-27-v1.14.0-release-verification.md`](findings/2026-07-27-v1.14.0-release-verification.md) - live `v1.14.0` release verification.
 - [`release-notes/v1.13.0.md`](release-notes/v1.13.0.md) - historical `v1.13.0` release notes.
 - [`release-notes/v1.12.0.md`](release-notes/v1.12.0.md) - historical `v1.12.0` release notes.

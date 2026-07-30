@@ -521,7 +521,7 @@ internal sealed class JulieDbFixture : IDisposable
         IReadOnlyList<FileSpec>? extraFiles = null,
         IReadOnlyList<SourceRegionRow>? sourceRegions = null,
         string? referenceResolutionStatus = "partial",
-        string? referenceResolutionVersion = "3")
+        string? referenceResolutionVersion = "6")
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-julie-fixture-" + Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(dir);

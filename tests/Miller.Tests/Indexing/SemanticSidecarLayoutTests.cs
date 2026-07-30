@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Xml.Linq;
 using Miller.Indexing.Semantic;
 using Xunit;
@@ -6,6 +7,39 @@ namespace Miller.Tests.Indexing;
 
 public sealed class SemanticSidecarLayoutTests
 {
+    [Fact]
+    public void StableSidecarPackageContractIsCurrent()
+    {
+        string root = ScaleTestSupport.RepoRoot();
+        using JsonDocument pins = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, "scripts", "semantic-pins.json")));
+
+        Assert.Equal(
+            "0.1.0",
+            pins.RootElement.GetProperty("sidecar").GetProperty("version").GetString());
+
+        string notices = File.ReadAllText(Path.Combine(root, "THIRD-PARTY-NOTICES.md"));
+        Assert.Contains("currently pinned at version **2.20.0**", notices, StringComparison.Ordinal);
+        Assert.Contains("pinned at version **0.1.0**", notices, StringComparison.Ordinal);
+        Assert.Contains(".tools/julie-semantic-sidecar-runtime", notices, StringComparison.Ordinal);
+        Assert.Contains("THIRD_PARTY-LICENSES.html", notices, StringComparison.Ordinal);
+
+        string[] operationalFiles =
+        [
+            Path.Combine(root, "scripts", "semantic-broker-soak.sh"),
+            Path.Combine(root, "scripts", "semantic-broker-soak.ps1"),
+            Path.Combine(root, "scripts", "Miller.SemanticBrokerProbe", "Program.cs"),
+            Path.Combine(root, "tests", "Miller.Tests", "Indexing", "SemanticBrokerScaleTests.cs"),
+        ];
+        foreach (string path in operationalFiles)
+        {
+            string guidance = File.ReadAllText(path);
+            Assert.DoesNotContain("rc.", guidance, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Task 8", guidance, StringComparison.Ordinal);
+            Assert.Contains("restore-semantic-sidecar", guidance, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void ExecutablePath_KeepsTheRuntimePackageTogetherUnderToolsRoot()
     {

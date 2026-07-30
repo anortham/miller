@@ -1,7 +1,7 @@
 # Patterns JSON v2
 
 `miller patterns --json` and `miller patterns export --jsonl` emit `schema_version: 2`.
-Version 2 is the schema-5 consumer contract and requires a julie-extract 2.19.0 artifact.
+Version 2 requires a schema-5 / extract-contract-4 artifact, first shipped by julie-extract 2.19.0.
 
 The `list`, `summary`, and `search` envelopes retain their operation-specific fields, bounded coverage,
 diagnostics, and next actions. Every envelope reports schema version 2 and a nullable `continuation` field.

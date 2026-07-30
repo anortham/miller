@@ -50,7 +50,7 @@ inside Miller's release archives.
 ### julie-extract
 
 Miller delegates all source extraction to the pinned **`julie-extract`** binary
-(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.16.0**
+(<https://github.com/anortham/julie-extractors>), currently pinned at version **2.20.0**
 (see [`scripts/julie-pins.json`](scripts/julie-pins.json)). It is the same author's own project (Alan
 Northam) and is shipped inside Miller's release archives under `.tools/julie-extract`. Refer to the
 julie-extractors repository for its license terms and for the licenses of the tree-sitter grammars it
@@ -58,11 +58,15 @@ embeds.
 
 ### julie-semantic-sidecar
 
-Miller's optional local semantic retrieval (ADR-0003) generates embeddings through the pinned
+Miller's default-on, off-switchable local semantic retrieval (ADR-0003) generates embeddings through the pinned
 **`julie-semantic-sidecar`** binary (<https://github.com/anortham/julie-semantic-sidecar>), currently
-pinned at version **0.1.0-rc.1** (see [`scripts/semantic-pins.json`](scripts/semantic-pins.json)). It is
-shipped inside Miller's release archives under `.tools/julie-semantic-sidecar`. The sidecar is the same
-author's own project (Alan Northam) and is licensed **MIT** (Copyright (c) 2026 Alan Northam).
+pinned at version **0.1.0** (see [`scripts/semantic-pins.json`](scripts/semantic-pins.json)). It is
+shipped inside Miller's release archives under `.tools/julie-semantic-sidecar-runtime`. That runtime
+directory contains `package-manifest.json` schema 2, the platform executable
+(`julie-semantic-sidecar` or `julie-semantic-sidecar.exe`), `LICENSE`, `README.md`, and
+`THIRD_PARTY-LICENSES.html`. The manifest declares the four payload files exactly, including one
+`THIRD_PARTY-LICENSES.html` entry with role `third_party_licenses`. The sidecar is the same author's own
+project (Alan Northam) and is licensed **MIT** (Copyright (c) 2026 Alan Northam).
 
 The sidecar binary is statically linked, so redistributing it also redistributes its native embedding
 engine. It embeds via the `llama-cpp-2` / `llama-cpp-sys-2` Rust crates (pinned at `=0.1.151`, both

@@ -1,14 +1,14 @@
 {
   "note": "Pins for Miller's OPTIONAL local semantic retrieval (ADR-0003). Two sections: `sidecar` is the julie-semantic-sidecar runtime package keyed by rust target triple; `sqliteVec` is the sqlite-vec loadable extension keyed by .NET RID (values copied verbatim from scripts/spike-pins.json). Sidecar asset names carry NO leading `v` before the version and install as a complete manifest-verified package under `.tools/julie-semantic-sidecar-runtime`. The Windows sidecar asset is a .zip; the Windows sqlite-vec asset is a .tar.gz. A missing restore is not an error: semantic fails open with a reason.",
   "sidecar": {
-    "version": "0.1.0-rc.5",
+    "version": "0.1.0",
     "binary": "julie-semantic-sidecar",
     "urlTemplate": "https://github.com/anortham/julie-semantic-sidecar/releases/download/v{VER}/{asset}",
     "assets": {
-      "aarch64-apple-darwin":     { "name": "julie-semantic-sidecar-{VER}-aarch64-apple-darwin-metal-portable.tar.gz",     "sha256": "4c62e729124ba30640a0b3a8c0f8a4d9f5b8cc4e02a6de640b5baa9039ff2ddc" },
-      "x86_64-apple-darwin":      { "name": "julie-semantic-sidecar-{VER}-x86_64-apple-darwin-metal-portable.tar.gz",      "sha256": "959ab0e1869f0eeb68f237f1ca1266f0440f33a1b42ebbfe370d2e3fb8be8a6e" },
-      "x86_64-unknown-linux-gnu": { "name": "julie-semantic-sidecar-{VER}-x86_64-unknown-linux-gnu-vulkan-portable.tar.gz", "sha256": "a2f0bcd0135cc056465d12353572462f877e9ae7ca5a988a0012de1038a4a36f" },
-      "x86_64-pc-windows-msvc":   { "name": "julie-semantic-sidecar-{VER}-x86_64-pc-windows-msvc-vulkan-portable.zip",      "sha256": "47f9b1bcc149c781d6d95d74e3e0207142d3f587210872758e5b208fef3b091a" }
+      "aarch64-apple-darwin":     { "name": "julie-semantic-sidecar-{VER}-aarch64-apple-darwin-metal-portable.tar.gz",     "sha256": "bd84211306145690c1033338c775c5f5af7bcf0752d8e6b25c579dbd082e0ab1" },
+      "x86_64-apple-darwin":      { "name": "julie-semantic-sidecar-{VER}-x86_64-apple-darwin-metal-portable.tar.gz",      "sha256": "c4e996abdd711efde1075af0cd222643a298354ec10f03f1f7c3bee9f70a8bdf" },
+      "x86_64-unknown-linux-gnu": { "name": "julie-semantic-sidecar-{VER}-x86_64-unknown-linux-gnu-vulkan-portable.tar.gz", "sha256": "14b369076776fc7e7ed0ee2a8d8261311e09b634bdc7d57eed928c4fcfa61212" },
+      "x86_64-pc-windows-msvc":   { "name": "julie-semantic-sidecar-{VER}-x86_64-pc-windows-msvc-vulkan-portable.zip",      "sha256": "659c952b405a087b98775e9fc68223b067955b61f525d7647e50087fe052972d" }
     },
     "ridByTriple": {
       "aarch64-apple-darwin": "osx-arm64",

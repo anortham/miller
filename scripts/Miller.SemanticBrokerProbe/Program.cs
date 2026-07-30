@@ -47,7 +47,7 @@ internal static class BrokerProbe
             Write(new
             {
                 @event = "skipped",
-                reason = $"Broker-capable julie-semantic-sidecar not found at {candidate}. Restore rc.5 or use --tools-root with a from-source broker candidate.",
+                reason = $"Broker-capable julie-semantic-sidecar not found at {candidate}. Restore the pinned package with scripts/restore-semantic-sidecar.sh or scripts/restore-semantic-sidecar.ps1.",
             });
             return 77;
         }
