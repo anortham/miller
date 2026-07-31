@@ -243,6 +243,51 @@ h3 {
   font-size: 18px;
 }
 
+.language-grid {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+
+.language-grid article {
+  padding: 22px 24px;
+  background: var(--panel);
+}
+
+.language-grid h3 {
+  margin: 0 0 12px;
+  color: var(--accent-strong);
+  font-size: 15px;
+}
+
+.language-grid ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+
+.language-grid li + li {
+  margin-top: 6px;
+}
+
+.language-grid code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.language-note {
+  width: min(1120px, 100%);
+  margin: 20px auto 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
 .feature-strip {
   width: min(1120px, 100%);
   margin: 0 auto;

@@ -223,6 +223,72 @@
           extractors, not query files</a>.
         </p>
       </div>
+      <div class="language-grid">
+        <article>
+          <h3>Systems and compiled</h3>
+          <ul>
+            <li>Rust <code>.rs</code></li>
+            <li>C <code>.c</code> <code>.h</code></li>
+            <li>C++ <code>.cpp</code> <code>.cc</code> <code>.cxx</code> <code>.c++</code> <code>.hpp</code>
+              <code>.hh</code> <code>.hxx</code> <code>.h++</code></li>
+            <li>Go <code>.go</code></li>
+            <li>Zig <code>.zig</code></li>
+            <li>Swift <code>.swift</code></li>
+            <li>Java <code>.java</code></li>
+            <li>Kotlin <code>.kt</code> <code>.kts</code></li>
+            <li>Scala <code>.scala</code> <code>.sc</code></li>
+            <li>C# <code>.cs</code></li>
+            <li>VB.NET <code>.vb</code></li>
+            <li>Dart <code>.dart</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Scripting and dynamic</h3>
+          <ul>
+            <li>Python <code>.py</code> <code>.pyi</code> <code>.pyw</code></li>
+            <li>Ruby <code>.rb</code> <code>.rbw</code></li>
+            <li>PHP <code>.php</code> <code>.phtml</code></li>
+            <li>Elixir <code>.ex</code> <code>.exs</code></li>
+            <li>Lua <code>.lua</code></li>
+            <li>R <code>.r</code></li>
+            <li>Bash <code>.sh</code> <code>.bash</code></li>
+            <li>PowerShell <code>.ps1</code> <code>.psm1</code> <code>.psd1</code></li>
+            <li>GDScript <code>.gd</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Web and UI</h3>
+          <ul>
+            <li>TypeScript <code>.ts</code> <code>.mts</code> <code>.cts</code></li>
+            <li>TSX <code>.tsx</code></li>
+            <li>JavaScript <code>.js</code> <code>.mjs</code> <code>.cjs</code></li>
+            <li>JSX <code>.jsx</code></li>
+            <li>Vue <code>.vue</code></li>
+            <li>HTML <code>.html</code> <code>.htm</code></li>
+            <li>CSS <code>.css</code></li>
+            <li>Razor <code>.razor</code> <code>.cshtml</code></li>
+            <li>QML <code>.qml</code></li>
+          </ul>
+        </article>
+        <article>
+          <h3>Data, docs, and query</h3>
+          <ul>
+            <li>SQL <code>.sql</code></li>
+            <li>JSON <code>.json</code> <code>.jsonl</code> <code>.jsonc</code></li>
+            <li>YAML <code>.yml</code> <code>.yaml</code></li>
+            <li>TOML <code>.toml</code></li>
+            <li>Markdown <code>.md</code> <code>.markdown</code></li>
+            <li>Regex <code>.regex</code></li>
+          </ul>
+        </article>
+      </div>
+      <p class="language-note">
+        Depth follows the format: programming languages get symbols, signatures, doc comments, identifiers,
+        relationships, types, complexity metrics, and structural facts, while JSON, YAML, TOML, and Markdown
+        get document structure rather than type or reference resolution. The catalog for any install is
+        <code>.tools/julie-extract languages --json</code>, and <code>miller workspace health</code> shows
+        which of these actually appear in your workspace.
+      </p>
     </section>
 
     <section id="tools" class="section tools-section">

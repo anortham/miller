@@ -14,8 +14,9 @@ benchmark is written up on [the method page](https://anortham.github.io/miller/m
 
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default, fully
 local, and off-switchable, and lexical-only results stay byte-identical either way. The extraction layer
-([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all 36 supported
-languages, without tree-sitter query-file shortcuts, so it reaches structure shell search cannot: framework
+([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
+[36 supported languages](#supported-languages), without tree-sitter query-file shortcuts, so it reaches
+structure shell search cannot: framework
 route facts across ~25 framework families (Express, Rails, Django, Spring, Next.js, Vue, React, ASP.NET, and
 others), dependency-injection registrations as real graph edges, partial classes linked across files, SQL
 DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had gaps. The full argument is
@@ -31,7 +32,7 @@ The practical difference from a one-time graph dump is that Miller is built for 
   opt out with `MILLER_SEARCH_SIDECAR=0` when debugging the in-memory fallback;
 - cross-language bridge evidence stays structural and provider-scoped, not embedding-driven.
 
-> **Current release: v1.14.0.** Miller ships as agent plugins, self-contained per-platform release archives,
+> **Current release: v1.14.1.** Miller ships as agent plugins, self-contained per-platform release archives,
 > and a source-checkout workflow. Plugin and release-archive installs include the pinned `julie-extract`
 > binary; users do not install it separately.
 >
@@ -268,6 +269,38 @@ dotnet run --project src/Miller.Server -c Release -- search "WorkspaceIndexProvi
   `10.x` SDK. Run the restore script once to download the pinned `julie-extract` binary into `.tools/`.
 - **Dashboard:** the packaged dashboard helper is self-contained/non-AOT because ASP.NET Razor Components do
   not currently support Native AOT.
+
+## Supported languages
+
+Miller indexes what the pinned extractor parses. `julie-extract` 2.20.0 ships hand-written extractors for
+**36 languages**:
+
+- **Systems and compiled** — Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`, `.hh`,
+  `.hxx`, `.h++`), Go (`.go`), Zig (`.zig`), Swift (`.swift`), Java (`.java`), Kotlin (`.kt`, `.kts`),
+  Scala (`.scala`, `.sc`), C# (`.cs`), VB.NET (`.vb`), Dart (`.dart`)
+- **Scripting and dynamic** — Python (`.py`, `.pyi`, `.pyw`), Ruby (`.rb`, `.rbw`), PHP (`.php`, `.phtml`),
+  Elixir (`.ex`, `.exs`), Lua (`.lua`), R (`.r`, `.R`), Bash (`.sh`, `.bash`),
+  PowerShell (`.ps1`, `.psm1`, `.psd1`), GDScript (`.gd`)
+- **Web and UI** — TypeScript (`.ts`, `.mts`, `.cts`), TSX (`.tsx`), JavaScript (`.js`, `.mjs`, `.cjs`),
+  JSX (`.jsx`), Vue (`.vue`), HTML (`.html`, `.htm`), CSS (`.css`), Razor (`.razor`, `.cshtml`), QML (`.qml`)
+- **Data, docs, and query** — SQL (`.sql`), JSON (`.json`, `.jsonl`, `.jsonc`), YAML (`.yml`, `.yaml`),
+  TOML (`.toml`), Markdown (`.md`, `.markdown`), Regex (`.regex`)
+
+Depth is not uniform, and it should not be: the programming languages get symbols with real signatures, doc
+comments, identifiers, relationships, types, complexity metrics, and structural facts, while the data and
+markup formats get the subset that means something for them (JSON/YAML/TOML/Markdown carry document structure
+and symbols, not type or reference resolution). Framework route facts, dependency-injection edges, and
+cross-file linkage ride on top of the language extractors for roughly 25 framework families.
+
+Two ways to check this list yourself instead of trusting the README:
+
+```bash
+.tools/julie-extract languages --json   # authoritative catalog for the pinned extractor
+miller workspace health                 # per-language rows for what is actually in your workspace
+```
+
+Adding a language is `julie-extractors` work, not Miller work — Miller consumes whatever the pinned extractor
+emits, so a new language shows up here after a pin bump.
 
 ## How it works
 
