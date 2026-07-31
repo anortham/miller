@@ -14,8 +14,8 @@ Paste the snippet below into:
 - **Codex and other AGENTS.md-aware harnesses:** `~/.codex/AGENTS.md` or the project `AGENTS.md`.
 - **Cursor:** a user or project rule (`.cursor/rules/`).
 
-The README embeds a copy of this snippet under "Making Agents Actually Use Miller" — keep the two in
-sync when editing.
+The README links here as the canonical copy of this snippet; `miller rules` prints the same block
+framed per harness.
 
 ```markdown
 ## Miller — code intelligence (use it before shell search)

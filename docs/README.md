@@ -5,7 +5,10 @@ Use this page to avoid treating old milestone plans as the current product contr
 
 ## Current docs
 
-- [`../README.md`](../README.md) - public entry point, install paths, current architecture summary, CLI surface.
+- [`../README.md`](../README.md) - public entry point: quickstart, tool overview, architecture summary, troubleshooting.
+- [`install.md`](install.md) - full install guide: plugin details and session hooks, manual binary install, MCP configuration, instruction-tier harnesses, source checkout, local plugin development.
+- [`cli.md`](cli.md) - CLI reference: server vs one-shot modes, command examples, tool surface details, dashboard, local proof commands, text/JSON output contract.
+- [`known-limits.md`](known-limits.md) - current boundaries: semantic retrieval knobs, region search, bridge provider scope, Blazor resolution, AOT packaging, server restart pickup.
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) - source-of-truth agent working notes and generated mirror.
 - [`migration-from-julie.md`](migration-from-julie.md) - Julie-to-Miller install, tool/workflow mapping, artifact rebuild, semantic opt-out, deliberate differences, verification, and rollback guide.
 - [`agent-guidance.md`](agent-guidance.md) - long-form agent reference: full workflow catalog, subagent-dispatch primer, and per-tool parameter detail relocated from the embedded ≤1,900-char ServerInstructions core.
