@@ -84,7 +84,7 @@ After extracting a release archive (see [Manual Binary Install](#manual-binary-i
   "mcpServers": {
     "miller": {
       "type": "stdio",
-      "command": "/absolute/path/to/miller-1.13.0-aarch64-apple-darwin/miller",
+      "command": "/absolute/path/to/miller-1.14.1-aarch64-apple-darwin/miller",
       "args": ["serve"]
     }
   }
@@ -167,28 +167,28 @@ Rules:
 Use this path when your MCP client does not use Miller's plugin package.
 
 1. Download the archive for your platform from the
-   [v1.13.0 release](https://github.com/anortham/miller/releases/tag/v1.13.0), plus the matching `.sha256`
+   [v1.14.1 release](https://github.com/anortham/miller/releases/tag/v1.14.1), plus the matching `.sha256`
    sidecar:
 
-   - `miller-1.13.0-aarch64-apple-darwin.tar.gz`
-   - `miller-1.13.0-x86_64-apple-darwin.tar.gz`
-   - `miller-1.13.0-x86_64-unknown-linux-gnu.tar.gz`
-   - `miller-1.13.0-x86_64-pc-windows-msvc.zip`
+   - `miller-1.14.1-aarch64-apple-darwin.tar.gz`
+   - `miller-1.14.1-x86_64-apple-darwin.tar.gz`
+   - `miller-1.14.1-x86_64-unknown-linux-gnu.tar.gz`
+   - `miller-1.14.1-x86_64-pc-windows-msvc.zip`
 
 2. Verify and extract it:
 
    ```bash
-   shasum -a 256 -c miller-1.13.0-aarch64-apple-darwin.tar.gz.sha256
-   tar -xzf miller-1.13.0-aarch64-apple-darwin.tar.gz
-   cd miller-1.13.0-aarch64-apple-darwin
+   shasum -a 256 -c miller-1.14.1-aarch64-apple-darwin.tar.gz.sha256
+   tar -xzf miller-1.14.1-aarch64-apple-darwin.tar.gz
+   cd miller-1.14.1-aarch64-apple-darwin
    ./miller version
    ```
 
    ```powershell
-   (Get-FileHash .\miller-1.13.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
-   # compare against miller-1.13.0-x86_64-pc-windows-msvc.zip.sha256, then extract
-   Expand-Archive .\miller-1.13.0-x86_64-pc-windows-msvc.zip -DestinationPath .
-   .\miller-1.13.0-x86_64-pc-windows-msvc\miller.exe version
+   (Get-FileHash .\miller-1.14.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash
+   # compare against miller-1.14.1-x86_64-pc-windows-msvc.zip.sha256, then extract
+   Expand-Archive .\miller-1.14.1-x86_64-pc-windows-msvc.zip -DestinationPath .
+   .\miller-1.14.1-x86_64-pc-windows-msvc\miller.exe version
    ```
 
    Keep the extracted directory together. The native library files beside `miller`/`miller.exe`, the `.tools/`
@@ -202,7 +202,7 @@ Use this path when your MCP client does not use Miller's plugin package.
    {
       "mcpServers": {
         "miller": {
-         "command": "/absolute/path/to/miller-1.13.0-aarch64-apple-darwin/miller",
+         "command": "/absolute/path/to/miller-1.14.1-aarch64-apple-darwin/miller",
           "args": ["serve"]
         }
       }
@@ -352,9 +352,14 @@ Design choices that follow from this:
 
 ## Replacing Julie
 
-Miller 1.14.0 carries the frozen candidate for replacing Julie's local agent code-intelligence workflows. It
-becomes the supported replacement only if the complete visible, review, package, and sealed takeover gates pass.
-The replacement has explicit component boundaries:
+Miller is the supported replacement for Julie's local agent code-intelligence workflows. The takeover program
+closed with v1.14.0 on 2026-07-28: the sealed paired gate was
+[cancelled as superseded](docs/findings/2026-07-28-sealed-gate-disposition.md) because it would have measured a
+retired baseline, and Julie is retired at v7.17.0. The next evaluation spend went to the question the Julie
+comparison never answered — what Miller adds over a bare agent with shell tools — recorded in
+[the calibration finding](docs/findings/2026-07-29-miller-vs-bare-agent-calibration.md).
+[`docs/migration-from-julie.md`](docs/migration-from-julie.md) is operative. The replacement has explicit
+component boundaries:
 
 - **Miller** replaces Julie's deterministic local agent-tool core: search, inspect, context, references, trace/path,
   impact, editing, workspace lifecycle, content/web/text import, structural facts, marker audits, telemetry,
@@ -821,8 +826,8 @@ Warnings are errors (`Directory.Build.props`).
   evidence from the reference fact, source component, inherited `_Imports.razor` `@using`/`@namespace` directives,
   or a bounded nearest-single-`.csproj` root/folder heuristic. Aliased, static, generic, conditional, imported,
   property-expanded, conflicting, ambiguous, unsafe, oversized, or malformed inputs fail closed. `.cshtml` and
-  `_ViewImports.cshtml` component resolution remains deferred because julie-extract 2.14 emits directives but no
-  component-reference facts for that surface. See
+  `_ViewImports.cshtml` component resolution remains deferred because the pinned julie-extract 2.20.0 emits
+  directives but no component-reference facts for that surface. See
   [the namespace-resolution evidence](docs/findings/2026-07-14-blazor-namespace-resolution.md).
 - The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The packaged
   dashboard helper stays self-contained/non-AOT because ASP.NET Razor Components do not yet support Native AOT.
