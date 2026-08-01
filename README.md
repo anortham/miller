@@ -15,7 +15,7 @@ budget made it worse, not better. Method, caveats, and raw evidence are in
 Miller is deterministic, local-first, and runs without a daemon. Semantic retrieval is on by default,
 fully local, and off-switchable; lexical-only results stay byte-identical either way. The extraction
 layer ([`julie-extractors`](https://github.com/anortham/julie-extractors)) is hand-written across all
-[36 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
+[38 supported languages](#supported-languages), so it reaches structure shell search cannot: framework route facts across ~25
 framework families, dependency-injection registrations as real graph edges, partial classes linked
 across files, SQL DDL/DML shapes, and owned grammar forks (Razor, T-SQL, C#) where the ecosystem had
 gaps. The full argument is
@@ -134,20 +134,20 @@ Read tools accept a `workspace_id` selector (display ID, unique prefix, full ID,
 
 ## Supported languages
 
-Miller indexes what the pinned extractor parses. `julie-extract` 2.20.0 ships hand-written extractors
-for **36 languages**:
+Miller indexes what the pinned extractor parses. `julie-extract` 2.21.0 ships hand-written extractors
+for **38 languages**:
 
 - **Systems and compiled:** Rust (`.rs`), C (`.c`, `.h`), C++ (`.cpp`, `.cc`, `.cxx`, `.c++`, `.hpp`,
   `.hh`, `.hxx`, `.h++`), Go (`.go`), Zig (`.zig`), Swift (`.swift`), Java (`.java`),
   Kotlin (`.kt`, `.kts`), Scala (`.scala`, `.sc`), C# (`.cs`), VB.NET (`.vb`), Dart (`.dart`)
 - **Scripting and dynamic:** Python (`.py`, `.pyi`, `.pyw`), Ruby (`.rb`, `.rbw`),
-  PHP (`.php`, `.phtml`), Elixir (`.ex`, `.exs`), Lua (`.lua`), R (`.r`, `.R`), Bash (`.sh`, `.bash`),
+  PHP (`.php`, `.phtml`), Elixir (`.ex`, `.exs`), Erlang (`.erl`, `.hrl`), Lua (`.lua`), R (`.r`, `.R`), Bash (`.sh`, `.bash`),
   PowerShell (`.ps1`, `.psm1`, `.psd1`), GDScript (`.gd`)
 - **Web and UI:** TypeScript (`.ts`, `.mts`, `.cts`), TSX (`.tsx`), JavaScript (`.js`, `.mjs`, `.cjs`),
   JSX (`.jsx`), Vue (`.vue`), HTML (`.html`, `.htm`), CSS (`.css`), Razor (`.razor`, `.cshtml`),
   QML (`.qml`)
 - **Data, docs, and query:** SQL (`.sql`), JSON (`.json`, `.jsonl`, `.jsonc`), YAML (`.yml`, `.yaml`),
-  TOML (`.toml`), Markdown (`.md`, `.markdown`), Regex (`.regex`)
+  TOML (`.toml`), XML (`.xml`, `.xsd`, `.wsdl`), Markdown (`.md`, `.markdown`), Regex (`.regex`)
 
 Depth is not uniform, and it should not be: the programming languages get symbols with real signatures,
 doc comments, identifiers, relationships, types, complexity metrics, and structural facts, while the
