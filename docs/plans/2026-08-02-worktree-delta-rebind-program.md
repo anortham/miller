@@ -68,8 +68,21 @@ missing; these numbers drive the P1 design choices.
   exhaustion would regenerate the overflow-rescan storm class W9 fixed for branch switches).
 - Artifact clone cost per platform at multi-GB size: APFS `clonefile` (`cp -c`), Linux reflink
   (btrfs/XFS) vs full copy, Windows full copy.
+- **Real-repo tier (added 2026-08-02, first results already in):** synthetic fixtures cannot
+  contain real-world pathologies — proven immediately. The standing real-repo target is
+  **dotnet/runtime @ `a2f953fe266`** (58,500 files, .NET wedge). The first baseline run
+  ([`docs/findings/2026-08-02-dotnet-runtime-scale-baseline.md`](../findings/2026-08-02-dotnet-runtime-scale-baseline.md))
+  found: a **stack-overflow crash** in julie-extract 2.21.0 at default thread stacks (likely deep
+  recursion on generated JIT test files), **~68× worst-case spool amplification** (982 KB source →
+  66.6 MB spool entry; ~10× aggregate), at-scale throughput ~190 files/s at jobs=4, and ~44 s of
+  fixed/serial overhead dominating small-repo scans. Both extractor bugs need julie-extractors
+  fixes — bundle them into the same release as the fleet-safety W4–W6 flags. P0's real-repo
+  baseline is **gated on that fix**; the ladder for later tiers: dotnet/roslyn (~15k), openjdk/jdk
+  (~70k), linux (~85k), llvm-project (~150k, stress).
 - Acceptance:
   - [ ] Each measurement recorded in a findings doc alongside the W10 spool/RSS/WAL numbers.
+  - [ ] A clean, crash-free timed extract of dotnet/runtime @ pinned commit with final DB/WAL
+        sizes and phase timings (extract vs artifact write).
 
 ### P1 — Rebind contract design doc. ~1 agent session.
 
@@ -132,6 +145,35 @@ blake3 `files.content_hash`.
   the next attempt, no spool leak beyond the safety plan's guarantees.
 - Validate on a real multi-language artifact (language-parity check: per-language row counts match
   a fresh scan).
+
+## Candidate follow-on — progressive indexing levels (discussion, NOT committed scope)
+
+Raised 2026-08-02 (user): cold start could serve basic functionality fast and deepen in the
+background — "level 1" minimal index immediately, richer levels converging behind it. Recorded here
+so it isn't lost; requires its own design + explicit approval, and is deliberately sequenced
+**after** the P0 extractor fixes and re-measurement, because the spool autopsy suggests the bugs
+may erase much of the need.
+
+- **Natural levels already exist in the artifact:** L1 = files + hashes + symbols/signatures
+  (serves `search`, `inspect`, `context` — most first-minutes agent value); L2 = reference
+  sites/relationships (serves `refs`, `trace`, `impact` — and per the spool autopsy, the dominant
+  extraction cost); L3 = source_regions + structural_facts (serves `patterns`, region search);
+  L4 = embeddings (**already progressive today** — lexical serves immediately, vectors converge in
+  the background, fail-open). The semantic arm is the in-tree proof of the pattern: default-on,
+  honest degradation, background convergence.
+- **Ownership boundary:** levels must be a julie-extract contract feature (e.g. a scan depth flag
+  plus a "deepen" pass that upgrades an existing artifact in place of a rescan), uniform across all
+  supported languages; Miller orchestrates scheduling and surfaces per-capability readiness
+  ("search ready; references converging") in status/health and tool not-ready results. Deepening
+  writes follow promote-not-merge or revision-keyed converge — never a bulk in-place merge on a
+  served artifact.
+- **Second axis — priority, not just depth:** index src-first/recently-changed-first and serve
+  partial results early. At the measured ~190 files/s, priority ordering alone puts the files an
+  agent will actually ask about into the index within seconds; possibly a cheaper UX win than
+  depth levels, and the two compose.
+- **Escalation policy if built:** automatic by default (L1 ready → L2+ kick off in the background),
+  env/config cap for CI or huge repos — mirroring the `MILLER_SEMANTIC` default-on/off-switch
+  precedent.
 
 ## Non-goals with standing triggers
 
