@@ -138,6 +138,41 @@ Structured report (schema v3), exit 1 at 313 s:
 4. **Fleet-safety validations for free:** W4 (spool reaping) and W5 (progress blindness) are now
    reproduced on a second machine, at scale, on a clean clone — no longer reporter-only evidence.
 
+## Root-cause update (2026-08-02, five-track code investigation — supersedes the hypotheses above)
+
+A five-agent read-only investigation of the julie-extractors source verified all five defects and
+**disproved two hypotheses recorded earlier in this doc**. Authoritative fix plan:
+julie-extractors `docs/plans/2026-08-02-scale-fixes-plan.md` (branch `scale-fixes`).
+
+- **Identity conflict — NOT a hash collision, and NOT the generated JIT files.** Exact-span
+  reference sites deliberately share one id (blake3 of file_id + span) across three extraction
+  passes; a BEFORE INSERT trigger aborts the whole single-transaction import when the same site
+  arrives with ANY divergent column. The divergence is `containing_symbol_id`, computed via
+  different code paths per pass: (1) PowerShell's identifier pass filters containment to multi-line
+  symbols only, so a one-line `function F { G }` yields NULL vs the pending pass's F — this is what
+  breaks `~/.hermes/hermes-agent` (scripts/install.ps1); (2) C multi-declarator statements emit
+  equal-span variable symbols and the shared helper's tie-break stops at (kind, size), so
+  HashMap-vs-Vec iteration order picks different winners per pass (verified in
+  src/native/containers simdhash benchmark.c). The cmov JIT directory scans CLEAN — the
+  "near-identical generated code collides" hypothesis was wrong.
+- **Stack overflow — three unguarded walkers, not general recursion.**
+  `blazor_navigation::collect_receiver_declarations`/`collect_navigation_calls` (run on EVERY C#
+  file) and `complexity_metrics::collect_stats` lack the crate's existing 1024-depth guard; macOS
+  crash reports pin the blazor walkers. Trigger: `src/tests/JIT/Regression/JitBlue/GitHub_10215.cs`
+  — 17,602 `+` operators in one statement, a file whose own header says it exists to overflow
+  recursive tree walkers. It reproduces the abort alone at default stacks.
+- **Spool bloat — ~47% is a verified-dead field.** Every identifier row carries a 7-line formatted
+  `code_context` snippet that julie's resolver loads but never reads and Miller never queries;
+  the rest is JSON key envelope + long hash-ID strings, and the import re-parses the whole spool
+  three times. Fix approved: drop `code_context`, re-frame the spool as binary frames.
+- **Write phase — structural, per strong hypothesis pending instrumentation:** live maintenance of
+  54 secondary indexes during the one-transaction import, the full-workspace resolution pass timed
+  inside `artifact_write`, triple spool parse, and the WAL checkpoint. Fix: instrument sub-phases,
+  then a fresh-artifact bulk-load mode (deferred indexes + rebuild pragmas, safe under
+  promote-not-merge).
+- **Contract decisions (user-approved 2026-08-02):** drop `identifiers.code_context` (JSONL export
+  emits null); demote the identity trigger to first-write-wins + recorded recoverable warning.
+
 ## Open items
 
 - Wall-clock for a full healthy extract + artifact write and final DB/WAL sizes — blocked on the
