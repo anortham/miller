@@ -4,28 +4,69 @@ namespace Miller.Indexing;
 
 /// <summary>
 /// The filesystem edge for <see cref="VendorScan"/> — the consumer-side port of julie's
-/// <c>generate_julieignore_file()</c>. When a workspace root has NO <c>.julieignore</c>, it enumerates the
-/// tree (bounded, skipping VCS/tool internals but deliberately DESCENDING into vendor-named dirs so they can
-/// be detected), runs the pure detection, and writes a seeded <c>.julieignore</c> with the baseline noise
-/// patterns plus any detected vendor directories. The generated file then flows everywhere ignore policy
-/// already flows: julie-extract reads it from the root on full scans (Miller passes no <c>--ignore-file</c>),
-/// and the watcher's <c>WorkspaceIgnorePolicy</c> reads the same file for live events.
+/// <c>generate_julieignore_file()</c>. When a workspace root has NO <c>.julieignore</c>, it writes one, and the
+/// seeded file then flows everywhere ignore policy already flows: julie-extract reads it from the root on full
+/// scans AND on single-file <c>update</c>s, and the watcher's <c>WorkspaceIgnorePolicy</c> reads the same file
+/// for live events. In-tree is the ONLY placement with that property.
+///
+/// <para><b>Two shapes.</b> A LINKED WORKTREE with no <c>.julieignore</c> of its own whose main checkout has
+/// one is seeded with a COPY of that file behind a generated header (<see cref="RenderInheritedContent"/>) —
+/// <c>git worktree add</c> hands over the committed tree, but the interesting ignore file is usually
+/// uncommitted (Miller seeds one; users write local ones) and exists only in the main checkout. Every other
+/// root is seeded with the baseline noise patterns plus auto-detected vendor directories
+/// (<see cref="RenderContent"/>). No root comes out of a scan without an in-tree policy.</para>
+///
+/// <para><b>Why a copy rather than <c>--ignore-file</c>.</b> Pointing julie-extract at the main checkout's file
+/// leaves the worktree with no in-tree policy at all, and the watcher only loads <c>.julieignore</c> at or under
+/// the workspace root — so the scan would exclude <c>generated/foo.cs</c> while a later touch of that same file
+/// let the watcher through and <c>julie-extract update</c> re-inserted it (verified: an <c>update</c> on a file
+/// excluded IN-TREE reports <c>unsupported</c> and writes nothing). The copy also sidesteps the hard-error
+/// hazard: a caller-supplied <c>--ignore-file</c> that cannot be read or parsed FAILS the whole scan, while the
+/// same content in-tree only warns.</para>
+///
+/// <para>The copy is a snapshot — it does not track later edits to the main checkout's file. That is the same
+/// staleness the seeded file already has, and the seeder's existing contract covers it: delete the file and
+/// rescan to re-copy.</para>
+///
+/// <para>Vendor-NAMED directories are detected by name and PRUNED rather than enumerated: the walk counts
+/// their files only until the <see cref="VendorScan.VendorDirectoryFileThreshold"/> decision is settled, then
+/// stops descending. A <c>node_modules</c> holding 60k files costs one directory listing instead of 60k
+/// yielded paths, which is what previously drove the walk into its cap.</para>
+///
+/// <para>The remaining enumeration — the evidence for content-shaped detection (jquery/bootstrap clusters,
+/// minified concentration) — stays bounded at <see cref="MaxEnumeratedFiles"/>, because an unbounded walk on a
+/// 74k-file root is the failure this whole workstream exists to prevent. Hitting that bound is no longer
+/// SILENT: it is carried out of the walk and rendered as a warning block in the generated file, so a root whose
+/// detection was truncated says so where the user reads the result.</para>
 ///
 /// <para>Contract: NEVER overwrites or appends to an existing <c>.julieignore</c> (a user-authored file is
 /// authoritative; deleting the generated one and rescanning regenerates from scratch). Best-effort: any I/O
 /// failure returns false rather than throwing — seeding hygiene must never break the scan that triggered it.
-/// The pure pieces (<see cref="RenderContent"/>, <see cref="VendorScan"/>) are fast-suite-testable; only the
-/// enumeration/write here touches the real filesystem.</para>
+/// The pure pieces (<see cref="RenderContent"/>, <see cref="RenderInheritedContent"/>,
+/// <see cref="VendorScan"/>) are fast-suite-testable; only the walk/write here touches the real filesystem.</para>
 /// </summary>
 public static class JulieIgnoreSeeder
 {
-    /// <summary>Bound on the detection walk so a first scan of a huge tree stays cheap. The name-matched
-    /// threshold (&gt;5 files) saturates long before this; the cap only limits cluster detection depth.</summary>
-    internal const int MaxEnumeratedFiles = 25_000;
+    /// <summary>The workspace-root ignore file julie-extract reads in-tree and this seeder writes.</summary>
+    public const string WorkspaceIgnoreFileName = ".julieignore";
 
-    // Internal dirs the detection walk skips outright: their contents are never indexable and never
-    // vendor evidence. NOTE: vendor-named dirs (node_modules, target, ...) are NOT here — the walk must
-    // see inside them to detect them (julie's phase-1 "vendor scan" walk does the same).
+    /// <summary>
+    /// Bound on the files the detection walk collects as content evidence. Vendor-named trees are pruned
+    /// before they contribute, so reaching this means the root really does hold this many non-vendor files;
+    /// the walk then stops and <see cref="RenderContent"/> says so instead of silently under-detecting.
+    /// </summary>
+    internal const int MaxEnumeratedFiles = 200_000;
+
+    /// <summary>
+    /// Bound on the directories one vendor-name probe visits while deciding whether a candidate clears
+    /// <see cref="VendorScan.VendorDirectoryFileThreshold"/>. The probe stops as soon as the threshold is
+    /// cleared, so this only bounds the pathological shape: a deep tree of near-empty directories.
+    /// </summary>
+    internal const int MaxVendorProbeDirectories = 4_096;
+
+    // Internal dirs the detection walk skips outright: their contents are never indexable and never vendor
+    // evidence. Vendor-named dirs (node_modules, target, ...) are NOT here — they are handled by the name
+    // probe, which must see them to report them.
     private static readonly HashSet<string> WalkSkipDirectories = new(StringComparer.Ordinal)
     {
         ".git",
@@ -36,12 +77,14 @@ public static class JulieIgnoreSeeder
         ".vs",
         ".cache",
         ".memories",
+        ".worktrees",
     };
 
     /// <summary>
-    /// Seed <c>&lt;workspaceRoot&gt;/.julieignore</c> when none exists. Returns true only when a new file was
-    /// written; false when one already exists (never overwritten), the root is missing, or any I/O step
-    /// failed (best-effort — never throws).
+    /// Seed <c>&lt;workspaceRoot&gt;/.julieignore</c> when none exists — a copy of the main checkout's file for
+    /// a linked worktree that inherits one, else the baseline + detected-vendor generation. Returns true only
+    /// when a new file was written; false when one already exists (never overwritten), the root is missing, or
+    /// any I/O step failed (best-effort — never throws).
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
     public static bool EnsureSeeded(string workspaceRoot)
@@ -49,13 +92,11 @@ public static class JulieIgnoreSeeder
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         try
         {
-            string ignorePath = Path.Combine(workspaceRoot, ".julieignore");
+            string ignorePath = Path.Combine(workspaceRoot, WorkspaceIgnoreFileName);
             if (File.Exists(ignorePath) || !Directory.Exists(workspaceRoot))
                 return false;
 
-            IReadOnlyList<string> vendorDirectories =
-                VendorScan.DetectVendorDirectories(EnumerateRelativeFiles(workspaceRoot));
-            File.WriteAllText(ignorePath, RenderContent(vendorDirectories, DateTime.UtcNow));
+            File.WriteAllText(ignorePath, InheritedContent(workspaceRoot) ?? GeneratedContent(workspaceRoot));
             return true;
         }
         catch (Exception ex) when (
@@ -67,12 +108,94 @@ public static class JulieIgnoreSeeder
     }
 
     /// <summary>
-    /// Pure renderer for the generated file: a short generated-by/edit-freely header, the baseline noise
-    /// patterns (<see cref="VendorScan.BaselinePatterns"/>), and the detected vendor directories as
-    /// gitignore-style <c>dir/</c> patterns. <paramref name="generatedAtUtc"/> is injected for determinism.
+    /// The main checkout's <c>.julieignore</c> that <paramref name="workspaceRoot"/> inherits, or null when
+    /// nothing should be inherited: the root is not a linked worktree, it already has its own
+    /// <c>.julieignore</c> (a local file is authoritative), the repository is bare, or the main checkout has no
+    /// <c>.julieignore</c>. Never throws.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
+    public static string? ResolveInheritedIgnoreFile(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        try
+        {
+            if (File.Exists(Path.Combine(workspaceRoot, WorkspaceIgnoreFileName)))
+                return null;
+
+            if (GitWorktreeLayout.Resolve(workspaceRoot) is not { IsLinkedWorktree: true } layout
+                || layout.MainCheckoutRoot is not { } mainCheckout)
+                return null;
+
+            string candidate = Path.Combine(mainCheckout, WorkspaceIgnoreFileName);
+            return File.Exists(candidate) ? candidate : null;
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+               or NotSupportedException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    // The inherited copy, or null when there is nothing to inherit or its content cannot be read — an
+    // unreadable main-checkout file falls back to the generated seed rather than leaving the root policy-less.
+    private static string? InheritedContent(string workspaceRoot)
+    {
+        if (ResolveInheritedIgnoreFile(workspaceRoot) is not { } source)
+            return null;
+        try
+        {
+            return RenderInheritedContent(source, File.ReadAllText(source));
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+               or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string GeneratedContent(string workspaceRoot)
+    {
+        DetectionResult detection = Detect(workspaceRoot);
+        return RenderContent(detection.VendorDirectories, DateTime.UtcNow, detection.Truncated);
+    }
+
+    /// <summary>
+    /// Pure renderer for the inherited copy: a header naming <paramref name="sourcePath"/> and stating the
+    /// snapshot limitation, then <paramref name="sourceContent"/> verbatim. Copied unchanged so the worktree's
+    /// policy is exactly the main checkout's; a malformed pattern in it degrades to julie-extract's in-tree
+    /// WARNING rather than the hard scan failure a <c>--ignore-file</c> would raise.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="sourcePath"/> is null or blank.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="sourceContent"/> is null.</exception>
+    public static string RenderInheritedContent(string sourcePath, string sourceContent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentNullException.ThrowIfNull(sourceContent);
+
+        var sb = new StringBuilder();
+        sb.Append("# .julieignore — copied by Miller from this repository's main checkout:\n");
+        sb.Append("#   ").Append(sourcePath.ReplaceLineEndings(" ")).Append('\n');
+        sb.Append("# This linked worktree had none of its own. The copy is a SNAPSHOT: later edits to that\n");
+        sb.Append("# file do not reach this one. Edit freely — Miller never overwrites or appends. Delete\n");
+        sb.Append("# this file and rescan to copy the main checkout's current version again.\n");
+        sb.Append('\n');
+        sb.Append(sourceContent);
+        if (!sourceContent.EndsWith('\n'))
+            sb.Append('\n');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Pure renderer for the generated file: a short generated-by/edit-freely header, an explicit warning when
+    /// <paramref name="detectionTruncated"/>, the baseline noise patterns
+    /// (<see cref="VendorScan.BaselinePatterns"/>), and the detected vendor directories as gitignore-style
+    /// <c>dir/</c> patterns. <paramref name="generatedAtUtc"/> is injected for determinism.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="vendorDirectories"/> is null.</exception>
-    public static string RenderContent(IReadOnlyList<string> vendorDirectories, DateTime generatedAtUtc)
+    public static string RenderContent(
+        IReadOnlyList<string> vendorDirectories, DateTime generatedAtUtc, bool detectionTruncated = false)
     {
         ArgumentNullException.ThrowIfNull(vendorDirectories);
 
@@ -84,6 +207,17 @@ public static class JulieIgnoreSeeder
         sb.Append("# Edit freely — Miller never overwrites or appends to this file. Excluded files\n");
         sb.Append("# stay out of symbol extraction and search; delete a line to re-include its files\n");
         sb.Append("# on the next scan. To opt out entirely, keep an empty .julieignore.\n");
+
+        if (detectionTruncated)
+        {
+            sb.Append('\n');
+            sb.Append("# TRUNCATED: detection stopped after ")
+              .Append(MaxEnumeratedFiles.ToString(System.Globalization.CultureInfo.InvariantCulture))
+              .Append(" files, so this root may hold\n");
+            sb.Append("# vendor/build directories that are NOT listed below. Add them by hand, then delete\n");
+            sb.Append("# this note.\n");
+        }
+
         sb.Append('\n');
         sb.Append("# Baseline noise (logs are index noise; use Miller's log tooling to read them)\n");
         foreach (string pattern in VendorScan.BaselinePatterns)
@@ -99,44 +233,120 @@ public static class JulieIgnoreSeeder
         return sb.ToString();
     }
 
-    // Bounded, non-throwing walk yielding root-relative paths with forward slashes. Unreadable
-    // subdirectories are skipped rather than failing the whole detection.
-    private static IEnumerable<string> EnumerateRelativeFiles(string workspaceRoot)
+    /// <summary>The vendor directories detected under a root, and whether the bounded walk was cut short.</summary>
+    internal sealed record DetectionResult(IReadOnlyList<string> VendorDirectories, bool Truncated);
+
+    /// <summary>
+    /// Walk <paramref name="workspaceRoot"/> and combine the two detection routes: vendor directories matched
+    /// by NAME (pruned in the walk, so their contents cost nothing) and vendor directories matched by content
+    /// shape over the bounded file listing.
+    /// </summary>
+    internal static DetectionResult Detect(string workspaceRoot) =>
+        Detect(workspaceRoot, MaxEnumeratedFiles);
+
+    /// <summary>
+    /// <see cref="Detect(string)"/> with an injected file bound — the seam that lets the bound-reached path be
+    /// proven on a tiny tree instead of a 200k-file one.
+    /// </summary>
+    internal static DetectionResult Detect(string workspaceRoot, int maxEnumeratedFiles)
+    {
+        var named = new List<string>();
+        var files = new List<string>();
+        bool truncated = Walk(workspaceRoot, maxEnumeratedFiles, named, files);
+
+        var detected = new SortedSet<string>(named, StringComparer.Ordinal);
+        foreach (string directory in VendorScan.DetectVendorDirectories(files))
+            detected.Add(directory);
+        return new DetectionResult(detected.ToArray(), truncated);
+    }
+
+    // Bounded, non-throwing walk. Fills `namedVendorDirectories` with pruned vendor-named dirs and `files` with
+    // root-relative paths (forward slashes) for content detection. Returns true when the file bound was hit.
+    // Unreadable subdirectories are skipped rather than failing the whole detection.
+    private static bool Walk(
+        string workspaceRoot, int maxEnumeratedFiles, List<string> namedVendorDirectories, List<string> files)
     {
         var pending = new Stack<string>();
         pending.Push(workspaceRoot);
-        int yielded = 0;
 
-        while (pending.Count > 0 && yielded < MaxEnumeratedFiles)
+        while (pending.Count > 0)
         {
-            string directory = pending.Pop();
-            string[] files;
-            string[] subdirectories;
-            try
-            {
-                files = Directory.GetFiles(directory);
-                subdirectories = Directory.GetDirectories(directory);
-            }
-            catch (Exception ex) when (
-                ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-            {
+            if (!TryList(pending.Pop(), out string[] directoryFiles, out string[] subdirectories))
                 continue;
-            }
 
-            foreach (string file in files)
+            foreach (string file in directoryFiles)
             {
-                if (yielded >= MaxEnumeratedFiles)
-                    yield break;
-                yielded++;
-                yield return Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/');
+                if (files.Count >= maxEnumeratedFiles)
+                    return true;
+                files.Add(Relative(workspaceRoot, file));
             }
 
             foreach (string subdirectory in subdirectories)
             {
-                string name = Path.GetFileName(subdirectory);
-                if (!WalkSkipDirectories.Contains(name))
-                    pending.Push(subdirectory);
+                if (IsSkippedDirectory(subdirectory))
+                    continue;
+                if (VendorScan.IsVendorDirectoryName(Path.GetFileName(subdirectory))
+                    && HoldsMoreFilesThanVendorThreshold(subdirectory))
+                {
+                    namedVendorDirectories.Add(Relative(workspaceRoot, subdirectory));
+                    continue;
+                }
+                pending.Push(subdirectory);
             }
         }
+        return false;
     }
+
+    // Whether a vendor-NAMED directory holds enough files to qualify, counting only until the answer is known.
+    private static bool HoldsMoreFilesThanVendorThreshold(string directory)
+    {
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        int files = 0;
+        int visited = 0;
+
+        while (pending.Count > 0 && visited < MaxVendorProbeDirectories)
+        {
+            visited++;
+            if (!TryList(pending.Pop(), out string[] directoryFiles, out string[] subdirectories))
+                continue;
+            files += directoryFiles.Length;
+            if (files > VendorScan.VendorDirectoryFileThreshold)
+                return true;
+            foreach (string subdirectory in subdirectories)
+                pending.Push(subdirectory);
+        }
+        return false;
+    }
+
+    private static bool IsSkippedDirectory(string directory)
+    {
+        string name = Path.GetFileName(directory);
+        if (WalkSkipDirectories.Contains(name))
+            return true;
+        return string.Equals(name, "worktrees", StringComparison.Ordinal)
+            && string.Equals(
+                Path.GetFileName(Path.GetDirectoryName(directory) ?? string.Empty), ".claude",
+                StringComparison.Ordinal);
+    }
+
+    private static bool TryList(string directory, out string[] files, out string[] subdirectories)
+    {
+        try
+        {
+            files = Directory.GetFiles(directory);
+            subdirectories = Directory.GetDirectories(directory);
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            files = Array.Empty<string>();
+            subdirectories = Array.Empty<string>();
+            return false;
+        }
+    }
+
+    private static string Relative(string workspaceRoot, string path) =>
+        Path.GetRelativePath(workspaceRoot, path).Replace('\\', '/');
 }

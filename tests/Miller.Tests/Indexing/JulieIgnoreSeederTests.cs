@@ -1,13 +1,16 @@
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
 
 /// <summary>
 /// Pins the <c>.julieignore</c> seeding edge (the consumer-side port of julie's
-/// <c>generate_julieignore_file()</c>): generated once when absent, NEVER overwritten or appended, with the
-/// baseline noise patterns plus detected vendor dirs in gitignore syntax. Tiny temp trees — fast suite (the
-/// same pattern as <c>WatchPathFilterTests</c>; no subprocess anywhere on this path).
+/// <c>generate_julieignore_file()</c>): written once when absent, NEVER overwritten or appended, as either the
+/// baseline + detected-vendor generation or, for a linked worktree that has none, an in-tree COPY of the main
+/// checkout's file. In-tree is the load-bearing part — the same file governs the scan, later single-file
+/// updates, and the watcher, which is why the watcher's own filter is asserted here. Tiny temp trees — fast
+/// suite (the same pattern as <c>WatchPathFilterTests</c>; no subprocess anywhere on this path).
 /// </summary>
 public sealed class JulieIgnoreSeederTests
 {
@@ -34,6 +37,20 @@ public sealed class JulieIgnoreSeederTests
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
             File.WriteAllText(full, "// fixture");
         }
+    }
+
+    private static string LinkedWorktree(string container, string? mainIgnoreContents)
+    {
+        string main = System.IO.Path.Combine(container, "main");
+        string gitDir = System.IO.Path.Combine(main, ".git", "worktrees", "feature");
+        string worktree = System.IO.Path.Combine(container, "wt-feature");
+        Directory.CreateDirectory(gitDir);
+        Directory.CreateDirectory(worktree);
+        if (mainIgnoreContents is not null)
+            File.WriteAllText(System.IO.Path.Combine(main, ".julieignore"), mainIgnoreContents);
+        File.WriteAllText(System.IO.Path.Combine(worktree, ".git"), $"gitdir: {gitDir}\n");
+        File.WriteAllText(System.IO.Path.Combine(gitDir, "commondir"), "../..\n");
+        return worktree;
     }
 
     [Fact]
@@ -93,10 +110,9 @@ public sealed class JulieIgnoreSeederTests
     }
 
     [Fact]
-    public void EnsureSeeded_DetectionWalk_SkipsVcsInternals_ButDescendsIntoVendorDirs()
+    public void EnsureSeeded_DetectionWalk_SkipsVcsInternals_ButDetectsVendorDirs()
     {
         using var temp = new TempDir();
-        // 6 junk files under .git must NOT make ".git" (or anything) a vendor pattern; 6 under dist MUST.
         WriteTree(
             temp.Path,
             ".git/objects/aa/1", ".git/objects/aa/2", ".git/objects/bb/3",
@@ -109,6 +125,279 @@ public sealed class JulieIgnoreSeederTests
         string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
         Assert.Contains("\ndist/\n", content, StringComparison.Ordinal);
         Assert.DoesNotContain(".git", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureSeeded_DetectionWalk_SkipsNestedWorktreePools()
+    {
+        using var temp = new TempDir();
+        WriteTree(
+            temp.Path,
+            ".worktrees/feature/dist/a/1.js", ".worktrees/feature/dist/a/2.js",
+            ".worktrees/feature/dist/b/3.js", ".worktrees/feature/dist/b/4.js",
+            ".worktrees/feature/dist/c/5.js", ".worktrees/feature/dist/c/6.js",
+            ".claude/worktrees/other/out/a/1.js", ".claude/worktrees/other/out/a/2.js",
+            ".claude/worktrees/other/out/b/3.js", ".claude/worktrees/other/out/b/4.js",
+            ".claude/worktrees/other/out/c/5.js", ".claude/worktrees/other/out/c/6.js",
+            "src/main.cs");
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+
+        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        Assert.DoesNotContain("worktrees", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureSeeded_LinkedWorktree_CopiesTheMainCheckoutIgnoreFileInTree()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\nsecrets/\n");
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+
+        string content = File.ReadAllText(System.IO.Path.Combine(worktree, ".julieignore"));
+        Assert.Contains("generated/", content, StringComparison.Ordinal);
+        Assert.Contains("secrets/", content, StringComparison.Ordinal);
+        Assert.Contains(
+            System.IO.Path.Combine(temp.Path, "main", ".julieignore"), content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureSeeded_LinkedWorktreeCopy_IsVisibleToTheWatcherIgnorePolicy()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\n");
+
+        JulieIgnoreSeeder.EnsureSeeded(worktree);
+
+        Assert.False(WatchPathFilter.ShouldProcess(
+            worktree, System.IO.Path.Combine(worktree, "generated", "foo.cs")));
+        Assert.True(WatchPathFilter.ShouldProcess(
+            worktree, System.IO.Path.Combine(worktree, "src", "keep.cs")));
+    }
+
+    [Fact]
+    public void EnsureSeeded_LinkedWorktreeCopy_CarriesTheMainCheckoutBaselinePatterns()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "# seeded by miller\n.miller/\n*.log\nnode_modules/\n");
+
+        JulieIgnoreSeeder.EnsureSeeded(worktree);
+
+        Assert.False(WatchPathFilter.ShouldProcess(
+            worktree, System.IO.Path.Combine(worktree, "daemon.log")));
+    }
+
+    [Fact]
+    public void EnsureSeeded_LinkedWorktreeWithItsOwnIgnoreFile_IsNeverOverwritten()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\n");
+        string local = System.IO.Path.Combine(worktree, ".julieignore");
+        File.WriteAllText(local, "local_only/\n");
+
+        Assert.False(JulieIgnoreSeeder.EnsureSeeded(worktree));
+        Assert.Equal("local_only/\n", File.ReadAllText(local));
+    }
+
+    [Fact]
+    public void EnsureSeeded_LinkedWorktreeWhoseMainCheckoutHasNone_FallsBackToTheGeneratedSeed()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, mainIgnoreContents: null);
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+
+        string content = File.ReadAllText(System.IO.Path.Combine(worktree, ".julieignore"));
+        Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
+        foreach (string pattern in VendorScan.BaselinePatterns)
+            Assert.Contains(pattern, content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureSeeded_PlainCheckout_SeedsTheGeneratedFileNotACopy()
+    {
+        using var temp = new TempDir();
+        Directory.CreateDirectory(System.IO.Path.Combine(temp.Path, ".git"));
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(temp.Path));
+
+        string content = File.ReadAllText(System.IO.Path.Combine(temp.Path, ".julieignore"));
+        Assert.Contains("Generated by Miller", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("main checkout", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnsureSeeded_MalformedMainCheckoutIgnoreFile_IsCopiedVerbatim()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "a{b\n");
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+
+        Assert.Contains(
+            "a{b", File.ReadAllText(System.IO.Path.Combine(worktree, ".julieignore")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveInheritedIgnoreFile_LinkedWorktree_ResolvesTheMainCheckoutFile()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\n");
+
+        Assert.Equal(
+            System.IO.Path.Combine(temp.Path, "main", ".julieignore"),
+            JulieIgnoreSeeder.ResolveInheritedIgnoreFile(worktree));
+    }
+
+    [Fact]
+    public void ResolveInheritedIgnoreFile_LinkedWorktreeWithItsOwnFile_ResolvesNothing()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\n");
+        File.WriteAllText(System.IO.Path.Combine(worktree, ".julieignore"), "local/\n");
+
+        Assert.Null(JulieIgnoreSeeder.ResolveInheritedIgnoreFile(worktree));
+    }
+
+    [Fact]
+    public void ResolveInheritedIgnoreFile_LinkedWorktreeWhoseMainCheckoutHasNone_ResolvesNothing()
+    {
+        using var temp = new TempDir();
+
+        Assert.Null(JulieIgnoreSeeder.ResolveInheritedIgnoreFile(LinkedWorktree(temp.Path, null)));
+    }
+
+    [Fact]
+    public void ResolveInheritedIgnoreFile_PlainCheckout_ResolvesNothing()
+    {
+        using var temp = new TempDir();
+        Directory.CreateDirectory(System.IO.Path.Combine(temp.Path, ".git"));
+
+        Assert.Null(JulieIgnoreSeeder.ResolveInheritedIgnoreFile(temp.Path));
+    }
+
+    [Fact]
+    public void ResolveInheritedIgnoreFile_NonGitRoot_ResolvesNothing()
+    {
+        using var temp = new TempDir();
+
+        Assert.Null(JulieIgnoreSeeder.ResolveInheritedIgnoreFile(temp.Path));
+    }
+
+    [Fact]
+    public void RenderInheritedContent_NamesTheSourceAndKeepsTheContentVerbatim()
+    {
+        string content = JulieIgnoreSeeder.RenderInheritedContent("/main/.julieignore", "generated/\n*.log\n");
+
+        Assert.Contains("/main/.julieignore", content, StringComparison.Ordinal);
+        Assert.EndsWith("generated/\n*.log\n", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderInheritedContent_HeaderIsCommentsOnly()
+    {
+        string content = JulieIgnoreSeeder.RenderInheritedContent("/main/.julieignore", "generated/\n");
+
+        string[] header = content.Split("\n\n", 2, StringSplitOptions.None)[0].Split('\n');
+        Assert.All(header, line => Assert.StartsWith("#", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderInheritedContent_SourceWithoutATrailingNewline_StillEndsOnOne()
+    {
+        string content = JulieIgnoreSeeder.RenderInheritedContent("/main/.julieignore", "generated/");
+
+        Assert.EndsWith("generated/\n", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Detect_VendorNamedDirectory_IsPrunedNotEnumerated()
+    {
+        using var temp = new TempDir();
+        WriteTree(
+            temp.Path,
+            "src/main.cs",
+            "node_modules/a/1.js", "node_modules/a/2.js", "node_modules/b/3.js",
+            "node_modules/b/4.js", "node_modules/c/5.js", "node_modules/c/6.js");
+
+        var detection = JulieIgnoreSeeder.Detect(temp.Path, maxEnumeratedFiles: 2);
+
+        Assert.Contains("node_modules", detection.VendorDirectories);
+        Assert.False(detection.Truncated);
+    }
+
+    [Fact]
+    public void Detect_VendorNamedDirectoryBelowTheFileThreshold_IsNotReported()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "src/main.cs", "out/1.js", "out/2.js");
+
+        var detection = JulieIgnoreSeeder.Detect(temp.Path);
+
+        Assert.DoesNotContain("out", detection.VendorDirectories);
+    }
+
+    [Fact]
+    public void Detect_NonVendorTreeWithinTheBound_IsNotReportedAsTruncated()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "src/main.cs", "docs/readme.md");
+
+        Assert.False(JulieIgnoreSeeder.Detect(temp.Path).Truncated);
+    }
+
+    [Fact]
+    public void Detect_FileBoundReached_ReportsTruncationInsteadOfStoppingSilently()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "src/a.cs", "src/b.cs", "src/c.cs", "src/d.cs");
+
+        Assert.True(JulieIgnoreSeeder.Detect(temp.Path, maxEnumeratedFiles: 2).Truncated);
+    }
+
+    [Fact]
+    public void Detect_FileBoundNotReached_ReportsNoTruncation()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "src/a.cs", "src/b.cs");
+
+        Assert.False(JulieIgnoreSeeder.Detect(temp.Path, maxEnumeratedFiles: 100).Truncated);
+    }
+
+    [Fact]
+    public void Detect_LargeVendorTree_DoesNotConsumeTheFileBound()
+    {
+        using var temp = new TempDir();
+        var files = new List<string> { "src/main.cs" };
+        for (int i = 0; i < 200; i++)
+            files.Add($"node_modules/pkg{i}/index.js");
+        WriteTree(temp.Path, files.ToArray());
+
+        var detection = JulieIgnoreSeeder.Detect(temp.Path, maxEnumeratedFiles: 50);
+
+        Assert.Contains("node_modules", detection.VendorDirectories);
+        Assert.False(detection.Truncated);
+    }
+
+    [Fact]
+    public void RenderContent_TruncatedDetection_SaysSoInTheGeneratedFile()
+    {
+        string content = JulieIgnoreSeeder.RenderContent(
+            Array.Empty<string>(),
+            new DateTime(2026, 8, 2, 0, 0, 0, DateTimeKind.Utc),
+            detectionTruncated: true);
+
+        Assert.Contains("# TRUNCATED: detection stopped after 200000 files", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_CompleteDetection_HasNoTruncationNote()
+    {
+        string content = JulieIgnoreSeeder.RenderContent(
+            Array.Empty<string>(), new DateTime(2026, 8, 2, 0, 0, 0, DateTimeKind.Utc));
+
+        Assert.DoesNotContain("TRUNCATED", content, StringComparison.Ordinal);
     }
 
     [Fact]

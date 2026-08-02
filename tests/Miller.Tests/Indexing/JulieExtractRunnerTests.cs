@@ -64,6 +64,49 @@ public sealed class JulieExtractRunnerTests
             () => JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, force: false, jobs: -1));
 
     [Fact]
+    public void BuildScanArgs_EmitsIgnoreFilesInOrder_SoTheLastOnePassedWins()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: false, jobs: 4,
+            ignoreFiles: new[] { "/abs/main/.julieignore", "/abs/work/.miller/invariant.julieignore" });
+
+        Assert.Equal(
+            new[]
+            {
+                "scan", "--root", AbsRoot, "--db", AbsDb, "--strict-schema", "--json", "--jobs", "4",
+                "--ignore-file", "/abs/main/.julieignore",
+                "--ignore-file", "/abs/work/.miller/invariant.julieignore",
+            },
+            args);
+    }
+
+    [Fact]
+    public void BuildScanArgs_ForceStillTrailsTheIgnoreFiles()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: true, jobs: 4,
+            ignoreFiles: new[] { "/abs/work/.miller/invariant.julieignore" });
+
+        Assert.Equal("--force", args[^1]);
+        Assert.Equal("/abs/work/.miller/invariant.julieignore", args[^2]);
+    }
+
+    [Fact]
+    public void BuildScanArgs_NoIgnoreFiles_EmitsNoIgnoreFileFlag()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: false, jobs: 4, ignoreFiles: Array.Empty<string>());
+
+        Assert.DoesNotContain("--ignore-file", args);
+    }
+
+    [Fact]
+    public void BuildScanArgs_BlankIgnoreFile_Throws() =>
+        Assert.Throws<ArgumentException>(
+            () => JulieExtractRunner.BuildScanArgs(
+                AbsDb, AbsRoot, force: false, jobs: 4, ignoreFiles: new[] { "  " }));
+
+    [Fact]
     public void BuildInfoArgs_TopLevel_NoRoot_StrictSchema()
     {
         var args = JulieExtractRunner.BuildInfoArgs(AbsDb);

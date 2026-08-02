@@ -25,8 +25,10 @@ namespace Miller.Indexing;
 public sealed class JulieExtractRunner
 {
     // info opens read-only, takes no flock — `info --db <ABS_DB> --strict-schema --json` (NO --root).
-    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json --jobs <N> [--force]`.
-    // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3).
+    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json --jobs <N>
+    //   [--ignore-file <ABS_PATH>]... [--force]`.
+    // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3);
+    //   update additionally takes `[--ignore-file <ABS_PATH>]...`, delete does not accept the flag at all.
     /// <summary>
     /// The default NO-PROGRESS bound on a single julie-extract invocation: the child is killed only after the
     /// artifact (db/-wal/-shm bytes) and its output have been silent this long. A fixed TOTAL cap cannot tell a
@@ -120,15 +122,21 @@ public sealed class JulieExtractRunner
 
     /// <summary>
     /// Build the argv for a <c>scan</c>:
-    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json --jobs &lt;jobs&gt; [--force]</c>.
+    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json --jobs &lt;jobs&gt;
+    /// [--ignore-file &lt;path&gt;]… [--force]</c>.
     /// v1 is a top-level subcommand with no parent verb and no workspace-id flag (the artifact binds the root
     /// itself). Paths must already be absolute (caller's responsibility for relative-CWD safety).
     /// <paramref name="jobs"/> is always emitted; <c>0</c> is julie-extract's rayon auto-detect
     /// (<see cref="ExtractJobsPolicy.RayonAuto"/>).
+    /// <paramref name="ignoreFiles"/> are emitted in the given ORDER, which is their precedence: julie-extract
+    /// concatenates them into one gitignore matcher, so last-match-wins makes the final file decisive
+    /// (<see cref="ScanIgnorePolicy"/> puts Miller's invariant file there).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
     /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
-    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force, int jobs)
+    /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
+    public static IReadOnlyList<string> BuildScanArgs(
+        string absDb, string absRoot, bool force, int jobs, IReadOnlyList<string>? ignoreFiles = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
@@ -138,6 +146,12 @@ public sealed class JulieExtractRunner
             "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json",
             "--jobs", jobs.ToString(CultureInfo.InvariantCulture),
         };
+        foreach (string ignoreFile in ignoreFiles ?? Array.Empty<string>())
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ignoreFile, nameof(ignoreFiles));
+            args.Add("--ignore-file");
+            args.Add(ignoreFile);
+        }
         if (force)
             args.Add("--force");
         return args;
@@ -197,13 +211,27 @@ public sealed class JulieExtractRunner
 
     /// <summary>
     /// Build the argv for a single-file <c>update</c>:
-    /// <c>update --root &lt;absRoot&gt; --db &lt;absDb&gt; --file &lt;absFile&gt; --strict-schema --json</c>. All
-    /// three paths must be CANONICAL (absolute + symlink-resolved — see <see cref="PathCanonicalizer"/>) so
-    /// julie-extract's inside-root check passes (verified-fact 4). The builder is a pure seam: it does NOT
-    /// re-normalize, so the caller's canonical paths reach julie verbatim.
+    /// <c>update --root &lt;absRoot&gt; --db &lt;absDb&gt; --file &lt;absFile&gt; --strict-schema --json
+    /// [--ignore-file &lt;path&gt;]…</c>. All three paths must be CANONICAL (absolute + symlink-resolved — see
+    /// <see cref="PathCanonicalizer"/>) so julie-extract's inside-root check passes (verified-fact 4). The
+    /// builder is a pure seam: it does NOT re-normalize, so the caller's canonical paths reach julie verbatim.
+    /// <paramref name="ignoreFiles"/> carries the same decisive exclusions the scan applied, so julie's
+    /// "an update can never insert rows for a file a fresh scan would not produce" contract holds on the
+    /// incremental path too.
     /// </summary>
-    public static IReadOnlyList<string> BuildUpdateArgs(string absDb, string absRoot, string absFile) =>
-        BuildFileOpArgs("update", absDb, absRoot, absFile);
+    /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
+    public static IReadOnlyList<string> BuildUpdateArgs(
+        string absDb, string absRoot, string absFile, IReadOnlyList<string>? ignoreFiles = null)
+    {
+        var args = new List<string>(BuildFileOpArgs("update", absDb, absRoot, absFile));
+        foreach (string ignoreFile in ignoreFiles ?? Array.Empty<string>())
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ignoreFile, nameof(ignoreFiles));
+            args.Add("--ignore-file");
+            args.Add(ignoreFile);
+        }
+        return args;
+    }
 
     /// <summary>
     /// Build the argv for a single-file <c>delete</c>:
@@ -211,6 +239,8 @@ public sealed class JulieExtractRunner
     /// canonical-path contract as <see cref="BuildUpdateArgs"/> — this is the exact call the path gotcha
     /// (verified-fact 4) governs: a non-canonical <c>--file</c> under a symlinked root is rejected.
     /// </summary>
+    // No --ignore-file: the delete subcommand does not accept the flag (clap rejects it, exit 2), and a
+    // deletion removes rows for a path rather than selecting one, so ignore policy has nothing to decide.
     public static IReadOnlyList<string> BuildDeleteArgs(string absDb, string absRoot, string absFile) =>
         BuildFileOpArgs("delete", absDb, absRoot, absFile);
 
@@ -319,6 +349,13 @@ public sealed class JulieExtractRunner
     /// <para>Extraction parallelism is always capped. An explicit <paramref name="jobs"/> BEATS
     /// <see cref="ExtractJobsPolicy.EnvVar"/>: it carries a caller's safety response — a retry after an OOM
     /// kill passes <c>1</c> — and a stale operator override must not be able to undo that.</para>
+    ///
+    /// <para>Every scan carries Miller's generated invariant ignore file last, which makes its exclusions
+    /// decisive over in-tree policy (<see cref="ScanIgnorePolicy"/>). Nothing user-authored is ever passed that
+    /// way: a root with no <c>.julieignore</c> is seeded with one IN-TREE first — a copy of the main checkout's
+    /// file for a linked worktree, else the baseline + detected-vendor generation
+    /// (<see cref="JulieIgnoreSeeder"/>) — so the same policy governs this scan, later single-file updates, and
+    /// the watcher, and a malformed user pattern stays a warning instead of failing the scan.</para>
     /// </summary>
     public ExtractReport Scan(string root, string db, bool force = false, int? jobs = null)
     {
@@ -332,16 +369,15 @@ public sealed class JulieExtractRunner
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir); // no mkdir in julie-extract's path; the .db itself may be absent (fresh)
 
-        // Consumer-side index hygiene: when the root has NO .julieignore, seed one (baseline noise patterns +
-        // auto-detected vendor dirs) BEFORE the scan so julie-extract's own ignore handling — it reads
-        // .gitignore/.julieignore from the root itself; Miller passes no --ignore-file — applies it on this
-        // very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap, leader
-        // startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace refresh),
-        // so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
+        // Consumer-side index hygiene, BEFORE the scan so julie-extract's own in-tree ignore handling applies it
+        // on this very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap,
+        // leader startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace
+        // refresh), so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
         JulieIgnoreSeeder.EnsureSeeded(absRoot);
+        IReadOnlyList<string> ignoreFiles = ScanIgnorePolicy.PrepareForScan(absRoot);
 
         if (!force || ForceScanInPlace())
-            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs));
+            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles));
 
         // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
         // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
@@ -350,7 +386,8 @@ public sealed class JulieExtractRunner
         ExtractReport report;
         try
         {
-            report = Run(BuildScanArgs(FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs));
+            report = Run(BuildScanArgs(
+                FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs, ignoreFiles));
         }
         catch
         {
@@ -492,13 +529,17 @@ public sealed class JulieExtractRunner
     /// preserve the verified-fact-4 fix: a non-canonical <c>--db</c>/<c>--root</c>/<c>--file</c> under a
     /// symlinked workspace trips julie's outside-root validation. The bootstrap canonicalizes the db ONCE and
     /// passes it here verbatim. Routes through the same <see cref="Run"/> → <see cref="Interpret"/> → version
-    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical.
+    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical. Carries the scan's invariant
+    /// ignore file (<see cref="ScanIgnorePolicy.ForFileUpdate"/>) so an event for a path the scan excluded
+    /// cannot re-insert its rows.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="canonicalDb"/> is null/blank or not an absolute path.</exception>
     public ExtractReport Update(string canonicalRoot, string canonicalDb, string canonicalFile)
     {
         RequireCanonicalDb(canonicalDb);
-        return Run(BuildUpdateArgs(canonicalDb, canonicalRoot, canonicalFile));
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        return Run(BuildUpdateArgs(
+            canonicalDb, canonicalRoot, canonicalFile, ScanIgnorePolicy.ForFileUpdate(canonicalRoot)));
     }
 
     /// <summary>

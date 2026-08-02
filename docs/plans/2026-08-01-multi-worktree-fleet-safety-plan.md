@@ -228,21 +228,27 @@ with a surviving leader still logs "keeping the prior index" and never retries u
 **W7. Worktree ignore propagation + seeder rework** — Miller. ~1–1.5 sessions.
 - Create: a git-worktree metadata adapter (resolve `.git`-file worktrees to their real git dir,
   common dir, and main checkout root) in `Miller.Indexing`.
-- Modify: `src/Miller.Indexing/JulieExtractRunner.cs` `Scan`/`BuildScanArgs`: when the root is a
-  linked worktree with no user-authored `.julieignore`, pass the main checkout's `.julieignore` via
-  repeatable `--ignore-file` (already supported with caller precedence, args.rs:40). ALWAYS pass a
+- Modify: `src/Miller.Indexing/JulieExtractRunner.cs` `Scan`/`BuildScanArgs`: ALWAYS pass a
   Miller-owned invariant ignore file last (generated under `.miller/`, containing at minimum
   `.miller/`, `.worktrees/`, `.claude/worktrees/`) — this also closes the nested-worktree
-  double-indexing hole generically.
-- Modify: `src/Miller.Indexing/JulieIgnoreSeeder.cs` — keep seeding green-field roots; raise or
+  double-indexing hole generically. Pass it to `update` as well; `delete` does not accept the flag.
+- Modify: `src/Miller.Indexing/JulieIgnoreSeeder.cs` — keep seeding green-field roots; seed a linked
+  worktree that has no `.julieignore` with an in-tree COPY of the main checkout's file; raise or
   restructure the `MaxEnumeratedFiles = 25_000` detection cap (name-based vendor-dir detection
   instead of full enumeration, or a much higher bound with a warning when hit).
-- Modify: `src/Miller.Server/Hosting/WatchPathFilter.cs` — add `.worktrees` alongside the existing
-  `.claude/worktrees` special case.
+  - Propagating the main checkout's file via `--ignore-file` was tried and REPLACED: it leaves the
+    worktree with no in-tree policy, so the watcher applies zero `.julieignore` rules and a
+    `julie-extract update` re-inserts a file the scan had excluded. A user-authored `--ignore-file`
+    is also a HARD scan failure when malformed, where the same content in-tree only warns.
+- Modify: `src/Miller.Server/Hosting/WatchPathFilter.cs` — add `.worktrees`, and match the skip set
+  against the path's ROOT-RELATIVE remainder so a workspace rooted at `<repo>/.worktrees/<branch>`
+  does not reject every file it owns.
 - Acceptance:
-  - [ ] A fresh linked worktree scan applies the main checkout's `.julieignore` rules.
-  - [ ] A >25k-file root no longer silently truncates vendor detection.
-  - [ ] `.worktrees/` under a repo root is neither indexed by the parent workspace nor watched.
+  - [x] A fresh linked worktree scan applies the main checkout's `.julieignore` rules.
+  - [x] The same rules govern the watcher and single-file `update` in that worktree.
+  - [x] A >25k-file root no longer silently truncates vendor detection.
+  - [x] `.worktrees/` under a repo root is neither indexed by the parent workspace nor watched.
+  - [x] A workspace whose own root is inside a `.worktrees/` pool is indexed and watched normally.
 
 **W8. Persisted scan-failure policy** — Miller. ~1–2 sessions.
 - Create: per-workspace scan-failure record under `.miller/` (intent, exit code, consecutive count,
