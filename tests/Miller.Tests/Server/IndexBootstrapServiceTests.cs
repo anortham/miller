@@ -275,6 +275,300 @@ public sealed class IndexBootstrapServiceTests
     }
 
     [Fact]
+    public void LoadIndexWithAutoRebuild_RescanSkippedBecauseTheLockWasBusy_ReportsNotRebuiltAndStillRunsTheBarrier()
+    {
+        int loads = 0, barriers = 0;
+
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
+            load: () =>
+            {
+                loads++;
+                if (loads == 1)
+                    throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
+                return "winner-artifact";
+            },
+            forceRescan: () => null,
+            onBeforeRetry: () => barriers++,
+            onIncompatible: _ => { },
+            onCorrupt: _ => { });
+
+        Assert.Equal("winner-artifact", result.Index);
+        Assert.False(result.Rebuilt);
+        Assert.Null(result.RebuiltRevision);
+        Assert.Equal(2, loads);
+        Assert.Equal(1, barriers);
+    }
+
+    [Fact]
+    public void LoadIndexWithAutoRebuild_RescanRan_ReportsRebuiltWithItsRevision()
+    {
+        int loads = 0, barriers = 0;
+
+        var result = IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
+            load: () =>
+            {
+                loads++;
+                if (loads == 1)
+                    throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
+                return "rebuilt";
+            },
+            forceRescan: () => 11L,
+            onBeforeRetry: () => barriers++,
+            onIncompatible: _ => { },
+            onCorrupt: _ => { });
+
+        Assert.True(result.Rebuilt);
+        Assert.Equal(11L, result.RebuiltRevision);
+        Assert.Equal(1, barriers);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_AcquiredOnFirstAttempt_ReturnsTheLeaseAndNeverSleeps()
+    {
+        var lease = new FakeLease();
+        int attempts = 0, decisions = 0, usableProbes = 0, sleeps = 0;
+
+        var result = IndexBootstrapService.AcquireBootstrapScanLease(
+            tryAcquire: () => { attempts++; return lease; },
+            decide: () => { decisions++; return Scan(force: false); },
+            winnerArtifactUsable: () => { usableProbes++; return false; },
+            wait: TimeSpan.FromMinutes(10),
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            sleep: _ => sleeps++);
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.Acquired, result.Outcome);
+        Assert.Same(lease, result.Lease);
+        Assert.True(result.Decision.ShouldScan);
+        Assert.Equal(1, attempts);
+        Assert.Equal(1, decisions);
+        Assert.Equal(0, usableProbes);
+        Assert.Equal(0, sleeps);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_PostLockRecheckSaysAnotherInstanceAlreadyHealedIt_ReturnsTheRecheckedDecision()
+    {
+        var result = IndexBootstrapService.AcquireBootstrapScanLease(
+            tryAcquire: () => new FakeLease(),
+            decide: Reuse,
+            winnerArtifactUsable: () => false,
+            wait: TimeSpan.FromMinutes(10),
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            sleep: _ => Assert.Fail("an immediate acquire must not sleep"));
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.Acquired, result.Outcome);
+        Assert.False(result.Decision.ShouldScan);
+        Assert.False(result.Decision.Force);
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, result.Decision.RegistryStateAfterLoad);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_ContendedUntilTheWinnerArtifactIsUsable_ExitsWithoutWaitingForRelease()
+    {
+        int usableProbes = 0, sleeps = 0;
+        var now = DateTimeOffset.UnixEpoch;
+
+        var result = IndexBootstrapService.AcquireBootstrapScanLease<FakeLease>(
+            tryAcquire: () => null,
+            decide: Reuse,
+            winnerArtifactUsable: () => ++usableProbes == 3,
+            wait: TimeSpan.FromMinutes(10),
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            utcNow: () => now,
+            sleep: d => { sleeps++; now += d; });
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.WinnerArtifactUsable, result.Outcome);
+        Assert.Null(result.Lease);
+        Assert.False(result.Decision.ShouldScan);
+        Assert.Equal(2, sleeps);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_ContendedAndNoArtifactEverAppears_TimesOutWithoutSleepingPastTheDeadline()
+    {
+        var start = DateTimeOffset.UnixEpoch;
+        var wait = TimeSpan.FromSeconds(1);
+        var poll = TimeSpan.FromMilliseconds(250);
+        var now = start;
+        int sleeps = 0;
+
+        var result = IndexBootstrapService.AcquireBootstrapScanLease<FakeLease>(
+            tryAcquire: () => null,
+            decide: () => Scan(force: true),
+            winnerArtifactUsable: () => false,
+            wait: wait,
+            pollInterval: poll,
+            utcNow: () => now,
+            sleep: d => { sleeps++; now += d; });
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.TimedOut, result.Outcome);
+        Assert.Null(result.Lease);
+        Assert.True(result.Decision.ShouldScan);
+        Assert.Equal(4, sleeps);
+        Assert.Equal(start + wait, now);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_ContendedTwiceThenAcquired_ReturnsTheDecisionEvaluatedAfterAcquisition()
+    {
+        int attempts = 0;
+        var lease = new FakeLease();
+        var now = DateTimeOffset.UnixEpoch;
+        var decidedAtAttempt = new List<int>();
+
+        var result = IndexBootstrapService.AcquireBootstrapScanLease(
+            tryAcquire: () => ++attempts < 3 ? null : lease,
+            decide: () =>
+            {
+                decidedAtAttempt.Add(attempts);
+                return attempts >= 3 ? Reuse() : Scan(force: true);
+            },
+            winnerArtifactUsable: () => false,
+            wait: TimeSpan.FromMinutes(10),
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            utcNow: () => now,
+            sleep: d => now += d);
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.Acquired, result.Outcome);
+        Assert.Same(lease, result.Lease);
+        Assert.Equal(3, attempts);
+        Assert.Equal(new[] { 3 }, decidedAtAttempt);
+        Assert.False(result.Decision.ShouldScan);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_ZeroWait_AttemptsOnceAndNeverSleeps()
+    {
+        int attempts = 0;
+
+        var result = IndexBootstrapService.AcquireBootstrapScanLease<FakeLease>(
+            tryAcquire: () => { attempts++; return null; },
+            decide: () => Scan(force: false),
+            winnerArtifactUsable: () => false,
+            wait: TimeSpan.Zero,
+            pollInterval: TimeSpan.FromMilliseconds(500),
+            utcNow: () => DateTimeOffset.UnixEpoch,
+            sleep: _ => Assert.Fail("a zero wait must never sleep"));
+
+        Assert.Equal(IndexBootstrapService.BootstrapLeaseOutcome.TimedOut, result.Outcome);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_DecideThrowsAfterTheLeaseIsWon_DisposesItAndRethrows()
+    {
+        var lease = new FakeLease();
+
+        var thrown = Assert.Throws<InvalidOperationException>(() =>
+            IndexBootstrapService.AcquireBootstrapScanLease(
+                tryAcquire: () => lease,
+                decide: () => throw new InvalidOperationException("SQLITE_READONLY_RECOVERY"),
+                winnerArtifactUsable: () => false,
+                wait: TimeSpan.FromMinutes(10),
+                pollInterval: TimeSpan.FromMilliseconds(500),
+                utcNow: () => DateTimeOffset.UnixEpoch,
+                sleep: _ => Assert.Fail("an immediate acquire must not sleep")));
+
+        Assert.Equal("SQLITE_READONLY_RECOVERY", thrown.Message);
+        Assert.True(lease.Disposed);
+    }
+
+    [Fact]
+    public void AcquireBootstrapScanLease_DecideThrowsOnAContendedOutcome_StillRethrows()
+    {
+        var now = DateTimeOffset.UnixEpoch;
+
+        Assert.Throws<SqliteException>(() =>
+            IndexBootstrapService.AcquireBootstrapScanLease<FakeLease>(
+                tryAcquire: () => null,
+                decide: () => throw new SqliteException("disk I/O error", 10),
+                winnerArtifactUsable: () => true,
+                wait: TimeSpan.FromMinutes(10),
+                pollInterval: TimeSpan.FromMilliseconds(500),
+                utcNow: () => now,
+                sleep: d => now += d));
+    }
+
+    [Fact]
+    public void ReadBootstrapScanDecision_MissingArtifact_ScansWithoutForcing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-bootstrap-decide-" + Guid.NewGuid().ToString("N"));
+        var probe = IndexBootstrapService.ReadBootstrapScanDecision(
+            Path.Combine(root, ".miller", "symbols.db"), root);
+
+        Assert.True(probe.Decision.ShouldScan);
+        Assert.False(probe.Decision.Force);
+        Assert.Null(probe.ExistingRootPath);
+    }
+
+    [Fact]
+    public void ReadBootstrapScanDecision_ArtifactTooCorruptToRead_ScansInsteadOfFailingTheBootstrap()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-bootstrap-decide-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string dbPath = Path.Combine(dir, "symbols.db");
+        try
+        {
+            File.WriteAllText(dbPath, "not a sqlite database, just bytes a torn promote could leave behind");
+
+            var probe = IndexBootstrapService.ReadBootstrapScanDecision(dbPath, dir);
+
+            Assert.True(probe.Decision.ShouldScan);
+            Assert.True(probe.Decision.Force);
+            Assert.Null(probe.ExistingRootPath);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void ReadBootstrapScanDecision_ArtifactRecordsAnotherRoot_ForceRebindsAndReportsThatRoot()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+
+        var probe = IndexBootstrapService.ReadBootstrapScanDecision(fx.DbPath, "/work/somewhere-else");
+
+        Assert.True(probe.Decision.ShouldScan);
+        Assert.True(probe.Decision.Force);
+        Assert.Equal("/work/repo", probe.ExistingRootPath);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-number")]
+    [InlineData("-1")]
+    [InlineData("1,5")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    [InlineData("1e400")]
+    [InlineData("1e30")]
+    public void ParseBootstrapScanLockWait_AbsentOrInvalidOrNegative_FallsBackToTheDefault(string? raw)
+    {
+        Assert.Equal(
+            IndexBootstrapService.DefaultBootstrapScanLockWait,
+            IndexBootstrapService.ParseBootstrapScanLockWait(raw));
+    }
+
+    [Theory]
+    [InlineData("0", 0)]
+    [InlineData("45", 45)]
+    [InlineData("1.5", 1.5)]
+    public void ParseBootstrapScanLockWait_ValidSeconds_IsHonored(string raw, double expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            IndexBootstrapService.ParseBootstrapScanLockWait(raw));
+    }
+
+    [Fact]
     public void RegisterBootstrapWorkspace_LoadedExisting_RecordsStableIdentityAndRevisionWithoutScanTimestamp()
     {
         string dir = Path.Combine(Path.GetTempPath(), "miller-bootstrap-registry-" + Guid.NewGuid().ToString("N"));
@@ -526,5 +820,18 @@ public sealed class IndexBootstrapServiceTests
         {
             File.SetUnixFileMode(dir, original);
         }
+    }
+
+    private static IndexBootstrapService.BootstrapScanDecision Scan(bool force) =>
+        new(ShouldScan: true, Force: force, WorkspaceRegistryState.Ready);
+
+    private static IndexBootstrapService.BootstrapScanDecision Reuse() =>
+        new(ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
+
+    private sealed class FakeLease : IDisposable
+    {
+        public bool Disposed { get; private set; }
+
+        public void Dispose() => Disposed = true;
     }
 }

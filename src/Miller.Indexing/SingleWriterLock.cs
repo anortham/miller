@@ -6,9 +6,9 @@ namespace Miller.Indexing;
 /// <em>leader</em>: it runs the file watcher and shells <c>extract</c>; every other instance is refused
 /// (<see cref="TryAcquire"/> returns null) and stays a pure reader. The lock is an open <see cref="FileStream"/>
 /// with <see cref="FileShare.None"/> — the OS denies any other handle (this process or another) while it is held,
-/// and releases it on dispose / process exit. This is Miller's election; julie's own
-/// <c>&lt;db&gt;.julie-extract.lock</c> 30s flock remains the lower-level cross-process backstop even if two
-/// writers ever race.
+/// and releases it on dispose / process exit. This lock is the ONLY serialization Miller has for a workspace:
+/// julie-extract runs no lock of its own, so nothing below this catches two writers that race. It is also
+/// strictly PER-WORKSPACE — N workspaces are N independent leaders with nothing machine-wide above them.
 ///
 /// <para>The returned <see cref="SingleWriterLock"/> IS the lease: hold it for the lifetime of leadership and
 /// dispose it to step down (enabling failover — another instance can then acquire it).</para>
