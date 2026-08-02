@@ -20,13 +20,23 @@ and the very first run found a crash a synthetic fixture would likely never prod
 
 ## Results
 
-### Small-repo baseline (Miller repo) — completed, but slow
+### Small-repo baseline (Miller repo) — completed, but slow, and now fully attributed
 
-51.3 s wall / 47.9 s user at jobs=4 → parallelism factor ≈ 0.93 (**effectively serial**), for
-1,330 extracted files. At the at-scale throughput measured below (~190 files/s), extraction alone
-accounts for ~7 s — so **~44 s is fixed/serial cost** (discovery, artifact write, startup —
-unattributed; needs profiling). A ~50 s first-open on a 1.3k-file repo is its own first-impression
-problem, independent of monorepo scale.
+First run: 51.3 s wall / 47.9 s user at jobs=4 → parallelism ≈ 0.93 (effectively serial). A second
+run with `--json` produced the phase profile (1,518 files scanned, total 44.2 s):
+
+| phase | ms |
+|---|---|
+| discovery | 21 |
+| extraction_spool | 4,537 |
+| **artifact_write** | **39,630** |
+
+**~90% of a small repo's cold start is SQLite artifact write, not parsing.** Extraction of the
+whole repo takes 4.5 s; writing the rows takes 39.6 s (~26 ms/file). This is the dominant
+first-impression cost for every normal-sized repo — fixing artifact-write throughput would turn a
+typical ~50 s first open into ~10 s or less, before any progressive-indexing design. It also
+compounds with the spool/reference bloat: most written rows are reference-site/identifier data, so
+the amplification fix shrinks the write phase too.
 
 ### dotnet/runtime attempt 1 (default 2 MB thread stacks) — **stack-overflow crash**
 
@@ -63,30 +73,75 @@ problem, independent of monorepo scale.
 No abort and no leaked spool (so `Drop` ran — a clean unwind/error path), but the DB contains
 schema + `artifact_metadata` and **zero files**: the scan failed before (or during) spool→DB
 import. 8.05 T instructions retired (vs 6.19 T for attempt 1's 60%), peak footprint 3.0 GB. The
-error text was lost to a logging mistake (`time | tail` pipeline); attempt 3 reruns with
-`RUST_BACKTRACE=full` and complete log capture. **Open until attempt 3 reports.**
+error text was lost to a logging mistake (`time | tail` pipeline).
+
+### dotnet/runtime attempt 3 (64 MB stacks, `RUST_BACKTRACE=full`, full log) — **deterministic "failed"**
+
+- Exit 1 after **341 s** (614 s user, max RSS 5.3 GB). No stack overflow, no panic, no backtrace —
+  the **entire log is the single word `failed`** plus the time report. A 5.7-minute run with one
+  word of diagnostics is itself a reporting bug (third extractor issue).
+- **Deterministic failure point:** attempts 2 and 3 retired near-identical instruction counts
+  (8.045 T vs 8.044 T) — both ran the complete extraction/spool phase (bigger stacks DO clear the
+  crash), then failed at the same boundary, cleaned the spool, and left the DB with schema +
+  metadata but zero files. The failure sits at the end of the spool phase or the start of spool→DB
+  import; candidates include per-file parse-failure aggregation tripping an abort threshold, or an
+  import-side limit on the 50–66 MB spool entries.
+- Timing data point: the full spool phase over 58,500 files at jobs=4 ≈ **341 s (~5.7 min)** —
+  consistent with the ~190 files/s projection from the attempt-1 autopsy.
+
+### dotnet/runtime attempt 4 (Miller's exact argv, `--json`) — **root cause captured**
+
+Structured report (schema v3), exit 1 at 313 s:
+
+```json
+"errors":[{"code":"db_write_failed",
+  "message":"SQLite artifact write failed: reference_site identity conflict",
+  "recoverable":false}]
+```
+
+- **The blocker is a reference-site identity collision during spool→DB import.** Spool entries use
+  content-derived "spanless" reference-site IDs (`reference_site_spanless-<hash>`); dotnet/runtime's
+  generated JIT tests are thousands of near-identical files packed with identical expressions, and
+  two distinct sites hash to the same identity → uniqueness violation → the ENTIRE import aborts
+  (`recoverable: false`), zero rows written. Duplicated generated code is exactly the corpus that
+  maximizes collision probability.
+- Phase profile (finally measurable): discovery **4.2 s**, extraction/spool **226 s**, artifact
+  write reached **82 s** before the conflict; total 312 s. A healthy end-to-end run projects to
+  **~6–8 minutes** at jobs=4.
+- Per-file failures are tolerated correctly (1 C#, 2 PowerShell, 5 XML files failed and were
+  recorded per-file without aborting) — so the abort is the identity conflict, not a failure
+  threshold. C# dominates extraction cost: 32,602 files, 339 MB, 412 worker-seconds.
+- The W5 progress-file design is validated by the phase split: under today's binary, Miller's
+  `ProgressStamp` would see zero bytes at its watched paths for the entire 226 s extraction phase.
 
 ## Implications
 
 1. **The real-repo tier is mandatory, not optional.** W10's synthetic fixture cannot contain
    generated-code pathologies like the JIT test family. dotnet/runtime @ `a2f953fe266` should be
    the standing scale target (P0 of the delta-rebind program now names it).
-2. **Two new julie-extractors bugs**, both with one-command repros on the pinned binary:
-   (a) stack-overflow crash at default stacks; (b) ~68× worst-case / ~10× aggregate spool
-   amplification. Recommend bundling fixes into the same julie-extractors release as the
-   fleet-safety W4–W6 flags (one release, one pin bump).
+2. **Four new julie-extractors bugs**, all with one-command repros on the pinned binary:
+   (a) stack-overflow crash at default thread stacks (likely deep recursion on generated
+   expression chains); (b) ~68× worst-case / ~10× aggregate spool amplification; (c) **the
+   blocker: `reference_site identity conflict` on duplicated generated code aborts the entire
+   import non-recoverably** — dotnet/runtime cannot be indexed at any stack size; (d) the
+   non-JSON error path reports a bare "failed" with no diagnostics for a 5.7-minute run.
+   Recommend bundling fixes into the same julie-extractors release as the fleet-safety W4–W6
+   flags (one release, one pin bump).
 3. **Cold-start reframe:** at-scale extraction is ~190 files/s — a *healthy* 58k-file extract
-   projects to ~5–6 minutes, not the 25–40 min linear extrapolation from the small-repo run. The
-   remaining cold-start costs are (a) the ~44 s fixed/serial small-repo overhead, (b) spool I/O
-   (79 MB/s of mostly-redundant bytes), (c) the artifact-write phase (unmeasured — attempt 3), and
-   (d) sidecar/embedding convergence on top. Fixing the spool bloat is likely a throughput win, not
-   just a disk win.
+   projects to ~6–8 minutes end-to-end, not the 25–40 min linear extrapolation from the small-repo
+   run. The cost structure is now attributed: **artifact write dominates small repos** (39.6 s of
+   44.2 s on 1.5k files) and is material at scale (82 s reached before the abort); spool I/O moves
+   ~10× redundant bytes at 79 MB/s; sidecar/embedding convergence sits on top. The two highest-
+   leverage cold-start fixes are artifact-write throughput and the reference/spool amplification —
+   both extractor-side, both now measured, and both shrink every repo's first open, not just
+   monorepos.
 4. **Fleet-safety validations for free:** W4 (spool reaping) and W5 (progress blindness) are now
    reproduced on a second machine, at scale, on a clean clone — no longer reporter-only evidence.
 
 ## Open items
 
-- Attempt 3 verdict: error identity + backtrace, and (if it completes) wall-clock for the full
-  extract + artifact write and final DB/WAL sizes on a real 58k-file repo.
-- Profile the ~44 s small-repo fixed cost (discovery vs artifact write vs startup).
-- File both extractor bugs in julie-extractors with the repro (pinned commit + command).
+- Wall-clock for a full healthy extract + artifact write and final DB/WAL sizes — blocked on the
+  reference-site identity fix.
+- File all four bugs plus the artifact-write throughput target in julie-extractors with the repro
+  (pinned commit + command); repro artifacts (clone, logs, structured reports) in this session's
+  scratchpad.

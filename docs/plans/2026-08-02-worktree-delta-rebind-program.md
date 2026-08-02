@@ -72,13 +72,17 @@ missing; these numbers drive the P1 design choices.
   contain real-world pathologies — proven immediately. The standing real-repo target is
   **dotnet/runtime @ `a2f953fe266`** (58,500 files, .NET wedge). The first baseline run
   ([`docs/findings/2026-08-02-dotnet-runtime-scale-baseline.md`](../findings/2026-08-02-dotnet-runtime-scale-baseline.md))
-  found: a **stack-overflow crash** in julie-extract 2.21.0 at default thread stacks (likely deep
-  recursion on generated JIT test files), **~68× worst-case spool amplification** (982 KB source →
-  66.6 MB spool entry; ~10× aggregate), at-scale throughput ~190 files/s at jobs=4, and ~44 s of
-  fixed/serial overhead dominating small-repo scans. Both extractor bugs need julie-extractors
-  fixes — bundle them into the same release as the fleet-safety W4–W6 flags. P0's real-repo
-  baseline is **gated on that fix**; the ladder for later tiers: dotnet/roslyn (~15k), openjdk/jdk
-  (~70k), linux (~85k), llvm-project (~150k, stress).
+  found four julie-extract 2.21.0 bugs: a **stack-overflow crash** at default thread stacks, **~68×
+  worst-case spool amplification** (982 KB source → 66.6 MB spool entry; ~10× aggregate), the
+  blocker — a non-recoverable **`reference_site identity conflict`** on duplicated generated code
+  that aborts the whole import (the repo cannot be indexed at any stack size) — and a bare
+  "failed" non-JSON error path. Healthy-run projection ~6–8 min end-to-end at jobs=4 (~190
+  files/s extraction); **artifact write is ~90% of small-repo cold start** (39.6 s of 44.2 s on the
+  1.5k-file Miller repo — the top first-impression fix for typical repos). All four bugs plus the
+  write-throughput target need julie-extractors work — bundle into the same release as the
+  fleet-safety W4–W6 flags. P0's
+  real-repo baseline is **gated on that fix**; the ladder for later tiers: dotnet/roslyn (~15k),
+  openjdk/jdk (~70k), linux (~85k), llvm-project (~150k, stress).
 - Acceptance:
   - [ ] Each measurement recorded in a findings doc alongside the W10 spool/RSS/WAL numbers.
   - [ ] A clean, crash-free timed extract of dotnet/runtime @ pinned commit with final DB/WAL
