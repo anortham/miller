@@ -3,7 +3,7 @@ id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
 status: active
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-07-29T05:01:02.233Z
+updated: 2026-08-02T15:45:51.459Z
 tags:
   - strategy
   - adoption
@@ -43,12 +43,34 @@ benchmark compared Miller to Julie instead of to a bare agent.
 4. Standing rule: extractor grinding frozen except experiment-driven gaps + resolution tiers.
    NEW fix candidates from the calibration prep: static-workspace chunk-cursor hold (restart re-embeds
    all cards, chunks never converge) and .julieignore seeding surprise — both are Miller bugs, fair game.
-5. Archive Eros formally; salvage note: continuous-testing daemon is the one novel piece.
+5. **DONE 2026-07-29** — Eros archived (banner in its README); salvage note: continuous-testing daemon
+   is the one novel piece.
+
+## Addendum — fleet architecture direction (approved 2026-08-02)
+
+The 2026-08-01 multi-worktree field report split into two programs, and an architecture review
+(user-approved) settled the long-term questions:
+
+- **Fleet-safety plan** (`docs/plans/2026-08-01-multi-worktree-fleet-safety-plan.md`) — IN
+  IMPLEMENTATION (separate session, `.worktrees/fleet-safety`). Fixes crashes: governor, jobs cap,
+  spool reaping, backoff, progress visibility, worktree ignore/watcher fixes.
+- **Worktree delta-rebind program** (`docs/plans/2026-08-02-worktree-delta-rebind-program.md`) —
+  APPROVED SUCCESSOR, gated on safety landing. Fixes cost: fresh worktrees rebind the main
+  checkout's artifact + delta-scan instead of full extraction (25–40 min → seconds). Safety makes
+  fleets not die; rebind makes them usable. The rebind contract doubles as the future Eros/CI
+  artifact-consumption seam (zero-regret).
+- **Settled architecture verdicts:** per-workspace swarm + lease coordination STAYS (incident
+  validated it — all fixes fit inside); SQLite STAYS (artifact-as-copyable-file is load-bearing for
+  rebind and any Eros future). Standing triggers documented in the rebind plan: central daemon only
+  at sustained 20+ heavy-churn worktrees (escalation = governor → small broker, semantic-broker
+  precedent); LanceDB only at ~100× embedding growth; Eros only on concrete demand for team/CI
+  artifacts (framing: Miller = runtime, Eros = artifact supply chain — not addon vs replacement).
 
 ## Pending approvals
 
-- Push miller main (ahead 4: takeover close, harness budget/schema fixes, calibration evidence).
+- Push miller main (unpushed docs commits: fleet triage/plan + delta-rebind program plan).
 - Push julie main (ahead 1: retirement note).
+- Approval to BEGIN each delta-rebind phase after the safety plan lands.
 
 ## Constraints
 
