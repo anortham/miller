@@ -22,8 +22,102 @@ julie-extractors gains three small opt-in contract flags (`--spool-dir`, `--prog
 `--parent-pid`) plus a dead-PID spool reaper, shipped and pin-bumped before Miller wires them.
 Nothing changes in parser/extraction semantics; the engine is explicitly kept.
 
-**Status:** awaiting user approval. Written while the 1.15.0 release session was in flight — nothing
-here is implemented.
+**Status:** APPROVED and in execution on branch `fleet-safety` (2026-08-02). See the amendment below
+before implementing any workstream — a pre-implementation doubt pass corrected five of them.
+
+## Amendment — 2026-08-02 pre-implementation doubt pass (Codex + Grok)
+
+Four read-only recon agents mapped the P0 workstreams against live code and disagreed about how much
+of the scan-coordination seam belonged in P0. A two-round doubt pass with Codex and Grok settled it.
+Every point below was re-verified in code by the lead before adoption; the two corrections that
+contradict the original plan text are marked **PLAN WAS WRONG**.
+
+**Scope decision (converged, both models agree).** P0 does NOT introduce `ScanIntent`, does NOT change
+`IExtractOps.Scan(bool force)`, and does NOT add a public `ScanRequest` or `ScanCoordinator`. W8 remains
+the chartered home for the intent enum, because that enum encodes *downgrade and backoff policy*, not
+"was the lock held". W1 needs only root identity, which `DecideBootstrapScan` already computes, and
+schema-heal and corruption-heal are both unconditional force rebuilds under lock today — the opaque
+`Func<long?>` loses W1 nothing. Codex initially argued for landing the full seam in P0 and withdrew
+after the lead showed that the `int? jobs` parameter is permanent rather than throwaway (W8 *consumes*
+it for the post-OOM `jobs: 1` retry) and that W4/W5 spool and progress lifecycle is runner-internal.
+
+**W2 — no change.** Shipped as specified (`707f9ea4`).
+
+**W3 — four corrections.**
+1. The governor is **NOT re-entrant**. An earlier draft argued for per-process re-entrancy to avoid a
+   self-deadlock across `RunStartupDeltaScan` → extractor-upgrade rescan → drain rescan. Verified: those
+   run *sequentially* (`IndexerService.cs:382`, `:396`), so the nesting does not exist — while one
+   process genuinely CAN refresh two different registered workspaces at once through
+   `WorkspaceIndexProvider._refresh`, which a re-entrancy counter would wrongly admit. Use a
+   non-re-entrant lease plus an explicit throw on re-entry to catch accidental double-wrapping.
+2. Admission must be acquired **before** `_opsGate`, not inside it. `TryReindexAsLeader`
+   (`IndexerService.cs:581`) holds `_opsGate`, so waiting for the governor inside that gate would block
+   the per-file update/delete path the plan explicitly exempts.
+3. **Success, not admission, is the commit point** for the whole-repo rescan signal. `IndexerCore`
+   clears `Queue.NeedsRescan`/`_overflowSignaled` (`:122-125`) *before* `ExecuteIsolated`, which swallows
+   `JulieExtractFailedException`. So a refused-or-failed reconcile already loses its signal today; the
+   governor makes it reachable far more often. Re-arm on anything other than completion.
+   `LeaderScanRequestQueue` claims and deletes requests before execution and needs the same treatment.
+4. **PLAN WAS WRONG — there is no C# "semantic accelerator lease" to mirror.** Miller only computes
+   `accelerator-v1.lock` (`SemanticBrokerEndpoint.cs:20`) and passes it to the Rust sidecar, which owns
+   the exclusivity. Mirror the accelerator lease's *path convention* and crash semantics, but take the
+   mechanism from `SingleWriterLock.TryAcquire` and `ContentCorpusWriteLock.AcquireFor`.
+
+**W1 — four additions.** The winner-acceptance condition must be a successful full load plus a stable
+`artifact_id`, not a bare `ReadRootPath` (which tolerates only a missing `artifact_metadata` table and
+throws on SQLITE_CORRUPT/NOTADB); transient torn reads mid-promote must be retried, not fatal. The
+outcome must honestly distinguish a local rebuild from loading the winner's artifact. The healthy reuse
+path must not take the lock at all. And `RebuildAndRetry` (`:773-778`) is a real defect W1 fixes: it
+reports `Rebuilt: true` even when `forceRescan()` returned null because the lock was busy and the
+rebuild was skipped, which makes `didScan` and the registry bookkeeping lie.
+
+**W8 — PLAN WAS WRONG on one intent.** The plan lists watcher overflow as a force that may downgrade.
+It is not a force at all: `IndexerCore.cs:151` calls `_ops.Scan()` with the default `force: false`, and
+`WatchEventRouter.Route` returns a single `ScanOp` with every per-file event dropped. There is no
+watcher-overflow force to downgrade. The real overflow problem is rescan *frequency*, owned by W9.
+The intents with actual call sites are: IncrementalReconcile, UserFullRebuild (the only downgradable
+one), RootRebind, SchemaHeal, CorruptionHeal, ExtractorUpgrade.
+
+**Success criterion reworded (v1 makes no fairness claim).** Jittered polling without FIFO tickets
+cannot guarantee "all N eventually ready". Replace that criterion with: *in the bounded N-process Scale
+test, the maximum number of concurrent extractors is 1 and every non-cancelled contender reaches Ready
+within the declared test deadline across repeated runs; v1 claims neither FIFO nor starvation freedom.*
+
+**W4/W6 — PLAN WAS WRONG about the reaping and liveness mechanisms.** The julie-extractors workspace sets
+`unsafe_code = "forbid"` in `[workspace.lints.rust]` and every crate opts in, which `forbid` makes
+locally un-`allow`-able. `libc::kill(pid, 0)` and Windows `OpenProcess` are therefore both unavailable,
+so the plan's dead-PID spool reaper — including its careful EPERM-means-alive rule — cannot be built as
+written.
+
+- **W4 reaps by advisory lock, not by PID.** The scan takes an exclusive `File::lock()` on its own spool
+  for the spool's lifetime; the reaper opens each candidate and calls `try_lock()`. `Ok` means the owner
+  is gone, so unlock and delete; `Err(WouldBlock)` means ALIVE, skip; any other error means skip. Verified
+  empirically by the lead on rustc 1.94.0 under `#![forbid(unsafe_code)]`: held ⇒ `Err(WouldBlock)`,
+  released ⇒ `Ok`. This is strictly better than the planned probe — std releases the lock on process
+  death including SIGKILL, it needs no new dependency, it works on Windows, and it has **no PID-reuse
+  failure mode at all**. The PID in the spool filename stays a diagnostic, never the reaping authority.
+  The "never reap by age alone" rule still stands.
+- **W6 drops stdout-pipe-closure detection.** Nothing is written to stdout during a scan — the report is
+  written once, after `scan` has fully returned — so there is no mid-scan write to fail, and polling fd 1
+  for `POLLERR`/`POLLHUP` needs `poll()`/kqueue and therefore `unsafe`. Use
+  `std::os::unix::process::parent_id()` instead, which is safe and *eliminates* rather than mitigates the
+  PID-reuse hazard: it asks the kernel who the parent is right now, and an orphan is reparented to
+  init/launchd, so a recycled PID cannot re-become the parent. std has no Windows counterpart, so the
+  watchdog is Unix-only and Windows stays covered by Miller's kill-on-close Job Object, as already planned.
+- **W6 must not call `process::exit`.** That skips `Drop` in all threads and would leak precisely the
+  spool W4 exists to stop leaking (`SpooledExtractedFiles`'s `Drop` at `commands.rs:1058` is the only
+  cleanup, and there is no `panic = "abort"` profile, so unwinding is reachable). The watchdog sets a
+  cooperative abort flag checked at the chunk loop (`EXTRACT_SPOOL_CHUNK_SIZE = 512`), which bounds exit
+  latency to one chunk and keeps cleanup intact. Never abort once the write transaction has started.
+- **Pre-existing leak found in passing:** `commands.rs:1429` can return `Err` before
+  `SpooledExtractedFiles` is constructed at 1437, and the raw spool local has no `Drop`, so a spool write
+  error leaves the file behind today. W4 should cover it.
+
+**Also recorded:** bootstrap does not converge sidecars, so its governor scope is scan-only; a fresh
+open pays two sequential whole-repo scans (bootstrap first scan, then `RunStartupDeltaScan`) and under
+the governor one workspace occupies the slot twice in a row — latency only, not a correctness bug; and
+P0 must not be described as fixing the field "never converge" report, because a killed extractor child
+with a surviving leader still logs "keeping the prior index" and never retries until W8 lands.
 
 ## Global Constraints
 
