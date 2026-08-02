@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -24,7 +25,7 @@ namespace Miller.Indexing;
 public sealed class JulieExtractRunner
 {
     // info opens read-only, takes no flock — `info --db <ABS_DB> --strict-schema --json` (NO --root).
-    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json [--force]`.
+    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json --jobs <N> [--force]`.
     // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3).
     /// <summary>
     /// The default NO-PROGRESS bound on a single julie-extract invocation: the child is killed only after the
@@ -119,16 +120,24 @@ public sealed class JulieExtractRunner
 
     /// <summary>
     /// Build the argv for a <c>scan</c>:
-    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json [--force]</c>.
+    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json --jobs &lt;jobs&gt; [--force]</c>.
     /// v1 is a top-level subcommand with no parent verb and no workspace-id flag (the artifact binds the root
     /// itself). Paths must already be absolute (caller's responsibility for relative-CWD safety).
+    /// <paramref name="jobs"/> is always emitted; <c>0</c> is julie-extract's rayon auto-detect
+    /// (<see cref="ExtractJobsPolicy.RayonAuto"/>).
     /// </summary>
-    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
+    /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
+    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force, int jobs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
+        ArgumentOutOfRangeException.ThrowIfNegative(jobs);
         var args = new List<string>
-            { "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json" };
+        {
+            "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json",
+            "--jobs", jobs.ToString(CultureInfo.InvariantCulture),
+        };
         if (force)
             args.Add("--force");
         return args;
@@ -306,13 +315,18 @@ public sealed class JulieExtractRunner
     /// artifact ran at ~7KB/s because live readers kept its WAL from checkpointing, while the same scan into a
     /// fresh DB bulk-inserts in ~90s). A failed force scan leaves the live artifact untouched. Escape hatch:
     /// <c>MILLER_FULL_REBUILD_INPLACE=1</c> restores the historical in-place force merge.</para>
+    ///
+    /// <para>Extraction parallelism is always capped. An explicit <paramref name="jobs"/> BEATS
+    /// <see cref="ExtractJobsPolicy.EnvVar"/>: it carries a caller's safety response — a retry after an OOM
+    /// kill passes <c>1</c> — and a stale operator override must not be able to undo that.</para>
     /// </summary>
-    public ExtractReport Scan(string root, string db, bool force = false)
+    public ExtractReport Scan(string root, string db, bool force = false, int? jobs = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
         string absDb = Path.GetFullPath(db);
         string absRoot = Path.GetFullPath(root);
+        int resolvedJobs = jobs ?? ExtractJobsPolicy.FromEnvironment();
 
         string? dbDir = Path.GetDirectoryName(absDb);
         if (!string.IsNullOrEmpty(dbDir))
@@ -327,7 +341,7 @@ public sealed class JulieExtractRunner
         JulieIgnoreSeeder.EnsureSeeded(absRoot);
 
         if (!force || ForceScanInPlace())
-            return Run(BuildScanArgs(absDb, absRoot, force));
+            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs));
 
         // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
         // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
@@ -336,7 +350,7 @@ public sealed class JulieExtractRunner
         ExtractReport report;
         try
         {
-            report = Run(BuildScanArgs(FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force));
+            report = Run(BuildScanArgs(FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs));
         }
         catch
         {

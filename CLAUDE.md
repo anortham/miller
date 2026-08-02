@@ -223,6 +223,15 @@ scripts/test.ps1 all
   replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`. If Windows
   antivirus or held handles need longer promote retries, set `MILLER_PROMOTE_RETRY_TIMEOUT` to seconds (for
   example `30`) or a `TimeSpan` value (for example `00:00:30`).
+- **Extraction parallelism is always capped.** Every scan argv carries `--jobs`
+  ([`ExtractJobsPolicy`](src/Miller.Indexing/ExtractJobsPolicy.cs)); the default is
+  `min(4, max(1, ProcessorCount / 2))`. julie-extract's own default is rayon auto-detect (every core), which
+  is why N concurrent worktree agents ran N all-core pools and the OOM killer took them out with exit 137
+  (2026-08-01 multi-worktree field report). `MILLER_EXTRACT_JOBS` overrides the default and is honored
+  verbatim; `0` opts back in to rayon auto. An explicit `jobs:` argument to `JulieExtractRunner.Scan` BEATS the
+  env var — it carries a caller's safety response (a post-OOM retry passes `1`) that a stale operator override
+  must not undo. This bounds only the extraction/spool phase, not the artifact write; bounding how many scans
+  run at once is a separate concern.
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the
