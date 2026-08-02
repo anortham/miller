@@ -79,7 +79,8 @@ public sealed class WorkspaceToolTests : IDisposable
         Func<string, long>? readLatestRevision = null,
         IDashboardLauncher? dashboardLauncher = null,
         VectorSidecar? vectors = null,
-        SemanticEmbeddingSessionBroker? semanticBroker = null)
+        SemanticEmbeddingSessionBroker? semanticBroker = null,
+        ScanGovernor? scanGovernor = null)
     {
         // The served workspace root is the fixture dir's parent of .miller; point ExtractDbPath at the fixture DB.
         string root = Path.GetDirectoryName(fx.DbPath)!;
@@ -104,7 +105,15 @@ public sealed class WorkspaceToolTests : IDisposable
         indexerBootstrap.TestHomeDirectoryOverride = indexerHome;
         var indexer = new IndexerService(
             indexerBootstrap,
-            NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, SymbolSearchSidecar.Disabled);
+            NullLogger<IndexerService>.Instance,
+            NullLoggerFactory.Instance,
+            tryAcquireLeadership: _ => null,
+            createOps: static (_, _, _) => throw new InvalidOperationException("not used by this test seam"),
+            leaderRetryInterval: TimeSpan.FromHours(1),
+            SymbolSearchSidecar.Disabled,
+            attachFileWatchers: false,
+            scanGovernor: scanGovernor,
+            scanGovernorWait: TimeSpan.Zero);
         var freshness = new FreshnessService(bootstrap, NullLogger<FreshnessService>.Instance);
 
         var probe = new IndexFreshProbe(
@@ -158,7 +167,9 @@ public sealed class WorkspaceToolTests : IDisposable
                 ProcessId: null,
                 Message: "already running")),
             NullLogger<WorkspaceTool>.Instance,
-            semanticBroker);
+            semanticBroker,
+            scanGovernor,
+            openPrimeGovernorWait: TimeSpan.Zero);
         return new WorkspaceToolHarness(tool, indexer, ledger, root, workspace, registry, bootstrap);
     }
 
@@ -1934,6 +1945,109 @@ public sealed class WorkspaceToolTests : IDisposable
         Assert.Contains("scanned: yes", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("status: refreshed", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("11", output);
+    }
+
+    // ---- W3 G1: a busy machine-wide governor is queued, not failed ----
+    // Under the short interactive budget a refusal is routine in a fleet, so rendering it as a failed extract
+    // sent agents hunting a log error that was never written while the rebuild was silently dropped.
+
+    private static ScanGovernorLease HoldScanAdmission(string millerHome) =>
+        ScanGovernor.ForMillerHome(millerHome).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "test-holder", 4),
+            TimeSpan.Zero,
+            CancellationToken.None)
+        ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease.");
+
+    [Fact]
+    public void Full_AsLeader_WithTheScanGovernorBusy_ReportsQueuedNotFailed()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string governorHome = NewTempDir("governor-home");
+        WorkspaceToolHarness harness = BuildHarness(
+            fx, builtRevision: 4, workspaceId: Ws, scanGovernor: ScanGovernor.ForMillerHome(governorHome));
+        var ops = new RecordingScanOps();
+        harness.Indexer.PublishOpsForTest(ops);
+
+        string output;
+        using (ScanGovernorLease held = HoldScanAdmission(governorHome))
+            output = harness.Tool.Workspace(operation: "full");
+
+        Assert.Empty(ops.ScanForce);
+        Assert.Contains("scanned: no", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("queued behind another scan", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("scan failed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Check the Miller log", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Full_AsLeader_WithTheScanGovernorBusy_LatchesTheRebuildInsteadOfDroppingIt()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string governorHome = NewTempDir("governor-latch-home");
+        WorkspaceToolHarness harness = BuildHarness(
+            fx, builtRevision: 4, workspaceId: Ws, scanGovernor: ScanGovernor.ForMillerHome(governorHome));
+        harness.Indexer.PublishOpsForTest(new RecordingScanOps());
+
+        Assert.True(harness.Indexer.QueueEmpty);
+
+        using (ScanGovernorLease held = HoldScanAdmission(governorHome))
+            harness.Tool.Workspace(operation: "full");
+
+        Assert.False(harness.Indexer.QueueEmpty);
+    }
+
+    [Fact]
+    public void Full_AsLeader_WithTheScanGovernorBusy_IsNotAnErrorOutcome()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string governorHome = NewTempDir("governor-json-home");
+        WorkspaceToolHarness harness = BuildHarness(
+            fx, builtRevision: 4, workspaceId: Ws, scanGovernor: ScanGovernor.ForMillerHome(governorHome));
+        harness.Indexer.PublishOpsForTest(new RecordingScanOps());
+
+        string json;
+        using (ScanGovernorLease held = HoldScanAdmission(governorHome))
+            json = harness.Tool.Workspace(operation: "full", format: "json");
+
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.False(doc.RootElement.GetProperty("scanned").GetBoolean());
+        JsonElement diagnostic = doc.RootElement.GetProperty("diagnostic");
+
+        Assert.Equal("workspace_full_queued", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("refusal", diagnostic.GetProperty("class").GetString());
+        Assert.NotEqual("error", diagnostic.GetProperty("outcome").GetString());
+    }
+
+    // ---- W3 G9: workspace open's prime scan is governed too ----
+
+    [Fact]
+    public void Open_WhenTheScanGovernorIsBusy_DoesNotPrime_AndSaysWhy()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        string governorHome = NewTempDir("governor-open-home");
+        bool scanned = false;
+        WorkspaceToolHarness harness = BuildHarness(
+            fx,
+            builtRevision: 4,
+            workspaceId: Ws,
+            openScan: (root, db, force) =>
+            {
+                scanned = true;
+                return Report(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);
+            },
+            acquireLock: _ => new NoopLease(),
+            scanGovernor: ScanGovernor.ForMillerHome(governorHome));
+        string target = NewTempDir("open-governor-busy");
+
+        string output;
+        using (ScanGovernorLease held = HoldScanAdmission(governorHome))
+            output = harness.Tool.Workspace(operation: "open", path: target);
+
+        Assert.False(scanned);
+        Assert.Contains("was not primed", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("holds the scan governor", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(harness.Registry.Get(WorkspaceId.FromCanonicalRoot(PathCanonicalizer.CanonicalizeRoot(target))));
     }
 
     [Fact]

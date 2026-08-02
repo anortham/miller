@@ -38,6 +38,10 @@ namespace Miller.Server.Tools;
 /// <param name="ArtifactId">The current extract artifact generation id, or null when the artifact is missing or unreadable.</param>
 /// <param name="Vectors">Status of the Miller-owned <c>vectors.db</c> sidecar, when known. A <c>disabled</c>
 /// state renders nowhere: with <c>MILLER_SEMANTIC</c> off, existing status output stays byte-identical.</param>
+/// <param name="SemanticBroker">Status of the shared semantic broker, when known.</param>
+/// <param name="ScanGovernor">This workspace's position in the user-global scan-admission queue, when there is
+/// one. Null — idle, disabled, or no corroborated holder — renders nowhere, so default status output stays
+/// byte-identical.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -58,7 +62,8 @@ public readonly record struct WorkspaceFacts(
     ContentCorpusFacts? ContentCorpus = null,
     string? ArtifactId = null,
     VectorSidecarFacts? Vectors = null,
-    SemanticBrokerFacts? SemanticBroker = null);
+    SemanticBrokerFacts? SemanticBroker = null,
+    ScanGovernorSnapshot? ScanGovernor = null);
 
 public sealed record SemanticBrokerFacts(
     string State,
@@ -372,6 +377,8 @@ public static class WorkspaceRender
             sb.Append("vectors: ").Append(vectorsLabel).Append('\n');
         if (facts.SemanticBroker is { } broker)
             sb.Append("semantic_broker: ").Append(SemanticBrokerLabel(broker)).Append('\n');
+        if (ScanGovernorLabel(facts.ScanGovernor) is { } governorLabel)
+            sb.Append("scan_governor: ").Append(governorLabel).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -422,6 +429,54 @@ public static class WorkspaceRender
             : $"unavailable ({facts.Reason})",
         _ => facts.State,
     };
+
+    // Null ⇒ render no `scan_governor:` line at all. An idle workspace, a disabled governor, and an unreadable
+    // owner record all produce a NULL fact, so anything but a live waiting/holding position produces
+    // byte-identical output to a build without the governor — the same rule VectorsLabel follows.
+    private static string? ScanGovernorLabel(ScanGovernorSnapshot? facts)
+    {
+        if (facts is null)
+            return null;
+
+        var label = new StringBuilder(facts.State);
+        label.Append(' ').Append(ElapsedSeconds(facts.SinceUtc).ToString(CultureInfo.InvariantCulture)).Append('s');
+        if (facts.HolderPid is { } holderPid)
+        {
+            label.Append(" (holder pid ").Append(holderPid.ToString(CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(facts.HolderWorkspaceRoot))
+                label.Append(' ').Append(facts.HolderWorkspaceRoot);
+            label.Append(')');
+        }
+        else if (!string.IsNullOrWhiteSpace(facts.Reason))
+        {
+            label.Append(" (").Append(facts.Reason).Append(')');
+        }
+
+        return label.ToString();
+    }
+
+    private static void WriteScanGovernorJson(Utf8JsonWriter w, ScanGovernorSnapshot facts)
+    {
+        w.WriteStartObject();
+        w.WriteString("state", facts.State);
+        if (facts.Reason is null) w.WriteNull("reason");
+        else w.WriteString("reason", facts.Reason);
+        if (facts.SinceUtc is { } since)
+        {
+            w.WriteString("since_utc", since.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+            w.WriteNumber("waiting_seconds", ElapsedSeconds(since));
+        }
+        else
+        {
+            w.WriteNull("since_utc");
+            w.WriteNull("waiting_seconds");
+        }
+        if (facts.HolderPid is { } holderPid) w.WriteNumber("holder_pid", holderPid);
+        else w.WriteNull("holder_pid");
+        if (facts.HolderWorkspaceRoot is null) w.WriteNull("holder_workspace_root");
+        else w.WriteString("holder_workspace_root", facts.HolderWorkspaceRoot);
+        w.WriteEndObject();
+    }
 
     private static string SemanticBrokerLabel(SemanticBrokerFacts facts)
     {
@@ -596,6 +651,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("semantic_broker");
                 WriteSemanticBrokerJson(w, broker, includeOwnerPid: true);
+            }
+
+            if (facts.ScanGovernor is { } scanGovernor)
+            {
+                w.WritePropertyName("scan_governor");
+                WriteScanGovernorJson(w, scanGovernor);
             }
 
             w.WritePropertyName("index");
@@ -931,6 +992,8 @@ public static class WorkspaceRender
             sb.Append("vectors: ").Append(HealthCompactValue(vectorsLabel)).Append('\n');
         if (status.SemanticBroker is { } broker)
             sb.Append("semantic_broker: ").Append(HealthCompactValue(SemanticBrokerLabel(broker))).Append('\n');
+        if (ScanGovernorLabel(status.ScanGovernor) is { } governorLabel)
+            sb.Append("scan_governor: ").Append(HealthCompactValue(governorLabel)).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -1100,6 +1163,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("semantic_broker");
                 WriteSemanticBrokerJson(w, broker, includeOwnerPid: true);
+            }
+
+            if (status.ScanGovernor is { } scanGovernor)
+            {
+                w.WritePropertyName("scan_governor");
+                WriteScanGovernorJson(w, scanGovernor);
             }
 
             w.WritePropertyName("index");

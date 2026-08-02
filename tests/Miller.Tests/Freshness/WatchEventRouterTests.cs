@@ -41,7 +41,7 @@ public sealed class WatchEventRouterTests
     public void Route_CreatedOrModified_Exists_EmitsUpdate(WatchEventKind kind)
     {
         var ops = WatchEventRouter.Route(
-            new[] { new WatchEvent("/repo/a.cs", kind) }, AllExist, needsRescanOrHead: false);
+            new[] { new WatchEvent("/repo/a.cs", kind) }, AllExist, needsRescanOrHead: false, forceWholeRepoScan: false);
 
         var op = Assert.Single(ops);
         Assert.Equal("/repo/a.cs", AssertUpdate(op).Path);
@@ -55,7 +55,7 @@ public sealed class WatchEventRouterTests
         // The file was created/modified then vanished before the drain (a race). Routing it as Update
         // would make julie no-op or error on a missing file; the affected path is gone => Delete.
         var ops = WatchEventRouter.Route(
-            new[] { new WatchEvent("/repo/a.cs", kind) }, NoneExist, needsRescanOrHead: false);
+            new[] { new WatchEvent("/repo/a.cs", kind) }, NoneExist, needsRescanOrHead: false, forceWholeRepoScan: false);
 
         var op = Assert.Single(ops);
         Assert.Equal("/repo/a.cs", AssertDelete(op).Path);
@@ -67,7 +67,7 @@ public sealed class WatchEventRouterTests
         // A Deleted event always deletes even if the stat (racily) reports the path back; the index
         // entry must be removed to match the observed deletion.
         var ops = WatchEventRouter.Route(
-            new[] { new WatchEvent("/repo/a.cs", WatchEventKind.Deleted) }, AllExist, needsRescanOrHead: false);
+            new[] { new WatchEvent("/repo/a.cs", WatchEventKind.Deleted) }, AllExist, needsRescanOrHead: false, forceWholeRepoScan: false);
 
         var op = Assert.Single(ops);
         Assert.Equal("/repo/a.cs", AssertDelete(op).Path);
@@ -78,7 +78,7 @@ public sealed class WatchEventRouterTests
     {
         var ops = WatchEventRouter.Route(
             new[] { WatchEvent.Renamed("/repo/old.cs", "/repo/new.cs") },
-            ExistsOnly("/repo/new.cs"), needsRescanOrHead: false);
+            ExistsOnly("/repo/new.cs"), needsRescanOrHead: false, forceWholeRepoScan: false);
 
         Assert.Equal(2, ops.Count);
         Assert.Equal("/repo/old.cs", AssertDelete(ops[0]).Path); // delete the source first
@@ -91,7 +91,7 @@ public sealed class WatchEventRouterTests
         // Rename target also vanished (rename-away then removed). Both paths route to Delete.
         var ops = WatchEventRouter.Route(
             new[] { WatchEvent.Renamed("/repo/old.cs", "/repo/new.cs") },
-            NoneExist, needsRescanOrHead: false);
+            NoneExist, needsRescanOrHead: false, forceWholeRepoScan: false);
 
         Assert.Equal(2, ops.Count);
         Assert.Equal("/repo/old.cs", AssertDelete(ops[0]).Path);
@@ -108,7 +108,7 @@ public sealed class WatchEventRouterTests
             WatchEvent.Renamed("/repo/c.cs", "/repo/d.cs"),
         };
 
-        var ops = WatchEventRouter.Route(events, AllExist, needsRescanOrHead: true);
+        var ops = WatchEventRouter.Route(events, AllExist, needsRescanOrHead: true, forceWholeRepoScan: false);
 
         var op = Assert.Single(ops);
         Assert.IsType<ScanOp>(op);
@@ -119,7 +119,7 @@ public sealed class WatchEventRouterTests
     {
         // .git/HEAD change forces a reconcile via the same flag; no per-file events needed.
         var ops = WatchEventRouter.Route(
-            Array.Empty<WatchEvent>(), AllExist, needsRescanOrHead: true);
+            Array.Empty<WatchEvent>(), AllExist, needsRescanOrHead: true, forceWholeRepoScan: false);
 
         Assert.IsType<ScanOp>(Assert.Single(ops));
     }
@@ -127,7 +127,18 @@ public sealed class WatchEventRouterTests
     [Fact]
     public void Route_EmptyEvents_NoRescan_EmitsNothing()
     {
-        Assert.Empty(WatchEventRouter.Route(Array.Empty<WatchEvent>(), AllExist, needsRescanOrHead: false));
+        Assert.Empty(WatchEventRouter.Route(Array.Empty<WatchEvent>(), AllExist, needsRescanOrHead: false, forceWholeRepoScan: false));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Route_StampsTheRequestedScanIntentOnTheScanOp(bool force)
+    {
+        var ops = WatchEventRouter.Route(
+            Array.Empty<WatchEvent>(), AllExist, needsRescanOrHead: true, forceWholeRepoScan: force);
+
+        Assert.Equal(force, Assert.IsType<ScanOp>(Assert.Single(ops)).Force);
     }
 
     [Fact]
@@ -141,7 +152,7 @@ public sealed class WatchEventRouterTests
         };
         var exists = ExistsOnly("/repo/keep.cs", "/repo/to.cs");
 
-        var ops = WatchEventRouter.Route(events, exists, needsRescanOrHead: false);
+        var ops = WatchEventRouter.Route(events, exists, needsRescanOrHead: false, forceWholeRepoScan: false);
 
         Assert.Equal(4, ops.Count);
         Assert.Equal("/repo/keep.cs", AssertUpdate(ops[0]).Path);
@@ -154,14 +165,14 @@ public sealed class WatchEventRouterTests
     public void Route_NullEvents_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            WatchEventRouter.Route(null!, AllExist, needsRescanOrHead: false));
+            WatchEventRouter.Route(null!, AllExist, needsRescanOrHead: false, forceWholeRepoScan: false));
     }
 
     [Fact]
     public void Route_NullExistsPredicate_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            WatchEventRouter.Route(Array.Empty<WatchEvent>(), null!, needsRescanOrHead: false));
+            WatchEventRouter.Route(Array.Empty<WatchEvent>(), null!, needsRescanOrHead: false, forceWholeRepoScan: false));
     }
 
     [Fact]

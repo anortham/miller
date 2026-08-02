@@ -19,13 +19,24 @@ public sealed record UpdateOp(string Path) : ExtractOp;
 public sealed record DeleteOp(string Path) : ExtractOp;
 
 /// <summary>
-/// Force a whole-repo hash-delta reconcile (julie <c>extract scan</c>). Emitted on overflow / <c>.git/HEAD</c>
-/// change / startup. Stateless singleton — <see cref="Instance"/> — since it carries no payload.
+/// A whole-repo reconcile (julie <c>extract scan</c>). Emitted on overflow / <c>.git/HEAD</c> change / startup.
+/// <see cref="Force"/> distinguishes the hash-delta reconcile from the from-scratch rebuild an extractor upgrade
+/// or an operator full-scan request needs; a re-armed request must carry its intent or the retry silently
+/// degrades to a delta scan that "succeeds" without rebuilding anything.
 /// </summary>
 public sealed record ScanOp : ExtractOp
 {
-    private ScanOp() { }
+    private ScanOp(bool force) => Force = force;
 
-    /// <summary>The single shared <see cref="ScanOp"/> value.</summary>
-    public static ScanOp Instance { get; } = new();
+    /// <summary>Whether julie must rebuild from scratch (<c>scan --force</c>) rather than hash-delta reconcile.</summary>
+    public bool Force { get; }
+
+    /// <summary>The shared delta-reconcile value.</summary>
+    public static ScanOp Instance { get; } = new(force: false);
+
+    /// <summary>The shared from-scratch rebuild value.</summary>
+    public static ScanOp Forced { get; } = new(force: true);
+
+    /// <summary>The shared value carrying <paramref name="force"/>.</summary>
+    public static ScanOp For(bool force) => force ? Forced : Instance;
 }

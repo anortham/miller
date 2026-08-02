@@ -95,11 +95,15 @@ public sealed class IndexerServiceScanTests : IDisposable
 
         public ExtractReport Delete(string path) => throw new NotSupportedException("not exercised here");
 
+        /// <summary>Runs while the caller still holds machine-wide scan admission.</summary>
+        public Action? WhileScanning { get; set; }
+
         public ExtractReport Scan(bool force = false)
         {
             lock (_gate)
                 _scanForce.Add(force);
             ScanCalled.Set();
+            WhileScanning?.Invoke();
             if (ThrowOnScan is not null)
                 throw ThrowOnScan;
             return Stub(Revision);
@@ -158,7 +162,9 @@ public sealed class IndexerServiceScanTests : IDisposable
     // defaults OFF, so the disabled (byte-identical) path is what these no-workspace tests exercise.
     private static IndexerService NewService(
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
-        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
+        ScanGovernor? scanGovernor = null,
+        TimeSpan? scanGovernorWait = null)
     {
         string tempHome = CreateTempHome();
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -173,7 +179,9 @@ public sealed class IndexerServiceScanTests : IDisposable
             SymbolSearchSidecar.Disabled,
             attachFileWatchers: false,
             drainFullScanRequests: drainFullScanRequests,
-            drainFileConvergeRequests: drainFileConvergeRequests);
+            drainFileConvergeRequests: drainFileConvergeRequests,
+            scanGovernor: scanGovernor,
+            scanGovernorWait: scanGovernorWait);
     }
 
     // A leader-capable instance whose bootstrap is SEEDED with a workspace (so TryScanAsLeader can read its
@@ -182,7 +190,11 @@ public sealed class IndexerServiceScanTests : IDisposable
     private static IndexerService NewSeededService(
         WorkspaceContext workspace,
         SymbolSearchSidecar sidecar,
-        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null)
+        Func<string, FileConvergeDrainResult>? drainFileConvergeRequests = null,
+        ScanGovernor? scanGovernor = null,
+        TimeSpan? scanGovernorWait = null,
+        Func<string, FullScanDrainResult>? drainFullScanRequests = null,
+        Func<string?>? ownExtractorVersion = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -190,7 +202,8 @@ public sealed class IndexerServiceScanTests : IDisposable
         bootstrap.SeedForTest(
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
-        if (drainFileConvergeRequests is null)
+        if (drainFileConvergeRequests is null && scanGovernor is null && drainFullScanRequests is null &&
+            ownExtractorVersion is null)
             return new IndexerService(
                 bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
@@ -202,7 +215,11 @@ public sealed class IndexerServiceScanTests : IDisposable
             leaderRetryInterval: TimeSpan.FromHours(1),
             sidecar,
             attachFileWatchers: false,
-            drainFileConvergeRequests: drainFileConvergeRequests);
+            drainFullScanRequests: drainFullScanRequests,
+            drainFileConvergeRequests: drainFileConvergeRequests,
+            ownExtractorVersion: ownExtractorVersion,
+            scanGovernor: scanGovernor,
+            scanGovernorWait: scanGovernorWait);
     }
 
     private static IndexerService NewStartedService(
@@ -711,6 +728,162 @@ public sealed class IndexerServiceScanTests : IDisposable
         Assert.Equal(new[] { true }, ops.ScanForce); // the scan WAS attempted (then threw)
     }
 
+    // ---- W3: machine-wide scan admission on the leader's whole-repo paths ----
+    // The per-workspace writer lock cannot stop N worktrees from each running a whole-repo extract at once (that
+    // is the OOM in the 2026-08-01 field report). Admission is user-global and capacity 1, so a leader that
+    // cannot get it must degrade to the prior index rather than scan ungoverned. Per-file update/delete stays
+    // exempt — it is cheap and blocking it would stall interactive write-through.
+
+    private static ScanGovernorLease HoldMachineScanAdmission(string millerHome) =>
+        ScanGovernor.ForMillerHome(millerHome).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "test-holder", 4),
+            TimeSpan.Zero,
+            CancellationToken.None)
+        ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease.");
+
+    // A refusal is routine under the short interactive budget, so reporting it as Failed sent agents hunting an
+    // extract error that was never logged while the rebuild they asked for was dropped.
+    [Fact]
+    public void TryScanAsLeader_WhenMachineScanAdmissionIsBusy_ReportsQueued_WithoutScanning()
+    {
+        string home = CreateTempHome();
+        var service = NewService(
+            scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.Zero);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        ScanOutcome outcome;
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            outcome = service.TryScanAsLeader(force: true);
+
+        Assert.Equal(ScanOutcome.Kind.Queued, outcome.Result);
+        Assert.Null(outcome.Report);
+        Assert.NotNull(outcome.HolderDescription);
+        Assert.Empty(ops.ScanForce);
+    }
+
+    [Fact]
+    public void TryScanAsLeader_WhenMachineScanAdmissionIsBusy_RearmsTheForcedScan()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.TryScanAsLeader(force: true);
+
+        Assert.False(service.QueueEmpty);
+
+        service.DrainForTest(headChanged: false);
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void TryScanAsLeader_WhenMachineScanAdmissionIsFree_Scans_AndReleasesTheLeaseAfterwards()
+    {
+        string home = CreateTempHome();
+        var service = NewService(
+            scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.Zero);
+        service.PublishOpsForTest(new RecordingScanOps());
+
+        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+
+        using ScanGovernorLease? afterwards = ScanGovernor.ForMillerHome(home).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "probe", 4), TimeSpan.Zero, CancellationToken.None);
+        Assert.NotNull(afterwards);
+    }
+
+    [Fact]
+    public void TryScanAsLeader_WhenNotLeader_NeverWaitsForMachineScanAdmission()
+    {
+        string home = CreateTempHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewService(
+            scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.FromMinutes(10));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        stopwatch.Stop();
+
+        Assert.Equal(ScanOutcome.Kind.NotLeader, outcome.Result);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
+    [Fact]
+    public void ProcessLeaderFullScanRequests_WhenMachineScanAdmissionIsBusy_DoesNotScan_AndRearmsTheRescan()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            });
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0));
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        bool processed;
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            processed = service.ProcessLeaderFullScanRequestsForTest("/repo/.miller");
+
+        Assert.False(processed);
+        Assert.Empty(ops.ScanForce);
+
+        // The drain already deleted the request file, so the requester's rebuild would be lost unless the refusal
+        // re-armed the core's latch — the next debounce tick must run it, and it must still be FORCED.
+        service.DrainForTest(headChanged: false);
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void TryReindexAsLeader_TakesNoMachineScanAdmission()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            });
+        string home = CreateTempHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.FromMinutes(10));
+        var ops = new RecordingScanOps { UpdateRevision = 2 };
+        service.PublishOpsForTest(ops);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        bool reindexed = service.TryReindexAsLeader("src/Edit.cs");
+        stopwatch.Stop();
+
+        Assert.True(reindexed);
+        Assert.Equal(new[] { "src/Edit.cs" }, ops.UpdatePaths);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
     [Fact]
     public async Task StartAsync_WhenLeader_RunsExactlyOneStartupDeltaScan_AndMarksRegistryScanned()
     {
@@ -1159,5 +1332,327 @@ public sealed class IndexerServiceScanTests : IDisposable
         {
             try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
         }
+    }
+
+    // ---- W3 F10: the production admission expression, driven through a real drain tick ----
+    // Every wholeRepoScanAdmitted assertion used to live in IndexerCoreTests with the boolean supplied by hand,
+    // so the expression that COMPUTES it in IndexerService was guarded by nothing. These drive RunDrainTick.
+
+    private static IndexerService NewGovernedDrainService(string home, string dbPath) =>
+        NewSeededService(
+            WorkspaceWithDb(dbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => FullScanDrainResult.Empty);
+
+    [Fact]
+    public void DrainTick_WithASignalledRescan_AndTheGovernorHeldElsewhere_RunsNoExtract_ButStillAppliesEdits()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(force: false);
+        service.EnqueueForTest(new WatchEvent("/repo/a.cs", WatchEventKind.Modified));
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Empty(ops.ScanForce);
+        Assert.Equal(new[] { "/repo/a.cs" }, ops.UpdatePaths);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void DrainTick_WithACheckoutSizedBatch_AndTheGovernorHeldElsewhere_RunsNoExtractAtAll()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(force: false);
+        for (int i = 0; i <= IndexerCore.MaxDeferredScanDrain; i++)
+            service.EnqueueForTest(new WatchEvent($"/repo/{i}.cs", WatchEventKind.Modified));
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Empty(ops.ScanForce);
+        Assert.Empty(ops.UpdatePaths);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.Empty(ops.UpdatePaths);
+    }
+
+    [Fact]
+    public void DrainTick_WhenARescanArrivesAfterTheAdmissionPeek_RefusesRatherThanScanningUngoverned()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.BetweenScanPeekAndDrainForTest = () => service.RequestWholeRepoScanForTest(force: false);
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Empty(ops.ScanForce);
+
+        service.BetweenScanPeekAndDrainForTest = null;
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenMachineScanAdmissionIsBusy_DoesNotScan_AndRearmsTheLatch()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.Empty(ops.ScanForce);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void ExtractorUpgradeRescan_WhenMachineScanAdmissionIsBusy_RearmsAForcedScan()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => FullScanDrainResult.Empty,
+            ownExtractorVersion: () => "2.21.0");
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        using (ScanGovernorLease held = HoldMachineScanAdmission(home))
+            service.RunExtractorUpgradeRescanForTest();
+
+        Assert.Empty(ops.ScanForce);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    [Fact]
+    public void RunStartupDeltaScan_WhenTheScanFails_RearmsTheLatchRatherThanLosingTheReconcile()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        service.PublishOpsForTest(ops);
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+
+        ops.ThrowOnScan = null;
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false, false }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    // ---- W3 G2: out-of-band scans must report completion, intent-aware ----
+    // Every whole-repo scan this service runs itself bypasses IndexerCore's drain, so without a completion signal
+    // the latch that would have run it survives and the same tick rebuilds the repo a second time. The signal has
+    // to carry INTENT: a delta that satisfies a pending FORCED request would drop the from-scratch rebuild.
+
+    [Fact]
+    public void LeaderRequestedFullScan_ThatSucceeds_ClearsAPendingForcedLatch_SoTheTickDoesNotRebuildTwice()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0));
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(force: true);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    [Fact]
+    public void StartupDeltaScan_ThatSucceeds_NeverSatisfiesAPendingForcedRebuild()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(force: true);
+
+        service.RunStartupDeltaScanForTest(workspace);
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false, true }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    [Fact]
+    public void OnDemandScan_ThatSucceeds_ClearsTheLatchItWouldOtherwiseLeaveArmed()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(force: true);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(force: true).Result);
+
+        Assert.True(service.QueueEmpty);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+    }
+
+    // A scan cannot service a request that did not exist when it started. TryScanAsLeader's refusal path arms the
+    // latch without _opsGate, so an MCP caller told "queued" mid-rebuild must still get its rebuild.
+    [Fact]
+    public void OnDemandScan_WithAForcedRequestArmedMidScan_StillRunsThatRequestOnTheNextTick()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        var ops = new RecordingScanOps();
+        ops.WhileScanning = () =>
+        {
+            ops.WhileScanning = null;
+            service.RequestWholeRepoScanForTest(force: true);
+        };
+        service.PublishOpsForTest(ops);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(force: true).Result);
+        Assert.False(service.QueueEmpty);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { true, true }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    // ---- W3 G7: admission state is published under a key readers look up, or not at all ----
+
+    [Fact]
+    public void ScanAdmission_PublishesThisProcessesPosition_UnderTheCanonicalRoot()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        ScanGovernorSnapshot? seen = null;
+        var ops = new RecordingScanOps
+        {
+            WhileScanning = () => seen = ScanGovernorState.Shared.Snapshot(workspace.CanonicalRoot!),
+        };
+        service.PublishOpsForTest(ops);
+
+        service.TryScanAsLeader(force: false);
+
+        Assert.Equal(ScanGovernorStates.Holding, seen?.State);
+        Assert.Null(ScanGovernorState.Shared.Snapshot(workspace.CanonicalRoot!));
+    }
+
+    [Fact]
+    public void ScanAdmission_WhenNoWorkspaceRootIsKnown_PublishesNothingUnderAnInventedKey()
+    {
+        string home = CreateTempHome();
+        var service = NewService(
+            scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.Zero);
+        ScanGovernorOwner? owner = null;
+        var ops = new RecordingScanOps
+        {
+            WhileScanning = () => owner = ScanGovernor.ForMillerHome(home).TryReadOwner(),
+        };
+        service.PublishOpsForTest(ops);
+
+        service.TryScanAsLeader(force: false);
+
+        Assert.Equal(IndexerService.UnknownWorkspaceRootLabel, owner?.WorkspaceRoot);
+        Assert.Null(ScanGovernorState.Shared.Snapshot(IndexerService.UnknownWorkspaceRootLabel));
+    }
+
+    [Fact]
+    public void ExtractorUpgradeRescan_WhenTheForcedScanFails_RearmsAForcedScanRatherThanLosingIt()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => FullScanDrainResult.Empty,
+            ownExtractorVersion: () => "2.21.0");
+        var ops = new RecordingScanOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        service.PublishOpsForTest(ops);
+
+        service.RunExtractorUpgradeRescanForTest();
+
+        Assert.Equal(new[] { true }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+
+        ops.ThrowOnScan = null;
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { true, true }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
     }
 }

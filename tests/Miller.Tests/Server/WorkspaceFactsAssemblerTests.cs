@@ -378,4 +378,161 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
         if (Directory.Exists(_temp))
             Directory.Delete(_temp, recursive: true);
     }
+
+    // ---- W3 F5/F8: the scan-governor key, and the corroboration the holding_elsewhere fallback needs ----
+
+    private string NewMillerHome() =>
+        Directory.CreateDirectory(Path.Combine(_temp, "home-" + Guid.NewGuid().ToString("N"))).FullName;
+
+    private static void WriteOwnerFile(ScanGovernor governor, int pid, string workspaceRoot)
+    {
+        Directory.CreateDirectory(governor.DirectoryPath);
+        File.WriteAllText(
+            governor.OwnerFilePath,
+            JsonSerializer.Serialize(new
+            {
+                pid,
+                workspace_root = workspaceRoot,
+                reason = "leader-ondemand",
+                jobs = 4,
+                started_at_utc = DateTimeOffset.UtcNow,
+            }));
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_PublishedUnderTheCanonicalRoot_IsFoundByTheUnresolvedRootReader()
+    {
+        string canonicalRoot = Path.Combine(_temp, "canonical-" + Guid.NewGuid().ToString("N"));
+        string unresolvedRoot = Path.Combine(_temp, "unresolved-" + Guid.NewGuid().ToString("N"));
+        var context = WorkspaceContext.Create(unresolvedRoot, AppContext.BaseDirectory, _temp) with
+        {
+            CanonicalRoot = canonicalRoot,
+        };
+        var request = new ScanGovernorRequest(canonicalRoot, "leader-drain-rescan", 4);
+        long id = ScanGovernorState.Shared.EnterWaiting(request);
+        try
+        {
+            WorkspaceFacts facts = WorkspaceFactsAssembler.FromUnregisteredLocal(
+                context,
+                new WorkspaceIndexFacts(0, 0),
+                SymbolSearchSidecar.Disabled,
+                new ContentCorpusSidecar(),
+                VectorSidecar.Disabled);
+
+            Assert.Equal(ScanGovernorStates.Waiting, facts.ScanGovernor?.State);
+        }
+        finally
+        {
+            ScanGovernorState.Shared.Exit(id, canonicalRoot);
+        }
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_WaitingBehindADeadRecordedHolder_StillReportsWaiting_WithoutNamingThePid()
+    {
+        string root = Path.Combine(_temp, "waiting-" + Guid.NewGuid().ToString("N"));
+        long id = ScanGovernorState.Shared.EnterWaiting(
+            new ScanGovernorRequest(root, "leader-drain-rescan", 4),
+            new ScanGovernorOwner(999_999, "/repo/dead-worktree", "leader-ondemand", 4, DateTimeOffset.UtcNow));
+        try
+        {
+            ScanGovernorSnapshot? facts = WorkspaceFactsAssembler.ScanGovernorFacts(
+                root, governor: null, isProcessAlive: (_, _) => false);
+
+            Assert.Equal(ScanGovernorStates.Waiting, facts?.State);
+            Assert.Null(facts?.HolderPid);
+            Assert.Null(facts?.HolderWorkspaceRoot);
+        }
+        finally
+        {
+            ScanGovernorState.Shared.Exit(id, root);
+        }
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_WaitingBehindALiveRecordedHolder_KeepsTheAttribution()
+    {
+        string root = Path.Combine(_temp, "waiting-" + Guid.NewGuid().ToString("N"));
+        long id = ScanGovernorState.Shared.EnterWaiting(
+            new ScanGovernorRequest(root, "leader-drain-rescan", 4),
+            new ScanGovernorOwner(4242, "/repo/other-worktree", "leader-ondemand", 4, DateTimeOffset.UtcNow));
+        try
+        {
+            ScanGovernorSnapshot? facts = WorkspaceFactsAssembler.ScanGovernorFacts(
+                root, governor: null, isProcessAlive: (_, _) => true);
+
+            Assert.Equal(ScanGovernorStates.Waiting, facts?.State);
+            Assert.Equal(4242, facts?.HolderPid);
+            Assert.Equal("/repo/other-worktree", facts?.HolderWorkspaceRoot);
+        }
+        finally
+        {
+            ScanGovernorState.Shared.Exit(id, root);
+        }
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_OwnerFileNamingADeadProcess_RendersNothing()
+    {
+        ScanGovernor governor = ScanGovernor.ForMillerHome(NewMillerHome());
+        WriteOwnerFile(governor, pid: 999_999, workspaceRoot: "/repo/dead-worktree");
+
+        Assert.Null(WorkspaceFactsAssembler.ScanGovernorFacts(
+            "/repo/mine", governor, isProcessAlive: (_, _) => false));
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_OwnerFileNamingThisProcess_IsNeverRenderedAsHoldingElsewhere()
+    {
+        ScanGovernor governor = ScanGovernor.ForMillerHome(NewMillerHome());
+        using ScanGovernorLease? held = governor.TryAcquire(
+            new ScanGovernorRequest("/repo/other-of-mine", "leader-ondemand", 4),
+            TimeSpan.Zero,
+            CancellationToken.None);
+
+        Assert.NotNull(held);
+        Assert.Null(WorkspaceFactsAssembler.ScanGovernorFacts("/repo/mine", governor));
+    }
+
+    [Fact]
+    public void ScanGovernorFacts_LiveForeignHolder_RendersHoldingElsewhere()
+    {
+        ScanGovernor governor = ScanGovernor.ForMillerHome(NewMillerHome());
+        WriteOwnerFile(governor, pid: Environment.ProcessId + 1, workspaceRoot: "/repo/other-worktree");
+
+        ScanGovernorSnapshot? facts = WorkspaceFactsAssembler.ScanGovernorFacts(
+            "/repo/mine", governor, isProcessAlive: (_, _) => true);
+
+        Assert.Equal(ScanGovernorStates.HoldingElsewhere, facts?.State);
+        Assert.Equal(Environment.ProcessId + 1, facts?.HolderPid);
+        Assert.Equal("/repo/other-worktree", facts?.HolderWorkspaceRoot);
+    }
+
+    // The display path must corroborate WITHOUT opening the lease: two concurrent status reads would otherwise
+    // corroborate each other over a free lease, and each would deny a real acquirer's poll while it probed.
+    [Fact]
+    public void ScanGovernorFacts_DoesNotTouchTheLease_SoAnAcquirerIsNeverBlocked()
+    {
+        string home = NewMillerHome();
+        ScanGovernor governor = ScanGovernor.ForMillerHome(home);
+        WriteOwnerFile(governor, pid: Environment.ProcessId + 1, workspaceRoot: "/repo/other-worktree");
+        int probes = 0;
+
+        ScanGovernorSnapshot? facts = WorkspaceFactsAssembler.ScanGovernorFacts(
+            "/repo/mine",
+            governor,
+            isProcessAlive: (_, _) =>
+            {
+                probes++;
+                using ScanGovernorLease? acquirer = ScanGovernor.ForMillerHome(home).TryAcquire(
+                    new ScanGovernorRequest("/repo/acquirer", "leader-ondemand", 4),
+                    TimeSpan.Zero,
+                    CancellationToken.None);
+                Assert.NotNull(acquirer);
+                return true;
+            });
+
+        Assert.Equal(1, probes);
+        Assert.Equal(ScanGovernorStates.HoldingElsewhere, facts?.State);
+    }
 }

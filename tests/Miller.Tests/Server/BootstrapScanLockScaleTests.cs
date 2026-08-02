@@ -134,6 +134,61 @@ public sealed class BootstrapScanLockScaleTests
         Assert.Contains("leader identity", IndexBootstrapService.DescribeBootstrapLockHolder(fx.MillerDir));
     }
 
+    // ---- W3: the two bootstrap scan-admission sites ----
+    // The bootstrap holds the workspace writer lease, then asks the user-global governor for admission INSIDE it.
+    // A busy governor must never produce a scan: N fresh worktrees starting at once is exactly the fleet that
+    // drove the reporter's machine into the OOM killer.
+
+    [Fact]
+    public void Bootstrap_WhenMachineScanAdmissionIsBusy_NeverScans_AndFailsNamingTheHolder()
+    {
+        ScaleTestSupport.RequireJulieServer();
+        using var fx = Fixture.Create();
+        using ScanGovernorLease held = fx.HoldMachineScanAdmission();
+
+        using var bootstrap = fx.CreateBootstrap(ScanGovernor.ForMillerHome(fx.GovernorHome));
+        BootstrapSnapshot snapshot = fx.RunBootstrapToFailure(bootstrap);
+
+        Assert.Equal(0, fx.ScanCount);
+        Assert.False(File.Exists(fx.DbPath));
+        Assert.Contains("machine-wide scan admission", snapshot.FailureMessage!, StringComparison.Ordinal);
+        Assert.Contains(
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            snapshot.FailureMessage!,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Bootstrap_WhenMachineScanAdmissionIsFree_Scans_AndReleasesTheLeaseAfterwards()
+    {
+        ScaleTestSupport.RequireJulieServer();
+        using var fx = Fixture.Create();
+
+        using var bootstrap = fx.CreateBootstrap(ScanGovernor.ForMillerHome(fx.GovernorHome));
+        fx.RunBootstrapToCompletion(bootstrap);
+
+        Assert.Equal(1, fx.ScanCount);
+        using ScanGovernorLease afterwards = fx.HoldMachineScanAdmission();
+    }
+
+    [Fact]
+    public void BootstrapAutoRebuild_WhenMachineScanAdmissionIsBusy_SkipsTheRebuildInsteadOfScanning()
+    {
+        ScaleTestSupport.RequireJulieServer();
+        using var fx = Fixture.Create();
+        File.Move(fx.ScanToStagingArtifact(), fx.DbPath);
+        fx.ExecuteOnArtifact(
+            "UPDATE artifact_metadata SET value = '99999' WHERE key = 'sqlite_schema_version';");
+        using ScanGovernorLease held = fx.HoldMachineScanAdmission();
+
+        using var bootstrap = fx.CreateBootstrap(ScanGovernor.ForMillerHome(fx.GovernorHome));
+        fx.RunBootstrapToFailure(bootstrap);
+
+        Assert.Equal(0, fx.ScanCount);
+        Assert.Contains(
+            fx.Log, m => m.Contains("Auto-rebuild skipped: machine-wide scan admission was refused"));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private static readonly TimeSpan BootstrapBudget = TimeSpan.FromMinutes(3);
@@ -189,14 +244,41 @@ public sealed class BootstrapScanLockScaleTests
             return new Fixture(work, home, repo, millerDir, Path.Combine(millerDir, "symbols.db"));
         }
 
-        public IndexBootstrapService CreateBootstrap()
+        public string GovernorHome => Path.Combine(_work, "governor-home");
+
+        public IndexBootstrapService CreateBootstrap(ScanGovernor? governor = null)
         {
-            var bootstrap = new IndexBootstrapService(_logger)
+            var bootstrap = new IndexBootstrapService(_logger, governor)
             {
                 TestHomeDirectoryOverride = _home,
+                TestBootstrapScanAdmissionWait = governor is null ? null : TimeSpan.Zero,
             };
             bootstrap.TestScanObserver = () => Interlocked.Increment(ref _scanCount);
             return bootstrap;
+        }
+
+        public ScanGovernorLease HoldMachineScanAdmission() =>
+            ScanGovernor.ForMillerHome(GovernorHome).TryAcquire(
+                new ScanGovernorRequest("/repo/other-worktree", "test-holder", 4),
+                TimeSpan.Zero,
+                CancellationToken.None)
+            ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease.");
+
+        public BootstrapSnapshot RunBootstrapToFailure(IndexBootstrapService bootstrap)
+        {
+            Assert.Equal(BindOutcome.Started,
+                bootstrap.BootstrapForRoot(Repo, WorkspaceBindingResolver.WorkspaceSource.Roots));
+
+            DateTimeOffset deadline = DateTimeOffset.UtcNow + BootstrapBudget;
+            BootstrapSnapshot snapshot = bootstrap.Snapshot;
+            while (snapshot.Phase == BootstrapPhase.Running && DateTimeOffset.UtcNow < deadline)
+            {
+                Thread.Sleep(50);
+                snapshot = bootstrap.Snapshot;
+            }
+
+            Assert.Equal(BootstrapPhase.Failed, snapshot.Phase);
+            return snapshot;
         }
 
         public void RunBootstrapToCompletion(IndexBootstrapService bootstrap)

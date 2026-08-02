@@ -34,6 +34,18 @@ public sealed class IndexerService : BackgroundService
     // How often a non-leader re-tries the writer lock so it can take over after the leader exits (failover).
     private static readonly TimeSpan DefaultLeaderRetryInterval = TimeSpan.FromSeconds(5);
 
+    // A path that RETRIES gets a short admission budget; only a path with no retry gets a long one. EVERY
+    // governed site in this service retries — the debounce drain re-peeks each tick, and the startup, upgrade,
+    // and leader-requested scans all re-arm the latch. Two of them (TryScanAsLeader, and the drain that delays
+    // D4 abdication) are reachable from a live MCP call, where a half-hour stall would jam every agent sharing
+    // the connection and outlive LeaderScanRequestQueue's request TTL. MILLER_SCAN_GOVERNOR_WAIT deliberately
+    // does NOT apply here: it is the operator budget for the one-shot CLI/dashboard forced refresh.
+    internal static readonly TimeSpan DefaultScanAdmissionWait = TimeSpan.FromSeconds(5);
+
+    // The owner-record label for a scan whose workspace root cannot be resolved (only reachable mid-rebind).
+    // It is diagnostics text, never a lookup key — no local state is published under it.
+    internal const string UnknownWorkspaceRootLabel = "(unknown)";
+
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<IndexerService> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -63,10 +75,22 @@ public sealed class IndexerService : BackgroundService
     private readonly IndexerSidecarConverger _sidecarConverger;
     private readonly WorkspaceRegistryScanPublisher _registryPublisher;
 
+    // Machine-wide (per-user) admission over whole-repo scans and the sidecar convergence that follows them.
+    // Acquired BEFORE _opsGate at every governed site so the per-file write-through path this design exempts
+    // (TryReindexAsLeader) can never be blocked behind an admission wait.
+    private readonly ScanGovernor _governor;
+    private readonly TimeSpan _governorWait;
+    private volatile CancellationTokenSource? _governorCancellation;
+
     private volatile IDisposable? _lease;
     private IndexerWatcherSet? _watchers;
     private IndexerCore? _core;
     private string? _currentMillerDir;
+
+    // The scan-governor key for the workspace this session serves, captured while the bootstrap is bound. It is
+    // the same value ScanGovernorKey.For yields, so a mid-rebind acquire (when the bootstrap getter throws) still
+    // publishes under a root status/health actually look up instead of an invented one.
+    private volatile string? _currentScanGovernorKey;
 
     // The leader's extract ops, set once leadership is won (null on a non-leader). M6 write-through reaches
     // through TryReindexAsLeader to converge the index inline after an apply; guarded by _opsGate so an edit on
@@ -84,7 +108,8 @@ public sealed class IndexerService : BackgroundService
     public IndexerService(
         IndexBootstrapService bootstrap, ILogger<IndexerService> logger, ILoggerFactory loggerFactory,
         SymbolSearchSidecar sidecar,
-        ContentCorpusSidecar? contentSidecar = null)
+        ContentCorpusSidecar? contentSidecar = null,
+        ScanGovernor? scanGovernor = null)
         : this(
             bootstrap,
             logger,
@@ -106,7 +131,8 @@ public sealed class IndexerService : BackgroundService
             // failure (gate nothing). Production-only — the internal test ctor defaults to no gate so no
             // fast test can ever spawn the languages probe.
             fetchSupportedExtensions: static workspace =>
-                SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot))
+                SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot),
+            scanGovernor: scanGovernor)
     {
     }
 
@@ -132,7 +158,9 @@ public sealed class IndexerService : BackgroundService
         Func<LeaderIdentity, bool>? leaderAliveProbe = null,
         Func<DateTimeOffset>? clock = null,
         Func<int, DateTimeOffset?, bool>? processAliveProbe = null,
-        Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null)
+        Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null,
+        ScanGovernor? scanGovernor = null,
+        TimeSpan? scanGovernorWait = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -177,6 +205,9 @@ public sealed class IndexerService : BackgroundService
         // Default = NO gate (null set). Unit tests reach this ctor; the gate's process probe must never run
         // in the fast suite, so only the public production ctor binds the real catalog fetch.
         _fetchSupportedExtensions = fetchSupportedExtensions ?? (static _ => null);
+        // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
+        _governor = scanGovernor ?? ScanGovernor.Disabled();
+        _governorWait = scanGovernorWait ?? DefaultScanAdmissionWait;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -206,6 +237,10 @@ public sealed class IndexerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // The synchronous scan paths take no token of their own, so an admission wait would otherwise stall
+        // Generic-Host shutdown. TryScanAsLeader is reached from MCP tool code with no token and shares this one.
+        var governorCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        _governorCancellation = governorCancellation;
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -222,6 +257,7 @@ public sealed class IndexerService : BackgroundService
                         "IndexerService started before the bootstrap resolved the canonical extract DB path.");
                 string millerDir = Path.GetDirectoryName(workspace.ExtractDbPath)!;
                 _currentMillerDir = millerDir;
+                _currentScanGovernorKey = canonicalRoot;
 
                 // The inner loop exists for the D4 yield protocol: a leader that abdicates to a newer-extractor
                 // challenger falls back into the claim loop as a reader (under the anti-flap cooldown) instead of
@@ -250,6 +286,7 @@ public sealed class IndexerService : BackgroundService
         }
         finally
         {
+            governorCancellation.Cancel();
             StepDownLeadership(_currentMillerDir);
         }
     }
@@ -383,18 +420,8 @@ public sealed class IndexerService : BackgroundService
         if (bindingGeneration != _bootstrap.BindingGeneration)
             return false;
 
-        // D3 auto-upgrade rescan: this claim's verdict proved the artifact was produced by an OLDER extractor
-        // than ours, so reconcile the whole repo with the newer binary immediately — upgrades self-heal with
-        // zero user action. One forced scan per claim, never per tick.
         if (claimVerdict is { ArtifactOlderThanOwn: true })
-        {
-            _logger.LogInformation(
-                "Extractor upgrade detected: bundled julie-extract {OwnVersion} is newer than the index artifact; " +
-                "running a forced full rescan.",
-                _leadership.ProbeOwnExtractorVersion());
-            lock (_opsGate)
-                ScanAsLeaderUnderGate(force: true, source: "extractor-upgrade");
-        }
+            RunExtractorUpgradeRescan();
 
         // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
         while (!stoppingToken.IsCancellationRequested &&
@@ -402,37 +429,18 @@ public sealed class IndexerService : BackgroundService
         {
             await Task.Delay(DebounceInterval, stoppingToken).ConfigureAwait(false);
 
-            bool headChanged;
-            lock (_headGate)
-            {
-                headChanged = _headChanged;
-                _headChanged = false;
-            }
-
             IndexerLeadershipYieldDecision? yieldDecision = null;
             IndexerLeadershipHandoffDecision? handoffDecision = null;
             try
             {
-                // D4 leader side: drain yield requests alongside the other request kinds. The decision is
-                // evaluated first but ACTED on only after this tick's work finishes (below), so an in-flight
-                // converge batch is never abandoned mid-tick.
+                // D4 leader side, decided BEFORE any work: a leader about to abdicate must not queue behind the
+                // machine-wide scan lease for a scan it is giving up, and leaving the full-scan/converge request
+                // files undrained hands them to its successor instead of deleting them unserviced.
                 yieldDecision = _leadership.EvaluateYieldRequests(millerDir, LogRequestDrainStats);
                 handoffDecision = _leadership.EvaluateLeaderHandoffRequests(millerDir, LogRequestDrainStats);
-                TryProcessLeaderFullScanRequests(millerDir);
-                TryProcessFileConvergeRequests(millerDir);
 
-                // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
-                // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract`
-                // subprocesses must never run against the same .miller DB at once (the M3 single-writer
-                // corruption guard, D3). DrainAndProcess additionally serializes the queue on IndexerCore's
-                // own gate; the lock order is always _opsGate -> _core gate (the Try* methods never take the
-                // core gate, and the watcher enqueue only takes the core gate), so there is no inversion.
-                lock (_opsGate)
-                {
-                    bool processed = _core!.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
-                    if (processed)
-                        TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
-                }
+                if (yieldDecision is null && handoffDecision is null)
+                    RunDrainTick(millerDir, workspace);
             }
             catch (Exception ex)
             {
@@ -462,6 +470,76 @@ public sealed class IndexerService : BackgroundService
         }
 
         return false;
+    }
+
+    // D3 auto-upgrade rescan: this claim's verdict proved the artifact was produced by an OLDER extractor than
+    // ours, so reconcile the whole repo with the newer binary immediately — upgrades self-heal with zero user
+    // action. One forced scan per claim, never per tick: this runs OUTSIDE the debounce loop and
+    // ScanAsLeaderUnderGate REPORTS a throw as Failed rather than rethrowing, so a refused admission AND a failed
+    // extract both have to re-arm the latch (with force) or the upgrade never self-heals.
+    private void RunExtractorUpgradeRescan()
+    {
+        _logger.LogInformation(
+            "Extractor upgrade detected: bundled julie-extract {OwnVersion} is newer than the index artifact; " +
+            "running a forced full rescan.",
+            _leadership.ProbeOwnExtractorVersion());
+
+        bool rescanned = false;
+        using (ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-upgrade"))
+        {
+            if (admission is not null)
+            {
+                lock (_opsGate)
+                {
+                    rescanned = ScanAsLeaderUnderGate(force: true, source: "extractor-upgrade").Result
+                        == ScanOutcome.Kind.Scanned;
+                }
+            }
+        }
+
+        if (!rescanned)
+            _core?.RequestWholeRepoScan(force: true);
+    }
+
+    // One debounce tick's work: leader request files, then the coalesced drain. Runs only on a tick that is NOT
+    // abdicating, so `.git/HEAD` stays latched for the successor rather than being consumed and dropped.
+    private void RunDrainTick(string millerDir, WorkspaceContext workspace)
+    {
+        bool headChanged;
+        lock (_headGate)
+        {
+            headChanged = _headChanged;
+            _headChanged = false;
+        }
+
+        TryProcessLeaderFullScanRequests(millerDir);
+        TryProcessFileConvergeRequests(millerDir);
+
+        // Scan admission is taken OUTSIDE _opsGate (and outside IndexerCore's own gate), because waiting for it
+        // while holding _opsGate would block the exempt per-file write-through path. The peek can race the
+        // watcher threads, but only in the safe direction: if the flags grow between peek and drain,
+        // DrainAndProcess skips the scan and keeps the latch for the next tick — never an ungoverned scan.
+        bool mayScanWholeRepo = _core!.WouldRunWholeRepoScan(headChanged);
+        using ScanGovernorAdmission? admission = mayScanWholeRepo
+            ? TryAcquireScanAdmission("leader-drain-rescan")
+            : null;
+        BetweenScanPeekAndDrainForTest?.Invoke();
+
+        // Hold _opsGate across the drain so the debounce-loop drain and the on-demand Try* scans
+        // (TryScanAsLeader / TryReindexAsLeader) share ONE serialization: two julie `extract` subprocesses must
+        // never run against the same .miller DB at once (the M3 single-writer corruption guard, D3).
+        // DrainAndProcess additionally serializes the queue on IndexerCore's own gate; the lock order is always
+        // _opsGate -> _core gate (the Try* methods take the core gate only to arm or clear the rescan latch,
+        // always in that direction, and the watcher enqueue takes the core gate alone), so there is no inversion.
+        lock (_opsGate)
+        {
+            bool processed = _core!.DrainAndProcess(
+                headChanged,
+                wholeRepoScanAdmitted: admission is not null,
+                out bool usedWholeRepoScan);
+            if (processed)
+                TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+        }
     }
 
     // Production own-version probe: locate the bundled binary once and ask it. Null on ANY failure (missing
@@ -534,9 +612,19 @@ public sealed class IndexerService : BackgroundService
             ?? throw new InvalidOperationException(
                 "IndexerService cannot run startup scan before bootstrap resolves the stable workspace id.");
 
+        using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-startup");
+        if (admission is null)
+        {
+            // Not a workspace error: the index stays valid and the debounce loop's next rescan tick retries.
+            // A startup delta is force:false, so the re-armed latch stays a delta scan.
+            _core?.RequestWholeRepoScan(force: false);
+            return;
+        }
+
         try
         {
             ExtractReport report;
+            long armingGeneration = _core?.WholeRepoScanArmingGeneration ?? 0;
             lock (_opsGate)
             {
                 IExtractOps ops = _ops
@@ -548,6 +636,10 @@ public sealed class IndexerService : BackgroundService
                 TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
             }
 
+            // A delta scan does not satisfy a pending FORCED request, and neither does it satisfy a request armed
+            // after it started, so the core decides whether this clears the latch; without the call a delta that
+            // ran here would leave it armed for a duplicate scan.
+            _core?.NoteWholeRepoScanCompleted(force: false, armingGeneration);
             _registryPublisher.MarkScanned(workspace, stableWorkspaceId, report.Revision);
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
@@ -557,6 +649,9 @@ public sealed class IndexerService : BackgroundService
         }
         catch (Exception ex)
         {
+            // This block runs once per claim, OUTSIDE the debounce loop, so nothing else retries it: without the
+            // re-arm a failed startup delta drops the reconcile for every edit made while Miller was down.
+            _core?.RequestWholeRepoScan(force: false);
             _logger.LogWarning(ex, "Startup delta scan failed; keeping the loaded index until a later scan converges.");
             try
             {
@@ -613,14 +708,71 @@ public sealed class IndexerService : BackgroundService
     /// <see cref="_opsGate"/> — the same serialization as the debounce-loop drain and the M6 write-through — so
     /// an on-demand scan never races a concurrent <c>extract</c>. Best-effort: an extract failure is logged and
     /// returned as <see cref="ScanOutcome.Failed"/>, never thrown into the caller (the tool), because the prior
-    /// index stays valid and the next scan/poll reconciles.
+    /// index stays valid and the next scan/poll reconciles. A refused machine-wide scan admission is NOT a
+    /// failure: it re-arms the rescan latch with <paramref name="force"/> and returns
+    /// <see cref="ScanOutcome.Queued"/>, so the caller can say the scan is queued rather than sending an agent
+    /// hunting an extract error that was never logged.
     /// </summary>
     public ScanOutcome TryScanAsLeader(bool force)
     {
+        if (!HoldsLeaderOps())
+            return ScanOutcome.NotLeader; // never wait for machine-wide admission we could not use
+
+        using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-ondemand");
+        if (admission is null)
+        {
+            _core?.RequestWholeRepoScan(force);
+            return ScanOutcome.Queued(_governor.DescribeHolder());
+        }
+
         lock (_opsGate)
         {
             return ScanAsLeaderUnderGate(force, "On-demand");
         }
+    }
+
+    private bool HoldsLeaderOps()
+    {
+        lock (_opsGate)
+            return _ops is not null;
+    }
+
+    // Machine-wide admission for ONE whole-repo scan plus the sidecar convergence that follows it. Always called
+    // OUTSIDE _opsGate. Returns null on refusal or on shutdown; the caller must degrade, never scan ungoverned.
+    private ScanGovernorAdmission? TryAcquireScanAdmission(string reason)
+    {
+        // Publish under the SAME key status/health read (CanonicalRoot, falling back to the unresolved root):
+        // keying the writer by the symlink-resolved path and the reader by the raw one made this process's own
+        // lease render as another process's on every symlinked workspace. When no key can be derived at all,
+        // publish NO local state rather than a third key shape no reader looks up.
+        WorkspaceContext? workspace = TryGetWorkspaceForSidecarConvergence();
+        string? workspaceRoot = ScanGovernorKey.For(workspace) ?? _currentScanGovernorKey;
+        var request = new ScanGovernorRequest(
+            workspaceRoot ?? UnknownWorkspaceRootLabel, reason, ExtractJobsPolicy.FromEnvironment());
+
+        ScanGovernorAdmission? admission;
+        try
+        {
+            admission = ScanGovernorAdmission.TryAcquire(
+                _governor,
+                workspaceRoot is null ? null : ScanGovernorState.Shared,
+                request,
+                _governorWait,
+                _governorCancellation?.Token ?? CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Scan admission wait ({Reason}) abandoned because the host is shutting down.", reason);
+            return null;
+        }
+
+        if (admission is null)
+            _logger.LogWarning(
+                "Refused machine-wide scan admission for {Reason} after {WaitSeconds}s; keeping the prior index " +
+                "(the next tick retries). {Holder}",
+                reason, _governorWait.TotalSeconds, _governor.DescribeHolder());
+
+        return admission;
     }
 
     private bool TryProcessLeaderFullScanRequests(string millerDir)
@@ -640,17 +792,36 @@ public sealed class IndexerService : BackgroundService
         if (!result.Requested)
             return false;
 
+        // The drain already DELETED the request files, so a refused or failed scan must re-arm the latch or the
+        // requester's rebuild is silently dropped.
+        using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-requested-full");
+        if (admission is null)
+        {
+            _core?.RequestWholeRepoScan(force: true);
+            return false;
+        }
+
         lock (_opsGate)
         {
             ScanOutcome outcome = ScanAsLeaderUnderGate(force: true, source: "Leader-requested");
+            if (outcome.Result != ScanOutcome.Kind.Scanned)
+                _core?.RequestWholeRepoScan(force: true);
             return outcome.Result == ScanOutcome.Kind.Scanned;
         }
     }
 
+    // Callers MUST already hold machine-wide scan admission (TryAcquireScanAdmission), acquired outside
+    // _opsGate, and must hold it across the sidecar convergence below — scan+sidecar storms must not overlap
+    // across workspaces.
     private ScanOutcome ScanAsLeaderUnderGate(bool force, string source)
     {
         if (_ops is not { } ops)
             return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
+
+        // Read BEFORE the scan: TryScanAsLeader's own refusal path arms the latch WITHOUT _opsGate, so a request
+        // can be armed while this scan is running, and the completion below must not clear one this scan started
+        // too early to have serviced.
+        long armingGeneration = _core?.WholeRepoScanArmingGeneration ?? 0;
 
         ExtractReport report;
         try
@@ -668,6 +839,10 @@ public sealed class IndexerService : BackgroundService
         if (ExtractReportLog.DescribeWarning(report) is { } warning)
             _logger.LogWarning(
                 "{Source} {Kind} scan: {Warning}", source, force ? "full (force)" : "refresh (delta)", warning);
+
+        // This whole-repo scan ran OUTSIDE IndexerCore's drain, so tell the core it happened or the latch that
+        // would have run it stays armed and the next tick rebuilds the same repo a second time.
+        _core?.NoteWholeRepoScanCompleted(force, armingGeneration);
 
         // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
         // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
@@ -794,17 +969,50 @@ public sealed class IndexerService : BackgroundService
     /// single-writer guard, D3). Requires <see cref="PublishOpsForTest"/> to have built the core. Not used in
     /// production.
     /// </summary>
-    internal void DrainForTest(bool headChanged)
+    internal void DrainForTest(bool headChanged, bool wholeRepoScanAdmitted = true)
     {
         IndexerCore core = _core
             ?? throw new InvalidOperationException("PublishOpsForTest must run before DrainForTest.");
         lock (_opsGate)
         {
-            bool processed = core.DrainAndProcess(headChanged, out bool usedWholeRepoScan);
+            bool processed = core.DrainAndProcess(headChanged, wholeRepoScanAdmitted, out bool usedWholeRepoScan);
             if (processed)
                 TryConvergeSidecarToLatest(_bootstrap.Workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
         }
     }
+
+    /// <summary>
+    /// Test seam: run ONE debounce tick's production body — leader request files, the governed peek/acquire, and
+    /// the drain — so a test can prove the real admission expression rather than a hand-supplied boolean. Not
+    /// used in production.
+    /// </summary>
+    internal void RunDrainTickForTest(string millerDir) =>
+        RunDrainTick(millerDir, _bootstrap.Workspace);
+
+    /// <summary>
+    /// Test seam: invoked between the drain tick's scan-admission peek and the drain itself. The peek reads
+    /// IndexerCore's flags under its own gate and cannot exclude a watcher thread arming them a moment later, so
+    /// this is how a test reproduces that race deterministically and proves the drain refuses rather than running
+    /// an ungoverned scan. Not used in production.
+    /// </summary>
+    internal Action? BetweenScanPeekAndDrainForTest { get; set; }
+
+    /// <summary>
+    /// Test seam: run the leadership-acquisition delta scan exactly as the production claim path does. Not used
+    /// in production.
+    /// </summary>
+    internal void RunStartupDeltaScanForTest(WorkspaceContext workspace) => RunStartupDeltaScan(workspace);
+
+    /// <summary>
+    /// Test seam: run the D3 extractor-upgrade forced rescan exactly as the production claim path does. Not used
+    /// in production.
+    /// </summary>
+    internal void RunExtractorUpgradeRescanForTest() => RunExtractorUpgradeRescan();
+
+    /// <summary>
+    /// Test seam: arm the whole-repo rescan latch on the published core, as the production re-arm sites do.
+    /// </summary>
+    internal void RequestWholeRepoScanForTest(bool force) => _core?.RequestWholeRepoScan(force);
 
     /// <summary>
     /// Test seam: drain leader full-scan request files and service them through the same force-scan path the

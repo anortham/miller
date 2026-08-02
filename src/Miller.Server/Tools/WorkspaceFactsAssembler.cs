@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Microsoft.Data.Sqlite;
 
@@ -14,6 +15,61 @@ internal enum WorkspaceRegisteredFactsProfile
 
 internal static class WorkspaceFactsAssembler
 {
+    /// <summary>
+    /// This process's scan-admission position for <paramref name="workspaceRoot"/>, falling back to the
+    /// advisory owner record when this process is idle. CLI status/health and the dashboard run one-shot, so the
+    /// local state is normally idle and the fallback is how <c>miller workspace status --json</c> in worktree B
+    /// reports that worktree A owns the governor. The fallback renders as
+    /// <see cref="ScanGovernorStates.HoldingElsewhere"/> — never <see cref="ScanGovernorStates.Holding"/> — so
+    /// another process's lease is not mistaken for this one's.
+    ///
+    /// <para>The owner record is diagnostics, not authority: a SIGKILLed holder leaves it behind (the OS
+    /// releases the lease, nothing deletes the file). Rendering it unvalidated made every workspace on the
+    /// machine report a dead pid as the holder with an unbounded <c>waiting_seconds</c>. Every holder attribution
+    /// is therefore corroborated against the recorded pid's LIVENESS before it is shown — the local
+    /// <see cref="ScanGovernorStates.Waiting"/> position copied its holder fields from that same advisory record,
+    /// so it gets the same check and one meaning — and this process's own pid is never rendered as somebody else.
+    /// Corroboration deliberately does not touch the lease: opening it exclusively would let two concurrent
+    /// status reads corroborate each other and would deny a real acquirer's poll.</para>
+    /// </summary>
+    internal static ScanGovernorSnapshot? ScanGovernorFacts(
+        string workspaceRoot,
+        ScanGovernor? governor,
+        Func<int, DateTimeOffset?, bool>? isProcessAlive = null)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
+            return null;
+
+        Func<int, DateTimeOffset?, bool> alive = isProcessAlive ?? LeaderIdentityFile.IsProcessAlive;
+
+        if (ScanGovernorState.Shared.Snapshot(workspaceRoot) is { } local)
+            return CorroborateHolder(local, alive);
+
+        if (governor?.TryReadOwner() is not { } owner)
+            return null;
+        if (owner.Pid == Environment.ProcessId)
+            return null;
+        if (!alive(owner.Pid, owner.StartedAtUtc))
+            return null;
+
+        return new ScanGovernorSnapshot(
+            ScanGovernorStates.HoldingElsewhere,
+            owner.Reason,
+            owner.StartedAtUtc,
+            owner.Pid,
+            owner.WorkspaceRoot);
+    }
+
+    // A local position is this process's own live fact and always stands; only the holder fields it copied from
+    // the advisory owner record can name a process that has since died, so those alone are dropped. The position's
+    // own start instant is the corroboration bound: the record was already written when this process read it, so a
+    // pid that started meaningfully later is a recycled pid, not the holder.
+    private static ScanGovernorSnapshot CorroborateHolder(
+        ScanGovernorSnapshot snapshot, Func<int, DateTimeOffset?, bool> isProcessAlive) =>
+        snapshot.HolderPid is not { } pid || isProcessAlive(pid, snapshot.SinceUtc)
+            ? snapshot
+            : snapshot with { HolderPid = null, HolderWorkspaceRoot = null };
+
     public static WorkspaceFacts FromRegisteredRow(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,
@@ -21,7 +77,8 @@ internal static class WorkspaceFactsAssembler
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
         VectorSidecar? vectors = null,
-        SemanticBrokerFacts? semanticBroker = null)
+        SemanticBrokerFacts? semanticBroker = null,
+        ScanGovernor? scanGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
@@ -53,17 +110,20 @@ internal static class WorkspaceFactsAssembler
                 SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
                 ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
                 Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
-                SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null));
+                SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
+                ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
         }
         catch (FileNotFoundException)
         {
             return MissingIndexFacts(
-                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, semanticBroker);
+                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, semanticBroker,
+                scanGovernor);
         }
         catch (Exception ex) when (IsHealthProfile(profile) && IsIndexReadException(ex))
         {
             return UnreadableIndexFacts(
-                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex, semanticBroker);
+                registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex, semanticBroker,
+                scanGovernor);
         }
     }
 
@@ -73,7 +133,8 @@ internal static class WorkspaceFactsAssembler
         SymbolSearchSidecar sidecar,
         ContentCorpusSidecar contentSidecar,
         VectorSidecar? vectors = null,
-        SemanticBrokerFacts? semanticBroker = null)
+        SemanticBrokerFacts? semanticBroker = null,
+        ScanGovernor? scanGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(sidecar);
@@ -100,7 +161,8 @@ internal static class WorkspaceFactsAssembler
             Vectors: WithPendingFiles(
                 resolvedVectors.Inspect(context.WorkspaceRoot),
                 context.ExtractDbPath),
-            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null));
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
+            ScanGovernor: ScanGovernorFacts(ScanGovernorKey.For(context) ?? context.WorkspaceRoot, scanGovernor));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -111,7 +173,8 @@ internal static class WorkspaceFactsAssembler
         ContentCorpusSidecar contentSidecar,
         Exception exception,
         VectorSidecar? vectors = null,
-        SemanticBrokerFacts? semanticBroker = null)
+        SemanticBrokerFacts? semanticBroker = null,
+        ScanGovernor? scanGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (!IsHealthProfile(profile))
@@ -126,7 +189,8 @@ internal static class WorkspaceFactsAssembler
             vectors ?? VectorSidecar.FromEnvironment(),
             row.LastRevision ?? 0,
             exception,
-            semanticBroker);
+            semanticBroker,
+            scanGovernor);
     }
 
     public static IReadOnlyList<WorkspaceListEntry> ToListEntries(
@@ -210,7 +274,8 @@ internal static class WorkspaceFactsAssembler
         ContentCorpusSidecar contentSidecar,
         VectorSidecar vectors,
         long revision,
-        SemanticBrokerFacts? semanticBroker)
+        SemanticBrokerFacts? semanticBroker,
+        ScanGovernor? scanGovernor)
     {
         string warning = UsesMcpWarning(profile)
             ? $"Workspace index DB not found: {row.IndexDbPath}"
@@ -238,7 +303,8 @@ internal static class WorkspaceFactsAssembler
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
             Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
-            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null));
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
+            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
@@ -250,7 +316,8 @@ internal static class WorkspaceFactsAssembler
         VectorSidecar vectors,
         long revision,
         Exception exception,
-        SemanticBrokerFacts? semanticBroker)
+        SemanticBrokerFacts? semanticBroker,
+        ScanGovernor? scanGovernor)
     {
         string warning = $"could not read workspace index DB '{row.IndexDbPath}': {exception.Message}";
         if (profile == WorkspaceRegisteredFactsProfile.McpHealth)
@@ -275,7 +342,8 @@ internal static class WorkspaceFactsAssembler
             SearchSidecar: sidecar.Inspect(row.IndexDbPath, revision),
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
             Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
-            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null));
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
+            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
     }
 
     /// <summary>

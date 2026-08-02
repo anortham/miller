@@ -83,7 +83,7 @@ public sealed class LiveFreshnessTests
                 public sealed class Zigglethorpe { public int Three() => 3; }
                 """);
             core.Enqueue(new WatchEvent(alphaFile, WatchEventKind.Modified));
-            core.DrainAndProcess(headChanged: false); // real `extract update` subprocess
+            core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _); // real `extract update` subprocess
 
             long afterModify = reader.LatestRevision();
             Assert.True(afterModify > initialRevision, "a real content change must bump the revision");
@@ -100,7 +100,7 @@ public sealed class LiveFreshnessTests
             Assert.Contains("Vortle", searchTool.Search("Vortle")); // present before delete
             File.Delete(betaFile);
             core.Enqueue(new WatchEvent(betaFile, WatchEventKind.Deleted));
-            core.DrainAndProcess(headChanged: false); // real `extract delete` subprocess
+            core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _); // real `extract delete` subprocess
 
             long afterDelete = reader.LatestRevision();
             Assert.True(afterDelete > afterModify, "a delete must bump the revision");
@@ -114,7 +114,7 @@ public sealed class LiveFreshnessTests
                 """);
             // Simulate a branch switch: HEAD moved, so the indexer forces a single scan (drops per-file events).
             File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/feature\n");
-            core.DrainAndProcess(headChanged: true); // real `extract scan` reconcile
+            core.DrainAndProcess(headChanged: true, wholeRepoScanAdmitted: true, out _); // real `extract scan` reconcile
 
             long afterScan = reader.LatestRevision();
             Assert.True(afterScan >= afterDelete, "the scan reconcile should not regress the revision");

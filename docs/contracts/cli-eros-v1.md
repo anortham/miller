@@ -139,11 +139,62 @@ body-hash clone groups, and bounded complexity ranking. The churn mapper uses cu
 that basis explicitly. Clone and complexity outputs do not include cleanup recommendations, suppressions,
 semantic similarity, or fleet history; Eros owns those workflows.
 
-A `lock_busy` result exits `0` and its payload is ingestable: the latest readable DB is being served and a live
-leader owns convergence (for `full`, a leader full-scan request was enqueued). Freshness is NOT confirmed —
-consumers that need a confirmed-fresh index must gate on `status` (`refreshed`/`unchanged`) or `index_fresh:
-true` in the payload, not on the exit code alone. Exit `3` is reserved for genuinely unusable-index outcomes:
-`missing_root`, `missing_index`, `failed`, and `ineligible_extractor`.
+A `lock_busy` result exits `0` and its payload is ingestable: the latest readable DB is being served. Freshness is
+NOT confirmed — consumers that need a confirmed-fresh index must gate on `status` (`refreshed`/`unchanged`) or
+`index_fresh: true` in the payload, not on the exit code alone. Exit `3` is reserved for genuinely
+unusable-index outcomes: `missing_root`, `missing_index`, `failed`, and `ineligible_extractor`.
+
+`lock_busy` does NOT promise that anything is converging. It has two causes, and they differ on exactly that
+point:
+
+- **Busy per-workspace writer lock.** A live leader owns that workspace and keeps it fresh; for `full`, a leader
+  full-scan request was enqueued for it.
+- **Busy machine-wide scan admission.** Miller admits one whole-repo extractor scan (plus the sidecar
+  convergence that follows it) per user at a time, so a fleet of git worktrees cannot run N concurrent
+  extractors. The refusal means nobody is scanning THIS workspace right now. The payload carries `status:
+  "lock_busy"`, `scanned: false`, and a `note` beginning `Machine-wide scan admission is busy`. A forced
+  request (`workspace full`, `workspace open --full`) additionally queues a leader full-scan request so a Miller
+  started in that root services it, and a refusal against a root with no readable index reports
+  `missing_index` (exit `3`) instead — `lock_busy` exit `0` therefore never advertises a registered workspace
+  with no `symbols.db`.
+
+Either way: ingestable, not confirmed-fresh, retry later. The user-global lease lives at
+`~/.miller/scan/scan-v1.lock` with an advisory `scan-v1.owner.json` sidecar; `MILLER_SCAN_GOVERNOR=0` disables
+admission entirely and `MILLER_SCAN_GOVERNOR_WAIT` (seconds or a `TimeSpan`) sets the budget for the one-shot CLI
+and dashboard forced refresh. In-server paths (the MCP `workspace` tool, the indexer's own scans) deliberately use
+a few-second budget instead and retry, so one queued scan can never stall an agent's tool call.
+
+### `scan_governor` (additive, conditional)
+
+`workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `scan_governor` object. It is
+**omitted entirely** when this process is idle, when the governor is disabled, and on every build that predates
+the feature — default output is byte-identical to the previous contract, so Eros must treat its absence as "no
+scan-admission contention to report", never as an error. It is NOT part of `workspace health --format json-summary`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | string | `waiting` (this process is queued for admission), `holding` (this process holds it), `holding_elsewhere` (another process holds it, read from the advisory owner file). There is no `idle` or `disabled` state — the object's absence covers both. |
+| `reason` | string \| null | Why admission was requested — e.g. `leader-startup`, `leader-drain-rescan`, `leader-ondemand`, `leader-requested-full`, `leader-upgrade`, `bootstrap`, `bootstrap-auto-rebuild`, `cross-workspace-refresh`, `workspace-open-prime`. Advisory; do not branch on the exact token. |
+| `since_utc` | string \| null | ISO-8601 UTC instant the current position began. |
+| `waiting_seconds` | number \| null | Whole seconds since `since_utc`. |
+| `holder_pid` | number \| null | The holder's process id, corroborated alive when rendered (possible for `waiting`/`holding_elsewhere`, always null for `holding`). |
+| `holder_workspace_root` | string \| null | The workspace root that holder is scanning; null whenever `holder_pid` is. |
+
+`holder_pid`/`holder_workspace_root` come from the advisory owner file, which is diagnostics only — a crashed or
+SIGKILLed holder's OS lease is released by the kernel even though its owner file lingers. Miller therefore
+corroborates the recorded pid's liveness before rendering it on EITHER arm, so a stale record naming a dead pid is
+never reported as a holder. The two arms differ only in what is left once the attribution fails: for
+`holding_elsewhere` the record was the sole evidence of a holder, so `scan_governor` is omitted entirely; for
+`waiting` this process really is queued, so the object stays and `holder_pid`/`holder_workspace_root` render null.
+Treat a present `holder_pid` as "a live process was recorded as the governor owner", never as proof of who holds
+the OS lease right now. Corroboration deliberately never opens the lease, so a status read can neither block a
+real acquirer nor mistake a concurrent status read for a holder. A one-shot CLI observer reports
+`holding_elsewhere`, never `waiting` — `waiting` is a live in-process position only the queued process itself can
+render.
+
+`workspace health --json` additionally emits a `scan_waiting_on_machine_governor` warning at severity
+`usable_with_warnings` while `state == "waiting"`. Queuing behind another worktree's scan is the governor
+working as designed and the index stays readable, so it must never be read as a degraded workspace.
 
 ## Export feeds
 

@@ -31,17 +31,22 @@ public static class WatchEventRouter
     /// True if the queue overflowed (<see cref="WatchEventQueue.NeedsRescan"/>) or <c>.git/HEAD</c> changed.
     /// When true, the result is a single <see cref="ScanOp"/> and <paramref name="events"/> is ignored.
     /// </param>
+    /// <param name="forceWholeRepoScan">
+    /// The scan intent to stamp on that <see cref="ScanOp"/>: <c>true</c> for a from-scratch rebuild, <c>false</c>
+    /// for a hash-delta reconcile. Passed IN so this router stays pure — it reads nothing of its own.
+    /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="events"/> or <paramref name="exists"/> is null.</exception>
     public static IReadOnlyList<ExtractOp> Route(
         IReadOnlyList<WatchEvent> events,
         Func<string, bool> exists,
-        bool needsRescanOrHead)
+        bool needsRescanOrHead,
+        bool forceWholeRepoScan)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(exists);
 
         if (needsRescanOrHead)
-            return new ExtractOp[] { ScanOp.Instance };
+            return new ExtractOp[] { ScanOp.For(forceWholeRepoScan) };
 
         if (events.Count == 0)
             return Array.Empty<ExtractOp>();

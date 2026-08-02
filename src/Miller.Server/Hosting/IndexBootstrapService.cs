@@ -58,6 +58,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private readonly ILogger<IndexBootstrapService> _logger;
     private readonly object _gate = new();
 
+    // The bootstrap scan runs on a detached Task.Run, so without this a scan blocked on machine-wide admission
+    // would survive host shutdown holding an OS handle.
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly ScanGovernor _governor;
+
     private BoundWorkspace? _bound;
     private BootstrapPhase _phase = BootstrapPhase.Idle;
     private string? _snapshotRoot;
@@ -67,10 +72,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private int _runGeneration;
     private TaskCompletionSource _runCompletion = CreateBindingGate();
 
-    public IndexBootstrapService(ILogger<IndexBootstrapService> logger)
+    public IndexBootstrapService(ILogger<IndexBootstrapService> logger, ScanGovernor? scanGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
+        // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
+        _governor = scanGovernor ?? ScanGovernor.Disabled();
     }
 
     private sealed record BoundWorkspace(
@@ -243,6 +250,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal string? TestHomeDirectoryOverride { get; set; }
 
+    /// <summary>
+    /// Test-only override for the machine-wide scan-admission budget, so a contention test does not sit out the
+    /// ten-minute production wait.
+    /// </summary>
+    internal TimeSpan? TestBootstrapScanAdmissionWait { get; set; }
+
     private WorkspaceContext CreateWorkspaceContext(string canonicalRoot) =>
         WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, TestHomeDirectoryOverride);
 
@@ -359,6 +372,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             if (!published && !result.UsesExistingLedger)
                 result.Bound.Ledger?.Dispose();
         }
+        catch (OperationCanceledException ex) when (_shutdown.IsCancellationRequested)
+        {
+            if (result is not null && !published && !result.UsesExistingLedger)
+                result.Bound.Ledger?.Dispose();
+            MarkBootstrapAbandoned(canonicalRoot, runGeneration, ex);
+        }
         catch (Exception ex)
         {
             if (result is not null && !published && !result.UsesExistingLedger)
@@ -473,6 +492,17 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                             "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
                             canonicalDbPath, canonicalRoot, stableWorkspaceId);
                     }
+                    // SingleWriterLock -> ScanGovernor: admission is taken INSIDE the lease this bootstrap
+                    // already holds, never the other way round.
+                    using ScanGovernorAdmission? admission =
+                        AcquireBootstrapScanAdmission(canonicalRoot, "bootstrap");
+                    if (admission is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Timed out waiting for machine-wide scan admission to index {canonicalRoot}, and no " +
+                            $"usable index exists at {canonicalDbPath}. {_governor.DescribeHolder()}");
+                    }
+
                     TestScanObserver?.Invoke();
                     var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
                     scanned = true;
@@ -519,6 +549,17 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                                 "Auto-rebuild skipped: another Miller instance holds the write lock for {Db}. " +
                                 "Retrying the load against whatever that instance produced.",
                                 canonicalDbPath);
+                            return null;
+                        }
+
+                        using ScanGovernorAdmission? admission =
+                            AcquireBootstrapScanAdmission(canonicalRoot, "bootstrap-auto-rebuild");
+                        if (admission is null)
+                        {
+                            _logger.LogWarning(
+                                "Auto-rebuild skipped: machine-wide scan admission was refused for {Db}. " +
+                                "Retrying the load against the existing artifact. {Holder}",
+                                canonicalDbPath, _governor.DescribeHolder());
                             return null;
                         }
 
@@ -658,6 +699,31 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 result.ElapsedMilliseconds);
             return true;
         }
+    }
+
+    /// <summary>
+    /// End a bootstrap that was cut short by host shutdown. It ends the run and unblocks waiters like a failure,
+    /// but says so honestly and writes NO registry error: a shutdown is not a workspace fault, and persisting one
+    /// would leave a later run reporting a timeout that never happened.
+    /// </summary>
+    private void MarkBootstrapAbandoned(string canonicalRoot, int runGeneration, Exception cancellation)
+    {
+        lock (_gate)
+        {
+            if (_phase != BootstrapPhase.Running || _runGeneration != runGeneration)
+                return;
+
+            string message = "Bootstrap was abandoned because the Miller host is shutting down; " +
+                "the next run indexes this workspace.";
+            _phase = BootstrapPhase.Failed;
+            _snapshotRoot = canonicalRoot;
+            _failureMessage = message;
+            _lastFailureMessage = message;
+            _runCompletion.TrySetResult();
+        }
+
+        _logger.LogInformation(
+            cancellation, "Bootstrap for {Root} abandoned during host shutdown.", canonicalRoot);
     }
 
     private void MarkBootstrapFailed(string canonicalRoot, int runGeneration, Exception error)
@@ -813,6 +879,32 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     private static readonly TimeSpan AutoRebuildLockWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AutoRebuildLockPollInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Machine-wide admission for a bootstrap scan, on the SAME budget as the workspace lock wait: both are one
+    /// user-visible "the first index is coming" state, already rendered as the friendly not-ready text. Returns
+    /// null on refusal; THROWS <see cref="OperationCanceledException"/> when the host is shutting down, because a
+    /// shutdown is not a budget expiry and must not be recorded as a failed bootstrap blaming a timeout.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The host is shutting down.</exception>
+    private ScanGovernorAdmission? AcquireBootstrapScanAdmission(string canonicalRoot, string reason)
+    {
+        try
+        {
+            return ScanGovernorAdmission.TryAcquire(
+                _governor,
+                ScanGovernorState.Shared,
+                new ScanGovernorRequest(canonicalRoot, reason, ExtractJobsPolicy.FromEnvironment()),
+                TestBootstrapScanAdmissionWait ?? BootstrapScanLockWait(),
+                _shutdown.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            throw new OperationCanceledException(
+                $"The bootstrap scan admission wait for '{canonicalRoot}' ({reason}) was abandoned because the " +
+                "Miller host is shutting down.");
+        }
+    }
 
     /// <summary>
     /// How long a bootstrap waits for the workspace writer lock before giving up. Deliberately far longer than
@@ -1275,7 +1367,27 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        TryCancelShutdown();
+        return Task.CompletedTask;
+    }
 
-    public void Dispose() => Volatile.Read(ref _bound)?.Ledger?.Dispose();
+    public void Dispose()
+    {
+        TryCancelShutdown();
+        _shutdown.Dispose();
+        Volatile.Read(ref _bound)?.Ledger?.Dispose();
+    }
+
+    private void TryCancelShutdown()
+    {
+        try
+        {
+            _shutdown.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 }

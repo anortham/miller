@@ -181,6 +181,53 @@ public sealed class WorkspaceBindingServiceTests
         }
     }
 
+    // Stopping Miller mid-bootstrap used to be reported as a scan-admission TIMEOUT and persisted to the
+    // registry as an actionable workspace error, so a later run rendered a failure that never happened.
+    [Fact]
+    public async Task BootstrapForRoot_CancelledByHostShutdown_IsNotRecordedAsAFailedWorkspace()
+    {
+        string project = CreateTempDir("project");
+        string tempHome = CreateTempDir("home");
+        try
+        {
+            var bootstrap = NewBootstrap(tempHome);
+            using var reachedRun = new ManualResetEventSlim();
+            using var shutdownRequested = new ManualResetEventSlim();
+            bootstrap.TestRunBootstrapOverride = _ =>
+            {
+                reachedRun.Set();
+                shutdownRequested.Wait(TimeSpan.FromSeconds(10));
+                throw new OperationCanceledException("admission wait abandoned");
+            };
+
+            Assert.Equal(
+                BindOutcome.Started,
+                bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots));
+            int runGeneration = bootstrap.Snapshot.RunGeneration;
+            Assert.True(reachedRun.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+            await bootstrap.StopAsync(TestContext.Current.CancellationToken);
+            shutdownRequested.Set();
+            await bootstrap.WaitForRunAsync(runGeneration, TestContext.Current.CancellationToken);
+
+            BootstrapSnapshot snapshot = bootstrap.Snapshot;
+            Assert.Contains("shutting down", snapshot.FailureMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain("Timed out", snapshot.FailureMessage!, StringComparison.Ordinal);
+
+            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(project);
+            string registryPath = WorkspaceContext.Create(
+                canonicalRoot, AppContext.BaseDirectory, tempHome).RegistryDbPath;
+            using var registry = WorkspaceRegistry.Open(registryPath);
+
+            Assert.Null(registry.Get(WorkspaceId.FromCanonicalRoot(canonicalRoot)));
+        }
+        finally
+        {
+            DeleteTempDir(project);
+            DeleteTempDir(tempHome);
+        }
+    }
+
     [Fact]
     public async Task BootstrapForRoot_WhenRunFails_MarksFailedCompletesRunWaitAndRetries()
     {

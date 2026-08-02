@@ -62,10 +62,11 @@ public sealed class SingleWriterLock : IDisposable
         return new SingleWriterLock(stream, lockFilePath);
     }
 
-    internal static bool IsLockContentionForTest(IOException ex, bool isWindows) =>
-        IsLockContention(ex, isWindows);
-
-    private static bool IsLockContention(IOException ex, bool isWindows)
+    /// <summary>
+    /// Whether <paramref name="ex"/> is another holder denying this handle rather than a genuine IO failure.
+    /// Shared with <see cref="ScanGovernor"/> so the Windows(32/33)/POSIX(11/35) table lives in one place.
+    /// </summary>
+    internal static bool IsLockContention(IOException ex, bool isWindows)
     {
         int nativeError = ex.HResult & 0xFFFF;
         if (isWindows)
@@ -152,6 +153,11 @@ public sealed class SingleWriterLock : IDisposable
 /// <c>SingleWriterLock</c> → <c>content.lock</c> → <c>history.lock</c> — lives in exactly one place and cannot
 /// drift between the two paths. That single order is what lets every writer pair avoid deadlock. This is one
 /// small shared helper, not a general lock manager: it only acquires-in-order and disposes-in-reverse.</para>
+///
+/// <para>The full process-wide order extends that with the user-global scan-admission lease: indexer
+/// <see cref="SingleWriterLock"/> → <see cref="ScanGovernor"/> → the indexer's ops gate → <c>content.lock</c> →
+/// <c>history.lock</c>. Nothing may acquire a workspace <see cref="SingleWriterLock"/> while holding the
+/// governor.</para>
 /// </summary>
 public sealed class WorkspaceWriteLeases : IDisposable
 {

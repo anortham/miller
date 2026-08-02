@@ -385,4 +385,62 @@ public sealed class WorkspaceHealthLeaderTests
 
         Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("indexer_leader").ValueKind);
     }
+
+    // ---- W3: waiting on machine-wide scan admission ----
+    // Queuing behind another worktree's scan is the governor working as designed: the index is still readable and
+    // still served, so it must read as "usable with warnings", never as a degraded workspace an agent should
+    // distrust. The warning exists so a slow refresh is diagnosable instead of looking like a hang.
+
+    private static WorkspaceHealthFacts HealthWithGovernor(ScanGovernorSnapshot? governor) =>
+        WorkspaceHealthFacts.Create(
+            Facts() with { IsLeader = true, ScanGovernor = governor },
+            TelemetrySummary.Empty,
+            new TelemetryHealthFacts(0, 0, 0),
+            EmptyExtraction());
+
+    [Fact]
+    public void Create_WaitingOnScanGovernor_WarnsWithoutDegrading()
+    {
+        WorkspaceHealthFacts health = HealthWithGovernor(new ScanGovernorSnapshot(
+            ScanGovernorStates.Waiting, "leader-drain-rescan", DateTimeOffset.UtcNow.AddSeconds(-8),
+            HolderPid: 4242, HolderWorkspaceRoot: "/repo/other-worktree"));
+
+        HealthWarning warning = Assert.Single(
+            health.Warnings, w => w.Code == "scan_waiting_on_machine_governor");
+        Assert.Equal("usable_with_warnings", warning.Severity);
+        Assert.Contains("4242", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("/repo/other-worktree", warning.Message, StringComparison.Ordinal);
+        Assert.Equal(HealthState.UsableWithWarnings, health.State);
+        Assert.Contains(
+            health.RecommendedActions,
+            a => a.Contains("MILLER_SCAN_GOVERNOR=0", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Create_WaitingOnScanGovernorWithNoRecordedHolder_StillWarns()
+    {
+        WorkspaceHealthFacts health = HealthWithGovernor(new ScanGovernorSnapshot(
+            ScanGovernorStates.Waiting, "leader-startup", DateTimeOffset.UtcNow, null, null));
+
+        HealthWarning warning = Assert.Single(
+            health.Warnings, w => w.Code == "scan_waiting_on_machine_governor");
+        Assert.Contains("no live holder is recorded", warning.Message, StringComparison.Ordinal);
+        Assert.Equal(HealthState.UsableWithWarnings, health.State);
+    }
+
+    [Fact]
+    public void Create_ScanGovernorHoldingOrAbsent_AddsNoWarning()
+    {
+        ScanGovernorSnapshot?[] quiet =
+        [
+            null,
+            new ScanGovernorSnapshot(
+                ScanGovernorStates.Holding, "leader-ondemand", DateTimeOffset.UtcNow, null, null),
+            new ScanGovernorSnapshot(
+                ScanGovernorStates.HoldingElsewhere, "leader-ondemand", DateTimeOffset.UtcNow, 4242, "/repo/other"),
+        ];
+
+        Assert.All(quiet, governor => Assert.DoesNotContain(
+            HealthWithGovernor(governor).Warnings, w => w.Code == "scan_waiting_on_machine_governor"));
+    }
 }

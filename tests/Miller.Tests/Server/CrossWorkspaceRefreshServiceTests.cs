@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Server.Cli;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -859,6 +860,268 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(1, fullScanRequests);
     }
 
+    // ---- W3: machine-wide scan admission ----
+    // The per-workspace writer lock is per-workspace by construction, so N worktrees each acquire their own and
+    // run N concurrent whole-repo extracts. Admission is user-global and capacity 1; a refused refresh must serve
+    // the latest readable DB (lock_busy) rather than scan ungoverned, and must NOT poison the registry row.
+
+    private string NewMillerHome() =>
+        Directory.CreateDirectory(Path.Combine(_dir, "home-" + Guid.NewGuid().ToString("N"))).FullName;
+
+    // A root whose symbols.db already exists: a governor refusal against it genuinely serves a readable index,
+    // which is what lock_busy claims. A root WITHOUT one takes the missing-index branch instead.
+    private string NewRootWithIndex(string name, out string dbPath)
+    {
+        string root = NewRoot(name);
+        dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "not-a-real-sqlite-file");
+        return root;
+    }
+
+    private static ScanGovernorLease HoldMachineScanAdmission(string millerHome) =>
+        ScanGovernor.ForMillerHome(millerHome).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "test-holder", 4),
+            TimeSpan.Zero,
+            CancellationToken.None)
+        ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease.");
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_ReportsLockBusy_WithoutScanningOrPoisoningTheRow()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        bool lockAcquired = false;
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ =>
+            {
+                lockAcquired = true;
+                return new NoopLease();
+            },
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(4, result.Revision);
+        Assert.Contains("Machine-wide scan admission is busy", result.WarningText, StringComparison.Ordinal);
+        Assert.True(lockAcquired); // the workspace writer lock is taken first, then admission (the lock order)
+
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public void Refresh_NonForce_WaitsOnlyTheShortLockBusyBudgetForMachineScanAdmission()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-nonforce", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: false);
+        stopwatch.Stop();
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
+    // The artifact-id probe only fires AFTER TryConvergeSidecar when the report carries no artifact block: the
+    // success path reads `report.Artifact?.ArtifactId ?? TryReadArtifactId(row)`, so a report WITH one
+    // short-circuits the fallback and leaves only the pre-scan read to assert on — a probe that cannot observe
+    // convergence and therefore cannot fail if the lease is released early.
+    [Fact]
+    public void Refresh_HoldsMachineScanAdmission_AcrossTheScanAndTheSidecarConvergence()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("governed-held");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        var probe = ScanGovernor.ForMillerHome(home);
+        bool freeDuringScan = true;
+        var freeAtArtifactIdReads = new List<bool>();
+
+        bool AdmissionIsFree()
+        {
+            using ScanGovernorLease? attempt = probe.TryAcquire(
+                new ScanGovernorRequest("/repo/probe", "probe", 4), TimeSpan.Zero, CancellationToken.None);
+            return attempt is not null;
+        }
+
+        var service = NewService(
+            registry,
+            scan: (_, _, _) =>
+            {
+                freeDuringScan = AdmissionIsFree();
+                return Report(root, dbPath, "target-ws", revision: 5) with { Artifact = null };
+            },
+            acquireLock: _ => new NoopLease(),
+            readArtifactId: _ =>
+            {
+                freeAtArtifactIdReads.Add(AdmissionIsFree());
+                return "artifact-a";
+            },
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(freeDuringScan);
+        Assert.Equal(2, freeAtArtifactIdReads.Count); // one before the scan, one after sidecar convergence
+        Assert.All(freeAtArtifactIdReads, free => Assert.False(free));
+        Assert.True(AdmissionIsFree()); // and it is released once Refresh returns
+    }
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_AndNoIndexExists_ReportsMissingIndexRatherThanLockBusy()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("governed-cold");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<string>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, _, _) => requested.Add(millerDir),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.MissingIndex, result.Status);
+        Assert.Equal(3, CliDispatch.RefreshExitCode(result.Status));
+        Assert.False(result.Scanned);
+        Assert.Single(requested);
+
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Missing, row.State);
+        Assert.NotNull(row.LastError);
+    }
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_QueuesALeaderFullScanForTheForcedRequest()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-queue", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<(string MillerDir, string WorkspaceId, long Baseline)>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, id, baseline) => requested.Add((millerDir, id, baseline)),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Equal(("target-ws", 7L), (requested.Single().WorkspaceId, requested.Single().Baseline));
+    }
+
+    [Fact]
+    public void Refresh_NonForceGovernorRefusal_QueuesNothing()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-noqueue", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<string>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, _, _) => requested.Add(millerDir),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: false);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Empty(requested);
+    }
+
+    [Fact]
+    public void Refresh_ForcedCallerBudget_OverridesTheServiceDefault()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-budget", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        WorkspaceRefreshResult result = service.Refresh(
+            "target-ws", force: true, ScanAdmissionBudget.Of(TimeSpan.Zero));
+        stopwatch.Stop();
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
+    [Fact]
+    public void Refresh_ForcedCallerBudget_WithACancelledToken_DegradesToLockBusyRatherThanThrowing()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-cancelled", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var service = NewService(
+            registry,
+            scan: (_, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        WorkspaceRefreshResult result = service.Refresh(
+            "target-ws",
+            force: true,
+            new ScanAdmissionBudget(TimeSpan.FromMinutes(30), cancelled.Token));
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+    }
+
     private CrossWorkspaceRefreshService NewService(
         WorkspaceRegistry registry,
         Func<string, string, bool, ExtractReport> scan,
@@ -868,7 +1131,9 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         SymbolSearchSidecar? sidecar = null,
         Action<string, string, long>? requestFullScan = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
-        Func<string, string?>? readArtifactId = null)
+        Func<string, string?>? readArtifactId = null,
+        ScanGovernor? governor = null,
+        TimeSpan? governorForceWait = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -883,7 +1148,9 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
             requestFullScan: requestFullScan,
             eligibilityGate: eligibilityGate,
-            readArtifactId: readArtifactId ?? (_ => null));
+            readArtifactId: readArtifactId ?? (_ => null),
+            governor: governor,
+            governorForceWait: governorForceWait);
     }
 
     private string NewRoot(string name)
