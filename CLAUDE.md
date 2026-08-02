@@ -232,6 +232,42 @@ scripts/test.ps1 all
   env var — it carries a caller's safety response (a post-OOM retry passes `1`) that a stale operator override
   must not undo. This bounds only the extraction/spool phase, not the artifact write; bounding how many scans
   run at once is a separate concern.
+- **Scan intent, not `bool force` (load-bearing).** Every whole-repo scan carries a
+  [`ScanIntent`](src/Miller.Core/Freshness/ScanIntent.cs): `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`,
+  `SchemaHeal`, `CorruptionHeal`, `ExtractorUpgrade`. Only `UserFullRebuild` may be downgraded to a delta on retry
+  (and only against an artifact that is readable AND records this root); every other force intent exists because
+  the artifact cannot be trusted, so a delta would produce a wrong index that looks fresh. The rescan latch is a
+  SET of pending intents discharged by `ScanIntentPolicy.Satisfies` and retried at `ScanIntentPolicy.Strongest`, so
+  a repair (`RootRebind`/`SchemaHeal`/`CorruptionHeal`, own-intent-only) is never cleared by someone else's rebuild
+  and a repair folded beside a user rebuild never inherits its downgrade permission. `ExtractorUpgrade` is the one
+  exception: ANY completed force discharges it, because every force re-extracts the repo with the bundled binary
+  and requiring its own intent made a completed `workspace full` run a second byte-equivalent rebuild. Watcher
+  overflow is NOT a force.
+- **A downgrade is a THIRD scan outcome (load-bearing).** Neither success nor failure: a delta ran, the prior
+  artifact is served with degraded freshness, and the rebuild is STILL OWED. It must not clear the failure record
+  (`IScanFailurePolicy.RecordDowngradedServe` rewrites `next_attempt_at` at the CURRENT streak without
+  incrementing it — without that the undischarged latch plus an elapsed timer re-ran a whole-repo delta on every
+  250ms tick, forever), must not discharge the pending rebuild, and must reach the caller as
+  `ScanOutcome.Kind.Downgraded` + `downgraded: true` in the `refresh`/`full` payload rather than as a completed
+  rebuild. Only the AUTOMATIC path may downgrade: `bypassBackoff` gates the downgrade as well as the timer, so a
+  person who typed `workspace full` gets the force scan or an honest reason.
+- **Scan-failure backoff is persisted, and is the ONLY retry timer.**
+  `<workspace>/.miller/scan-failure.json` ([`ScanFailureJournal`](src/Miller.Indexing/ScanFailureJournal.cs))
+  records the last intent, exit code, consecutive failures, `--jobs`, and `next_attempt_at`; the schedule is
+  30s → 2m → 10m → 30m-max, jittered upward. It is shared by every Miller process on the workspace and survives
+  restarts — a rebuild that cannot succeed must not be re-forced by each fresh process. `IndexerCore`'s former
+  in-memory doubling backoff was REPLACED by it, not layered under it; do not re-add a second timer. Exit 137
+  (SIGKILL/OOM) clamps the next automatic attempt to `--jobs 1`. An explicit user request (`workspace
+  full/refresh/open`, the MCP `workspace` tool, the dashboard, bootstrap) bypasses the timer once but still
+  records — pass `bypassBackoff: true` at those call sites only; the automatic refresh-first path behind every
+  cross-workspace read (`WorkspaceIndexProvider`) must leave it false or ten cross-workspace searches spawn ten
+  extractors. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
+  `Strongest`), because a downgraded retry that also fails runs as a delta and recording that verbatim would let
+  the next routine refresh clear a force throttle in two steps. Clearing uses
+  `ScanIntentPolicy.ClearsFailureRecord`, NOT the latch rule `Satisfies`: a delta clears only a delta-intent
+  record, while ANY completed force clears a force-intent one — including a repair's, which `Satisfies` would
+  strand forever and thereby downgrade every future automatic rebuild. Surfaced as the conditional
+  `scan_failure` object in `workspace status`/`health` (`docs/contracts/cli-eros-v1.md`).
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the

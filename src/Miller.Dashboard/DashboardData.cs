@@ -1470,7 +1470,7 @@ public static class DashboardData
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         var refresh = new CrossWorkspaceRefreshService(
             registry, runner, sidecar, DashboardScanGovernor(registryDbPath));
-        return refresh.Refresh(workspaceId);
+        return refresh.Refresh(workspaceId, bypassBackoff: true);
     }
 
     // The dashboard is one more scan source on this machine, so it queues behind the same user-global admission

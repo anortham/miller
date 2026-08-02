@@ -2966,7 +2966,7 @@ public static class CliDispatch
         }
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
-        WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force);
+        WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force, bypassBackoff: true);
 
         bool currentWorkspace = WorkspaceSafety.IsLiveWorkspace(
             row.CanonicalRoot,
@@ -3130,10 +3130,17 @@ public static class CliDispatch
 
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
-        registry.UpsertSeen(id, display, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);
+        // `Refreshing` is written only for a row this open CREATES: it advertises "an index is being built", which
+        // is a lie about an ALREADY-registered workspace and would demote a healthy `ready` row. An existing row
+        // keeps its own state until the refresh below moves it (MarkScanned ⇒ ready, MarkError ⇒ error,
+        // MarkMissing ⇒ missing), and the statuses that deliberately leave it untouched are reconciled after.
+        WorkspaceRegistryRow? priorRow = registry.Get(id);
+        registry.UpsertSeen(
+            id, display, canonicalRoot, dbPath, priorRow?.State ?? WorkspaceRegistryState.Refreshing);
 
         var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
-        WorkspaceRefreshResult result = refresh.Refresh(id, force: full);
+        WorkspaceRefreshResult result = refresh.Refresh(id, force: full, bypassBackoff: true);
+        ReconcileOpenedRegistryRow(registry, id, dbPath, isNewRow: priorRow is null, result);
 
         // Rendered via the Action view (NOT WorkspaceRender.Open, whose "primed / not a live switch" copy is
         // server semantics — false for the CLI). A scan failure has marked the just-registered row error.
@@ -3151,6 +3158,34 @@ public static class CliDispatch
             ArtifactId: ArtifactIdForAction(result, registry));
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
+    }
+
+    // Give a row this open CREATED a real state when the refresh deliberately left it alone. `lock_busy` (a live
+    // Miller owns the workspace) and `ineligible_extractor` (the index is valid for whoever built it with a NEWER
+    // binary) are not workspace errors, so the refresh does not write them — which would strand a brand-new row at
+    // `refreshing`, a state nothing sweeps and that drops the workspace out of every fleet consumer's
+    // Current|Ready|LoadedExisting filter. A row that ALREADY existed needs nothing here: it kept its own state
+    // through the upsert above, and demoting a healthy `ready` workspace because this open could not scan it would
+    // break a workspace the open was only meant to register.
+    private static void ReconcileOpenedRegistryRow(
+        WorkspaceRegistry registry,
+        string workspaceId,
+        string dbPath,
+        bool isNewRow,
+        WorkspaceRefreshResult result)
+    {
+        if (!isNewRow)
+            return;
+        if (result.Status is not (WorkspaceRefreshStatus.LockBusy or WorkspaceRefreshStatus.IneligibleExtractor))
+            return;
+
+        if (File.Exists(dbPath))
+            registry.MarkLoadedExisting(workspaceId, result.Revision ?? 0);
+        else
+            registry.MarkError(
+                workspaceId,
+                result.Error ?? result.WarningText
+                    ?? "workspace open did not produce an index and nothing is scanning this workspace.");
     }
 
     // ---------- prune (registry GC for gone roots) ----------

@@ -1,3 +1,4 @@
+using Miller.Core.Freshness;
 using Miller.Indexing;
 
 namespace Miller.Server.Hosting;
@@ -26,11 +27,13 @@ public interface IExtractOps
     ExtractReport Delete(string path);
 
     /// <summary>
-    /// Run a whole-repo <c>extract scan</c> over the canonical root. With <paramref name="force"/> <c>false</c>
-    /// (the M3 default) julie does a hash-delta reconcile — only changed files are re-extracted; with
-    /// <paramref name="force"/> <c>true</c> it rebuilds the workspace from scratch (julie <c>scan --force</c>),
-    /// the <c>workspace full</c> operation (M7 decision-3). The indexer's own overflow/HEAD reconcile path stays
-    /// on the delta default; only an explicit operator <c>full</c> passes <c>force</c>.
+    /// Run a whole-repo <c>extract scan</c> over the canonical root. <paramref name="intent"/> decides both the
+    /// julie invocation — <see cref="ScanIntent.IncrementalReconcile"/> is the M3 default hash-delta reconcile,
+    /// every other intent is <c>scan --force</c>, a from-scratch rebuild — and, upstream of this call, whether a
+    /// retry was allowed to downgrade. The indexer's own overflow/HEAD reconcile path stays on the delta default.
+    /// <paramref name="jobs"/> is an explicit extraction-parallelism cap that BEATS
+    /// <c>MILLER_EXTRACT_JOBS</c>: it carries a caller's safety response (a post-OOM retry passes <c>1</c>) that a
+    /// stale operator override must not undo. Null uses the ambient policy.
     /// </summary>
-    ExtractReport Scan(bool force = false);
+    ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null);
 }

@@ -21,15 +21,16 @@ namespace Miller.Server.Hosting;
 /// <para><b>Failure isolation (decision-10).</b> A single op throwing (a lock timeout, a data-loss guard, a
 /// recoverable parser failure) is logged and the batch continues; the prior index is kept and the failed file
 /// is reconciled on the next scan. One bad file never wipes the queue or aborts sibling updates.</para>
+///
+/// <para><b>Scan-failure backoff.</b> The whole-repo retry timer is the injected
+/// <see cref="IScanFailurePolicy"/> — the persisted, per-workspace, cross-process record — and this class keeps
+/// none of its own. It REPLACED the former in-memory doubling backoff rather than layering over it: two
+/// independent timers disagree the moment one is reset, and an in-memory one cannot survive the process restart
+/// the policy exists to survive. Every whole-repo scan that runs here reports back exactly one of three outcomes —
+/// failed, downgraded, or completed at the requested strength — because only the third may clear the record.</para>
 /// </summary>
 public sealed class IndexerCore
 {
-    /// <summary>The first cooldown after a failed whole-repo scan; each further failure doubles it.</summary>
-    internal static readonly TimeSpan InitialScanFailureBackoff = TimeSpan.FromSeconds(1);
-
-    /// <summary>The ceiling the doubling backoff saturates at.</summary>
-    internal static readonly TimeSpan MaxScanFailureBackoff = TimeSpan.FromMinutes(5);
-
     /// <summary>
     /// The largest queued per-file batch still drained on a tick that owes a whole-repo scan it cannot run —
     /// refused machine-wide admission, or the post-failure backoff. Draining then is a RESPONSIVENESS
@@ -45,7 +46,7 @@ public sealed class IndexerCore
     private readonly IExtractOps _ops;
     private readonly Func<string, bool> _exists;
     private readonly ILogger? _logger;
-    private readonly Func<DateTimeOffset> _utcNow;
+    private readonly IScanFailurePolicy _failurePolicy;
     private readonly object _gate = new();
 
     // The FileSystemWatcher Error (InternalBuffer overflow) signal. Kept in this layer rather than mutating the
@@ -57,11 +58,11 @@ public sealed class IndexerCore
     // The persistent whole-repo-rescan latch. Every transient signal (the queue's own NeedsRescan, the FSW
     // overflow flag, a per-tick .git/HEAD move) folds into it, and ONLY a scan that actually ran and succeeded
     // clears it — either here or, for the out-of-band scans IndexerService runs itself, through
-    // NoteWholeRepoScanCompleted. _pendingWholeRepoScanForce carries the strongest intent any folded request
-    // asked for, so a re-armed force:true request is never retried as a delta scan, and a delta scan that
-    // succeeds elsewhere never clears it. Guarded by _gate.
-    private bool _pendingWholeRepoScan;
-    private bool _pendingWholeRepoScanForce;
+    // NoteWholeRepoScanCompleted. The SET (rather than one folded value) is what keeps two differently-motivated
+    // requests from erasing each other: the scan runs at ScanIntentPolicy.Strongest, so a re-armed request is
+    // never retried more weakly than anything folded in, and each pending intent is discharged only by a
+    // completion that ScanIntentPolicy.Satisfies. Guarded by _gate.
+    private readonly HashSet<ScanIntent> _pendingWholeRepoScanIntents = new();
 
     // Bumped by every RequestWholeRepoScan. An out-of-band scan captures it BEFORE it starts and hands it back on
     // completion, so a request armed while that scan was already in flight no longer matches and cannot be
@@ -70,11 +71,8 @@ public sealed class IndexerCore
     // takes, so nothing can arm mid-drain. Guarded by _gate.
     private long _wholeRepoScanArmingGeneration;
 
-    // Failure backoff for the latch. Without it a whole-repo scan that keeps failing (an OOM-killed extract,
-    // exit 137) is respawned on every 250ms debounce tick, and each attempt first takes the user-global scan
-    // lease — starving every sibling worktree and leaking a temp spool per kill. Guarded by _gate.
-    private int _consecutiveScanFailures;
-    private DateTimeOffset? _scanRetryNotBeforeUtc;
+    // Log throttle for the suppressed-scan warning: one line per backoff arming, not one per 250ms tick.
+    // Guarded by _gate.
     private bool _backoffWarned;
 
     /// <summary>The coalescing event queue. Enqueue under the watcher; drained on the debounce tick.</summary>
@@ -88,12 +86,16 @@ public sealed class IndexerCore
         get
         {
             lock (_gate)
-                return Queue.Count > 0 || Queue.NeedsRescan || _overflowSignaled || _pendingWholeRepoScan;
+                return Queue.Count > 0 || Queue.NeedsRescan || _overflowSignaled ||
+                    _pendingWholeRepoScanIntents.Count > 0;
         }
     }
 
     /// <summary>
-    /// Construct the core over a fresh (or supplied) queue, the extract-op runner, and a file-existence stat.
+    /// Construct the core over a fresh (or supplied) queue, the extract-op runner, a file-existence stat, and the
+    /// scan-failure policy that owns the whole-repo retry timer. <paramref name="failurePolicy"/> defaults to a
+    /// process-local one; production passes the workspace's persisted policy so the backoff is shared with every
+    /// other Miller process on that workspace.
     /// </summary>
     /// <exception cref="ArgumentNullException">Any required argument is null.</exception>
     public IndexerCore(
@@ -101,7 +103,7 @@ public sealed class IndexerCore
         IExtractOps ops,
         Func<string, bool> exists,
         ILogger? logger = null,
-        Func<DateTimeOffset>? utcNow = null)
+        IScanFailurePolicy? failurePolicy = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
         ArgumentNullException.ThrowIfNull(ops);
@@ -110,7 +112,7 @@ public sealed class IndexerCore
         _ops = ops;
         _exists = exists;
         _logger = logger;
-        _utcNow = utcNow ?? (static () => DateTimeOffset.UtcNow);
+        _failurePolicy = failurePolicy ?? new InMemoryScanFailurePolicy();
     }
 
     /// <summary>
@@ -139,16 +141,15 @@ public sealed class IndexerCore
 
     /// <summary>
     /// Arm the whole-repo rescan latch directly, for a request that was claimed elsewhere and then could not be
-    /// serviced (refused scan admission, or a scan that failed) — so the reconcile is retried instead of lost.
-    /// <paramref name="force"/> carries the request's intent: any forced request makes the pending scan forced,
-    /// and the bit survives until a scan that satisfies that intent succeeds.
+    /// serviced (refused scan admission, a deferred retry, or a scan that failed) — so the reconcile is retried
+    /// instead of lost. <paramref name="intent"/> survives until a scan that
+    /// <see cref="ScanIntentPolicy.Satisfies"/> it succeeds; the retry itself runs at the strongest intent armed.
     /// </summary>
-    public void RequestWholeRepoScan(bool force)
+    public void RequestWholeRepoScan(ScanIntent intent)
     {
         lock (_gate)
         {
-            _pendingWholeRepoScan = true;
-            _pendingWholeRepoScanForce |= force;
+            _pendingWholeRepoScanIntents.Add(intent);
             _wholeRepoScanArmingGeneration++;
         }
     }
@@ -168,28 +169,23 @@ public sealed class IndexerCore
     }
 
     /// <summary>
-    /// Report that a whole-repo scan run OUTSIDE this core succeeded, so the latch it would otherwise satisfy is
-    /// cleared instead of driving a duplicate rebuild on the next tick. INTENT-AWARE: a successful
-    /// <paramref name="force"/> <c>false</c> delta scan does NOT satisfy a pending forced request, because the
-    /// delta would leave the from-scratch rebuild the requester asked for unrun. GENERATION-AWARE:
-    /// <paramref name="armingGeneration"/> is the <see cref="WholeRepoScanArmingGeneration"/> read before the scan
-    /// started, and a latch re-armed since then is left alone — the scan that just finished began before that
-    /// request existed, so clearing it would silently drop a rebuild Miller already promised the caller.
+    /// Report that a whole-repo scan run OUTSIDE this core succeeded, so the latch entries it discharges are
+    /// cleared instead of driving a duplicate rebuild on the next tick. INTENT-AWARE: only pending intents
+    /// <see cref="ScanIntentPolicy.Satisfies"/> considers discharged by <paramref name="completed"/> are dropped,
+    /// so a delta (including a DOWNGRADED rebuild that ran as one) never clears a pending force.
+    /// GENERATION-AWARE: <paramref name="armingGeneration"/> is the <see cref="WholeRepoScanArmingGeneration"/>
+    /// read before the scan started, and a latch re-armed since then is left alone — the scan that just finished
+    /// began before that request existed, so clearing it would silently drop a rebuild Miller already promised
+    /// the caller. The failure history is NOT touched here: the caller that ran the scan owns
+    /// <see cref="IScanFailurePolicy.RecordSuccess"/>, because only it knows whether the run was a downgrade.
     /// </summary>
-    public void NoteWholeRepoScanCompleted(bool force, long armingGeneration)
+    public void NoteWholeRepoScanCompleted(ScanIntent completed, long armingGeneration)
     {
         lock (_gate)
         {
-            // A scan that completed is direct evidence the extractor is healthy, so the failure backoff resets
-            // even when the latch must stay armed — otherwise a stale backoff would suppress the very request
-            // that was armed while this scan ran.
-            ResetScanFailureBackoff();
-
             if (_wholeRepoScanArmingGeneration != armingGeneration)
                 return;
-            if (_pendingWholeRepoScanForce && !force)
-                return;
-            ClearWholeRepoScanLatch();
+            DischargePendingIntents(completed);
         }
     }
 
@@ -203,22 +199,16 @@ public sealed class IndexerCore
     {
         lock (_gate)
         {
-            bool pending = _pendingWholeRepoScan || Queue.NeedsRescan || _overflowSignaled || headChanged;
-            return pending && !InScanFailureBackoff();
+            if (PendingScanIntent(headChanged) is not { } intent)
+                return false;
+            return _failurePolicy.Evaluate(intent).Attempt;
         }
     }
 
     /// <summary>
     /// The consecutive whole-repo scan failures currently driving the backoff. Zero once one succeeds.
     /// </summary>
-    internal int ConsecutiveScanFailures
-    {
-        get
-        {
-            lock (_gate)
-                return _consecutiveScanFailures;
-        }
-    }
+    internal int ConsecutiveScanFailures => _failurePolicy.Read()?.ConsecutiveFailures ?? 0;
 
     /// <summary>
     /// Drain and process the queue. <paramref name="headChanged"/> is true when <c>.git/HEAD</c> moved since the
@@ -249,19 +239,24 @@ public sealed class IndexerCore
             if (Queue.NeedsRescan)
             {
                 Queue.ClearNeedsRescan();
-                _pendingWholeRepoScan = true;
+                _pendingWholeRepoScanIntents.Add(ScanIntent.IncrementalReconcile);
             }
             if (_overflowSignaled)
             {
                 _overflowSignaled = false;
-                _pendingWholeRepoScan = true;
+                _pendingWholeRepoScanIntents.Add(ScanIntent.IncrementalReconcile);
             }
             if (headChanged)
-                _pendingWholeRepoScan = true;
+                _pendingWholeRepoScanIntents.Add(ScanIntent.IncrementalReconcile);
 
-            bool scanDue = _pendingWholeRepoScan && !InScanFailureBackoff();
-            if (_pendingWholeRepoScan && !scanDue)
-                WarnScanSuppressedOnce();
+            bool scanPending = _pendingWholeRepoScanIntents.Count > 0;
+            ScanAttemptDecision? decision = scanPending
+                ? _failurePolicy.Evaluate(ScanIntentPolicy.Strongest(_pendingWholeRepoScanIntents))
+                : null;
+
+            bool scanDue = decision is { Attempt: true };
+            if (scanPending && !scanDue)
+                WarnScanSuppressedOnce(decision!);
 
             if (scanDue && !wholeRepoScanAdmitted)
                 scanDue = false;
@@ -271,7 +266,7 @@ public sealed class IndexerCore
             // every one of them, so draining here would run up to WatchEventQueue.MaxQueue sequential extracts,
             // holding this gate and the caller's for the whole storm, to reach an index the latched scan produces
             // anyway. An overflow while they wait is not a loss either — it folds straight back into the latch.
-            bool scanOwedButNotRunning = _pendingWholeRepoScan && !scanDue;
+            bool scanOwedButNotRunning = scanPending && !scanDue;
             if (scanOwedButNotRunning && Queue.Count > MaxDeferredScanDrain)
             {
                 _logger?.LogDebug(
@@ -281,69 +276,83 @@ public sealed class IndexerCore
                 return false;
             }
 
-            bool force = _pendingWholeRepoScanForce;
             IReadOnlyList<WatchEvent> drained = Queue.Drain();
 
             if (!scanDue && drained.Count == 0)
                 return false; // no per-file events and no runnable reconcile — a no-op tick.
 
+            ScanOp? wholeRepoScan = scanDue
+                ? ScanOp.For(decision!.EffectiveIntent, decision.Jobs)
+                : null;
+
             // Stat is injected; watcher paths may not yet be canonical here — they are canonicalized later in
             // JulieExtractOps (per-file via PathCanonicalizer) just before the extract call, NOT in this layer.
-            IReadOnlyList<ExtractOp> ops = WatchEventRouter.Route(drained, _exists, scanDue, force);
+            IReadOnlyList<ExtractOp> ops = WatchEventRouter.Route(drained, _exists, wholeRepoScan);
 
             foreach (var op in ops)
             {
-                bool succeeded = ExecuteIsolated(op);
-                if (op is not ScanOp)
+                (bool succeeded, Exception? failure) = ExecuteIsolated(op);
+                if (op is not ScanOp scan)
                     continue;
                 if (succeeded)
                     usedWholeRepoScan = true;
                 else
-                    ArmScanFailureBackoff();
+                    RecordScanFailure(scan, failure);
             }
 
             // Success, not admission, is the commit point: a swallowed extractor failure must leave the latch
             // armed so the reconcile is retried rather than silently dropped.
             if (usedWholeRepoScan)
             {
-                ResetScanFailureBackoff();
-                ClearWholeRepoScanLatch();
+                // A DOWNGRADED rebuild that succeeded as a delta is a degraded serve, not a recovery: it proves
+                // nothing about the from-scratch rebuild that was skipped, so it neither clears the failure
+                // history nor discharges the pending rebuild. It must still CONSUME the attempt slot — the
+                // undischarged rebuild plus an already-elapsed next_attempt_at is a state that repeats itself,
+                // and this drain runs every 250ms.
+                if (decision!.Downgraded)
+                    _failurePolicy.RecordDowngradedServe();
+                else
+                    _failurePolicy.RecordSuccess(decision.EffectiveIntent);
+                _backoffWarned = false;
+                DischargePendingIntents(decision.EffectiveIntent);
             }
 
             return ops.Count > 0;
         }
     }
 
-    // All five helpers below run under _gate.
-    private bool InScanFailureBackoff() =>
-        _scanRetryNotBeforeUtc is { } notBefore && _utcNow() < notBefore;
+    // All helpers below run under _gate, except where they only read the injected policy.
 
-    private void ArmScanFailureBackoff()
+    // The strongest intent the next drain owes, or null when nothing is pending. headChanged is a per-tick fact
+    // the caller supplies rather than latched state, so it is OR-ed in without being consumed.
+    private ScanIntent? PendingScanIntent(bool headChanged)
     {
-        _consecutiveScanFailures++;
-        TimeSpan backoff = BackoffFor(_consecutiveScanFailures);
-        _scanRetryNotBeforeUtc = _utcNow() + backoff;
+        // A transient signal only ever contributes the weakest intent, so it cannot change the strongest when the
+        // latch already holds one.
+        if (_pendingWholeRepoScanIntents.Count > 0)
+            return ScanIntentPolicy.Strongest(_pendingWholeRepoScanIntents);
+
+        return headChanged || Queue.NeedsRescan || _overflowSignaled
+            ? ScanIntent.IncrementalReconcile
+            : null;
+    }
+
+    private void RecordScanFailure(ScanOp scan, Exception? failure)
+    {
+        int jobs = scan.Jobs ?? ExtractJobsPolicy.FromEnvironment();
+        _failurePolicy.RecordFailure(scan.Intent, JulieExtractException.ExitCodeOf(failure), jobs);
         _backoffWarned = false;
+        ScanFailureRecord? record = _failurePolicy.Read();
         _logger?.LogWarning(
-            "Whole-repo scan failed {Failures} time(s) in a row; deferring the next attempt by {BackoffSeconds}s " +
-            "so a failing extractor cannot respawn on every debounce tick.",
-            _consecutiveScanFailures, backoff.TotalSeconds);
+            "Whole-repo scan failed {Failures} time(s) in a row; the next automatic attempt is deferred until " +
+            "{RetryAtUtc:O} so a failing extractor cannot respawn on every debounce tick.",
+            record?.ConsecutiveFailures ?? 1, record?.NextAttemptAtUtc);
     }
 
-    private void ClearWholeRepoScanLatch()
-    {
-        _pendingWholeRepoScan = false;
-        _pendingWholeRepoScanForce = false;
-    }
+    private void DischargePendingIntents(ScanIntent completed) =>
+        _pendingWholeRepoScanIntents.RemoveWhere(pending => ScanIntentPolicy.Satisfies(completed, pending));
 
-    private void ResetScanFailureBackoff()
-    {
-        _consecutiveScanFailures = 0;
-        _scanRetryNotBeforeUtc = null;
-        _backoffWarned = false;
-    }
-
-    private void WarnScanSuppressedOnce()
+    private void WarnScanSuppressedOnce(ScanAttemptDecision decision)
     {
         if (_backoffWarned)
             return;
@@ -351,19 +360,7 @@ public sealed class IndexerCore
         _logger?.LogWarning(
             "A whole-repo scan is pending but suppressed until {RetryAtUtc:O} after {Failures} consecutive " +
             "failures; per-file updates continue meanwhile.",
-            _scanRetryNotBeforeUtc, _consecutiveScanFailures);
-    }
-
-    // Doubling from InitialScanFailureBackoff, saturating at MaxScanFailureBackoff. The shift is bounded so a
-    // long-running failure streak cannot overflow the multiplier.
-    private static TimeSpan BackoffFor(int consecutiveFailures)
-    {
-        const int MaxDoublings = 30;
-        int doublings = Math.Min(Math.Max(consecutiveFailures - 1, 0), MaxDoublings);
-        double ms = InitialScanFailureBackoff.TotalMilliseconds * Math.Pow(2, doublings);
-        return ms >= MaxScanFailureBackoff.TotalMilliseconds
-            ? MaxScanFailureBackoff
-            : TimeSpan.FromMilliseconds(ms);
+            decision.RetryAtUtc, decision.ConsecutiveFailures);
     }
 
     // v1 emits a per-diagnostic `recoverable` flag; that is the primary keep-prior signal. The data-loss guard
@@ -374,8 +371,9 @@ public sealed class IndexerCore
         new(StringComparer.Ordinal) { "data_loss_guard" };
 
     // Run one op, isolating any failure so a single bad file never aborts the rest of the batch (decision-10).
-    // Returns whether the op completed; the caller uses that to decide whether the rescan latch may be cleared.
-    private bool ExecuteIsolated(ExtractOp op)
+    // Returns whether the op completed and, when it did not, the exception — the caller uses the first to decide
+    // whether the rescan latch may be cleared and the second to record julie's exit code in the failure history.
+    private (bool Succeeded, Exception? Failure) ExecuteIsolated(ExtractOp op)
     {
         try
         {
@@ -383,7 +381,7 @@ public sealed class IndexerCore
             {
                 UpdateOp u => _ops.Update(u.Path),
                 DeleteOp d => _ops.Delete(d.Path),
-                ScanOp s => _ops.Scan(s.Force),
+                ScanOp s => _ops.Scan(s.Intent, s.Jobs),
                 _ => throw new InvalidOperationException($"Unhandled ExtractOp '{op.GetType().Name}'."),
             };
 
@@ -393,7 +391,7 @@ public sealed class IndexerCore
                 _logger?.LogDebug(
                     "extract op {Op} succeeded (status {Status}, revision {Revision}).",
                     Describe(op), report.Status, report.Revision);
-            return true;
+            return (true, null);
         }
         catch (JulieExtractFailedException ex)
         {
@@ -424,7 +422,7 @@ public sealed class IndexerCore
                     Describe(op), described.Codes, described.StderrTail);
             }
 
-            return false;
+            return (false, ex);
         }
         catch (Exception ex)
         {
@@ -450,7 +448,7 @@ public sealed class IndexerCore
                     Describe(op), described.StderrTail);
             }
 
-            return false;
+            return (false, ex);
         }
     }
 

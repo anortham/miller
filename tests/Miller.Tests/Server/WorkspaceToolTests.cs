@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server;
@@ -73,8 +74,8 @@ public sealed class WorkspaceToolTests : IDisposable
         JulieDbFixture fx,
         long builtRevision,
         string? workspaceId,
-        Func<string, string, bool, ExtractReport>? crossWorkspaceScan = null,
-        Func<string, string, bool, ExtractReport>? openScan = null,
+        Func<string, string, bool, int?, ExtractReport>? crossWorkspaceScan = null,
+        Func<string, string, bool, int?, ExtractReport>? openScan = null,
         Func<string, IDisposable?>? acquireLock = null,
         Func<string, long>? readLatestRevision = null,
         IDashboardLauncher? dashboardLauncher = null,
@@ -147,7 +148,7 @@ public sealed class WorkspaceToolTests : IDisposable
 
         var crossRefresh = new CrossWorkspaceRefreshService(
             registry,
-            crossWorkspaceScan ?? ((_, _, _) => throw new InvalidOperationException("cross-workspace scan was not expected")),
+            crossWorkspaceScan ?? ((_, _, _, _) => throw new InvalidOperationException("cross-workspace scan was not expected")),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             readLatestRevision ?? (_ => 0),
             lockBusyWait: TimeSpan.Zero,
@@ -159,7 +160,7 @@ public sealed class WorkspaceToolTests : IDisposable
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
             vectors ?? VectorSidecar.Disabled,
-            openScan ?? ((scanRoot, scanDb, force) => runner.Scan(scanRoot, scanDb, force)),
+            openScan ?? ((scanRoot, scanDb, force, jobs) => runner.Scan(scanRoot, scanDb, force, jobs)),
             acquireLock ?? (millerDir => SingleWriterLock.TryAcquire(millerDir)),
             dashboardLauncher ?? new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,
@@ -276,9 +277,9 @@ public sealed class WorkspaceToolTests : IDisposable
         public List<bool> ScanForce { get; } = [];
         public ExtractReport Update(string path) => throw new NotSupportedException();
         public ExtractReport Delete(string path) => throw new NotSupportedException();
-        public ExtractReport Scan(bool force = false)
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
-            ScanForce.Add(force);
+            ScanForce.Add(ScanIntentPolicy.RequiresForce(intent));
             return new ExtractReport(
                 ReportSchemaVersion: 1, Status: "ok", Operation: "scan", Mode: "incremental", Input: null,
                 Artifact: new ExtractArtifact(
@@ -299,9 +300,9 @@ public sealed class WorkspaceToolTests : IDisposable
         public List<bool> ScanForce { get; } = [];
         public ExtractReport Update(string path) => throw new NotSupportedException();
         public ExtractReport Delete(string path) => throw new NotSupportedException();
-        public ExtractReport Scan(bool force = false)
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
-            ScanForce.Add(force);
+            ScanForce.Add(ScanIntentPolicy.RequiresForce(intent));
             return PartialReport(root, dbPath, Ws, revision: 99);
         }
     }
@@ -1316,7 +1317,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (_, _, _) => throw new InvalidOperationException("prime scan must not run here"),
+            openScan: (_, _, _, _) => throw new InvalidOperationException("prime scan must not run here"),
             acquireLock: _ => new NoopLease());
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -1376,7 +1377,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, force) =>
+            openScan: (root, db, force, _) =>
             {
                 Assert.False(force);
                 Directory.CreateDirectory(Path.GetDirectoryName(db)!);
@@ -1407,7 +1408,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, _) =>
+            openScan: (root, db, _, _) =>
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(db)!);
                 File.WriteAllText(db, "created by fake scan");
@@ -1431,7 +1432,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, _) =>
+            openScan: (root, db, _, _) =>
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(db)!);
                 File.WriteAllText(db, "created by fake scan");
@@ -1774,7 +1775,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (_, _, _) => throw new InvalidOperationException("current refresh must not use cross-workspace scan"));
+            crossWorkspaceScan: (_, _, _, _) => throw new InvalidOperationException("current refresh must not use cross-workspace scan"));
         var ops = new RecordingScanOps();
         harness.Indexer.PublishOpsForTest(ops);
 
@@ -1806,7 +1807,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, force) =>
+            crossWorkspaceScan: (root, db, force, _) =>
             {
                 observedForce = force;
                 return Report(root, db, OtherWs, revision: 10);
@@ -1832,7 +1833,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, _) => Report(root, db, OtherWs, revision: 9) with
+            crossWorkspaceScan: (root, db, _, _) => Report(root, db, OtherWs, revision: 9) with
             {
                 Status = "no_change",
                 Artifact = null,
@@ -1856,7 +1857,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, _) => PartialReport(root, db, OtherWs, revision: 10));
+            crossWorkspaceScan: (root, db, _, _) => PartialReport(root, db, OtherWs, revision: 10));
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
         harness.Registry.MarkScanned(OtherWs, revision: 9);
@@ -1877,7 +1878,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, _) => SlowWarningReport(root, db, OtherWs, revision: 9));
+            crossWorkspaceScan: (root, db, _, _) => SlowWarningReport(root, db, OtherWs, revision: 9));
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(OtherWs, "other-111111111111", otherRoot, other.DbPath, WorkspaceRegistryState.Ready);
         harness.Registry.MarkScanned(OtherWs, revision: 9);
@@ -1898,7 +1899,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (_, _, _) => throw new IOException("extract unavailable"));
+            crossWorkspaceScan: (_, _, _, _) => throw new IOException("extract unavailable"));
         string otherRoot = Path.GetDirectoryName(other.DbPath)!;
         harness.Registry.UpsertSeen(
             OtherWs,
@@ -1930,7 +1931,7 @@ public sealed class WorkspaceToolTests : IDisposable
             current,
             builtRevision: 4,
             workspaceId: Ws,
-            crossWorkspaceScan: (root, db, force) =>
+            crossWorkspaceScan: (root, db, force, _) =>
             {
                 observedForce = force;
                 return Report(root, db, OtherWs, revision: 11);
@@ -2031,7 +2032,7 @@ public sealed class WorkspaceToolTests : IDisposable
             fx,
             builtRevision: 4,
             workspaceId: Ws,
-            openScan: (root, db, force) =>
+            openScan: (root, db, force, _) =>
             {
                 scanned = true;
                 return Report(root, db, WorkspaceId.FromCanonicalRoot(root), revision: 13);

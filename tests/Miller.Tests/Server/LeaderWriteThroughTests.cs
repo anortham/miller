@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -46,7 +47,8 @@ public sealed class LeaderWriteThroughTests : IDisposable
         }
 
         public ExtractReport Delete(string path) => throw new NotSupportedException("not exercised here");
-        public ExtractReport Scan(bool force = false) => throw new NotSupportedException("not exercised here");
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null) =>
+            throw new NotSupportedException("not exercised here");
     }
 
     private WorkspaceContext CreateWorkspace()

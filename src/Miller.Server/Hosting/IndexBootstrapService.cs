@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
@@ -178,8 +179,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     internal sealed record BootstrapScanDecision(
         bool ShouldScan,
-        bool Force,
-        WorkspaceRegistryState RegistryStateAfterLoad);
+        ScanIntent Intent,
+        WorkspaceRegistryState RegistryStateAfterLoad)
+    {
+        /// <summary>Whether the decided scan is a from-scratch rebuild rather than a hash-delta reconcile.</summary>
+        internal bool Force => ScanIntentPolicy.RequiresForce(Intent);
+    }
 
     /// <summary>
     /// The outcome of <see cref="LoadIndexWithAutoRebuild{T}"/>: the loaded index, whether a force-rebuild
@@ -431,6 +436,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             }
 
             var winnerArtifact = new WinnerArtifactProbe(canonicalDbPath, canonicalRoot, stableWorkspaceId);
+            // The bootstrap RECORDS scan failures but is never DEFERRED by the backoff. It only scans when there
+            // is no usable artifact for this root at all, so deferring could only turn a transient into a hard
+            // bind failure with nothing served; concurrency here is already bounded by the workspace writer lease
+            // (a loser loads the winner's artifact) and the machine-wide governor. What it must do is record —
+            // that record is what throttles every AUTOMATIC path afterwards — and honor the post-SIGKILL jobs
+            // clamp, which costs a struggling machine nothing.
+            PersistedScanFailurePolicy failurePolicy =
+                PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
 
             var scanDecision = ReadDecision();
             bool scanned = false;
@@ -504,7 +517,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     }
 
                     TestScanObserver?.Invoke();
-                    var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
+                    ScanAttemptDecision attempt =
+                        failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
+                    ExtractReport report = RunRecordedScan(
+                        failurePolicy, attempt,
+                        () => runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs));
                     scanned = true;
                     scanRevision = report.Revision;
                     _logger.LogInformation(
@@ -529,7 +546,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 // reload. A second incompatibility means the bundled tool does not match this build — fail loudly.
                 loadResult = LoadIndexWithAutoRebuild(
                     load: () => RepositoryIndexLoader.Load(canonicalDbPath),
-                    forceRescan: () =>
+                    forceRescan: healIntent =>
                     {
                         // A force scan promotes over the live artifact (FullRebuildPromotion), and
                         // JulieExtractRunner.Scan's contract is that force-scan callers hold Miller's single-writer
@@ -564,7 +581,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         }
 
                         TestScanObserver?.Invoke();
-                        var rebuild = runner.Scan(canonicalRoot, canonicalDbPath, force: true);
+                        ScanAttemptDecision attempt = failurePolicy.Evaluate(healIntent, bypassBackoff: true);
+                        ExtractReport rebuild = RunRecordedScan(
+                            failurePolicy, attempt,
+                            () => runner.Scan(canonicalRoot, canonicalDbPath, force: true, attempt.Jobs));
                         _logger.LogInformation(
                             "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
                             rebuild.SymbolsExtracted, rebuild.Revision);
@@ -818,14 +838,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
         if (!dbExists)
             return new BootstrapScanDecision(
-                ShouldScan: true, Force: false, WorkspaceRegistryState.Ready);
+                ShouldScan: true, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.Ready);
 
         if (!RootPathsEqual(existingRootPath, canonicalRoot))
             return new BootstrapScanDecision(
-                ShouldScan: true, Force: true, WorkspaceRegistryState.Ready);
+                ShouldScan: true, ScanIntent.RootRebind, WorkspaceRegistryState.Ready);
 
         return new BootstrapScanDecision(
-            ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
+            ShouldScan: false, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.LoadedExisting);
     }
 
     /// <summary>
@@ -842,19 +862,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// matches, forcing a clean rescan. Without this, a Windows workspace force-rescanned on every startup because
     /// <c>\\?\C:\repo</c> never matched <c>C:\repo</c> ordinally — a 30s+ rescan that tripped the MCP connect timeout.
     /// </summary>
-    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot)
-    {
-        if (string.IsNullOrEmpty(recordedRootPath))
-            return false;
-
-        string recorded = PathCanonicalizer.StripWindowsVerbatimPrefix(recordedRootPath);
-        string current = PathCanonicalizer.StripWindowsVerbatimPrefix(canonicalRoot);
-        var comparison = RootPathComparison(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS());
-        return string.Equals(recorded, current, comparison);
-    }
+    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot) =>
+        ArtifactRootIdentity.Matches(recordedRootPath, canonicalRoot);
 
     internal static StringComparison RootPathComparison(bool isWindows, bool isMacOS) =>
-        isWindows || isMacOS ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        ArtifactRootIdentity.ComparisonFor(isWindows, isMacOS);
 
     /// <summary>
     /// Bounded-wait acquisition of the workspace single-writer lock for the bootstrap auto-rebuild promote.
@@ -1170,7 +1182,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal static IndexLoadResult<T> LoadIndexWithAutoRebuild<T>(
         Func<T> load,
-        Func<long?> forceRescan,
+        Func<ScanIntent, long?> forceRescan,
         Action onBeforeRetry,
         Action<IncompatibleExtractException> onIncompatible,
         Action<SqliteException> onCorrupt)
@@ -1189,7 +1201,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         {
             // A stale-schema/contract artifact: notify, then force-rebuild once and reload.
             onIncompatible(ex);
-            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
+            return RebuildAndRetry(load, forceRescan, ScanIntent.SchemaHeal, onBeforeRetry);
         }
         catch (SqliteException ex) when (IsCorruption(ex))
         {
@@ -1198,7 +1210,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             // connect"), force-rebuild once with the bundled julie-extract and reload — the same self-heal the
             // incompatible path uses. A SECOND corruption after rebuild escapes (we never loop).
             onCorrupt(ex);
-            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
+            return RebuildAndRetry(load, forceRescan, ScanIntent.CorruptionHeal, onBeforeRetry);
         }
     }
 
@@ -1210,11 +1222,37 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     // A second failure on the retry load propagates — fail loudly rather than loop on a DB the tool cannot fix.
     // A null revision means the rescan was SKIPPED (the lock was busy), so nothing was rebuilt; the barrier still
     // runs because the holder may have promoted a new inode under us.
-    private static IndexLoadResult<T> RebuildAndRetry<T>(Func<T> load, Func<long?> forceRescan, Action onBeforeRetry)
+    private static IndexLoadResult<T> RebuildAndRetry<T>(
+        Func<T> load, Func<ScanIntent, long?> forceRescan, ScanIntent healIntent, Action onBeforeRetry)
     {
-        long? rebuiltRevision = forceRescan();
+        long? rebuiltRevision = forceRescan(healIntent);
         onBeforeRetry();
         return new IndexLoadResult<T>(load(), Rebuilt: rebuiltRevision is not null, RebuiltRevision: rebuiltRevision);
+    }
+
+    /// <summary>
+    /// Run a bootstrap scan through the persisted scan-failure record: a success clears the failure history when
+    /// the completed intent satisfies the recorded one, a throw extends it (with julie's exit code, so a SIGKILL
+    /// clamps the next attempt's <c>--jobs</c>) before propagating. This is what makes a bootstrap failure visible
+    /// to every LATER automatic path — the bootstrap itself never defers on the record.
+    /// </summary>
+    private static ExtractReport RunRecordedScan(
+        IScanFailurePolicy failurePolicy, ScanAttemptDecision attempt, Func<ExtractReport> scan)
+    {
+        try
+        {
+            ExtractReport report = scan();
+            failurePolicy.RecordSuccess(attempt.EffectiveIntent);
+            return report;
+        }
+        catch (Exception ex)
+        {
+            failurePolicy.RecordFailure(
+                attempt.EffectiveIntent,
+                JulieExtractException.ExitCodeOf(ex),
+                attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
+            throw;
+        }
     }
 
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(

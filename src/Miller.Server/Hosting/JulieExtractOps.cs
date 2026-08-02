@@ -1,3 +1,4 @@
+using Miller.Core.Freshness;
 using Miller.Indexing;
 
 namespace Miller.Server.Hosting;
@@ -16,16 +17,16 @@ public sealed class JulieExtractOps : IExtractOps
 {
     private readonly string _canonicalRoot;
     private readonly string _db;
-    private readonly Func<string, string, string, ExtractReport> _update; // (root, db, file)
-    private readonly Func<string, string, string, ExtractReport> _delete; // (root, db, file)
-    private readonly Func<string, string, bool, ExtractReport> _scan;     // (root, db, force)
+    private readonly Func<string, string, string, ExtractReport> _update;   // (root, db, file)
+    private readonly Func<string, string, string, ExtractReport> _delete;   // (root, db, file)
+    private readonly Func<string, string, bool, int?, ExtractReport> _scan; // (root, db, force, jobs)
 
     private JulieExtractOps(
         string canonicalRoot,
         string db,
         Func<string, string, string, ExtractReport> update,
         Func<string, string, string, ExtractReport> delete,
-        Func<string, string, bool, ExtractReport> scan)
+        Func<string, string, bool, int?, ExtractReport> scan)
     {
         _canonicalRoot = canonicalRoot;
         _db = db;
@@ -49,7 +50,7 @@ public sealed class JulieExtractOps : IExtractOps
             canonicalRoot, db,
             update: runner.Update,
             delete: runner.Delete,
-            scan: (root, dbPath, force) => runner.Scan(root, dbPath, force));
+            scan: (root, dbPath, force, jobs) => runner.Scan(root, dbPath, force, jobs));
     }
 
     /// <summary>
@@ -61,7 +62,7 @@ public sealed class JulieExtractOps : IExtractOps
         string db,
         Func<string, string, string, ExtractReport> update,
         Func<string, string, string, ExtractReport> delete,
-        Func<string, string, bool, ExtractReport> scan)
+        Func<string, string, bool, int?, ExtractReport> scan)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
@@ -94,5 +95,6 @@ public sealed class JulieExtractOps : IExtractOps
     }
 
     /// <inheritdoc/>
-    public ExtractReport Scan(bool force = false) => _scan(_canonicalRoot, _db, force);
+    public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null) =>
+        _scan(_canonicalRoot, _db, ScanIntentPolicy.RequiresForce(intent), jobs);
 }

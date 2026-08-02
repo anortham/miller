@@ -99,6 +99,15 @@ public sealed class IndexerService : BackgroundService
     private IExtractOps? _ops;
     private readonly object _opsGate = new();
 
+    // The persisted, per-workspace whole-repo scan-failure policy: the SINGLE retry timer every scan site in this
+    // service and in IndexerCore consults. Bound once leadership is won (it needs the workspace's .miller dir);
+    // the in-memory fallback covers the pure test seams that publish ops without a bound workspace. Reference
+    // assignment is atomic; the debounce loop and MCP threads both read it.
+    private readonly IScanFailurePolicy _fallbackFailurePolicy = new InMemoryScanFailurePolicy();
+    private volatile IScanFailurePolicy? _failurePolicy;
+
+    private IScanFailurePolicy FailurePolicy => _failurePolicy ?? _fallbackFailurePolicy;
+
     // .git/HEAD changes (branch switch / checkout) are folded into ONE forced scan per drain rather than
     // drowning in the per-file storm a checkout produces (decision-7). Set by the HEAD watcher, read+reset on
     // the next drain under the lock below.
@@ -369,11 +378,13 @@ public sealed class IndexerService : BackgroundService
         // Pass the CANONICAL db (verified-fact 4): the single-file update/delete ops require an
         // already-canonical --db (the runner no longer GetFullPath-mangles it).
         IExtractOps ops = _createOps(workspace, canonicalRoot, canonicalDbPath);
+        _failurePolicy = PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
         lock (_opsGate)
             _ops = ops; // publish for M6 write-through (TryReindexAsLeader)
         _core = new IndexerCore(
             new WatchEventQueue(), ops, File.Exists,
-            _loggerFactory.CreateLogger<IndexerCore>());
+            _loggerFactory.CreateLogger<IndexerCore>(),
+            FailurePolicy);
 
         // Resolve julie's claimed extension set BEFORE the watchers attach so every event handler sees the
         // final value. Null (probe failed / binary missing) gates nothing — the historical behavior.
@@ -491,14 +502,14 @@ public sealed class IndexerService : BackgroundService
             {
                 lock (_opsGate)
                 {
-                    rescanned = ScanAsLeaderUnderGate(force: true, source: "extractor-upgrade").Result
-                        == ScanOutcome.Kind.Scanned;
+                    rescanned = ScanAsLeaderUnderGate(ScanIntent.ExtractorUpgrade, source: "extractor-upgrade")
+                        .Result == ScanOutcome.Kind.Scanned;
                 }
             }
         }
 
         if (!rescanned)
-            _core?.RequestWholeRepoScan(force: true);
+            _core?.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
     }
 
     // One debounce tick's work: leader request files, then the coalesced drain. Runs only on a tick that is NOT
@@ -612,12 +623,25 @@ public sealed class IndexerService : BackgroundService
             ?? throw new InvalidOperationException(
                 "IndexerService cannot run startup scan before bootstrap resolves the stable workspace id.");
 
+        // The startup delta is an AUTOMATIC path, so it honors the persisted backoff: a workspace whose scans keep
+        // being OOM-killed must not get one more free attempt out of every fresh process that claims leadership.
+        ScanAttemptDecision decision = FailurePolicy.Evaluate(ScanIntent.IncrementalReconcile);
+        if (!decision.Attempt)
+        {
+            _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
+            _logger.LogWarning(
+                "Startup delta scan deferred until {RetryAtUtc:O} after {Failures} consecutive whole-repo scan " +
+                "failures; serving the loaded index until then.",
+                decision.RetryAtUtc, decision.ConsecutiveFailures);
+            return;
+        }
+
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-startup");
         if (admission is null)
         {
             // Not a workspace error: the index stays valid and the debounce loop's next rescan tick retries.
-            // A startup delta is force:false, so the re-armed latch stays a delta scan.
-            _core?.RequestWholeRepoScan(force: false);
+            // A startup delta is incremental, so the re-armed latch stays a delta scan.
+            _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
             return;
         }
 
@@ -629,17 +653,18 @@ public sealed class IndexerService : BackgroundService
             {
                 IExtractOps ops = _ops
                     ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
-                report = ops.Scan(force: false);
+                report = ops.Scan(ScanIntent.IncrementalReconcile, decision.Jobs);
                 // Converge search.db under _opsGate — the same lock that serializes extract subprocesses — so the
                 // symbols.db read never races a concurrent extract that could replace the file. Revision-gated
                 // inside the sidecar; a no-op when the feature is off.
                 TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
             }
 
+            FailurePolicy.RecordSuccess(ScanIntent.IncrementalReconcile);
             // A delta scan does not satisfy a pending FORCED request, and neither does it satisfy a request armed
             // after it started, so the core decides whether this clears the latch; without the call a delta that
             // ran here would leave it armed for a duplicate scan.
-            _core?.NoteWholeRepoScanCompleted(force: false, armingGeneration);
+            _core?.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, armingGeneration);
             _registryPublisher.MarkScanned(workspace, stableWorkspaceId, report.Revision);
             _logger.LogInformation(
                 "Startup delta scan complete: revision {Revision}, {Updated} files updated, {Deleted} files deleted.",
@@ -651,7 +676,8 @@ public sealed class IndexerService : BackgroundService
         {
             // This block runs once per claim, OUTSIDE the debounce loop, so nothing else retries it: without the
             // re-arm a failed startup delta drops the reconcile for every edit made while Miller was down.
-            _core?.RequestWholeRepoScan(force: false);
+            RecordScanFailure(ScanIntent.IncrementalReconcile, decision, ex);
+            _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
             _logger.LogWarning(ex, "Startup delta scan failed; keeping the loaded index until a later scan converges.");
             try
             {
@@ -698,9 +724,10 @@ public sealed class IndexerService : BackgroundService
 
     /// <summary>
     /// M7 workspace refresh/full (decision-3): if THIS instance is the indexer leader, run a whole-repo
-    /// <c>extract scan</c> through its <see cref="IExtractOps"/> — <paramref name="force"/> <c>false</c> is the
-    /// delta reconcile behind <c>workspace refresh</c>, <c>true</c> the from-scratch rebuild behind
-    /// <c>workspace full</c> — and return <see cref="ScanOutcome.Scanned(ExtractReport)"/> carrying julie's
+    /// <c>extract scan</c> through its <see cref="IExtractOps"/> — <see cref="ScanIntent.IncrementalReconcile"/>
+    /// is the delta reconcile behind <c>workspace refresh</c>, <see cref="ScanIntent.UserFullRebuild"/> the
+    /// from-scratch rebuild behind <c>workspace full</c> — and return
+    /// <see cref="ScanOutcome.Scanned(ExtractReport)"/> carrying julie's
     /// report (the revision the freshness poll then converges on). If this instance does NOT hold the writer lock
     /// it returns <see cref="ScanOutcome.NotLeader"/> WITHOUT scanning: two miller instances must never both
     /// <c>extract scan</c> (the M3 single-writer corruption guard), so a non-leader honestly reports it cannot
@@ -709,27 +736,48 @@ public sealed class IndexerService : BackgroundService
     /// an on-demand scan never races a concurrent <c>extract</c>. Best-effort: an extract failure is logged and
     /// returned as <see cref="ScanOutcome.Failed"/>, never thrown into the caller (the tool), because the prior
     /// index stays valid and the next scan/poll reconciles. A refused machine-wide scan admission is NOT a
-    /// failure: it re-arms the rescan latch with <paramref name="force"/> and returns
+    /// failure: it re-arms the rescan latch with <paramref name="intent"/> and returns
     /// <see cref="ScanOutcome.Queued"/>, so the caller can say the scan is queued rather than sending an agent
     /// hunting an extract error that was never logged.
+    ///
+    /// <para><paramref name="bypassBackoff"/> is the direct-user carve-out: a person typing
+    /// <c>workspace refresh/full</c> is not the automatic path the persisted scan-failure backoff exists to
+    /// throttle, so the retry TIMER is skipped for them AND their rebuild is never downgraded to a delta —
+    /// somebody who asked for a from-scratch rebuild must get one or be told they did not. The attempt is still
+    /// recorded, and it still carries the post-SIGKILL jobs clamp.</para>
+    ///
+    /// <para>An AUTOMATIC caller can get <see cref="ScanOutcome.Kind.Downgraded"/>: a delta ran against the
+    /// still-servable prior artifact and the requested rebuild is still owed (already re-armed on the rescan
+    /// latch). It is neither a success nor a failure and must not be rendered as either.</para>
     /// </summary>
-    public ScanOutcome TryScanAsLeader(bool force)
+    public ScanOutcome TryScanAsLeader(ScanIntent intent, bool bypassBackoff = false)
     {
         if (!HoldsLeaderOps())
             return ScanOutcome.NotLeader; // never wait for machine-wide admission we could not use
 
+        ScanAttemptDecision decision = FailurePolicy.Evaluate(intent, bypassBackoff);
+        if (!decision.Attempt)
+        {
+            _core?.RequestWholeRepoScan(intent);
+            return ScanOutcome.Queued(DescribeScanBackoff(decision));
+        }
+
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-ondemand");
         if (admission is null)
         {
-            _core?.RequestWholeRepoScan(force);
+            _core?.RequestWholeRepoScan(intent);
             return ScanOutcome.Queued(_governor.DescribeHolder());
         }
 
         lock (_opsGate)
         {
-            return ScanAsLeaderUnderGate(force, "On-demand");
+            return ScanAsLeaderUnderGate(intent, "On-demand", decision);
         }
     }
+
+    private static string DescribeScanBackoff(ScanAttemptDecision decision) =>
+        $"The previous whole-repo scan of this workspace failed {decision.ConsecutiveFailures} time(s) in a row; " +
+        $"the next automatic attempt is not before {decision.RetryAtUtc:O}.";
 
     private bool HoldsLeaderOps()
     {
@@ -792,31 +840,55 @@ public sealed class IndexerService : BackgroundService
         if (!result.Requested)
             return false;
 
-        // The drain already DELETED the request files, so a refused or failed scan must re-arm the latch or the
-        // requester's rebuild is silently dropped.
+        // The drain already DELETED the request files, so a refused, deferred, downgraded, or failed scan must
+        // re-arm the latch or the requester's rebuild is silently dropped — there is no request file left to
+        // retry from. Servicing another process's queued request is an AUTOMATIC path — the requester is long
+        // gone — so it honors the backoff rather than bypassing it.
+        ScanAttemptDecision decision = FailurePolicy.Evaluate(ScanIntent.UserFullRebuild);
+        if (!decision.Attempt)
+        {
+            _core?.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+            _logger.LogWarning(
+                "Leader-requested full scan deferred: {Backoff}", DescribeScanBackoff(decision));
+            return false;
+        }
+
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-requested-full");
         if (admission is null)
         {
-            _core?.RequestWholeRepoScan(force: true);
+            _core?.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
             return false;
         }
 
         lock (_opsGate)
         {
-            ScanOutcome outcome = ScanAsLeaderUnderGate(force: true, source: "Leader-requested");
-            if (outcome.Result != ScanOutcome.Kind.Scanned)
-                _core?.RequestWholeRepoScan(force: true);
+            ScanOutcome outcome = ScanAsLeaderUnderGate(
+                ScanIntent.UserFullRebuild, source: "Leader-requested", decision);
+            // A downgraded run re-armed the rebuild inside the gate, where the decision not to discharge it was
+            // made; re-arming it again here would only bump the arming generation a second time.
+            if (outcome.Result is not (ScanOutcome.Kind.Scanned or ScanOutcome.Kind.Downgraded))
+                _core?.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
             return outcome.Result == ScanOutcome.Kind.Scanned;
         }
     }
 
     // Callers MUST already hold machine-wide scan admission (TryAcquireScanAdmission), acquired outside
     // _opsGate, and must hold it across the sidecar convergence below — scan+sidecar storms must not overlap
-    // across workspaces.
-    private ScanOutcome ScanAsLeaderUnderGate(bool force, string source)
+    // across workspaces. `decision` is the scan-failure policy's verdict for this attempt, evaluated by the
+    // caller BEFORE it took admission; null means "evaluate here" (the upgrade-rescan path, which has no earlier
+    // decision point).
+    private ScanOutcome ScanAsLeaderUnderGate(
+        ScanIntent intent, string source, ScanAttemptDecision? decision = null)
     {
         if (_ops is not { } ops)
             return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
+
+        ScanAttemptDecision attempt = decision ?? FailurePolicy.Evaluate(intent);
+        if (!attempt.Attempt)
+        {
+            _logger.LogWarning("{Source} scan deferred: {Backoff}", source, DescribeScanBackoff(attempt));
+            return ScanOutcome.Queued(DescribeScanBackoff(attempt));
+        }
 
         // Read BEFORE the scan: TryScanAsLeader's own refusal path arms the latch WITHOUT _opsGate, so a request
         // can be armed while this scan is running, and the completion below must not clear one this scan started
@@ -826,23 +898,30 @@ public sealed class IndexerService : BackgroundService
         ExtractReport report;
         try
         {
-            report = ops.Scan(force);
+            report = ops.Scan(attempt.EffectiveIntent, attempt.Jobs);
         }
         catch (Exception ex)
         {
+            RecordScanFailure(attempt.EffectiveIntent, attempt, ex);
             _logger.LogWarning(ex,
                 "{Source} {Kind} scan failed; keeping the prior index (the next scan/poll reconciles).",
-                source, force ? "full (force)" : "refresh (delta)");
+                source, DescribeScanKind(attempt));
             return ScanOutcome.Failed;
         }
 
         if (ExtractReportLog.DescribeWarning(report) is { } warning)
             _logger.LogWarning(
-                "{Source} {Kind} scan: {Warning}", source, force ? "full (force)" : "refresh (delta)", warning);
+                "{Source} {Kind} scan: {Warning}", source, DescribeScanKind(attempt), warning);
+
+        if (attempt.Downgraded)
+            FailurePolicy.RecordDowngradedServe();
+        else
+            FailurePolicy.RecordSuccess(attempt.EffectiveIntent);
 
         // This whole-repo scan ran OUTSIDE IndexerCore's drain, so tell the core it happened or the latch that
-        // would have run it stays armed and the next tick rebuilds the same repo a second time.
-        _core?.NoteWholeRepoScanCompleted(force, armingGeneration);
+        // would have run it stays armed and the next tick rebuilds the same repo a second time. Intent-aware, so
+        // a downgraded run discharges only the delta it actually performed.
+        _core?.NoteWholeRepoScanCompleted(attempt.EffectiveIntent, armingGeneration);
 
         // Converge derived sidecars after a successful scan, still under _opsGate. Deliberately OUTSIDE the
         // scan's try/catch so sidecar issues can never be misreported as scan failures. Some pure unit seams
@@ -850,8 +929,32 @@ public sealed class IndexerService : BackgroundService
         if (TryGetWorkspaceForSidecarConvergence() is { CanonicalExtractDbPath: { } symbolsDbPath })
             TryConvergeSidecar(symbolsDbPath, report, fullRebuild: true);
 
-        return ScanOutcome.Scanned(report);
+        if (!attempt.Downgraded)
+            return ScanOutcome.Scanned(report);
+
+        // A DOWNGRADED rebuild served the prior artifact instead of rebuilding it. Re-arming here, rather than
+        // trusting each caller to, is what makes "the force scan is still owed" true of this method: the pending
+        // intent was just NOT discharged above, and every exit from here reports Downgraded so no caller can
+        // mistake the delta for the rebuild.
+        string downgradeReason = ScanFailurePolicy.DescribeDowngrade(intent, attempt);
+        _logger.LogWarning(
+            "{Source} scan was downgraded to a delta reconcile after {Failures} consecutive failures; serving " +
+            "the existing artifact with degraded freshness until the rebuild succeeds.",
+            source, attempt.ConsecutiveFailures);
+        _core?.RequestWholeRepoScan(intent);
+        return ScanOutcome.Downgraded(report, downgradeReason);
     }
+
+    private static string DescribeScanKind(ScanAttemptDecision decision) =>
+        ScanFailurePolicy.DescribeIntent(decision.EffectiveIntent);
+
+    // The jobs value recorded is the one the attempt actually ran with, so a post-SIGKILL clamp is visible in the
+    // record rather than inferred from the ambient environment a later reader would resolve differently.
+    private void RecordScanFailure(ScanIntent intent, ScanAttemptDecision decision, Exception error) =>
+        FailurePolicy.RecordFailure(
+            intent,
+            JulieExtractException.ExitCodeOf(error),
+            decision.Jobs ?? ExtractJobsPolicy.FromEnvironment());
 
     private WorkspaceContext? TryGetWorkspaceForSidecarConvergence()
     {
@@ -918,8 +1021,20 @@ public sealed class IndexerService : BackgroundService
         {
             _ops = ops;
             _core = new IndexerCore(
-                new WatchEventQueue(), ops, _ => true, _loggerFactory.CreateLogger<IndexerCore>());
+                new WatchEventQueue(), ops, _ => true, _loggerFactory.CreateLogger<IndexerCore>(),
+                FailurePolicy);
         }
+    }
+
+    /// <summary>
+    /// Test seam: bind the scan-failure policy this service and its core consult, as the production leadership
+    /// claim does from the workspace's <c>.miller</c> directory. Call BEFORE
+    /// <see cref="PublishOpsForTest"/> so the core is built over the same instance. Not used in production.
+    /// </summary>
+    internal void PublishFailurePolicyForTest(IScanFailurePolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        _failurePolicy = policy;
     }
 
     /// <summary>
@@ -1012,7 +1127,7 @@ public sealed class IndexerService : BackgroundService
     /// <summary>
     /// Test seam: arm the whole-repo rescan latch on the published core, as the production re-arm sites do.
     /// </summary>
-    internal void RequestWholeRepoScanForTest(bool force) => _core?.RequestWholeRepoScan(force);
+    internal void RequestWholeRepoScanForTest(ScanIntent intent) => _core?.RequestWholeRepoScan(intent);
 
     /// <summary>
     /// Test seam: drain leader full-scan request files and service them through the same force-scan path the

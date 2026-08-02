@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server.Cli;
@@ -33,7 +34,7 @@ public sealed class WorkspaceTool
     private readonly ContentCorpusSidecar _contentSidecar = new();
     private readonly VectorSidecar _vectors;
     private readonly SemanticEmbeddingSessionBroker? _semanticBroker;
-    private readonly Func<string, string, bool, ExtractReport> _scanForOpen;
+    private readonly Func<string, string, bool, int?, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
@@ -75,7 +76,7 @@ public sealed class WorkspaceTool
             crossWorkspaceRefresh,
             sidecar,
             vectors,
-            (root, db, force) => runner.Scan(root, db, force),
+            (root, db, force, jobs) => runner.Scan(root, db, force, jobs),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             new DashboardCliLauncher(),
             logger,
@@ -97,7 +98,7 @@ public sealed class WorkspaceTool
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
         VectorSidecar vectors,
-        Func<string, string, bool, ExtractReport> scanForOpen,
+        Func<string, string, bool, int?, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
         IDashboardLauncher dashboardLauncher,
         ILogger<WorkspaceTool> logger,
@@ -847,7 +848,8 @@ public sealed class WorkspaceTool
                 _workspace.ExtractDbPath),
             SemanticBroker: CurrentSemanticBrokerFacts(),
             ScanGovernor: WorkspaceFactsAssembler.ScanGovernorFacts(
-                ScanGovernorKey.For(_workspace) ?? _workspace.WorkspaceRoot, _governor));
+                ScanGovernorKey.For(_workspace) ?? _workspace.WorkspaceRoot, _governor),
+            ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(_workspace.ExtractDbPath));
     }
 
     private SemanticBrokerFacts CurrentSemanticBrokerFacts() =>
@@ -899,7 +901,11 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderAction(string operation, bool force, bool json)
     {
         string? artifactIdBeforeScan = CurrentArtifactId();
-        ScanOutcome scan = _indexer.TryScanAsLeader(force);
+        // bypassBackoff: this is a person asking directly, which is not the automatic path the persisted
+        // scan-failure backoff exists to throttle. The attempt is still recorded, and it still carries the
+        // post-SIGKILL jobs clamp.
+        ScanOutcome scan = _indexer.TryScanAsLeader(
+            force ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         string? note = scan.Result switch
         {
@@ -918,6 +924,10 @@ public sealed class WorkspaceTool
             ScanOutcome.Kind.Queued =>
                 $"the {operation} scan is queued behind another scan on this machine and will run when admission " +
                 $"frees up (the prior index is kept and still served). {scan.HolderDescription}",
+            // A delta ran where a from-scratch rebuild was asked for. Reporting that as a completed rebuild is
+            // exactly the lie the third outcome exists to prevent, so it is said out loud and the rebuild stays
+            // owed (the indexer re-armed it).
+            ScanOutcome.Kind.Downgraded => scan.DowngradeReason,
             _ => null,
         };
         if (note is null && scan.Report is { } report)
@@ -927,14 +937,16 @@ public sealed class WorkspaceTool
         // (a leader's own scan, or a non-leader picking up the leader's writes). Best-effort; never throws.
         PollResult poll = _freshness.PollNow();
 
-        bool scanned = scan.Result == ScanOutcome.Kind.Scanned;
+        bool downgraded = scan.Result == ScanOutcome.Kind.Downgraded;
+        bool scanned = scan.Result == ScanOutcome.Kind.Scanned || downgraded;
         var result = new WorkspaceActionResult(
             operation,
             scanned,
             poll.Swapped,
             poll.Revision,
             note,
-            ArtifactId: CurrentArtifactId() ?? artifactIdBeforeScan);
+            ArtifactId: CurrentArtifactId() ?? artifactIdBeforeScan,
+            Downgraded: downgraded);
         return scan.Result switch
         {
             ScanOutcome.Kind.Failed => new WorkspaceOperationResult(
@@ -968,6 +980,17 @@ public sealed class WorkspaceTool
                     [new ToolDiagnosticAction(
                         "workspace(operation=\"status\")",
                         "watch scan_governor for this workspace's position")])),
+            ScanOutcome.Kind.Downgraded => new WorkspaceOperationResult(
+                WorkspaceRender.Action(result, json),
+                0,
+                TelemetryOutcome.Empty,
+                ToolDiagnostic.Refusal(
+                    $"workspace_{operation}_downgraded",
+                    $"Repeated whole-repo scan failures downgraded the {operation} scan to a delta reconcile; " +
+                    "the prior index is served with degraded freshness and the rebuild is still owed.",
+                    [new ToolDiagnosticAction(
+                        "workspace(operation=\"health\")",
+                        "read scan_failure for the streak and the next attempt time")])),
             _ => new WorkspaceOperationResult(
                 WorkspaceRender.Action(result, json),
                 1,
@@ -988,7 +1011,10 @@ public sealed class WorkspaceTool
         // A live MCP call gets the SHORT scan-admission budget, not the operator one: subagents share the lead's
         // Miller connection, so one call stuck behind another workspace's scan would jam the whole fleet.
         WorkspaceRefreshResult refresh = _crossWorkspaceRefresh.Refresh(
-            target.WorkspaceId, force, ScanAdmissionBudget.Of(IndexerService.DefaultScanAdmissionWait));
+            target.WorkspaceId,
+            force,
+            ScanAdmissionBudget.Of(IndexerService.DefaultScanAdmissionWait),
+            bypassBackoff: true);
         WorkspaceRegistryRow row = target.Row
             ?? throw new InvalidOperationException($"Workspace registry row '{target.WorkspaceId}' was not resolved.");
         string? artifactId = refresh.ArtifactId;
@@ -1203,7 +1229,26 @@ public sealed class WorkspaceTool
 
         // force:false — a prime is a from-current scan (julie creates the DB on the first scan of a fresh root,
         // or delta-reconciles an existing one); --force is reserved for the live workspace's `full` rebuild.
-        ExtractReport report = _scanForOpen(canonicalRoot, dbPath, false);
+        // The attempt rides the target workspace's persisted scan-failure record: an explicit open bypasses the
+        // retry timer but still records, so a SIGKILLed prime throttles the resident leader's automatic retries
+        // there and clamps their --jobs.
+        IScanFailurePolicy failurePolicy = PersistedScanFailurePolicy.For(dbPath, canonicalRoot);
+        ScanAttemptDecision attempt =
+            failurePolicy.Evaluate(ScanIntent.IncrementalReconcile, bypassBackoff: true);
+        ExtractReport report;
+        try
+        {
+            report = _scanForOpen(canonicalRoot, dbPath, false, attempt.Jobs);
+            failurePolicy.RecordSuccess(attempt.EffectiveIntent);
+        }
+        catch (Exception ex)
+        {
+            failurePolicy.RecordFailure(
+                ScanIntent.IncrementalReconcile,
+                JulieExtractException.ExitCodeOf(ex),
+                attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
+            throw;
+        }
 
         // v1 has no echoed workspace_id to cross-check: julie-extract self-rejects a DB built for a different
         // root (exit 3 RootMismatch, design §4.1), so a wrong-DB prime fails the scan above and surfaces through

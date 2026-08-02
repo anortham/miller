@@ -63,7 +63,7 @@ public sealed class LiveBootstrapAutoRebuildTests
             //    pooled connection from the failed first load still points at the old inode and would re-read schema 1.
             var result = IndexBootstrapService.LoadIndexWithAutoRebuild(
                 load: () => RepositoryIndexLoader.Load(db),
-                forceRescan: () => runner.Scan(repo, db, force: true).Revision,
+                forceRescan: _ => runner.Scan(repo, db, force: true).Revision,
                 onBeforeRetry: SqliteConnection.ClearAllPools,
                 onIncompatible: _ => { },
                 onCorrupt: _ => { });

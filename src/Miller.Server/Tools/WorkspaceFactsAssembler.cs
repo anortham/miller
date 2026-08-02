@@ -1,3 +1,4 @@
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
@@ -70,6 +71,20 @@ internal static class WorkspaceFactsAssembler
             ? snapshot
             : snapshot with { HolderPid = null, HolderWorkspaceRoot = null };
 
+    /// <summary>
+    /// The workspace's persisted whole-repo scan-failure record, or null when none is recorded. Null renders
+    /// nowhere, so a healthy workspace's status/health output stays byte-identical to a build without it. The
+    /// record is the ONLY place a repeatedly-killed extractor is visible without reading Miller's log, so status
+    /// and health both surface it rather than adding an agent-facing tool for it.
+    /// </summary>
+    internal static ScanFailureRecord? ScanFailureFacts(string? indexDbPath)
+    {
+        if (string.IsNullOrWhiteSpace(indexDbPath))
+            return null;
+        string? millerDir = Path.GetDirectoryName(Path.GetFullPath(indexDbPath));
+        return string.IsNullOrEmpty(millerDir) ? null : ScanFailureJournal.TryRead(millerDir);
+    }
+
     public static WorkspaceFacts FromRegisteredRow(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,
@@ -111,7 +126,8 @@ internal static class WorkspaceFactsAssembler
                 ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
                 Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
                 SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
-                ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
+                ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
+                ScanFailure: ScanFailureFacts(row.IndexDbPath));
         }
         catch (FileNotFoundException)
         {
@@ -162,7 +178,8 @@ internal static class WorkspaceFactsAssembler
                 resolvedVectors.Inspect(context.WorkspaceRoot),
                 context.ExtractDbPath),
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
-            ScanGovernor: ScanGovernorFacts(ScanGovernorKey.For(context) ?? context.WorkspaceRoot, scanGovernor));
+            ScanGovernor: ScanGovernorFacts(ScanGovernorKey.For(context) ?? context.WorkspaceRoot, scanGovernor),
+            ScanFailure: ScanFailureFacts(context.ExtractDbPath));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -304,7 +321,8 @@ internal static class WorkspaceFactsAssembler
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
             Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
-            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
+            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
+            ScanFailure: ScanFailureFacts(row.IndexDbPath));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
@@ -343,7 +361,8 @@ internal static class WorkspaceFactsAssembler
             ContentCorpus: contentSidecar.Inspect(row.IndexDbPath, revision),
             Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
-            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor));
+            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
+            ScanFailure: ScanFailureFacts(row.IndexDbPath));
     }
 
     /// <summary>

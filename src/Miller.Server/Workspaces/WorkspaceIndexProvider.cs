@@ -38,7 +38,7 @@ public sealed class WorkspaceIndexProvider
             holder,
             currentWorkspace,
             registry,
-            workspaceId => refreshService.Refresh(workspaceId),
+            AutomaticRefresh(refreshService),
             dbPath => RepositoryIndexLoader.Load(dbPath),
             dbPath => SymbolSearchProjectionLoader.Load(dbPath),
             (dbPath, root) => ContentSearchProjectionLoader.Load(dbPath, root),
@@ -455,6 +455,23 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId);
+    }
+
+    /// <summary>
+    /// The refresh-first path behind every cross-workspace read, as a named seam so its backoff posture is
+    /// directly testable rather than living in a constructor lambda a mutation could flip unobserved.
+    ///
+    /// <para><c>bypassBackoff</c> stays FALSE: this is the AUTOMATIC path, not a person asking.
+    /// <c>ReadToolWorkspaceRouting.ResolveEnsureFresh</c> turns freshness on for any explicit
+    /// <c>workspace_id</c>, so bypassing here would let ten cross-workspace searches against a workspace whose
+    /// extractor is being OOM-killed spawn ten more extractor processes.</para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="refreshService"/> is null.</exception>
+    internal static Func<string, WorkspaceRefreshResult> AutomaticRefresh(
+        CrossWorkspaceRefreshService refreshService)
+    {
+        ArgumentNullException.ThrowIfNull(refreshService);
+        return workspaceId => refreshService.Refresh(workspaceId);
     }
 
     private RegisteredWorkspaceState ResolveRegisteredState(string workspaceId, bool ensureFresh)

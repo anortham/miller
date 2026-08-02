@@ -98,10 +98,38 @@ public sealed class IndexerServiceScanTests : IDisposable
         /// <summary>Runs while the caller still holds machine-wide scan admission.</summary>
         public Action? WhileScanning { get; set; }
 
-        public ExtractReport Scan(bool force = false)
+        /// <summary>The explicit --jobs cap of every scan dispatched, in order (null = ambient policy).</summary>
+        public IReadOnlyList<int?> ScanJobs
+        {
+            get
+            {
+                lock (_gate)
+                    return _scanJobs.ToArray();
+            }
+        }
+
+        private readonly List<int?> _scanJobs = new();
+
+        /// <summary>The intent of every scan dispatched, in order.</summary>
+        public IReadOnlyList<ScanIntent> ScanIntents
+        {
+            get
+            {
+                lock (_gate)
+                    return _scanIntents.ToArray();
+            }
+        }
+
+        private readonly List<ScanIntent> _scanIntents = new();
+
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
             lock (_gate)
-                _scanForce.Add(force);
+            {
+                _scanForce.Add(ScanIntentPolicy.RequiresForce(intent));
+                _scanJobs.Add(jobs);
+                _scanIntents.Add(intent);
+            }
             ScanCalled.Set();
             WhileScanning?.Invoke();
             if (ThrowOnScan is not null)
@@ -354,7 +382,7 @@ public sealed class IndexerServiceScanTests : IDisposable
     {
         var service = NewService(); // no ops published => not the leader
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.NotLeader, outcome.Result);
         Assert.Null(outcome.Report); // a non-leader produced no extract report (it cannot write)
@@ -367,7 +395,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops); // become the leader (the production publish happens once leadership wins)
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         Assert.Equal(new[] { false }, ops.ScanForce); // refresh = delta reconcile (no --force)
@@ -382,7 +410,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: true);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         Assert.Equal(new[] { true }, ops.ScanForce); // full = from-scratch rebuild (--force)
@@ -721,7 +749,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         service.PublishOpsForTest(ops);
 
         // Best-effort: an extract failure is logged + returned as Failed, never thrown into the caller (the tool).
-        ScanOutcome outcome = service.TryScanAsLeader(force: true);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Failed, outcome.Result);
         Assert.Null(outcome.Report);
@@ -754,7 +782,7 @@ public sealed class IndexerServiceScanTests : IDisposable
 
         ScanOutcome outcome;
         using (ScanGovernorLease held = HoldMachineScanAdmission(home))
-            outcome = service.TryScanAsLeader(force: true);
+            outcome = service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Queued, outcome.Result);
         Assert.Null(outcome.Report);
@@ -777,7 +805,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         service.PublishOpsForTest(ops);
 
         using (ScanGovernorLease held = HoldMachineScanAdmission(home))
-            service.TryScanAsLeader(force: true);
+            service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true);
 
         Assert.False(service.QueueEmpty);
 
@@ -794,7 +822,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.Zero);
         service.PublishOpsForTest(new RecordingScanOps());
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
 
@@ -812,7 +840,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             scanGovernor: ScanGovernor.ForMillerHome(home), scanGovernorWait: TimeSpan.FromMinutes(10));
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
         stopwatch.Stop();
 
         Assert.Equal(ScanOutcome.Kind.NotLeader, outcome.Result);
@@ -935,7 +963,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
         service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         string searchDb = SymbolSearchSidecar.SearchDbPathFor(julie.DbPath);
@@ -958,7 +986,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewSeededService(workspace, SymbolSearchSidecar.Disabled);
         service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         string contentDb = ContentCorpusSidecar.ContentDbPathFor(julie.DbPath);
@@ -1003,7 +1031,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), sidecar);
         service.PublishOpsForTest(new RecordingScanOps { Revision = 2 });
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
         Assert.False(TableExists(searchDb, "incremental_sentinel"));
@@ -1209,7 +1237,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewSeededService(WorkspaceWithDb(julie.DbPath), SymbolSearchSidecar.Disabled);
         service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
 
-        ScanOutcome outcome = service.TryScanAsLeader(force: false);
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         // OFF path is byte-identical to pre-feature behavior: a successful scan and NO derived artifact.
         Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
@@ -1229,7 +1257,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             var service = NewSeededService(WorkspaceWithDb(brokenDb), new SymbolSearchSidecar(enabled: true));
             service.PublishOpsForTest(new RecordingScanOps { Revision = 9 });
 
-            ScanOutcome outcome = service.TryScanAsLeader(force: false);
+            ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
             // Best-effort: a sidecar build failure NEVER turns a successful scan into a failure (reads self-heal).
             Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
@@ -1356,7 +1384,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewGovernedDrainService(home, julie.DbPath);
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.RequestWholeRepoScanForTest(force: false);
+        service.RequestWholeRepoScanForTest(ScanIntent.IncrementalReconcile);
         service.EnqueueForTest(new WatchEvent("/repo/a.cs", WatchEventKind.Modified));
 
         using (ScanGovernorLease held = HoldMachineScanAdmission(home))
@@ -1379,7 +1407,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewGovernedDrainService(home, julie.DbPath);
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.RequestWholeRepoScanForTest(force: false);
+        service.RequestWholeRepoScanForTest(ScanIntent.IncrementalReconcile);
         for (int i = 0; i <= IndexerCore.MaxDeferredScanDrain; i++)
             service.EnqueueForTest(new WatchEvent($"/repo/{i}.cs", WatchEventKind.Modified));
 
@@ -1404,7 +1432,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewGovernedDrainService(home, julie.DbPath);
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.BetweenScanPeekAndDrainForTest = () => service.RequestWholeRepoScanForTest(force: false);
+        service.BetweenScanPeekAndDrainForTest = () => service.RequestWholeRepoScanForTest(ScanIntent.IncrementalReconcile);
 
         using (ScanGovernorLease held = HoldMachineScanAdmission(home))
             service.RunDrainTickForTest(Path.Combine(home, "requests"));
@@ -1473,6 +1501,9 @@ public sealed class IndexerServiceScanTests : IDisposable
         string home = CreateTempHome();
         WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
         var service = NewGovernedDrainService(home, julie.DbPath);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        service.PublishFailurePolicyForTest(
+            new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0));
         var ops = new RecordingScanOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
         service.PublishOpsForTest(ops);
 
@@ -1482,6 +1513,12 @@ public sealed class IndexerServiceScanTests : IDisposable
         Assert.False(service.QueueEmpty);
 
         ops.ThrowOnScan = null;
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+
+        now += ScanFailurePolicy.FirstBackoff;
         service.RunDrainTickForTest(Path.Combine(home, "requests"));
 
         Assert.Equal(new[] { false, false }, ops.ScanForce);
@@ -1508,7 +1545,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0));
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.RequestWholeRepoScanForTest(force: true);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
 
         service.RunDrainTickForTest(Path.Combine(home, "requests"));
 
@@ -1526,7 +1563,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewGovernedDrainService(home, julie.DbPath);
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.RequestWholeRepoScanForTest(force: true);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
 
         service.RunStartupDeltaScanForTest(workspace);
 
@@ -1548,9 +1585,9 @@ public sealed class IndexerServiceScanTests : IDisposable
         var service = NewGovernedDrainService(home, julie.DbPath);
         var ops = new RecordingScanOps();
         service.PublishOpsForTest(ops);
-        service.RequestWholeRepoScanForTest(force: true);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
 
-        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(force: true).Result);
+        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true).Result);
 
         Assert.True(service.QueueEmpty);
 
@@ -1572,11 +1609,11 @@ public sealed class IndexerServiceScanTests : IDisposable
         ops.WhileScanning = () =>
         {
             ops.WhileScanning = null;
-            service.RequestWholeRepoScanForTest(force: true);
+            service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
         };
         service.PublishOpsForTest(ops);
 
-        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(force: true).Result);
+        Assert.Equal(ScanOutcome.Kind.Scanned, service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true).Result);
         Assert.False(service.QueueEmpty);
 
         service.RunDrainTickForTest(Path.Combine(home, "requests"));
@@ -1602,7 +1639,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         };
         service.PublishOpsForTest(ops);
 
-        service.TryScanAsLeader(force: false);
+        service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(ScanGovernorStates.Holding, seen?.State);
         Assert.Null(ScanGovernorState.Shared.Snapshot(workspace.CanonicalRoot!));
@@ -1621,10 +1658,95 @@ public sealed class IndexerServiceScanTests : IDisposable
         };
         service.PublishOpsForTest(ops);
 
-        service.TryScanAsLeader(force: false);
+        service.TryScanAsLeader(ScanIntent.IncrementalReconcile, bypassBackoff: true);
 
         Assert.Equal(IndexerService.UnknownWorkspaceRootLabel, owner?.WorkspaceRoot);
         Assert.Null(ScanGovernorState.Shared.Snapshot(IndexerService.UnknownWorkspaceRootLabel));
+    }
+
+    // ---- W8 G2/G3: a downgrade is a third outcome, and a direct request is never downgraded ----
+
+    [Fact]
+    public void LeaderRequestedFullScan_ThatIsDowngraded_RearmsTheRebuildInsteadOfReportingItDone()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            drainFileConvergeRequests: _ => FileConvergeDrainResult.Empty,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0));
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(
+            priorArtifactUsable: static () => true, utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        now += ScanFailurePolicy.FirstBackoff;
+        service.PublishFailurePolicyForTest(policy);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+        Assert.Equal(1, policy.Read()?.ConsecutiveFailures);
+
+        now += ScanFailurePolicy.FirstBackoff;
+        policy.RecordSuccess(ScanIntent.UserFullRebuild);
+        service.RunDrainTickForTest(Path.Combine(home, "requests"));
+
+        Assert.Equal(new[] { false, true }, ops.ScanForce);
+        Assert.True(service.QueueEmpty);
+    }
+
+    [Fact]
+    public void OnDemandFullScan_WithTheDirectUserBypass_RunsTheRealForceScanRatherThanADowngradedDelta()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(
+            priorArtifactUsable: static () => true, utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        service.PublishFailurePolicyForTest(policy);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.UserFullRebuild, bypassBackoff: true);
+
+        Assert.Equal(ScanOutcome.Kind.Scanned, outcome.Result);
+        Assert.Equal(new[] { true }, ops.ScanForce);
+        Assert.Null(policy.Read());
+    }
+
+    [Fact]
+    public void OnDemandFullScan_OnTheAutomaticPath_ReportsTheDowngradeAndKeepsTheRebuildOwed()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, System.Array.Empty<JulieDbFixture.SymbolRow>());
+        string home = CreateTempHome();
+        var service = NewGovernedDrainService(home, julie.DbPath);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(
+            priorArtifactUsable: static () => true, utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        now += ScanFailurePolicy.FirstBackoff;
+        service.PublishFailurePolicyForTest(policy);
+        var ops = new RecordingScanOps();
+        service.PublishOpsForTest(ops);
+
+        ScanOutcome outcome = service.TryScanAsLeader(ScanIntent.UserFullRebuild);
+
+        Assert.Equal(ScanOutcome.Kind.Downgraded, outcome.Result);
+        Assert.Equal(new[] { false }, ops.ScanForce);
+        Assert.Contains("still owed", outcome.DowngradeReason, StringComparison.Ordinal);
+        Assert.False(service.QueueEmpty);
+        Assert.Equal(1, policy.Read()?.ConsecutiveFailures);
     }
 
     [Fact]
@@ -1641,6 +1763,9 @@ public sealed class IndexerServiceScanTests : IDisposable
             scanGovernorWait: TimeSpan.Zero,
             drainFullScanRequests: _ => FullScanDrainResult.Empty,
             ownExtractorVersion: () => "2.21.0");
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        service.PublishFailurePolicyForTest(
+            new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0));
         var ops = new RecordingScanOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
         service.PublishOpsForTest(ops);
 
@@ -1650,9 +1775,12 @@ public sealed class IndexerServiceScanTests : IDisposable
         Assert.False(service.QueueEmpty);
 
         ops.ThrowOnScan = null;
+        now += ScanFailurePolicy.FirstBackoff;
         service.RunDrainTickForTest(Path.Combine(home, "requests"));
 
         Assert.Equal(new[] { true, true }, ops.ScanForce);
+        Assert.Equal(
+            new[] { ScanIntent.ExtractorUpgrade, ScanIntent.ExtractorUpgrade }, ops.ScanIntents);
         Assert.True(service.QueueEmpty);
     }
 }

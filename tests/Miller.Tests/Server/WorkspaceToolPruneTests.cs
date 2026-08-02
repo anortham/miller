@@ -102,7 +102,7 @@ public sealed class WorkspaceToolPruneTests : IDisposable
         var runner = new JulieExtractRunner(stubBinary);
         var crossRefresh = new CrossWorkspaceRefreshService(
             registry,
-            (_, _, _) => throw new InvalidOperationException("scan not expected"),
+            (_, _, _, _) => throw new InvalidOperationException("scan not expected"),
             _ => SingleWriterLock.TryAcquire(_),
             _ => 0,
             lockBusyWait: TimeSpan.Zero,
@@ -115,7 +115,7 @@ public sealed class WorkspaceToolPruneTests : IDisposable
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
-            (_, _, _) => throw new InvalidOperationException("open scan not expected"),
+            (_, _, _, _) => throw new InvalidOperationException("open scan not expected"),
             _ => SingleWriterLock.TryAcquire(_),
             new RecordingDashboardLauncher(new DashboardLaunchResult(
                 DashboardLaunchOutcome.AlreadyRunning,

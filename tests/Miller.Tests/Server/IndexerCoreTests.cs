@@ -48,10 +48,19 @@ public sealed class IndexerCoreTests
         /// <summary>The force flag of every scan dispatched, in order — the scan-intent contract.</summary>
         public List<bool> ScanForce { get; } = new();
 
-        public ExtractReport Scan(bool force = false)
+        /// <summary>The intent of every scan dispatched, in order.</summary>
+        public List<ScanIntent> ScanIntents { get; } = new();
+
+        /// <summary>The explicit --jobs cap of every scan dispatched, in order (null = ambient policy).</summary>
+        public List<int?> ScanJobs { get; } = new();
+
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
+            bool force = ScanIntentPolicy.RequiresForce(intent);
             Calls.Add(force ? "scan:force" : "scan");
             ScanForce.Add(force);
+            ScanIntents.Add(intent);
+            ScanJobs.Add(jobs);
             if (ThrowOnScan is { } failure)
                 throw failure;
             return Stub("scanned");
@@ -98,9 +107,22 @@ public sealed class IndexerCoreTests
         public void Advance(TimeSpan by) => UtcNow += by;
     }
 
+    // The scan-failure policy owns the whole-repo retry timer, so the test clock is injected there. Jitter is
+    // drawn as zero so the schedule is exactly ScanFailurePolicy's documented one.
     private static IndexerCore NewCore(
-        RecordingOps ops, Func<string, bool> exists, ILogger? logger = null, TestClock? clock = null) =>
-        new(new WatchEventQueue(), ops, exists, logger, clock is null ? null : () => clock.UtcNow);
+        RecordingOps ops,
+        Func<string, bool> exists,
+        ILogger? logger = null,
+        TestClock? clock = null,
+        IScanFailurePolicy? failurePolicy = null) =>
+        new(new WatchEventQueue(), ops, exists, logger,
+            failurePolicy ?? NewFailurePolicy(clock));
+
+    private static InMemoryScanFailurePolicy NewFailurePolicy(
+        TestClock? clock, Func<bool>? priorArtifactUsable = null) =>
+        new(priorArtifactUsable,
+            clock is null ? null : () => clock.UtcNow,
+            jitter: static () => 0);
 
     [Fact]
     public void DrainAndProcess_EmptyQueueNoFlag_DoesNothing()
@@ -531,7 +553,7 @@ public sealed class IndexerCoreTests
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
 
-        core.RequestWholeRepoScan(force: false);
+        core.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
 
         Assert.True(core.HasPendingWork);
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
@@ -682,21 +704,26 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
-    public void NoteWholeRepoScanCompleted_WhenTheLatchWasRearmedMidScan_StillResetsTheFailureBackoff()
+    public void NoteWholeRepoScanCompleted_WhenTheLatchWasRearmedMidScan_LeavesTheBackoffToTheCallerThatScanned()
     {
         var clock = new TestClock();
+        var policy = NewFailurePolicy(clock);
         var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
-        var core = NewCore(ops, _ => true, clock: clock);
+        var core = NewCore(ops, _ => true, clock: clock, failurePolicy: policy);
         core.SignalRescan();
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
         Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
 
         long generation = core.WholeRepoScanArmingGeneration;
-        core.RequestWholeRepoScan(force: true);
-        core.NoteWholeRepoScanCompleted(force: true, armingGeneration: generation);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, armingGeneration: generation);
+
+        Assert.Equal(1, core.ConsecutiveScanFailures);
+        Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
+
+        policy.RecordSuccess(ScanIntent.UserFullRebuild);
 
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
-        Assert.Equal(0, core.ConsecutiveScanFailures);
     }
 
     [Fact]
@@ -751,7 +778,7 @@ public sealed class IndexerCoreTests
 
         core.DrainAndProcess(headChanged: true, wholeRepoScanAdmitted: true, out _);
         ops.ThrowOnScan = null;
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
 
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
 
@@ -775,7 +802,7 @@ public sealed class IndexerCoreTests
         Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
         Assert.False(core.WouldRunWholeRepoScan(headChanged: true));
 
-        clock.Advance(IndexerCore.InitialScanFailureBackoff - IndexerService.DebounceInterval);
+        clock.Advance(ScanFailurePolicy.FirstBackoff - IndexerService.DebounceInterval);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
         core.DrainAndProcess(headChanged: true, wholeRepoScanAdmitted: true, out _);
 
@@ -817,16 +844,213 @@ public sealed class IndexerCoreTests
         core.SignalRescan();
 
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
 
         Assert.Equal(2, core.ConsecutiveScanFailures);
         Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
 
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.SecondBackoff - ScanFailurePolicy.FirstBackoff);
 
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
+    }
+
+    [Fact]
+    public void DrainAndProcess_AfterASigkilledScan_ClampsTheNextAttemptToOneJob()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps
+        {
+            ThrowOnScan = new JulieExtractException("crashed", "", ScanFailurePolicy.SigkillExitCode),
+        };
+        var core = NewCore(ops, _ => true, clock: clock);
+        core.SignalRescan();
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new int?[] { null, ScanFailurePolicy.PostSigkillJobs }, ops.ScanJobs);
+    }
+
+    [Fact]
+    public void DrainAndProcess_AfterANonSigkillFailure_LeavesTheJobsCapToTheAmbientPolicy()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("exited 1", "", exitCode: 1) };
+        var core = NewCore(ops, _ => true, clock: clock);
+        core.SignalRescan();
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new int?[] { null, null }, ops.ScanJobs);
+    }
+
+    [Fact]
+    public void DrainAndProcess_AUserFullRebuildRetry_DowngradesToADeltaAgainstAServableArtifact()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(
+            ops, _ => true, clock: clock,
+            failurePolicy: NewFailurePolicy(clock, priorArtifactUsable: static () => true));
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(
+            new[] { ScanIntent.UserFullRebuild, ScanIntent.IncrementalReconcile }, ops.ScanIntents);
+        Assert.True(core.HasPendingWork);
+    }
+
+    [Fact]
+    public void DrainAndProcess_AfterADowngradedSuccess_ScansOncePerBackoffWindowNotOncePerTick()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(
+            ops, _ => true, clock: clock,
+            failurePolicy: NewFailurePolicy(clock, priorArtifactUsable: static () => true));
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        for (int tick = 0; tick < 100; tick++)
+        {
+            clock.Advance(IndexerService.DebounceInterval);
+            core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        }
+
+        Assert.Equal(
+            new[] { ScanIntent.UserFullRebuild, ScanIntent.IncrementalReconcile }, ops.ScanIntents);
+        Assert.True(core.HasPendingWork);
+
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(
+            new[]
+            {
+                ScanIntent.UserFullRebuild,
+                ScanIntent.IncrementalReconcile,
+                ScanIntent.IncrementalReconcile,
+            },
+            ops.ScanIntents);
+    }
+
+    [Fact]
+    public void DrainAndProcess_AUserFullRebuildRetry_NeverDowngradesWithoutAServableArtifact()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(
+            ops, _ => true, clock: clock,
+            failurePolicy: NewFailurePolicy(clock, priorArtifactUsable: static () => false));
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new[] { ScanIntent.UserFullRebuild, ScanIntent.UserFullRebuild }, ops.ScanIntents);
+        Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
+    }
+
+    [Fact]
+    public void DrainAndProcess_ADowngradedRetryThatSucceeds_KeepsTheBackoffAndThePendingRebuild()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(
+            ops, _ => true, clock: clock,
+            failurePolicy: NewFailurePolicy(clock, priorArtifactUsable: static () => true));
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out bool usedWholeRepoScan);
+
+        Assert.True(usedWholeRepoScan);
+        Assert.Equal(1, core.ConsecutiveScanFailures);
+        Assert.True(core.HasPendingWork);
+    }
+
+    [Fact]
+    public void RequestWholeRepoScan_AnExtractorUpgradeIsDischargedByACompletedUserFullRebuild()
+    {
+        var ops = new RecordingOps();
+        var core = NewCore(ops, _ => true);
+        core.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, core.WholeRepoScanArmingGeneration);
+
+        Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Empty(ops.ScanIntents);
+    }
+
+    [Fact]
+    public void RequestWholeRepoScan_AnExtractorUpgradeIsNotDischargedByADeltaReconcile()
+    {
+        var ops = new RecordingOps();
+        var core = NewCore(ops, _ => true);
+        core.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
+
+        core.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, core.WholeRepoScanArmingGeneration);
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new[] { ScanIntent.ExtractorUpgrade }, ops.ScanIntents);
+    }
+
+    [Fact]
+    public void RequestWholeRepoScan_ACorruptionHealIsNotDischargedByACompletedUserFullRebuild()
+    {
+        var ops = new RecordingOps();
+        var core = NewCore(ops, _ => true);
+        core.RequestWholeRepoScan(ScanIntent.CorruptionHeal);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, core.WholeRepoScanArmingGeneration);
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new[] { ScanIntent.CorruptionHeal }, ops.ScanIntents);
+    }
+
+    [Fact]
+    public void RequestWholeRepoScan_AHealIntentFoldedWithAUserRebuild_IsNeverRetriedDowngradable()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(
+            ops, _ => true, clock: clock,
+            failurePolicy: NewFailurePolicy(clock, priorArtifactUsable: static () => true));
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        core.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(
+            new[] { ScanIntent.UserFullRebuild, ScanIntent.ExtractorUpgrade }, ops.ScanIntents);
     }
 
     [Fact]
@@ -847,14 +1071,14 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
-    public void DrainAndProcess_ASuccessfulScan_ResetsTheFailureBackoff()
+    public void DrainAndProcess_ASuccessfulScanOfTheRecordedStrength_ResetsTheFailureBackoff()
     {
         var clock = new TestClock();
         var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
         var core = NewCore(ops, _ => true, clock: clock);
         core.SignalRescan();
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
         ops.ThrowOnScan = null;
 
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out bool usedWholeRepoScan);
@@ -868,12 +1092,31 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
+    public void DrainAndProcess_ADeltaThatSucceeds_LeavesAForcedScansFailureBackoffInPlace()
+    {
+        var clock = new TestClock();
+        var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
+        var core = NewCore(ops, _ => true, clock: clock);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
+        ops.ThrowOnScan = null;
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, core.WholeRepoScanArmingGeneration);
+        core.SignalRescan();
+
+        core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
+
+        Assert.Equal(new[] { ScanIntent.UserFullRebuild, ScanIntent.IncrementalReconcile }, ops.ScanIntents);
+        Assert.Equal(1, core.ConsecutiveScanFailures);
+    }
+
+    [Fact]
     public void RequestWholeRepoScan_WithForce_RetriesAsAForcedScan()
     {
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
 
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out bool usedWholeRepoScan);
 
         Assert.True(usedWholeRepoScan);
@@ -887,10 +1130,10 @@ public sealed class IndexerCoreTests
         var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
         var core = NewCore(ops, _ => true, clock: clock);
 
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: false, out _);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
-        clock.Advance(IndexerCore.InitialScanFailureBackoff);
+        clock.Advance(ScanFailurePolicy.FirstBackoff);
         ops.ThrowOnScan = null;
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
 
@@ -903,9 +1146,9 @@ public sealed class IndexerCoreTests
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
 
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
         core.SignalRescan();
-        core.RequestWholeRepoScan(force: false);
+        core.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
         core.DrainAndProcess(headChanged: true, wholeRepoScanAdmitted: true, out _);
 
         Assert.Equal(new[] { true }, ops.ScanForce);
@@ -917,7 +1160,7 @@ public sealed class IndexerCoreTests
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
 
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
         core.SignalRescan();
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
@@ -946,9 +1189,9 @@ public sealed class IndexerCoreTests
     {
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
-        core.RequestWholeRepoScan(force: false);
+        core.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
 
-        core.NoteWholeRepoScanCompleted(force: false, core.WholeRepoScanArmingGeneration);
+        core.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, core.WholeRepoScanArmingGeneration);
 
         Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
         Assert.False(core.HasPendingWork);
@@ -963,9 +1206,9 @@ public sealed class IndexerCoreTests
     {
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
 
-        core.NoteWholeRepoScanCompleted(force: true, core.WholeRepoScanArmingGeneration);
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, core.WholeRepoScanArmingGeneration);
 
         Assert.False(core.WouldRunWholeRepoScan(headChanged: false));
 
@@ -979,9 +1222,9 @@ public sealed class IndexerCoreTests
     {
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
 
-        core.NoteWholeRepoScanCompleted(force: false, core.WholeRepoScanArmingGeneration);
+        core.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, core.WholeRepoScanArmingGeneration);
 
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
 
@@ -992,7 +1235,7 @@ public sealed class IndexerCoreTests
     }
 
     [Fact]
-    public void NoteWholeRepoScanCompleted_AlsoResetsTheFailureBackoff()
+    public void NoteWholeRepoScanCompleted_DischargesTheLatchWithoutTouchingTheFailureHistory()
     {
         var clock = new TestClock();
         var ops = new RecordingOps { ThrowOnScan = new JulieExtractException("crashed (exit 137)", "") };
@@ -1000,9 +1243,9 @@ public sealed class IndexerCoreTests
         core.SignalRescan();
         core.DrainAndProcess(headChanged: false, wholeRepoScanAdmitted: true, out _);
 
-        core.NoteWholeRepoScanCompleted(force: false, core.WholeRepoScanArmingGeneration);
+        core.NoteWholeRepoScanCompleted(ScanIntent.IncrementalReconcile, core.WholeRepoScanArmingGeneration);
 
-        Assert.Equal(0, core.ConsecutiveScanFailures);
+        Assert.Equal(1, core.ConsecutiveScanFailures);
         Assert.False(core.HasPendingWork);
     }
 
@@ -1011,10 +1254,10 @@ public sealed class IndexerCoreTests
     {
         var ops = new RecordingOps();
         var core = NewCore(ops, _ => true);
-        core.RequestWholeRepoScan(force: true);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
         long generationAtScanStart = core.WholeRepoScanArmingGeneration;
 
-        core.NoteWholeRepoScanCompleted(force: true, generationAtScanStart);
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, generationAtScanStart);
 
         Assert.False(core.HasPendingWork);
     }
@@ -1026,8 +1269,8 @@ public sealed class IndexerCoreTests
         var core = NewCore(ops, _ => true);
         long generationAtScanStart = core.WholeRepoScanArmingGeneration;
 
-        core.RequestWholeRepoScan(force: true);
-        core.NoteWholeRepoScanCompleted(force: true, generationAtScanStart);
+        core.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
+        core.NoteWholeRepoScanCompleted(ScanIntent.UserFullRebuild, generationAtScanStart);
 
         Assert.True(core.WouldRunWholeRepoScan(headChanged: false));
 

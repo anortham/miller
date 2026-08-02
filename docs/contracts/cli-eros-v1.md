@@ -157,6 +157,12 @@ point:
   started in that root services it, and a refusal against a root with no readable index reports
   `missing_index` (exit `3`) instead — `lock_busy` exit `0` therefore never advertises a registered workspace
   with no `symbols.db`.
+- **Deferred by the persisted scan-failure backoff.** An AUTOMATIC refresh — the refresh-first path behind a
+  cross-workspace read with an explicit `workspace_id` — is deferred while `scan_failure.next_attempt_utc` is in
+  the future. Nothing is scanning and nothing is queued; the record itself is the schedule. The `note` begins
+  `The previous whole-repo scan of this workspace failed`, and a root with no readable index again reports
+  `missing_index` (exit `3`) instead. A DIRECT request (`workspace refresh/full/open`, the MCP `workspace` tool,
+  the dashboard) is never deferred this way.
 
 Either way: ingestable, not confirmed-fresh, retry later. The user-global lease lives at
 `~/.miller/scan/scan-v1.lock` with an advisory `scan-v1.owner.json` sidecar; `MILLER_SCAN_GOVERNOR=0` disables
@@ -195,6 +201,49 @@ render.
 `workspace health --json` additionally emits a `scan_waiting_on_machine_governor` warning at severity
 `usable_with_warnings` while `state == "waiting"`. Queuing behind another worktree's scan is the governor
 working as designed and the index stays readable, so it must never be read as a degraded workspace.
+
+### `scan_failure` (additive, conditional)
+
+`workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `scan_failure` object carrying
+the workspace's persisted whole-repo scan-failure record (`<workspace>/.miller/scan-failure.json`). It is
+**omitted entirely** when no failure is recorded — after any successful whole-repo scan, and on every build that
+predates the feature — so default output stays byte-identical to the previous contract and Eros must treat its
+absence as "no recorded scan failure", never as an error. It is NOT part of
+`workspace health --format json-summary`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `intent` | string | Why the failed scan ran: `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`, `SchemaHeal`, `CorruptionHeal`, or `ExtractorUpgrade`. Treat unknown values as opaque — the set may grow. |
+| `exit_code` | number \| null | The extractor's exit code; `137` is the OOM-killer/SIGKILL signature that clamps the next automatic attempt to `--jobs 1`. Null when the failure carried no exit code. |
+| `consecutive_failures` | number | The current failure streak (≥ 1 whenever the object is present). Drives the backoff step. |
+| `jobs` | number | The `--jobs` cap the failed attempt ran with. |
+| `last_failure_utc` | string | ISO-8601 UTC instant of the most recent failure. |
+| `next_attempt_utc` | string | ISO-8601 UTC instant before which no AUTOMATIC attempt runs. |
+| `retry_in_seconds` | number | Whole seconds until `next_attempt_utc`, floored at `0`. |
+
+Backoff is 30s → 2m → 10m → 30m-max, jittered upward by up to 25%, so the listed schedule is a floor. The record
+is shared by every Miller process on that workspace and survives restarts — that is the point: a rebuild that
+cannot succeed must not be re-forced by each fresh process. An explicit user request (`workspace full`,
+`workspace refresh`, `workspace open`) bypasses the timer once but still records its own attempt.
+
+The record is cleared only by a scan at least as strong as the one that failed: a delta reconcile clears a
+delta-intent record, and only a force clears a force-intent record. So a routine `workspace refresh` against a
+workspace whose `scan --force` keeps being OOM-killed leaves the throttle in place rather than erasing it.
+
+A present `scan_failure` does NOT by itself mean the index is unreadable. On an AUTOMATIC path a retried
+`UserFullRebuild` may run as a delta reconcile against a still-servable artifact; the workspace then serves the
+prior artifact with degraded freshness, the `refresh`/`full` payload carries `downgraded: true` plus a note, and
+the rebuild stays owed and retries on the next allowed attempt. A direct user request is never downgraded — it
+runs the force scan or reports why it did not. Read the object as "scans are failing and here is when the next
+one is allowed", and use the existing freshness/health fields for whether the artifact itself is usable.
+
+### `downgraded` on `refresh`/`full` (additive, conditional)
+
+The `workspace refresh --json` / `workspace full --json` action payload gains an OPTIONAL `downgraded: true`
+member, emitted ONLY when a requested from-scratch rebuild actually ran as a delta reconcile. It is omitted
+entirely otherwise, so default output stays byte-identical to the previous contract. When it is present,
+`scanned: true` refers to the delta that ran, NOT to the rebuild that was requested — treat `downgraded: true` as
+"this workspace is serving a degraded artifact and still owes a rebuild".
 
 ## Export feeds
 

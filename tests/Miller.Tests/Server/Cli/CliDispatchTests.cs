@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Miller.Core.Freshness;
 using Miller.Core.Search;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
@@ -3681,6 +3682,146 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal(3, code);
         Assert.False(string.IsNullOrWhiteSpace(errText));
         Assert.Empty(ListRegistry()); // Locate threw before UpsertSeen
+    }
+
+    [Fact]
+    public void WorkspaceOpen_WhoseRefreshNeverScans_LeavesANonReadyRow()
+    {
+        string root = Path.Combine(_dir, "contended-workspace");
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        File.WriteAllText(Path.Combine(millerDir, "symbols.db"), "not a readable artifact");
+        Directory.CreateDirectory(Path.Combine(_dir, ".tools"));
+        File.WriteAllText(
+            Path.Combine(_dir, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"),
+            "placeholder: located, never executed on this path");
+
+        using SingleWriterLock? held = SingleWriterLock.TryAcquire(millerDir);
+        Assert.NotNull(held);
+
+        Run(new[] { "workspace", "open", "--path", root }, Context(Path.Combine(_dir, "symbols.db")));
+
+        WorkspaceRegistryRow registered = Assert.Single(ListRegistry());
+
+        Assert.NotEqual(WorkspaceRegistryState.Ready, registered.State);
+    }
+
+    [Fact]
+    public void WorkspaceOpen_RefusedByTheEligibilityGate_LeavesAServableRow_NotAStrandedRefreshingOne()
+    {
+        Assert.SkipUnless(
+            StubJulieExtract.Supported, "the outdated-extractor stub is a POSIX shell script.");
+
+        string root = Path.Combine(_dir, "newer-artifact-workspace");
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        using (var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, Array.Empty<JulieDbFixture.SymbolRow>()))
+        {
+            SqliteConnection.ClearAllPools();
+            File.Copy(julie.DbPath, Path.Combine(millerDir, "symbols.db"));
+        }
+        StampArtifactBinaryVersion(Path.Combine(millerDir, "symbols.db"), "9.9.9");
+        StubJulieExtract.WriteFailing(Path.Combine(_dir, ".tools"), version: "1.0.0");
+
+        var (code, _, _) = Run(
+            new[] { "workspace", "open", "--path", root }, Context(Path.Combine(_dir, "symbols.db")));
+
+        WorkspaceRegistryRow registered = Assert.Single(ListRegistry());
+
+        Assert.Equal(3, code);
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, registered.State);
+    }
+
+    [Fact]
+    public void WorkspaceOpen_RefusedByTheEligibilityGate_DoesNotDemoteAnAlreadyReadyRow()
+    {
+        Assert.SkipUnless(
+            StubJulieExtract.Supported, "the outdated-extractor stub is a POSIX shell script.");
+
+        string root = Path.Combine(_dir, "already-registered-workspace");
+        string millerDir = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(millerDir);
+        string dbPath = Path.Combine(millerDir, "symbols.db");
+        using (var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, Array.Empty<JulieDbFixture.SymbolRow>()))
+        {
+            SqliteConnection.ClearAllPools();
+            File.Copy(julie.DbPath, dbPath);
+        }
+        StampArtifactBinaryVersion(dbPath, "9.9.9");
+        StubJulieExtract.WriteFailing(Path.Combine(_dir, ".tools"), version: "1.0.0");
+
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        string id = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+        using (WorkspaceRegistry registry = WorkspaceRegistry.Open(_registryDb))
+        {
+            registry.UpsertSeen(
+                id,
+                WorkspaceId.Display(canonicalRoot, id),
+                canonicalRoot,
+                dbPath,
+                WorkspaceRegistryState.Ready);
+            registry.MarkScanned(id, 42);
+        }
+
+        Run(new[] { "workspace", "open", "--path", root }, Context(Path.Combine(_dir, "symbols.db")));
+
+        WorkspaceRegistryRow registered = Assert.Single(ListRegistry());
+
+        Assert.Equal(WorkspaceRegistryState.Ready, registered.State);
+        Assert.Equal(42, registered.LastRevision);
+    }
+
+    private static void StampArtifactBinaryVersion(string dbPath, string version)
+    {
+        SqliteConnection.ClearAllPools();
+        using var conn = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = dbPath, Pooling = false }.ToString());
+        conn.Open();
+        using SqliteCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE artifact_metadata SET value = $v WHERE key = 'binary_version';";
+        cmd.Parameters.AddWithValue("$v", version);
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
+    public void WorkspaceOpen_WhenTheFirstScanFails_LeavesAnErrorRow_NotAReadyOne()
+    {
+        Assert.SkipUnless(
+            StubJulieExtract.Supported, "the failing-extractor stub is a POSIX shell script.");
+
+        string root = Path.Combine(_dir, "fresh-workspace");
+        Directory.CreateDirectory(root);
+        StubJulieExtract.WriteFailing(Path.Combine(_dir, ".tools"));
+
+        var (code, _, _) = Run(
+            new[] { "workspace", "open", "--path", root }, Context(Path.Combine(_dir, "symbols.db")));
+
+        WorkspaceRegistryRow registered = Assert.Single(ListRegistry());
+
+        Assert.Equal(3, code);
+        Assert.NotEqual(WorkspaceRegistryState.Ready, registered.State);
+        Assert.Equal(WorkspaceRegistryState.Error, registered.State);
+        Assert.False(File.Exists(Path.Combine(root, ".miller", "symbols.db")));
+    }
+
+    [Fact]
+    public void WorkspaceOpen_WhenTheFirstScanFails_RecordsTheFailureForTheNextProcessToBackOffFrom()
+    {
+        Assert.SkipUnless(
+            StubJulieExtract.Supported, "the failing-extractor stub is a POSIX shell script.");
+
+        string root = Path.Combine(_dir, "fresh-workspace");
+        Directory.CreateDirectory(root);
+        StubJulieExtract.WriteFailing(Path.Combine(_dir, ".tools"));
+
+        Run(new[] { "workspace", "open", "--path", root }, Context(Path.Combine(_dir, "symbols.db")));
+
+        ScanFailureRecord? recorded = ScanFailureJournal.TryRead(Path.Combine(root, ".miller"));
+
+        Assert.Equal(1, recorded?.ConsecutiveFailures);
+        Assert.Equal(ScanIntent.IncrementalReconcile, recorded?.Intent);
     }
 
     // ---------- workspace remove ----------

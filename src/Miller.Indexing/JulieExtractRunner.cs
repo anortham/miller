@@ -327,8 +327,10 @@ public sealed class JulieExtractRunner
                     $"(v{MillerExtractContract.PinnedJulieExtractVersion}).");
 
             default:
+                // The exit code rides along because 137 (SIGKILL) is the OOM killer's signature, and the
+                // scan-failure policy clamps the next attempt's --jobs when it sees one.
                 throw new JulieExtractException(
-                    $"julie-extract exited with unexpected code {exitCode}.", stderr);
+                    $"julie-extract exited with unexpected code {exitCode}.", stderr, exitCode);
         }
     }
 

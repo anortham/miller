@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Semantic;
 using Miller.Server;
@@ -42,6 +43,8 @@ namespace Miller.Server.Tools;
 /// <param name="ScanGovernor">This workspace's position in the user-global scan-admission queue, when there is
 /// one. Null — idle, disabled, or no corroborated holder — renders nowhere, so default status output stays
 /// byte-identical.</param>
+/// <param name="ScanFailure">The persisted whole-repo scan-failure record, when one exists. Null — the normal
+/// state — renders nowhere, so default status output stays byte-identical.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -63,7 +66,8 @@ public readonly record struct WorkspaceFacts(
     string? ArtifactId = null,
     VectorSidecarFacts? Vectors = null,
     SemanticBrokerFacts? SemanticBroker = null,
-    ScanGovernorSnapshot? ScanGovernor = null);
+    ScanGovernorSnapshot? ScanGovernor = null,
+    ScanFailureRecord? ScanFailure = null);
 
 public sealed record SemanticBrokerFacts(
     string State,
@@ -167,6 +171,11 @@ public enum WorkspaceHealthFormat
 /// <param name="ScanDurationMs">Wall ms of the julie-extract scan attempt (set even for a failed/killed scan);
 /// null when no scan ran or the path does not measure it.</param>
 /// <param name="DurationMs">Wall ms of the whole refresh attempt, when measured.</param>
+/// <param name="Downgraded">
+/// True when a requested from-scratch rebuild ran as a delta reconcile against the still-servable prior artifact
+/// after repeated scan failures. <c>Scanned</c> is then true for the delta that DID run, so this flag is the only
+/// thing distinguishing "your rebuild happened" from "your rebuild is still owed" — never drop it from a render.
+/// </param>
 public readonly record struct WorkspaceActionResult(
     string Operation,
     bool Scanned,
@@ -181,7 +190,8 @@ public readonly record struct WorkspaceActionResult(
     ContentCorpusFacts? ContentCorpus = null,
     long? ScanDurationMs = null,
     long? DurationMs = null,
-    string? ArtifactId = null);
+    string? ArtifactId = null,
+    bool Downgraded = false);
 
 /// <summary>The result of starting or reusing the local loopback dashboard from the <c>workspace</c> tool.</summary>
 internal readonly record struct WorkspaceDashboardResult(
@@ -379,6 +389,8 @@ public static class WorkspaceRender
             sb.Append("semantic_broker: ").Append(SemanticBrokerLabel(broker)).Append('\n');
         if (ScanGovernorLabel(facts.ScanGovernor) is { } governorLabel)
             sb.Append("scan_governor: ").Append(governorLabel).Append('\n');
+        if (ScanFailureLabel(facts.ScanFailure) is { } scanFailureLabel)
+            sb.Append("scan_failure: ").Append(scanFailureLabel).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -477,6 +489,42 @@ public static class WorkspaceRender
         else w.WriteString("holder_workspace_root", facts.HolderWorkspaceRoot);
         w.WriteEndObject();
     }
+
+    // Null ⇒ render no `scan_failure:` line at all — the same emit-nothing rule ScanGovernorLabel follows, so a
+    // workspace whose scans have never failed produces byte-identical output to a build without the record.
+    private static string? ScanFailureLabel(ScanFailureRecord? facts)
+    {
+        if (facts is null)
+            return null;
+
+        var label = new StringBuilder(facts.Intent.ToString());
+        label.Append(" x").Append(facts.ConsecutiveFailures.ToString(CultureInfo.InvariantCulture));
+        if (facts.ExitCode is { } exitCode)
+            label.Append(" exit ").Append(exitCode.ToString(CultureInfo.InvariantCulture));
+        label.Append(" jobs ").Append(facts.Jobs.ToString(CultureInfo.InvariantCulture));
+        label.Append(" retry_at ")
+             .Append(facts.NextAttemptAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        return label.ToString();
+    }
+
+    private static void WriteScanFailureJson(Utf8JsonWriter w, ScanFailureRecord facts)
+    {
+        w.WriteStartObject();
+        w.WriteString("intent", facts.Intent.ToString());
+        if (facts.ExitCode is { } exitCode) w.WriteNumber("exit_code", exitCode);
+        else w.WriteNull("exit_code");
+        w.WriteNumber("consecutive_failures", facts.ConsecutiveFailures);
+        w.WriteNumber("jobs", facts.Jobs);
+        w.WriteString(
+            "last_failure_utc", facts.LastFailureAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        w.WriteString(
+            "next_attempt_utc", facts.NextAttemptAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
+        w.WriteNumber("retry_in_seconds", RemainingSeconds(facts.NextAttemptAtUtc));
+        w.WriteEndObject();
+    }
+
+    private static long RemainingSeconds(DateTimeOffset untilUtc) =>
+        Math.Max(0, (long)(untilUtc - DateTimeOffset.UtcNow).TotalSeconds);
 
     private static string SemanticBrokerLabel(SemanticBrokerFacts facts)
     {
@@ -657,6 +705,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("scan_governor");
                 WriteScanGovernorJson(w, scanGovernor);
+            }
+
+            if (facts.ScanFailure is { } scanFailure)
+            {
+                w.WritePropertyName("scan_failure");
+                WriteScanFailureJson(w, scanFailure);
             }
 
             w.WritePropertyName("index");
@@ -994,6 +1048,8 @@ public static class WorkspaceRender
             sb.Append("semantic_broker: ").Append(HealthCompactValue(SemanticBrokerLabel(broker))).Append('\n');
         if (ScanGovernorLabel(status.ScanGovernor) is { } governorLabel)
             sb.Append("scan_governor: ").Append(HealthCompactValue(governorLabel)).Append('\n');
+        if (ScanFailureLabel(status.ScanFailure) is { } scanFailureLabel)
+            sb.Append("scan_failure: ").Append(HealthCompactValue(scanFailureLabel)).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -1169,6 +1225,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("scan_governor");
                 WriteScanGovernorJson(w, scanGovernor);
+            }
+
+            if (status.ScanFailure is { } scanFailure)
+            {
+                w.WritePropertyName("scan_failure");
+                WriteScanFailureJson(w, scanFailure);
             }
 
             w.WritePropertyName("index");
@@ -2178,6 +2240,8 @@ public static class WorkspaceRender
         if (!string.IsNullOrEmpty(result.Status))
             sb.Append("status: ").Append(result.Status).Append('\n');
         sb.Append("scanned: ").Append(result.Scanned ? "yes" : "no").Append('\n');
+        if (result.Downgraded)
+            sb.Append("downgraded: yes\n");
         sb.Append("swapped: ").Append(result.Swapped ? "yes" : "no").Append('\n');
         sb.Append("revision: ").Append(result.Revision);
         if (result.ScanDurationMs is { } scanMs)
@@ -2203,6 +2267,8 @@ public static class WorkspaceRender
             if (result.Status is null) w.WriteNull("status");
             else w.WriteString("status", result.Status);
             w.WriteBoolean("scanned", result.Scanned);
+            if (result.Downgraded)
+                w.WriteBoolean("downgraded", true);
             w.WriteBoolean("swapped", result.Swapped);
             w.WriteNumber("revision", result.Revision);
             if (result.ScanDurationMs is { } scanMs) w.WriteNumber("scan_duration_ms", scanMs);

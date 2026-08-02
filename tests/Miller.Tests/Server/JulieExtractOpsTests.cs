@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Core.Freshness;
 using Miller.Server.Hosting;
 using Xunit;
 
@@ -36,7 +37,7 @@ public sealed class JulieExtractOpsTests
             canonicalRoot, db,
             update: (root, db2, file) => { calls.Add(new Recorded("update", root, db2, file)); return Stub(); },
             delete: (root, db2, file) => { calls.Add(new Recorded("delete", root, db2, file)); return Stub(); },
-            scan: (root, db2, force) => { calls.Add(new Recorded("scan", root, db2, "", force)); return Stub(); });
+            scan: (root, db2, force, _) => { calls.Add(new Recorded("scan", root, db2, "", force)); return Stub(); });
         return (ops, calls);
     }
 
@@ -138,7 +139,7 @@ public sealed class JulieExtractOpsTests
         {
             var (ops, calls) = NewOps(canonicalReal, Path.Combine(canonicalReal, ".miller", "symbols.db"));
 
-            ops.Scan(force: true); // a `workspace full` from-scratch rebuild (M7 D3)
+            ops.Scan(ScanIntent.UserFullRebuild); // a `workspace full` from-scratch rebuild (M7 D3)
 
             var rec = Assert.Single(calls);
             Assert.Equal("scan", rec.Op);

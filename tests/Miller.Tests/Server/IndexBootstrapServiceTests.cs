@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Telemetry;
@@ -133,7 +134,7 @@ public sealed class IndexBootstrapServiceTests
         int loads = 0, rescans = 0;
         var result = IndexBootstrapService.LoadIndexWithAutoRebuild(
             load: () => { loads++; return "index"; },
-            forceRescan: () => { rescans++; return 5L; },
+            forceRescan: _ => { rescans++; return 5L; },
             onBeforeRetry: () => Assert.Fail("onBeforeRetry must not fire for a compatible DB"),
             onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a compatible DB"),
             onCorrupt: _ => Assert.Fail("onCorrupt must not fire for a compatible DB"));
@@ -163,7 +164,7 @@ public sealed class IndexBootstrapServiceTests
                     throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
                 return "rebuilt";
             },
-            forceRescan: () => { order.Add("rescan"); return 3L; },
+            forceRescan: _ => { order.Add("rescan"); return 3L; },
             onBeforeRetry: () => order.Add("barrier"),
             onIncompatible: _ => order.Add("warn"),
             onCorrupt: _ => Assert.Fail("onCorrupt must not fire for an incompatible DB"));
@@ -189,7 +190,7 @@ public sealed class IndexBootstrapServiceTests
                     throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
                 return "rebuilt-index";
             },
-            forceRescan: () => { rescans++; return 7L; },
+            forceRescan: _ => { rescans++; return 7L; },
             onBeforeRetry: () => barriers++,
             onIncompatible: _ => warned++,
             onCorrupt: _ => Assert.Fail("onCorrupt must not fire for an incompatible DB"));
@@ -215,7 +216,7 @@ public sealed class IndexBootstrapServiceTests
         var thrown = Assert.Throws<IncompatibleExtractException>(() =>
             IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
                 load: () => { loads++; throw boom; },
-                forceRescan: () => { rescans++; return 1L; },
+                forceRescan: _ => { rescans++; return 1L; },
                 onBeforeRetry: () => { },
                 onIncompatible: _ => { },
                 onCorrupt: _ => { }));
@@ -240,7 +241,7 @@ public sealed class IndexBootstrapServiceTests
                     throw new SqliteException("database disk image is malformed", 11 /* SQLITE_CORRUPT */);
                 return "rebuilt-index";
             },
-            forceRescan: () => { rescans++; return 9L; },
+            forceRescan: _ => { rescans++; return 9L; },
             onBeforeRetry: () => barriers++,
             onIncompatible: _ => Assert.Fail("onIncompatible must not fire for a corrupt DB"),
             onCorrupt: _ => corrupt++);
@@ -265,7 +266,7 @@ public sealed class IndexBootstrapServiceTests
         var thrown = Assert.Throws<SqliteException>(() =>
             IndexBootstrapService.LoadIndexWithAutoRebuild<string>(
                 load: () => throw busy,
-                forceRescan: () => { rescans++; return 1L; },
+                forceRescan: _ => { rescans++; return 1L; },
                 onBeforeRetry: () => { },
                 onIncompatible: _ => { },
                 onCorrupt: _ => { }));
@@ -287,7 +288,7 @@ public sealed class IndexBootstrapServiceTests
                     throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
                 return "winner-artifact";
             },
-            forceRescan: () => null,
+            forceRescan: _ => null,
             onBeforeRetry: () => barriers++,
             onIncompatible: _ => { },
             onCorrupt: _ => { });
@@ -312,7 +313,7 @@ public sealed class IndexBootstrapServiceTests
                     throw new IncompatibleExtractException("DB schema is 1 but this Miller build expects 2");
                 return "rebuilt";
             },
-            forceRescan: () => 11L,
+            forceRescan: _ => 11L,
             onBeforeRetry: () => barriers++,
             onIncompatible: _ => { },
             onCorrupt: _ => { });
@@ -823,10 +824,10 @@ public sealed class IndexBootstrapServiceTests
     }
 
     private static IndexBootstrapService.BootstrapScanDecision Scan(bool force) =>
-        new(ShouldScan: true, Force: force, WorkspaceRegistryState.Ready);
+        new(ShouldScan: true, force ? ScanIntent.RootRebind : ScanIntent.IncrementalReconcile, WorkspaceRegistryState.Ready);
 
     private static IndexBootstrapService.BootstrapScanDecision Reuse() =>
-        new(ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
+        new(ShouldScan: false, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.LoadedExisting);
 
     private sealed class FakeLease : IDisposable
     {

@@ -20,23 +20,34 @@ public sealed record DeleteOp(string Path) : ExtractOp;
 
 /// <summary>
 /// A whole-repo reconcile (julie <c>extract scan</c>). Emitted on overflow / <c>.git/HEAD</c> change / startup.
-/// <see cref="Force"/> distinguishes the hash-delta reconcile from the from-scratch rebuild an extractor upgrade
-/// or an operator full-scan request needs; a re-armed request must carry its intent or the retry silently
-/// degrades to a delta scan that "succeeds" without rebuilding anything.
+/// <see cref="Intent"/> carries WHY the scan was asked for, which decides both whether julie rebuilds from
+/// scratch and whether a completed scan discharges a pending request; a re-armed request must carry its intent or
+/// the retry silently degrades to a delta scan that "succeeds" without rebuilding anything.
 /// </summary>
 public sealed record ScanOp : ExtractOp
 {
-    private ScanOp(bool force) => Force = force;
+    private ScanOp(ScanIntent intent, int? jobs)
+    {
+        Intent = intent;
+        Jobs = jobs;
+    }
+
+    /// <summary>Why this scan was asked for.</summary>
+    public ScanIntent Intent { get; }
+
+    /// <summary>
+    /// An explicit <c>--jobs</c> cap this scan must carry (a post-SIGKILL safety response), or null to use the
+    /// ambient <c>ExtractJobsPolicy</c>.
+    /// </summary>
+    public int? Jobs { get; }
 
     /// <summary>Whether julie must rebuild from scratch (<c>scan --force</c>) rather than hash-delta reconcile.</summary>
-    public bool Force { get; }
+    public bool Force => ScanIntentPolicy.RequiresForce(Intent);
 
     /// <summary>The shared delta-reconcile value.</summary>
-    public static ScanOp Instance { get; } = new(force: false);
+    public static ScanOp Instance { get; } = new(ScanIntent.IncrementalReconcile, jobs: null);
 
-    /// <summary>The shared from-scratch rebuild value.</summary>
-    public static ScanOp Forced { get; } = new(force: true);
-
-    /// <summary>The shared value carrying <paramref name="force"/>.</summary>
-    public static ScanOp For(bool force) => force ? Forced : Instance;
+    /// <summary>The shared value carrying <paramref name="intent"/> and an optional jobs cap.</summary>
+    public static ScanOp For(ScanIntent intent, int? jobs = null) =>
+        intent == ScanIntent.IncrementalReconcile && jobs is null ? Instance : new ScanOp(intent, jobs);
 }
