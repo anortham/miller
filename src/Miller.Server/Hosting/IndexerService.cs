@@ -630,7 +630,7 @@ public sealed class IndexerService : BackgroundService
     //
     // This suspends the DEBOUNCE path only. An on-demand scan (the MCP/CLI workspace refresh|full) does not
     // consult the presence flag and will still spawn an extract against the absent root. Measured against the
-    // pinned julie-extract 2.22.0 that is safe but wasteful: a missing --root exits 1 and leaves the artifact
+    // pinned julie-extract 2.23.0 that is safe but wasteful: a missing --root exits 1 and leaves the artifact
     // byte-identical, so the failure is recorded and the prior index keeps serving. Gating those paths on the
     // flag was considered and NOT done — it is refreshed only by this tick, so a root that has just returned
     // would read as missing and a legitimate user rebuild would be refused for a stale reason.
