@@ -139,10 +139,10 @@ public sealed class JulieExtractRunner
     /// <paramref name="ignoreFiles"/> are emitted in the given ORDER, which is their precedence: julie-extract
     /// concatenates them into one gitignore matcher, so last-match-wins makes the final file decisive
     /// (<see cref="ScanIgnorePolicy"/> puts Miller's invariant file there).
-    /// </summary>
     /// <paramref name="supervision"/> adds the three process-lifecycle flags julie-extract 2.22.0 introduced
     /// (<see cref="ExtractSupervision"/>). Null or <see cref="ExtractSupervision.None"/> emits none of them and
     /// reproduces the earlier argv byte for byte.
+    /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
     /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
     /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
