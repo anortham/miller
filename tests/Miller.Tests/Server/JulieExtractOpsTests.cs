@@ -14,9 +14,12 @@ namespace Miller.Tests.Server;
 /// </summary>
 public sealed class JulieExtractOpsTests
 {
-    private sealed record Recorded(string Op, string Root, string Db, string File, bool Force = false);
+    private sealed record Recorded(
+        string Op, string Root, string Db, string File, bool Force = false,
+        ExtractIndexLevel Level = ExtractIndexLevel.Full);
 
-    private static (JulieExtractOps ops, List<Recorded> calls) NewOps(string canonicalRoot, string db)
+    private static (JulieExtractOps ops, List<Recorded> calls) NewOps(
+        string canonicalRoot, string db, IndexLevelPolicy levelPolicy = IndexLevelPolicy.Full)
     {
         var calls = new List<Recorded>();
         ExtractReport Stub() => new(
@@ -37,7 +40,12 @@ public sealed class JulieExtractOpsTests
             canonicalRoot, db,
             update: (root, db2, file) => { calls.Add(new Recorded("update", root, db2, file)); return Stub(); },
             delete: (root, db2, file) => { calls.Add(new Recorded("delete", root, db2, file)); return Stub(); },
-            scan: (root, db2, force, _) => { calls.Add(new Recorded("scan", root, db2, "", force)); return Stub(); });
+            scan: (root, db2, force, _, level) =>
+            {
+                calls.Add(new Recorded("scan", root, db2, "", force, level));
+                return Stub();
+            },
+            levelPolicy: () => levelPolicy);
         return (ops, calls);
     }
 
@@ -121,6 +129,82 @@ public sealed class JulieExtractOpsTests
             Assert.Equal("scan", rec.Op);
             Assert.Equal(canonicalReal, rec.Root);
             Assert.False(rec.Force); // the M3 delta reconcile default is a hash-delta scan, never --force
+        }
+        finally
+        {
+            try { Directory.Delete(real, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Scan_UnderProgressive_ADeltaOnAnAbsentDbCarriesTheSymbolsLevel()
+    {
+        string real = Path.Combine(Path.GetTempPath(), "miller-ops-lvl-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(real);
+        string canonicalReal = PathCanonicalizer.CanonicalizeRoot(real);
+
+        try
+        {
+            var (ops, calls) = NewOps(
+                canonicalReal, Path.Combine(canonicalReal, ".miller", "symbols.db"),
+                IndexLevelPolicy.Progressive);
+
+            ops.Scan(); // no DB file exists, so this delta CREATES the artifact
+
+            Assert.Equal(ExtractIndexLevel.Symbols, Assert.Single(calls).Level);
+        }
+        finally
+        {
+            try { Directory.Delete(real, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Scan_UnderProgressive_AHealRebuildsAtSymbols_ButAUserRebuildRunsFull()
+    {
+        string real = Path.Combine(Path.GetTempPath(), "miller-ops-lvl2-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(real);
+        string canonicalReal = PathCanonicalizer.CanonicalizeRoot(real);
+        string db = Path.Combine(canonicalReal, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(db)!);
+        File.WriteAllText(db, "existing artifact placeholder");
+
+        try
+        {
+            var (ops, calls) = NewOps(canonicalReal, db, IndexLevelPolicy.Progressive);
+
+            ops.Scan(ScanIntent.CorruptionHeal);
+            ops.Scan(ScanIntent.UserFullRebuild);
+            ops.Scan(ScanIntent.LevelUpgrade);
+            ops.Scan(); // routine delta of an existing artifact inherits (no flag)
+
+            Assert.Equal(ExtractIndexLevel.Symbols, calls[0].Level);
+            Assert.Equal(ExtractIndexLevel.Full, calls[1].Level);
+            Assert.Equal(ExtractIndexLevel.Full, calls[2].Level);
+            Assert.Equal(ExtractIndexLevel.Full, calls[3].Level);
+        }
+        finally
+        {
+            try { Directory.Delete(real, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public void Scan_UnderFullPolicy_NothingEverCarriesALevel()
+    {
+        string real = Path.Combine(Path.GetTempPath(), "miller-ops-lvl3-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(real);
+        string canonicalReal = PathCanonicalizer.CanonicalizeRoot(real);
+
+        try
+        {
+            var (ops, calls) = NewOps(
+                canonicalReal, Path.Combine(canonicalReal, ".miller", "symbols.db"), IndexLevelPolicy.Full);
+
+            ops.Scan();
+            ops.Scan(ScanIntent.CorruptionHeal);
+
+            Assert.All(calls, call => Assert.Equal(ExtractIndexLevel.Full, call.Level));
         }
         finally
         {

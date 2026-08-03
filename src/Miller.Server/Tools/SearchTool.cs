@@ -329,10 +329,16 @@ public sealed class SearchTool
 
             string output;
             int count;
+            bool regionsConverging = false;
             if (route.Kind == SearchRouteKind.Regions)
             {
                 WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
+                if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(region.IndexDbPath)))
+                {
+                    regionsConverging = true;
+                    IndexLevelGuard.MarkDegraded(scope, "regions_layer_converging");
+                }
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
                     region.Index,
                     route,
@@ -577,8 +583,12 @@ public sealed class SearchTool
             }
 
             RequireSearchMcpOutput(output);
-            ToolDiagnostic? diagnostic =
-                count == 0 ? SearchEmptyDiagnostic(route, query) : null;
+            ToolDiagnostic? diagnostic = regionsConverging
+                ? IndexLevelGuard.Converging(
+                    "source regions (comments/doc comments/string literals) have not been extracted yet.")
+                : count == 0
+                    ? SearchEmptyDiagnostic(route, query)
+                    : null;
             if (scope is not null)
             {
                 scope.SetTarget(query);

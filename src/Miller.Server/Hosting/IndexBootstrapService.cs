@@ -563,9 +563,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     TestScanObserver?.Invoke();
                     ScanAttemptDecision attempt =
                         failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
+                    // A non-force bootstrap scan means no usable DB exists (DecideBootstrapScan's fresh case),
+                    // so this scan CREATES the artifact at the policy's first-build level; the force case is a
+                    // root rebind, which LevelForScan routes by intent.
+                    ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
+                        attempt.EffectiveIntent, newArtifact: !scanDecision.Force,
+                        IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId));
                     ExtractReport report = RunRecordedScan(
                         failurePolicy, attempt,
-                        () => runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs));
+                        () => runner.Scan(
+                            canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs, bootstrapLevel));
                     scanned = true;
                     scanRevision = report.Revision;
                     _logger.LogInformation(
@@ -628,7 +635,13 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         ScanAttemptDecision attempt = failurePolicy.Evaluate(healIntent, bypassBackoff: true);
                         ExtractReport rebuild = RunRecordedScan(
                             failurePolicy, attempt,
-                            () => runner.Scan(canonicalRoot, canonicalDbPath, force: true, attempt.Jobs));
+                            () => runner.Scan(
+                                canonicalRoot, canonicalDbPath, force: true, attempt.Jobs,
+                                // Heals rebuild at the policy's repair level (symbols under progressive:
+                                // restore serving fast, the upgrade re-latches from the artifact afterward).
+                                IndexLevels.LevelForScan(
+                                    attempt.EffectiveIntent, newArtifact: false,
+                                    IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId))));
                         _logger.LogInformation(
                             "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
                             rebuild.SymbolsExtracted, rebuild.Revision);

@@ -15,7 +15,7 @@ differ (the program plan's strawman had three levels; the shipped design has two
 | Level identity | `artifact_metadata.index_level` = `symbols` \| `full`; **absent = full** (old artifacts and old binaries stay compatible both directions). Level is **immutable for an artifact's lifetime**. |
 | Upgrade mechanics | **Full re-extract into `symbols.db.rebuild` + promote** (`FullRebuildPromotion`). Never in-place L2 writes under served readers (the 2026-06-11 7 KB/s WAL-collapse field report), never retained-spool replay (the 130 GB orphan history; extraction is only ~5% of scan wall). |
 | Miller policy | `MILLER_INDEX_LEVELS` = `progressive` (default) \| `full` (today's behavior) \| `symbols-only` (never upgrade), plus a per-workspace registry override. `full` is the permanent zero-behavior-change escape hatch, like `MILLER_SEMANTIC=off`. |
-| Degradation shape | Reference-needing tools return an actionable "reference layer converging" result (never a bare empty result, never an exception); each such call records a `degraded` telemetry outcome — the demand counter that decides whether on-demand extraction is ever worth building. |
+| Degradation shape | Reference-needing tools return an actionable "reference layer converging" result (never a bare empty result, never an exception); each such call stamps `degraded`/`degraded_reason` into telemetry `metadata_json` — the demand counter that decides whether on-demand extraction is ever worth building. (The telemetry `outcome` column is CHECK-constrained to ok\|empty\|error, so the counter rides metadata, not a new outcome value.) |
 
 ## Level composition (measured, not guessed)
 
@@ -64,8 +64,10 @@ Two subtleties the composition depends on:
 and a released 2.24.0 binary only fails on the one new thing (a `symbols` bootstrap), never on
 routine scans. Delta scans never pass the flag (inherit).
 
-**Bootstrap under `progressive` policy.** Fresh workspace: bootstrap force-builds at `symbols`
-level into `.rebuild`, promotes, serves — then the leader latches a `LevelUpgrade` intent. The
+**Bootstrap under `progressive` policy.** Fresh workspace: the bootstrap's first scan is a
+non-force `IncrementalReconcile` against an ABSENT DB (julie creates and root-binds the artifact on
+first scan), so it carries `--level symbols` explicitly and builds the L1 artifact directly — then
+the leader latches a `LevelUpgrade` intent. The
 upgrade scan is an ordinary full-level force rebuild into `.rebuild` + promote under the existing
 governor/backoff machinery; freshness detects it as an `artifact_id` change like any promote.
 Deltas against the served `symbols` artifact keep it fresh during convergence (julie inherits the
@@ -107,16 +109,23 @@ mode, reversible by policy change + `workspace full`).
 | references candidates CLI | reference layer | converging message |
 | patterns, search regions= | structural_facts / source_regions | converging message (facts arrive with the same upgrade) |
 
-Every degraded response is data-bearing (`layer_state` in JSON, one-line note in compact) and
-recorded in telemetry with outcome `degraded` — the demand counter. If degraded-call volume on
+Every degraded response is data-bearing (a `reference_layer_converging` diagnostic attached to
+both compact and JSON output) and stamped `degraded`/`degraded_reason` in telemetry
+`metadata_json` — the demand counter. If degraded-call volume on
 converging workspaces stays as low as the historical shares suggest (trace+impact ≈ 7%), the
 levels default is validated; if it spikes, that is the trigger recorded in the program plan for
 evaluating query-triggered extraction.
 
-**Lazy `SymbolGraphReader`.** The reader currently hydrates identifier state eagerly at index
-load; at `symbols` level that's pointless, and after an upgrade promote it re-pays a 12 M-row
-scan before the first tool call. P2 makes reference hydration lazy/on-demand so L1 serving pays
-zero reference-layer cost by construction.
+**Level-proportional loading (revised from "lazy `SymbolGraphReader`").** The P0 draft proposed
+lazy reference hydration; implementation showed it is unnecessary at L1 and hazardous in general.
+The eager loader's reference cost is proportional to the tables it reads: at `symbols` level the
+identifier/literal/facts tables are EMPTY, so the existing eager pass costs ~zero by construction,
+while the relationship-arm edges (which L1 DOES carry) still load — they must, since inheritance/
+import edges are part of the L1 contract. A lazy read would instead re-open the artifact at first
+tool call, which races the upgrade promote (reading a DIFFERENT artifact's edges against this
+index's symbol ids) and on Windows would pin a handle that blocks the promote rename. The
+post-upgrade reload pays the same eager cost every full-artifact load pays today — pre-existing,
+not a levels regression.
 
 **Surfacing.** `workspace status`/`health` JSON gain `index_level` and a conditional
 `level_upgrade` object (state running/owed/failed + timing); dashboard shows both per workspace.

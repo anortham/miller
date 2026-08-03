@@ -40,6 +40,31 @@ public sealed class JulieExtractRunnerTests
             args);
     }
 
+    [Fact]
+    public void BuildScanArgs_SymbolsLevel_AppendsTheLevelFlag()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: false, jobs: 4, level: ExtractIndexLevel.Symbols);
+        Assert.Equal(
+            new[]
+            {
+                "scan", "--root", AbsRoot, "--db", AbsDb, "--strict-schema", "--json", "--jobs", "4",
+                "--level", "symbols",
+            },
+            args);
+    }
+
+    [Fact]
+    public void BuildScanArgs_FullLevel_EmitsNoLevelFlag_ArgvStaysByteIdenticalToPreLevels()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            AbsDb, AbsRoot, force: true, jobs: 4, level: ExtractIndexLevel.Full);
+        Assert.DoesNotContain("--level", args);
+        Assert.Equal(
+            JulieExtractRunner.BuildScanArgs(AbsDb, AbsRoot, force: true, jobs: 4),
+            args);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

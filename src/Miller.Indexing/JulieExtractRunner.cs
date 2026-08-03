@@ -183,13 +183,18 @@ public sealed class JulieExtractRunner
     /// <paramref name="supervision"/> adds the three process-lifecycle flags julie-extract 2.22.0 introduced
     /// (<see cref="ExtractSupervision"/>). Null or <see cref="ExtractSupervision.None"/> emits none of them and
     /// reproduces the earlier argv byte for byte.
+    /// <paramref name="level"/> requests the extraction level (julie-extract 2.25.0 levels contract).
+    /// <see cref="ExtractIndexLevel.Full"/> emits NO flag at all — full-level argv stays byte-identical to
+    /// pre-levels Miller and works against a pre-levels binary; only <see cref="ExtractIndexLevel.Symbols"/>
+    /// adds <c>--level symbols</c>, and only a NEW-artifact build may pass it (julie rejects a level that
+    /// conflicts with an existing artifact's recorded level).
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
     /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
     /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
     public static IReadOnlyList<string> BuildScanArgs(
         string absDb, string absRoot, bool force, int jobs, IReadOnlyList<string>? ignoreFiles = null,
-        ExtractSupervision? supervision = null)
+        ExtractSupervision? supervision = null, ExtractIndexLevel level = ExtractIndexLevel.Full)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
@@ -199,6 +204,11 @@ public sealed class JulieExtractRunner
             "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json",
             "--jobs", jobs.ToString(CultureInfo.InvariantCulture),
         };
+        if (level == ExtractIndexLevel.Symbols)
+        {
+            args.Add("--level");
+            args.Add("symbols");
+        }
         foreach (string ignoreFile in ignoreFiles ?? Array.Empty<string>())
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(ignoreFile, nameof(ignoreFiles));
@@ -439,7 +449,9 @@ public sealed class JulieExtractRunner
     /// (<see cref="JulieIgnoreSeeder"/>) — so the same policy governs this scan, later single-file updates, and
     /// the watcher, and a malformed user pattern stays a warning instead of failing the scan.</para>
     /// </summary>
-    public ExtractReport Scan(string root, string db, bool force = false, int? jobs = null)
+    public ExtractReport Scan(
+        string root, string db, bool force = false, int? jobs = null,
+        ExtractIndexLevel level = ExtractIndexLevel.Full)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
@@ -460,7 +472,7 @@ public sealed class JulieExtractRunner
         ExtractSupervision supervision = ExtractSupervisionPolicy.For(absDb);
 
         if (!force || ForceScanInPlace())
-            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles, supervision));
+            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles, supervision, level));
 
         // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
         // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
@@ -471,7 +483,7 @@ public sealed class JulieExtractRunner
         {
             report = Run(BuildScanArgs(
                 FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs, ignoreFiles,
-                supervision));
+                supervision, level));
         }
         catch
         {

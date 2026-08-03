@@ -34,7 +34,7 @@ public sealed class WorkspaceTool
     private readonly ContentCorpusSidecar _contentSidecar = new();
     private readonly VectorSidecar _vectors;
     private readonly SemanticEmbeddingSessionBroker? _semanticBroker;
-    private readonly Func<string, string, bool, int?, ExtractReport> _scanForOpen;
+    private readonly Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> _scanForOpen;
     private readonly Func<string, IDisposable?> _acquireWriterLock;
     private readonly IDashboardLauncher _dashboardLauncher;
     private readonly ILogger<WorkspaceTool> _logger;
@@ -76,7 +76,7 @@ public sealed class WorkspaceTool
             crossWorkspaceRefresh,
             sidecar,
             vectors,
-            (root, db, force, jobs) => runner.Scan(root, db, force, jobs),
+            (root, db, force, jobs, level) => runner.Scan(root, db, force, jobs, level),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             new DashboardCliLauncher(),
             logger,
@@ -98,7 +98,7 @@ public sealed class WorkspaceTool
         CrossWorkspaceRefreshService crossWorkspaceRefresh,
         SymbolSearchSidecar sidecar,
         VectorSidecar vectors,
-        Func<string, string, bool, int?, ExtractReport> scanForOpen,
+        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> scanForOpen,
         Func<string, IDisposable?> acquireWriterLock,
         IDashboardLauncher dashboardLauncher,
         ILogger<WorkspaceTool> logger,
@@ -1246,10 +1246,15 @@ public sealed class WorkspaceTool
         IScanFailurePolicy failurePolicy = PersistedScanFailurePolicy.For(dbPath, canonicalRoot);
         ScanAttemptDecision attempt =
             failurePolicy.Evaluate(ScanIntent.IncrementalReconcile, bypassBackoff: true);
+        // A prime that CREATES the artifact (no DB yet) carries the policy's first-build level; a delta prime
+        // of an existing artifact emits no flag and inherits its recorded level.
+        ExtractIndexLevel primeLevel = IndexLevels.LevelForScan(
+            attempt.EffectiveIntent, !File.Exists(dbPath),
+            IndexLevels.Resolve(_registry.Get(stableWorkspaceId)?.LevelPolicy));
         ExtractReport report;
         try
         {
-            report = _scanForOpen(canonicalRoot, dbPath, false, attempt.Jobs);
+            report = _scanForOpen(canonicalRoot, dbPath, false, attempt.Jobs, primeLevel);
             failurePolicy.RecordSuccess(attempt.EffectiveIntent);
         }
         catch (Exception ex)

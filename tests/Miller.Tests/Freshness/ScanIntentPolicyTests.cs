@@ -113,6 +113,50 @@ public sealed class ScanIntentPolicyTests
     }
 
     [Fact]
+    public void RequiresForce_ALevelUpgradeIsAForce() =>
+        Assert.True(ScanIntentPolicy.RequiresForce(ScanIntent.LevelUpgrade));
+
+    [Fact]
+    public void MayDowngradeToIncremental_ALevelUpgradeNeverDowngrades_ADeltaCannotAddALayer() =>
+        Assert.False(ScanIntentPolicy.MayDowngradeToIncremental(ScanIntent.LevelUpgrade));
+
+    [Theory]
+    [InlineData(ScanIntent.IncrementalReconcile, false)]
+    [InlineData(ScanIntent.UserFullRebuild, true)]
+    [InlineData(ScanIntent.RootRebind, false)]
+    [InlineData(ScanIntent.SchemaHeal, false)]
+    [InlineData(ScanIntent.CorruptionHeal, false)]
+    [InlineData(ScanIntent.ExtractorUpgrade, true)]
+    [InlineData(ScanIntent.LevelUpgrade, true)]
+    public void Satisfies_APendingLevelUpgradeIsDischargedOnlyByAFullLevelForce(
+        ScanIntent completed, bool expected) =>
+        Assert.Equal(expected, ScanIntentPolicy.Satisfies(completed, ScanIntent.LevelUpgrade));
+
+    [Fact]
+    public void Strongest_OfAUserRebuildAndALevelUpgrade_IsTheLevelUpgrade_SoTheRetryIsNotDowngradable()
+    {
+        ScanIntent strongest = ScanIntentPolicy.Strongest(
+            new[] { ScanIntent.UserFullRebuild, ScanIntent.LevelUpgrade });
+
+        Assert.Equal(ScanIntent.LevelUpgrade, strongest);
+        Assert.False(ScanIntentPolicy.MayDowngradeToIncremental(strongest));
+    }
+
+    [Theory]
+    [InlineData(ScanIntent.RootRebind)]
+    [InlineData(ScanIntent.SchemaHeal)]
+    [InlineData(ScanIntent.CorruptionHeal)]
+    public void Strongest_OfALevelUpgradeAndAHeal_IsTheHeal_SoTheRepairRunsFirst(ScanIntent heal) =>
+        Assert.Equal(heal, ScanIntentPolicy.Strongest(new[] { ScanIntent.LevelUpgrade, heal }));
+
+    [Fact]
+    public void ClearsFailureRecord_ACompletedLevelUpgradeClearsAnyForceIntentRecord()
+    {
+        Assert.True(ScanIntentPolicy.ClearsFailureRecord(ScanIntent.LevelUpgrade, ScanIntent.CorruptionHeal));
+        Assert.True(ScanIntentPolicy.ClearsFailureRecord(ScanIntent.LevelUpgrade, ScanIntent.UserFullRebuild));
+    }
+
+    [Fact]
     public void Strongest_OfADeltaAndAUserRebuild_IsTheUserRebuild() =>
         Assert.Equal(
             ScanIntent.UserFullRebuild,

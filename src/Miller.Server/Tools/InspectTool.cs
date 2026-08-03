@@ -98,6 +98,19 @@ public sealed class InspectTool
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
 
+            // Only the refs-dependent depths degrade: summary is complete at symbols level, while
+            // overview/full would otherwise render a definition with silently-absent refs/callers sections —
+            // indistinguishable from "nothing references this symbol".
+            if (parsedDepth is not InspectDepth.Summary
+                && diagnostic is null
+                && context.Index is MillerRepositoryIndex repositoryIndex
+                && IndexLevelGuard.ReferenceLayerConverging(repositoryIndex))
+            {
+                IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
+                diagnostic = IndexLevelGuard.Converging(
+                    "the refs/callers/callees sections are empty pending identifier extraction.");
+            }
+
             if (telemetry is not null)
             {
                 telemetry.Op = DepthName(parsedDepth);

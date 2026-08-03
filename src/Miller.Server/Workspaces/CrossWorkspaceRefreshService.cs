@@ -26,7 +26,7 @@ public sealed class CrossWorkspaceRefreshService
     private static readonly TimeSpan DefaultLockBusyPollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly WorkspaceRegistry _registry;
-    private readonly Func<string, string, bool, int?, ExtractReport> _scan;
+    private readonly Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> _scan;
     private readonly Func<string, IDisposable?> _acquireLock;
     private readonly Func<string, long> _readLatestRevision;
     private readonly Func<string, string?> _readArtifactId;
@@ -58,7 +58,7 @@ public sealed class CrossWorkspaceRefreshService
         ContentCorpusSidecar? contentSidecar = null)
         : this(
             registry,
-            (root, db, force, jobs) => runner.Scan(root, db, force, jobs),
+            (root, db, force, jobs, level) => runner.Scan(root, db, force, jobs, level),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             ReadLatestRevision,
             DefaultLockBusyWait,
@@ -84,7 +84,7 @@ public sealed class CrossWorkspaceRefreshService
 
     internal CrossWorkspaceRefreshService(
         WorkspaceRegistry registry,
-        Func<string, string, bool, int?, ExtractReport> scan,
+        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
         Func<string, long> readLatestRevision,
         TimeSpan lockBusyWait,
@@ -257,7 +257,13 @@ public sealed class CrossWorkspaceRefreshService
                 row.CanonicalRoot,
                 row.IndexDbPath,
                 ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
-                attempt.Jobs);
+                attempt.Jobs,
+                // A refresh that CREATES the artifact (an opened-but-never-primed workspace) carries the
+                // policy's first-build level; deltas inherit and a `workspace full` force runs at the level
+                // the policy assigns that intent.
+                IndexLevels.LevelForScan(
+                    attempt.EffectiveIntent, !File.Exists(row.IndexDbPath),
+                    IndexLevels.Resolve(row.LevelPolicy)));
             scanClock.Stop();
             if (attempt.Downgraded)
                 failurePolicy.RecordDowngradedServe();

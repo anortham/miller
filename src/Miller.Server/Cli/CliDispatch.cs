@@ -1642,6 +1642,17 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
+        // A symbols-level artifact has no inbound identifier evidence, so EVERY symbol would read as
+        // unreferenced — an authoritative-looking list of false dead-code candidates. Refuse instead.
+        if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+        {
+            err.WriteLine(
+                "references candidates is unavailable while this workspace serves a symbols-level index: " +
+                "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
+                "after the background full-level upgrade completes (`miller workspace status` shows progress).");
+            return 3;
+        }
+
         int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
 
         // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
@@ -2442,6 +2453,8 @@ public static class CliDispatch
                 return WorkspaceOpen(ctx, path, full: o.Has("full"), json, outw, err);
             case "remove":
                 return WorkspaceRemove(ctx, id, path, json, outw, err);
+            case "levels":
+                return WorkspaceLevels(ctx, id, path, set: o.Value("set"), clear: o.Has("clear"), json, outw, err);
             case "prune":
                 if (id is not null || path is not null)
                 {
@@ -2452,9 +2465,97 @@ public static class CliDispatch
                 }
                 return WorkspacePrune(ctx, json, dryRun: o.Has("dry-run"), outw);
             default:
-                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove|prune.");
+                err.WriteLine($"unknown workspace operation '{operation}'. Use status|health|onboarding|leader|list|refresh|full|open|remove|levels|prune.");
                 return 2;
         }
+    }
+
+    private static int WorkspaceLevels(
+        WorkspaceContext ctx, string? id, string? path, string? set, bool clear, bool json,
+        TextWriter outw, TextWriter err)
+    {
+        if (set is not null && clear)
+        {
+            err.WriteLine("--set and --clear are mutually exclusive.");
+            return 2;
+        }
+
+        string? normalizedSet = null;
+        if (set is not null)
+        {
+            normalizedSet = set.Trim().ToLowerInvariant();
+            if (normalizedSet is not ("progressive" or "full" or "symbols-only"))
+            {
+                err.WriteLine($"unknown level policy '{set}'. Use progressive|full|symbols-only.");
+                return 2;
+            }
+        }
+
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+        WorkspaceRegistryRow? row;
+        if (!string.IsNullOrWhiteSpace(id) || !string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                row = WorkspaceRegistrySelector.Resolve(registry, (id ?? path)!);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                err.WriteLine(ex.Message);
+                return 2;
+            }
+        }
+        else
+        {
+            row = FindCurrentWorkspaceRow(registry, ctx);
+        }
+
+        if ((normalizedSet is not null || clear) && row is null)
+        {
+            err.WriteLine(
+                "this workspace is not registered yet, so there is no row to store the policy on; run " +
+                "`miller workspace open --path <dir>` first (or select a registered one with --id/--path).");
+            return 2;
+        }
+
+        string? changed = null;
+        if (normalizedSet is not null)
+        {
+            row = registry.SetLevelPolicy(row!.WorkspaceId, normalizedSet);
+            changed = "set";
+        }
+        else if (clear)
+        {
+            row = registry.SetLevelPolicy(row!.WorkspaceId, null);
+            changed = "cleared";
+        }
+
+        string? envRaw = Environment.GetEnvironmentVariable(IndexLevels.EnvVar);
+        bool inPlace = Environment.GetEnvironmentVariable("MILLER_FULL_REBUILD_INPLACE") == "1";
+        string? registryPolicy = row?.LevelPolicy;
+        IndexLevelPolicy effective = IndexLevels.Resolve(envRaw, inPlace ? "1" : null, registryPolicy);
+        string source = inPlace ? "forced by MILLER_FULL_REBUILD_INPLACE=1"
+            : !string.IsNullOrWhiteSpace(envRaw) ? $"env {IndexLevels.EnvVar}"
+            : !string.IsNullOrWhiteSpace(registryPolicy) ? "registry"
+            : "default";
+
+        string dbPath = row?.IndexDbPath ?? ctx.ExtractDbPath;
+        string? indexLevel = File.Exists(dbPath) ? ExtractIndexLevelReader.Read(dbPath) : null;
+        bool upgradeOwed = indexLevel is not null && IndexLevels.UpgradeOwed(indexLevel, effective);
+
+        outw.WriteLine(WorkspaceRender.Levels(
+            new WorkspaceLevelsResult(
+                row?.WorkspaceId,
+                row?.DisplayId,
+                row?.CanonicalRoot ?? ctx.WorkspaceRoot,
+                IndexLevels.StorageValue(effective),
+                source,
+                registryPolicy,
+                indexLevel,
+                upgradeOwed,
+                changed),
+            json));
+        return 0;
     }
 
     private static int WorkspaceList(
@@ -3592,6 +3693,7 @@ public static class CliDispatch
           full     Force a full re-index (ignores the freshness check).
           open     Register + index a directory (creates .miller/symbols.db).  [--path DIR] [--full]
           remove   Delete a workspace's .miller index dir.                     (--id ID | --path DIR)
+          levels   Show or set the progressive-indexing policy.                [--set progressive|full|symbols-only] [--clear]
           prune    Remove registry rows whose roots no longer exist.           [--dry-run]
 
         Selectors / flags: [--id|--workspace-id SELECTOR] [--path|--workspace DIR] [--json] [--handoff] [--wait] [--dry-run]

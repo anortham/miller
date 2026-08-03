@@ -149,7 +149,9 @@ public sealed class IndexerService : BackgroundService
                     reason => logger.LogWarning(
                         "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan " +
                         "proceeds, but if this Miller is killed the extractor can outlive it.", reason));
-                return JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
+                return JulieExtractOps.Create(
+                    canonicalRoot, canonicalDbPath, runner,
+                    () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId));
             },
             DefaultLeaderRetryInterval,
             sidecar,
@@ -460,6 +462,10 @@ public sealed class IndexerService : BackgroundService
         if (claimVerdict is { ArtifactOlderThanOwn: true })
             RunExtractorUpgradeRescan();
 
+        // AFTER the extractor-upgrade rescan: that path rebuilds at full level, so a fresh read here sees the
+        // upgraded artifact and correctly derives nothing owed instead of scheduling a duplicate rebuild.
+        RequestLevelUpgradeIfOwed(workspace);
+
         // --- debounce loop: drain on each tick (collects bursts into a single coalesced batch) ---
         while (!stoppingToken.IsCancellationRequested &&
                bindingGeneration == _bootstrap.BindingGeneration)
@@ -550,6 +556,24 @@ public sealed class IndexerService : BackgroundService
             _core?.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
     }
 
+    // The LevelUpgrade request is DERIVED from artifact state — a symbols-level artifact under a policy that
+    // wants full IS the owed upgrade — never persisted, which makes it restart-proof with no journal. Derived
+    // at every leader claim and re-derived after every drain-path whole-repo scan, so a repair that restored
+    // serving with a symbols-level rebuild re-arms the upgrade it could not perform itself. Idempotent: the
+    // latch is a set, and a completed full-level force reads back as nothing owed.
+    private void RequestLevelUpgradeIfOwed(WorkspaceContext workspace)
+    {
+        if (workspace.CanonicalExtractDbPath is not { } canonicalDbPath)
+            return;
+        IndexLevelPolicy policy = IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId);
+        if (!IndexLevels.UpgradeOwed(ExtractIndexLevelReader.Read(canonicalDbPath), policy))
+            return;
+        _logger.LogInformation(
+            "Index artifact is a symbols-level index and policy wants full; scheduling the background " +
+            "level-upgrade rebuild.");
+        _core?.RequestWholeRepoScan(ScanIntent.LevelUpgrade);
+    }
+
     /// <summary>
     /// One debounce tick's work: root presence, leader request files, then the coalesced drain. Runs only on a
     /// tick that is NOT abdicating, so <c>.git/HEAD</c> stays latched for the successor rather than being
@@ -614,6 +638,8 @@ public sealed class IndexerService : BackgroundService
                 out bool usedWholeRepoScan);
             if (processed)
                 TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+            if (usedWholeRepoScan)
+                RequestLevelUpgradeIfOwed(workspace);
         }
         finally
         {

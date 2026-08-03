@@ -46,6 +46,15 @@ public enum ScanIntent
     /// downgradable: the point is to re-extract everything with the newer parsers.
     /// </summary>
     ExtractorUpgrade,
+
+    /// <summary>
+    /// The served artifact is a symbols-level index and policy wants full: rebuild at full level into
+    /// <c>.rebuild</c> and promote, converging the reference/facts layers in the background. Never downgradable:
+    /// a delta inherits the artifact's recorded level, so it cannot add a layer. The request is DERIVED from
+    /// artifact state (<c>index_level != full</c> under progressive policy) rather than persisted, which makes an
+    /// owed upgrade restart-proof for free.
+    /// </summary>
+    LevelUpgrade,
 }
 
 /// <summary>
@@ -80,6 +89,12 @@ public static class ScanIntentPolicy
     ///   <c>workspace full</c> leave the upgrade armed, so the next tick ran a second, byte-equivalent
     ///   <c>scan --force</c>: minutes of duplicate extraction and a second whole-machine memory-pressure
     ///   window.</item>
+    /// <item>A pending <see cref="ScanIntent.LevelUpgrade"/> is discharged only by a completed FULL-LEVEL force —
+    ///   <see cref="ScanIntent.LevelUpgrade"/> itself, <see cref="ScanIntent.UserFullRebuild"/>, or
+    ///   <see cref="ScanIntent.ExtractorUpgrade"/>, the three intents that always run at full level. A repair
+    ///   under progressive policy rebuilds at symbols level (restore serving fast), so it cannot claim the
+    ///   upgrade; and because the upgrade request re-derives from the artifact's recorded level, a wrongly
+    ///   dropped latch self-heals on the next leader tick anyway.</item>
     /// <item>A repair intent (<see cref="ScanIntent.RootRebind"/>, <see cref="ScanIntent.SchemaHeal"/>,
     ///   <see cref="ScanIntent.CorruptionHeal"/>) is discharged ONLY by its own intent. Each names a specific
     ///   defect observed in the artifact, and nothing here proves a rebuild driven by another reason observed it
@@ -93,6 +108,9 @@ public static class ScanIntentPolicy
     {
         ScanIntent.IncrementalReconcile => true,
         ScanIntent.UserFullRebuild or ScanIntent.ExtractorUpgrade => RequiresForce(completed),
+        ScanIntent.LevelUpgrade => completed is ScanIntent.LevelUpgrade
+            or ScanIntent.UserFullRebuild
+            or ScanIntent.ExtractorUpgrade,
         _ => completed == pending,
     };
 
@@ -147,6 +165,7 @@ public static class ScanIntentPolicy
     {
         ScanIntent.IncrementalReconcile => 0,
         ScanIntent.UserFullRebuild => 1,
-        _ => 2,
+        ScanIntent.LevelUpgrade => 2,
+        _ => 3,
     };
 }

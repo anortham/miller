@@ -19,20 +19,23 @@ public sealed class JulieExtractOps : IExtractOps
     private readonly string _db;
     private readonly Func<string, string, string, ExtractReport> _update;   // (root, db, file)
     private readonly Func<string, string, string, ExtractReport> _delete;   // (root, db, file)
-    private readonly Func<string, string, bool, int?, ExtractReport> _scan; // (root, db, force, jobs)
+    private readonly Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> _scan; // (root, db, force, jobs, level)
+    private readonly Func<IndexLevelPolicy> _levelPolicy;
 
     private JulieExtractOps(
         string canonicalRoot,
         string db,
         Func<string, string, string, ExtractReport> update,
         Func<string, string, string, ExtractReport> delete,
-        Func<string, string, bool, int?, ExtractReport> scan)
+        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> scan,
+        Func<IndexLevelPolicy> levelPolicy)
     {
         _canonicalRoot = canonicalRoot;
         _db = db;
         _update = update;
         _delete = delete;
         _scan = scan;
+        _levelPolicy = levelPolicy;
     }
 
     /// <summary>
@@ -41,7 +44,8 @@ public sealed class JulieExtractOps : IExtractOps
     /// </summary>
     /// <exception cref="ArgumentNullException">Any required argument is null.</exception>
     /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> or <paramref name="db"/> is empty.</exception>
-    public static JulieExtractOps Create(string canonicalRoot, string db, JulieExtractRunner runner)
+    public static JulieExtractOps Create(
+        string canonicalRoot, string db, JulieExtractRunner runner, Func<IndexLevelPolicy>? levelPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
@@ -50,7 +54,8 @@ public sealed class JulieExtractOps : IExtractOps
             canonicalRoot, db,
             update: runner.Update,
             delete: runner.Delete,
-            scan: (root, dbPath, force, jobs) => runner.Scan(root, dbPath, force, jobs));
+            scan: (root, dbPath, force, jobs, level) => runner.Scan(root, dbPath, force, jobs, level),
+            levelPolicy: levelPolicy ?? IndexLevels.FromEnvironment);
     }
 
     /// <summary>
@@ -62,14 +67,16 @@ public sealed class JulieExtractOps : IExtractOps
         string db,
         Func<string, string, string, ExtractReport> update,
         Func<string, string, string, ExtractReport> delete,
-        Func<string, string, bool, int?, ExtractReport> scan)
+        Func<string, string, bool, int?, ExtractIndexLevel, ExtractReport> scan,
+        Func<IndexLevelPolicy>? levelPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
         ArgumentNullException.ThrowIfNull(update);
         ArgumentNullException.ThrowIfNull(delete);
         ArgumentNullException.ThrowIfNull(scan);
-        return new JulieExtractOps(canonicalRoot, db, update, delete, scan);
+        return new JulieExtractOps(
+            canonicalRoot, db, update, delete, scan, levelPolicy ?? IndexLevels.FromEnvironment);
     }
 
     /// <inheritdoc/>
@@ -95,6 +102,12 @@ public sealed class JulieExtractOps : IExtractOps
     }
 
     /// <inheritdoc/>
-    public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null) =>
-        _scan(_canonicalRoot, _db, ScanIntentPolicy.RequiresForce(intent), jobs);
+    public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
+    {
+        // The leader normally scans an artifact the bootstrap already built, so newArtifact is a plain
+        // file-existence probe: it only reports true when the DB is genuinely gone (an operator deleted
+        // .miller), in which case the delta below CREATES the artifact and must carry the policy's level.
+        ExtractIndexLevel level = IndexLevels.LevelForScan(intent, !File.Exists(_db), _levelPolicy());
+        return _scan(_canonicalRoot, _db, ScanIntentPolicy.RequiresForce(intent), jobs, level);
+    }
 }

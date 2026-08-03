@@ -258,7 +258,15 @@ public sealed class ImpactTool
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
-            if (!revisionDelta && returnedCount == 0)
+            if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
+            {
+                // Blast-radius math over a symbols-level artifact sees relationship edges only — the impacted
+                // set is incomplete by construction, so say so instead of letting a thin result read as safety.
+                IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
+                diagnostic = IndexLevelGuard.Converging(
+                    "call-site edges are missing, so the impacted-symbol set undercounts.");
+            }
+            else if (!revisionDelta && returnedCount == 0)
             {
                 diagnostic = ImpactEmptyDiagnostic(
                     emptyReason ?? ImpactEmptyReason.NoImpactedSymbols,

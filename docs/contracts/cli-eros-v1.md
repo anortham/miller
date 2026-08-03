@@ -213,7 +213,7 @@ absence as "no recorded scan failure", never as an error. It is NOT part of
 
 | Field | Type | Meaning |
 |---|---|---|
-| `intent` | string | Why the failed scan ran: `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`, `SchemaHeal`, `CorruptionHeal`, or `ExtractorUpgrade`. Treat unknown values as opaque — the set may grow. |
+| `intent` | string | Why the failed scan ran: `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`, `SchemaHeal`, `CorruptionHeal`, `ExtractorUpgrade`, or `LevelUpgrade`. Treat unknown values as opaque — the set may grow. |
 | `exit_code` | number \| null | The extractor's exit code; `137` is the OOM-killer/SIGKILL signature that clamps the next automatic attempt to `--jobs 1`. Null when the failure carried no exit code. |
 | `consecutive_failures` | number | The current failure streak (≥ 1 whenever the object is present). Drives the backoff step. |
 | `jobs` | number | The `--jobs` cap the failed attempt ran with. |
@@ -236,6 +236,29 @@ prior artifact with degraded freshness, the `refresh`/`full` payload carries `do
 the rebuild stays owed and retries on the next allowed attempt. A direct user request is never downgraded — it
 runs the force scan or reports why it did not. Read the object as "scans are failing and here is when the next
 one is allowed", and use the existing freshness/health fields for whether the artifact itself is usable.
+
+### `index_level` (additive, conditional)
+
+`workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `index_level` object,
+emitted ONLY while the workspace serves a SYMBOLS-level artifact (progressive indexing levels, julie-extract ≥
+2.25.0). Full-level and pre-levels artifacts omit it entirely, so default output stays byte-identical; treat
+its absence as "the full index is being served".
+
+| Field | Type | Meaning |
+|---|---|---|
+| `level` | string | The artifact's recorded extraction level; currently always `symbols` when present. |
+| `upgrade_owed` | boolean | Whether policy wants full and the background full-level upgrade rebuild is owed or running. `false` means the workspace is deliberately pinned at symbols level (`symbols-only` policy). |
+| `policy` | string | The effective policy: `progressive`, `full`, or `symbols-only` (env `MILLER_INDEX_LEVELS` > per-workspace registry policy > default `progressive`). |
+
+While the object is present, symbol definitions, search, structure, relationship edges, and all `metrics`
+surfaces are complete; identifier-level reference results (trace refs, impact, inspect refs sections,
+`references candidates`), source-region search, and `patterns` facts are still converging and return a
+`reference_layer_converging` diagnostic instead of silently-empty results.
+
+`miller workspace levels [--json] [--set progressive|full|symbols-only] [--clear]` shows or sets the
+per-workspace policy; its JSON payload carries `operation: "levels"`, the `level_policy` object
+(`effective`/`source`/`registry`), `index_level` (nullable), `level_upgrade_owed`, and `changed`
+(`set`/`cleared`/null).
 
 ### `downgraded` on `refresh`/`full` (additive, conditional)
 

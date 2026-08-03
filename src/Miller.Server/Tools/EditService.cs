@@ -47,6 +47,7 @@ public sealed class EditService
     private const string FailureTargetNotFound = "target_not_found";
     private const string FailureApplyFailed = "apply_failed";
     private const string FailurePartialApply = "partial_apply";
+    private const string FailureReferenceLayerConverging = "reference_layer_converging";
     private const int RenameDiffMaxBytes = 4 * 1024;
     private const int RenameSummaryMaxBytes = 1024;
     private const int MaxRenameEvidenceSitesPerTier = 8;
@@ -206,7 +207,7 @@ public sealed class EditService
                 ToolDiagnostic.ExpectedEmpty(result.FailureReason, DiagnosticMessage(result.Output)),
             FailureAmbiguousMatch =>
                 ToolDiagnostic.Ambiguity(result.FailureReason, DiagnosticMessage(result.Output)),
-            FailureInvalidRequest or FailureStaleTarget =>
+            FailureInvalidRequest or FailureStaleTarget or FailureReferenceLayerConverging =>
                 ToolDiagnostic.Refusal(result.FailureReason, DiagnosticMessage(result.Output)),
             FailureApplyFailed or FailurePartialApply =>
                 ToolDiagnostic.Unavailable(result.FailureReason, DiagnosticMessage(result.Output)),
@@ -1046,6 +1047,20 @@ public sealed class EditService
                 "rename_mode must be exact or include_fallback.",
                 json,
                 failureReason: FailureInvalidRequest);
+        }
+
+        // A symbols-level artifact has an EMPTY identifier layer, which the coverage math below cannot tell
+        // from "this symbol has no references": every counter reads zero, "exact coverage" verifies vacuously,
+        // and the rename would rewrite the definition while silently missing every usage site. Refuse instead —
+        // an unproven rename is worse than a delayed one.
+        if (IndexLevelGuard.ReferenceLayerConverging(_index))
+        {
+            return Error(
+                "rename is refused while this workspace serves a symbols-level index: identifier extraction " +
+                "has not run yet, so the rename cannot prove it found every usage site. Re-run after the " +
+                "background full-level upgrade completes (workspace status shows progress).",
+                json,
+                failureReason: FailureReferenceLayerConverging);
         }
 
         var evidenceBounds = new ReferenceEvidenceBounds(int.MaxValue, int.MaxValue);

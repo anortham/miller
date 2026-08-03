@@ -22,7 +22,8 @@ public sealed record WorkspaceRegistryRow(
     DateTimeOffset? LastScanAt,
     long? LastRevision,
     WorkspaceRegistryState State,
-    string? LastError)
+    string? LastError,
+    string? LevelPolicy = null)
 {
     public string StateText => State.ToStorageString();
 }

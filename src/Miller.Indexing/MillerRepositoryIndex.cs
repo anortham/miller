@@ -54,8 +54,10 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
         Dictionary<string, List<string>> byFileName,
         IReadOnlySet<string> knownExtensions,
         SymbolGraph graph,
-        BridgeGraph bridgeGraph)
+        BridgeGraph bridgeGraph,
+        string indexLevel)
     {
+        IndexLevel = indexLevel;
         _index = index;
         _byDocId = byDocId;
         _bySymbolId = bySymbolId;
@@ -89,6 +91,14 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
 
     /// <summary>Total number of indexed symbols.</summary>
     public int DocumentCount => _byDocId.Length;
+
+    /// <summary>
+    /// The artifact's recorded <c>index_level</c> metadata value (<c>"symbols"</c> or <c>"full"</c>; absent
+    /// reads as full). Travels with the index so reference-dependent tools can tell an EMPTY reference layer
+    /// (symbols-level artifact, upgrade converging) from a genuinely reference-free result. Default-built
+    /// indexes (tests, non-loader paths) read as full.
+    /// </summary>
+    public string IndexLevel { get; }
 
     /// <summary>
     /// The distinct file extensions (lowercased, leading dot, e.g. <c>.cs</c>/<c>.rs</c>/<c>.vue</c>) present
@@ -143,9 +153,11 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
     /// DocIds are not the contiguous 0..n-1 ordinals this facade requires (a reader regression).
     /// </exception>
     public static MillerRepositoryIndex Build(
-        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges, BridgeGraph bridgeGraph)
+        IReadOnlyList<IndexedSymbol> symbols, IReadOnlyList<GraphEdge> edges, BridgeGraph bridgeGraph,
+        string indexLevel = "full")
     {
         ArgumentNullException.ThrowIfNull(symbols);
+        ArgumentException.ThrowIfNullOrWhiteSpace(indexLevel);
         ArgumentNullException.ThrowIfNull(edges);
         ArgumentNullException.ThrowIfNull(bridgeGraph);
 
@@ -202,7 +214,7 @@ public sealed class MillerRepositoryIndex : ISymbolLookupIndex
 
         return new MillerRepositoryIndex(
             MillerSearchIndex.Build(documents), byDocId, bySymbolId, byName, byFilePath, byParentId,
-            byFileName, knownExtensions, SymbolGraph.Build(nodes, edges), bridgeGraph);
+            byFileName, knownExtensions, SymbolGraph.Build(nodes, edges), bridgeGraph, indexLevel);
 
         static void Add(Dictionary<string, List<IndexedSymbol>> map, string key, IndexedSymbol value)
         {

@@ -160,8 +160,19 @@ public sealed class TraceTool
                     continuation,
                     out emitted, out nodesVisited);
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
-            ToolDiagnostic? diagnostic =
-                emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target, to) : null;
+            ToolDiagnostic? diagnostic;
+            if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
+            {
+                // The converging explanation beats the generic empty diagnostic here: an empty (or thin) trace
+                // against a symbols-level artifact is expected, not evidence about the code.
+                IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
+                diagnostic = IndexLevelGuard.Converging(
+                    "identifier-level usage sites are missing from refs/path/bridge results.");
+            }
+            else
+            {
+                diagnostic = emitted == 0 ? TraceEmptyDiagnostic(normalizedMode, output, target, to) : null;
+            }
 
             if (telemetry is not null)
             {

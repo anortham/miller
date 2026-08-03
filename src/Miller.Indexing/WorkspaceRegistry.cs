@@ -15,7 +15,8 @@ public sealed class WorkspaceRegistry : IDisposable
             last_scan_at TEXT,
             last_revision INTEGER CHECK (last_revision IS NULL OR last_revision >= 0),
             state TEXT NOT NULL CHECK (state IN ('current','ready','loaded_existing','stale','refreshing','missing','error')),
-            last_error TEXT
+            last_error TEXT,
+            level_policy TEXT
         ) STRICT;
         """;
 
@@ -61,6 +62,8 @@ public sealed class WorkspaceRegistry : IDisposable
                 ddl.CommandText = CreateTableDdl;
                 ddl.ExecuteNonQuery();
             }
+
+            EnsureLevelPolicyColumn(connection);
 
             return new WorkspaceRegistry(connection);
         }
@@ -236,6 +239,31 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    /// <summary>
+    /// Set (or with null, clear) the workspace's per-workspace index-level policy. The stored string uses the
+    /// same tokens <c>MILLER_INDEX_LEVELS</c> accepts; resolution order is env &gt; this column &gt; the
+    /// progressive default, so the environment always wins over a stored policy.
+    /// </summary>
+    public WorkspaceRegistryRow SetLevelPolicy(string workspaceId, string? levelPolicy)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE workspaces
+                SET level_policy = $level_policy
+                WHERE workspace_id = $workspace_id;
+                """;
+            cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
+            cmd.Parameters.AddWithValue("$level_policy", (object?)levelPolicy ?? DBNull.Value);
+            ExecuteExistingRowUpdate(cmd, workspaceId);
+            return GetRequiredUnderLock(workspaceId);
+        }
+    }
+
     public bool Remove(string workspaceId)
     {
         ThrowIfDisposed();
@@ -270,7 +298,7 @@ public sealed class WorkspaceRegistry : IDisposable
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = """
                 SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
-                       last_revision, state, last_error
+                       last_revision, state, last_error, level_policy
                 FROM workspaces
                 ORDER BY CASE WHEN state IN ('current','ready','loaded_existing') THEN 0 ELSE 1 END,
                          display_id COLLATE NOCASE,
@@ -306,6 +334,24 @@ public sealed class WorkspaceRegistry : IDisposable
         _disposed = true;
     }
 
+    // Registries created before the levels work lack the column, and the registry has no migration
+    // machinery -- one additive nullable column rides the same pragma_table_info + ALTER pattern the
+    // telemetry ledger uses. STRICT tables accept ALTER TABLE ... ADD COLUMN for nullable TEXT.
+    private static void EnsureLevelPolicyColumn(SqliteConnection connection)
+    {
+        using (var probe = connection.CreateCommand())
+        {
+            probe.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('workspaces') WHERE name = 'level_policy';";
+            if (Convert.ToInt64(probe.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
+                return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = "ALTER TABLE workspaces ADD COLUMN level_policy TEXT;";
+        alter.ExecuteNonQuery();
+    }
+
     private WorkspaceRegistryRow GetRequiredUnderLock(string workspaceId) =>
         GetUnderLock(workspaceId) ?? throw new KeyNotFoundException(
             string.Create(CultureInfo.InvariantCulture, $"Workspace registry row '{workspaceId}' was not found."));
@@ -315,7 +361,7 @@ public sealed class WorkspaceRegistry : IDisposable
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
             SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
-                   last_revision, state, last_error
+                   last_revision, state, last_error, level_policy
             FROM workspaces
             WHERE workspace_id = $workspace_id;
             """;
@@ -362,7 +408,8 @@ public sealed class WorkspaceRegistry : IDisposable
             reader.IsDBNull(5) ? null : ParseTimestamp(reader.GetString(5)),
             reader.IsDBNull(6) ? null : reader.GetInt64(6),
             WorkspaceRegistryStateExtensions.FromStorage(reader.GetString(7)),
-            reader.IsDBNull(8) ? null : reader.GetString(8));
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetString(9));
 
     private static void ExecuteExistingRowUpdate(SqliteCommand cmd, string workspaceId)
     {

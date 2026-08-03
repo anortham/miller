@@ -67,7 +67,15 @@ public readonly record struct WorkspaceFacts(
     VectorSidecarFacts? Vectors = null,
     SemanticBrokerFacts? SemanticBroker = null,
     ScanGovernorSnapshot? ScanGovernor = null,
-    ScanFailureRecord? ScanFailure = null);
+    ScanFailureRecord? ScanFailure = null,
+    IndexLevelFacts? IndexLevel = null);
+
+/// <summary>
+/// The progressive-indexing facts for a workspace serving a SYMBOLS-level artifact. A full-level artifact (and
+/// every pre-levels artifact) produces a NULL fact, which renders nowhere — default status/health output stays
+/// byte-identical, the same emit-nothing rule scan_failure follows.
+/// </summary>
+public sealed record IndexLevelFacts(string Level, bool UpgradeOwed, string Policy);
 
 public sealed record SemanticBrokerFacts(
     string State,
@@ -391,6 +399,8 @@ public static class WorkspaceRender
             sb.Append("scan_governor: ").Append(governorLabel).Append('\n');
         if (ScanFailureLabel(facts.ScanFailure) is { } scanFailureLabel)
             sb.Append("scan_failure: ").Append(scanFailureLabel).Append('\n');
+        if (IndexLevelLabel(facts.IndexLevel) is { } indexLevelLabel)
+            sb.Append("index_level: ").Append(indexLevelLabel).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -525,6 +535,25 @@ public static class WorkspaceRender
 
     private static long RemainingSeconds(DateTimeOffset untilUtc) =>
         Math.Max(0, (long)(untilUtc - DateTimeOffset.UtcNow).TotalSeconds);
+
+    // Null ⇒ render no `index_level:` line at all — full-level and pre-levels artifacts stay byte-identical.
+    private static string? IndexLevelLabel(IndexLevelFacts? facts)
+    {
+        if (facts is null)
+            return null;
+        return facts.UpgradeOwed
+            ? $"{facts.Level} (full-level upgrade owed; runs in background)"
+            : $"{facts.Level} (policy {facts.Policy})";
+    }
+
+    private static void WriteIndexLevelJson(Utf8JsonWriter w, IndexLevelFacts facts)
+    {
+        w.WriteStartObject();
+        w.WriteString("level", facts.Level);
+        w.WriteBoolean("upgrade_owed", facts.UpgradeOwed);
+        w.WriteString("policy", facts.Policy);
+        w.WriteEndObject();
+    }
 
     private static string SemanticBrokerLabel(SemanticBrokerFacts facts)
     {
@@ -711,6 +740,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("scan_failure");
                 WriteScanFailureJson(w, scanFailure);
+            }
+
+            if (facts.IndexLevel is { } indexLevel)
+            {
+                w.WritePropertyName("index_level");
+                WriteIndexLevelJson(w, indexLevel);
             }
 
             w.WritePropertyName("index");
@@ -1231,6 +1266,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("scan_failure");
                 WriteScanFailureJson(w, scanFailure);
+            }
+
+            if (status.IndexLevel is { } healthIndexLevel)
+            {
+                w.WritePropertyName("index_level");
+                WriteIndexLevelJson(w, healthIndexLevel);
             }
 
             w.WritePropertyName("index");
@@ -2433,6 +2474,67 @@ public static class WorkspaceRender
         return Utf8(buffer);
     }
 
+    // ---------- levels ----------
+
+    /// <summary>Render a <c>workspace levels</c> result: the effective index-level policy (with its source),
+    /// the served artifact's recorded level, and whether a full-level upgrade is owed. CLI-only surface.</summary>
+    public static string Levels(WorkspaceLevelsResult result, bool json) =>
+        json ? LevelsJson(result) : LevelsCompact(result);
+
+    private static string LevelsCompact(WorkspaceLevelsResult result)
+    {
+        var lines = new List<string>();
+        string target = result.DisplayId ?? result.Root ?? "(unregistered workspace)";
+        lines.Add(result.Root is { } root && result.DisplayId is not null
+            ? $"index levels for {result.DisplayId} ({root})"
+            : $"index levels for {target}");
+        lines.Add($"  policy: {result.EffectivePolicy} ({result.PolicySource})");
+        if (result.IndexLevel is { } level)
+        {
+            lines.Add(result.UpgradeOwed
+                ? $"  artifact: {level} level (full-level upgrade owed; the indexer leader runs it in the background)"
+                : $"  artifact: {level} level");
+        }
+        else
+        {
+            lines.Add("  artifact: none yet (the level applies on the first build)");
+        }
+        if (result.Changed is "set")
+            lines.Add($"  registry policy set to '{result.RegistryPolicy}' for this workspace");
+        else if (result.Changed is "cleared")
+            lines.Add("  registry policy cleared for this workspace");
+        return string.Join('\n', lines);
+    }
+
+    private static string LevelsJson(WorkspaceLevelsResult result)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = NewWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("operation", "levels");
+            if (result.WorkspaceId is null) w.WriteNull("workspace_id");
+            else w.WriteString("workspace_id", result.WorkspaceId);
+            if (result.DisplayId is null) w.WriteNull("display_id");
+            else w.WriteString("display_id", result.DisplayId);
+            if (result.Root is null) w.WriteNull("root");
+            else w.WriteString("root", result.Root);
+            w.WriteStartObject("level_policy");
+            w.WriteString("effective", result.EffectivePolicy);
+            w.WriteString("source", result.PolicySource);
+            if (result.RegistryPolicy is null) w.WriteNull("registry");
+            else w.WriteString("registry", result.RegistryPolicy);
+            w.WriteEndObject();
+            if (result.IndexLevel is null) w.WriteNull("index_level");
+            else w.WriteString("index_level", result.IndexLevel);
+            w.WriteBoolean("level_upgrade_owed", result.UpgradeOwed);
+            if (result.Changed is null) w.WriteNull("changed");
+            else w.WriteString("changed", result.Changed);
+            w.WriteEndObject();
+        }
+        return Utf8(buffer);
+    }
+
     // ---------- prune ----------
 
     /// <summary>Render a <c>prune</c> result (removed / would-remove + kept count).</summary>
@@ -2500,3 +2602,16 @@ public static class WorkspaceRender
 
     private static string Utf8(ArrayBufferWriter<byte> buffer) => Encoding.UTF8.GetString(buffer.WrittenSpan);
 }
+
+/// <summary>The facts a <c>workspace levels</c> invocation reports (CLI-only; MCP surface unchanged).
+/// <paramref name="Changed"/> is null for a read, <c>"set"</c>/<c>"cleared"</c> after a mutation.</summary>
+public sealed record WorkspaceLevelsResult(
+    string? WorkspaceId,
+    string? DisplayId,
+    string? Root,
+    string EffectivePolicy,
+    string PolicySource,
+    string? RegistryPolicy,
+    string? IndexLevel,
+    bool UpgradeOwed,
+    string? Changed);

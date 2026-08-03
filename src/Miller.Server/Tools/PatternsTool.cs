@@ -126,14 +126,22 @@ public sealed class PatternsTool
                 outputBudget,
                 context.WorkspaceId ?? "current",
                 continuation);
-            ToolDiagnostic? diagnostic = result.ResultCount == 0
-                ? ToolDiagnostic.ExpectedEmpty(
+            ToolDiagnostic? diagnostic = null;
+            if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(context.IndexDbPath)))
+            {
+                IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
+                diagnostic = IndexLevelGuard.Converging(
+                    "structural facts have not been extracted yet, so pattern results are empty.");
+            }
+            else if (result.ResultCount == 0)
+            {
+                diagnostic = ToolDiagnostic.ExpectedEmpty(
                     result.EmptyReason ?? "no_facts",
                     "No structural facts matched the request.",
                     [new ToolDiagnosticAction(
                         "patterns(operation=\"list\")",
-                        "list pattern ids observed in this workspace")])
-                : null;
+                        "list pattern ids observed in this workspace")]);
+            }
 
             if (telemetry is not null)
             {

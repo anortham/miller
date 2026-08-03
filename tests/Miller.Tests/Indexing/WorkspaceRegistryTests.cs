@@ -53,6 +53,7 @@ public sealed class WorkspaceRegistryTests : IDisposable
                 ("last_revision", "INTEGER", false),
                 ("state", "TEXT", true),
                 ("last_error", "TEXT", false),
+                ("level_policy", "TEXT", false),
             },
             ReadTableInfo(c));
         Assert.Equal(("wal", 1, 3000), registry.ReadPragmasForTest());
@@ -403,6 +404,70 @@ public sealed class WorkspaceRegistryTests : IDisposable
         Assert.NotNull(row);
         Assert.Equal(5, row.LastRevision);
         Assert.Equal(Utc(2), row.LastScanAt);
+    }
+
+    [Fact]
+    public void SetLevelPolicy_StoresClearsAndSurvivesUpsertSeen()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        registry.UpsertSeen(
+            "ws1", "alpha-11111111", "/work/alpha", "/work/alpha/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1));
+
+        Assert.Null(registry.Get("ws1")!.LevelPolicy);
+
+        var row = registry.SetLevelPolicy("ws1", "symbols-only");
+        Assert.Equal("symbols-only", row.LevelPolicy);
+
+        // UpsertSeen's ON CONFLICT update must not clobber the stored policy.
+        registry.UpsertSeen(
+            "ws1", "alpha-11111111", "/work/alpha", "/work/alpha/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(2));
+        Assert.Equal("symbols-only", registry.Get("ws1")!.LevelPolicy);
+
+        Assert.Null(registry.SetLevelPolicy("ws1", null).LevelPolicy);
+    }
+
+    [Fact]
+    public void SetLevelPolicy_OnAnUnknownWorkspace_Throws()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        Assert.Throws<KeyNotFoundException>(() => registry.SetLevelPolicy("missing", "full"));
+    }
+
+    [Fact]
+    public void Open_APreLevelsRegistryGainsTheLevelPolicyColumn()
+    {
+        using (var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString()))
+        {
+            c.Open();
+            using var ddl = c.CreateCommand();
+            ddl.CommandText = """
+                CREATE TABLE workspaces (
+                    workspace_id TEXT NOT NULL PRIMARY KEY,
+                    display_id TEXT NOT NULL,
+                    canonical_root TEXT NOT NULL,
+                    index_db_path TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_scan_at TEXT,
+                    last_revision INTEGER CHECK (last_revision IS NULL OR last_revision >= 0),
+                    state TEXT NOT NULL CHECK (state IN ('current','ready','loaded_existing','stale','refreshing','missing','error')),
+                    last_error TEXT
+                ) STRICT;
+                """;
+            ddl.ExecuteNonQuery();
+        }
+
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        registry.UpsertSeen(
+            "ws1", "alpha-11111111", "/work/alpha", "/work/alpha/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1));
+        Assert.Equal("progressive", registry.SetLevelPolicy("ws1", "progressive").LevelPolicy);
     }
 
     private string ReadState(string workspaceId)

@@ -85,6 +85,23 @@ internal static class WorkspaceFactsAssembler
         return string.IsNullOrEmpty(millerDir) ? null : ScanFailureJournal.TryRead(millerDir);
     }
 
+    /// <summary>
+    /// The progressive-indexing fact for status/health. Non-null ONLY for a symbols-level artifact — full-level
+    /// and pre-levels artifacts render nothing, keeping default output byte-identical.
+    /// <paramref name="registryPolicy"/> is the row's stored per-workspace policy (null when unset or unknown).
+    /// </summary>
+    internal static IndexLevelFacts? IndexLevelFactsFor(string? indexDbPath, string? registryPolicy)
+    {
+        if (string.IsNullOrWhiteSpace(indexDbPath) || !File.Exists(indexDbPath))
+            return null;
+        string level = ExtractIndexLevelReader.Read(indexDbPath);
+        if (!string.Equals(level, IndexLevels.SymbolsMetadataValue, StringComparison.Ordinal))
+            return null;
+        IndexLevelPolicy policy = IndexLevels.Resolve(registryPolicy);
+        return new IndexLevelFacts(
+            level, IndexLevels.UpgradeOwed(level, policy), IndexLevels.StorageValue(policy));
+    }
+
     public static WorkspaceFacts FromRegisteredRow(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,
@@ -127,7 +144,8 @@ internal static class WorkspaceFactsAssembler
                 Vectors: WithPendingFiles(resolvedVectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
                 SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
                 ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
-                ScanFailure: ScanFailureFacts(row.IndexDbPath));
+                ScanFailure: ScanFailureFacts(row.IndexDbPath),
+                IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy));
         }
         catch (FileNotFoundException)
         {
@@ -179,7 +197,8 @@ internal static class WorkspaceFactsAssembler
                 context.ExtractDbPath),
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
             ScanGovernor: ScanGovernorFacts(ScanGovernorKey.For(context) ?? context.WorkspaceRoot, scanGovernor),
-            ScanFailure: ScanFailureFacts(context.ExtractDbPath));
+            ScanFailure: ScanFailureFacts(context.ExtractDbPath),
+            IndexLevel: IndexLevelFactsFor(context.ExtractDbPath, registryPolicy: null));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(
@@ -322,7 +341,8 @@ internal static class WorkspaceFactsAssembler
             Vectors: WithPendingFiles(vectors.Inspect(row.CanonicalRoot), row.IndexDbPath),
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
             ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
-            ScanFailure: ScanFailureFacts(row.IndexDbPath));
+            ScanFailure: ScanFailureFacts(row.IndexDbPath),
+            IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy));
     }
 
     private static WorkspaceFacts UnreadableIndexFacts(
