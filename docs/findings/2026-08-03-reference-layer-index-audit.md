@@ -1,4 +1,4 @@
-# Reference-layer index audit — five droppable indexes, 3.7 GiB (16%) of the dotnet artifact
+# Reference-layer index audit — three retired indexes, 2.4 GiB (11%) of the dotnet artifact
 
 Follow-up to [`2026-08-03-dotnet-runtime-v2231-baseline.md`](2026-08-03-dotnet-runtime-v2231-baseline.md):
 the dotnet/runtime artifact spends ~8.7 GiB on `identifiers`/`reference_sites` indexes. This audit
@@ -30,18 +30,26 @@ Chosen by at least one real query — KEEP:
 | `sqlite_autoindex_reference_sites_1` (PK) | 0.94 GiB | identity trigger + every Miller join |
 | `idx_reference_sites_file` | 0.68 GiB | report attribution, FK cascade |
 
-Chosen by NO query in either codebase — DROP:
+Chosen by NO query in either codebase — RETIRED (shipped in the 2.24.0 schema):
 
 | Index | dotnet size | Why it exists / why it's dead |
 | --- | --- | --- |
 | `idx_identifiers_path` | 0.95 GiB | original 2026-05-31 schema; no consumer ever filters identifiers by path (file_id everywhere) |
 | `idx_identifiers_file_line_name` | 0.72 GiB | added with schema-v4 overlay 2026-07-06 for a locator pattern that shipped as an in-memory `IdentifierLocator` instead; planner picks `idx_identifiers_file` for every file-scoped query |
-| `idx_identifiers_reference_site` | 0.68 GiB | all joins run identifiers→reference_sites via the reference_sites PK, never the reverse |
 | `idx_reference_sites_span` | 0.76 GiB | no consumer filters reference_sites by span; `start_byte` appears only in ORDER BY after a PK join |
-| `idx_reference_sites_containing_symbol` | 0.59 GiB | no consumer filters reference_sites by containing symbol (identifiers carries that axis) |
 
-Total: **3.70 GiB = 16.2% of the 22.84 GiB artifact**, and those bytes are also build time — they
-are part of the ~7-minute finalize phase and of every bulk-load row insert.
+Total: **2.43 GiB = 10.6% of the 22.84 GiB artifact**, and those bytes are also build time — they
+are part of the ~7-minute finalize phase. Verified on the 2.24.0 validation scan: the artifact
+shrank 22.84 → 20.41 GiB with all 24 row domains and resolution outcomes identical.
+
+**Correction (method limitation).** The audit's `EXPLAIN QUERY PLAN` pass is blind to SQLite's
+FK-internal child searches — cascade/SET NULL enforcement runs lookups no query plan surfaces.
+Two of the original five candidates are load-bearing exactly there and were RETAINED:
+`idx_identifiers_reference_site` (identifiers CASCADE from reference_sites) and
+`idx_reference_sites_containing_symbol` (SET NULL from symbols). Without them a file's cascade
+delete degrades to a per-parent-row table scan. julie-extractors' schema-contract FK guard
+(`mutable_foreign_keys_have_leading_indexes`) caught this before it shipped; future index audits
+must check `PRAGMA foreign_key_list` alongside query plans.
 
 ## Caveats and riders
 

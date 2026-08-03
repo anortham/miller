@@ -95,19 +95,29 @@ outcome/tier/method/confidence distributions, aggregates, and `pending_resolutio
   metadata BTreeMap) instead of journal bookkeeping. User CPU fell by ~1,330 s — that was pure
   `memjrnlTruncate`.
 
-The experiment savepoint skip is measurement-only (error rollback is unsound in that mode). The
-sound production shape is resolution in its OWN transaction after the main scan commit — the
-design already defines resolution failure as "rows stay unresolved," so transaction-level
-rollback preserves exactly today's semantics without any statement sub-journal.
+The experiment savepoint skip was measurement-only (error rollback is unsound in that mode). The
+shipped 2.24.0 shape keeps resolution inside the bulk transaction but savepoint-free: on a bulk
+FIRST BUILD a hook error aborts the whole scan (`BulkResolutionFailed`, empty artifact
+discarded, rerun rebuilds) — nothing durable exists to protect, so the savepoint bought nothing
+but the quadratic. WAL delta paths keep the savepoint and the contained "rows stay unresolved"
+failure semantics unchanged.
+
+## Production validation (2.24.0 implementation, same repo/box/argv, no env knobs)
+
+The shipped three-part package (memory-aware cache = total/8 clamped [512 MiB, 8 GiB];
+savepoint-free bulk resolution; three retired indexes) ran the same scan in **23.7 min wall**
+(1,239 s user + 108 s sys, 25.7 GiB peak RSS) producing a **20.41 GiB artifact** — 2.43 GiB
+smaller, all 24 row-count domains and the resolution aggregates identical to baseline, retired
+indexes absent, FK-supporting indexes present. The profile is clean: resolution shows the
+resolver algorithm (`IdentifierLocator::locate`, candidate memcmp), zero `memjrnlTruncate`.
+The gap vs Exp 2's 18.8 min is environmental (lower CPU duty at equal phases on the fourth
+consecutive full scan; no new bottleneck frames) — treat the production number as **3.2–4.1×**
+run-to-run.
 
 ## Implications
 
-- Production fixes for julie-extractors, in order: (1) size the bulk cache to the machine/artifact
-  instead of a flat 128 MiB (peak RSS must stay bounded on small-RAM boxes — a flat 8 GiB is
-  hostile to a 16 GiB machine), and (2) move resolution out of the scan transaction into its own
-  transaction, eliminating the whole-pass savepoint. Together they are a measured 4× on cold
-  scans at this scale. Remaining wall after both: bulk load (~6–7 min) and index finalize
-  (~7 min) — future levers, not blockers.
+- The julie-extractors fixes shipped as described above; remaining wall is bulk load (~6–7 min)
+  and index finalize — future levers, not blockers.
 - A ~19 min cold scan on a 41 k-file repo still fails the "nobody waits on an index" bar —
   the levels program remains the product answer; these fixes make every level's background
   convergence ~4× cheaper.
