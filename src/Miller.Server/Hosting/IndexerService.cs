@@ -46,6 +46,16 @@ public sealed class IndexerService : BackgroundService
     // It is diagnostics text, never a lookup key — no local state is published under it.
     internal const string UnknownWorkspaceRootLabel = "(unknown)";
 
+    // How long the on-demand scan path waits for the process-local _opsGate WHILE it owns machine-wide admission.
+    // Long enough to absorb the governor-EXEMPT holders (an M6 per-file write-through, a per-file converge drain),
+    // short enough that N sibling worktrees are not refused admission behind a gate this thread is only waiting on.
+    // A whole-repo extract cannot be the blocker: every site that runs one takes admission first, so it could not
+    // have started while this thread holds it.
+    internal static readonly TimeSpan DefaultOnDemandOpsGateWait = TimeSpan.FromSeconds(1);
+
+    private const string OpsGateBusyDescription =
+        "This Miller instance is already busy with another operation on this workspace's index.";
+
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<IndexerService> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -77,9 +87,12 @@ public sealed class IndexerService : BackgroundService
 
     // Machine-wide (per-user) admission over whole-repo scans and the sidecar convergence that follows them.
     // Acquired BEFORE _opsGate at every governed site so the per-file write-through path this design exempts
-    // (TryReindexAsLeader) can never be blocked behind an admission wait.
+    // (TryReindexAsLeader) can never be blocked behind an admission wait. That order makes it possible to own the
+    // machine-wide lease while an EXEMPT holder still owns _opsGate, so a site reachable from a live MCP call
+    // (TryScanAsLeader) bounds that wait instead of parking every sibling worktree behind it.
     private readonly ScanGovernor _governor;
     private readonly TimeSpan _governorWait;
+    private readonly TimeSpan _onDemandOpsGateWait;
     private volatile CancellationTokenSource? _governorCancellation;
 
     private volatile IDisposable? _lease;
@@ -169,7 +182,8 @@ public sealed class IndexerService : BackgroundService
         Func<int, DateTimeOffset?, bool>? processAliveProbe = null,
         Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null,
         ScanGovernor? scanGovernor = null,
-        TimeSpan? scanGovernorWait = null)
+        TimeSpan? scanGovernorWait = null,
+        TimeSpan? onDemandOpsGateWait = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -217,6 +231,7 @@ public sealed class IndexerService : BackgroundService
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = scanGovernor ?? ScanGovernor.Disabled();
         _governorWait = scanGovernorWait ?? DefaultScanAdmissionWait;
+        _onDemandOpsGateWait = onDemandOpsGateWait ?? DefaultOnDemandOpsGateWait;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -750,6 +765,19 @@ public sealed class IndexerService : BackgroundService
     /// still-servable prior artifact and the requested rebuild is still owed (already re-armed on the rescan
     /// latch). It is neither a success nor a failure and must not be rendered as either.</para>
     /// </summary>
+    /// <remarks>
+    /// <para><b>Why <see cref="_opsGate"/> is entered with a BOUNDED wait.</b> Machine-wide admission is taken
+    /// first — the order every governed site in this class uses, and the order the field comment on
+    /// <see cref="_governor"/> requires so the governor-exempt per-file write-through
+    /// (<see cref="TryReindexAsLeader"/>) is never blocked behind an admission wait. Reordering to take
+    /// <see cref="_opsGate"/> first would break that exemption AND invert this site against the four others, so
+    /// the order stays and the HOLD is bounded instead: an unbounded <c>lock</c> here sat on the one-at-a-time,
+    /// machine-wide scan lease for as long as an exempt <see cref="_opsGate"/> holder ran, refusing admission to
+    /// every sibling worktree — the fleet starvation the governor exists to prevent, inverted. On timeout the
+    /// admission is released and the intent is re-armed on the rescan latch, exactly as a refused admission is.
+    /// The resulting order is <c>SingleWriterLock -> ScanGovernor -> _opsGate -> IndexerCore gate</c> everywhere,
+    /// with no site taking them in any other sequence, so no deadlock cycle exists.</para>
+    /// </remarks>
     public ScanOutcome TryScanAsLeader(ScanIntent intent, bool bypassBackoff = false)
     {
         if (!HoldsLeaderOps())
@@ -769,9 +797,24 @@ public sealed class IndexerService : BackgroundService
             return ScanOutcome.Queued(_governor.DescribeHolder());
         }
 
-        lock (_opsGate)
+        if (!Monitor.TryEnter(_opsGate, _onDemandOpsGateWait))
+        {
+            _core?.RequestWholeRepoScan(intent);
+            _logger.LogWarning(
+                "This instance's index-operation gate was still held after {WaitSeconds}s; releasing machine-wide " +
+                "scan admission rather than holding it while waiting, and latching the {Intent} scan for the " +
+                "next tick.",
+                _onDemandOpsGateWait.TotalSeconds, intent);
+            return ScanOutcome.Queued(OpsGateBusyDescription);
+        }
+
+        try
         {
             return ScanAsLeaderUnderGate(intent, "On-demand", decision);
+        }
+        finally
+        {
+            Monitor.Exit(_opsGate);
         }
     }
 
@@ -779,11 +822,12 @@ public sealed class IndexerService : BackgroundService
         $"The previous whole-repo scan of this workspace failed {decision.ConsecutiveFailures} time(s) in a row; " +
         $"the next automatic attempt is not before {decision.RetryAtUtc:O}.";
 
-    private bool HoldsLeaderOps()
-    {
-        lock (_opsGate)
-            return _ops is not null;
-    }
+    // A lock-free snapshot on purpose. This is only the "do not wait for machine-wide admission we could not use"
+    // pre-check; the AUTHORITATIVE leader test is ScanAsLeaderUnderGate's own read of _ops under the gate, so a
+    // stale answer here costs at most one admission acquire that then reports NotLeader. Taking _opsGate for it
+    // parked the caller behind an in-flight extract before it could even decide it is not the leader — and made
+    // the bounded entry below unreachable, because the unbounded wait happened first.
+    private bool HoldsLeaderOps() => Volatile.Read(ref _ops) is not null;
 
     // Machine-wide admission for ONE whole-repo scan plus the sidecar convergence that follows it. Always called
     // OUTSIDE _opsGate. Returns null on refusal or on shutdown; the caller must degrade, never scan ungoverned.

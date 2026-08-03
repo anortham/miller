@@ -24,7 +24,8 @@ public sealed class IndexBootstrapServiceTests
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: false,
             existingRootPath: null,
-            canonicalRoot: "/work/repo");
+            canonicalRoot: "/work/repo",
+            hasCommittedRevision: false);
 
         Assert.True(decision.ShouldScan);
         Assert.False(decision.Force);
@@ -38,7 +39,8 @@ public sealed class IndexBootstrapServiceTests
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: true,
             existingRootPath: "/work/repo",
-            canonicalRoot: "/work/repo");
+            canonicalRoot: "/work/repo",
+            hasCommittedRevision: true);
 
         Assert.False(decision.ShouldScan);
         Assert.False(decision.Force);
@@ -54,7 +56,8 @@ public sealed class IndexBootstrapServiceTests
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: true,
             existingRootPath: @"\\?\C:\source\AccessIQ",
-            canonicalRoot: @"C:\source\AccessIQ");
+            canonicalRoot: @"C:\source\AccessIQ",
+            hasCommittedRevision: true);
 
         Assert.False(decision.ShouldScan);
         Assert.False(decision.Force);
@@ -71,10 +74,26 @@ public sealed class IndexBootstrapServiceTests
         var decision = IndexBootstrapService.DecideBootstrapScan(
             dbExists: true,
             existingRootPath: existingRootPath,
-            canonicalRoot: "/work/repo");
+            canonicalRoot: "/work/repo",
+            hasCommittedRevision: true);
 
         Assert.True(decision.ShouldScan);
         Assert.True(decision.Force);
+        Assert.Equal(WorkspaceRegistryState.Ready, decision.RegistryStateAfterLoad);
+    }
+
+    [Fact]
+    public void DecideBootstrapScan_ExistingDbMatchingThisRootWithNoCommittedRevision_DeltaScansInsteadOfBindingItEmpty()
+    {
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: true,
+            existingRootPath: "/work/repo",
+            canonicalRoot: "/work/repo",
+            hasCommittedRevision: false);
+
+        Assert.True(decision.ShouldScan);
+        Assert.False(decision.Force);
+        Assert.Equal(ScanIntent.IncrementalReconcile, decision.Intent);
         Assert.Equal(WorkspaceRegistryState.Ready, decision.RegistryStateAfterLoad);
     }
 
@@ -536,6 +555,34 @@ public sealed class IndexBootstrapServiceTests
 
         Assert.True(probe.Decision.ShouldScan);
         Assert.True(probe.Decision.Force);
+        Assert.Equal("/work/repo", probe.ExistingRootPath);
+    }
+
+    [Fact]
+    public void ReadBootstrapScanDecision_ArtifactRecordsThisRootButHasNoCommittedRevision_DeltaScansInsteadOfReusing()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows);
+
+        var probe = IndexBootstrapService.ReadBootstrapScanDecision(fx.DbPath, "/work/repo");
+
+        Assert.True(probe.Decision.ShouldScan);
+        Assert.False(probe.Decision.Force);
+        Assert.Equal(WorkspaceRegistryState.Ready, probe.Decision.RegistryStateAfterLoad);
+        Assert.Equal("/work/repo", probe.ExistingRootPath);
+    }
+
+    [Fact]
+    public void ReadBootstrapScanDecision_ArtifactRecordsThisRootWithACommittedRevision_ReusesWithoutScanning()
+    {
+        using var fx = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema, JulieDbFixture.PinnedContract, JulieDbFixture.DefaultRows,
+            revisions: new[] { new JulieDbFixture.RevisionRow(1) });
+
+        var probe = IndexBootstrapService.ReadBootstrapScanDecision(fx.DbPath, "/work/repo");
+
+        Assert.False(probe.Decision.ShouldScan);
+        Assert.Equal(WorkspaceRegistryState.LoadedExisting, probe.Decision.RegistryStateAfterLoad);
         Assert.Equal("/work/repo", probe.ExistingRootPath);
     }
 

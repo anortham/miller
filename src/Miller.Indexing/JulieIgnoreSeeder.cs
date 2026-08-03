@@ -86,8 +86,24 @@ public static class JulieIgnoreSeeder
     /// when a new file was written; false when one already exists (never overwritten), the root is missing, or
     /// any I/O step failed (best-effort — never throws).
     /// </summary>
+    /// <remarks>
+    /// The file is created EXCLUSIVELY (<see cref="FileMode.CreateNew"/>), not written over the earlier
+    /// <see cref="File.Exists(string)"/> answer. Detection walks a whole repository between the two, and
+    /// <see cref="File.WriteAllText(string, string?)"/> TRUNCATES — so two Miller processes bootstrapping the same
+    /// fresh worktree (the ordinary fleet case), or a user authoring their own <c>.julieignore</c> inside that
+    /// window, had authoritative scan input silently replaced by generated content. With an exclusive create the
+    /// racing creator wins and this call becomes a no-op returning false: an already-existing file is an EXPECTED
+    /// outcome of the race, not an error, and it reaches the same never-throw exit as every other I/O failure.
+    /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
-    public static bool EnsureSeeded(string workspaceRoot)
+    public static bool EnsureSeeded(string workspaceRoot) => EnsureSeeded(workspaceRoot, betweenProbeAndCreate: null);
+
+    /// <summary>
+    /// <see cref="EnsureSeeded(string)"/> with a hook fired after the existence probe and the content render, and
+    /// before the exclusive create — the seam that lets the race window be occupied deterministically instead of
+    /// hoped for. Not used in production.
+    /// </summary>
+    internal static bool EnsureSeeded(string workspaceRoot, Action? betweenProbeAndCreate)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         try
@@ -96,7 +112,12 @@ public static class JulieIgnoreSeeder
             if (File.Exists(ignorePath) || !Directory.Exists(workspaceRoot))
                 return false;
 
-            File.WriteAllText(ignorePath, InheritedContent(workspaceRoot) ?? GeneratedContent(workspaceRoot));
+            string content = InheritedContent(workspaceRoot) ?? GeneratedContent(workspaceRoot);
+            betweenProbeAndCreate?.Invoke();
+
+            using var stream = new FileStream(ignorePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            using var writer = new StreamWriter(stream);
+            writer.Write(content);
             return true;
         }
         catch (Exception ex) when (

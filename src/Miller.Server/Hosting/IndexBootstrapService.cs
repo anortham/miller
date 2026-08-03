@@ -829,10 +829,21 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// is the canonical <c>root_path</c> the artifact was extracted from (reconciliation #14): a missing DB delta-
     /// scans; a DB whose recorded root does NOT match the root Miller is indexing (a relocated/aliased workspace,
     /// or a pre-v1 DB with no <c>root_path</c>) is force-rescanned so the index, freshness cursor, and metadata all
-    /// converge on the current root; a matching root reuses the existing DB.
+    /// converge on the current root; a matching root that carries a committed revision reuses the existing DB.
     /// </summary>
+    /// <param name="hasCommittedRevision">
+    /// Whether the artifact carries a revision this process can SEE — the same committed-data test
+    /// <see cref="WinnerArtifactProbe.IsFinished"/> applies. julie-extract writes <c>artifact_metadata</c>
+    /// (<c>root_path</c> included) in autocommit the moment it opens the writer, then streams every file/symbol row
+    /// into one long transaction, so for the whole duration of a first scan there is a DB on disk that matches this
+    /// root and holds zero committed rows. Reusing it binds an empty index and serves a silent wrong answer to
+    /// every agent query until freshness happens to reconcile. Deciding to scan instead routes the caller into the
+    /// lease block, where the winner-artifact probe makes a loser wait for the winner's finished artifact. It stays
+    /// a DELTA reconcile: a finished artifact reached here is correct and cheap to reconcile, and forcing would
+    /// turn every cold-start race into a full rebuild.
+    /// </param>
     internal static BootstrapScanDecision DecideBootstrapScan(
-        bool dbExists, string? existingRootPath, string canonicalRoot)
+        bool dbExists, string? existingRootPath, string canonicalRoot, bool hasCommittedRevision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
 
@@ -843,6 +854,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         if (!RootPathsEqual(existingRootPath, canonicalRoot))
             return new BootstrapScanDecision(
                 ShouldScan: true, ScanIntent.RootRebind, WorkspaceRegistryState.Ready);
+
+        if (!hasCommittedRevision)
+            return new BootstrapScanDecision(
+                ShouldScan: true, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.Ready);
 
         return new BootstrapScanDecision(
             ShouldScan: false, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.LoadedExisting);
@@ -965,7 +980,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// <summary>
     /// Read the scan decision from the artifact on disk. An artifact that is absent, or unreadable because it is
     /// mid-write, reads as "still needs a scan" rather than failing the bootstrap: a torn read while another
-    /// instance promotes is exactly the transient this path must survive.
+    /// instance promotes is exactly the transient this path must survive. This owns ALL the I/O behind the pure
+    /// <see cref="DecideBootstrapScan"/>, including the committed-revision probe.
     /// </summary>
     internal static BootstrapArtifactDecision ReadBootstrapScanDecision(string dbPath, string canonicalRoot)
     {
@@ -976,19 +992,54 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             bool dbExists = File.Exists(dbPath);
             string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(dbPath) : null;
             return new BootstrapArtifactDecision(
-                existingRootPath, DecideBootstrapScan(dbExists, existingRootPath, canonicalRoot));
+                existingRootPath,
+                DecideBootstrapScan(
+                    dbExists, existingRootPath, canonicalRoot,
+                    dbExists && HasCommittedRevision(dbPath, canonicalRoot)));
         }
         catch (FileNotFoundException)
         {
             return new BootstrapArtifactDecision(
-                null, DecideBootstrapScan(dbExists: false, existingRootPath: null, canonicalRoot));
+                null,
+                DecideBootstrapScan(
+                    dbExists: false, existingRootPath: null, canonicalRoot, hasCommittedRevision: false));
         }
         catch (SqliteException ex) when (IsCorruption(ex))
         {
             return new BootstrapArtifactDecision(
-                null, DecideBootstrapScan(dbExists: true, existingRootPath: null, canonicalRoot));
+                null,
+                DecideBootstrapScan(
+                    dbExists: true, existingRootPath: null, canonicalRoot, hasCommittedRevision: false));
         }
     }
+
+    /// <summary>
+    /// Whether the artifact at <paramref name="dbPath"/> carries a revision this process can see. Uncommitted rows
+    /// are invisible to other connections, so a visible revision is exactly the proof that a scan's long insert
+    /// transaction landed — the same test <see cref="WinnerArtifactProbe.IsFinished"/> applies, over the same
+    /// <see cref="ReadLatestRevisionOrZero"/> seam.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadLatestRevisionOrZero"/> propagates a locked/corrupt/misconfigured DB loudly, because seeding
+    /// the HOLDER's revision from a degraded read would mask the problem. Here the same failure has a safe answer
+    /// that costs one delta scan — "no committed revision yet, so scan" — and the caller's contract is that no
+    /// artifact read may fail the bootstrap. So every probe failure reads as absent rather than propagating.
+    /// </remarks>
+    private static bool HasCommittedRevision(string dbPath, string canonicalRoot)
+    {
+        try
+        {
+            return ReadLatestRevisionOrZero(dbPath, WorkspaceId.FromCanonicalRoot(canonicalRoot)) > 0;
+        }
+        catch (Exception ex) when (IsArtifactProbeFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsArtifactProbeFailure(Exception ex) =>
+        ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+            or IncompatibleExtractException;
 
     /// <summary>
     /// The stand-down gate for a bootstrap that lost the workspace writer lock: it answers whether the artifact
@@ -1047,7 +1098,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 SqliteSymbolReader.VerifyCompatible(_dbPath);
                 return true;
             }
-            catch (Exception ex) when (IsProbeFailure(ex))
+            catch (Exception ex) when (IsArtifactProbeFailure(ex))
             {
                 return false;
             }
@@ -1062,15 +1113,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     ? SymbolsArtifactIdentity.TryRead(_dbPath).ArtifactId
                     : null;
             }
-            catch (Exception ex) when (IsProbeFailure(ex))
+            catch (Exception ex) when (IsArtifactProbeFailure(ex))
             {
                 return null;
             }
         }
-
-        private static bool IsProbeFailure(Exception ex) =>
-            ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                or IncompatibleExtractException;
     }
 
     /// <summary>

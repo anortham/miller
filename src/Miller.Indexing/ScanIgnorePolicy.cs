@@ -103,6 +103,15 @@ public static class ScanIgnorePolicy
     /// Rewrite <c>&lt;root&gt;/.miller/invariant.julieignore</c> from <see cref="RenderInvariantContent"/> and
     /// return its path, or null when the root does not exist or the file could not be written.
     /// </summary>
+    /// <remarks>
+    /// Last-writer-wins is DELIBERATE here, and the opposite of the exclusive create
+    /// <see cref="JulieIgnoreSeeder.EnsureSeeded(string)"/> uses. That one protects a file a USER may author, so a
+    /// racing creator must win; this one is generated, Miller-owned, and contracted to be rewritten on every scan
+    /// — there is no user content to lose, and racing Miller processes render byte-identical content from
+    /// <see cref="InvariantPatterns"/>. An exclusive create would also strand every existing workspace on the
+    /// pattern set that happened to be current when its file was first written, so a release that adds an
+    /// invariant exclusion would never reach it.
+    /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
     public static string? WriteInvariantIgnoreFile(string workspaceRoot)
     {

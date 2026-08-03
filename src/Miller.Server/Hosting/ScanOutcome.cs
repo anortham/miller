@@ -17,7 +17,8 @@ namespace Miller.Server.Hosting;
 /// actually ran); <c>null</c> otherwise.
 /// </param>
 /// <param name="HolderDescription">
-/// Who holds machine-wide scan admission, on <see cref="Kind.Queued"/>; <c>null</c> otherwise.
+/// What the queued scan is waiting behind, on <see cref="Kind.Queued"/> — the machine-wide admission holder, this
+/// instance's own in-flight extract, or the scan-failure backoff; <c>null</c> otherwise.
 /// </param>
 /// <param name="DowngradeReason">
 /// Why the rebuild ran as a delta and what is still owed, on <see cref="Kind.Downgraded"/>; <c>null</c> otherwise.
@@ -52,9 +53,10 @@ public sealed record ScanOutcome(
         Failed,
 
         /// <summary>
-        /// This instance is the leader, but another scan on this machine holds admission, so nothing ran YET.
-        /// The rescan latch was re-armed with the caller's intent, so the leader runs it once admission frees
-        /// up. Not a failure: no error was logged and there is no extract error to look for.
+        /// This instance is the leader, but another scan is in the way, so nothing ran YET — machine-wide
+        /// admission is held elsewhere, or this instance's own extract still holds the process-local ops gate.
+        /// The rescan latch was re-armed with the caller's intent, so the leader runs it once the way is clear.
+        /// Not a failure: no error was logged and there is no extract error to look for.
         /// </summary>
         Queued,
     }
@@ -66,8 +68,8 @@ public sealed record ScanOutcome(
     public static ScanOutcome Failed { get; } = new(Kind.Failed, Report: null);
 
     /// <summary>
-    /// Machine-wide scan admission was busy; the scan is latched and will run.
-    /// <paramref name="holderDescription"/> names the observed holder.
+    /// Another scan was in the way; this one is latched and will run.
+    /// <paramref name="holderDescription"/> names what it is waiting behind.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="holderDescription"/> is null.</exception>
     public static ScanOutcome Queued(string holderDescription)

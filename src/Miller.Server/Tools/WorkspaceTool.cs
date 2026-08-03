@@ -919,11 +919,7 @@ public sealed class WorkspaceTool
             ScanOutcome.Kind.NotLeader =>
                 "not the indexer leader; cannot force a global rescan here. " +
                 "The leader's watcher keeps the index fresh — polled + swapped to pick up its latest writes.",
-            // Machine-wide admission was busy, so nothing ran YET and nothing failed. The rescan latch carries
-            // the request, so this leader runs it once admission frees up — do not send anyone log-hunting.
-            ScanOutcome.Kind.Queued =>
-                $"the {operation} scan is queued behind another scan on this machine and will run when admission " +
-                $"frees up (the prior index is kept and still served). {scan.HolderDescription}",
+            ScanOutcome.Kind.Queued => QueuedNote(operation, scan.HolderDescription),
             // A delta ran where a from-scratch rebuild was asked for. Reporting that as a completed rebuild is
             // exactly the lie the third outcome exists to prevent, so it is said out loud and the rebuild stays
             // owed (the indexer re-armed it).
@@ -973,13 +969,7 @@ public sealed class WorkspaceTool
                 WorkspaceRender.Action(result, json),
                 0,
                 TelemetryOutcome.Empty,
-                ToolDiagnostic.Refusal(
-                    $"workspace_{operation}_queued",
-                    $"Another scan on this machine holds scan admission; the {operation} scan is queued and will " +
-                    "run without a retry.",
-                    [new ToolDiagnosticAction(
-                        "workspace(operation=\"status\")",
-                        "watch scan_governor for this workspace's position")])),
+                QueuedRefusal(operation, scan.HolderDescription)),
             ScanOutcome.Kind.Downgraded => new WorkspaceOperationResult(
                 WorkspaceRender.Action(result, json),
                 0,
@@ -997,6 +987,27 @@ public sealed class WorkspaceTool
                 TelemetryOutcome.Ok),
         };
     }
+
+    /// <summary>
+    /// The agent-facing text for a scan that was QUEUED rather than run. Deliberately cause-NEUTRAL: machine-wide
+    /// scan admission is only one of the things a queued scan can be waiting behind — this instance's own
+    /// in-flight extract is another — and <see cref="ScanOutcome.HolderDescription"/> is the member that names
+    /// the actual one. Naming a mechanism here instead sent an agent to a <c>scan_governor</c> object that is
+    /// absent whenever the wait was not an admission wait.
+    /// </summary>
+    internal static string QueuedNote(string operation, string? holderDescription) =>
+        $"the {operation} scan is queued and will run without a retry (the prior index is kept and still " +
+        $"served). {holderDescription}";
+
+    /// <inheritdoc cref="QueuedNote"/>
+    internal static ToolDiagnostic QueuedRefusal(string operation, string? holderDescription) =>
+        ToolDiagnostic.Refusal(
+            $"workspace_{operation}_queued",
+            $"{holderDescription} The {operation} scan is queued and will run without a retry.",
+            [new ToolDiagnosticAction(
+                "workspace(operation=\"status\")",
+                "confirm the revision converged; scan_governor appears there only while a scan on this machine " +
+                "actually holds or waits on admission")]);
 
     private WorkspaceOperationResult RenderTargetAction(
         string operation, string? workspaceId, string? path, bool force, bool json)

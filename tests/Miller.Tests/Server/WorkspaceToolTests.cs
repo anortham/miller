@@ -1975,9 +1975,28 @@ public sealed class WorkspaceToolTests : IDisposable
 
         Assert.Empty(ops.ScanForce);
         Assert.Contains("scanned: no", output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("queued behind another scan", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("queued and will run without a retry", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("scan-governor owner", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("scan failed", output, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Check the Miller log", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("The recorded scan-governor owner is miller pid 4242 scanning '/repo/other'.")]
+    [InlineData("This Miller instance is already busy with another operation on this workspace's index.")]
+    public void QueuedRendering_NamesOnlyTheReportedHolder_SoASecondQueuedCauseIsNeverMisattributed(
+        string holderDescription)
+    {
+        string note = WorkspaceTool.QueuedNote("full", holderDescription);
+        ToolDiagnostic refusal = WorkspaceTool.QueuedRefusal("full", holderDescription);
+
+        Assert.Contains(holderDescription, note, StringComparison.Ordinal);
+        Assert.Contains(holderDescription, refusal.Message, StringComparison.Ordinal);
+        foreach (string text in new[] { note, refusal.Message })
+        {
+            Assert.DoesNotContain("admission", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("another scan on this machine", text, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]

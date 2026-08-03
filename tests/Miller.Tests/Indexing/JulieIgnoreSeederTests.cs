@@ -102,6 +102,49 @@ public sealed class JulieIgnoreSeederTests
     }
 
     [Fact]
+    public void EnsureSeeded_UserAuthoredFileAppearsInsideTheRaceWindow_KeepsTheirsAndReportsNotSeeded()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "node_modules/a/1.js", "node_modules/a/2.js");
+        string ignorePath = System.IO.Path.Combine(temp.Path, ".julieignore");
+        const string UserAuthored = "# mine — hands off\nonly_this/\n";
+
+        bool seeded = JulieIgnoreSeeder.EnsureSeeded(
+            temp.Path, betweenProbeAndCreate: () => File.WriteAllText(ignorePath, UserAuthored));
+
+        Assert.False(seeded);
+        Assert.Equal(UserAuthored, File.ReadAllText(ignorePath));
+    }
+
+    [Fact]
+    public void EnsureSeeded_ConcurrentSeedersOnOneFreshRoot_ReportExactlyOneWriter()
+    {
+        using var temp = new TempDir();
+        WriteTree(temp.Path, "src/main.cs");
+        const int Racers = 8;
+        using var start = new Barrier(Racers);
+        var seeded = new bool[Racers];
+        var racers = new Thread[Racers];
+
+        for (int i = 0; i < Racers; i++)
+        {
+            int index = i;
+            racers[i] = new Thread(() =>
+            {
+                start.SignalAndWait();
+                seeded[index] = JulieIgnoreSeeder.EnsureSeeded(temp.Path);
+            })
+            { IsBackground = true };
+            racers[i].Start();
+        }
+
+        foreach (Thread racer in racers)
+            Assert.True(racer.Join(TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(1, seeded.Count(won => won));
+    }
+
+    [Fact]
     public void EnsureSeeded_MissingRoot_ReturnsFalse_NeverThrows()
     {
         string missing = System.IO.Path.Combine(
