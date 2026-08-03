@@ -69,11 +69,50 @@ facets of one root cause: **the 128 MiB bulk-connection cache is dimensioned for
 but the resolution phase does random reads and re-dirtying over a multi-GiB working set through
 it.** The first experiment is therefore cache sizing (single variable), not savepoint surgery.
 
+## Experiment ladder (same repo, same box, same argv; run same day)
+
+Two env-gated experiment knobs on the `resolver-decay` worktree branch (commits `d940e0c`,
+`7ffaa3c`; defaults unchanged):
+
+| Run | Wall | User CPU | Sys CPU | Peak RSS | vs baseline |
+| --- | --- | --- | --- | --- | --- |
+| Baseline (128 MiB cache, whole-pass savepoint) | 76.3 min | 2,570 s | 676 s | 19.6 GiB | — |
+| Exp 1: 8 GiB bulk cache | 47.0 min | 2,487 s | 105 s | 29.2 GiB | **1.62×** |
+| Exp 2: + skip whole-pass savepoint | **18.8 min** | 1,153 s | 70 s | 30.1 GiB | **4.05×** |
+
+All three artifacts are equivalent: identical byte size (24,524,304,384), identical row counts,
+and a full logical check on Exp 2 — identical `identifier_resolutions`
+outcome/tier/method/confidence distributions, aggregates, and `pending_resolutions` count.
+
+- **Exp 1 (cache):** resolution went from ~54 min at 60% CPU duty to ~22 min at ~93% — the
+  syscall storm vanished (sys 676 → 105 s) and the decay curve flattened. It also unmasked the
+  next bottleneck: `memjrnlTruncate` became ~82% of resolution samples.
+- **Exp 2 (no savepoint):** the v2.9.0 `ResolutionWriteBuffer` batching bounded statement-ends
+  for that era's scale, but 12.86 M identifiers ÷ 500-row flush chunks ≈ 30 k statement-ends,
+  each truncating the whole-pass `SAVEPOINT resolution_hook` sub-journal by walking its multi-GiB
+  chunk list — quadratic again. Without the savepoint, resolution collapses to minutes and the
+  profile shows the actual resolver algorithm (`tier_candidates`, candidate memcmp, the #17
+  metadata BTreeMap) instead of journal bookkeeping. User CPU fell by ~1,330 s — that was pure
+  `memjrnlTruncate`.
+
+The experiment savepoint skip is measurement-only (error rollback is unsound in that mode). The
+sound production shape is resolution in its OWN transaction after the main scan commit — the
+design already defines resolution failure as "rows stay unresolved," so transaction-level
+rollback preserves exactly today's semantics without any statement sub-journal.
+
 ## Implications
 
-- Raising the resolution-phase cache is the cheapest first lever: it attacks the early-regime
-  read misses and the mid-regime spill together. Budget exists (64 GiB box, 19.6 GiB peak).
-- Even a 2–4× resolution win leaves a cold scan at ~30–40 min — levels (serve-something-early)
-  remain the product answer; this baseline is the number L0/L1 must beat to first usefulness.
-- Raw evidence (report.json, time.txt, samples.csv, profsamples/) captured in the session
-  scratchpad; this document records everything decision-relevant.
+- Production fixes for julie-extractors, in order: (1) size the bulk cache to the machine/artifact
+  instead of a flat 128 MiB (peak RSS must stay bounded on small-RAM boxes — a flat 8 GiB is
+  hostile to a 16 GiB machine), and (2) move resolution out of the scan transaction into its own
+  transaction, eliminating the whole-pass savepoint. Together they are a measured 4× on cold
+  scans at this scale. Remaining wall after both: bulk load (~6–7 min) and index finalize
+  (~7 min) — future levers, not blockers.
+- A ~19 min cold scan on a 41 k-file repo still fails the "nobody waits on an index" bar —
+  the levels program remains the product answer; these fixes make every level's background
+  convergence ~4× cheaper.
+- This unblocks #15 (was blocked on #18) and closes #18's investigation: root cause found,
+  fix validated at scale, decay curve explained (cache-miss growth, not an algorithmic decay in
+  the resolver itself).
+- Raw evidence (report.json, time.txt, samples.csv, profsamples/) for all three runs captured in
+  the session scratchpad; this document records everything decision-relevant.
