@@ -2220,6 +2220,14 @@ public static class CliDispatch
         string output = ImpactTool.Run(
             index, graph, resolver, target, changedPaths, diff,
             maxDepth: o.Int("max-depth", 2), limit: o.Int("limit", 100), json: o.Has("json"), out _, out _);
+        // The CLI calls the pure tool core directly, so the MCP wrapper's converging check never runs
+        // here; without this, a symbols-level artifact renders an authoritative-looking undercount.
+        if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+            output = ToolDiagnosticRenderer.Attach(
+                "impact", output,
+                IndexLevelGuard.Converging(
+                    "call-site edges are missing, so the impacted-symbol set undercounts."),
+                o.Has("json"));
         outw.WriteLine(output);
         return 0;
     }
@@ -2319,6 +2327,10 @@ public static class CliDispatch
         bool json = o.Has("json");
         string? referenceKind = o.Value("reference-kind", o.Value("kind"));
         bool includeDefinition = BoolOption(o, "include-definition", fallback: true) && !o.Has("no-definition");
+        // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs
+        // here; without this, a symbols-level artifact renders authoritative-looking empty trace output.
+        bool referenceLayerConverging =
+            IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath));
         try
         {
             if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
@@ -2338,6 +2350,12 @@ public static class CliDispatch
                         : null,
                     o.Value("continuation"),
                     out _, out _);
+                if (referenceLayerConverging)
+                    bridgeOutput = ToolDiagnosticRenderer.Attach(
+                        "trace", bridgeOutput,
+                        IndexLevelGuard.Converging(
+                            "identifier-level usage sites are missing from refs/path/bridge results."),
+                        json);
                 outw.WriteLine(bridgeOutput);
                 return 0;
             }
@@ -2375,6 +2393,12 @@ public static class CliDispatch
                     o.Value("continuation"),
                     out _,
                     out _);
+            if (referenceLayerConverging)
+                output = ToolDiagnosticRenderer.Attach(
+                    "trace", output,
+                    IndexLevelGuard.Converging(
+                        "identifier-level usage sites are missing from refs/path/bridge results."),
+                    json);
             outw.WriteLine(output);
             return 0;
         }

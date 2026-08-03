@@ -83,7 +83,7 @@ public static class RepositoryIndexLoader
         stopwatch.Stop();
         onBridgeGraphBuilt?.Invoke(stopwatch.Elapsed);
 
-        return MillerRepositoryIndex.Build(symbols, edges, bridgeGraph, ExtractIndexLevelReader.Read(dbPath));
+        return MillerRepositoryIndex.Build(symbols, edges, bridgeGraph, ExtractIndexLevelReader.ReadStrict(dbPath));
     }
 
     /// <summary>

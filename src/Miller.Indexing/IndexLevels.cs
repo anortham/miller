@@ -236,4 +236,21 @@ public static class ExtractIndexLevelReader
             return IndexLevels.FullMetadataValue;
         }
     }
+
+    /// <summary>
+    /// The index-load variant: an ABSENT key still reads as full (pre-levels artifacts are full-level
+    /// artifacts), but a read FAILURE throws instead of failing open. An index load that just read the whole
+    /// artifact successfully must not classify a symbols artifact as full on one failed scalar read — that
+    /// would silently disable every converging diagnostic while the reference tables sit empty. Callers that
+    /// only display the level keep the tolerant <see cref="Read(string?)"/>.
+    /// </summary>
+    public static string ReadStrict(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'index_level';";
+        object? value = command.ExecuteScalar();
+        return value is string s && !string.IsNullOrWhiteSpace(s) ? s : IndexLevels.FullMetadataValue;
+    }
 }

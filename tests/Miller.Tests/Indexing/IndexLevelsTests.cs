@@ -195,4 +195,22 @@ public sealed class ExtractIndexLevelReaderTests : IDisposable
         File.WriteAllText(DbPath, "not a sqlite database at all");
         Assert.Equal("full", ExtractIndexLevelReader.Read(DbPath));
     }
+
+    [Fact]
+    public void ReadStrict_AnAbsentKeyStillReadsAsFull_ButABrokenArtifactThrows()
+    {
+        CreateArtifact(indexLevel: null);
+        Assert.Equal("full", ExtractIndexLevelReader.ReadStrict(DbPath));
+
+        string broken = Path.Combine(_dir, "broken.db");
+        File.WriteAllText(broken, "not a sqlite database at all");
+        Assert.ThrowsAny<Exception>(() => ExtractIndexLevelReader.ReadStrict(broken));
+    }
+
+    [Fact]
+    public void ReadStrict_ASymbolsArtifactReadsAsSymbols()
+    {
+        CreateArtifact(indexLevel: "symbols");
+        Assert.Equal("symbols", ExtractIndexLevelReader.ReadStrict(DbPath));
+    }
 }

@@ -26,14 +26,20 @@ internal static class IndexLevelGuard
         string.Equals(indexLevel, IndexLevels.SymbolsMetadataValue, StringComparison.Ordinal);
 
     /// <summary>The data-bearing "reference layer converging" diagnostic for read tools: what is missing, what
-    /// still works, and where to watch progress.</summary>
+    /// still works, and how the upgrade happens. The upgrade is NOT promised as automatic — only a session
+    /// leading the workspace runs it in the background; a workspace served purely cross-workspace stays at
+    /// symbols level until someone forces the upgrade.</summary>
     public static ToolDiagnostic Converging(string missing) =>
         ToolDiagnostic.ExpectedEmpty(
             "reference_layer_converging",
-            $"This workspace serves a symbols-level index while the full-level rebuild converges in the "
-            + $"background: {missing} Symbol definitions, search, structure, and relationship edges "
-            + "(inheritance/imports) are complete; per-usage identifier results are not yet.",
-            [new ToolDiagnosticAction("workspace(operation=\"status\")", "check level-upgrade progress")]);
+            $"This workspace serves a symbols-level index; the full-level layer has not been extracted yet: "
+            + $"{missing} Symbol definitions, search, structure, and relationship edges (inheritance/imports) "
+            + "are complete; per-usage identifier results are not yet. A session leading this workspace "
+            + "upgrades it in the background; otherwise force it.",
+            [
+                new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+            ]);
 
     /// <summary>The rename refusal: an unproven rename is worse than a delayed one — with an empty identifier
     /// layer the workspace scan cannot see usage sites, so an "exact coverage" claim would be false.</summary>
@@ -42,8 +48,12 @@ internal static class IndexLevelGuard
             "reference_layer_converging",
             "rename is refused while this workspace serves a symbols-level index: identifier extraction has "
             + "not run yet, so the rename cannot prove it found every usage site (it would rename definitions "
-            + "and miss references). Re-run after the background full-level upgrade completes.",
-            [new ToolDiagnosticAction("workspace(operation=\"status\")", "check level-upgrade progress")]);
+            + "and miss references). Re-run after the full-level upgrade completes — a leading session runs "
+            + "it in the background; otherwise force it.",
+            [
+                new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+            ]);
 
     /// <summary>Stamp the demand counter on a degraded call.</summary>
     public static void MarkDegraded(TelemetryScope? telemetry, string reason)

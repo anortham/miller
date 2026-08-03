@@ -563,9 +563,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     TestScanObserver?.Invoke();
                     ScanAttemptDecision attempt =
                         failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
-                    // A non-force bootstrap scan means no usable DB exists (DecideBootstrapScan's fresh case),
-                    // so this scan CREATES the artifact at the policy's first-build level; the force case is a
-                    // root rebind, which LevelForScan routes by intent.
+                    // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
+                    // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
+                    // arm). Both are first builds: julie records index_level only with extraction history, so a
+                    // level-less shell accepts the policy's first-build level without conflict. The force case
+                    // is a root rebind, which LevelForScan routes by intent.
                     ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
                         attempt.EffectiveIntent, newArtifact: !scanDecision.Force,
                         IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId));

@@ -542,7 +542,7 @@ public static class WorkspaceRender
         if (facts is null)
             return null;
         return facts.UpgradeOwed
-            ? $"{facts.Level} (full-level upgrade owed; runs in background)"
+            ? $"{facts.Level} (full-level upgrade owed — a leading session converges it; 'workspace full' forces it)"
             : $"{facts.Level} (policy {facts.Policy})";
     }
 
