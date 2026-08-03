@@ -347,9 +347,26 @@ public sealed class WorkspaceRegistry : IDisposable
                 return;
         }
 
+        AddLevelPolicyColumnToleratingConcurrentAdder(connection);
+    }
+
+    /// <summary>
+    /// The ALTER half of <see cref="EnsureLevelPolicyColumn"/>. The pragma probe above it is only a fast
+    /// path: the registry is machine-global, so another Miller process can add the column between that
+    /// check and this statement. A duplicate-column failure means the intended end state already holds.
+    /// </summary>
+    internal static void AddLevelPolicyColumnToleratingConcurrentAdder(SqliteConnection connection)
+    {
         using var alter = connection.CreateCommand();
         alter.CommandText = "ALTER TABLE workspaces ADD COLUMN level_policy TEXT;";
-        alter.ExecuteNonQuery();
+        try
+        {
+            alter.ExecuteNonQuery();
+        }
+        catch (SqliteException ex) when (
+            ex.Message.Contains("duplicate column name", StringComparison.OrdinalIgnoreCase))
+        {
+        }
     }
 
     private WorkspaceRegistryRow GetRequiredUnderLock(string workspaceId) =>

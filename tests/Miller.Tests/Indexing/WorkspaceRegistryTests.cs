@@ -470,6 +470,21 @@ public sealed class WorkspaceRegistryTests : IDisposable
         Assert.Equal("progressive", registry.SetLevelPolicy("ws1", "progressive").LevelPolicy);
     }
 
+    [Fact]
+    public void AddLevelPolicyColumn_ToleratesAConcurrentAdderWinningTheRace()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+
+        WorkspaceRegistry.AddLevelPolicyColumnToleratingConcurrentAdder(c);
+    }
+
     private string ReadState(string workspaceId)
     {
         using var c = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
