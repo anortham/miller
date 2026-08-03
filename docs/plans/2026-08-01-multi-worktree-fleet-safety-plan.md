@@ -22,8 +22,102 @@ julie-extractors gains three small opt-in contract flags (`--spool-dir`, `--prog
 `--parent-pid`) plus a dead-PID spool reaper, shipped and pin-bumped before Miller wires them.
 Nothing changes in parser/extraction semantics; the engine is explicitly kept.
 
-**Status:** awaiting user approval. Written while the 1.15.0 release session was in flight — nothing
-here is implemented.
+**Status:** APPROVED and in execution on branch `fleet-safety` (2026-08-02). See the amendment below
+before implementing any workstream — a pre-implementation doubt pass corrected five of them.
+
+## Amendment — 2026-08-02 pre-implementation doubt pass (Codex + Grok)
+
+Four read-only recon agents mapped the P0 workstreams against live code and disagreed about how much
+of the scan-coordination seam belonged in P0. A two-round doubt pass with Codex and Grok settled it.
+Every point below was re-verified in code by the lead before adoption; the two corrections that
+contradict the original plan text are marked **PLAN WAS WRONG**.
+
+**Scope decision (converged, both models agree).** P0 does NOT introduce `ScanIntent`, does NOT change
+`IExtractOps.Scan(bool force)`, and does NOT add a public `ScanRequest` or `ScanCoordinator`. W8 remains
+the chartered home for the intent enum, because that enum encodes *downgrade and backoff policy*, not
+"was the lock held". W1 needs only root identity, which `DecideBootstrapScan` already computes, and
+schema-heal and corruption-heal are both unconditional force rebuilds under lock today — the opaque
+`Func<long?>` loses W1 nothing. Codex initially argued for landing the full seam in P0 and withdrew
+after the lead showed that the `int? jobs` parameter is permanent rather than throwaway (W8 *consumes*
+it for the post-OOM `jobs: 1` retry) and that W4/W5 spool and progress lifecycle is runner-internal.
+
+**W2 — no change.** Shipped as specified (`707f9ea4`).
+
+**W3 — four corrections.**
+1. The governor is **NOT re-entrant**. An earlier draft argued for per-process re-entrancy to avoid a
+   self-deadlock across `RunStartupDeltaScan` → extractor-upgrade rescan → drain rescan. Verified: those
+   run *sequentially* (`IndexerService.cs:382`, `:396`), so the nesting does not exist — while one
+   process genuinely CAN refresh two different registered workspaces at once through
+   `WorkspaceIndexProvider._refresh`, which a re-entrancy counter would wrongly admit. Use a
+   non-re-entrant lease plus an explicit throw on re-entry to catch accidental double-wrapping.
+2. Admission must be acquired **before** `_opsGate`, not inside it. `TryReindexAsLeader`
+   (`IndexerService.cs:581`) holds `_opsGate`, so waiting for the governor inside that gate would block
+   the per-file update/delete path the plan explicitly exempts.
+3. **Success, not admission, is the commit point** for the whole-repo rescan signal. `IndexerCore`
+   clears `Queue.NeedsRescan`/`_overflowSignaled` (`:122-125`) *before* `ExecuteIsolated`, which swallows
+   `JulieExtractFailedException`. So a refused-or-failed reconcile already loses its signal today; the
+   governor makes it reachable far more often. Re-arm on anything other than completion.
+   `LeaderScanRequestQueue` claims and deletes requests before execution and needs the same treatment.
+4. **PLAN WAS WRONG — there is no C# "semantic accelerator lease" to mirror.** Miller only computes
+   `accelerator-v1.lock` (`SemanticBrokerEndpoint.cs:20`) and passes it to the Rust sidecar, which owns
+   the exclusivity. Mirror the accelerator lease's *path convention* and crash semantics, but take the
+   mechanism from `SingleWriterLock.TryAcquire` and `ContentCorpusWriteLock.AcquireFor`.
+
+**W1 — four additions.** The winner-acceptance condition must be a successful full load plus a stable
+`artifact_id`, not a bare `ReadRootPath` (which tolerates only a missing `artifact_metadata` table and
+throws on SQLITE_CORRUPT/NOTADB); transient torn reads mid-promote must be retried, not fatal. The
+outcome must honestly distinguish a local rebuild from loading the winner's artifact. The healthy reuse
+path must not take the lock at all. And `RebuildAndRetry` (`:773-778`) is a real defect W1 fixes: it
+reports `Rebuilt: true` even when `forceRescan()` returned null because the lock was busy and the
+rebuild was skipped, which makes `didScan` and the registry bookkeeping lie.
+
+**W8 — PLAN WAS WRONG on one intent.** The plan lists watcher overflow as a force that may downgrade.
+It is not a force at all: `IndexerCore.cs:151` calls `_ops.Scan()` with the default `force: false`, and
+`WatchEventRouter.Route` returns a single `ScanOp` with every per-file event dropped. There is no
+watcher-overflow force to downgrade. The real overflow problem is rescan *frequency*, owned by W9.
+The intents with actual call sites are: IncrementalReconcile, UserFullRebuild (the only downgradable
+one), RootRebind, SchemaHeal, CorruptionHeal, ExtractorUpgrade.
+
+**Success criterion reworded (v1 makes no fairness claim).** Jittered polling without FIFO tickets
+cannot guarantee "all N eventually ready". Replace that criterion with: *in the bounded N-process Scale
+test, the maximum number of concurrent extractors is 1 and every non-cancelled contender reaches Ready
+within the declared test deadline across repeated runs; v1 claims neither FIFO nor starvation freedom.*
+
+**W4/W6 — PLAN WAS WRONG about the reaping and liveness mechanisms.** The julie-extractors workspace sets
+`unsafe_code = "forbid"` in `[workspace.lints.rust]` and every crate opts in, which `forbid` makes
+locally un-`allow`-able. `libc::kill(pid, 0)` and Windows `OpenProcess` are therefore both unavailable,
+so the plan's dead-PID spool reaper — including its careful EPERM-means-alive rule — cannot be built as
+written.
+
+- **W4 reaps by advisory lock, not by PID.** The scan takes an exclusive `File::lock()` on its own spool
+  for the spool's lifetime; the reaper opens each candidate and calls `try_lock()`. `Ok` means the owner
+  is gone, so unlock and delete; `Err(WouldBlock)` means ALIVE, skip; any other error means skip. Verified
+  empirically by the lead on rustc 1.94.0 under `#![forbid(unsafe_code)]`: held ⇒ `Err(WouldBlock)`,
+  released ⇒ `Ok`. This is strictly better than the planned probe — std releases the lock on process
+  death including SIGKILL, it needs no new dependency, it works on Windows, and it has **no PID-reuse
+  failure mode at all**. The PID in the spool filename stays a diagnostic, never the reaping authority.
+  The "never reap by age alone" rule still stands.
+- **W6 drops stdout-pipe-closure detection.** Nothing is written to stdout during a scan — the report is
+  written once, after `scan` has fully returned — so there is no mid-scan write to fail, and polling fd 1
+  for `POLLERR`/`POLLHUP` needs `poll()`/kqueue and therefore `unsafe`. Use
+  `std::os::unix::process::parent_id()` instead, which is safe and *eliminates* rather than mitigates the
+  PID-reuse hazard: it asks the kernel who the parent is right now, and an orphan is reparented to
+  init/launchd, so a recycled PID cannot re-become the parent. std has no Windows counterpart, so the
+  watchdog is Unix-only and Windows stays covered by Miller's kill-on-close Job Object, as already planned.
+- **W6 must not call `process::exit`.** That skips `Drop` in all threads and would leak precisely the
+  spool W4 exists to stop leaking (`SpooledExtractedFiles`'s `Drop` at `commands.rs:1058` is the only
+  cleanup, and there is no `panic = "abort"` profile, so unwinding is reachable). The watchdog sets a
+  cooperative abort flag checked at the chunk loop (`EXTRACT_SPOOL_CHUNK_SIZE = 512`), which bounds exit
+  latency to one chunk and keeps cleanup intact. Never abort once the write transaction has started.
+- **Pre-existing leak found in passing:** `commands.rs:1429` can return `Err` before
+  `SpooledExtractedFiles` is constructed at 1437, and the raw spool local has no `Drop`, so a spool write
+  error leaves the file behind today. W4 should cover it.
+
+**Also recorded:** bootstrap does not converge sidecars, so its governor scope is scan-only; a fresh
+open pays two sequential whole-repo scans (bootstrap first scan, then `RunStartupDeltaScan`) and under
+the governor one workspace occupies the slot twice in a row — latency only, not a correctness bug; and
+P0 must not be described as fixing the field "never converge" report, because a killed extractor child
+with a surviving leader still logs "keeping the prior index" and never retries until W8 lands.
 
 ## Global Constraints
 
@@ -56,8 +150,15 @@ here is implemented.
 - Test: fast injected-concurrency tests (two in-process bootstrap decisions racing a fake lock);
   live two-process coverage is Scale.
 - Acceptance:
-  - [ ] No bootstrap path reaches `runner.Scan` without holding the workspace writer lock.
-  - [ ] Loser of the race loads the winner's artifact rather than scanning.
+  - [x] No bootstrap path reaches `runner.Scan` without holding the workspace writer lock.
+        (`BootstrapScanLockScaleTests.BootstrapScanLease_LockHeldAndNoArtifactEverAppears_NeverScansAndNamesTheHolder`,
+        `…Bootstrap_ThatScansForReal_ReleasesTheWriterLeaseBeforeItReturns`)
+  - [x] Loser of the race loads the winner's artifact rather than scanning.
+        (`…Bootstrap_LosesTheLockAndTheWinnerFinishesMidWait_BindsThatArtifactWithoutScanning`,
+        `…BootstrapScanLease_FinishedWinnerArtifact_StandsDownAndReportsTheReuseDecision`)
+- **Delivered.** The stand-down is gated on the winner's artifact being genuinely usable, not merely
+  present — a cross-model finding. Four sibling tests refuse to stand down for an artifact that records
+  another root, committed no revision, or this build cannot read.
 
 **W2. Cap extraction parallelism** — Miller. ~0.5 agent session.
 - Modify: `src/Miller.Indexing/JulieExtractRunner.cs` (`BuildScanArgs`, ~line 126): always pass
@@ -67,7 +168,13 @@ here is implemented.
 - Consumed by W8: after an exit-137/SIGKILL failure the next automatic attempt runs `--jobs 1`.
 - Test: pure argv unit tests.
 - Acceptance:
-  - [ ] Every scan argv carries `--jobs`; default matches the formula; env override honored.
+  - [x] Every scan argv carries `--jobs`; default matches the formula; env override honored.
+        (`ExtractJobsPolicyTests` — `DefaultFor_HalvesProcessorCountCappedAtFour`,
+        `FromEnvValue_ExplicitZero_OptsIntoRayonAuto`,
+        `FromEnvValue_ExplicitCount_HonoredEvenAboveTheDefaultCap`,
+        `FromEnvValue_InvalidValue_FallsBackToDefault`)
+- **Delivered.** An explicit `jobs:` argument to `Scan` BEATS the env var, because it carries a caller's
+  safety response — W8's post-OOM retry passes `1` — that a stale operator override must not undo.
 
 **W3. Machine-wide scan governor** — Miller. ~1–2 agent sessions.
 - Create: `src/Miller.Indexing/ScanGovernor.cs` (+ registration in
@@ -83,9 +190,18 @@ here is implemented.
   no new MCP tool.
 - Test: pure lease-decision units fast; multi-process contention in Scale.
 - Acceptance:
-  - [ ] N concurrent `workspace open --full` on sibling worktrees run ≤1 extractor at a time.
-  - [ ] Kill -9 of the holder frees the lease without manual cleanup.
-  - [ ] Waiting state visible in `workspace status --json`.
+  - [x] N concurrent `workspace open --full` on sibling worktrees run ≤1 extractor at a time.
+        (`ScanGovernorContentionScaleTests.TwoSiblingWorktrees_ConcurrentFullOpen_NeverHoldScanAdmissionAtTheSameTime`
+        — two real processes, not an in-process fake)
+  - [x] Kill -9 of the holder frees the lease without manual cleanup.
+        (`…KilledHolder_FreesScanAdmission_WithoutManualCleanup`)
+  - [x] Waiting state visible in `workspace status --json`.
+        (`…ObserverProcess_WhileAScanHoldsAdmission_ReportsTheMachineWideHolder`,
+        `…BlockedProcess_OnASeededRoot_ReportsLockBusy_AndKeepsServingTheExistingIndex`)
+- **Delivered.** Admission is released before blocking on any other gate — a cross-model finding: holding
+  a machine-wide lease while waiting on a per-workspace lock serializes the whole fleet behind one
+  workspace's queue. A blocked process on a COLD root gives up inside its budget and reports an unusable
+  index rather than waiting forever.
 
 **W4. Spool containment + reaping** — julie-extractors first, then Miller. ~1 session (julie) +
 ~0.5 session (Miller wiring after pin bump).
@@ -99,8 +215,20 @@ here is implemented.
 - Why `.miller/tmp`: shared `/tmp` is a container tmpfs/memory trap and a multi-user disk-fill
   hazard (findings §6.8), and workspace-local spools are trivially discoverable.
 - Acceptance:
-  - [ ] SIGKILL mid-scan leaves at most one dead-PID spool, removed by the next scan's reaper.
-  - [ ] Spools live under `.miller/tmp` when Miller drives the scan.
+  - [x] SIGKILL mid-scan leaves at most one dead-PID spool, removed by the next scan's reaper.
+  - [x] Spools live under `.miller/spool` when Miller drives the scan.
+- **Delivered 2026-08-03 (julie-extractors v2.22.0 + Miller wiring), with three deviations:**
+  - **Reaping is by advisory lock, not by a dead-PID probe.** `unsafe_code = "forbid"` is workspace-wide
+    in julie-extractors, so `libc::kill`/`OpenProcess` are unreachable; `File::lock` on a sibling
+    `<spool>.lock` sentinel is strictly better anyway — the kernel releases it however the owner dies,
+    including SIGKILL, so there is no PID-reuse window, and it works on Windows.
+  - **`.miller/spool`, not `.miller/tmp`.** julie-extract raises a `spool_dir_excluded` warning on every
+    scan when the spool directory holds anything that is not a spool, so the progress file must be a
+    SIBLING of it rather than share it.
+  - **Miller does not delete the child's spool after exit.** julie-extract's own guard removes the spool
+    on every exit path including early returns, and its reaper covers hard kills by lock. A Miller-side
+    delete keyed on the child PID would be the PID-probe design julie-extractors rejected, and it could
+    remove a live sibling worktree's spool.
 
 **W5. Extraction progress observability** — julie-extractors first, then Miller. ~1 session (julie)
 + ~0.5–1 session (Miller).
@@ -113,8 +241,17 @@ here is implemented.
   (`ExtractWaitPolicy`, `src/Miller.Indexing/ExtractWaitPolicy.cs` — currently stall × 6 = 60 min)
   to 4 hours, env-overridable.
 - Acceptance:
-  - [ ] A synthetic long-spool-phase scan (Scale) survives past the old stall window.
-  - [ ] A genuinely hung extractor is still killed at the stall window.
+  - [x] A synthetic long-spool-phase scan (Scale) survives past the old stall window.
+  - [x] A genuinely hung extractor is still killed at the stall window.
+- **Delivered 2026-08-03. Deviation: a FIXED `<.miller>/scan.progress`, not a nonce name deleted in
+  `finally`.** The progress-file v1 contract is written for exactly this consumer shape — it specifies
+  truncate-on-new-scan and "a length DECREASE is progress, never a stall" precisely because the named
+  supervisor reuses one path per workspace. A fixed path also leaks nothing when Miller is killed
+  mid-scan (a nonce name leaks one file per kill, since the spool reaper only ever removes
+  sentinel-backed spool names), and it leaves a readable post-mortem of where a killed scan stopped —
+  which `ScanProgressRecord.DescribeLastProgress` now puts into the kill message.
+  The hard cap was raised separately (stall × 24 = 4h, `MILLER_EXTRACT_HARD_CAP`) after W10 measured a
+  healthy 74k-file scan at 61.3 minutes.
 
 **W6. Orphan-child containment (amended item 9 mechanism)** — julie-extractors + Miller.
 ~0.5–1 session (julie) + ~0.5–1 session (Miller).
@@ -126,29 +263,42 @@ here is implemented.
   (`PR_SET_PDEATHSIG` is Linux-only; macOS has no equivalent — the watchdog is the portable
   primitive). This amendment was Codex's round-2 objection, adopted verbatim; both models AGREE.
 - Acceptance:
-  - [ ] Kill -9 of the Miller host leaves no julie-extract running beyond the watchdog interval
+  - [x] Kill -9 of the Miller host leaves no julie-extract running beyond the watchdog interval
         (Scale, POSIX) / Job Object close (Windows).
+- **Delivered 2026-08-03.** POSIX is julie-extract's `--parent-pid` watchdog, which asks the kernel who
+  the parent is NOW rather than probing a recorded id, so PID reuse cannot defeat it (an orphan is
+  reparented to init). Windows is the job object, which Miller already had for the semantic broker —
+  `WindowsBrokerJob` was renamed `WindowsKillOnCloseJob`, moved to `Miller.Indexing`, and every
+  julie-extract spawn is now attached to one for the life of the `Run` call. The stdout-pipe-closure half
+  of the original design was dropped by julie-extractors: nothing is written to stdout during a scan, so
+  there is no mid-scan write to fail, and polling the descriptor for hangup needs `unsafe`.
 
 ### P1 — make failure recovery deliberate
 
 **W7. Worktree ignore propagation + seeder rework** — Miller. ~1–1.5 sessions.
 - Create: a git-worktree metadata adapter (resolve `.git`-file worktrees to their real git dir,
   common dir, and main checkout root) in `Miller.Indexing`.
-- Modify: `src/Miller.Indexing/JulieExtractRunner.cs` `Scan`/`BuildScanArgs`: when the root is a
-  linked worktree with no user-authored `.julieignore`, pass the main checkout's `.julieignore` via
-  repeatable `--ignore-file` (already supported with caller precedence, args.rs:40). ALWAYS pass a
+- Modify: `src/Miller.Indexing/JulieExtractRunner.cs` `Scan`/`BuildScanArgs`: ALWAYS pass a
   Miller-owned invariant ignore file last (generated under `.miller/`, containing at minimum
   `.miller/`, `.worktrees/`, `.claude/worktrees/`) — this also closes the nested-worktree
-  double-indexing hole generically.
-- Modify: `src/Miller.Indexing/JulieIgnoreSeeder.cs` — keep seeding green-field roots; raise or
+  double-indexing hole generically. Pass it to `update` as well; `delete` does not accept the flag.
+- Modify: `src/Miller.Indexing/JulieIgnoreSeeder.cs` — keep seeding green-field roots; seed a linked
+  worktree that has no `.julieignore` with an in-tree COPY of the main checkout's file; raise or
   restructure the `MaxEnumeratedFiles = 25_000` detection cap (name-based vendor-dir detection
   instead of full enumeration, or a much higher bound with a warning when hit).
-- Modify: `src/Miller.Server/Hosting/WatchPathFilter.cs` — add `.worktrees` alongside the existing
-  `.claude/worktrees` special case.
+  - Propagating the main checkout's file via `--ignore-file` was tried and REPLACED: it leaves the
+    worktree with no in-tree policy, so the watcher applies zero `.julieignore` rules and a
+    `julie-extract update` re-inserts a file the scan had excluded. A user-authored `--ignore-file`
+    is also a HARD scan failure when malformed, where the same content in-tree only warns.
+- Modify: `src/Miller.Server/Hosting/WatchPathFilter.cs` — add `.worktrees`, and match the skip set
+  against the path's ROOT-RELATIVE remainder so a workspace rooted at `<repo>/.worktrees/<branch>`
+  does not reject every file it owns.
 - Acceptance:
-  - [ ] A fresh linked worktree scan applies the main checkout's `.julieignore` rules.
-  - [ ] A >25k-file root no longer silently truncates vendor detection.
-  - [ ] `.worktrees/` under a repo root is neither indexed by the parent workspace nor watched.
+  - [x] A fresh linked worktree scan applies the main checkout's `.julieignore` rules.
+  - [x] The same rules govern the watcher and single-file `update` in that worktree.
+  - [x] A >25k-file root no longer silently truncates vendor detection.
+  - [x] `.worktrees/` under a repo root is neither indexed by the parent workspace nor watched.
+  - [x] A workspace whose own root is inside a `.worktrees/` pool is indexed and watched normally.
 
 **W8. Persisted scan-failure policy** — Miller. ~1–2 sessions.
 - Create: per-workspace scan-failure record under `.miller/` (intent, exit code, consecutive count,
@@ -163,9 +313,22 @@ here is implemented.
   CLI `workspace open` stops upserting `Ready` before the first scan completes
   (`src/Miller.Server/Cli/CliDispatch.cs:3130`); failed opens leave an error-state row, not `Ready`.
 - Acceptance:
-  - [ ] A failed force scan does not immediately re-force on any automatic path.
-  - [ ] Kill→retry cycles show monotonically increasing spacing in the failure record.
-  - [ ] Schema/corruption/upgrade rebuilds still always run force.
+  - [x] A failed force scan does not immediately re-force on any automatic path.
+        (`IndexerCoreTests.DrainAndProcess_AfterAFailedScan_SuppressesTheRetryUntilTheBackoffElapses`,
+        `…DrainAndProcess_AfterADowngradedSuccess_ScansOncePerBackoffWindowNotOncePerTick`)
+  - [x] Kill→retry cycles show monotonically increasing spacing in the failure record.
+        (`…DrainAndProcess_BackoffGrowsWithEachConsecutiveFailure`,
+        `…DrainAndProcess_AfterASigkilledScan_ClampsTheNextAttemptToOneJob`,
+        `ScanFailureJournalTests.PersistedPolicy_SharesTheRecordAcrossInstances_SoARestartInheritsTheBackoff`)
+  - [x] Schema/corruption/upgrade rebuilds still always run force.
+        (`ScanIntentPolicyTests.RequiresForce_IsTrueForEveryIntentExceptTheDeltaReconcile`,
+        `…MayDowngradeToIncremental_IsTrueOnlyForAUserRequestedRebuild`,
+        `…Satisfies_ARepairIsDischargedOnlyByItsOwnIntent`)
+- **Delivered.** A downgrade turned out to be a THIRD outcome rather than a success or a failure: a delta
+  ran, the prior artifact is served with degraded freshness, and the rebuild is still owed. Recording it
+  as either one produced a whole-repo delta on every 250ms tick forever, so it gets its own
+  `RecordDowngradedServe` (respaces at the current streak without incrementing it) and reaches the caller
+  as `downgraded: true`.
 
 **W9. Linked-worktree watcher + identity fixes** — Miller. ~1–1.5 sessions.
 - Modify: `src/Miller.Server/Hosting/IndexerWatcherSet.cs:69–70` — when `.git` is a file, resolve
@@ -175,13 +338,29 @@ here is implemented.
   a git admin-dir generation/epoch and re-bootstrap instead of silently serving the old in-memory
   index (path-reuse identity risk, findings §6.6).
 - Acceptance:
-  - [ ] Branch switch in a linked worktree produces one reconcile scan, not an overflow rescan.
-  - [ ] Deleting and recreating a different worktree at the same path triggers re-bootstrap.
+  - [x] Branch switch in a linked worktree produces one reconcile scan, not an overflow rescan.
+        (`IndexerWatcherSetTests.Attach_LinkedWorktreeDotGitFile_WatchesTheWorktreesOwnGitDir`,
+        `…Attach_LinkedWorktree_DoesNotWatchTheSharedCommonDir`,
+        `IndexerCoreTests.DrainAndProcess_HeadChanged_ForcesSingleScan_AndDropsPerFileEvents`)
+  - [x] Deleting and recreating a different worktree at the same path triggers re-bootstrap.
+        (`WorkspaceRootPresenceMonitorTests.AReturningRootWithADifferentIdentityIsReplaced`,
+        `…TheSameCheckoutReturningReconcilesInsteadOfRebootstrapping`,
+        `BootstrapReplacedRootTests` ×4,
+        `VersionAwareLeadershipScaleTests.AWorktreeRemovedAndReAddedAtTheSamePathEndsTheLeadershipSession`)
+- **Delivered.** Watch `GitDir`, never `CommonDir` — the shared one reports the MAIN checkout's branch
+  switches. Identity is compared ONLY across a disappearance: comparing it every tick reads an ordinary
+  branch switch as a new checkout on any filesystem without a birth time, and missing evidence never
+  counts as a replacement.
 
 ### P2 — measure before deeper changes
 
 **W10. Scale repro + WAL measurement** — julie-extractors (xtask) or Miller Scale fixture.
-~1 session.
+~1 session. **DONE 2026-08-02 —
+[`docs/findings/2026-08-02-w10-scale-repro-wal-measurement.md`](../findings/2026-08-02-w10-scale-repro-wal-measurement.md).**
+The multi-GB trigger condition is met (9.28 GB peak WAL on 74k files), but the measurement moves the
+exit-137 diagnosis: extraction peaks at 135 MB RSS, the 31.7 GiB peak is the artifact-write phase, which
+`--jobs` does not bound — so W3's governor, not W2's cap, is the OOM fix, and chunking would not lower
+the memory peak. Read the findings before acting on the chunking option below.
 - Build a 74k-file fixture; kill scans during extraction and during artifact write; measure spool,
   RSS, DB, and WAL sizes separately. Only if a healthy force-to-`.rebuild` shows multi-GB WAL do we
   consider chunked commits (safe only for new/rebuild artifacts behind an explicit building/ready
@@ -233,12 +412,22 @@ contention, orphan reaping); W10 is itself the expensive measurement gate. Seman
 (`scripts/semantic-broker-soak.*`) only if governor work touches broker lease code paths.
 
 **Success criteria for the program (from the consensus round):**
-- [ ] N concurrent sibling-worktree `workspace open --full`: ≤1 extractor at a time, each with
+- [x] N concurrent sibling-worktree `workspace open --full`: ≤1 extractor at a time, each with
       bounded `--jobs`, all N eventually ready — on the same root size that previously OOM'd.
-- [ ] SIGKILL anywhere (child, leader, host) leaves no unbounded orphan extractor and at most one
+      (W3 Scale contention tests for the serialization, W2 units for the cap. The 74k-file root that
+      OOM'd is measured in the W10 findings; its peak is the artifact-write phase, which `--jobs` does
+      not bound, so the governor rather than the cap is what carries this criterion.)
+- [x] SIGKILL anywhere (child, leader, host) leaves no unbounded orphan extractor and at most one
       dead-PID spool, reaped on the next scan.
-- [ ] A fresh worktree without a local `.julieignore` still applies the main checkout's rules.
-- [ ] No automatic path immediately re-forces after a force failure.
+      (POSIX child/host: julie-extract's `--parent-pid` watchdog. Windows host: the kill-on-close job
+      object — compile-verified, executed by neither this machine nor CI, both POSIX. Spools: reaped by
+      advisory lock rather than by PID, so the criterion is met more strongly than written — there is no
+      PID-reuse window and no "dead-PID" judgement to get wrong.)
+- [x] A fresh worktree without a local `.julieignore` still applies the main checkout's rules.
+      (`WorktreeIgnorePropagationScaleTests`, against a real `git worktree add` and a real extract.)
+- [x] No automatic path immediately re-forces after a force failure.
+      (`IndexerCoreTests.DrainAndProcess_AfterAFailedScan_SuppressesTheRetryUntilTheBackoffElapses`; the
+      record is shared across processes, so a fresh Miller inherits the throttle instead of resetting it.)
 
 ## Architecture Quality
 

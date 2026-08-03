@@ -223,6 +223,82 @@ scripts/test.ps1 all
   replaced file's old inode). Escape hatch for in-place merges: `MILLER_FULL_REBUILD_INPLACE=1`. If Windows
   antivirus or held handles need longer promote retries, set `MILLER_PROMOTE_RETRY_TIMEOUT` to seconds (for
   example `30`) or a `TimeSpan` value (for example `00:00:30`).
+- **Extraction parallelism is always capped.** Every scan argv carries `--jobs`
+  ([`ExtractJobsPolicy`](src/Miller.Indexing/ExtractJobsPolicy.cs)); the default is
+  `min(4, max(1, ProcessorCount / 2))`. julie-extract's own default is rayon auto-detect (every core), which
+  is why N concurrent worktree agents ran N all-core pools and the OOM killer took them out with exit 137
+  (2026-08-01 multi-worktree field report). `MILLER_EXTRACT_JOBS` overrides the default and is honored
+  verbatim; `0` opts back in to rayon auto. An explicit `jobs:` argument to `JulieExtractRunner.Scan` BEATS the
+  env var — it carries a caller's safety response (a post-OOM retry passes `1`) that a stale operator override
+  must not undo. This bounds only the extraction/spool phase, not the artifact write; bounding how many scans
+  run at once is a separate concern.
+- **Every scan is supervised (julie-extract ≥ 2.22.0).** Alongside `--jobs`, each scan argv carries three
+  process-lifecycle flags resolved from the ARTIFACT's directory by
+  [`ExtractSupervisionPolicy`](src/Miller.Indexing/ExtractSupervision.cs), so a full rebuild into
+  `symbols.db.rebuild` and a cross-workspace refresh both supervise into the right workspace:
+  `--spool-dir <.miller>/spool` (spools move off shared `$TMPDIR` and julie-extract reaps the ones no live scan
+  holds a lock on — the field report's 130GB of orphans), `--progress-file <.miller>/scan.progress` (a liveness
+  heartbeat for the long pre-artifact phase), and `--parent-pid` (julie-extract self-terminates when Miller
+  dies; Unix-only on its side, accepted and ignored elsewhere). `MILLER_EXTRACT_SUPERVISION=off` restores the
+  pre-2.22.0 argv exactly. The progress file is a SIBLING of the spool directory, never inside it: julie-extract
+  raises `spool_dir_excluded` when the spool dir holds anything that is not a spool, and a progress file living
+  there would fire that warning on every scan forever. `ProgressStamp` SUMS the heartbeat's length with the
+  artifact bytes and output lines rather than replacing them, so a progress file that cannot be written degrades
+  the stall signal to the pre-2.22.0 one instead of to nothing; a length DECREASE is progress (a new scan
+  truncated it), which the inequality comparison already handles.
+- **Scan intent, not `bool force` (load-bearing).** Every whole-repo scan carries a
+  [`ScanIntent`](src/Miller.Core/Freshness/ScanIntent.cs): `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`,
+  `SchemaHeal`, `CorruptionHeal`, `ExtractorUpgrade`. Only `UserFullRebuild` may be downgraded to a delta on retry
+  (and only against an artifact that is readable AND records this root); every other force intent exists because
+  the artifact cannot be trusted, so a delta would produce a wrong index that looks fresh. The rescan latch is a
+  SET of pending intents discharged by `ScanIntentPolicy.Satisfies` and retried at `ScanIntentPolicy.Strongest`, so
+  a repair (`RootRebind`/`SchemaHeal`/`CorruptionHeal`, own-intent-only) is never cleared by someone else's rebuild
+  and a repair folded beside a user rebuild never inherits its downgrade permission. `ExtractorUpgrade` is the one
+  exception: ANY completed force discharges it, because every force re-extracts the repo with the bundled binary
+  and requiring its own intent made a completed `workspace full` run a second byte-equivalent rebuild. Watcher
+  overflow is NOT a force.
+- **A downgrade is a THIRD scan outcome (load-bearing).** Neither success nor failure: a delta ran, the prior
+  artifact is served with degraded freshness, and the rebuild is STILL OWED. It must not clear the failure record
+  (`IScanFailurePolicy.RecordDowngradedServe` rewrites `next_attempt_at` at the CURRENT streak without
+  incrementing it — without that the undischarged latch plus an elapsed timer re-ran a whole-repo delta on every
+  250ms tick, forever), must not discharge the pending rebuild, and must reach the caller as
+  `ScanOutcome.Kind.Downgraded` + `downgraded: true` in the `refresh`/`full` payload rather than as a completed
+  rebuild. Only the AUTOMATIC path may downgrade: `bypassBackoff` gates the downgrade as well as the timer, so a
+  person who typed `workspace full` gets the force scan or an honest reason.
+- **Scan-failure backoff is persisted, and is the ONLY retry timer.**
+  `<workspace>/.miller/scan-failure.json` ([`ScanFailureJournal`](src/Miller.Indexing/ScanFailureJournal.cs))
+  records the last intent, exit code, consecutive failures, `--jobs`, and `next_attempt_at`; the schedule is
+  30s → 2m → 10m → 30m-max, jittered upward. It is shared by every Miller process on the workspace and survives
+  restarts — a rebuild that cannot succeed must not be re-forced by each fresh process. `IndexerCore`'s former
+  in-memory doubling backoff was REPLACED by it, not layered under it; do not re-add a second timer. Exit 137
+  (SIGKILL/OOM) clamps the next automatic attempt to `--jobs 1`. An explicit user request (`workspace
+  full/refresh/open`, the MCP `workspace` tool, the dashboard, bootstrap) bypasses the timer once but still
+  records — pass `bypassBackoff: true` at those call sites only; the automatic refresh-first path behind every
+  cross-workspace read (`WorkspaceIndexProvider`) must leave it false or ten cross-workspace searches spawn ten
+  extractors. The record names the STRONGEST scan still owed (`ScanFailurePolicy.RecordFailure` folds via
+  `Strongest`), because a downgraded retry that also fails runs as a delta and recording that verbatim would let
+  the next routine refresh clear a force throttle in two steps. Clearing uses
+  `ScanIntentPolicy.ClearsFailureRecord`, NOT the latch rule `Satisfies`: a delta clears only a delta-intent
+  record, while ANY completed force clears a force-intent one — including a repair's, which `Satisfies` would
+  strand forever and thereby downgrade every future automatic rebuild. Surfaced as the conditional
+  `scan_failure` object in `workspace status`/`health` (`docs/contracts/cli-eros-v1.md`).
+- **A linked worktree's `.git` is a FILE (load-bearing).** `git worktree add` writes a `.git` FILE holding
+  `gitdir: <path>`, not a directory, so `Directory.Exists(<root>/.git)` is FALSE in every worktree — which meant
+  the dedicated `.git/HEAD` watch never attached there and every branch switch flooded the watcher buffer,
+  overflowed, and forced a rescan storm instead of the ONE reconcile that watch exists to produce. Resolve the
+  admin dir through [`GitWorktreeLayout`](src/Miller.Indexing/GitWorktreeLayout.cs) (no `git` subprocess), and
+  watch `GitDir`, never `CommonDir`: a linked worktree has its own HEAD, and the shared one reports the MAIN
+  checkout's branch switches. Anything else keying off a repo layout has the same trap.
+- **Root disappearance and path reuse.** `workspace_id` is SHA-256 of the canonical ROOT, so
+  `git worktree remove wt && git worktree add wt other-branch` yields the same id, the same registry row, and an
+  artifact whose recorded `root_path` still matches — a different tree served under the old index.
+  [`WorkspaceRootPresenceMonitor`](src/Miller.Indexing/WorkspaceRootPresenceMonitor.cs) polls the root once per
+  debounce tick: a disappearance detaches the watchers, marks the registry row `missing`, and SUSPENDS scanning
+  (a delta against an absent root deletes every file in the artifact); a return with a different
+  `WorkspaceRootIdentity` (git admin dir path + creation time) releases leadership and re-bootstraps at
+  `RootRebind`. Identity is compared ONLY across a disappearance — comparing every tick reads an ordinary branch
+  switch as a new checkout on any filesystem without a birth time. Missing evidence never counts as a
+  replacement, and the re-probe is bounded because a non-git workspace can never become known.
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the

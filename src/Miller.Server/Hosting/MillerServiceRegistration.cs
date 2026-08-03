@@ -36,6 +36,13 @@ public static class MillerServiceRegistration
         ArgumentNullException.ThrowIfNull(services);
         SemanticMode activeSemanticMode = semanticMode ?? SemanticActivation.FromEnvironment();
 
+        // Machine-wide (per-user) admission over whole-repo scans. Registered BEFORE its consumers, and built
+        // from the user profile directly: the governor is workspace-independent, and reading an
+        // IndexBootstrapService getter here would throw (the host constructs every hosted service before any
+        // StartAsync — the lifecycle contract above).
+        services.AddSingleton(_ => ScanGovernor.FromEnvironment(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".miller")));
+
         // The bootstrap holds the built current-workspace state. Registered as a singleton AND as the FIRST hosted service so
         // its StartAsync (index build + ledger open + holder seed + canonical-root resolve) completes before any
         // OTHER hosted service's StartAsync (the indexer, the freshness poller, the MCP transport) runs.

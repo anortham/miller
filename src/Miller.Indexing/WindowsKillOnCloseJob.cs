@@ -3,56 +3,74 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace Miller.Indexing.Semantic;
+namespace Miller.Indexing;
 
-internal sealed record WindowsBrokerJobAttachment(
-    WindowsBrokerJob? Job,
+/// <summary>
+/// The outcome of putting a child process in a job object that kills its members when the handle closes.
+/// <see cref="NotRequired"/> off Windows, where the caller has a portable mechanism instead: the semantic
+/// broker is reference-counted, and julie-extract self-terminates on <c>--parent-pid</c>.
+/// </summary>
+internal sealed record WindowsKillOnCloseJobAttachment(
+    WindowsKillOnCloseJob? Job,
     bool IsAttached,
     string? FailureReason)
 {
-    public static WindowsBrokerJobAttachment NotRequired { get; } = new(null, false, null);
+    public static WindowsKillOnCloseJobAttachment NotRequired { get; } = new(null, false, null);
 
-    public static WindowsBrokerJobAttachment Attached(WindowsBrokerJob job)
+    public static WindowsKillOnCloseJobAttachment Attached(WindowsKillOnCloseJob job)
     {
         ArgumentNullException.ThrowIfNull(job);
         return new(job, true, null);
     }
 
-    public static WindowsBrokerJobAttachment Failed(string reason)
+    public static WindowsKillOnCloseJobAttachment Failed(string reason)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         return new(null, false, reason);
     }
 }
 
-internal sealed partial class WindowsBrokerJob : IDisposable
+/// <summary>
+/// A Windows job object carrying <c>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</c>: every process assigned to it dies
+/// when the last handle closes, including when the owning process is killed outright. That handle-close is the
+/// point — it is the only Windows mechanism that survives a <c>kill -9</c> equivalent of the parent, which is
+/// exactly the case a cooperative watchdog cannot cover.
+///
+/// <para>Shared by the two subsystems that spawn long-lived children: the semantic broker, and every
+/// <c>julie-extract</c> scan (whose <c>--parent-pid</c> watchdog is Unix-only, because <c>std</c> exposes no
+/// Windows counterpart for <c>parent_id</c>).</para>
+///
+/// <para>Best-effort everywhere: a failure to create, configure, or assign returns a reason rather than
+/// throwing, because containment hygiene must never break the work it was protecting.</para>
+/// </summary>
+internal sealed partial class WindowsKillOnCloseJob : IDisposable
 {
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private const int JobObjectExtendedLimitInformationClass = 9;
 
     private readonly SafeFileHandle _handle;
 
-    private WindowsBrokerJob(SafeFileHandle handle)
+    private WindowsKillOnCloseJob(SafeFileHandle handle)
     {
         _handle = handle;
     }
 
-    public static WindowsBrokerJobAttachment Attach(Process process)
+    public static WindowsKillOnCloseJobAttachment Attach(Process process)
     {
         ArgumentNullException.ThrowIfNull(process);
         if (!OperatingSystem.IsWindows())
         {
-            return WindowsBrokerJobAttachment.NotRequired;
+            return WindowsKillOnCloseJobAttachment.NotRequired;
         }
 
         SafeFileHandle handle = NativeMethods.CreateJobObject(IntPtr.Zero, null);
         if (handle.IsInvalid)
         {
-            return WindowsBrokerJobAttachment.Failed(
+            return WindowsKillOnCloseJobAttachment.Failed(
                 new Win32Exception(Marshal.GetLastWin32Error()).Message);
         }
 
-        var job = new WindowsBrokerJob(handle);
+        var job = new WindowsKillOnCloseJob(handle);
         try
         {
             var information = new JobObjectExtendedLimitInformation
@@ -87,12 +105,12 @@ internal sealed partial class WindowsBrokerJob : IDisposable
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
 
-            return WindowsBrokerJobAttachment.Attached(job);
+            return WindowsKillOnCloseJobAttachment.Attached(job);
         }
         catch (Win32Exception ex)
         {
             job.Dispose();
-            return WindowsBrokerJobAttachment.Failed(ex.Message);
+            return WindowsKillOnCloseJobAttachment.Failed(ex.Message);
         }
     }
 

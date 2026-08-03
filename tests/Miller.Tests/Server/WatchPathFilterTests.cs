@@ -16,6 +16,11 @@ namespace Miller.Tests.Server;
 /// events for explicit extensions julie cannot parse are dropped before they spawn a subprocess; extensionless
 /// paths remain fail-soft because the extension-only catalog cannot prove they are unsupported. A null/empty set
 /// gates nothing.
+///
+/// <para>The skip set is matched against the path's segments BELOW the root, so cases here pin roots that
+/// themselves carry a skip segment — <c>/repo/.worktrees/feature</c>, the agent-worktree convention. Pinning
+/// only <c>Root = "/repo"</c> is what let a filter that rejected every file of every worktree workspace look
+/// correct.</para>
 /// </summary>
 public sealed class WatchPathFilterTests
 {
@@ -105,6 +110,65 @@ public sealed class WatchPathFilterTests
     public void Accepts_ClaudePaths_OutsideTheNestedWorktreeDirectory(string path)
     {
         Assert.True(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/.worktrees/feature/src/A.cs")]
+    [InlineData(@"/repo\.worktrees\feature\src\A.cs")]
+    [InlineData("/repo/src/.worktrees/nested/B.cs")]
+    public void Skips_RepoRootNestedWorktrees(string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/docs/worktrees.md")]
+    [InlineData("/repo/worktrees/feature/src/A.cs")]
+    [InlineData("/repo/src/.worktrees.cs")]
+    public void Accepts_PathsThatMerelyContainTheWorktreesToken(string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(Root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/src/A.cs")]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/docs/readme.md")]
+    [InlineData("/repo/.claude/worktrees/feature", "/repo/.claude/worktrees/feature/src/A.cs")]
+    [InlineData("/repo/bin/tools", "/repo/bin/tools/src/A.cs")]
+    [InlineData("/repo/obj", "/repo/obj/src/A.cs")]
+    public void Accepts_FilesOfAWorkspaceWhoseOwnRootContainsASkipSegment(string root, string path)
+    {
+        Assert.True(WatchPathFilter.ShouldProcess(root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo", "/repo/.worktrees/feature/src/A.cs")]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/.worktrees/inner/B.cs")]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/node_modules/pkg/index.js")]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/.miller/symbols.db")]
+    [InlineData("/repo/.claude/worktrees/feature", "/repo/.claude/worktrees/feature/.claude/worktrees/in/B.cs")]
+    public void Skips_SkipSegmentsBelowTheRoot_EvenWhenTheRootItselfContainsOne(string root, string path)
+    {
+        Assert.False(WatchPathFilter.ShouldProcess(root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo", "/repo/.worktrees/feature/.gitignore")]
+    [InlineData("/repo", "/repo/.claude/worktrees/feature/.julieignore")]
+    [InlineData("/repo", "/repo/node_modules/pkg/.gitignore")]
+    public void ShouldForceRescan_PolicyFileInsideAnExcludedSubtree_CannotArmAWholeRepoScan(
+        string root, string path)
+    {
+        Assert.False(WatchPathFilter.ShouldForceRescan(root, path));
+    }
+
+    [Theory]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/.gitignore")]
+    [InlineData("/repo/.worktrees/feature", "/repo/.worktrees/feature/src/.julieignore")]
+    public void ShouldForceRescan_PolicyFileOfAWorkspaceRootedInsideAWorktreePool_StillArmsAScan(
+        string root, string path)
+    {
+        Assert.True(WatchPathFilter.ShouldForceRescan(root, path));
     }
 
     [Fact]

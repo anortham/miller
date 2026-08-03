@@ -10,10 +10,20 @@ public class JulieExtractException : Exception
     /// <summary>The raw stderr captured from the process (may be empty).</summary>
     public string StandardError { get; }
 
-    public JulieExtractException(string message, string standardError)
+    /// <summary>
+    /// The child's exit code when one was actually observed, else null. Null covers the cases where no exit code
+    /// means anything about julie's health: a failed exec, and Miller's own timeout kill (whose post-kill code
+    /// would read as a signal death Miller itself caused). The scan-failure policy reads this to recognize
+    /// <see cref="Miller.Core.Freshness.ScanFailurePolicy.SigkillExitCode"/> — the OOM killer — and clamp the
+    /// next attempt's <c>--jobs</c>.
+    /// </summary>
+    public int? ExitCode { get; }
+
+    public JulieExtractException(string message, string standardError, int? exitCode = null)
         : base(message)
     {
         StandardError = standardError;
+        ExitCode = exitCode;
     }
 
     public JulieExtractException(string message, string standardError, Exception innerException)
@@ -21,6 +31,12 @@ public class JulieExtractException : Exception
     {
         StandardError = standardError;
     }
+
+    /// <summary>
+    /// The exit code <paramref name="error"/> observed, or null when it is not a julie failure carrying one. The
+    /// one place callers map an arbitrary caught exception onto the failure record.
+    /// </summary>
+    public static int? ExitCodeOf(Exception? error) => (error as JulieExtractException)?.ExitCode;
 }
 
 /// <summary>
@@ -35,7 +51,7 @@ public sealed class JulieExtractFailedException : JulieExtractException
     public IReadOnlyList<ReportDiagnostic> Errors { get; }
 
     public JulieExtractFailedException(string message, IReadOnlyList<ReportDiagnostic> errors, string standardError)
-        : base(message, standardError)
+        : base(message, standardError, exitCode: 1)
     {
         Errors = errors;
     }
@@ -51,7 +67,8 @@ public sealed class JulieExtractUsageException : JulieExtractException
         : base(
             "julie-extract reported a usage/argv error (exit 2): " +
             (string.IsNullOrWhiteSpace(standardError) ? "(no stderr)" : standardError),
-            standardError)
+            standardError,
+            exitCode: 2)
     {
     }
 }

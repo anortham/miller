@@ -1468,8 +1468,24 @@ public static class DashboardData
         // A dashboard-triggered refresh holds the workspace lock around the scan, so it is also a safe sidecar
         // writer; honor the same default-on MILLER_SEARCH_SIDECAR flag as the server so the artifact stays consistent.
         var sidecar = SymbolSearchSidecar.FromEnvironment();
-        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
-        return refresh.Refresh(workspaceId);
+        var refresh = new CrossWorkspaceRefreshService(
+            registry, runner, sidecar, DashboardScanGovernor(registryDbPath));
+        return refresh.Refresh(workspaceId, bypassBackoff: true);
+    }
+
+    // The dashboard is one more scan source on this machine, so it queues behind the same user-global admission
+    // every other Miller process does; the miller home is the registry's own directory, which honors
+    // MILLER_REGISTRY_DB exactly as DashboardPaths resolves it. Cached per home because ScanGovernor holds a
+    // ThreadLocal that reserves a slot for the instance's lifetime, and this runs on every dashboard refresh
+    // inside a long-lived ASP.NET process.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ScanGovernor>
+        DashboardScanGovernors = new(StringComparer.Ordinal);
+
+    private static ScanGovernor DashboardScanGovernor(string registryDbPath)
+    {
+        string home = Path.GetDirectoryName(registryDbPath)
+            ?? throw new InvalidOperationException($"Registry path '{registryDbPath}' has no parent directory.");
+        return DashboardScanGovernors.GetOrAdd(home, static key => ScanGovernor.FromEnvironment(key));
     }
 
     /// <summary>

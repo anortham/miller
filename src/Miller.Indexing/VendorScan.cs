@@ -39,6 +39,17 @@ public static class VendorScan
     };
 
     /// <summary>
+    /// True when <paramref name="name"/> is one of the known vendor/build-output directory names. Lets the
+    /// seeding walk decide a directory by NAME and prune it instead of enumerating a vendored tree.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="name"/> is null.</exception>
+    public static bool IsVendorDirectoryName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return VendorDirectoryNames.Contains(name);
+    }
+
+    /// <summary>
     /// The always-recommended baseline ignore patterns, independent of detection. <c>.miller/</c> is Miller's
     /// generated sidecar and must never feed back into extraction. <c>*.log</c> is index noise: julie parses no
     /// log files (zero artifact rows) and Miller has a separate ad-hoc log-scan tool, so log churn should not

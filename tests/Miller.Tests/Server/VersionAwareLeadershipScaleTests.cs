@@ -1,6 +1,7 @@
 using System.Threading;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -55,12 +56,12 @@ public sealed class VersionAwareLeadershipScaleTests
         public ExtractReport Update(string path) => _inner.Update(path);
         public ExtractReport Delete(string path) => _inner.Delete(path);
 
-        public ExtractReport Scan(bool force = false)
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
-            ExtractReport report = _inner.Scan(force); // real julie-extract subprocess
+            ExtractReport report = _inner.Scan(intent, jobs); // real julie-extract subprocess
             lock (_gate)
             {
-                _scanForce.Add(force);
+                _scanForce.Add(ScanIntentPolicy.RequiresForce(intent));
                 if (_scanForce.Count >= SignalAtScanCount)
                     ScansReached.Set();
             }

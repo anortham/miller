@@ -21,6 +21,21 @@ public static class SqliteSymbolReader
     private const int ParameterChunkSize = 500;
 
     /// <summary>
+    /// Run the compatibility gate over the artifact at <paramref name="dbPath"/> and read nothing else. Answers
+    /// "can THIS build read this artifact at all" for callers deciding whether an artifact another process wrote
+    /// is usable, without paying for a full symbol load.
+    /// </summary>
+    /// <exception cref="FileNotFoundException">The DB file does not exist.</exception>
+    /// <exception cref="InvalidOperationException">The DB's directory is not writable (WAL sidecar trap).</exception>
+    /// <exception cref="IncompatibleExtractException">The DB is not a compatible v1 julie-extract artifact.</exception>
+    public static void VerifyCompatible(string dbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        JulieSchemaGate.Verify(connection);
+    }
+
+    /// <summary>
     /// Read all named symbols from the julie extract at <paramref name="dbPath"/> into a deterministically
     /// ordered list. DocId is the 0-based ordinal of the SELECT order (path, start_line, symbol_id).
     /// </summary>

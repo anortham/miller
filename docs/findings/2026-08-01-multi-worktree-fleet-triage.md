@@ -148,6 +148,20 @@ survived lead verification against the code. Verdict revisions they forced are a
 ended with both models voting AGREE on all ten plan items. Codex's sole objection — that a Unix
 process group alone cannot kill children on parent death — was adopted verbatim into the plan.
 
+## 6b. Measured WAL datapoint (2026-08-02, partial corroboration of claim 4)
+
+A force scan of the julie-extractors repo itself — **1,786 files** — peaked at a **2.09 GB** combined
+`db + wal + shm` total and settled to **1.13 GB** after julie's TRUNCATE checkpoint. Observed while
+mapping the extractor for W5, not staged as a measurement, so treat it as an incidental datapoint
+rather than a controlled result.
+
+It matters because claim 4's "~14 GB of WAL" was recorded as **unreproduced**. A 1.8k-file repo
+transiently holding 2 GB makes a multi-GB transient on the reporter's 74k-file root entirely
+plausible, and it means the peak is a *transient* that only survives when the scan is killed before
+its checkpoint — which is exactly what the OOM cascade in §3 causes. It does not on its own justify
+chunked commits: W10 still owns the controlled measurement, and only a healthy force-to-`.rebuild`
+showing multi-GB WAL would reopen that question.
+
 ## 7. Open questions for the reporter
 
 1. Exact `miller version` output and platform (macOS/Linux; container? shared temp?).

@@ -2504,7 +2504,8 @@ public static class CliDispatch
                     sidecar,
                     contentSidecar,
                     vectors,
-                    semanticBroker);
+                    semanticBroker,
+                    CliScanGovernor(ctx));
             outw.WriteLine(WorkspaceRender.Status(
                 selectedFacts,
                 TelemetrySummary.Empty,
@@ -2524,7 +2525,8 @@ public static class CliDispatch
                     sidecar,
                     contentSidecar,
                     vectors,
-                    semanticBroker);
+                    semanticBroker,
+                    CliScanGovernor(ctx));
             outw.WriteLine(WorkspaceRender.Status(
                 currentFacts,
                 TelemetrySummary.Empty,
@@ -2542,7 +2544,8 @@ public static class CliDispatch
             sidecar,
             contentSidecar,
             vectors,
-            semanticBroker);
+            semanticBroker,
+            CliScanGovernor(ctx));
         outw.WriteLine(WorkspaceRender.Status(
             facts,
             TelemetrySummary.Empty,
@@ -2585,7 +2588,8 @@ public static class CliDispatch
                 sidecar,
                 contentSidecar,
                 vectors,
-                semanticBroker);
+                semanticBroker,
+                CliScanGovernor(ctx));
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -2606,7 +2610,8 @@ public static class CliDispatch
                 sidecar,
                 contentSidecar,
                 vectors,
-                semanticBroker);
+                semanticBroker,
+                CliScanGovernor(ctx));
             WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
@@ -2626,7 +2631,8 @@ public static class CliDispatch
             sidecar,
             contentSidecar,
             vectors,
-            semanticBroker);
+            semanticBroker,
+            CliScanGovernor(ctx));
         outw.WriteLine(WorkspaceRender.Health(
             WorkspaceHealthFacts.Create(
                 localFacts,
@@ -2651,12 +2657,9 @@ public static class CliDispatch
         if (mode is SemanticMode.Off)
             return SemanticBrokerFacts.From(mode, null);
 
-        string millerHome = Path.GetDirectoryName(context.RegistryDbPath)
-            ?? throw new InvalidOperationException(
-                $"Registry path '{context.RegistryDbPath}' has no parent directory.");
         var factory = new SharedSemanticBrokerConnectionFactory(
             context.ToolsRoot,
-            millerHome,
+            MillerHomeFor(context),
             SemanticEncoderSelection.Active);
         try
         {
@@ -2962,8 +2965,8 @@ public static class CliDispatch
             return 3;
         }
         var sidecar = SymbolSearchSidecar.FromEnvironment();
-        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
-        WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force);
+        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
+        WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force, bypassBackoff: true);
 
         bool currentWorkspace = WorkspaceSafety.IsLiveWorkspace(
             row.CanonicalRoot,
@@ -3127,10 +3130,17 @@ public static class CliDispatch
 
         var sidecar = SymbolSearchSidecar.FromEnvironment();
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
-        registry.UpsertSeen(id, display, canonicalRoot, dbPath, WorkspaceRegistryState.Ready);
+        // `Refreshing` is written only for a row this open CREATES: it advertises "an index is being built", which
+        // is a lie about an ALREADY-registered workspace and would demote a healthy `ready` row. An existing row
+        // keeps its own state until the refresh below moves it (MarkScanned ⇒ ready, MarkError ⇒ error,
+        // MarkMissing ⇒ missing), and the statuses that deliberately leave it untouched are reconciled after.
+        WorkspaceRegistryRow? priorRow = registry.Get(id);
+        registry.UpsertSeen(
+            id, display, canonicalRoot, dbPath, priorRow?.State ?? WorkspaceRegistryState.Refreshing);
 
-        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar);
-        WorkspaceRefreshResult result = refresh.Refresh(id, force: full);
+        var refresh = new CrossWorkspaceRefreshService(registry, runner, sidecar, CliScanGovernor(ctx));
+        WorkspaceRefreshResult result = refresh.Refresh(id, force: full, bypassBackoff: true);
+        ReconcileOpenedRegistryRow(registry, id, dbPath, isNewRow: priorRow is null, result);
 
         // Rendered via the Action view (NOT WorkspaceRender.Open, whose "primed / not a live switch" copy is
         // server semantics — false for the CLI). A scan failure has marked the just-registered row error.
@@ -3148,6 +3158,34 @@ public static class CliDispatch
             ArtifactId: ArtifactIdForAction(result, registry));
         outw.WriteLine(WorkspaceRender.Action(action, json));
         return RefreshExitCode(result.Status);
+    }
+
+    // Give a row this open CREATED a real state when the refresh deliberately left it alone. `lock_busy` (a live
+    // Miller owns the workspace) and `ineligible_extractor` (the index is valid for whoever built it with a NEWER
+    // binary) are not workspace errors, so the refresh does not write them — which would strand a brand-new row at
+    // `refreshing`, a state nothing sweeps and that drops the workspace out of every fleet consumer's
+    // Current|Ready|LoadedExisting filter. A row that ALREADY existed needs nothing here: it kept its own state
+    // through the upsert above, and demoting a healthy `ready` workspace because this open could not scan it would
+    // break a workspace the open was only meant to register.
+    private static void ReconcileOpenedRegistryRow(
+        WorkspaceRegistry registry,
+        string workspaceId,
+        string dbPath,
+        bool isNewRow,
+        WorkspaceRefreshResult result)
+    {
+        if (!isNewRow)
+            return;
+        if (result.Status is not (WorkspaceRefreshStatus.LockBusy or WorkspaceRefreshStatus.IneligibleExtractor))
+            return;
+
+        if (File.Exists(dbPath))
+            registry.MarkLoadedExisting(workspaceId, result.Revision ?? 0);
+        else
+            registry.MarkError(
+                workspaceId,
+                result.Error ?? result.WarningText
+                    ?? "workspace open did not produce an index and nothing is scanning this workspace.");
     }
 
     // ---------- prune (registry GC for gone roots) ----------
@@ -3219,12 +3257,14 @@ public static class CliDispatch
     }
 
     // Map a refresh/full outcome to a process exit code (cli-eros-v1: exit 0 = ingestable payload, exit 3 =
-    // genuinely unusable index). LockBusy is exit 0: the latest readable DB IS being served and a LIVE leader
-    // owns convergence — the payload says so (`status: lock_busy`, `index_fresh: false`), so a consumer that
-    // needs CONFIRMED freshness must gate on those fields, not the exit code (2026-06-11 Eros ask; previously 3,
-    // which forced Eros to parse exit-3 stdout against the "non-zero = non-ingestable" rule). A missing
-    // root/index, a hard failure, or an ineligible extractor (nothing usable was served or the rebuild broke)
-    // stay operational failures (3); any future status is unexpected (1).
+    // genuinely unusable index). LockBusy is exit 0 because the latest readable DB IS being served — the payload
+    // says so (`status: lock_busy`, `index_fresh: false`), so a consumer that needs CONFIRMED freshness must gate
+    // on those fields, not the exit code (2026-06-11 Eros ask; previously 3, which forced Eros to parse exit-3
+    // stdout against the "non-zero = non-ingestable" rule). Exit 0 does NOT promise a live converger: a busy
+    // WRITER lock means a leader owns convergence, while a busy machine-wide scan governor means nobody is
+    // scanning right now, and a governor refusal with no readable index reports MissingIndex instead so this
+    // code can never advertise a Ready workspace with no symbols.db. A missing root/index, a hard failure, or an
+    // ineligible extractor stay operational failures (3); any future status is unexpected (1).
     internal static int RefreshExitCode(WorkspaceRefreshStatus status) => status switch
     {
         WorkspaceRefreshStatus.Refreshed
@@ -3513,12 +3553,25 @@ public static class CliDispatch
           serve              Run the MCP stdio server (the default when launched with no arguments).
         """;
 
-    private static CliSemanticSession CreateCliSemanticSession(WorkspaceContext workspace)
+    private static CliSemanticSession CreateCliSemanticSession(WorkspaceContext workspace) =>
+        new(workspace.ToolsRoot, MillerHomeFor(workspace));
+
+    /// <summary>The machine-global <c>.miller</c> directory: the registry's own parent.</summary>
+    private static string MillerHomeFor(WorkspaceContext workspace) =>
+        Path.GetDirectoryName(workspace.RegistryDbPath)
+        ?? throw new InvalidOperationException(
+            $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
+
+    // One governor per (miller home, kill-switch value), not one per call site: ScanGovernor holds a ThreadLocal
+    // that reserves a slot for the instance's lifetime, and the CLI builds one at eight sites per process.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Home, string Env), ScanGovernor>
+        CliScanGovernors = new();
+
+    private static ScanGovernor CliScanGovernor(WorkspaceContext workspace)
     {
-        string millerHome = Path.GetDirectoryName(workspace.RegistryDbPath)
-            ?? throw new InvalidOperationException(
-                $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
-        return new CliSemanticSession(workspace.ToolsRoot, millerHome);
+        string home = MillerHomeFor(workspace);
+        string env = Environment.GetEnvironmentVariable(ScanGovernor.EnvVar) ?? string.Empty;
+        return CliScanGovernors.GetOrAdd((home, env), _ => ScanGovernor.FromEnvironment(home));
     }
 
     private const string WorkspaceHelpText =

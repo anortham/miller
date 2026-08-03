@@ -125,24 +125,24 @@ public sealed class SingleWriterLockTests
     [Fact]
     public void IsLockContention_WindowsSharingViolationsOnly_AreBusy()
     {
-        Assert.True(SingleWriterLock.IsLockContentionForTest(
+        Assert.True(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(unchecked((int)0x80070020)), isWindows: true)); // ERROR_SHARING_VIOLATION
-        Assert.True(SingleWriterLock.IsLockContentionForTest(
+        Assert.True(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(unchecked((int)0x80070021)), isWindows: true)); // ERROR_LOCK_VIOLATION
-        Assert.False(SingleWriterLock.IsLockContentionForTest(
+        Assert.False(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(unchecked((int)0x8007007B)), isWindows: true)); // ERROR_INVALID_NAME
     }
 
     [Fact]
     public void IsLockContention_NonWindows_OnlyLockUnavailableErrorsAreBusy()
     {
-        Assert.True(SingleWriterLock.IsLockContentionForTest(
+        Assert.True(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(11), isWindows: false)); // Linux EAGAIN/EWOULDBLOCK
-        Assert.True(SingleWriterLock.IsLockContentionForTest(
+        Assert.True(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(35), isWindows: false)); // macOS EAGAIN/EWOULDBLOCK
-        Assert.False(SingleWriterLock.IsLockContentionForTest(
+        Assert.False(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(28), isWindows: false)); // ENOSPC
-        Assert.False(SingleWriterLock.IsLockContentionForTest(
+        Assert.False(SingleWriterLock.IsLockContention(
             new IOExceptionWithHResult(unchecked((int)0x80131620)), isWindows: false)); // generic IOException
     }
 

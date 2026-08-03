@@ -1,6 +1,8 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
@@ -57,6 +59,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private readonly ILogger<IndexBootstrapService> _logger;
     private readonly object _gate = new();
 
+    // The bootstrap scan runs on a detached Task.Run, so without this a scan blocked on machine-wide admission
+    // would survive host shutdown holding an OS handle.
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly ScanGovernor _governor;
+
     private BoundWorkspace? _bound;
     private BootstrapPhase _phase = BootstrapPhase.Idle;
     private string? _snapshotRoot;
@@ -66,10 +73,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private int _runGeneration;
     private TaskCompletionSource _runCompletion = CreateBindingGate();
 
-    public IndexBootstrapService(ILogger<IndexBootstrapService> logger)
+    public IndexBootstrapService(ILogger<IndexBootstrapService> logger, ScanGovernor? scanGovernor = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
+        // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
+        _governor = scanGovernor ?? ScanGovernor.Disabled();
     }
 
     private sealed record BoundWorkspace(
@@ -170,15 +179,43 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
     internal sealed record BootstrapScanDecision(
         bool ShouldScan,
-        bool Force,
-        WorkspaceRegistryState RegistryStateAfterLoad);
+        ScanIntent Intent,
+        WorkspaceRegistryState RegistryStateAfterLoad)
+    {
+        /// <summary>Whether the decided scan is a from-scratch rebuild rather than a hash-delta reconcile.</summary>
+        internal bool Force => ScanIntentPolicy.RequiresForce(Intent);
+    }
 
     /// <summary>
-    /// The outcome of <see cref="LoadIndexWithAutoRebuild{T}"/>: the loaded index, whether a force-rebuild was
-    /// needed to heal an incompatible DB, and (when rebuilt) the revision the rebuild scan produced — which the
-    /// caller folds into the holder's seed revision and the registry's scanned-at bookkeeping.
+    /// The outcome of <see cref="LoadIndexWithAutoRebuild{T}"/>: the loaded index, whether a force-rebuild
+    /// actually ran, and (when it ran) the revision it produced — which the caller folds into the holder's seed
+    /// revision and the registry's scanned-at bookkeeping. <c>Rebuilt</c> is false when the rebuild was SKIPPED
+    /// because another instance held the writer lock; reporting it true there recorded a scan nothing performed.
     /// </summary>
     internal sealed record IndexLoadResult<T>(T Index, bool Rebuilt, long? RebuiltRevision);
+
+    /// <summary>How a bootstrap that needed to scan resolved the workspace writer lock.</summary>
+    internal enum BootstrapLeaseOutcome
+    {
+        /// <summary>The lease is held; the accompanying decision was re-read after acquisition.</summary>
+        Acquired,
+
+        /// <summary>Another instance holds the lease, and the artifact it produced is finished and usable.</summary>
+        WinnerArtifactUsable,
+
+        /// <summary>The wait expired with the lease still held elsewhere and no finished artifact observed.</summary>
+        TimedOut,
+    }
+
+    /// <summary>
+    /// The result of <see cref="AcquireBootstrapScanLease{TLease}"/>. <c>Decision</c> is ALWAYS evaluated after the
+    /// outcome is known, so a caller that acts on it is acting on post-lock facts rather than the stale pre-lock
+    /// probe. <c>Lease</c> is non-null only for <see cref="BootstrapLeaseOutcome.Acquired"/>.
+    /// </summary>
+    internal sealed record BootstrapScanLease<TLease>(
+        BootstrapLeaseOutcome Outcome,
+        TLease? Lease,
+        BootstrapScanDecision Decision) where TLease : class, IDisposable;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -206,11 +243,23 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     internal Action<string>? TestRunBootstrapOverride { get; set; }
 
     /// <summary>
+    /// Test-only hook: invoked immediately before every extract subprocess <see cref="RunBootstrap"/> launches,
+    /// so a test can count the scans the real bootstrap performed. The scan itself still runs for real.
+    /// </summary>
+    internal Action? TestScanObserver { get; set; }
+
+    /// <summary>
     /// Test-only home directory override for <see cref="WorkspaceContext.Create"/>. When set, every workspace
     /// context the bootstrap builds (including <see cref="MarkBootstrapFailed"/>) routes registry/telemetry
     /// paths under this directory instead of the real user profile.
     /// </summary>
     internal string? TestHomeDirectoryOverride { get; set; }
+
+    /// <summary>
+    /// Test-only override for the machine-wide scan-admission budget, so a contention test does not sit out the
+    /// ten-minute production wait.
+    /// </summary>
+    internal TimeSpan? TestBootstrapScanAdmissionWait { get; set; }
 
     private WorkspaceContext CreateWorkspaceContext(string canonicalRoot) =>
         WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, TestHomeDirectoryOverride);
@@ -279,6 +328,44 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         return BindOutcome.Started;
     }
 
+    /// <summary>
+    /// Re-run the bootstrap for the root this service is ALREADY bound to, because a different checkout now
+    /// occupies that path (<see cref="Miller.Indexing.WorkspaceRootIdentity"/>). <see cref="BootstrapForRoot"/>
+    /// deliberately answers <see cref="BindOutcome.AlreadyBound"/> for an unchanged root, so path-reuse needs its
+    /// own entry point; everything after this call is the ordinary bootstrap run, including
+    /// <see cref="ReadBootstrapScanDecision"/> — the identity fact is folded INTO that decision by
+    /// <see cref="EscalateForReplacedRoot"/> rather than deciding anything in parallel with it.
+    ///
+    /// <para>The caller must have released the workspace writer lease first: the run this starts needs it to
+    /// rebuild the artifact.</para>
+    /// </summary>
+    /// <returns>
+    /// The run generation to await with <see cref="WaitForRunAsync"/>. When a run is already in flight its
+    /// generation is returned instead of starting a second one — that run rebinds the workspace on its own, and
+    /// starting a competing one would race it for the same writer lease.
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> is null or blank.</exception>
+    internal int RebootstrapForReplacedRoot(string canonicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+
+        int runGeneration;
+        lock (_gate)
+        {
+            if (_phase == BootstrapPhase.Running)
+                return _runGeneration;
+
+            _logger.LogWarning(
+                "Workspace root {Root} is now occupied by a different checkout; re-bootstrapping it.",
+                canonicalRoot);
+            runGeneration = StartRunLocked(canonicalRoot);
+        }
+
+        _ = Task.Run(() => RunBootstrapInBackground(
+            canonicalRoot, WorkspaceBindingResolver.WorkspaceSource.Roots, runGeneration, rootReplaced: true));
+        return runGeneration;
+    }
+
     private int StartRunLocked(string canonicalRoot)
     {
         if (_phase != BootstrapPhase.Failed)
@@ -311,7 +398,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     }
 
     private void RunBootstrapInBackground(
-        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration)
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration,
+        bool rootReplaced = false)
     {
         BootstrapRunResult? result = null;
         bool published = false;
@@ -323,10 +411,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 return;
             }
 
-            result = RunBootstrap(canonicalRoot, source);
+            result = RunBootstrap(canonicalRoot, source, rootReplaced);
             published = PublishBoundWorkspace(result, runGeneration);
             if (!published && !result.UsesExistingLedger)
                 result.Bound.Ledger?.Dispose();
+        }
+        catch (OperationCanceledException ex) when (_shutdown.IsCancellationRequested)
+        {
+            if (result is not null && !published && !result.UsesExistingLedger)
+                result.Bound.Ledger?.Dispose();
+            MarkBootstrapAbandoned(canonicalRoot, runGeneration, ex);
         }
         catch (Exception ex)
         {
@@ -336,7 +430,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
-    private BootstrapRunResult RunBootstrap(string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    private BootstrapRunResult RunBootstrap(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, bool rootReplaced = false)
     {
         // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
         // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
@@ -355,7 +450,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
-            var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+            var runner = JulieExtractRunner.Locate(
+                ctx.ToolsRoot,
+                reason => _logger.LogWarning(
+                    "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan proceeds, " +
+                    "but if this Miller is killed the extractor can outlive it.", reason));
 
             // Locate only checks EXISTENCE, so a julie-extract left in .tools/ from before a pin bump passes it
             // but then fails every scan with a schema mismatch. Probe the bundled version up front and warn
@@ -370,89 +469,195 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             // missing/legacy/mismatched workspace_id is force-rebound before Miller loads it, so the in-memory
             // index, freshness cursor, registry row, and julie metadata all converge on the stable root hash.
             long? scanRevision = null;
-            bool dbExists = File.Exists(canonicalDbPath);
             // v1 identity is the recorded canonical root_path, not a stored workspace_id (reconciliation #14).
-            string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(canonicalDbPath) : null;
-            var scanDecision = DecideBootstrapScan(dbExists, existingRootPath, canonicalRoot);
-            if (scanDecision.ShouldScan)
+            string? existingRootPath = null;
+
+            BootstrapScanDecision ReadDecision()
             {
-                if (scanDecision.Force)
+                var probe = ReadBootstrapScanDecision(canonicalDbPath, canonicalRoot);
+                existingRootPath = probe.ExistingRootPath;
+                return rootReplaced ? EscalateForReplacedRoot(probe.Decision) : probe.Decision;
+            }
+
+            var winnerArtifact = new WinnerArtifactProbe(canonicalDbPath, canonicalRoot, stableWorkspaceId);
+            // The bootstrap RECORDS scan failures but is never DEFERRED by the backoff. It only scans when there
+            // is no usable artifact for this root at all, so deferring could only turn a transient into a hard
+            // bind failure with nothing served; concurrency here is already bounded by the workspace writer lease
+            // (a loser loads the winner's artifact) and the machine-wide governor. What it must do is record —
+            // that record is what throttles every AUTOMATIC path afterwards — and honor the post-SIGKILL jobs
+            // clamp, which costs a struggling machine nothing.
+            PersistedScanFailurePolicy failurePolicy =
+                PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
+
+            var scanDecision = ReadDecision();
+            bool scanned = false;
+            IndexLoadResult<MillerRepositoryIndex> loadResult;
+
+            // Every bootstrap scan — including the force rebind, which PROMOTES over the live artifact — runs
+            // under this lease. It is disposed before the method returns: the same process's IndexerService claim
+            // loop unblocks only after bind, so a leaked lease would make this instance a permanent non-leader.
+            SingleWriterLock? bootstrapLease = null;
+            try
+            {
+                if (scanDecision.ShouldScan)
                 {
+                    var scanLease = AcquireBootstrapScanLease(
+                        tryAcquire: () => SingleWriterLock.TryAcquire(millerDir),
+                        decide: ReadDecision,
+                        winnerArtifactUsable: winnerArtifact.IsFinished,
+                        wait: BootstrapScanLockWait(),
+                        pollInterval: BootstrapScanLockPollInterval,
+                        utcNow: () => DateTimeOffset.UtcNow,
+                        sleep: Thread.Sleep);
+                    bootstrapLease = scanLease.Lease;
+                    scanDecision = scanLease.Decision;
+
+                    if (scanLease.Outcome == BootstrapLeaseOutcome.WinnerArtifactUsable)
+                    {
+                        _logger.LogInformation(
+                            "Another Miller instance holds the writer lock for {Db}; loading the artifact it " +
+                            "produced instead of scanning. {Holder}",
+                            canonicalDbPath, DescribeBootstrapLockHolder(millerDir));
+                    }
+                    else if (scanLease.Outcome == BootstrapLeaseOutcome.TimedOut)
+                    {
+                        if (scanDecision.ShouldScan)
+                        {
+                            throw new InvalidOperationException(
+                                $"Timed out waiting for the Miller writer lock on {millerDir}, and no usable index " +
+                                $"exists at {canonicalDbPath}. {DescribeBootstrapLockHolder(millerDir)}");
+                        }
+
+                        _logger.LogWarning(
+                            "Timed out waiting for the Miller writer lock for {Db}; serving the existing artifact " +
+                            "without confirming its freshness. {Holder}",
+                            canonicalDbPath, DescribeBootstrapLockHolder(millerDir));
+                    }
+                }
+
+                if (scanDecision.ShouldScan && bootstrapLease is not null)
+                {
+                    if (scanDecision.Force)
+                    {
+                        _logger.LogInformation(
+                            "Extract DB at {Db} has root_path={ExistingRootPath}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                            canonicalDbPath, existingRootPath ?? "(missing)", canonicalRoot, stableWorkspaceId);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
+                            canonicalDbPath, canonicalRoot, stableWorkspaceId);
+                    }
+                    // SingleWriterLock -> ScanGovernor: admission is taken INSIDE the lease this bootstrap
+                    // already holds, never the other way round.
+                    using ScanGovernorAdmission? admission =
+                        AcquireBootstrapScanAdmission(canonicalRoot, "bootstrap");
+                    if (admission is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Timed out waiting for machine-wide scan admission to index {canonicalRoot}, and no " +
+                            $"usable index exists at {canonicalDbPath}. {_governor.DescribeHolder()}");
+                    }
+
+                    TestScanObserver?.Invoke();
+                    ScanAttemptDecision attempt =
+                        failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
+                    ExtractReport report = RunRecordedScan(
+                        failurePolicy, attempt,
+                        () => runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs));
+                    scanned = true;
+                    scanRevision = report.Revision;
                     _logger.LogInformation(
-                        "Extract DB at {Db} has root_path={ExistingRootPath}; force-scanning {Root} with stable workspace_id={StableWorkspaceId}.",
-                        canonicalDbPath, existingRootPath ?? "(missing)", canonicalRoot, stableWorkspaceId);
+                        "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                        report.SymbolsExtracted, report.Revision);
+                    if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                        _logger.LogWarning("Bootstrap scan: {Warning}", warning);
                 }
                 else
                 {
-                    _logger.LogInformation(
-                        "No extract DB at {Db}; scanning {Root} with stable workspace_id={StableWorkspaceId}.",
-                        canonicalDbPath, canonicalRoot, stableWorkspaceId);
+                    _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
                 }
-                var report = runner.Scan(canonicalRoot, canonicalDbPath, scanDecision.Force);
-                scanRevision = report.Revision;
-                _logger.LogInformation(
-                    "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                    report.SymbolsExtracted, report.Revision);
-                if (ExtractReportLog.DescribeWarning(report) is { } warning)
-                    _logger.LogWarning("Bootstrap scan: {Warning}", warning);
-            }
-            else
-            {
-                _logger.LogInformation("Reusing existing extract DB at {Db}.", canonicalDbPath);
-            }
 
-            // Read → build the in-memory index + dependency graph as one unit via the single production path
-            // (M5 D9; read-path opens the same DB file; canonical is fine). The bootstrap and the freshness
-            // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
-            //
-            // AUTO-HEAL: a reused DB whose root_path matched (so DecideBootstrapScan did NOT rescan) can still
-            // be an INCOMPATIBLE artifact — e.g. a julie-extract schema/contract bump raised the expected
-            // version since the DB was written. Rather than crash the whole host (which surfaces to the client
-            // as "MCP failed to connect"), force-rebuild the index ONCE with the bundled julie-extract and
-            // reload. A second incompatibility means the bundled tool does not match this build — fail loudly.
-            var loadResult = LoadIndexWithAutoRebuild(
-                load: () => RepositoryIndexLoader.Load(canonicalDbPath),
-                forceRescan: () =>
-                {
-                    // A force scan promotes over the live artifact (FullRebuildPromotion), and
-                    // JulieExtractRunner.Scan's contract is that force-scan callers hold Miller's single-writer
-                    // lock so two instances cannot interleave promotes on the same workspace. Skip the rebuild
-                    // rather than promote unlocked: whoever holds the lock is already healing this artifact, and
-                    // the retry load below either picks up their result or fails loudly.
-                    using SingleWriterLock? writeLock = AcquireWriteLockForAutoRebuild(canonicalDbPath);
-                    if (writeLock is null)
+                // Read → build the in-memory index + dependency graph as one unit via the single production path
+                // (M5 D9; read-path opens the same DB file; canonical is fine). The bootstrap and the freshness
+                // rebuild both route through RepositoryIndexLoader so each gets the graph identically.
+                //
+                // AUTO-HEAL: a reused DB whose root_path matched (so DecideBootstrapScan did NOT rescan) can still
+                // be an INCOMPATIBLE artifact — e.g. a julie-extract schema/contract bump raised the expected
+                // version since the DB was written. Rather than crash the whole host (which surfaces to the client
+                // as "MCP failed to connect"), force-rebuild the index ONCE with the bundled julie-extract and
+                // reload. A second incompatibility means the bundled tool does not match this build — fail loudly.
+                loadResult = LoadIndexWithAutoRebuild(
+                    load: () => RepositoryIndexLoader.Load(canonicalDbPath),
+                    forceRescan: healIntent =>
                     {
-                        _logger.LogWarning(
-                            "Auto-rebuild skipped: another Miller instance holds the write lock for {Db}. " +
-                            "Retrying the load against whatever that instance produced.",
-                            canonicalDbPath);
-                        return null;
-                    }
+                        // A force scan promotes over the live artifact (FullRebuildPromotion), and
+                        // JulieExtractRunner.Scan's contract is that force-scan callers hold Miller's single-writer
+                        // lock so two instances cannot interleave promotes on the same workspace. Skip the rebuild
+                        // rather than promote unlocked: whoever holds the lock is already healing this artifact, and
+                        // the retry load below either picks up their result or fails loudly.
+                        //
+                        // A lease this bootstrap ALREADY holds must be reused, never re-acquired: the lock is
+                        // FileShare.None, so a second handle is denied to this process too and would spend the full
+                        // wait discovering that, then skip a rebuild it was entitled to run.
+                        using SingleWriterLock? writeLock = bootstrapLease is null
+                            ? AcquireWriteLockForAutoRebuild(canonicalDbPath)
+                            : null;
+                        if (bootstrapLease is null && writeLock is null)
+                        {
+                            _logger.LogWarning(
+                                "Auto-rebuild skipped: another Miller instance holds the write lock for {Db}. " +
+                                "Retrying the load against whatever that instance produced.",
+                                canonicalDbPath);
+                            return null;
+                        }
 
-                    var rebuild = runner.Scan(canonicalRoot, canonicalDbPath, force: true);
-                    _logger.LogInformation(
-                        "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                        rebuild.SymbolsExtracted, rebuild.Revision);
-                    if (ExtractReportLog.DescribeWarning(rebuild) is { } warning)
-                        _logger.LogWarning("Auto-rebuild scan: {Warning}", warning);
-                    return rebuild.Revision;
-                },
-                // The rebuild replaced the DB file; drop pooled read connections so the retry below opens a
-                // fresh handle on the rebuilt artifact instead of re-reading the old inode's stale snapshot.
-                onBeforeRetry: SqliteConnection.ClearAllPools,
-                onIncompatible: ex => _logger.LogWarning(
-                    "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
-                    "bundled julie-extract.",
-                    canonicalDbPath, ex.Message),
-                onCorrupt: ex => _logger.LogWarning(
-                    "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
-                    "julie-extract (a writer likely died mid-scan).",
-                    canonicalDbPath, ex.Message));
+                        using ScanGovernorAdmission? admission =
+                            AcquireBootstrapScanAdmission(canonicalRoot, "bootstrap-auto-rebuild");
+                        if (admission is null)
+                        {
+                            _logger.LogWarning(
+                                "Auto-rebuild skipped: machine-wide scan admission was refused for {Db}. " +
+                                "Retrying the load against the existing artifact. {Holder}",
+                                canonicalDbPath, _governor.DescribeHolder());
+                            return null;
+                        }
+
+                        TestScanObserver?.Invoke();
+                        ScanAttemptDecision attempt = failurePolicy.Evaluate(healIntent, bypassBackoff: true);
+                        ExtractReport rebuild = RunRecordedScan(
+                            failurePolicy, attempt,
+                            () => runner.Scan(canonicalRoot, canonicalDbPath, force: true, attempt.Jobs));
+                        _logger.LogInformation(
+                            "Auto-rebuild scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                            rebuild.SymbolsExtracted, rebuild.Revision);
+                        if (ExtractReportLog.DescribeWarning(rebuild) is { } warning)
+                            _logger.LogWarning("Auto-rebuild scan: {Warning}", warning);
+                        return rebuild.Revision;
+                    },
+                    // The rebuild replaced the DB file; drop pooled read connections so the retry below opens a
+                    // fresh handle on the rebuilt artifact instead of re-reading the old inode's stale snapshot.
+                    onBeforeRetry: SqliteConnection.ClearAllPools,
+                    onIncompatible: ex => _logger.LogWarning(
+                        "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
+                        "bundled julie-extract.",
+                        canonicalDbPath, ex.Message),
+                    onCorrupt: ex => _logger.LogWarning(
+                        "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
+                        "julie-extract (a writer likely died mid-scan).",
+                        canonicalDbPath, ex.Message));
+            }
+            finally
+            {
+                bootstrapLease?.Dispose();
+            }
+
             var index = loadResult.Index;
 
             // An auto-rebuild counts as a scan for the holder's seed revision + the registry's scanned-at
             // bookkeeping below, even though DecideBootstrapScan chose to reuse: julie just (re)wrote the DB.
-            bool didScan = scanDecision.ShouldScan || loadResult.Rebuilt;
+            bool didScan = scanned || loadResult.Rebuilt;
             if (loadResult.Rebuilt)
                 scanRevision = loadResult.RebuiltRevision;
 
@@ -560,6 +765,31 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// End a bootstrap that was cut short by host shutdown. It ends the run and unblocks waiters like a failure,
+    /// but says so honestly and writes NO registry error: a shutdown is not a workspace fault, and persisting one
+    /// would leave a later run reporting a timeout that never happened.
+    /// </summary>
+    private void MarkBootstrapAbandoned(string canonicalRoot, int runGeneration, Exception cancellation)
+    {
+        lock (_gate)
+        {
+            if (_phase != BootstrapPhase.Running || _runGeneration != runGeneration)
+                return;
+
+            string message = "Bootstrap was abandoned because the Miller host is shutting down; " +
+                "the next run indexes this workspace.";
+            _phase = BootstrapPhase.Failed;
+            _snapshotRoot = canonicalRoot;
+            _failureMessage = message;
+            _lastFailureMessage = message;
+            _runCompletion.TrySetResult();
+        }
+
+        _logger.LogInformation(
+            cancellation, "Bootstrap for {Root} abandoned during host shutdown.", canonicalRoot);
+    }
+
     private void MarkBootstrapFailed(string canonicalRoot, int runGeneration, Exception error)
     {
         bool shouldMarkRegistry;
@@ -643,23 +873,58 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// is the canonical <c>root_path</c> the artifact was extracted from (reconciliation #14): a missing DB delta-
     /// scans; a DB whose recorded root does NOT match the root Miller is indexing (a relocated/aliased workspace,
     /// or a pre-v1 DB with no <c>root_path</c>) is force-rescanned so the index, freshness cursor, and metadata all
-    /// converge on the current root; a matching root reuses the existing DB.
+    /// converge on the current root; a matching root that carries a committed revision reuses the existing DB.
     /// </summary>
+    /// <param name="hasCommittedRevision">
+    /// Whether the artifact carries a revision this process can SEE — the same committed-data test
+    /// <see cref="WinnerArtifactProbe.IsFinished"/> applies. julie-extract writes <c>artifact_metadata</c>
+    /// (<c>root_path</c> included) in autocommit the moment it opens the writer, then streams every file/symbol row
+    /// into one long transaction, so for the whole duration of a first scan there is a DB on disk that matches this
+    /// root and holds zero committed rows. Reusing it binds an empty index and serves a silent wrong answer to
+    /// every agent query until freshness happens to reconcile. Deciding to scan instead routes the caller into the
+    /// lease block, where the winner-artifact probe makes a loser wait for the winner's finished artifact. It stays
+    /// a DELTA reconcile: a finished artifact reached here is correct and cheap to reconcile, and forcing would
+    /// turn every cold-start race into a full rebuild.
+    /// </param>
     internal static BootstrapScanDecision DecideBootstrapScan(
-        bool dbExists, string? existingRootPath, string canonicalRoot)
+        bool dbExists, string? existingRootPath, string canonicalRoot, bool hasCommittedRevision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
 
         if (!dbExists)
             return new BootstrapScanDecision(
-                ShouldScan: true, Force: false, WorkspaceRegistryState.Ready);
+                ShouldScan: true, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.Ready);
 
         if (!RootPathsEqual(existingRootPath, canonicalRoot))
             return new BootstrapScanDecision(
-                ShouldScan: true, Force: true, WorkspaceRegistryState.Ready);
+                ShouldScan: true, ScanIntent.RootRebind, WorkspaceRegistryState.Ready);
+
+        if (!hasCommittedRevision)
+            return new BootstrapScanDecision(
+                ShouldScan: true, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.Ready);
 
         return new BootstrapScanDecision(
-            ShouldScan: false, Force: false, WorkspaceRegistryState.LoadedExisting);
+            ShouldScan: false, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.LoadedExisting);
+    }
+
+    /// <summary>
+    /// Fold "a DIFFERENT checkout now occupies this path" into whatever <see cref="DecideBootstrapScan"/> read off
+    /// the artifact. Workspace identity is the canonical ROOT PATH, so an artifact the previous occupant left
+    /// behind records a <c>root_path</c> that still matches and would be REUSED — serving the removed worktree's
+    /// symbols under the new one's name, with a matching freshness cursor to make it look current.
+    /// <see cref="ScanIntent.RootRebind"/> names exactly that condition ("the artifact describes another tree")
+    /// and is never downgradable, so a workspace whose scans have been failing cannot quietly turn the rebuild
+    /// into a delta against the foreign artifact.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="decision"/> is null.</exception>
+    internal static BootstrapScanDecision EscalateForReplacedRoot(BootstrapScanDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+
+        return new BootstrapScanDecision(
+            ShouldScan: true,
+            ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.RootRebind }),
+            WorkspaceRegistryState.Ready);
     }
 
     /// <summary>
@@ -676,19 +941,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// matches, forcing a clean rescan. Without this, a Windows workspace force-rescanned on every startup because
     /// <c>\\?\C:\repo</c> never matched <c>C:\repo</c> ordinally — a 30s+ rescan that tripped the MCP connect timeout.
     /// </summary>
-    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot)
-    {
-        if (string.IsNullOrEmpty(recordedRootPath))
-            return false;
-
-        string recorded = PathCanonicalizer.StripWindowsVerbatimPrefix(recordedRootPath);
-        string current = PathCanonicalizer.StripWindowsVerbatimPrefix(canonicalRoot);
-        var comparison = RootPathComparison(OperatingSystem.IsWindows(), OperatingSystem.IsMacOS());
-        return string.Equals(recorded, current, comparison);
-    }
+    internal static bool RootPathsEqual(string? recordedRootPath, string canonicalRoot) =>
+        ArtifactRootIdentity.Matches(recordedRootPath, canonicalRoot);
 
     internal static StringComparison RootPathComparison(bool isWindows, bool isMacOS) =>
-        isWindows || isMacOS ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        ArtifactRootIdentity.ComparisonFor(isWindows, isMacOS);
 
     /// <summary>
     /// Bounded-wait acquisition of the workspace single-writer lock for the bootstrap auto-rebuild promote.
@@ -715,6 +972,310 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private static readonly TimeSpan AutoRebuildLockPollInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
+    /// Machine-wide admission for a bootstrap scan, on the SAME budget as the workspace lock wait: both are one
+    /// user-visible "the first index is coming" state, already rendered as the friendly not-ready text. Returns
+    /// null on refusal; THROWS <see cref="OperationCanceledException"/> when the host is shutting down, because a
+    /// shutdown is not a budget expiry and must not be recorded as a failed bootstrap blaming a timeout.
+    /// </summary>
+    /// <exception cref="OperationCanceledException">The host is shutting down.</exception>
+    private ScanGovernorAdmission? AcquireBootstrapScanAdmission(string canonicalRoot, string reason)
+    {
+        try
+        {
+            return ScanGovernorAdmission.TryAcquire(
+                _governor,
+                ScanGovernorState.Shared,
+                new ScanGovernorRequest(canonicalRoot, reason, ExtractJobsPolicy.FromEnvironment()),
+                TestBootstrapScanAdmissionWait ?? BootstrapScanLockWait(),
+                _shutdown.Token);
+        }
+        catch (ObjectDisposedException)
+        {
+            throw new OperationCanceledException(
+                $"The bootstrap scan admission wait for '{canonicalRoot}' ({reason}) was abandoned because the " +
+                "Miller host is shutting down.");
+        }
+    }
+
+    /// <summary>
+    /// How long a bootstrap waits for the workspace writer lock before giving up. Deliberately far longer than
+    /// <see cref="AutoRebuildLockWait"/>: that is a give-up budget for an already-loaded workspace, while this
+    /// covers the entire first-index experience, during which the bootstrap phase stays
+    /// <see cref="BootstrapPhase.Running"/> and tool calls render the friendly not-ready text. Overridden by
+    /// <c>MILLER_BOOTSTRAP_SCAN_LOCK_WAIT_SECONDS</c>.
+    /// </summary>
+    internal static readonly TimeSpan DefaultBootstrapScanLockWait = TimeSpan.FromMinutes(10);
+
+    private static readonly TimeSpan BootstrapScanLockPollInterval = TimeSpan.FromMilliseconds(500);
+
+    private static TimeSpan BootstrapScanLockWait() =>
+        ParseBootstrapScanLockWait(Environment.GetEnvironmentVariable("MILLER_BOOTSTRAP_SCAN_LOCK_WAIT_SECONDS"));
+
+    /// <summary>
+    /// Parse the bootstrap lock-wait override in seconds. An absent, unparsable, negative, non-finite, or
+    /// out-of-range value falls back to <see cref="DefaultBootstrapScanLockWait"/>; this never throws.
+    /// </summary>
+    /// <remarks>
+    /// <c>double.TryParse</c> with <see cref="NumberStyles.Float"/> accepts <c>Infinity</c>, <c>NaN</c>, and
+    /// magnitudes past <see cref="TimeSpan.MaxValue"/>, all of which make <see cref="TimeSpan.FromSeconds(double)"/>
+    /// throw — which would fail the whole bootstrap over a typo in an env var. Same guard shape as
+    /// <c>FullRebuildPromotion.ReadTimeout</c>.
+    /// </remarks>
+    internal static TimeSpan ParseBootstrapScanLockWait(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return DefaultBootstrapScanLockWait;
+
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds) &&
+            !double.IsNaN(seconds) &&
+            !double.IsInfinity(seconds) &&
+            seconds >= 0 &&
+            seconds <= TimeSpan.MaxValue.TotalSeconds
+            ? TimeSpan.FromSeconds(seconds)
+            : DefaultBootstrapScanLockWait;
+    }
+
+    /// <summary>
+    /// A bootstrap scan decision together with the <c>root_path</c> the artifact recorded, which the caller logs
+    /// when it force-rebinds.
+    /// </summary>
+    internal sealed record BootstrapArtifactDecision(string? ExistingRootPath, BootstrapScanDecision Decision);
+
+    /// <summary>
+    /// Read the scan decision from the artifact on disk. An artifact that is absent, or unreadable because it is
+    /// mid-write, reads as "still needs a scan" rather than failing the bootstrap: a torn read while another
+    /// instance promotes is exactly the transient this path must survive. This owns ALL the I/O behind the pure
+    /// <see cref="DecideBootstrapScan"/>, including the committed-revision probe.
+    /// </summary>
+    internal static BootstrapArtifactDecision ReadBootstrapScanDecision(string dbPath, string canonicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        try
+        {
+            bool dbExists = File.Exists(dbPath);
+            string? existingRootPath = dbExists ? ExtractReader.ReadRootPath(dbPath) : null;
+            return new BootstrapArtifactDecision(
+                existingRootPath,
+                DecideBootstrapScan(
+                    dbExists, existingRootPath, canonicalRoot,
+                    dbExists && HasCommittedRevision(dbPath, canonicalRoot)));
+        }
+        catch (FileNotFoundException)
+        {
+            return new BootstrapArtifactDecision(
+                null,
+                DecideBootstrapScan(
+                    dbExists: false, existingRootPath: null, canonicalRoot, hasCommittedRevision: false));
+        }
+        catch (SqliteException ex) when (IsCorruption(ex))
+        {
+            return new BootstrapArtifactDecision(
+                null,
+                DecideBootstrapScan(
+                    dbExists: true, existingRootPath: null, canonicalRoot, hasCommittedRevision: false));
+        }
+    }
+
+    /// <summary>
+    /// Whether the artifact at <paramref name="dbPath"/> carries a revision this process can see. Uncommitted rows
+    /// are invisible to other connections, so a visible revision is exactly the proof that a scan's long insert
+    /// transaction landed — the same test <see cref="WinnerArtifactProbe.IsFinished"/> applies, over the same
+    /// <see cref="ReadLatestRevisionOrZero"/> seam.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadLatestRevisionOrZero"/> propagates a locked/corrupt/misconfigured DB loudly, because seeding
+    /// the HOLDER's revision from a degraded read would mask the problem. Here the same failure has a safe answer
+    /// that costs one delta scan — "no committed revision yet, so scan" — and the caller's contract is that no
+    /// artifact read may fail the bootstrap. So every probe failure reads as absent rather than propagating.
+    /// </remarks>
+    private static bool HasCommittedRevision(string dbPath, string canonicalRoot)
+    {
+        try
+        {
+            return ReadLatestRevisionOrZero(dbPath, WorkspaceId.FromCanonicalRoot(canonicalRoot)) > 0;
+        }
+        catch (Exception ex) when (IsArtifactProbeFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsArtifactProbeFailure(Exception ex) =>
+        ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
+            or IncompatibleExtractException;
+
+    /// <summary>
+    /// The stand-down gate for a bootstrap that lost the workspace writer lock: it answers whether the artifact
+    /// the holder is writing is FINISHED, so this instance may load it instead of scanning. Sampling is stateful
+    /// (an identity must repeat across polls), so this is an object rather than a static.
+    /// </summary>
+    internal sealed class WinnerArtifactProbe
+    {
+        private readonly string _dbPath;
+        private readonly string _canonicalRoot;
+        private readonly string _workspaceId;
+        private string? _sampledArtifactId;
+
+        internal WinnerArtifactProbe(string dbPath, string canonicalRoot, string workspaceId)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+            ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+            _dbPath = dbPath;
+            _canonicalRoot = canonicalRoot;
+            _workspaceId = workspaceId;
+        }
+
+        /// <summary>
+        /// True only when the artifact records THIS root, its identity stopped moving between polls, it carries a
+        /// COMMITTED revision, and this build can read its schema. Any probe failure reads as "not finished yet",
+        /// never as a bootstrap failure.
+        /// </summary>
+        /// <remarks>
+        /// The committed-revision conjunct is the load-bearing one. julie-extract writes <c>artifact_metadata</c>
+        /// — including <c>artifact_id</c> and <c>root_path</c> — in autocommit the moment it opens the writer,
+        /// then streams every file/symbol row into one long transaction, and a first scan writes IN PLACE with no
+        /// promote to move the id. Identity alone therefore goes stable about a second into a scan that has
+        /// committed nothing, and a loser accepting it would bind an empty index for the whole duration of the
+        /// winner's insert. Uncommitted rows are invisible to other connections, so a visible revision is exactly
+        /// the proof that the write landed.
+        ///
+        /// The schema conjunct keeps a winner THIS build cannot read from being accepted: standing down on it
+        /// turns a self-heal into a hard bootstrap failure, because the auto-rebuild cannot take the lock the
+        /// winner is still holding. Refusing it here leaves this process waiting to heal the artifact itself.
+        /// </remarks>
+        internal bool IsFinished()
+        {
+            string? previous = _sampledArtifactId;
+            string? current = TryReadArtifactIdForThisRoot();
+            _sampledArtifactId = current;
+
+            if (current is null || !string.Equals(current, previous, StringComparison.Ordinal))
+                return false;
+
+            try
+            {
+                if (ReadLatestRevisionOrZero(_dbPath, _workspaceId) <= 0)
+                    return false;
+
+                SqliteSymbolReader.VerifyCompatible(_dbPath);
+                return true;
+            }
+            catch (Exception ex) when (IsArtifactProbeFailure(ex))
+            {
+                return false;
+            }
+        }
+
+        private string? TryReadArtifactIdForThisRoot()
+        {
+            try
+            {
+                return File.Exists(_dbPath) &&
+                    RootPathsEqual(ExtractReader.ReadRootPath(_dbPath), _canonicalRoot)
+                    ? SymbolsArtifactIdentity.TryRead(_dbPath).ArtifactId
+                    : null;
+            }
+            catch (Exception ex) when (IsArtifactProbeFailure(ex))
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Acquire the workspace single-writer lock for a bootstrap scan, or stand down in favour of the artifact the
+    /// current holder produced. Generic over the lease type (which is sealed in production) so the fast suite can
+    /// drive the whole control flow with fakes, exactly as <see cref="LoadIndexWithAutoRebuild{T}"/> is driven.
+    /// The returned <see cref="BootstrapScanLease{TLease}.Decision"/> is always evaluated after the outcome is
+    /// known, so the caller never acts on the stale pre-lock probe.
+    /// </summary>
+    /// <remarks>
+    /// A loser NEVER waits for the lock to be released: a live <c>IndexerService</c> leader in another process
+    /// holds it for that process's entire lifetime, so a release-wait could not terminate. It exits the moment
+    /// <paramref name="winnerArtifactUsable"/> reports a finished artifact, and the caller loads that instead.
+    /// Handing the work to the holder through <c>LeaderScanRequestQueue</c> is a deliberate non-choice here: it
+    /// moves the write to another process and needs its own bootstrap-time requester design.
+    /// </remarks>
+    internal static BootstrapScanLease<TLease> AcquireBootstrapScanLease<TLease>(
+        Func<TLease?> tryAcquire,
+        Func<BootstrapScanDecision> decide,
+        Func<bool> winnerArtifactUsable,
+        TimeSpan wait,
+        TimeSpan pollInterval,
+        Func<DateTimeOffset> utcNow,
+        Action<TimeSpan> sleep) where TLease : class, IDisposable
+    {
+        ArgumentNullException.ThrowIfNull(tryAcquire);
+        ArgumentNullException.ThrowIfNull(decide);
+        ArgumentNullException.ThrowIfNull(winnerArtifactUsable);
+        ArgumentNullException.ThrowIfNull(utcNow);
+        ArgumentNullException.ThrowIfNull(sleep);
+
+        DateTimeOffset deadline = utcNow() + wait;
+        while (true)
+        {
+            if (tryAcquire() is { } lease)
+                return Resolve(BootstrapLeaseOutcome.Acquired, lease);
+
+            if (winnerArtifactUsable())
+                return Resolve(BootstrapLeaseOutcome.WinnerArtifactUsable, null);
+
+            if (utcNow() >= deadline)
+                return Resolve(BootstrapLeaseOutcome.TimedOut, null);
+
+            sleep(pollInterval);
+        }
+
+        // A throwing decide() must not orphan a lease this method just won: the caller has no reference to
+        // release, and the FileShare.None handle would then survive to finalization, making every later
+        // bootstrap on this workspace wait out the full lock timeout and fail.
+        BootstrapScanLease<TLease> Resolve(BootstrapLeaseOutcome outcome, TLease? lease)
+        {
+            try
+            {
+                return new BootstrapScanLease<TLease>(outcome, lease, decide());
+            }
+            catch
+            {
+                lease?.Dispose();
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Who holds the writer lock, from the leader identity sidecar, so a bootstrap that waited on it names the
+    /// holder instead of leaving an invisible-owner mystery. Identity is advisory (a crash leaves a stale file; a
+    /// holder mid-startup has not written one yet), so each state reports exactly what it proves.
+    /// </summary>
+    internal static string DescribeBootstrapLockHolder(string millerDir)
+    {
+        LeaderIdentity? identity;
+        try
+        {
+            identity = LeaderIdentityFile.TryRead(millerDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            identity = null;
+        }
+
+        if (identity is null)
+        {
+            return "No leader identity is recorded for the holder — it is likely mid-startup, or exited " +
+                "without recording one.";
+        }
+
+        return LeaderIdentityFile.IsProcessAlive(identity)
+            ? $"The recorded leader is miller pid {identity.Pid} (version {identity.Version}), and it is alive."
+            : $"The recorded leader (miller pid {identity.Pid}, version {identity.Version}) is no longer " +
+              "running — the actual holder has not recorded an identity (likely mid-startup or a " +
+              "crash-looping instance).";
+    }
+
+    /// <summary>
     /// Load the in-memory index, AUTO-HEALING a reused-but-incompatible DB. <paramref name="load"/> runs first; if
     /// it throws <see cref="IncompatibleExtractException"/> — a stale schema/contract artifact that a root-matching
     /// reuse (<see cref="DecideBootstrapScan"/>) did not rescan, e.g. after a julie-extract schema bump raised the
@@ -732,7 +1293,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal static IndexLoadResult<T> LoadIndexWithAutoRebuild<T>(
         Func<T> load,
-        Func<long?> forceRescan,
+        Func<ScanIntent, long?> forceRescan,
         Action onBeforeRetry,
         Action<IncompatibleExtractException> onIncompatible,
         Action<SqliteException> onCorrupt)
@@ -751,7 +1312,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         {
             // A stale-schema/contract artifact: notify, then force-rebuild once and reload.
             onIncompatible(ex);
-            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
+            return RebuildAndRetry(load, forceRescan, ScanIntent.SchemaHeal, onBeforeRetry);
         }
         catch (SqliteException ex) when (IsCorruption(ex))
         {
@@ -760,7 +1321,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             // connect"), force-rebuild once with the bundled julie-extract and reload — the same self-heal the
             // incompatible path uses. A SECOND corruption after rebuild escapes (we never loop).
             onCorrupt(ex);
-            return RebuildAndRetry(load, forceRescan, onBeforeRetry);
+            return RebuildAndRetry(load, forceRescan, ScanIntent.CorruptionHeal, onBeforeRetry);
         }
     }
 
@@ -770,11 +1331,39 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     // Force-rebuild the DB out-of-process, drop pooled read connections still bound to the pre-rescan inode (so the
     // retry opens a fresh handle on the rebuilt artifact, not the old inode's stale snapshot), then reload ONCE.
     // A second failure on the retry load propagates — fail loudly rather than loop on a DB the tool cannot fix.
-    private static IndexLoadResult<T> RebuildAndRetry<T>(Func<T> load, Func<long?> forceRescan, Action onBeforeRetry)
+    // A null revision means the rescan was SKIPPED (the lock was busy), so nothing was rebuilt; the barrier still
+    // runs because the holder may have promoted a new inode under us.
+    private static IndexLoadResult<T> RebuildAndRetry<T>(
+        Func<T> load, Func<ScanIntent, long?> forceRescan, ScanIntent healIntent, Action onBeforeRetry)
     {
-        long? rebuiltRevision = forceRescan();
+        long? rebuiltRevision = forceRescan(healIntent);
         onBeforeRetry();
-        return new IndexLoadResult<T>(load(), Rebuilt: true, RebuiltRevision: rebuiltRevision);
+        return new IndexLoadResult<T>(load(), Rebuilt: rebuiltRevision is not null, RebuiltRevision: rebuiltRevision);
+    }
+
+    /// <summary>
+    /// Run a bootstrap scan through the persisted scan-failure record: a success clears the failure history when
+    /// the completed intent satisfies the recorded one, a throw extends it (with julie's exit code, so a SIGKILL
+    /// clamps the next attempt's <c>--jobs</c>) before propagating. This is what makes a bootstrap failure visible
+    /// to every LATER automatic path — the bootstrap itself never defers on the record.
+    /// </summary>
+    private static ExtractReport RunRecordedScan(
+        IScanFailurePolicy failurePolicy, ScanAttemptDecision attempt, Func<ExtractReport> scan)
+    {
+        try
+        {
+            ExtractReport report = scan();
+            failurePolicy.RecordSuccess(attempt.EffectiveIntent);
+            return report;
+        }
+        catch (Exception ex)
+        {
+            failurePolicy.RecordFailure(
+                attempt.EffectiveIntent,
+                JulieExtractException.ExitCodeOf(ex),
+                attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
+            throw;
+        }
     }
 
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(
@@ -842,6 +1431,30 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             canonicalDbPath,
             WorkspaceRegistryState.Ready);
         return registry.MarkError(stableWorkspaceId, error);
+    }
+
+    /// <summary>
+    /// Record that the workspace's root is no longer on disk. The registry lives outside the workspace
+    /// (<c>~/.miller/workspaces.db</c>), so it survives the deletion and is the one place a fleet-wide view can
+    /// tell "this worktree is gone" from "this worktree is idle".
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="workspace"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="stableWorkspaceId"/> is null or blank.</exception>
+    internal static WorkspaceRegistryRow MarkRegistryMissing(
+        WorkspaceContext workspace, string stableWorkspaceId, string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+
+        var (canonicalRoot, canonicalDbPath) = RequireCanonicalWorkspacePaths(workspace);
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        registry.UpsertSeen(
+            stableWorkspaceId,
+            WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
+            canonicalRoot,
+            canonicalDbPath,
+            WorkspaceRegistryState.Ready);
+        return registry.MarkMissing(stableWorkspaceId, reason);
     }
 
     private static (string CanonicalRoot, string CanonicalDbPath) RequireCanonicalWorkspacePaths(
@@ -927,7 +1540,27 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        TryCancelShutdown();
+        return Task.CompletedTask;
+    }
 
-    public void Dispose() => Volatile.Read(ref _bound)?.Ledger?.Dispose();
+    public void Dispose()
+    {
+        TryCancelShutdown();
+        _shutdown.Dispose();
+        Volatile.Read(ref _bound)?.Ledger?.Dispose();
+    }
+
+    private void TryCancelShutdown()
+    {
+        try
+        {
+            _shutdown.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 }

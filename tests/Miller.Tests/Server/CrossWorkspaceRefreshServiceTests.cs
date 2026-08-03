@@ -1,4 +1,6 @@
+using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Server.Cli;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -50,7 +52,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int scanCount = 0;
         var service = NewService(
             registry,
-            scan: (scanRoot, scanDb, force) =>
+            scan: (scanRoot, scanDb, force, _) =>
             {
                 scanCount++;
                 Assert.Equal(root, scanRoot);
@@ -84,7 +86,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, _, _) => PartialReport(root, dbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => PartialReport(root, dbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease());
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -111,7 +113,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         };
         var service = NewService(
             registry,
-            scan: (_, _, _) => report,
+            scan: (_, _, _, _) => report,
             acquireLock: _ => new NoopLease());
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -135,7 +137,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int scanCount = 0;
         var service = NewService(
             registry,
-            scan: (_, _, force) =>
+            scan: (_, _, force, _) =>
             {
                 scanCount++;
                 Assert.False(force);
@@ -163,7 +165,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 7);
         var service = NewService(
             registry,
-            scan: (_, _, _) => NoChangeReport(root, dbPath, "target-ws", revision: 7),
+            scan: (_, _, _, _) => NoChangeReport(root, dbPath, "target-ws", revision: 7),
             acquireLock: _ => new NoopLease());
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -182,7 +184,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int artifactReads = 0;
         var service = NewService(
             registry,
-            scan: (_, _, _) =>
+            scan: (_, _, _, _) =>
             {
                 Assert.Equal(1, artifactReads);
                 return NoChangeReport(root, dbPath, "target-ws", revision: 7) with { Artifact = null };
@@ -206,7 +208,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 7);
         var service = NewService(
             registry,
-            scan: (_, _, force) =>
+            scan: (_, _, force, _) =>
             {
                 Assert.True(force);
                 // A --force scan of an incompatible artifact deletes and recreates the DB; the fresh
@@ -235,7 +237,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         bool? observedForce = null;
         var service = NewService(
             registry,
-            scan: (_, _, force) =>
+            scan: (_, _, force, _) =>
             {
                 observedForce = force;
                 return Report(root, dbPath, "target-ws", revision: 9);
@@ -265,7 +267,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) =>
+            scan: (_, _, _, _) =>
             {
                 scanCount++;
                 throw new InvalidOperationException("scan should not run while the lock is busy");
@@ -301,7 +303,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 currentPid, "9.9.9-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 7);
 
@@ -325,7 +327,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 7);
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 7);
 
@@ -352,7 +354,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
                 deadPid, "9.9.8-test", ProcessPath: null, StartedAtUtc: DateTimeOffset.UtcNow));
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 7);
 
@@ -379,7 +381,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) =>
+            scan: (_, _, _, _) =>
             {
                 scanCount++;
                 throw new InvalidOperationException("scan should not run while the lock is busy");
@@ -422,7 +424,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 1, // the promoted fresh artifact restarted its counter BELOW the baseline
             clock: clock,
@@ -451,7 +453,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 7,
             clock: clock,
@@ -474,7 +476,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) =>
+            scan: (_, _, _, _) =>
             {
                 scanCount++;
                 throw new InvalidOperationException("scan should not run while the lock is busy");
@@ -506,7 +508,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         var clock = new FakeClock();
         var service = NewService(
             registry,
-            scan: (_, _, _) =>
+            scan: (_, _, _, _) =>
             {
                 scanCount++;
                 throw new InvalidOperationException("scan should not run while the lock is busy");
@@ -533,7 +535,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", missingRoot, dbPath);
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run for a missing root"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run for a missing root"),
             acquireLock: _ => throw new InvalidOperationException("lock should not be acquired for a missing root"));
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -555,7 +557,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", sensitiveRoot, dbPath);
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan should not run for a sensitive root"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run for a sensitive root"),
             acquireLock: _ => throw new InvalidOperationException("lock should not be acquired for a sensitive root"));
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -578,7 +580,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         // Scanned: both durations are measured (real wall clock — assert presence, not magnitude).
         WorkspaceRefreshResult scanned = NewService(
             registry,
-            scan: (_, _, _) => Report(root, dbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => Report(root, dbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease()).Refresh("target-ws");
         Assert.Equal(WorkspaceRefreshStatus.Refreshed, scanned.Status);
         Assert.NotNull(scanned.ScanDuration);
@@ -588,7 +590,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         // kill (~the timeout) from an instant hard failure.
         WorkspaceRefreshResult failed = NewService(
             registry,
-            scan: (_, _, _) => throw new JulieExtractException("boom", standardError: string.Empty),
+            scan: (_, _, _, _) => throw new JulieExtractException("boom", standardError: string.Empty),
             acquireLock: _ => new NoopLease()).Refresh("target-ws");
         Assert.Equal(WorkspaceRefreshStatus.Failed, failed.Status);
         Assert.NotNull(failed.ScanDuration);
@@ -599,7 +601,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         File.WriteAllText(dbPath, string.Empty);
         WorkspaceRefreshResult busy = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("scan must not run when the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan must not run when the lock is busy"),
             acquireLock: _ => null).Refresh("target-ws");
         Assert.Equal(WorkspaceRefreshStatus.LockBusy, busy.Status);
         Assert.Null(busy.ScanDuration);
@@ -615,7 +617,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
         var service = NewService(
             registry,
-            scan: (scanRoot, scanDb, force) =>
+            scan: (scanRoot, scanDb, force, _) =>
             {
                 Assert.Equal(root, scanRoot);
                 Assert.Equal(dbPath, scanDb);
@@ -651,7 +653,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease(),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
@@ -674,7 +676,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease());
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -702,7 +704,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => Report(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease());   // default sidecar = Disabled
 
         WorkspaceRefreshResult result = service.Refresh("target-ws");
@@ -729,7 +731,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 5);
         var service = NewService(
             registry,
-            scan: (_, _, _) => NoChangeReport(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
+            scan: (_, _, _, _) => NoChangeReport(julie.WorkspaceRoot, julie.DbPath, "target-ws", revision: 5),
             acquireLock: _ => new NoopLease(),
             sidecar: new SymbolSearchSidecar(enabled: true));
 
@@ -753,7 +755,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         registry.MarkScanned("target-ws", revision: 1);
         var service = NewService(
             registry,
-            scan: (_, scanDb, _) =>
+            scan: (_, scanDb, _, _) =>
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(scanDb)!);
                 File.WriteAllText(scanDb, "not a sqlite database");
@@ -783,7 +785,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int scanCount = 0;
         var service = NewService(
             registry,
-            scan: (_, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
+            scan: (_, _, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
             acquireLock: _ => new NoopLease(),
             eligibilityGate: db =>
             {
@@ -815,7 +817,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int scanCount = 0;
         var service = NewService(
             registry,
-            scan: (_, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
+            scan: (_, _, _, _) => { scanCount++; return Report(root, dbPath, "target-ws", revision: 5); },
             acquireLock: _ => new NoopLease(),
             eligibilityGate: _ => LeadershipEligibility.Evaluate("2.1.3", "2.3.0", allowDowngrade: true));
 
@@ -842,7 +844,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         int fullScanRequests = 0;
         var service = NewService(
             registry,
-            scan: (_, _, _) => throw new InvalidOperationException("must not scan while the lock is busy"),
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan while the lock is busy"),
             acquireLock: _ => null,
             readLatestRevision: _ => 1,
             requestFullScan: (_, _, _) => fullScanRequests++,
@@ -859,16 +861,281 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(1, fullScanRequests);
     }
 
+    // ---- W3: machine-wide scan admission ----
+    // The per-workspace writer lock is per-workspace by construction, so N worktrees each acquire their own and
+    // run N concurrent whole-repo extracts. Admission is user-global and capacity 1; a refused refresh must serve
+    // the latest readable DB (lock_busy) rather than scan ungoverned, and must NOT poison the registry row.
+
+    private string NewMillerHome() =>
+        Directory.CreateDirectory(Path.Combine(_dir, "home-" + Guid.NewGuid().ToString("N"))).FullName;
+
+    // A root whose symbols.db already exists: a governor refusal against it genuinely serves a readable index,
+    // which is what lock_busy claims. A root WITHOUT one takes the missing-index branch instead.
+    private string NewRootWithIndex(string name, out string dbPath)
+    {
+        string root = NewRoot(name);
+        dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "not-a-real-sqlite-file");
+        return root;
+    }
+
+    private static ScanGovernorLease HoldMachineScanAdmission(string millerHome) =>
+        ScanGovernor.ForMillerHome(millerHome).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "test-holder", 4),
+            TimeSpan.Zero,
+            CancellationToken.None)
+        ?? throw new InvalidOperationException("A fresh temp miller home must have a free scan lease.");
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_ReportsLockBusy_WithoutScanningOrPoisoningTheRow()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 4);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        bool lockAcquired = false;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ =>
+            {
+                lockAcquired = true;
+                return new NoopLease();
+            },
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(4, result.Revision);
+        Assert.Contains("Machine-wide scan admission is busy", result.WarningText, StringComparison.Ordinal);
+        Assert.True(lockAcquired); // the workspace writer lock is taken first, then admission (the lock order)
+
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Null(row.LastError);
+    }
+
+    [Fact]
+    public void Refresh_NonForce_WaitsOnlyTheShortLockBusyBudgetForMachineScanAdmission()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-nonforce", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: false);
+        stopwatch.Stop();
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
+    // The artifact-id probe only fires AFTER TryConvergeSidecar when the report carries no artifact block: the
+    // success path reads `report.Artifact?.ArtifactId ?? TryReadArtifactId(row)`, so a report WITH one
+    // short-circuits the fallback and leaves only the pre-scan read to assert on — a probe that cannot observe
+    // convergence and therefore cannot fail if the lease is released early.
+    [Fact]
+    public void Refresh_HoldsMachineScanAdmission_AcrossTheScanAndTheSidecarConvergence()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("governed-held");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        var probe = ScanGovernor.ForMillerHome(home);
+        bool freeDuringScan = true;
+        var freeAtArtifactIdReads = new List<bool>();
+
+        bool AdmissionIsFree()
+        {
+            using ScanGovernorLease? attempt = probe.TryAcquire(
+                new ScanGovernorRequest("/repo/probe", "probe", 4), TimeSpan.Zero, CancellationToken.None);
+            return attempt is not null;
+        }
+
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) =>
+            {
+                freeDuringScan = AdmissionIsFree();
+                return Report(root, dbPath, "target-ws", revision: 5) with { Artifact = null };
+            },
+            acquireLock: _ => new NoopLease(),
+            readArtifactId: _ =>
+            {
+                freeAtArtifactIdReads.Add(AdmissionIsFree());
+                return "artifact-a";
+            },
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(freeDuringScan);
+        Assert.Equal(2, freeAtArtifactIdReads.Count); // one before the scan, one after sidecar convergence
+        Assert.All(freeAtArtifactIdReads, free => Assert.False(free));
+        Assert.True(AdmissionIsFree()); // and it is released once Refresh returns
+    }
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_AndNoIndexExists_ReportsMissingIndexRatherThanLockBusy()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("governed-cold");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<string>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, _, _) => requested.Add(millerDir),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.MissingIndex, result.Status);
+        Assert.Equal(3, CliDispatch.RefreshExitCode(result.Status));
+        Assert.False(result.Scanned);
+        Assert.Single(requested);
+
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Missing, row.State);
+        Assert.NotNull(row.LastError);
+    }
+
+    [Fact]
+    public void Refresh_WhenMachineScanAdmissionIsBusy_QueuesALeaderFullScanForTheForcedRequest()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-queue", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<(string MillerDir, string WorkspaceId, long Baseline)>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, id, baseline) => requested.Add((millerDir, id, baseline)),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Equal(("target-ws", 7L), (requested.Single().WorkspaceId, requested.Single().Baseline));
+    }
+
+    [Fact]
+    public void Refresh_NonForceGovernorRefusal_QueuesNothing()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-noqueue", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var requested = new List<string>();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            requestFullScan: (millerDir, _, _) => requested.Add(millerDir),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.Zero);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: false);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.Empty(requested);
+    }
+
+    [Fact]
+    public void Refresh_ForcedCallerBudget_OverridesTheServiceDefault()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-budget", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        WorkspaceRefreshResult result = service.Refresh(
+            "target-ws", force: true, ScanAdmissionBudget.Of(TimeSpan.Zero));
+        stopwatch.Stop();
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
+    }
+
+    [Fact]
+    public void Refresh_ForcedCallerBudget_WithACancelledToken_DegradesToLockBusyRatherThanThrowing()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("governed-cancelled", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        string home = NewMillerHome();
+        using ScanGovernorLease held = HoldMachineScanAdmission(home);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("must not scan without machine-wide admission"),
+            acquireLock: _ => new NoopLease(),
+            governor: ScanGovernor.ForMillerHome(home),
+            governorForceWait: TimeSpan.FromMinutes(30));
+
+        WorkspaceRefreshResult result = service.Refresh(
+            "target-ws",
+            force: true,
+            new ScanAdmissionBudget(TimeSpan.FromMinutes(30), cancelled.Token));
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+    }
+
     private CrossWorkspaceRefreshService NewService(
         WorkspaceRegistry registry,
-        Func<string, string, bool, ExtractReport> scan,
+        Func<string, string, bool, int?, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
         Func<string, long>? readLatestRevision = null,
         FakeClock? clock = null,
         SymbolSearchSidecar? sidecar = null,
         Action<string, string, long>? requestFullScan = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
-        Func<string, string?>? readArtifactId = null)
+        Func<string, string?>? readArtifactId = null,
+        ScanGovernor? governor = null,
+        TimeSpan? governorForceWait = null,
+        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -883,7 +1150,128 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             sidecar: sidecar ?? SymbolSearchSidecar.Disabled,
             requestFullScan: requestFullScan,
             eligibilityGate: eligibilityGate,
-            readArtifactId: readArtifactId ?? (_ => null));
+            readArtifactId: readArtifactId ?? (_ => null),
+            governor: governor,
+            governorForceWait: governorForceWait,
+            failurePolicyFor: failurePolicyFor);
+    }
+
+    [Fact]
+    public void Refresh_WithoutTheDirectUserBypass_HonorsThePersistedScanBackoffInsteadOfRespawningTheExtractor()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("throttled", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.IncrementalReconcile, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) =>
+            {
+                scanCount++;
+                return Report(root, dbPath, "target-ws", revision: 9);
+            },
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy);
+
+        WorkspaceRefreshResult deferred = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, deferred.Status);
+        Assert.False(deferred.Scanned);
+        Assert.Equal(0, scanCount);
+        Assert.Equal(WorkspaceRegistryState.Ready, registry.Get("target-ws")?.State);
+
+        WorkspaceRefreshResult direct = service.Refresh("target-ws", bypassBackoff: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, direct.Status);
+        Assert.Equal(1, scanCount);
+    }
+
+    [Fact]
+    public void Refresh_AForcedRebuildThatDowngrades_SaysSoRatherThanReportingTheRebuildAsDone()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("downgraded", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(
+            priorArtifactUsable: () => true, utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        now += ScanFailurePolicy.MaxJitteredBackoffFor(1);
+        bool? ranForced = null;
+        var service = NewService(
+            registry,
+            scan: (_, _, force, _) =>
+            {
+                ranForced = force;
+                return Report(root, dbPath, "target-ws", revision: 9);
+            },
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.False(ranForced);
+        Assert.Contains("downgraded", result.WarningText ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, policy.Read()?.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public void WorkspaceIndexProviderAutomaticRefresh_HonorsTheBackoff_SoReadTrafficCannotRespawnTheExtractor()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("read-traffic", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.IncrementalReconcile, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) =>
+            {
+                scanCount++;
+                return Report(root, dbPath, "target-ws", revision: 9);
+            },
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy);
+
+        Func<string, WorkspaceRefreshResult> automatic = WorkspaceIndexProvider.AutomaticRefresh(service);
+
+        for (int i = 0; i < 10; i++)
+            Assert.Equal(WorkspaceRefreshStatus.LockBusy, automatic("target-ws").Status);
+
+        Assert.Equal(0, scanCount);
+    }
+
+    [Fact]
+    public void Refresh_ADeltaThatSucceeds_LeavesAForcedRebuildsFailureRecordForTheResidentLeader()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("routine-refresh", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => Report(root, dbPath, "target-ws", revision: 9),
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy);
+
+        service.Refresh("target-ws", bypassBackoff: true);
+
+        Assert.Equal(1, policy.Read()?.ConsecutiveFailures);
+
+        service.Refresh("target-ws", force: true, bypassBackoff: true);
+
+        Assert.Null(policy.Read());
     }
 
     private string NewRoot(string name)

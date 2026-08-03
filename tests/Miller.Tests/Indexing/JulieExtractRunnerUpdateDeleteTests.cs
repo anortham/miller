@@ -40,6 +40,32 @@ public sealed class JulieExtractRunnerUpdateDeleteTests
     }
 
     [Fact]
+    public void BuildUpdateArgs_EmitsTheIgnoreFilesAfterTheV1Argv()
+    {
+        var args = JulieExtractRunner.BuildUpdateArgs(
+            AbsDb, AbsRoot, AbsFile, new[] { "/abs/work/.miller/invariant.julieignore" });
+
+        Assert.Equal(
+            new[]
+            {
+                "update", "--root", AbsRoot, "--db", AbsDb, "--file", AbsFile, "--strict-schema", "--json",
+                "--ignore-file", "/abs/work/.miller/invariant.julieignore",
+            },
+            args);
+    }
+
+    [Fact]
+    public void BuildUpdateArgs_BlankIgnoreFile_Throws() =>
+        Assert.Throws<ArgumentException>(
+            () => JulieExtractRunner.BuildUpdateArgs(AbsDb, AbsRoot, AbsFile, new[] { "  " }));
+
+    [Fact]
+    public void BuildDeleteArgs_NeverCarriesAnIgnoreFile_TheSubcommandDoesNotAcceptTheFlag()
+    {
+        Assert.DoesNotContain("--ignore-file", JulieExtractRunner.BuildDeleteArgs(AbsDb, AbsRoot, AbsFile));
+    }
+
+    [Fact]
     public void BuildUpdateArgs_PassesCanonicalPathsVerbatim_NoNormalizationInTheBuilder()
     {
         // The builder is a pure seam: it must NOT re-normalize. Canonicalization is PathCanonicalizer's job

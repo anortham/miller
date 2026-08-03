@@ -1,10 +1,23 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Logging;
 using Miller.Server.Tools;
 
 namespace Miller.Server.Workspaces;
+
+/// <summary>
+/// A caller's tolerance for the machine-wide scan-admission wait on a FORCED refresh: how long it may queue, and
+/// the token that abandons the queue early. The two travel together because they are ONE decision — a one-shot
+/// CLI or dashboard refresh has no retry and may wait out the operator budget with no token, while an in-server
+/// MCP call takes seconds and must give up when the host shuts down.
+/// </summary>
+public readonly record struct ScanAdmissionBudget(TimeSpan Wait, CancellationToken CancellationToken)
+{
+    /// <summary>A budget with no cancellation — the one-shot CLI and dashboard shape.</summary>
+    public static ScanAdmissionBudget Of(TimeSpan wait) => new(wait, CancellationToken.None);
+}
 
 public sealed class CrossWorkspaceRefreshService
 {
@@ -13,7 +26,7 @@ public sealed class CrossWorkspaceRefreshService
     private static readonly TimeSpan DefaultLockBusyPollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly WorkspaceRegistry _registry;
-    private readonly Func<string, string, bool, ExtractReport> _scan;
+    private readonly Func<string, string, bool, int?, ExtractReport> _scan;
     private readonly Func<string, IDisposable?> _acquireLock;
     private readonly Func<string, long> _readLatestRevision;
     private readonly Func<string, string?> _readArtifactId;
@@ -26,6 +39,9 @@ public sealed class CrossWorkspaceRefreshService
     private readonly SymbolSearchSidecar _sidecar;
     private readonly ContentCorpusSidecar _contentSidecar;
     private readonly Func<string, LeadershipVerdict>? _eligibilityGate;
+    private readonly ScanGovernor _governor;
+    private readonly TimeSpan _governorForceWait;
+    private readonly Func<string, string, IScanFailurePolicy> _failurePolicyFor;
 
     // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
     // restore/upgrade, and the env hatch exists only for INTENTIONAL downgrades — never as a routine unblock.
@@ -35,10 +51,14 @@ public sealed class CrossWorkspaceRefreshService
         "only for an intentional downgrade.";
 
     public CrossWorkspaceRefreshService(
-        WorkspaceRegistry registry, JulieExtractRunner runner, SymbolSearchSidecar sidecar, ContentCorpusSidecar? contentSidecar = null)
+        WorkspaceRegistry registry,
+        JulieExtractRunner runner,
+        SymbolSearchSidecar sidecar,
+        ScanGovernor governor,
+        ContentCorpusSidecar? contentSidecar = null)
         : this(
             registry,
-            (root, db, force) => runner.Scan(root, db, force),
+            (root, db, force, jobs) => runner.Scan(root, db, force, jobs),
             millerDir => SingleWriterLock.TryAcquire(millerDir),
             ReadLatestRevision,
             DefaultLockBusyWait,
@@ -57,13 +77,14 @@ public sealed class CrossWorkspaceRefreshService
                 runner.QueryVersion(),
                 ExtractBinaryVersionReader.TryRead(dbPath),
                 Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
-            ReadArtifactId)
+            ReadArtifactId,
+            governor)
     {
     }
 
     internal CrossWorkspaceRefreshService(
         WorkspaceRegistry registry,
-        Func<string, string, bool, ExtractReport> scan,
+        Func<string, string, bool, int?, ExtractReport> scan,
         Func<string, IDisposable?> acquireLock,
         Func<string, long> readLatestRevision,
         TimeSpan lockBusyWait,
@@ -75,7 +96,10 @@ public sealed class CrossWorkspaceRefreshService
         Action<string, string, long>? requestFullScan = null,
         TimeSpan? fullScanRequestWait = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
-        Func<string, string?>? readArtifactId = null)
+        Func<string, string?>? readArtifactId = null,
+        ScanGovernor? governor = null,
+        TimeSpan? governorForceWait = null,
+        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -107,11 +131,39 @@ public sealed class CrossWorkspaceRefreshService
         _sidecar = sidecar;
         _contentSidecar = contentSidecar ?? new ContentCorpusSidecar();
         _eligibilityGate = eligibilityGate;
+        // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
+        _governor = governor ?? ScanGovernor.Disabled();
+        _governorForceWait = governorForceWait ?? ScanGovernor.WaitFromEnvironment();
+        _failurePolicyFor = failurePolicyFor
+            ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
     }
 
-    public WorkspaceRefreshResult Refresh(string workspaceId, bool force = false)
+    /// <summary>
+    /// Refresh one registered workspace. <paramref name="scanAdmission"/> is the FORCED path's machine-wide
+    /// scan-admission budget and belongs to the CALLER, not this service: a one-shot CLI or dashboard refresh has
+    /// no retry and may wait out <c>MILLER_SCAN_GOVERNOR_WAIT</c>, while an in-server MCP caller must pass a few
+    /// seconds because a stuck call jams every agent sharing the connection. Null uses the configured default.
+    /// A non-forced <c>ensure_fresh</c> read always uses the short lock-busy budget regardless.
+    ///
+    /// <para><paramref name="bypassBackoff"/> also belongs to the caller, and defaults to false because most
+    /// traffic through here is NOT a person asking. Pass true only for a direct request — CLI
+    /// <c>workspace refresh/full/open</c>, the MCP <c>workspace</c> tool, the dashboard. The automatic
+    /// refresh-first path behind every cross-workspace read (<see cref="WorkspaceIndexProvider"/>, which
+    /// <c>ReadToolWorkspaceRouting.ResolveEnsureFresh</c> turns on for ANY explicit <c>workspace_id</c>) must
+    /// leave it false: ten cross-workspace searches against a workspace whose extractor is being OOM-killed would
+    /// otherwise spawn ten more extractor processes. A deferred attempt serves the existing artifact with a
+    /// <see cref="WorkspaceRefreshStatus.LockBusy"/>-shaped result rather than failing the read.</para>
+    /// </summary>
+    public WorkspaceRefreshResult Refresh(
+        string workspaceId,
+        bool force = false,
+        ScanAdmissionBudget? scanAdmission = null,
+        bool bypassBackoff = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceId);
+        if (scanAdmission is { Wait: var requested } && requested < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(
+                nameof(scanAdmission), requested, "Wait must be non-negative.");
         WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
         var total = Stopwatch.StartNew();
 
@@ -179,17 +231,49 @@ public sealed class CrossWorkspaceRefreshService
             }
         }
 
+        // Evaluated BEFORE machine-wide admission is taken: an attempt the backoff will not allow must not first
+        // queue for (or hold) the one lease every other workspace's scan is waiting on.
+        IScanFailurePolicy failurePolicy = _failurePolicyFor(row.IndexDbPath, row.CanonicalRoot);
+        ScanIntent intent = force ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile;
+        ScanAttemptDecision attempt = failurePolicy.Evaluate(intent, bypassBackoff);
+        if (!attempt.Attempt)
+            return DeferredByScanBackoff(row, attempt, total);
+
+        // Machine-wide scan admission, inside the workspace writer lock (SingleWriterLock -> ScanGovernor) and
+        // spanning the scan AND the sidecar convergence below, so scan+sidecar storms cannot overlap across
+        // workspaces.
+        using ScanGovernorAdmission? admission = TryAcquireScanAdmission(
+            row.CanonicalRoot,
+            force ? scanAdmission?.Wait ?? _governorForceWait : _lockBusyWait,
+            force ? scanAdmission?.CancellationToken ?? CancellationToken.None : CancellationToken.None);
+        if (admission is null)
+            return RefusedScanAdmission(row, force, millerDir, total);
+
         string? artifactIdBeforeScan = TryReadArtifactId(row);
         var scanClock = Stopwatch.StartNew();
         try
         {
-            ExtractReport report = _scan(row.CanonicalRoot, row.IndexDbPath, force);
+            ExtractReport report = _scan(
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
+                attempt.Jobs);
             scanClock.Stop();
+            if (attempt.Downgraded)
+                failurePolicy.RecordDowngradedServe();
+            else
+                failurePolicy.RecordSuccess(attempt.EffectiveIntent);
 
             // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
             // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
             long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
-            string? warning = ExtractReportLog.DescribeWarning(report);
+            // A downgraded serve carries its own warning even though no caller can reach one today (every
+            // force caller passes bypassBackoff). Without it, the result below is indistinguishable from the
+            // rebuild that was asked for — the same lie the leader path's third outcome exists to prevent, and
+            // the next caller that drops the bypass would ship it silently.
+            string? warning = JoinNotes(
+                attempt.Downgraded ? ScanFailurePolicy.DescribeDowngrade(intent, attempt) : null,
+                ExtractReportLog.DescribeWarning(report));
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
             // This is the one safe writer for an external workspace's search.db — it holds the workspace
@@ -224,6 +308,10 @@ public sealed class CrossWorkspaceRefreshService
             // Keep the duration of the FAILED scan attempt: a timeout kill reporting ~the timeout is exactly
             // the fact a fleet sweep needs to tell "slow under load" from "instant hard failure".
             scanClock.Stop();
+            failurePolicy.RecordFailure(
+                attempt.EffectiveIntent,
+                JulieExtractException.ExitCodeOf(ex),
+                attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
             _registry.MarkError(row.WorkspaceId, ex.Message, _utcNow());
             return new WorkspaceRefreshResult(
                 WorkspaceRefreshStatus.Failed,
@@ -236,6 +324,131 @@ public sealed class CrossWorkspaceRefreshService
                 ScanDuration: scanClock.Elapsed,
                 TotalDuration: total.Elapsed,
                 ArtifactId: TryReadArtifactId(row));
+        }
+    }
+
+    private static string? JoinNotes(string? first, string? second) => (first, second) switch
+    {
+        (null or "", null or "") => null,
+        (null or "", { } only) => only,
+        ({ } only, null or "") => only,
+        var (a, b) => a + " " + b,
+    };
+
+    /// <summary>
+    /// The refusal shape for an attempt the persisted scan-failure backoff will not allow yet. Shaped like a busy
+    /// governor because it is the same promise: nothing scanned, the latest readable DB is served, retry later.
+    /// A root with NO readable index cannot serve anything, so it reports
+    /// <see cref="WorkspaceRefreshStatus.MissingIndex"/> (exit 3) rather than a <c>lock_busy</c> exit 0 that would
+    /// advertise a workspace with no <c>symbols.db</c>.
+    /// </summary>
+    private WorkspaceRefreshResult DeferredByScanBackoff(
+        WorkspaceRegistryRow row, ScanAttemptDecision attempt, Stopwatch total)
+    {
+        string reason = $"The previous whole-repo scan of this workspace failed {attempt.ConsecutiveFailures} " +
+            $"time(s) in a row; the next automatic attempt is not before {attempt.RetryAtUtc:O}.";
+
+        if (!File.Exists(row.IndexDbPath))
+        {
+            string error = $"{reason} No index exists yet at {row.IndexDbPath}.";
+            _registry.MarkMissing(row.WorkspaceId, error, _utcNow());
+            return new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.MissingIndex,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: null,
+                Scanned: false,
+                Error: error,
+                TotalDuration: total.Elapsed,
+                ArtifactId: null);
+        }
+
+        return new WorkspaceRefreshResult(
+            WorkspaceRefreshStatus.LockBusy,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            row.IndexDbPath,
+            row.LastRevision,
+            Scanned: false,
+            WarningText: $"{reason} Served the latest readable DB without scanning.",
+            TotalDuration: total.Elapsed,
+            ArtifactId: TryReadArtifactId(row));
+    }
+
+    /// <summary>
+    /// The refusal shape for a busy machine-wide governor. Unlike a busy WRITER lock there is no live leader
+    /// converging behind us, so the refusal must not imply one: a forced request is written to the target's
+    /// leader queue so a Miller that starts there services it, and a root with NO readable index reports
+    /// <see cref="WorkspaceRefreshStatus.MissingIndex"/> (registry row marked, exit 3) instead of a
+    /// <c>lock_busy</c> exit 0 that would advertise a Ready workspace with no <c>symbols.db</c> and nothing
+    /// scheduled. When a readable index DOES exist it is genuinely being served, so the row is left untouched.
+    /// </summary>
+    private WorkspaceRefreshResult RefusedScanAdmission(
+        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total)
+    {
+        string? requestWarning = null;
+        if (force)
+        {
+            try
+            {
+                _requestFullScan(millerDir, row.WorkspaceId, row.LastRevision ?? 0);
+            }
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                requestWarning = $"Miller could not queue a leader full-scan request: {ex.Message} ";
+            }
+        }
+
+        if (!File.Exists(row.IndexDbPath))
+        {
+            string error = "Machine-wide scan admission is busy and no index exists yet at " +
+                $"{row.IndexDbPath}. " + _governor.DescribeHolder();
+            _registry.MarkMissing(row.WorkspaceId, error, _utcNow());
+            return new WorkspaceRefreshResult(
+                WorkspaceRefreshStatus.MissingIndex,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                Revision: null,
+                Scanned: false,
+                Error: error,
+                TotalDuration: total.Elapsed,
+                ArtifactId: null);
+        }
+
+        return new WorkspaceRefreshResult(
+            WorkspaceRefreshStatus.LockBusy,
+            row.WorkspaceId,
+            row.CanonicalRoot,
+            row.IndexDbPath,
+            row.LastRevision,
+            Scanned: false,
+            WarningText: "Machine-wide scan admission is busy; served the latest readable DB without scanning. " +
+                requestWarning + _governor.DescribeHolder(),
+            TotalDuration: total.Elapsed,
+            ArtifactId: TryReadArtifactId(row));
+    }
+
+    // Machine-wide admission for one governed refresh. A cancelled wait degrades to a refusal rather than
+    // throwing: the caller is already going away, and every governed path must be able to serve the existing DB.
+    private ScanGovernorAdmission? TryAcquireScanAdmission(
+        string canonicalRoot, TimeSpan wait, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return ScanGovernorAdmission.TryAcquire(
+                _governor,
+                ScanGovernorState.Shared,
+                new ScanGovernorRequest(
+                    canonicalRoot, "cross-workspace-refresh", ExtractJobsPolicy.FromEnvironment()),
+                wait,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
         }
     }
 

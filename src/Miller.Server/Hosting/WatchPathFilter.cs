@@ -17,13 +17,21 @@ namespace Miller.Server.Hosting;
 /// version-control internals (<c>.git</c> — the dedicated <c>.git/HEAD</c> watch handles branch switches —
 /// plus <c>.hg</c>/<c>.svn</c>), Miller's own <c>.miller</c> sidecar (its extract/telemetry/WAL writes must
 /// not re-enter as events), julie's <c>.julie</c> home, IDE/tool caches (<c>.vs</c>, <c>.cache</c>), agent
-/// memory checkpoints (<c>.memories</c>), nested agent worktrees (<c>.claude/worktrees</c>), and the usual
+/// memory checkpoints (<c>.memories</c>), nested worktrees (<c>.worktrees</c> and <c>.claude/worktrees</c> —
+/// the same two locations Miller's invariant ignore file excludes from extraction, so a repo-root worktree
+/// pool is neither indexed by the parent workspace nor watched), and the usual
 /// build-output trees (<c>node_modules</c>,
 /// <c>target</c>, <c>bin</c>, <c>obj</c>) — parity with julie-extract's own hard-excluded directories, so
 /// the watcher never spawns a subprocess for a file julie would refuse anyway. Matching is on whole path
 /// SEGMENTS, so a <c>.github</c> dir or an <c>object.cs</c> file is not caught by a substring. It also
 /// applies workspace ignore files (<c>.gitignore</c> plus <c>.julieignore</c>) so live per-file updates do
 /// not churn on files a full scan would skip.</para>
+///
+/// <para><b>The skip set is matched ROOT-RELATIVE.</b> These are directory names INSIDE a workspace, so a
+/// workspace whose own root sits under one of them — <c>&lt;repo&gt;/.worktrees/&lt;branch&gt;</c>, the agent
+/// worktree convention this filter exists to serve — must not have every file it owns rejected for a segment
+/// that belongs to its own root. Only the remainder below the root is matched; a path OUTSIDE the root falls
+/// back to whole-path matching, where <see cref="WorkspaceIgnorePolicy.IsIgnored"/> rejects it anyway.</para>
 /// </summary>
 public static class WatchPathFilter
 {
@@ -40,6 +48,7 @@ public static class WatchPathFilter
         ".vs",
         ".cache",
         ".memories",
+        ".worktrees",
         "node_modules",
         "target",
         "bin",
@@ -54,8 +63,8 @@ public static class WatchPathFilter
 
     /// <summary>
     /// True if a watcher event for <paramref name="absolutePath"/> (under <paramref name="root"/>) should be
-    /// processed; false to drop it. <paramref name="root"/> is accepted for symmetry / future root-relative
-    /// rules; the decision is made on the path's segments.
+    /// processed; false to drop it. The skip-segment decision is made on the path's segments BELOW
+    /// <paramref name="root"/>, so a root that itself contains a skip segment still watches its own files.
     /// </summary>
     /// <exception cref="ArgumentNullException">Either argument is null.</exception>
     public static bool ShouldProcess(string root, string absolutePath) =>
@@ -77,22 +86,54 @@ public static class WatchPathFilter
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
 
-        string[] segments = absolutePath.Split(
-            new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < segments.Length; i++)
-        {
-            string segment = segments[i];
-            if (SkipSegments.Contains(segment))
-                return false;
-            if (i > 0
-                && SegmentComparer.Equals(segments[i - 1], ".claude")
-                && SegmentComparer.Equals(segment, "worktrees"))
-                return false;
-        }
+        if (HasSkippedSegment(root, absolutePath))
+            return false;
         if (HasUnsupportedExtension(absolutePath, supportedExtensions))
             return false;
         return !WorkspaceIgnorePolicy.IsIgnored(root, absolutePath);
     }
+
+    private static bool HasSkippedSegment(string root, string absolutePath)
+    {
+        string[] segments = SkipCandidateSegments(root, absolutePath);
+        for (int i = 0; i < segments.Length; i++)
+        {
+            if (SkipSegments.Contains(segments[i]))
+                return true;
+            if (i > 0
+                && SegmentComparer.Equals(segments[i - 1], ".claude")
+                && SegmentComparer.Equals(segments[i], "worktrees"))
+                return true;
+        }
+        return false;
+    }
+
+    // The segments the skip set is matched against: the remainder BELOW the root when the path is inside it,
+    // else the whole path. A root of <repo>/.worktrees/<branch> owns files whose ABSOLUTE path carries a skip
+    // segment that is the root's own, not the file's.
+    private static string[] SkipCandidateSegments(string root, string absolutePath) =>
+        SplitSegments(TryRootRelative(root, absolutePath) ?? absolutePath);
+
+    private static string? TryRootRelative(string root, string absolutePath)
+    {
+        try
+        {
+            string relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(absolutePath));
+            return Path.IsPathRooted(relative) || IsParentRelative(relative) ? null : relative;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsParentRelative(string relative) =>
+        relative == ".."
+        || relative.StartsWith("../", StringComparison.Ordinal)
+        || relative.StartsWith(@"..\", StringComparison.Ordinal);
+
+    private static string[] SplitSegments(string path) =>
+        path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
 
     // Pure extension gate over julie's claimed set. The set holds lowercase, dot-less extensions exactly as
     // `languages --json` reports them — nothing is hardcoded here. A file with no extension (Dockerfile, a
@@ -113,6 +154,11 @@ public static class WatchPathFilter
     /// <summary>
     /// True when this event changes ignore policy rather than indexable source. The watcher should force one scan
     /// so previously-indexed files that just became ignored are pruned, and newly-unignored files are discovered.
+    ///
+    /// <para>Gated on the same root-relative skip decision as <see cref="ShouldProcess(string,string)"/>: a
+    /// policy file inside a subtree this workspace never extracts cannot change a single row, so it must not arm
+    /// a whole-tree scan. <c>git worktree add .worktrees/&lt;branch&gt;</c> writes a <c>.gitignore</c> under the
+    /// parent repo's own root, once per agent worktree, on the largest roots.</para>
     /// </summary>
     /// <exception cref="ArgumentNullException">Either argument is null.</exception>
     public static bool ShouldForceRescan(string root, string absolutePath)
@@ -120,12 +166,13 @@ public static class WatchPathFilter
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(absolutePath);
         return IgnorePolicyFiles.Contains(LastPathSegment(absolutePath))
-            && !WorkspaceIgnorePolicy.IsOutsideRoot(root, absolutePath);
+            && !WorkspaceIgnorePolicy.IsOutsideRoot(root, absolutePath)
+            && !HasSkippedSegment(root, absolutePath);
     }
 
     private static string LastPathSegment(string path)
     {
-        string[] segments = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+        string[] segments = SplitSegments(path);
         return segments.Length == 0 ? string.Empty : segments[^1];
     }
 

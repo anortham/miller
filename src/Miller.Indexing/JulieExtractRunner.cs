@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -24,20 +25,25 @@ namespace Miller.Indexing;
 public sealed class JulieExtractRunner
 {
     // info opens read-only, takes no flock — `info --db <ABS_DB> --strict-schema --json` (NO --root).
-    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json [--force]`.
-    // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3).
+    // scan binds the workspace/root — `scan --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json --jobs <N>
+    //   [--ignore-file <ABS_PATH>]... [--force]`.
+    // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3);
+    //   update additionally takes `[--ignore-file <ABS_PATH>]...`, delete does not accept the flag at all.
     /// <summary>
     /// The default NO-PROGRESS bound on a single julie-extract invocation: the child is killed only after the
     /// artifact (db/-wal/-shm bytes) and its output have been silent this long. A fixed TOTAL cap cannot tell a
     /// hung child from a legitimately long scan — the same openclaw force-scan that takes ~90s idle exceeded
     /// 600s under fleet load and was killed mid-rebuild (2026-06-11 Eros field report). The absolute backstop
-    /// is <see cref="ExtractWaitPolicy.HardTimeoutFor"/> of this value (§10A).
+    /// is <see cref="ExtractWaitPolicy.HardTimeoutFor"/> of this value (§10A), overridable through
+    /// <see cref="ExtractWaitPolicy.HardCapEnvironmentVariable"/> on this default path only.
     /// </summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
 
     private readonly string _binaryPath;
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _hardTimeout;
+    private readonly Action<string>? _onContainmentDegraded;
+    private readonly Func<Process, WindowsKillOnCloseJobAttachment> _attachContainmentJob;
 
     /// <summary>The resolved absolute path to the julie-extract binary this runner invokes.</summary>
     public string BinaryPath => _binaryPath;
@@ -47,8 +53,19 @@ public sealed class JulieExtractRunner
     /// binary does not exist, pointing the operator at the restore script. Use <see cref="Locate"/> for the
     /// default resolution.
     /// </summary>
+    /// <param name="onContainmentDegraded">
+    /// Optional sink for the reason Windows orphan containment could not be established for a scan
+    /// (<see cref="WindowsKillOnCloseJob"/>). The scan still runs — containment hygiene must never break the
+    /// work it was protecting — but it runs UNCONTAINED, and on Windows nothing else covers that case because
+    /// julie-extract's <c>--parent-pid</c> watchdog is Unix-only. Miller.Indexing is logger-free by design, so
+    /// the caller (the indexer/bootstrap services, which hold an <c>ILogger</c>) supplies the sink; unwired, the
+    /// degradation is silent.
+    /// </param>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
-    public JulieExtractRunner(string binaryPath) : this(binaryPath, DefaultTimeout)
+    public JulieExtractRunner(string binaryPath, Action<string>? onContainmentDegraded = null)
+        : this(binaryPath, DefaultTimeout,
+               ExtractWaitPolicy.HardTimeoutForEnvironment(DefaultTimeout, Environment.GetEnvironmentVariable),
+               onContainmentDegraded, WindowsKillOnCloseJob.Attach)
     {
     }
 
@@ -60,7 +77,32 @@ public sealed class JulieExtractRunner
     /// </summary>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
     public JulieExtractRunner(string binaryPath, TimeSpan timeout)
+        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout), null, WindowsKillOnCloseJob.Attach)
     {
+    }
+
+    /// <summary>
+    /// Test seam for the containment path: <paramref name="attachContainmentJob"/> lets a test force the
+    /// Windows job-object failure that is otherwise unreachable off Windows and unreproducible on it.
+    /// </summary>
+    internal JulieExtractRunner(
+        string binaryPath,
+        TimeSpan timeout,
+        Action<string>? onContainmentDegraded,
+        Func<Process, WindowsKillOnCloseJobAttachment> attachContainmentJob)
+        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout),
+               onContainmentDegraded, attachContainmentJob)
+    {
+    }
+
+    private JulieExtractRunner(
+        string binaryPath,
+        TimeSpan timeout,
+        TimeSpan hardTimeout,
+        Action<string>? onContainmentDegraded,
+        Func<Process, WindowsKillOnCloseJobAttachment> attachContainmentJob)
+    {
+        ArgumentNullException.ThrowIfNull(attachContainmentJob);
         ArgumentException.ThrowIfNullOrWhiteSpace(binaryPath);
         string abs = Path.GetFullPath(binaryPath);
         if (!File.Exists(abs))
@@ -70,7 +112,9 @@ public sealed class JulieExtractRunner
                 $"v{MillerExtractContract.PinnedJulieExtractVersion} binary into .tools/.", abs);
         _binaryPath = abs;
         _timeout = timeout;
-        _hardTimeout = ExtractWaitPolicy.HardTimeoutFor(timeout);
+        _hardTimeout = hardTimeout;
+        _onContainmentDegraded = onContainmentDegraded;
+        _attachContainmentJob = attachContainmentJob;
     }
 
     /// <summary>
@@ -78,25 +122,30 @@ public sealed class JulieExtractRunner
     /// first, then PATH. Returns a constructed runner, or throws <see cref="FileNotFoundException"/> pointing at
     /// the restore script if absent.
     /// </summary>
-    public static JulieExtractRunner Locate(string toolsRoot) =>
+    /// <param name="onContainmentDegraded">
+    /// Optional sink for a Windows containment failure — see the constructor. Unwired, the degradation is
+    /// silent, which on Windows means the orphan this whole path exists to prevent can happen unannounced.
+    /// </param>
+    public static JulieExtractRunner Locate(string toolsRoot, Action<string>? onContainmentDegraded = null) =>
         Locate(toolsRoot, (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries), onContainmentDegraded);
 
     /// <summary>
     /// Resolve the julie-extract binary using <paramref name="pathDirs"/> as the PATH search list (test seam —
     /// avoids ambient PATH flakiness when <c>julie-extract</c> is installed on a dev or CI machine).
     /// </summary>
-    internal static JulieExtractRunner Locate(string toolsRoot, IReadOnlyList<string> pathDirs)
+    internal static JulieExtractRunner Locate(
+        string toolsRoot, IReadOnlyList<string> pathDirs, Action<string>? onContainmentDegraded = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
         string binaryName = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
         string toolsCandidate = Path.Combine(toolsRoot, binaryName);
         if (File.Exists(toolsCandidate))
-            return new JulieExtractRunner(toolsCandidate);
+            return new JulieExtractRunner(toolsCandidate, onContainmentDegraded);
 
         string? onPath = FindOnPath(binaryName, pathDirs);
         if (onPath is not null)
-            return new JulieExtractRunner(onPath);
+            return new JulieExtractRunner(onPath, onContainmentDegraded);
 
         throw new FileNotFoundException(
             $"julie-extract not found in '{toolsRoot}' or on PATH. Run scripts/restore-julie-extract.sh " +
@@ -119,19 +168,70 @@ public sealed class JulieExtractRunner
 
     /// <summary>
     /// Build the argv for a <c>scan</c>:
-    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json [--force]</c>.
+    /// <c>scan --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json --jobs &lt;jobs&gt;
+    /// [--ignore-file &lt;path&gt;]… [--force]</c>.
     /// v1 is a top-level subcommand with no parent verb and no workspace-id flag (the artifact binds the root
     /// itself). Paths must already be absolute (caller's responsibility for relative-CWD safety).
+    /// <paramref name="jobs"/> is always emitted; <c>0</c> is julie-extract's rayon auto-detect
+    /// (<see cref="ExtractJobsPolicy.RayonAuto"/>).
+    /// <paramref name="ignoreFiles"/> are emitted in the given ORDER, which is their precedence: julie-extract
+    /// concatenates them into one gitignore matcher, so last-match-wins makes the final file decisive
+    /// (<see cref="ScanIgnorePolicy"/> puts Miller's invariant file there).
+    /// <paramref name="supervision"/> adds the three process-lifecycle flags julie-extract 2.22.0 introduced
+    /// (<see cref="ExtractSupervision"/>). Null or <see cref="ExtractSupervision.None"/> emits none of them and
+    /// reproduces the earlier argv byte for byte.
     /// </summary>
-    public static IReadOnlyList<string> BuildScanArgs(string absDb, string absRoot, bool force)
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
+    /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
+    /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
+    public static IReadOnlyList<string> BuildScanArgs(
+        string absDb, string absRoot, bool force, int jobs, IReadOnlyList<string>? ignoreFiles = null,
+        ExtractSupervision? supervision = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
+        ArgumentOutOfRangeException.ThrowIfNegative(jobs);
         var args = new List<string>
-            { "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json" };
+        {
+            "scan", "--root", absRoot, "--db", absDb, "--strict-schema", "--json",
+            "--jobs", jobs.ToString(CultureInfo.InvariantCulture),
+        };
+        foreach (string ignoreFile in ignoreFiles ?? Array.Empty<string>())
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ignoreFile, nameof(ignoreFiles));
+            args.Add("--ignore-file");
+            args.Add(ignoreFile);
+        }
+        if (supervision?.SpoolDirectory is { } spoolDirectory)
+        {
+            args.Add("--spool-dir");
+            args.Add(spoolDirectory);
+        }
+        if (supervision?.ProgressFile is { } progressFile)
+        {
+            args.Add("--progress-file");
+            args.Add(progressFile);
+        }
+        if (supervision?.ParentPid is { } parentPid)
+        {
+            args.Add("--parent-pid");
+            args.Add(parentPid.ToString(CultureInfo.InvariantCulture));
+        }
         if (force)
             args.Add("--force");
         return args;
+    }
+
+    /// <summary>The <c>--progress-file</c> value from an already-built argv, if present.</summary>
+    internal static string? ProgressFileFromArgs(IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        for (int i = 0; i + 1 < args.Count; i++)
+        {
+            if (args[i] == "--progress-file")
+                return args[i + 1];
+        }
+        return null;
     }
 
     /// <summary>
@@ -188,13 +288,27 @@ public sealed class JulieExtractRunner
 
     /// <summary>
     /// Build the argv for a single-file <c>update</c>:
-    /// <c>update --root &lt;absRoot&gt; --db &lt;absDb&gt; --file &lt;absFile&gt; --strict-schema --json</c>. All
-    /// three paths must be CANONICAL (absolute + symlink-resolved — see <see cref="PathCanonicalizer"/>) so
-    /// julie-extract's inside-root check passes (verified-fact 4). The builder is a pure seam: it does NOT
-    /// re-normalize, so the caller's canonical paths reach julie verbatim.
+    /// <c>update --root &lt;absRoot&gt; --db &lt;absDb&gt; --file &lt;absFile&gt; --strict-schema --json
+    /// [--ignore-file &lt;path&gt;]…</c>. All three paths must be CANONICAL (absolute + symlink-resolved — see
+    /// <see cref="PathCanonicalizer"/>) so julie-extract's inside-root check passes (verified-fact 4). The
+    /// builder is a pure seam: it does NOT re-normalize, so the caller's canonical paths reach julie verbatim.
+    /// <paramref name="ignoreFiles"/> carries the same decisive exclusions the scan applied, so julie's
+    /// "an update can never insert rows for a file a fresh scan would not produce" contract holds on the
+    /// incremental path too.
     /// </summary>
-    public static IReadOnlyList<string> BuildUpdateArgs(string absDb, string absRoot, string absFile) =>
-        BuildFileOpArgs("update", absDb, absRoot, absFile);
+    /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
+    public static IReadOnlyList<string> BuildUpdateArgs(
+        string absDb, string absRoot, string absFile, IReadOnlyList<string>? ignoreFiles = null)
+    {
+        var args = new List<string>(BuildFileOpArgs("update", absDb, absRoot, absFile));
+        foreach (string ignoreFile in ignoreFiles ?? Array.Empty<string>())
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(ignoreFile, nameof(ignoreFiles));
+            args.Add("--ignore-file");
+            args.Add(ignoreFile);
+        }
+        return args;
+    }
 
     /// <summary>
     /// Build the argv for a single-file <c>delete</c>:
@@ -202,6 +316,8 @@ public sealed class JulieExtractRunner
     /// canonical-path contract as <see cref="BuildUpdateArgs"/> — this is the exact call the path gotcha
     /// (verified-fact 4) governs: a non-canonical <c>--file</c> under a symlinked root is rejected.
     /// </summary>
+    // No --ignore-file: the delete subcommand does not accept the flag (clap rejects it, exit 2), and a
+    // deletion removes rows for a path rather than selecting one, so ignore policy has nothing to decide.
     public static IReadOnlyList<string> BuildDeleteArgs(string absDb, string absRoot, string absFile) =>
         BuildFileOpArgs("delete", absDb, absRoot, absFile);
 
@@ -288,8 +404,10 @@ public sealed class JulieExtractRunner
                     $"(v{MillerExtractContract.PinnedJulieExtractVersion}).");
 
             default:
+                // The exit code rides along because 137 (SIGKILL) is the OOM killer's signature, and the
+                // scan-failure policy clamps the next attempt's --jobs when it sees one.
                 throw new JulieExtractException(
-                    $"julie-extract exited with unexpected code {exitCode}.", stderr);
+                    $"julie-extract exited with unexpected code {exitCode}.", stderr, exitCode);
         }
     }
 
@@ -306,28 +424,40 @@ public sealed class JulieExtractRunner
     /// artifact ran at ~7KB/s because live readers kept its WAL from checkpointing, while the same scan into a
     /// fresh DB bulk-inserts in ~90s). A failed force scan leaves the live artifact untouched. Escape hatch:
     /// <c>MILLER_FULL_REBUILD_INPLACE=1</c> restores the historical in-place force merge.</para>
+    ///
+    /// <para>Extraction parallelism is always capped. An explicit <paramref name="jobs"/> BEATS
+    /// <see cref="ExtractJobsPolicy.EnvVar"/>: it carries a caller's safety response — a retry after an OOM
+    /// kill passes <c>1</c> — and a stale operator override must not be able to undo that.</para>
+    ///
+    /// <para>Every scan carries Miller's generated invariant ignore file last, which makes its exclusions
+    /// decisive over in-tree policy (<see cref="ScanIgnorePolicy"/>). Nothing user-authored is ever passed that
+    /// way: a root with no <c>.julieignore</c> is seeded with one IN-TREE first — a copy of the main checkout's
+    /// file for a linked worktree, else the baseline + detected-vendor generation
+    /// (<see cref="JulieIgnoreSeeder"/>) — so the same policy governs this scan, later single-file updates, and
+    /// the watcher, and a malformed user pattern stays a warning instead of failing the scan.</para>
     /// </summary>
-    public ExtractReport Scan(string root, string db, bool force = false)
+    public ExtractReport Scan(string root, string db, bool force = false, int? jobs = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(db);
         string absDb = Path.GetFullPath(db);
         string absRoot = Path.GetFullPath(root);
+        int resolvedJobs = jobs ?? ExtractJobsPolicy.FromEnvironment();
 
         string? dbDir = Path.GetDirectoryName(absDb);
         if (!string.IsNullOrEmpty(dbDir))
             Directory.CreateDirectory(dbDir); // no mkdir in julie-extract's path; the .db itself may be absent (fresh)
 
-        // Consumer-side index hygiene: when the root has NO .julieignore, seed one (baseline noise patterns +
-        // auto-detected vendor dirs) BEFORE the scan so julie-extract's own ignore handling — it reads
-        // .gitignore/.julieignore from the root itself; Miller passes no --ignore-file — applies it on this
-        // very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap, leader
-        // startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace refresh),
-        // so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
+        // Consumer-side index hygiene, BEFORE the scan so julie-extract's own in-tree ignore handling applies it
+        // on this very scan. Scan is the one chokepoint every indexing path funnels through (server bootstrap,
+        // leader startup/refresh, MCP `workspace open` prime, CLI `workspace open` via the cross-workspace
+        // refresh), so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
         JulieIgnoreSeeder.EnsureSeeded(absRoot);
+        IReadOnlyList<string> ignoreFiles = ScanIgnorePolicy.PrepareForScan(absRoot);
+        ExtractSupervision supervision = ExtractSupervisionPolicy.For(absDb);
 
         if (!force || ForceScanInPlace())
-            return Run(BuildScanArgs(absDb, absRoot, force));
+            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles, supervision));
 
         // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
         // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
@@ -336,7 +466,9 @@ public sealed class JulieExtractRunner
         ExtractReport report;
         try
         {
-            report = Run(BuildScanArgs(FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force));
+            report = Run(BuildScanArgs(
+                FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs, ignoreFiles,
+                supervision));
         }
         catch
         {
@@ -478,13 +610,17 @@ public sealed class JulieExtractRunner
     /// preserve the verified-fact-4 fix: a non-canonical <c>--db</c>/<c>--root</c>/<c>--file</c> under a
     /// symlinked workspace trips julie's outside-root validation. The bootstrap canonicalizes the db ONCE and
     /// passes it here verbatim. Routes through the same <see cref="Run"/> → <see cref="Interpret"/> → version
-    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical.
+    /// cross-check as <see cref="Scan"/>; the exit-code contract is identical. Carries the scan's invariant
+    /// ignore file (<see cref="ScanIgnorePolicy.ForFileUpdate"/>) so an event for a path the scan excluded
+    /// cannot re-insert its rows.
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="canonicalDb"/> is null/blank or not an absolute path.</exception>
     public ExtractReport Update(string canonicalRoot, string canonicalDb, string canonicalFile)
     {
         RequireCanonicalDb(canonicalDb);
-        return Run(BuildUpdateArgs(canonicalDb, canonicalRoot, canonicalFile));
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+        return Run(BuildUpdateArgs(
+            canonicalDb, canonicalRoot, canonicalFile, ScanIgnorePolicy.ForFileUpdate(canonicalRoot)));
     }
 
     /// <summary>
@@ -556,6 +692,18 @@ public sealed class JulieExtractRunner
                 standardError: string.Empty, ex);
         }
 
+        // Windows half of orphan containment. julie-extract's --parent-pid watchdog is Unix-only (std exposes
+        // no Windows parent_id), so on Windows a killed Miller would otherwise leave a whole-repo extract
+        // running against a workspace nobody is waiting on. The job object kills its members when this handle
+        // closes, which a killed process does for us; disposing it AFTER the child has exited is what keeps it
+        // from being the thing that kills a healthy scan. NotRequired off Windows and best-effort on it — and
+        // a best-effort mechanism that fails silently is one nobody learns has stopped working, so the reason
+        // goes to the sink before the scan proceeds uncontained.
+        WindowsKillOnCloseJobAttachment attachment = _attachContainmentJob(process);
+        using WindowsKillOnCloseJob? containment = attachment.Job;
+        if (attachment.FailureReason is { } containmentFailure)
+            _onContainmentDegraded?.Invoke(containmentFailure);
+
         // Read stdout/stderr asynchronously to avoid the classic pipe-buffer deadlock on large reports.
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -566,6 +714,7 @@ public sealed class JulieExtractRunner
         // idle but exceeded 600s when the fleet rebuilt concurrently — 2026-06-11 Eros field report). Kill
         // only when the artifact and output stop moving for the stall window, with an absolute backstop.
         string? dbPath = DbPathFromArgs(args);
+        string? progressPath = ProgressFileFromArgs(args);
         var policy = new ExtractWaitPolicy(_timeout, _hardTimeout);
         var clock = Stopwatch.StartNew();
         int pollSlice = (int)Math.Clamp((long)_timeout.TotalMilliseconds, 50, 1000);
@@ -574,7 +723,7 @@ public sealed class JulieExtractRunner
         while (!(exited = process.WaitForExit(pollSlice)))
         {
             verdict = policy.Observe(
-                clock.Elapsed, ProgressStamp(dbPath, Interlocked.Read(ref outputActivity)));
+                clock.Elapsed, ProgressStamp(dbPath, progressPath, Interlocked.Read(ref outputActivity)));
             if (verdict != ExtractWaitVerdict.Continue)
                 break;
         }
@@ -590,8 +739,11 @@ public sealed class JulieExtractRunner
                 : $"was still making progress but timed out at the {_hardTimeout.TotalSeconds:0}s hard cap and " +
                   "was killed. Large workspaces under heavy concurrent load can take this long; retry when the " +
                   "machine is less loaded.";
+            string where = ScanProgressRecord.DescribeLastProgress(progressPath) is { } progress
+                ? $" It {progress}."
+                : string.Empty;
             throw new JulieExtractException(
-                $"julie-extract at '{_binaryPath}' {reason}",
+                $"julie-extract at '{_binaryPath}' {reason}{where}",
                 standardError: stderr.ToString().TrimEnd('\n', '\r'));
         }
 
@@ -624,26 +776,42 @@ public sealed class JulieExtractRunner
         return null;
     }
 
-    // The progress stamp the wait policy watches: total bytes of the artifact db + WAL/SHM sidecars plus the
-    // count of output lines received. ANY change (including WAL shrink on checkpoint) counts as progress.
-    private static long ProgressStamp(string? dbPath, long outputActivity)
+    /// <summary>
+    /// The progress stamp the wait policy watches: bytes of the artifact db + WAL/SHM sidecars, bytes of the
+    /// <c>--progress-file</c> heartbeat, and the count of output lines received. ANY change counts as progress
+    /// — including a WAL shrink on checkpoint, and including the heartbeat file shrinking because a new scan
+    /// truncated it, which the progress-file contract requires be read as progress rather than as a stall.
+    ///
+    /// <para>The heartbeat is what makes the pre-artifact phase visible at all. Extraction spools for minutes
+    /// on a large repo without touching the artifact, so before it the sum could sit still for the whole stall
+    /// window on a perfectly healthy scan. It is SUMMED with the older signals rather than replacing them, so a
+    /// progress file that cannot be written degrades this to exactly the pre-2.22.0 stamp instead of to
+    /// nothing.</para>
+    /// </summary>
+    private static long ProgressStamp(string? dbPath, string? progressPath, long outputActivity)
     {
         long stamp = outputActivity;
-        if (dbPath is null)
-            return stamp;
-        foreach (string suffix in new[] { "", "-wal", "-shm" })
+        if (dbPath is not null)
         {
-            try
-            {
-                var info = new FileInfo(dbPath + suffix);
-                if (info.Exists)
-                    stamp += info.Length;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                // Unreadable sidecar: contribute nothing — output activity and the other files still count.
-            }
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+                stamp += LengthOrZero(dbPath + suffix);
         }
+        if (progressPath is not null)
+            stamp += LengthOrZero(progressPath);
         return stamp;
+    }
+
+    private static long LengthOrZero(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Unreadable: contribute nothing — output activity and the other files still count.
+            return 0;
+        }
     }
 }

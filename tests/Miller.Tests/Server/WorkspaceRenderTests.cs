@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
@@ -195,6 +196,269 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain("4242", text);
         Assert.DoesNotContain(".sock", text);
         Assert.DoesNotContain(@"\\.\pipe\", text);
+    }
+
+    // ---- W3 machine-wide scan governor (additive, must stay invisible when idle/disabled/absent) ----
+
+    private static ScanGovernorSnapshot WaitingGovernor() => new(
+        State: ScanGovernorStates.Waiting,
+        Reason: "leader-drain-rescan",
+        SinceUtc: DateTimeOffset.UtcNow.AddSeconds(-12),
+        HolderPid: 4242,
+        HolderWorkspaceRoot: "/repo/other-worktree");
+
+    private static WorkspaceHealthFacts HealthFacts(WorkspaceFacts status) => new(
+        StatusFacts: status,
+        Telemetry: TelemetrySummary.Empty,
+        TelemetryHealth: new TelemetryHealthFacts(0, 0, 0),
+        Extraction: ExtractionHealth(),
+        Warnings: [],
+        RecommendedActions: [],
+        State: HealthState.Ready,
+        Summary: "ready");
+
+    // Idle, disabled, and an uncorroborated owner record all produce a NULL fact — the only invisible shape
+    // production emits, and therefore the only one worth pinning byte-identity against.
+    [Fact]
+    public void Status_Compact_IsByteIdenticalWhenTheScanGovernorFactIsAbsent()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { ScanGovernor = null }, Telemetry, json: false));
+    }
+
+    [Fact]
+    public void Status_Json_IsByteIdenticalWhenTheScanGovernorFactIsAbsent()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { ScanGovernor = null }, Telemetry, json: true));
+        Assert.DoesNotContain("scan_governor", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Compact_IsByteIdenticalWhenTheScanGovernorFactIsAbsent()
+    {
+        string baseline = WorkspaceRender.Health(HealthFacts(Facts()), json: false);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Health(HealthFacts(Facts() with { ScanGovernor = null }), json: false));
+    }
+
+    [Fact]
+    public void Health_Json_IsByteIdenticalWhenTheScanGovernorFactIsAbsent()
+    {
+        string baseline = WorkspaceRender.Health(HealthFacts(Facts()), json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Health(HealthFacts(Facts() with { ScanGovernor = null }), json: true));
+        Assert.DoesNotContain("scan_governor", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_WaitingScanGovernor_NamesTheHolder()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { ScanGovernor = WaitingGovernor() }, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("scan_governor: waiting 1", text, StringComparison.Ordinal);
+        Assert.Contains("s (holder pid 4242 /repo/other-worktree)", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_HoldingScanGovernor_ShowsTheReasonInsteadOfAHolder()
+    {
+        var holding = new ScanGovernorSnapshot(
+            ScanGovernorStates.Holding, "leader-startup", DateTimeOffset.UtcNow.AddSeconds(-3), null, null);
+
+        string text = WorkspaceRender.Status(
+            Facts() with { ScanGovernor = holding }, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains("scan_governor: holding ", text, StringComparison.Ordinal);
+        Assert.Contains("s (leader-startup)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("holder pid", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_WaitingScanGovernor_ExposesTheHolderFacts()
+    {
+        JsonElement governor = Json(WorkspaceRender.Status(
+                Facts() with { ScanGovernor = WaitingGovernor() }, TelemetrySummary.Empty, json: true))
+            .GetProperty("scan_governor");
+
+        Assert.Equal("waiting", governor.GetProperty("state").GetString());
+        Assert.Equal("leader-drain-rescan", governor.GetProperty("reason").GetString());
+        Assert.Equal(4242, governor.GetProperty("holder_pid").GetInt32());
+        Assert.Equal("/repo/other-worktree", governor.GetProperty("holder_workspace_root").GetString());
+        Assert.InRange(governor.GetProperty("waiting_seconds").GetInt64(), 12, 120);
+        Assert.NotEqual(JsonValueKind.Null, governor.GetProperty("since_utc").ValueKind);
+    }
+
+    [Fact]
+    public void Health_Compact_WaitingScanGovernor_NamesTheHolder()
+    {
+        string text = WorkspaceRender.Health(
+            HealthFacts(Facts() with { ScanGovernor = WaitingGovernor() }), json: false);
+
+        Assert.Contains("scan_governor: waiting 1", text, StringComparison.Ordinal);
+        Assert.Contains("s (holder pid 4242 /repo/other-worktree)", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Json_WaitingScanGovernor_ExposesTheHolderFacts()
+    {
+        JsonElement governor = Json(WorkspaceRender.Health(
+                HealthFacts(Facts() with { ScanGovernor = WaitingGovernor() }), json: true))
+            .GetProperty("scan_governor");
+
+        Assert.Equal("waiting", governor.GetProperty("state").GetString());
+        Assert.Equal(4242, governor.GetProperty("holder_pid").GetInt32());
+        Assert.Equal("/repo/other-worktree", governor.GetProperty("holder_workspace_root").GetString());
+    }
+
+    [Fact]
+    public void Health_JsonSummary_OmitsTheScanGovernorEntirely()
+    {
+        JsonElement root = Json(WorkspaceRender.Health(
+            HealthFacts(Facts() with { ScanGovernor = WaitingGovernor() }),
+            WorkspaceHealthFormat.JsonSummary));
+
+        Assert.False(root.TryGetProperty("scan_governor", out _));
+    }
+
+    // ---- persisted scan-failure record (W8 D6) ----
+
+    private static ScanFailureRecord ScanFailure() => new(
+        Intent: ScanIntent.UserFullRebuild,
+        ExitCode: 137,
+        ConsecutiveFailures: 3,
+        Jobs: 1,
+        LastFailureAtUtc: new DateTimeOffset(2026, 8, 2, 12, 0, 0, TimeSpan.Zero),
+        NextAttemptAtUtc: DateTimeOffset.UtcNow.AddMinutes(10));
+
+    [Fact]
+    public void Status_Compact_IsByteIdenticalWhenNoScanFailureIsRecorded()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { ScanFailure = null }, Telemetry, json: false));
+        Assert.DoesNotContain("scan_failure", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_IsByteIdenticalWhenNoScanFailureIsRecorded()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { ScanFailure = null }, Telemetry, json: true));
+        Assert.DoesNotContain("scan_failure", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Json_IsByteIdenticalWhenNoScanFailureIsRecorded()
+    {
+        string baseline = WorkspaceRender.Health(HealthFacts(Facts()), json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Health(HealthFacts(Facts() with { ScanFailure = null }), json: true));
+        Assert.DoesNotContain("scan_failure", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_ARecordedScanFailure_ShowsTheIntentStreakExitCodeAndRetryTime()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { ScanFailure = ScanFailure() }, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains(
+            "scan_failure: UserFullRebuild x3 exit 137 jobs 1 retry_at ", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_ARecordedScanFailure_ExposesEveryPersistedField()
+    {
+        JsonElement failure = Json(WorkspaceRender.Status(
+                Facts() with { ScanFailure = ScanFailure() }, TelemetrySummary.Empty, json: true))
+            .GetProperty("scan_failure");
+
+        Assert.Equal("UserFullRebuild", failure.GetProperty("intent").GetString());
+        Assert.Equal(137, failure.GetProperty("exit_code").GetInt32());
+        Assert.Equal(3, failure.GetProperty("consecutive_failures").GetInt32());
+        Assert.Equal(1, failure.GetProperty("jobs").GetInt32());
+        Assert.Equal(
+            "2026-08-02T12:00:00.0000000Z", failure.GetProperty("last_failure_utc").GetString());
+        Assert.NotEqual(JsonValueKind.Null, failure.GetProperty("next_attempt_utc").ValueKind);
+        Assert.InRange(failure.GetProperty("retry_in_seconds").GetInt64(), 500, 600);
+    }
+
+    [Fact]
+    public void Status_Json_AScanFailureWithNoExitCode_RendersAnExplicitNull()
+    {
+        JsonElement failure = Json(WorkspaceRender.Status(
+                Facts() with { ScanFailure = ScanFailure() with { ExitCode = null } },
+                TelemetrySummary.Empty,
+                json: true))
+            .GetProperty("scan_failure");
+
+        Assert.Equal(JsonValueKind.Null, failure.GetProperty("exit_code").ValueKind);
+    }
+
+    [Fact]
+    public void Status_Compact_AScanFailureWithNoExitCode_OmitsTheExitClause()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { ScanFailure = ScanFailure() with { ExitCode = null } },
+            TelemetrySummary.Empty,
+            json: false);
+
+        Assert.Contains("scan_failure: UserFullRebuild x3 jobs 1 retry_at ", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_APastRetryTime_ReportsZeroSecondsRemainingRatherThanANegative()
+    {
+        JsonElement failure = Json(WorkspaceRender.Status(
+                Facts() with
+                {
+                    ScanFailure = ScanFailure() with { NextAttemptAtUtc = DateTimeOffset.UtcNow.AddHours(-1) },
+                },
+                TelemetrySummary.Empty,
+                json: true))
+            .GetProperty("scan_failure");
+
+        Assert.Equal(0, failure.GetProperty("retry_in_seconds").GetInt64());
+    }
+
+    [Fact]
+    public void Health_Compact_ARecordedScanFailure_ShowsTheStreak()
+    {
+        string text = WorkspaceRender.Health(
+            HealthFacts(Facts() with { ScanFailure = ScanFailure() }), json: false);
+
+        Assert.Contains("scan_failure: UserFullRebuild x3 exit 137 jobs 1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Json_ARecordedScanFailure_ExposesTheStreakAndRetryTime()
+    {
+        JsonElement failure = Json(WorkspaceRender.Health(
+                HealthFacts(Facts() with { ScanFailure = ScanFailure() }), json: true))
+            .GetProperty("scan_failure");
+
+        Assert.Equal("UserFullRebuild", failure.GetProperty("intent").GetString());
+        Assert.Equal(3, failure.GetProperty("consecutive_failures").GetInt32());
+        Assert.InRange(failure.GetProperty("retry_in_seconds").GetInt64(), 500, 600);
     }
 
     // ---- status role string (version-aware leadership D6) ----
@@ -1245,6 +1509,37 @@ public sealed class WorkspaceRenderTests
         string text = WorkspaceRender.Action(result, json: false);
         Assert.Contains("leader", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("cannot force", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Action_ADowngradedRebuild_SaysSoInBothRenders_SoScannedIsNeverReadAsRebuilt()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "full",
+            Scanned: true,
+            Swapped: false,
+            Revision: 43,
+            Note: "the full (force) scan was downgraded to a delta reconcile; the rebuild is still owed.",
+            Downgraded: true);
+
+        string text = WorkspaceRender.Action(result, json: false);
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+
+        Assert.Contains("downgraded: yes", text, StringComparison.Ordinal);
+        Assert.Contains("still owed", text, StringComparison.Ordinal);
+        Assert.True(doc.RootElement.GetProperty("downgraded").GetBoolean());
+    }
+
+    [Fact]
+    public void Action_WithoutADowngrade_OmitsTheFlagEntirely_SoTheDefaultContractIsByteIdentical()
+    {
+        var result = new WorkspaceActionResult(
+            Operation: "full", Scanned: true, Swapped: false, Revision: 43, Note: null);
+
+        using var doc = JsonDocument.Parse(WorkspaceRender.Action(result, json: true));
+
+        Assert.DoesNotContain("downgraded", WorkspaceRender.Action(result, json: false), StringComparison.Ordinal);
+        Assert.False(doc.RootElement.TryGetProperty("downgraded", out _));
     }
 
     [Fact]

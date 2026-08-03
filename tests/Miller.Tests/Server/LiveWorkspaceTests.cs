@@ -119,12 +119,14 @@ public sealed class LiveWorkspaceTests : IDisposable
                 WorkspaceRegistryState.Current);
             registry.MarkScanned(workspaceId, scan.Revision ?? 0);
         }
-        var crossRefresh = new CrossWorkspaceRefreshService(registry, runner, SymbolSearchSidecar.Disabled);
+        var crossRefresh = new CrossWorkspaceRefreshService(
+            registry, runner, SymbolSearchSidecar.Disabled, ScanGovernor.Disabled());
 
         var tool = new WorkspaceTool(
             holder, workspace, indexer, freshness, probe, bootstrap, ledger, runner, registry, crossRefresh,
             SymbolSearchSidecar.Disabled,
             VectorSidecar.Disabled,
+            ScanGovernor.Disabled(),
             NullLogger<WorkspaceTool>.Instance);
         return (tool, indexer, holder, ledger, root, dbPath, runner, registry);
     }

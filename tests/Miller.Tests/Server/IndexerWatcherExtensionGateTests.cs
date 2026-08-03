@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -37,7 +38,7 @@ public sealed class IndexerWatcherExtensionGateTests
             return Stub();
         }
 
-        public ExtractReport Scan(bool force = false)
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
             ScanCount++;
             return Stub();

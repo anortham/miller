@@ -1,3 +1,4 @@
+using System.Globalization;
 using Miller.Indexing;
 using Miller.Server.Hosting;
 using Miller.Server.Telemetry;
@@ -134,6 +135,7 @@ public sealed record WorkspaceHealthFacts(
             statusFacts.ContentCorpus?.State,
             statusFacts.ContentCorpus?.Error);
         AddVectorWarnings(warnings, recommended, statusFacts.Vectors);
+        AddScanGovernorWarning(warnings, recommended, statusFacts.ScanGovernor);
 
         AddLeaderWarnings(warnings, recommended, statusFacts, leader);
 
@@ -306,6 +308,32 @@ public sealed record WorkspaceHealthFacts(
         {
             recommended.Add($"run workspace full to replace the {code} after preserving its diagnostics");
         }
+    }
+
+    // Queueing behind another workspace's scan is the governor working as DESIGNED, so it is
+    // usable_with_warnings, never degraded — a degraded severity would flip every queued fleet workspace's
+    // HealthState through StateFrom.
+    private static void AddScanGovernorWarning(
+        List<HealthWarning> warnings,
+        List<string> recommended,
+        ScanGovernorSnapshot? governor)
+    {
+        if (governor is null || !string.Equals(governor.State, ScanGovernorStates.Waiting, StringComparison.Ordinal))
+            return;
+
+        string holder = governor.HolderPid is { } pid
+            ? "recorded holder pid " + pid.ToString(CultureInfo.InvariantCulture) +
+              (string.IsNullOrWhiteSpace(governor.HolderWorkspaceRoot)
+                  ? string.Empty
+                  : " scanning " + governor.HolderWorkspaceRoot)
+            : "no live holder is recorded";
+        warnings.Add(new HealthWarning(
+            "scan_waiting_on_machine_governor",
+            "usable_with_warnings",
+            $"this workspace's scan is queued behind another scan on this machine ({holder})"));
+        recommended.Add(
+            "wait for the in-flight scan to finish, or set MILLER_SCAN_GOVERNOR=0 to disable machine-wide " +
+            "scan admission");
     }
 
     private static void AddVectorWarnings(

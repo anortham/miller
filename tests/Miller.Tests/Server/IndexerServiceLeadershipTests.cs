@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
@@ -75,11 +76,11 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
         public ExtractReport Update(string path) => Stub(Revision);
         public ExtractReport Delete(string path) => Stub(Revision);
 
-        public ExtractReport Scan(bool force = false)
+        public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
         {
             lock (_gate)
             {
-                _scanForce.Add(force);
+                _scanForce.Add(ScanIntentPolicy.RequiresForce(intent));
                 if (_scanForce.Count >= SignalAtScanCount)
                     ScansReached.Set();
             }
@@ -444,7 +445,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
 
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         while (!condition())
             await Task.Delay(10, linked.Token).ConfigureAwait(false);
@@ -596,7 +597,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             Assert.True(lease.Disposed);   // indexer.lock released so the challenger's retry can win it
             Assert.False(service.IsLeader);
             Assert.Null(LeaderIdentityFile.TryRead(dir)); // leader.json removed before the successor writes its own
-            Assert.Equal(ScanOutcome.Kind.NotLeader, service.TryScanAsLeader(force: true).Result); // ops reset
+            Assert.Equal(ScanOutcome.Kind.NotLeader, service.TryScanAsLeader(ScanIntent.UserFullRebuild).Result); // ops reset
         }
         finally
         {
@@ -660,7 +661,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             Assert.True(lease.Disposed);
             Assert.False(service.IsLeader);
             Assert.Null(LeaderIdentityFile.TryRead(dir));
-            Assert.Equal(ScanOutcome.Kind.NotLeader, service.TryScanAsLeader(force: true).Result);
+            Assert.Equal(ScanOutcome.Kind.NotLeader, service.TryScanAsLeader(ScanIntent.UserFullRebuild).Result);
         }
         finally
         {

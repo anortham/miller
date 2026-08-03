@@ -6,9 +6,9 @@ namespace Miller.Indexing;
 /// <em>leader</em>: it runs the file watcher and shells <c>extract</c>; every other instance is refused
 /// (<see cref="TryAcquire"/> returns null) and stays a pure reader. The lock is an open <see cref="FileStream"/>
 /// with <see cref="FileShare.None"/> — the OS denies any other handle (this process or another) while it is held,
-/// and releases it on dispose / process exit. This is Miller's election; julie's own
-/// <c>&lt;db&gt;.julie-extract.lock</c> 30s flock remains the lower-level cross-process backstop even if two
-/// writers ever race.
+/// and releases it on dispose / process exit. This lock is the ONLY serialization Miller has for a workspace:
+/// julie-extract runs no lock of its own, so nothing below this catches two writers that race. It is also
+/// strictly PER-WORKSPACE — N workspaces are N independent leaders with nothing machine-wide above them.
 ///
 /// <para>The returned <see cref="SingleWriterLock"/> IS the lease: hold it for the lifetime of leadership and
 /// dispose it to step down (enabling failover — another instance can then acquire it).</para>
@@ -62,10 +62,11 @@ public sealed class SingleWriterLock : IDisposable
         return new SingleWriterLock(stream, lockFilePath);
     }
 
-    internal static bool IsLockContentionForTest(IOException ex, bool isWindows) =>
-        IsLockContention(ex, isWindows);
-
-    private static bool IsLockContention(IOException ex, bool isWindows)
+    /// <summary>
+    /// Whether <paramref name="ex"/> is another holder denying this handle rather than a genuine IO failure.
+    /// Shared with <see cref="ScanGovernor"/> so the Windows(32/33)/POSIX(11/35) table lives in one place.
+    /// </summary>
+    internal static bool IsLockContention(IOException ex, bool isWindows)
     {
         int nativeError = ex.HResult & 0xFFFF;
         if (isWindows)
@@ -152,6 +153,11 @@ public sealed class SingleWriterLock : IDisposable
 /// <c>SingleWriterLock</c> → <c>content.lock</c> → <c>history.lock</c> — lives in exactly one place and cannot
 /// drift between the two paths. That single order is what lets every writer pair avoid deadlock. This is one
 /// small shared helper, not a general lock manager: it only acquires-in-order and disposes-in-reverse.</para>
+///
+/// <para>The full process-wide order extends that with the user-global scan-admission lease: indexer
+/// <see cref="SingleWriterLock"/> → <see cref="ScanGovernor"/> → the indexer's ops gate → <c>content.lock</c> →
+/// <c>history.lock</c>. Nothing may acquire a workspace <see cref="SingleWriterLock"/> while holding the
+/// governor.</para>
 /// </summary>
 public sealed class WorkspaceWriteLeases : IDisposable
 {

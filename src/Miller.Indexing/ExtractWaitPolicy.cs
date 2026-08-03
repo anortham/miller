@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Miller.Indexing;
 
 /// <summary>What the bounded wait should do with a still-running julie-extract process.</summary>
@@ -24,8 +26,19 @@ public enum ExtractWaitVerdict
 public sealed class ExtractWaitPolicy
 {
     /// <summary>Absolute-cap multiple of the stall window: generous enough that any progressing real-world
-    /// scan finishes, small enough to bound a pathological extractor that writes forever.</summary>
-    public const int HardCapMultiplier = 6;
+    /// scan finishes, small enough to bound a pathological extractor that writes forever.
+    ///
+    /// <para>At the default 10-minute stall window this is 4 hours. It used to be 6× — one hour — and that was
+    /// measured to be too small to be a backstop at all: a HEALTHY force scan of a 74k-file repo (the size in
+    /// the 2026-08-01 fleet field report) took 61.3 minutes and would have been killed 77 seconds before it
+    /// finished, on every attempt, forever
+    /// (`docs/findings/2026-08-02-w10-scale-repro-wal-measurement.md`). A cap a real workload cannot beat does
+    /// not bound a runaway extractor; it converts the largest repos into permanently unindexable ones.</para>
+    /// </summary>
+    public const int HardCapMultiplier = 24;
+
+    /// <summary>Operator override for the absolute cap: a positive number of seconds, or a TimeSpan.</summary>
+    public const string HardCapEnvironmentVariable = "MILLER_EXTRACT_HARD_CAP";
 
     private readonly TimeSpan _stallTimeout;
     private readonly TimeSpan _hardTimeout;
@@ -43,6 +56,44 @@ public sealed class ExtractWaitPolicy
     }
 
     public static TimeSpan HardTimeoutFor(TimeSpan stallTimeout) => stallTimeout * HardCapMultiplier;
+
+    /// <summary>
+    /// The absolute cap for the DEFAULT production stall window, honoring
+    /// <see cref="HardCapEnvironmentVariable"/>. An override at or below <paramref name="stallTimeout"/> is
+    /// ignored rather than clamped: it would make the cap fire before the stall window could ever be reached,
+    /// which is a typo far more often than an intent, and the constructor rejects it outright.
+    ///
+    /// <para>This is deliberately NOT applied to a caller-supplied stall window. The explicit-timeout
+    /// constructor is the kill-path test seam, and an operator's machine-wide override must not reach in and
+    /// change what a caller asked for — the same rule <c>ExtractJobsPolicy</c> follows.</para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="readEnvironmentVariable"/> is null.</exception>
+    public static TimeSpan HardTimeoutForEnvironment(
+        TimeSpan stallTimeout, Func<string, string?> readEnvironmentVariable)
+    {
+        ArgumentNullException.ThrowIfNull(readEnvironmentVariable);
+
+        return ParseDuration(readEnvironmentVariable(HardCapEnvironmentVariable)) is { } configured
+               && configured > stallTimeout
+            ? configured
+            : HardTimeoutFor(stallTimeout);
+    }
+
+    private static TimeSpan? ParseDuration(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)
+            && seconds > 0 && !double.IsNaN(seconds) && !double.IsInfinity(seconds))
+        {
+            return TimeSpan.FromSeconds(seconds);
+        }
+
+        return TimeSpan.TryParse(value, CultureInfo.InvariantCulture, out TimeSpan parsed) && parsed > TimeSpan.Zero
+            ? parsed
+            : null;
+    }
 
     /// <summary>
     /// Observe the process at <paramref name="elapsed"/> since start with the current progress stamp.
