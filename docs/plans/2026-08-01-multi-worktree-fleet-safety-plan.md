@@ -281,7 +281,12 @@ with a surviving leader still logs "keeping the prior index" and never retries u
 ### P2 — measure before deeper changes
 
 **W10. Scale repro + WAL measurement** — julie-extractors (xtask) or Miller Scale fixture.
-~1 session.
+~1 session. **DONE 2026-08-02 —
+[`docs/findings/2026-08-02-w10-scale-repro-wal-measurement.md`](../findings/2026-08-02-w10-scale-repro-wal-measurement.md).**
+The multi-GB trigger condition is met (9.28 GB peak WAL on 74k files), but the measurement moves the
+exit-137 diagnosis: extraction peaks at 135 MB RSS, the 31.7 GiB peak is the artifact-write phase, which
+`--jobs` does not bound — so W3's governor, not W2's cap, is the OOM fix, and chunking would not lower
+the memory peak. Read the findings before acting on the chunking option below.
 - Build a 74k-file fixture; kill scans during extraction and during artifact write; measure spool,
   RSS, DB, and WAL sizes separately. Only if a healthy force-to-`.rebuild` shows multi-GB WAL do we
   consider chunked commits (safe only for new/rebuild artifacts behind an explicit building/ready
