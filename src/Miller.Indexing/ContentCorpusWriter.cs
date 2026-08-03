@@ -28,6 +28,7 @@ public static partial class ContentCorpusWriter
             ?? throw new ArgumentException($"Path has no directory: {contentDbPath}", nameof(contentDbPath));
         Directory.CreateDirectory(dir);
         string tempPath = Path.Combine(dir, ".content-build-" + Guid.NewGuid().ToString("N") + ".db");
+        SidecarStagingReaper.ReapStale(dir, ".content-build-", SidecarStagingReaper.DefaultStaleAge, tempPath);
 
         ContentCorpusFacts facts;
         try

@@ -117,6 +117,7 @@ public static class SearchIndexWriter
         string dir = Path.GetDirectoryName(fullPath)
             ?? throw new ArgumentException($"Path has no directory: {searchDbPath}", nameof(searchDbPath));
         string tempPath = Path.Combine(dir, $".search-build-{Guid.NewGuid():N}.db");
+        SidecarStagingReaper.ReapStale(dir, ".search-build-", SidecarStagingReaper.DefaultStaleAge, tempPath);
 
         try
         {
