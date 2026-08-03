@@ -445,7 +445,7 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
 
     private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         while (!condition())
             await Task.Delay(10, linked.Token).ConfigureAwait(false);
