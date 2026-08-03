@@ -150,8 +150,15 @@ with a surviving leader still logs "keeping the prior index" and never retries u
 - Test: fast injected-concurrency tests (two in-process bootstrap decisions racing a fake lock);
   live two-process coverage is Scale.
 - Acceptance:
-  - [ ] No bootstrap path reaches `runner.Scan` without holding the workspace writer lock.
-  - [ ] Loser of the race loads the winner's artifact rather than scanning.
+  - [x] No bootstrap path reaches `runner.Scan` without holding the workspace writer lock.
+        (`BootstrapScanLockScaleTests.BootstrapScanLease_LockHeldAndNoArtifactEverAppears_NeverScansAndNamesTheHolder`,
+        `…Bootstrap_ThatScansForReal_ReleasesTheWriterLeaseBeforeItReturns`)
+  - [x] Loser of the race loads the winner's artifact rather than scanning.
+        (`…Bootstrap_LosesTheLockAndTheWinnerFinishesMidWait_BindsThatArtifactWithoutScanning`,
+        `…BootstrapScanLease_FinishedWinnerArtifact_StandsDownAndReportsTheReuseDecision`)
+- **Delivered.** The stand-down is gated on the winner's artifact being genuinely usable, not merely
+  present — a cross-model finding. Four sibling tests refuse to stand down for an artifact that records
+  another root, committed no revision, or this build cannot read.
 
 **W2. Cap extraction parallelism** — Miller. ~0.5 agent session.
 - Modify: `src/Miller.Indexing/JulieExtractRunner.cs` (`BuildScanArgs`, ~line 126): always pass
@@ -161,7 +168,13 @@ with a surviving leader still logs "keeping the prior index" and never retries u
 - Consumed by W8: after an exit-137/SIGKILL failure the next automatic attempt runs `--jobs 1`.
 - Test: pure argv unit tests.
 - Acceptance:
-  - [ ] Every scan argv carries `--jobs`; default matches the formula; env override honored.
+  - [x] Every scan argv carries `--jobs`; default matches the formula; env override honored.
+        (`ExtractJobsPolicyTests` — `DefaultFor_HalvesProcessorCountCappedAtFour`,
+        `FromEnvValue_ExplicitZero_OptsIntoRayonAuto`,
+        `FromEnvValue_ExplicitCount_HonoredEvenAboveTheDefaultCap`,
+        `FromEnvValue_InvalidValue_FallsBackToDefault`)
+- **Delivered.** An explicit `jobs:` argument to `Scan` BEATS the env var, because it carries a caller's
+  safety response — W8's post-OOM retry passes `1` — that a stale operator override must not undo.
 
 **W3. Machine-wide scan governor** — Miller. ~1–2 agent sessions.
 - Create: `src/Miller.Indexing/ScanGovernor.cs` (+ registration in
@@ -177,9 +190,18 @@ with a surviving leader still logs "keeping the prior index" and never retries u
   no new MCP tool.
 - Test: pure lease-decision units fast; multi-process contention in Scale.
 - Acceptance:
-  - [ ] N concurrent `workspace open --full` on sibling worktrees run ≤1 extractor at a time.
-  - [ ] Kill -9 of the holder frees the lease without manual cleanup.
-  - [ ] Waiting state visible in `workspace status --json`.
+  - [x] N concurrent `workspace open --full` on sibling worktrees run ≤1 extractor at a time.
+        (`ScanGovernorContentionScaleTests.TwoSiblingWorktrees_ConcurrentFullOpen_NeverHoldScanAdmissionAtTheSameTime`
+        — two real processes, not an in-process fake)
+  - [x] Kill -9 of the holder frees the lease without manual cleanup.
+        (`…KilledHolder_FreesScanAdmission_WithoutManualCleanup`)
+  - [x] Waiting state visible in `workspace status --json`.
+        (`…ObserverProcess_WhileAScanHoldsAdmission_ReportsTheMachineWideHolder`,
+        `…BlockedProcess_OnASeededRoot_ReportsLockBusy_AndKeepsServingTheExistingIndex`)
+- **Delivered.** Admission is released before blocking on any other gate — a cross-model finding: holding
+  a machine-wide lease while waiting on a per-workspace lock serializes the whole fleet behind one
+  workspace's queue. A blocked process on a COLD root gives up inside its budget and reports an unusable
+  index rather than waiting forever.
 
 **W4. Spool containment + reaping** — julie-extractors first, then Miller. ~1 session (julie) +
 ~0.5 session (Miller wiring after pin bump).
@@ -291,9 +313,22 @@ with a surviving leader still logs "keeping the prior index" and never retries u
   CLI `workspace open` stops upserting `Ready` before the first scan completes
   (`src/Miller.Server/Cli/CliDispatch.cs:3130`); failed opens leave an error-state row, not `Ready`.
 - Acceptance:
-  - [ ] A failed force scan does not immediately re-force on any automatic path.
-  - [ ] Kill→retry cycles show monotonically increasing spacing in the failure record.
-  - [ ] Schema/corruption/upgrade rebuilds still always run force.
+  - [x] A failed force scan does not immediately re-force on any automatic path.
+        (`IndexerCoreTests.DrainAndProcess_AfterAFailedScan_SuppressesTheRetryUntilTheBackoffElapses`,
+        `…DrainAndProcess_AfterADowngradedSuccess_ScansOncePerBackoffWindowNotOncePerTick`)
+  - [x] Kill→retry cycles show monotonically increasing spacing in the failure record.
+        (`…DrainAndProcess_BackoffGrowsWithEachConsecutiveFailure`,
+        `…DrainAndProcess_AfterASigkilledScan_ClampsTheNextAttemptToOneJob`,
+        `ScanFailureJournalTests.PersistedPolicy_SharesTheRecordAcrossInstances_SoARestartInheritsTheBackoff`)
+  - [x] Schema/corruption/upgrade rebuilds still always run force.
+        (`ScanIntentPolicyTests.RequiresForce_IsTrueForEveryIntentExceptTheDeltaReconcile`,
+        `…MayDowngradeToIncremental_IsTrueOnlyForAUserRequestedRebuild`,
+        `…Satisfies_ARepairIsDischargedOnlyByItsOwnIntent`)
+- **Delivered.** A downgrade turned out to be a THIRD outcome rather than a success or a failure: a delta
+  ran, the prior artifact is served with degraded freshness, and the rebuild is still owed. Recording it
+  as either one produced a whole-repo delta on every 250ms tick forever, so it gets its own
+  `RecordDowngradedServe` (respaces at the current streak without incrementing it) and reaches the caller
+  as `downgraded: true`.
 
 **W9. Linked-worktree watcher + identity fixes** — Miller. ~1–1.5 sessions.
 - Modify: `src/Miller.Server/Hosting/IndexerWatcherSet.cs:69–70` — when `.git` is a file, resolve
@@ -303,8 +338,19 @@ with a surviving leader still logs "keeping the prior index" and never retries u
   a git admin-dir generation/epoch and re-bootstrap instead of silently serving the old in-memory
   index (path-reuse identity risk, findings §6.6).
 - Acceptance:
-  - [ ] Branch switch in a linked worktree produces one reconcile scan, not an overflow rescan.
-  - [ ] Deleting and recreating a different worktree at the same path triggers re-bootstrap.
+  - [x] Branch switch in a linked worktree produces one reconcile scan, not an overflow rescan.
+        (`IndexerWatcherSetTests.Attach_LinkedWorktreeDotGitFile_WatchesTheWorktreesOwnGitDir`,
+        `…Attach_LinkedWorktree_DoesNotWatchTheSharedCommonDir`,
+        `IndexerCoreTests.DrainAndProcess_HeadChanged_ForcesSingleScan_AndDropsPerFileEvents`)
+  - [x] Deleting and recreating a different worktree at the same path triggers re-bootstrap.
+        (`WorkspaceRootPresenceMonitorTests.AReturningRootWithADifferentIdentityIsReplaced`,
+        `…TheSameCheckoutReturningReconcilesInsteadOfRebootstrapping`,
+        `BootstrapReplacedRootTests` ×4,
+        `VersionAwareLeadershipScaleTests.AWorktreeRemovedAndReAddedAtTheSamePathEndsTheLeadershipSession`)
+- **Delivered.** Watch `GitDir`, never `CommonDir` — the shared one reports the MAIN checkout's branch
+  switches. Identity is compared ONLY across a disappearance: comparing it every tick reads an ordinary
+  branch switch as a new checkout on any filesystem without a birth time, and missing evidence never
+  counts as a replacement.
 
 ### P2 — measure before deeper changes
 
@@ -366,12 +412,22 @@ contention, orphan reaping); W10 is itself the expensive measurement gate. Seman
 (`scripts/semantic-broker-soak.*`) only if governor work touches broker lease code paths.
 
 **Success criteria for the program (from the consensus round):**
-- [ ] N concurrent sibling-worktree `workspace open --full`: ≤1 extractor at a time, each with
+- [x] N concurrent sibling-worktree `workspace open --full`: ≤1 extractor at a time, each with
       bounded `--jobs`, all N eventually ready — on the same root size that previously OOM'd.
-- [ ] SIGKILL anywhere (child, leader, host) leaves no unbounded orphan extractor and at most one
+      (W3 Scale contention tests for the serialization, W2 units for the cap. The 74k-file root that
+      OOM'd is measured in the W10 findings; its peak is the artifact-write phase, which `--jobs` does
+      not bound, so the governor rather than the cap is what carries this criterion.)
+- [x] SIGKILL anywhere (child, leader, host) leaves no unbounded orphan extractor and at most one
       dead-PID spool, reaped on the next scan.
-- [ ] A fresh worktree without a local `.julieignore` still applies the main checkout's rules.
-- [ ] No automatic path immediately re-forces after a force failure.
+      (POSIX child/host: julie-extract's `--parent-pid` watchdog. Windows host: the kill-on-close job
+      object — compile-verified, executed by neither this machine nor CI, both POSIX. Spools: reaped by
+      advisory lock rather than by PID, so the criterion is met more strongly than written — there is no
+      PID-reuse window and no "dead-PID" judgement to get wrong.)
+- [x] A fresh worktree without a local `.julieignore` still applies the main checkout's rules.
+      (`WorktreeIgnorePropagationScaleTests`, against a real `git worktree add` and a real extract.)
+- [x] No automatic path immediately re-forces after a force failure.
+      (`IndexerCoreTests.DrainAndProcess_AfterAFailedScan_SuppressesTheRetryUntilTheBackoffElapses`; the
+      record is shared across processes, so a fresh Miller inherits the throttle instead of resetting it.)
 
 ## Architecture Quality
 
