@@ -150,7 +150,14 @@ blake3 `files.content_hash`.
 - Validate on a real multi-language artifact (language-parity check: per-language row counts match
   a fresh scan).
 
-## Candidate follow-on — progressive indexing levels (discussion, NOT committed scope)
+## Candidate follow-on — progressive indexing levels (PROMOTED 2026-08-03)
+
+**This section is superseded by
+[`2026-08-03-progressive-indexing-levels-program.md`](2026-08-03-progressive-indexing-levels-program.md)**
+— the scale-fixes re-measurement showed the extractor bugs did NOT erase the need (the reference
+layer is 74% of artifact bytes serving 7% of tool calls, and dominates the remaining at-scale write
+cost), so the levels idea was promoted to its own program plan with this session's telemetry and
+byte-share evidence. The notes below are preserved as the original discussion record.
 
 Raised 2026-08-02 (user): cold start could serve basic functionality fast and deepen in the
 background — "level 1" minimal index immediately, richer levels converging behind it. Recorded here
