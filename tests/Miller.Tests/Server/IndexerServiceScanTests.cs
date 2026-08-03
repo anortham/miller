@@ -227,7 +227,7 @@ public sealed class IndexerServiceScanTests : IDisposable
         TimeSpan? scanGovernorWait = null,
         Func<string, FullScanDrainResult>? drainFullScanRequests = null,
         Func<string?>? ownExtractorVersion = null,
-        TimeSpan? onDemandOpsGateWait = null)
+        TimeSpan? opsGateWait = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -236,7 +236,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             workspace,
             new IndexHolder(MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()), builtRevision: 0));
         if (drainFileConvergeRequests is null && scanGovernor is null && drainFullScanRequests is null &&
-            ownExtractorVersion is null && onDemandOpsGateWait is null)
+            ownExtractorVersion is null && opsGateWait is null)
             return new IndexerService(
                 bootstrap, NullLogger<IndexerService>.Instance, NullLoggerFactory.Instance, sidecar);
         return new IndexerService(
@@ -253,7 +253,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             ownExtractorVersion: ownExtractorVersion,
             scanGovernor: scanGovernor,
             scanGovernorWait: scanGovernorWait,
-            onDemandOpsGateWait: onDemandOpsGateWait);
+            opsGateWait: opsGateWait);
     }
 
     private static IndexerService NewStartedService(
@@ -905,7 +905,7 @@ public sealed class IndexerServiceScanTests : IDisposable
             SymbolSearchSidecar.Disabled,
             scanGovernor: ScanGovernor.ForMillerHome(home),
             scanGovernorWait: TimeSpan.Zero,
-            onDemandOpsGateWait: TimeSpan.Zero);
+            opsGateWait: TimeSpan.Zero);
 
         using var opsGateHeld = new ManualResetEventSlim(false);
         using var releaseOpsGate = new ManualResetEventSlim(false);
@@ -946,6 +946,161 @@ public sealed class IndexerServiceScanTests : IDisposable
         Assert.True(returnedWhileTheGateWasStillHeld);
         Assert.NotNull(sibling);
         Assert.Equal(ScanOutcome.Kind.Queued, outcome!.Result);
+        Assert.Empty(ops.ScanForce);
+        Assert.False(service.QueueEmpty);
+    }
+
+    public enum GovernedScanSite
+    {
+        StartupDelta,
+        ExtractorUpgrade,
+        LeaderRequestedFull,
+    }
+
+    [Theory]
+    [InlineData(GovernedScanSite.StartupDelta)]
+    [InlineData(GovernedScanSite.ExtractorUpgrade)]
+    [InlineData(GovernedScanSite.LeaderRequestedFull)]
+    public void AGovernedSite_WhileTheExemptWriteThroughHoldsTheOpsGate_ReleasesMachineScanAdmissionForSiblings(
+        GovernedScanSite site)
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            });
+        string home = CreateTempHome();
+        WorkspaceContext workspace = WorkspaceWithDb(julie.DbPath);
+        var service = NewSeededService(
+            workspace,
+            SymbolSearchSidecar.Disabled,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            drainFullScanRequests: _ => new FullScanDrainResult(true, 0, 0),
+            ownExtractorVersion: () => "99.0.0",
+            opsGateWait: TimeSpan.Zero);
+
+        using var opsGateHeld = new ManualResetEventSlim(false);
+        using var releaseOpsGate = new ManualResetEventSlim(false);
+        using var siteReturned = new ManualResetEventSlim(false);
+        var ops = new RecordingScanOps
+        {
+            UpdateRevision = 2,
+            WhileUpdating = () =>
+            {
+                opsGateHeld.Set();
+                releaseOpsGate.Wait(ScanSignalTimeoutMs, CancellationToken.None);
+            },
+        };
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
+
+        var writeThrough = new Thread(() => service.TryReindexAsLeader("src/Edit.cs")) { IsBackground = true };
+        writeThrough.Start();
+        Assert.True(opsGateHeld.Wait(ScanSignalTimeoutMs, CancellationToken.None));
+
+        var governed = new Thread(() =>
+        {
+            switch (site)
+            {
+                case GovernedScanSite.StartupDelta:
+                    service.RunStartupDeltaScanForTest(workspace);
+                    break;
+                case GovernedScanSite.ExtractorUpgrade:
+                    service.RunExtractorUpgradeRescanForTest();
+                    break;
+                default:
+                    service.ProcessLeaderFullScanRequestsForTest("/repo/.miller");
+                    break;
+            }
+
+            siteReturned.Set();
+        })
+        { IsBackground = true };
+        governed.Start();
+
+        bool returnedWhileTheGateWasStillHeld =
+            siteReturned.Wait(TimeSpan.FromSeconds(10), CancellationToken.None);
+        using ScanGovernorLease? sibling = ScanGovernor.ForMillerHome(home).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "sibling", 4), TimeSpan.Zero, CancellationToken.None);
+
+        releaseOpsGate.Set();
+        Assert.True(writeThrough.Join(ScanSignalTimeoutMs));
+        Assert.True(governed.Join(ScanSignalTimeoutMs));
+
+        Assert.True(returnedWhileTheGateWasStillHeld);
+        Assert.NotNull(sibling);
+        Assert.Empty(ops.ScanForce);
+    }
+
+    // The drain reaches its gate only after two EXEMPT pre-checks that take _opsGate while holding no admission,
+    // so a blocker installed before the tick starts stops it there and never exercises the governed hold. The
+    // seam fires between the admission acquire and the gate, which is the only point where the tick both holds
+    // machine-wide admission and has not yet entered the gate.
+    [Fact]
+    public void TheDebounceDrain_WhileTheExemptWriteThroughHoldsTheOpsGate_ReleasesMachineScanAdmissionForSiblings()
+    {
+        using var julie = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            new[]
+            {
+                new JulieDbFixture.SymbolRow("edit-new", "UpdatedType", "class", "csharp",
+                    "src/Edit.cs", "public class UpdatedType", 1, ParentId: null),
+            });
+        string home = CreateTempHome();
+        var service = NewSeededService(
+            WorkspaceWithDb(julie.DbPath),
+            SymbolSearchSidecar.Disabled,
+            scanGovernor: ScanGovernor.ForMillerHome(home),
+            scanGovernorWait: TimeSpan.Zero,
+            opsGateWait: TimeSpan.Zero);
+
+        using var opsGateHeld = new ManualResetEventSlim(false);
+        using var releaseOpsGate = new ManualResetEventSlim(false);
+        using var drainReturned = new ManualResetEventSlim(false);
+        var ops = new RecordingScanOps
+        {
+            UpdateRevision = 2,
+            WhileUpdating = () =>
+            {
+                opsGateHeld.Set();
+                releaseOpsGate.Wait(ScanSignalTimeoutMs, CancellationToken.None);
+            },
+        };
+        service.PublishOpsForTest(ops);
+        service.RequestWholeRepoScanForTest(ScanIntent.UserFullRebuild);
+
+        Thread? writeThrough = null;
+        service.BetweenScanPeekAndDrainForTest = () =>
+        {
+            writeThrough = new Thread(() => service.TryReindexAsLeader("src/Edit.cs")) { IsBackground = true };
+            writeThrough.Start();
+            Assert.True(opsGateHeld.Wait(ScanSignalTimeoutMs, CancellationToken.None));
+        };
+
+        var drain = new Thread(() =>
+        {
+            service.RunDrainTickForTest("/repo/.miller");
+            drainReturned.Set();
+        })
+        { IsBackground = true };
+        drain.Start();
+
+        bool returnedWhileTheGateWasStillHeld =
+            drainReturned.Wait(TimeSpan.FromSeconds(10), CancellationToken.None);
+        using ScanGovernorLease? sibling = ScanGovernor.ForMillerHome(home).TryAcquire(
+            new ScanGovernorRequest("/repo/other-worktree", "sibling", 4), TimeSpan.Zero, CancellationToken.None);
+
+        releaseOpsGate.Set();
+        Assert.True(writeThrough!.Join(ScanSignalTimeoutMs));
+        Assert.True(drain.Join(ScanSignalTimeoutMs));
+
+        Assert.True(returnedWhileTheGateWasStillHeld);
+        Assert.NotNull(sibling);
         Assert.Empty(ops.ScanForce);
         Assert.False(service.QueueEmpty);
     }

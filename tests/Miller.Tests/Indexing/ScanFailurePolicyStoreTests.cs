@@ -48,6 +48,39 @@ public sealed class ScanFailurePolicyStoreTests : IDisposable
     [Theory]
     [InlineData(Store.Persisted)]
     [InlineData(Store.InMemory)]
+    public void RecordSuccess_ADeltaThatRanOnceTheThrottleElapsed_RespacesTheStillOwedForce(Store store)
+    {
+        IScanFailurePolicy policy = New(store);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, exitCode: 137, jobs: 4);
+        DateTimeOffset firstDeadline = policy.Read()!.NextAttemptAtUtc;
+
+        _now = firstDeadline;
+        Assert.True(policy.Evaluate(ScanIntent.IncrementalReconcile).Attempt);
+        policy.RecordSuccess(ScanIntent.IncrementalReconcile);
+
+        Assert.False(policy.Evaluate(ScanIntent.IncrementalReconcile).Attempt);
+        Assert.Equal(1, policy.Read()?.ConsecutiveFailures);
+        Assert.Equal(ScanIntent.UserFullRebuild, policy.Read()?.Intent);
+        Assert.True(policy.Read()?.NextAttemptAtUtc > firstDeadline);
+    }
+
+    [Theory]
+    [InlineData(Store.Persisted)]
+    [InlineData(Store.InMemory)]
+    public void RecordSuccess_ADeltaWhileTheThrottleStillHolds_LeavesTheDeadlineAlone(Store store)
+    {
+        IScanFailurePolicy policy = New(store);
+        policy.RecordFailure(ScanIntent.UserFullRebuild, exitCode: 137, jobs: 4);
+        DateTimeOffset deadline = policy.Read()!.NextAttemptAtUtc;
+
+        policy.RecordSuccess(ScanIntent.IncrementalReconcile);
+
+        Assert.Equal(deadline, policy.Read()?.NextAttemptAtUtc);
+    }
+
+    [Theory]
+    [InlineData(Store.Persisted)]
+    [InlineData(Store.InMemory)]
     public void RecordSuccess_ADeltaCompletion_ClearsADeltaIntentRecord(Store store)
     {
         IScanFailurePolicy policy = New(store);

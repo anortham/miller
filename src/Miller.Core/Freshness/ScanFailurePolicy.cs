@@ -221,4 +221,29 @@ public static class ScanFailurePolicy
             NextAttemptAtUtc = nowUtc + BackoffFor(previous.ConsecutiveFailures, jitter01),
         };
     }
+
+    /// <summary>
+    /// The rewrite a COMPLETED scan owes a record it did not discharge, or null when the record already
+    /// throttles and must be left alone.
+    ///
+    /// <para>A weaker scan is only allowed to run at all once <see cref="ScanFailureRecord.NextAttemptAtUtc"/>
+    /// has elapsed, and a success that does not clear the record leaves that deadline in the past — so the next
+    /// automatic read is admitted too, and the one after that, each spawning a whole-repo scan against a
+    /// workspace whose real rebuild is still owed. That is the extractor storm the persisted backoff exists to
+    /// stop, reached through the success path instead of the failure path. Re-space at the SAME streak:
+    /// nothing failed here, so nothing may lengthen the backoff either.</para>
+    ///
+    /// <para>A deadline still in the FUTURE is returned as null rather than rewritten. It is already
+    /// throttling, and moving it would let unrelated successful work (a user refresh that bypassed the timer)
+    /// push out a retry deadline nothing failed at.</para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="previous"/> is null.</exception>
+    public static ScanFailureRecord? RespaceOwedScan(
+        ScanFailureRecord previous,
+        DateTimeOffset nowUtc,
+        double jitter01)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        return nowUtc < previous.NextAttemptAtUtc ? null : RecordDowngrade(previous, nowUtc, jitter01);
+    }
 }

@@ -34,7 +34,8 @@ public sealed class JulieExtractRunner
     /// artifact (db/-wal/-shm bytes) and its output have been silent this long. A fixed TOTAL cap cannot tell a
     /// hung child from a legitimately long scan — the same openclaw force-scan that takes ~90s idle exceeded
     /// 600s under fleet load and was killed mid-rebuild (2026-06-11 Eros field report). The absolute backstop
-    /// is <see cref="ExtractWaitPolicy.HardTimeoutFor"/> of this value (§10A).
+    /// is <see cref="ExtractWaitPolicy.HardTimeoutFor"/> of this value (§10A), overridable through
+    /// <see cref="ExtractWaitPolicy.HardCapEnvironmentVariable"/> on this default path only.
     /// </summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(10);
 
@@ -51,7 +52,9 @@ public sealed class JulieExtractRunner
     /// default resolution.
     /// </summary>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
-    public JulieExtractRunner(string binaryPath) : this(binaryPath, DefaultTimeout)
+    public JulieExtractRunner(string binaryPath)
+        : this(binaryPath, DefaultTimeout,
+               ExtractWaitPolicy.HardTimeoutForEnvironment(DefaultTimeout, Environment.GetEnvironmentVariable))
     {
     }
 
@@ -63,6 +66,11 @@ public sealed class JulieExtractRunner
     /// </summary>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
     public JulieExtractRunner(string binaryPath, TimeSpan timeout)
+        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout))
+    {
+    }
+
+    private JulieExtractRunner(string binaryPath, TimeSpan timeout, TimeSpan hardTimeout)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(binaryPath);
         string abs = Path.GetFullPath(binaryPath);
@@ -73,7 +81,7 @@ public sealed class JulieExtractRunner
                 $"v{MillerExtractContract.PinnedJulieExtractVersion} binary into .tools/.", abs);
         _binaryPath = abs;
         _timeout = timeout;
-        _hardTimeout = ExtractWaitPolicy.HardTimeoutFor(timeout);
+        _hardTimeout = hardTimeout;
     }
 
     /// <summary>

@@ -46,12 +46,12 @@ public sealed class IndexerService : BackgroundService
     // It is diagnostics text, never a lookup key — no local state is published under it.
     internal const string UnknownWorkspaceRootLabel = "(unknown)";
 
-    // How long the on-demand scan path waits for the process-local _opsGate WHILE it owns machine-wide admission.
+    // How long ANY governed site waits for the process-local _opsGate WHILE it owns machine-wide admission.
     // Long enough to absorb the governor-EXEMPT holders (an M6 per-file write-through, a per-file converge drain),
     // short enough that N sibling worktrees are not refused admission behind a gate this thread is only waiting on.
     // A whole-repo extract cannot be the blocker: every site that runs one takes admission first, so it could not
     // have started while this thread holds it.
-    internal static readonly TimeSpan DefaultOnDemandOpsGateWait = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan DefaultOpsGateWait = TimeSpan.FromSeconds(1);
 
     private const string OpsGateBusyDescription =
         "This Miller instance is already busy with another operation on this workspace's index.";
@@ -92,7 +92,7 @@ public sealed class IndexerService : BackgroundService
     // (TryScanAsLeader) bounds that wait instead of parking every sibling worktree behind it.
     private readonly ScanGovernor _governor;
     private readonly TimeSpan _governorWait;
-    private readonly TimeSpan _onDemandOpsGateWait;
+    private readonly TimeSpan _opsGateWait;
     private volatile CancellationTokenSource? _governorCancellation;
 
     private volatile IDisposable? _lease;
@@ -188,7 +188,7 @@ public sealed class IndexerService : BackgroundService
         Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null,
         ScanGovernor? scanGovernor = null,
         TimeSpan? scanGovernorWait = null,
-        TimeSpan? onDemandOpsGateWait = null)
+        TimeSpan? opsGateWait = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -236,7 +236,7 @@ public sealed class IndexerService : BackgroundService
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = scanGovernor ?? ScanGovernor.Disabled();
         _governorWait = scanGovernorWait ?? DefaultScanAdmissionWait;
-        _onDemandOpsGateWait = onDemandOpsGateWait ?? DefaultOnDemandOpsGateWait;
+        _opsGateWait = opsGateWait ?? DefaultOpsGateWait;
     }
 
     /// <summary>True once this instance holds the writer lock and is running the watcher. For diagnostics/tests.</summary>
@@ -527,12 +527,17 @@ public sealed class IndexerService : BackgroundService
         bool rescanned = false;
         using (ScanGovernorAdmission? admission = TryAcquireScanAdmission("leader-upgrade"))
         {
-            if (admission is not null)
+            if (admission is not null
+                && TryEnterOpsGateHoldingAdmission("the extractor-upgrade rescan", relatchIntent: null))
             {
-                lock (_opsGate)
+                try
                 {
                     rescanned = ScanAsLeaderUnderGate(ScanIntent.ExtractorUpgrade, source: "extractor-upgrade")
                         .Result == ScanOutcome.Kind.Scanned;
+                }
+                finally
+                {
+                    Monitor.Exit(_opsGate);
                 }
             }
         }
@@ -592,7 +597,12 @@ public sealed class IndexerService : BackgroundService
         // DrainAndProcess additionally serializes the queue on IndexerCore's own gate; the lock order is always
         // _opsGate -> _core gate (the Try* methods take the core gate only to arm or clear the rescan latch,
         // always in that direction, and the watcher enqueue takes the core gate alone), so there is no inversion.
-        lock (_opsGate)
+        // Nothing is consumed when the gate is busy: DrainAndProcess is what clears the queue and the rescan
+        // latch, so skipping this tick leaves both armed for the next one.
+        if (!TryEnterOpsGateHoldingAdmission("the debounce drain", relatchIntent: null))
+            return true;
+
+        try
         {
             bool processed = _core!.DrainAndProcess(
                 headChanged,
@@ -600,6 +610,10 @@ public sealed class IndexerService : BackgroundService
                 out bool usedWholeRepoScan);
             if (processed)
                 TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
+        }
+        finally
+        {
+            Monitor.Exit(_opsGate);
         }
 
         return true;
@@ -772,7 +786,10 @@ public sealed class IndexerService : BackgroundService
         {
             ExtractReport report;
             long armingGeneration = _core?.WholeRepoScanArmingGeneration ?? 0;
-            lock (_opsGate)
+            if (!TryEnterOpsGateHoldingAdmission("the startup delta scan", ScanIntent.IncrementalReconcile))
+                return;
+
+            try
             {
                 IExtractOps ops = _ops
                     ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
@@ -781,6 +798,10 @@ public sealed class IndexerService : BackgroundService
                 // symbols.db read never races a concurrent extract that could replace the file. Revision-gated
                 // inside the sidecar; a no-op when the feature is off.
                 TryConvergeSidecar(workspace.CanonicalExtractDbPath, report, fullRebuild: true);
+            }
+            finally
+            {
+                Monitor.Exit(_opsGate);
             }
 
             FailurePolicy.RecordSuccess(ScanIntent.IncrementalReconcile);
@@ -905,16 +926,8 @@ public sealed class IndexerService : BackgroundService
             return ScanOutcome.Queued(_governor.DescribeHolder());
         }
 
-        if (!Monitor.TryEnter(_opsGate, _onDemandOpsGateWait))
-        {
-            _core?.RequestWholeRepoScan(intent);
-            _logger.LogWarning(
-                "This instance's index-operation gate was still held after {WaitSeconds}s; releasing machine-wide " +
-                "scan admission rather than holding it while waiting, and latching the {Intent} scan for the " +
-                "next tick.",
-                _onDemandOpsGateWait.TotalSeconds, intent);
+        if (!TryEnterOpsGateHoldingAdmission("an on-demand scan", relatchIntent: intent))
             return ScanOutcome.Queued(OpsGateBusyDescription);
-        }
 
         try
         {
@@ -924,6 +937,39 @@ public sealed class IndexerService : BackgroundService
         {
             Monitor.Exit(_opsGate);
         }
+    }
+
+    /// <summary>
+    /// Enter <see cref="_opsGate"/> with a BOUNDED wait from a site that already holds machine-wide scan
+    /// admission. Returns false when the gate could not be taken in time, and the caller must then return
+    /// promptly so its <c>using</c> releases admission.
+    ///
+    /// <para>Every governed site takes admission BEFORE <see cref="_opsGate"/> — the order the
+    /// <see cref="_governor"/> field comment requires, so the governor-EXEMPT per-file write-through is never
+    /// blocked behind an admission wait. The cost of that order is that an unbounded <c>lock</c> here sits on
+    /// the one-at-a-time, machine-wide scan lease for as long as an exempt holder runs, refusing admission to
+    /// every sibling worktree — the fleet starvation the governor exists to prevent, inverted. So the HOLD is
+    /// bounded at every site rather than the order being changed at any of them. Bounding only the on-demand
+    /// path (as this first shipped) left the drain, startup, upgrade, and leader-requested-full sites free to
+    /// do exactly that; cross-model review caught it.</para>
+    ///
+    /// <para><paramref name="relatchIntent"/> is null at sites whose caller already re-arms on the
+    /// not-scanned path, so the intent is not armed twice and the arming generation is not bumped twice.</para>
+    /// </summary>
+    private bool TryEnterOpsGateHoldingAdmission(string site, ScanIntent? relatchIntent)
+    {
+        if (Monitor.TryEnter(_opsGate, _opsGateWait))
+            return true;
+
+        if (relatchIntent is { } intent)
+            _core?.RequestWholeRepoScan(intent);
+
+        _logger.LogWarning(
+            "This instance's index-operation gate was still held after {WaitSeconds}s during {Site}; releasing " +
+            "machine-wide scan admission rather than holding it while waiting. The pending work stays latched " +
+            "for the next tick.",
+            _opsGateWait.TotalSeconds, site);
+        return false;
     }
 
     private static string DescribeScanBackoff(ScanAttemptDecision decision) =>
@@ -1012,7 +1058,10 @@ public sealed class IndexerService : BackgroundService
             return false;
         }
 
-        lock (_opsGate)
+        if (!TryEnterOpsGateHoldingAdmission("the leader-requested full scan", ScanIntent.UserFullRebuild))
+            return false;
+
+        try
         {
             ScanOutcome outcome = ScanAsLeaderUnderGate(
                 ScanIntent.UserFullRebuild, source: "Leader-requested", decision);
@@ -1021,6 +1070,10 @@ public sealed class IndexerService : BackgroundService
             if (outcome.Result is not (ScanOutcome.Kind.Scanned or ScanOutcome.Kind.Downgraded))
                 _core?.RequestWholeRepoScan(ScanIntent.UserFullRebuild);
             return outcome.Result == ScanOutcome.Kind.Scanned;
+        }
+        finally
+        {
+            Monitor.Exit(_opsGate);
         }
     }
 

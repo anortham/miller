@@ -117,7 +117,12 @@ public sealed class PersistedScanFailurePolicy : IScanFailurePolicy
     public void RecordSuccess(ScanIntent completed)
     {
         if (Read() is { } record && !ScanIntentPolicy.ClearsFailureRecord(completed, record.Intent))
+        {
+            if (ScanFailurePolicy.RespaceOwedScan(record, _utcNow(), _jitter()) is { } respaced)
+                ScanFailureJournal.TryWrite(_millerDir, respaced);
             return;
+        }
+
         ScanFailureJournal.TryClear(_millerDir);
     }
 
@@ -177,7 +182,11 @@ public sealed class InMemoryScanFailurePolicy : IScanFailurePolicy
         lock (_gate)
         {
             if (_record is { } record && !ScanIntentPolicy.ClearsFailureRecord(completed, record.Intent))
+            {
+                _record = ScanFailurePolicy.RespaceOwedScan(record, _utcNow(), _jitter()) ?? record;
                 return;
+            }
+
             _record = null;
         }
     }

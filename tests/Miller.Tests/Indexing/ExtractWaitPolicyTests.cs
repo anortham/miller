@@ -78,7 +78,63 @@ public sealed class ExtractWaitPolicyTests
     [Fact]
     public void HardTimeoutFor_IsTheDocumentedMultipleOfTheStallWindow()
     {
-        Assert.Equal(TimeSpan.FromMinutes(60), ExtractWaitPolicy.HardTimeoutFor(TimeSpan.FromMinutes(10)));
+        Assert.Equal(TimeSpan.FromHours(4), ExtractWaitPolicy.HardTimeoutFor(TimeSpan.FromMinutes(10)));
+    }
+
+    // The measured floor this cap has to clear: a healthy force scan of a 74k-file repo took 3,677 s
+    // (docs/findings/2026-08-02-w10-scale-repro-wal-measurement.md). The previous 6x cap was 3,600 s, so the
+    // scan was killed 77 s short of finishing on every attempt.
+    [Fact]
+    public void TheDefaultHardCap_OutlastsAMeasuredHealthy74kFileScan()
+    {
+        var policy = new ExtractWaitPolicy(
+            JulieExtractRunner.DefaultTimeout,
+            ExtractWaitPolicy.HardTimeoutFor(JulieExtractRunner.DefaultTimeout));
+
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(At(1), progressStamp: 1));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(At(3677), progressStamp: 2));
+    }
+
+    [Fact]
+    public void AnEnvironmentOverrideAboveTheStallWindow_ReplacesTheDerivedCap()
+    {
+        Assert.Equal(
+            TimeSpan.FromHours(9),
+            ExtractWaitPolicy.HardTimeoutForEnvironment(TimeSpan.FromMinutes(10), _ => "32400"));
+
+        Assert.Equal(
+            TimeSpan.FromMinutes(90),
+            ExtractWaitPolicy.HardTimeoutForEnvironment(TimeSpan.FromMinutes(10), _ => "01:30:00"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("soon")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("600")]
+    [InlineData("300")]
+    public void AnAbsentOrUnusableEnvironmentOverride_KeepsTheDerivedCap(string? value)
+    {
+        Assert.Equal(
+            TimeSpan.FromHours(4),
+            ExtractWaitPolicy.HardTimeoutForEnvironment(TimeSpan.FromMinutes(10), _ => value));
+    }
+
+    [Fact]
+    public void TheEnvironmentOverrideIsReadFromTheDocumentedVariable()
+    {
+        string? asked = null;
+
+        ExtractWaitPolicy.HardTimeoutForEnvironment(TimeSpan.FromMinutes(10), name =>
+        {
+            asked = name;
+            return null;
+        });
+
+        Assert.Equal("MILLER_EXTRACT_HARD_CAP", asked);
     }
 
     [Theory]
