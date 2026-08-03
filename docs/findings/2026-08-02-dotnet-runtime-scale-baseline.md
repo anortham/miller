@@ -173,10 +173,28 @@ julie-extractors `docs/plans/2026-08-02-scale-fixes-plan.md` (branch `scale-fixe
 - **Contract decisions (user-approved 2026-08-02):** drop `identifiers.code_context` (JSONL export
   emits null); demote the identity trigger to first-write-wins + recorded recoverable warning.
 
-## Open items
+## Scale-fixes branch validation (2026-08-02, closes the open items above)
 
-- Wall-clock for a full healthy extract + artifact write and final DB/WAL sizes — blocked on the
-  reference-site identity fix.
-- File all four bugs plus the artifact-write throughput target in julie-extractors with the repro
-  (pinned commit + command); repro artifacts (clone, logs, structured reports) in this session's
-  scratchpad.
+The five defects were fixed on julie-extractors branch `scale-fixes` (T1–T5) and validated end to
+end (T6, `docs/findings/2026-08-02-scale-fixes-validation.md` in that repo). The first-ever
+complete dotnet/runtime artifact answers the blocked open item:
+
+- **Full scan completes at default stacks**: 3 h 51 m wall, artifact **22.84 GiB**, WAL 0 at
+  finish, peak spool 3.18 GiB (vs 15.4 GB leaked at 60% on 2.21.0), no spool residue. Extraction
+  is now 274 files/s and 1.5% of the run; **artifact_write is 98.4%** (resolution 61%,
+  file/symbol insert 28%, child rows 7%). Peak RSS 30.6 GiB, tracking DB size ~1:1.
+- Exit 1 is by design: the corpus ships 8 non-UTF-8 files (per-file `read_failed`, recoverable);
+  exit 0 is unreachable on this corpus for any extractor version. The baseline's "swallowed panic"
+  hypothesis was wrong — the lone C# failure is invalid UTF-8, made legible by the T1 rendering fix.
+- Identity-conflict residual: 4,237 recoverable warnings across 28 C files (multi-declarator
+  own-scope class); PowerShell zero (hermes-agent scans clean). Fix tracked for the next cycle.
+- Small-repo win held: Miller repo cold start 22.09 s vs 44.2 s on the pin (2.00×).
+- **New wall, new work**: the write phase at 58k files is hours, not minutes — random hash-text
+  PKs thrash the page cache and the in-RAM bulk journal grows with the DB. T7 (disk journal +
+  scaled cache + PK-sorted staging inserts) is in flight on the branch; release held for its
+  re-validation. Row counts also settle the progressive-levels direction: identifiers 12.86M +
+  reference_sites 15.5M vs symbols 2.58M — the reference layer is ~10× the symbol core that
+  serves 83% of Miller tool calls (search + inspect, per live telemetry).
+
+The four bugs were fixed directly on the branch rather than filed as issues; repro artifacts
+(clone, logs, structured reports, the 22.8 GiB artifact) live in this session's scratchpad.
