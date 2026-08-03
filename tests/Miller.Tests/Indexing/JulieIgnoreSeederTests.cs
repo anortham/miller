@@ -110,7 +110,9 @@ public sealed class JulieIgnoreSeederTests
         const string UserAuthored = "# mine — hands off\nonly_this/\n";
 
         bool seeded = JulieIgnoreSeeder.EnsureSeeded(
-            temp.Path, betweenProbeAndCreate: () => File.WriteAllText(ignorePath, UserAuthored));
+            temp.Path,
+            betweenProbeAndCreate: () => File.WriteAllText(ignorePath, UserAuthored),
+            readAllText: null);
 
         Assert.False(seeded);
         Assert.Equal(UserAuthored, File.ReadAllText(ignorePath));
@@ -203,6 +205,27 @@ public sealed class JulieIgnoreSeederTests
         Assert.Contains("secrets/", content, StringComparison.Ordinal);
         Assert.Contains(
             System.IO.Path.Combine(temp.Path, "main", ".julieignore"), content, StringComparison.Ordinal);
+    }
+
+    // The create is exclusive, so whatever this call writes is never revisited. Seeding the generated baseline
+    // over an unreadable-but-present main file would make one transient read error a permanent policy swap.
+    [Fact]
+    public void EnsureSeeded_LinkedWorktreeWhoseMainIgnoreFileCannotBeRead_WritesNothingAndRetriesLater()
+    {
+        using var temp = new TempDir();
+        string worktree = LinkedWorktree(temp.Path, "generated/\nsecrets/\n");
+        string ignorePath = System.IO.Path.Combine(worktree, ".julieignore");
+
+        bool seeded = JulieIgnoreSeeder.EnsureSeeded(
+            worktree,
+            betweenProbeAndCreate: null,
+            readAllText: _ => throw new IOException("main checkout file is momentarily unreadable"));
+
+        Assert.False(seeded);
+        Assert.False(File.Exists(ignorePath));
+
+        Assert.True(JulieIgnoreSeeder.EnsureSeeded(worktree));
+        Assert.Contains("secrets/", File.ReadAllText(ignorePath), StringComparison.Ordinal);
     }
 
     [Fact]

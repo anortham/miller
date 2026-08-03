@@ -619,10 +619,17 @@ public sealed class IndexerService : BackgroundService
         return true;
     }
 
-    // The root is gone. Watchers on a deleted path raise nothing useful and pin the dead directory, and every
-    // scan from here would tell julie to reconcile a tree that is not there — a delta against an empty root
-    // deletes every file in the artifact. So detach, publish the state, and let the tick keep polling: the
-    // lease stays held because a workspace with no root has nothing for a successor to index either.
+    // The root is gone. Watchers on a deleted path raise nothing useful and pin the dead directory, and a scan
+    // from here can only waste a machine-wide admission on a doomed extract. So detach, publish the state, and
+    // let the tick keep polling: the lease stays held because a workspace with no root has nothing for a
+    // successor to index either.
+    //
+    // This suspends the DEBOUNCE path only. An on-demand scan (the MCP/CLI workspace refresh|full) does not
+    // consult the presence flag and will still spawn an extract against the absent root. Measured against the
+    // pinned julie-extract 2.21.0 that is safe but wasteful: a missing --root exits 1 and leaves the artifact
+    // byte-identical, so the failure is recorded and the prior index keeps serving. Gating those paths on the
+    // flag was considered and NOT done — it is refreshed only by this tick, so a root that has just returned
+    // would read as missing and a legitimate user rebuild would be refused for a stale reason.
     private void HandleRootDisappeared(WorkspaceContext workspace)
     {
         _logger.LogWarning(

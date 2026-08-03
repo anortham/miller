@@ -96,14 +96,17 @@ public static class JulieIgnoreSeeder
     /// outcome of the race, not an error, and it reaches the same never-throw exit as every other I/O failure.
     /// </remarks>
     /// <exception cref="ArgumentException"><paramref name="workspaceRoot"/> is null or blank.</exception>
-    public static bool EnsureSeeded(string workspaceRoot) => EnsureSeeded(workspaceRoot, betweenProbeAndCreate: null);
+    public static bool EnsureSeeded(string workspaceRoot) =>
+        EnsureSeeded(workspaceRoot, betweenProbeAndCreate: null, readAllText: null);
 
     /// <summary>
     /// <see cref="EnsureSeeded(string)"/> with a hook fired after the existence probe and the content render, and
     /// before the exclusive create — the seam that lets the race window be occupied deterministically instead of
-    /// hoped for. Not used in production.
+    /// hoped for — plus an injectable reader for the inherited source, so an unreadable main-checkout file can be
+    /// exercised without depending on platform locking semantics. Not used in production.
     /// </summary>
-    internal static bool EnsureSeeded(string workspaceRoot, Action? betweenProbeAndCreate)
+    internal static bool EnsureSeeded(
+        string workspaceRoot, Action? betweenProbeAndCreate, Func<string, string>? readAllText)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         try
@@ -112,7 +115,9 @@ public static class JulieIgnoreSeeder
             if (File.Exists(ignorePath) || !Directory.Exists(workspaceRoot))
                 return false;
 
-            string content = InheritedContent(workspaceRoot) ?? GeneratedContent(workspaceRoot);
+            if (!TryRenderSeedContent(workspaceRoot, readAllText ?? File.ReadAllText, out string content))
+                return false;
+
             betweenProbeAndCreate?.Invoke();
 
             using var stream = new FileStream(ignorePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
@@ -158,21 +163,40 @@ public static class JulieIgnoreSeeder
         }
     }
 
-    // The inherited copy, or null when there is nothing to inherit or its content cannot be read — an
-    // unreadable main-checkout file falls back to the generated seed rather than leaving the root policy-less.
-    private static string? InheritedContent(string workspaceRoot)
+    /// <summary>
+    /// What to seed: the main checkout's file copied verbatim when this root inherits one, else the baseline +
+    /// detected-vendor generation. False means SEED NOTHING.
+    ///
+    /// <para>False is returned only for a source that exists and could not be read. Falling back to the
+    /// generated baseline there looks harmless and is not: the create is exclusive, so the file it writes is
+    /// never revisited, and one transient read error would permanently replace the main checkout's ignore rules
+    /// with a generic baseline — the worktree then indexes everything the repository deliberately excludes, for
+    /// as long as that worktree exists, silently. Writing nothing keeps the failure retryable on the next
+    /// scan.</para>
+    ///
+    /// <para>An absent source is a different answer: there is genuinely nothing to inherit (not a linked
+    /// worktree, or the main checkout has no file), and the generated seed is the correct content.</para>
+    /// </summary>
+    private static bool TryRenderSeedContent(
+        string workspaceRoot, Func<string, string> readAllText, out string content)
     {
         if (ResolveInheritedIgnoreFile(workspaceRoot) is not { } source)
-            return null;
+        {
+            content = GeneratedContent(workspaceRoot);
+            return true;
+        }
+
         try
         {
-            return RenderInheritedContent(source, File.ReadAllText(source));
+            content = RenderInheritedContent(source, readAllText(source));
+            return true;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
                or NotSupportedException)
         {
-            return null;
+            content = string.Empty;
+            return false;
         }
     }
 
