@@ -43,6 +43,9 @@ public sealed class JulieExtractRunner
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _hardTimeout;
     private readonly Action<string>? _onContainmentDegraded;
+
+    /// <summary>Whether a containment-degradation sink is wired — a silent runner scan is uncontained-unannounced on Windows.</summary>
+    internal bool HasContainmentSink => _onContainmentDegraded is not null;
     private readonly Func<Process, WindowsKillOnCloseJobAttachment> _attachContainmentJob;
 
     /// <summary>The resolved absolute path to the julie-extract binary this runner invokes.</summary>

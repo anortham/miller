@@ -408,6 +408,42 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_ForceLockBusy_RevisionAdvanceWithoutArtifactReplacement_IsNotReportedAsRefreshed()
+    {
+        // The leader may legally service our full-scan request as a DOWNGRADED delta (it evaluates the
+        // request without bypassBackoff, and a usable artifact downgrades UserFullRebuild). A delta bumps the
+        // revision WITHOUT replacing the artifact, so a force waiter that accepts a bare revision advance
+        // reports "refreshed" for a rebuild that never ran. With a readable baseline artifact_id, only a
+        // CHANGED artifact_id confirms the force; the timeout must say the rebuild is still owed.
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-force-downgraded");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(dbPath, "readable index placeholder");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int pollCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            readLatestRevision: _ => ++pollCount < 2 ? 7 : 8,
+            clock: clock,
+            requestFullScan: (_, _, _) => { },
+            readArtifactId: _ => "artifact-unchanged");
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(8, result.Revision);
+        Assert.Contains("still owed", result.WarningText);
+        Assert.Contains("scan_failure", result.WarningText);
+        Assert.Equal(7, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_ForceLockBusy_LeaderPromotedAFreshArtifactWithARestartedCounter_ReturnsRefreshed()
     {
         // The leader serviced our full-scan request with a build-to-temp PROMOTE (FullRebuildPromotion): the

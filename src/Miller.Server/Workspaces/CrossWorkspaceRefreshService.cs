@@ -514,6 +514,7 @@ public sealed class CrossWorkspaceRefreshService
         TimeSpan wait = force ? _fullScanRequestWait : _lockBusyWait;
         DateTimeOffset deadline = _utcNow() + wait;
 
+        bool unconfirmedForceAdvance = false;
         while (_utcNow() < deadline)
         {
             if (TryReadLatestRevision(row, out long latest))
@@ -522,7 +523,15 @@ public sealed class CrossWorkspaceRefreshService
                 bool artifactReplaced = baselineArtifactId is not null
                     && TryReadArtifactId(row) is { } currentArtifactId
                     && !string.Equals(currentArtifactId, baselineArtifactId, StringComparison.Ordinal);
-                if (latest > baseline || artifactReplaced)
+                // A force wait with a readable baseline id accepts ONLY a replaced artifact: the leader may
+                // legally service the request as a downgraded delta (it evaluates without bypassBackoff), and
+                // a delta bumps the revision without promoting — reporting that as a completed rebuild lies to
+                // the person who asked for one. Null baseline id keeps the documented revision-only degradation.
+                bool confirmed = artifactReplaced
+                    || (latest > baseline && (!force || baselineArtifactId is null));
+                if (force && !confirmed && latest > baseline)
+                    unconfirmedForceAdvance = true;
+                if (confirmed)
                 {
                     _registry.MarkScanned(row.WorkspaceId, latest, _utcNow());
                     return new WorkspaceRefreshResult(
@@ -558,8 +567,13 @@ public sealed class CrossWorkspaceRefreshService
 
         string warning = (requestWarning ??
             (force
-                ? "Target workspace indexer lock is busy; requested the leader to run a full scan, but freshness " +
-                  "was not confirmed before serving the latest readable DB."
+                ? unconfirmedForceAdvance
+                    ? "Target workspace indexer lock is busy; the leader advanced the index while we waited but " +
+                      "did not replace the artifact, so the requested full rebuild was likely served as a " +
+                      "downgraded delta under scan-failure backoff and is still owed (see workspace status " +
+                      "scan_failure). Serving the latest readable DB."
+                    : "Target workspace indexer lock is busy; requested the leader to run a full scan, but freshness " +
+                      "was not confirmed before serving the latest readable DB."
                 : "Target workspace indexer lock is busy; freshness was not confirmed before serving the latest readable DB."))
             + " " + DescribeLockHolder(millerDir);
         return new WorkspaceRefreshResult(

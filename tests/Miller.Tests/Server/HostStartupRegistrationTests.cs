@@ -273,6 +273,48 @@ public sealed class HostStartupRegistrationTests : IDisposable
         Assert.Same(firstHolder, bootstrap.Holder);
     }
 
+    [Fact]
+    public void DiRegisteredJulieExtractRunner_AnnouncesContainmentDegradation()
+    {
+        string root = CreateTempRoot();
+        string toolsBase = CreateTempRoot();
+        Directory.CreateDirectory(Path.Combine(toolsBase, ".tools"));
+        File.WriteAllText(
+            Path.Combine(toolsBase, ".tools", OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract"),
+            "");
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMillerServices();
+
+        using var provider = services.BuildServiceProvider();
+        var bootstrap = provider.GetRequiredService<IndexBootstrapService>();
+        string tempHome = CreateTempRoot();
+        bootstrap.TestHomeDirectoryOverride = tempHome;
+        bootstrap.TestBootstrapInterceptor = (canonicalRoot, _) =>
+        {
+            var workspace = WorkspaceContext.Create(canonicalRoot, toolsBase, tempHome) with
+            {
+                WorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot),
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db"),
+            };
+            bootstrap.SeedForTest(
+                workspace,
+                new IndexHolder(
+                    MillerRepositoryIndex.Build(System.Array.Empty<IndexedSymbol>()),
+                    builtRevision: bootstrap.BindingGeneration + 1));
+            return true;
+        };
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots);
+
+        var runner = provider.GetRequiredService<JulieExtractRunner>();
+
+        // This runner feeds WorkspaceTool's open(path) prime scan and CrossWorkspaceRefreshService — server
+        // paths with a logger available. An unwired sink means a failed Windows job-object attach runs the
+        // scan UNCONTAINED with nothing said (the 3a933e0b fix covered only the indexer/bootstrap runners).
+        Assert.True(runner.HasContainmentSink);
+    }
+
     private string CreateTempRoot()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-host-registration-" + Guid.NewGuid().ToString("N"));

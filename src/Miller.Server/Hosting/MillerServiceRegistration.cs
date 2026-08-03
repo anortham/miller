@@ -180,7 +180,14 @@ public static class MillerServiceRegistration
         // cwd), so a missing binary fails loudly via JulieExtractRunner.Locate's restore-script message rather than
         // silently degrading.
         services.AddTransient(sp =>
-            JulieExtractRunner.Locate(sp.GetRequiredService<WorkspaceContext>().ToolsRoot));
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(JulieExtractRunner));
+            return JulieExtractRunner.Locate(
+                sp.GetRequiredService<WorkspaceContext>().ToolsRoot,
+                reason => logger.LogWarning(
+                    "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan " +
+                    "proceeds, but if this Miller is killed the extractor can outlive it.", reason));
+        });
 
         // Task 5 cross-workspace read seam. The registry is machine-global (<home>/.miller/workspaces.db); target
         // indexes remain local to their owning workspace and are loaded through WorkspaceIndexProvider only.
