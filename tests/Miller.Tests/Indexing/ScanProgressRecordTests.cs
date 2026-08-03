@@ -60,6 +60,20 @@ public sealed class ScanProgressRecordTests
     }
 
     [Fact]
+    public void LastIn_ATrailingRecordThatParsesButLostItsNewline_IsStillDroppedAsAnIncompleteTail()
+    {
+        string text = Record + "\n" + """{"phase":"artifact_write","files_extracted":74000}""";
+
+        Assert.Equal("extraction_spool", ScanProgressRecord.LastIn(text)!.Phase);
+    }
+
+    [Fact]
+    public void LastIn_ASingleUnterminatedRecord_IsNoRecordAtAll()
+    {
+        Assert.Null(ScanProgressRecord.LastIn(Record));
+    }
+
+    [Fact]
     public void LastIn_AMalformedRecordMidFile_DoesNotStopTheRead()
     {
         string text = Record + "\n" + """{"phase":"tor""" + "\n"

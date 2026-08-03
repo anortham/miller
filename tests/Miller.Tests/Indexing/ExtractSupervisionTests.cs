@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Miller.Indexing;
 using Xunit;
 
@@ -137,5 +138,50 @@ public sealed class ExtractSupervisionTests
         Assert.Null(
             JulieExtractRunner.ProgressFileFromArgs(
                 JulieExtractRunner.BuildScanArgs(ArtifactPath, "/abs/work/repo", force: false, jobs: 1)));
+    }
+
+    [Fact]
+    public void AFailedContainmentAttach_ReachesTheSink_RatherThanRunningUncontainedInSilence()
+    {
+        Assert.Equal(
+            new[] { "access is denied" },
+            ScanWithContainment(_ => WindowsKillOnCloseJobAttachment.Failed("access is denied")));
+    }
+
+    [Fact]
+    public void AContainmentAttachThatWasNotNeeded_ReportsNothing()
+    {
+        Assert.Empty(ScanWithContainment(_ => WindowsKillOnCloseJobAttachment.NotRequired));
+    }
+
+    /// <summary>
+    /// Drive one real <c>Run</c> against a stub binary that exits non-zero, and return what the containment
+    /// sink was told. The scan is expected to fail — the point is that containment is reported either way.
+    /// </summary>
+    private static IReadOnlyList<string> ScanWithContainment(
+        Func<Process, WindowsKillOnCloseJobAttachment> attach)
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("The stub extractor is a POSIX shell script.");
+
+        string root = Path.Combine(Path.GetTempPath(), $"miller-containment-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, ".miller"));
+        string binary = Path.Combine(root, "stub-extract");
+        File.WriteAllText(binary, "#!/bin/sh\nexit 9\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        var reported = new List<string>();
+        var runner = new JulieExtractRunner(binary, TimeSpan.FromSeconds(30), reported.Add, attach);
+        try
+        {
+            Assert.ThrowsAny<JulieExtractException>(
+                () => runner.Scan(root, Path.Combine(root, ".miller", "symbols.db")));
+            return reported;
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

@@ -42,6 +42,8 @@ public sealed class JulieExtractRunner
     private readonly string _binaryPath;
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _hardTimeout;
+    private readonly Action<string>? _onContainmentDegraded;
+    private readonly Func<Process, WindowsKillOnCloseJobAttachment> _attachContainmentJob;
 
     /// <summary>The resolved absolute path to the julie-extract binary this runner invokes.</summary>
     public string BinaryPath => _binaryPath;
@@ -51,10 +53,19 @@ public sealed class JulieExtractRunner
     /// binary does not exist, pointing the operator at the restore script. Use <see cref="Locate"/> for the
     /// default resolution.
     /// </summary>
+    /// <param name="onContainmentDegraded">
+    /// Optional sink for the reason Windows orphan containment could not be established for a scan
+    /// (<see cref="WindowsKillOnCloseJob"/>). The scan still runs — containment hygiene must never break the
+    /// work it was protecting — but it runs UNCONTAINED, and on Windows nothing else covers that case because
+    /// julie-extract's <c>--parent-pid</c> watchdog is Unix-only. Miller.Indexing is logger-free by design, so
+    /// the caller (the indexer/bootstrap services, which hold an <c>ILogger</c>) supplies the sink; unwired, the
+    /// degradation is silent.
+    /// </param>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
-    public JulieExtractRunner(string binaryPath)
+    public JulieExtractRunner(string binaryPath, Action<string>? onContainmentDegraded = null)
         : this(binaryPath, DefaultTimeout,
-               ExtractWaitPolicy.HardTimeoutForEnvironment(DefaultTimeout, Environment.GetEnvironmentVariable))
+               ExtractWaitPolicy.HardTimeoutForEnvironment(DefaultTimeout, Environment.GetEnvironmentVariable),
+               onContainmentDegraded, WindowsKillOnCloseJob.Attach)
     {
     }
 
@@ -66,12 +77,32 @@ public sealed class JulieExtractRunner
     /// </summary>
     /// <exception cref="FileNotFoundException">The binary does not exist at <paramref name="binaryPath"/>.</exception>
     public JulieExtractRunner(string binaryPath, TimeSpan timeout)
-        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout))
+        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout), null, WindowsKillOnCloseJob.Attach)
     {
     }
 
-    private JulieExtractRunner(string binaryPath, TimeSpan timeout, TimeSpan hardTimeout)
+    /// <summary>
+    /// Test seam for the containment path: <paramref name="attachContainmentJob"/> lets a test force the
+    /// Windows job-object failure that is otherwise unreachable off Windows and unreproducible on it.
+    /// </summary>
+    internal JulieExtractRunner(
+        string binaryPath,
+        TimeSpan timeout,
+        Action<string>? onContainmentDegraded,
+        Func<Process, WindowsKillOnCloseJobAttachment> attachContainmentJob)
+        : this(binaryPath, timeout, ExtractWaitPolicy.HardTimeoutFor(timeout),
+               onContainmentDegraded, attachContainmentJob)
     {
+    }
+
+    private JulieExtractRunner(
+        string binaryPath,
+        TimeSpan timeout,
+        TimeSpan hardTimeout,
+        Action<string>? onContainmentDegraded,
+        Func<Process, WindowsKillOnCloseJobAttachment> attachContainmentJob)
+    {
+        ArgumentNullException.ThrowIfNull(attachContainmentJob);
         ArgumentException.ThrowIfNullOrWhiteSpace(binaryPath);
         string abs = Path.GetFullPath(binaryPath);
         if (!File.Exists(abs))
@@ -82,6 +113,8 @@ public sealed class JulieExtractRunner
         _binaryPath = abs;
         _timeout = timeout;
         _hardTimeout = hardTimeout;
+        _onContainmentDegraded = onContainmentDegraded;
+        _attachContainmentJob = attachContainmentJob;
     }
 
     /// <summary>
@@ -89,25 +122,30 @@ public sealed class JulieExtractRunner
     /// first, then PATH. Returns a constructed runner, or throws <see cref="FileNotFoundException"/> pointing at
     /// the restore script if absent.
     /// </summary>
-    public static JulieExtractRunner Locate(string toolsRoot) =>
+    /// <param name="onContainmentDegraded">
+    /// Optional sink for a Windows containment failure — see the constructor. Unwired, the degradation is
+    /// silent, which on Windows means the orphan this whole path exists to prevent can happen unannounced.
+    /// </param>
+    public static JulieExtractRunner Locate(string toolsRoot, Action<string>? onContainmentDegraded = null) =>
         Locate(toolsRoot, (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries));
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries), onContainmentDegraded);
 
     /// <summary>
     /// Resolve the julie-extract binary using <paramref name="pathDirs"/> as the PATH search list (test seam —
     /// avoids ambient PATH flakiness when <c>julie-extract</c> is installed on a dev or CI machine).
     /// </summary>
-    internal static JulieExtractRunner Locate(string toolsRoot, IReadOnlyList<string> pathDirs)
+    internal static JulieExtractRunner Locate(
+        string toolsRoot, IReadOnlyList<string> pathDirs, Action<string>? onContainmentDegraded = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolsRoot);
         string binaryName = OperatingSystem.IsWindows() ? "julie-extract.exe" : "julie-extract";
         string toolsCandidate = Path.Combine(toolsRoot, binaryName);
         if (File.Exists(toolsCandidate))
-            return new JulieExtractRunner(toolsCandidate);
+            return new JulieExtractRunner(toolsCandidate, onContainmentDegraded);
 
         string? onPath = FindOnPath(binaryName, pathDirs);
         if (onPath is not null)
-            return new JulieExtractRunner(onPath);
+            return new JulieExtractRunner(onPath, onContainmentDegraded);
 
         throw new FileNotFoundException(
             $"julie-extract not found in '{toolsRoot}' or on PATH. Run scripts/restore-julie-extract.sh " +
@@ -658,8 +696,13 @@ public sealed class JulieExtractRunner
         // no Windows parent_id), so on Windows a killed Miller would otherwise leave a whole-repo extract
         // running against a workspace nobody is waiting on. The job object kills its members when this handle
         // closes, which a killed process does for us; disposing it AFTER the child has exited is what keeps it
-        // from being the thing that kills a healthy scan. NotRequired off Windows and best-effort on it.
-        using WindowsKillOnCloseJob? containment = WindowsKillOnCloseJob.Attach(process).Job;
+        // from being the thing that kills a healthy scan. NotRequired off Windows and best-effort on it — and
+        // a best-effort mechanism that fails silently is one nobody learns has stopped working, so the reason
+        // goes to the sink before the scan proceeds uncontained.
+        WindowsKillOnCloseJobAttachment attachment = _attachContainmentJob(process);
+        using WindowsKillOnCloseJob? containment = attachment.Job;
+        if (attachment.FailureReason is { } containmentFailure)
+            _onContainmentDegraded?.Invoke(containmentFailure);
 
         // Read stdout/stderr asynchronously to avoid the classic pipe-buffer deadlock on large reports.
         process.BeginOutputReadLine();

@@ -450,7 +450,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
-            var runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+            var runner = JulieExtractRunner.Locate(
+                ctx.ToolsRoot,
+                reason => _logger.LogWarning(
+                    "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan proceeds, " +
+                    "but if this Miller is killed the extractor can outlive it.", reason));
 
             // Locate only checks EXISTENCE, so a julie-extract left in .tools/ from before a pin bump passes it
             // but then fails every scan with a schema mismatch. Probe the bundled version up front and warn

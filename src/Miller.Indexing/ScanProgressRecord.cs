@@ -61,13 +61,20 @@ public sealed record ScanProgressRecord(
     /// The last parseable record in <paramref name="text"/>, scanning backwards. Backwards because a failed
     /// write leaves damage at the point it failed and every LATER record still parses, so the newest usable
     /// record is the one nearest the end.
+    ///
+    /// <para>An unterminated trailing line is dropped even when it parses. The contract makes the terminating
+    /// newline — not JSON validity — the proof that the producer finished a record, because a reader can
+    /// otherwise consume a line the writer is still extending. Miller reads this file only after the child is
+    /// dead, so today the dropped line's counters would have been genuine; conforming anyway is what keeps a
+    /// future live-progress reader from inheriting a subtly wrong parser.</para>
     /// </summary>
     public static ScanProgressRecord? LastIn(string? text)
     {
         if (string.IsNullOrEmpty(text))
             return null;
         string[] lines = text.Split('\n');
-        for (int i = lines.Length - 1; i >= 0; i--)
+        int lastTerminated = text.EndsWith('\n') ? lines.Length - 1 : lines.Length - 2;
+        for (int i = lastTerminated; i >= 0; i--)
         {
             if (TryParse(lines[i]) is { } record)
                 return record;

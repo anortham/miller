@@ -142,9 +142,13 @@ public sealed class IndexerService : BackgroundService
             logger,
             loggerFactory,
             static millerDir => SingleWriterLock.TryAcquire(millerDir),
-            static (workspace, canonicalRoot, canonicalDbPath) =>
+            (workspace, canonicalRoot, canonicalDbPath) =>
             {
-                var runner = JulieExtractRunner.Locate(workspace.ToolsRoot);
+                var runner = JulieExtractRunner.Locate(
+                    workspace.ToolsRoot,
+                    reason => logger.LogWarning(
+                        "julie-extract is running WITHOUT Windows orphan containment: {Reason}. The scan " +
+                        "proceeds, but if this Miller is killed the extractor can outlive it.", reason));
                 return JulieExtractOps.Create(canonicalRoot, canonicalDbPath, runner);
             },
             DefaultLeaderRetryInterval,
