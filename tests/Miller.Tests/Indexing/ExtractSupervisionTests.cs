@@ -1,0 +1,141 @@
+using Miller.Indexing;
+using Xunit;
+
+namespace Miller.Tests.Indexing;
+
+/// <summary>
+/// Pins where a Miller-driven scan's <c>--spool-dir</c>, <c>--progress-file</c>, and <c>--parent-pid</c> point,
+/// and that the switch producing the pre-2.22.0 argv really produces it. All pure — the live flags are the
+/// Scale suite.
+/// </summary>
+public sealed class ExtractSupervisionTests
+{
+    private const string ArtifactPath = "/abs/work/.miller/symbols.db";
+    private const int Pid = 4242;
+
+    private static Func<string, string?> Env(string? supervision) =>
+        name => name == ExtractSupervisionPolicy.EnvVar ? supervision : null;
+
+    [Fact]
+    public void SpoolAndProgressPaths_SitBesideTheArtifactTheyBelongTo()
+    {
+        var supervision = ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(null));
+
+        Assert.Equal(
+            Path.Combine("/abs/work/.miller", ExtractSupervisionPolicy.SpoolDirectoryName),
+            supervision.SpoolDirectory);
+        Assert.Equal(
+            Path.Combine("/abs/work/.miller", ExtractSupervisionPolicy.ProgressFileName),
+            supervision.ProgressFile);
+        Assert.Equal(Pid, supervision.ParentPid);
+    }
+
+    [Fact]
+    public void TheProgressFile_IsNotInsideTheSpoolDirectory()
+    {
+        var supervision = ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(null));
+
+        Assert.NotNull(supervision.SpoolDirectory);
+        Assert.NotNull(supervision.ProgressFile);
+        Assert.False(
+            supervision.ProgressFile!.StartsWith(
+                supervision.SpoolDirectory! + Path.DirectorySeparatorChar, StringComparison.Ordinal),
+            "julie-extract warns on every scan when the spool directory holds anything that is not a spool");
+    }
+
+    [Fact]
+    public void TheProgressFileName_CarriesTheSuffixJulieExtractRequires()
+    {
+        var supervision = ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(null));
+
+        Assert.EndsWith(".progress", supervision.ProgressFile!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFullRebuildTarget_SupervisesIntoTheSameWorkspaceAsTheArtifactItReplaces()
+    {
+        var live = ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(null));
+        var rebuild = ExtractSupervisionPolicy.For(
+            FullRebuildPromotion.RebuildDbPathFor(ArtifactPath), Pid, Env(null));
+
+        Assert.Equal(live.SpoolDirectory, rebuild.SpoolDirectory);
+        Assert.Equal(live.ProgressFile, rebuild.ProgressFile);
+    }
+
+    [Theory]
+    [InlineData("off")]
+    [InlineData("OFF")]
+    [InlineData("  off  ")]
+    [InlineData("0")]
+    public void TheOffSwitch_ProducesTheArgvMillerSentBefore_2_22_0(string configured)
+    {
+        Assert.Same(
+            ExtractSupervision.None, ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(configured)));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("on")]
+    [InlineData("1")]
+    [InlineData("false")]
+    public void AnythingElse_LeavesSupervisionOn(string? configured)
+    {
+        Assert.NotNull(ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(configured)).SpoolDirectory);
+    }
+
+    [Fact]
+    public void AnArtifactPathWithNoDirectory_SupervisesNothingRatherThanGuessing()
+    {
+        Assert.Same(ExtractSupervision.None, ExtractSupervisionPolicy.For("/", Pid, Env(null)));
+    }
+
+    [Fact]
+    public void BuildScanArgs_WithSupervision_CarriesAllThreeFlagsBeforeForce()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            ArtifactPath, "/abs/work/repo", force: true, jobs: 2, ignoreFiles: null,
+            supervision: new ExtractSupervision("/abs/work/.miller/spool", "/abs/work/.miller/scan.progress", 7));
+
+        Assert.Equal(
+            new[]
+            {
+                "scan", "--root", "/abs/work/repo", "--db", ArtifactPath, "--strict-schema", "--json",
+                "--jobs", "2",
+                "--spool-dir", "/abs/work/.miller/spool",
+                "--progress-file", "/abs/work/.miller/scan.progress",
+                "--parent-pid", "7",
+                "--force",
+            },
+            args);
+    }
+
+    [Fact]
+    public void BuildScanArgs_WithoutSupervision_IsByteIdenticalToTheArgvBeforeTheFlagsExisted()
+    {
+        Assert.Equal(
+            JulieExtractRunner.BuildScanArgs(ArtifactPath, "/abs/work/repo", force: false, jobs: 4),
+            JulieExtractRunner.BuildScanArgs(
+                ArtifactPath, "/abs/work/repo", force: false, jobs: 4, ignoreFiles: null,
+                supervision: ExtractSupervision.None));
+    }
+
+    [Fact]
+    public void ProgressFileFromArgs_ReadsBackWhatBuildScanArgsWrote()
+    {
+        var args = JulieExtractRunner.BuildScanArgs(
+            ArtifactPath, "/abs/work/repo", force: false, jobs: 1, ignoreFiles: null,
+            supervision: new ExtractSupervision(null, "/abs/work/.miller/scan.progress", null));
+
+        Assert.Equal("/abs/work/.miller/scan.progress", JulieExtractRunner.ProgressFileFromArgs(args));
+    }
+
+    [Fact]
+    public void ProgressFileFromArgs_WithoutTheFlag_IsNull()
+    {
+        Assert.Null(
+            JulieExtractRunner.ProgressFileFromArgs(
+                JulieExtractRunner.BuildScanArgs(ArtifactPath, "/abs/work/repo", force: false, jobs: 1)));
+    }
+}

@@ -140,11 +140,15 @@ public sealed class JulieExtractRunner
     /// concatenates them into one gitignore matcher, so last-match-wins makes the final file decisive
     /// (<see cref="ScanIgnorePolicy"/> puts Miller's invariant file there).
     /// </summary>
+    /// <paramref name="supervision"/> adds the three process-lifecycle flags julie-extract 2.22.0 introduced
+    /// (<see cref="ExtractSupervision"/>). Null or <see cref="ExtractSupervision.None"/> emits none of them and
+    /// reproduces the earlier argv byte for byte.
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="jobs"/> is negative — julie-extract types
     /// the flag as <c>usize</c>, so a negative would surface as an opaque clap usage failure.</exception>
     /// <exception cref="ArgumentException">An <paramref name="ignoreFiles"/> entry is null or blank.</exception>
     public static IReadOnlyList<string> BuildScanArgs(
-        string absDb, string absRoot, bool force, int jobs, IReadOnlyList<string>? ignoreFiles = null)
+        string absDb, string absRoot, bool force, int jobs, IReadOnlyList<string>? ignoreFiles = null,
+        ExtractSupervision? supervision = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
         ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
@@ -160,9 +164,36 @@ public sealed class JulieExtractRunner
             args.Add("--ignore-file");
             args.Add(ignoreFile);
         }
+        if (supervision?.SpoolDirectory is { } spoolDirectory)
+        {
+            args.Add("--spool-dir");
+            args.Add(spoolDirectory);
+        }
+        if (supervision?.ProgressFile is { } progressFile)
+        {
+            args.Add("--progress-file");
+            args.Add(progressFile);
+        }
+        if (supervision?.ParentPid is { } parentPid)
+        {
+            args.Add("--parent-pid");
+            args.Add(parentPid.ToString(CultureInfo.InvariantCulture));
+        }
         if (force)
             args.Add("--force");
         return args;
+    }
+
+    /// <summary>The <c>--progress-file</c> value from an already-built argv, if present.</summary>
+    internal static string? ProgressFileFromArgs(IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        for (int i = 0; i + 1 < args.Count; i++)
+        {
+            if (args[i] == "--progress-file")
+                return args[i + 1];
+        }
+        return null;
     }
 
     /// <summary>
@@ -385,9 +416,10 @@ public sealed class JulieExtractRunner
         // refresh), so CLI and server both get it. Best-effort and never-overwrite (see JulieIgnoreSeeder).
         JulieIgnoreSeeder.EnsureSeeded(absRoot);
         IReadOnlyList<string> ignoreFiles = ScanIgnorePolicy.PrepareForScan(absRoot);
+        ExtractSupervision supervision = ExtractSupervisionPolicy.For(absDb);
 
         if (!force || ForceScanInPlace())
-            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles));
+            return Run(BuildScanArgs(absDb, absRoot, force, resolvedJobs, ignoreFiles, supervision));
 
         // Full rebuild: extract into a fresh sibling DB (bulk-insert fast, invisible to readers), then promote.
         // Callers hold Miller's single-writer lock, so the deterministic rebuild path cannot be contended; a
@@ -397,7 +429,8 @@ public sealed class JulieExtractRunner
         try
         {
             report = Run(BuildScanArgs(
-                FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs, ignoreFiles));
+                FullRebuildPromotion.RebuildDbPathFor(absDb), absRoot, force, resolvedJobs, ignoreFiles,
+                supervision));
         }
         catch
         {
@@ -621,6 +654,13 @@ public sealed class JulieExtractRunner
                 standardError: string.Empty, ex);
         }
 
+        // Windows half of orphan containment. julie-extract's --parent-pid watchdog is Unix-only (std exposes
+        // no Windows parent_id), so on Windows a killed Miller would otherwise leave a whole-repo extract
+        // running against a workspace nobody is waiting on. The job object kills its members when this handle
+        // closes, which a killed process does for us; disposing it AFTER the child has exited is what keeps it
+        // from being the thing that kills a healthy scan. NotRequired off Windows and best-effort on it.
+        using WindowsKillOnCloseJob? containment = WindowsKillOnCloseJob.Attach(process).Job;
+
         // Read stdout/stderr asynchronously to avoid the classic pipe-buffer deadlock on large reports.
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -631,6 +671,7 @@ public sealed class JulieExtractRunner
         // idle but exceeded 600s when the fleet rebuilt concurrently — 2026-06-11 Eros field report). Kill
         // only when the artifact and output stop moving for the stall window, with an absolute backstop.
         string? dbPath = DbPathFromArgs(args);
+        string? progressPath = ProgressFileFromArgs(args);
         var policy = new ExtractWaitPolicy(_timeout, _hardTimeout);
         var clock = Stopwatch.StartNew();
         int pollSlice = (int)Math.Clamp((long)_timeout.TotalMilliseconds, 50, 1000);
@@ -639,7 +680,7 @@ public sealed class JulieExtractRunner
         while (!(exited = process.WaitForExit(pollSlice)))
         {
             verdict = policy.Observe(
-                clock.Elapsed, ProgressStamp(dbPath, Interlocked.Read(ref outputActivity)));
+                clock.Elapsed, ProgressStamp(dbPath, progressPath, Interlocked.Read(ref outputActivity)));
             if (verdict != ExtractWaitVerdict.Continue)
                 break;
         }
@@ -655,8 +696,11 @@ public sealed class JulieExtractRunner
                 : $"was still making progress but timed out at the {_hardTimeout.TotalSeconds:0}s hard cap and " +
                   "was killed. Large workspaces under heavy concurrent load can take this long; retry when the " +
                   "machine is less loaded.";
+            string where = ScanProgressRecord.DescribeLastProgress(progressPath) is { } progress
+                ? $" It {progress}."
+                : string.Empty;
             throw new JulieExtractException(
-                $"julie-extract at '{_binaryPath}' {reason}",
+                $"julie-extract at '{_binaryPath}' {reason}{where}",
                 standardError: stderr.ToString().TrimEnd('\n', '\r'));
         }
 
@@ -689,26 +733,42 @@ public sealed class JulieExtractRunner
         return null;
     }
 
-    // The progress stamp the wait policy watches: total bytes of the artifact db + WAL/SHM sidecars plus the
-    // count of output lines received. ANY change (including WAL shrink on checkpoint) counts as progress.
-    private static long ProgressStamp(string? dbPath, long outputActivity)
+    /// <summary>
+    /// The progress stamp the wait policy watches: bytes of the artifact db + WAL/SHM sidecars, bytes of the
+    /// <c>--progress-file</c> heartbeat, and the count of output lines received. ANY change counts as progress
+    /// — including a WAL shrink on checkpoint, and including the heartbeat file shrinking because a new scan
+    /// truncated it, which the progress-file contract requires be read as progress rather than as a stall.
+    ///
+    /// <para>The heartbeat is what makes the pre-artifact phase visible at all. Extraction spools for minutes
+    /// on a large repo without touching the artifact, so before it the sum could sit still for the whole stall
+    /// window on a perfectly healthy scan. It is SUMMED with the older signals rather than replacing them, so a
+    /// progress file that cannot be written degrades this to exactly the pre-2.22.0 stamp instead of to
+    /// nothing.</para>
+    /// </summary>
+    private static long ProgressStamp(string? dbPath, string? progressPath, long outputActivity)
     {
         long stamp = outputActivity;
-        if (dbPath is null)
-            return stamp;
-        foreach (string suffix in new[] { "", "-wal", "-shm" })
+        if (dbPath is not null)
         {
-            try
-            {
-                var info = new FileInfo(dbPath + suffix);
-                if (info.Exists)
-                    stamp += info.Length;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                // Unreadable sidecar: contribute nothing — output activity and the other files still count.
-            }
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+                stamp += LengthOrZero(dbPath + suffix);
         }
+        if (progressPath is not null)
+            stamp += LengthOrZero(progressPath);
         return stamp;
+    }
+
+    private static long LengthOrZero(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Unreadable: contribute nothing — output activity and the other files still count.
+            return 0;
+        }
     }
 }

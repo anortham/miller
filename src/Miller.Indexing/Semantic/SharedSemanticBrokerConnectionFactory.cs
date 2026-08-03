@@ -41,7 +41,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
     private readonly TimeSpan _initializationTimeout;
     private readonly TimeSpan _pollInterval;
     private readonly bool _requireWindowsJob;
-    private readonly Func<Process, WindowsBrokerJobAttachment> _attachWindowsJob;
+    private readonly Func<Process, WindowsKillOnCloseJobAttachment> _attachWindowsJob;
     private readonly Action? _passiveConnectionAccepted;
     private readonly Action? _connectionDisposed;
     private readonly SemaphoreSlim _spawnGate = new(1, 1);
@@ -50,7 +50,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
 
     private Process? _ownerProcess;
     private StreamWriter? _ownerInput;
-    private WindowsBrokerJob? _ownerJob;
+    private WindowsKillOnCloseJob? _ownerJob;
     private bool _disposed;
     private bool _hasConnected;
     private int _activeConnects;
@@ -85,7 +85,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         TimeSpan initializationTimeout,
         TimeSpan pollInterval,
         bool requireWindowsJob,
-        Func<Process, WindowsBrokerJobAttachment>? attachWindowsJob,
+        Func<Process, WindowsKillOnCloseJobAttachment>? attachWindowsJob,
         Action? passiveConnectionAccepted = null,
         Action? connectionDisposed = null)
     {
@@ -102,7 +102,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         _initializationTimeout = initializationTimeout;
         _pollInterval = pollInterval;
         _requireWindowsJob = requireWindowsJob;
-        _attachWindowsJob = attachWindowsJob ?? WindowsBrokerJob.Attach;
+        _attachWindowsJob = attachWindowsJob ?? WindowsKillOnCloseJob.Attach;
         _passiveConnectionAccepted = passiveConnectionAccepted;
         _connectionDisposed = connectionDisposed;
         _snapshot = new SemanticBrokerSnapshot(
@@ -287,7 +287,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         BrokerConnection[] connections;
         Process? ownerProcess;
         StreamWriter? ownerInput;
-        WindowsBrokerJob? ownerJob;
+        WindowsKillOnCloseJob? ownerJob;
 
         lock (_sync)
         {
@@ -386,9 +386,9 @@ public sealed class SharedSemanticBrokerConnectionFactory :
         }
 
         var ownerInput = process.StandardInput;
-        WindowsBrokerJobAttachment attachment = _requireWindowsJob
+        WindowsKillOnCloseJobAttachment attachment = _requireWindowsJob
             ? _attachWindowsJob(process)
-            : WindowsBrokerJobAttachment.NotRequired;
+            : WindowsKillOnCloseJobAttachment.NotRequired;
 
         bool accepted;
         lock (_sync)
@@ -527,7 +527,7 @@ public sealed class SharedSemanticBrokerConnectionFactory :
     {
         Process? process = null;
         StreamWriter? input = null;
-        WindowsBrokerJob? job = null;
+        WindowsKillOnCloseJob? job = null;
         lock (_sync)
         {
             if (_ownerProcess is not { HasExited: true })

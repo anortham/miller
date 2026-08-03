@@ -193,8 +193,20 @@ with a surviving leader still logs "keeping the prior index" and never retries u
 - Why `.miller/tmp`: shared `/tmp` is a container tmpfs/memory trap and a multi-user disk-fill
   hazard (findings §6.8), and workspace-local spools are trivially discoverable.
 - Acceptance:
-  - [ ] SIGKILL mid-scan leaves at most one dead-PID spool, removed by the next scan's reaper.
-  - [ ] Spools live under `.miller/tmp` when Miller drives the scan.
+  - [x] SIGKILL mid-scan leaves at most one dead-PID spool, removed by the next scan's reaper.
+  - [x] Spools live under `.miller/spool` when Miller drives the scan.
+- **Delivered 2026-08-03 (julie-extractors v2.22.0 + Miller wiring), with three deviations:**
+  - **Reaping is by advisory lock, not by a dead-PID probe.** `unsafe_code = "forbid"` is workspace-wide
+    in julie-extractors, so `libc::kill`/`OpenProcess` are unreachable; `File::lock` on a sibling
+    `<spool>.lock` sentinel is strictly better anyway — the kernel releases it however the owner dies,
+    including SIGKILL, so there is no PID-reuse window, and it works on Windows.
+  - **`.miller/spool`, not `.miller/tmp`.** julie-extract raises a `spool_dir_excluded` warning on every
+    scan when the spool directory holds anything that is not a spool, so the progress file must be a
+    SIBLING of it rather than share it.
+  - **Miller does not delete the child's spool after exit.** julie-extract's own guard removes the spool
+    on every exit path including early returns, and its reaper covers hard kills by lock. A Miller-side
+    delete keyed on the child PID would be the PID-probe design julie-extractors rejected, and it could
+    remove a live sibling worktree's spool.
 
 **W5. Extraction progress observability** — julie-extractors first, then Miller. ~1 session (julie)
 + ~0.5–1 session (Miller).
@@ -207,8 +219,17 @@ with a surviving leader still logs "keeping the prior index" and never retries u
   (`ExtractWaitPolicy`, `src/Miller.Indexing/ExtractWaitPolicy.cs` — currently stall × 6 = 60 min)
   to 4 hours, env-overridable.
 - Acceptance:
-  - [ ] A synthetic long-spool-phase scan (Scale) survives past the old stall window.
-  - [ ] A genuinely hung extractor is still killed at the stall window.
+  - [x] A synthetic long-spool-phase scan (Scale) survives past the old stall window.
+  - [x] A genuinely hung extractor is still killed at the stall window.
+- **Delivered 2026-08-03. Deviation: a FIXED `<.miller>/scan.progress`, not a nonce name deleted in
+  `finally`.** The progress-file v1 contract is written for exactly this consumer shape — it specifies
+  truncate-on-new-scan and "a length DECREASE is progress, never a stall" precisely because the named
+  supervisor reuses one path per workspace. A fixed path also leaks nothing when Miller is killed
+  mid-scan (a nonce name leaks one file per kill, since the spool reaper only ever removes
+  sentinel-backed spool names), and it leaves a readable post-mortem of where a killed scan stopped —
+  which `ScanProgressRecord.DescribeLastProgress` now puts into the kill message.
+  The hard cap was raised separately (stall × 24 = 4h, `MILLER_EXTRACT_HARD_CAP`) after W10 measured a
+  healthy 74k-file scan at 61.3 minutes.
 
 **W6. Orphan-child containment (amended item 9 mechanism)** — julie-extractors + Miller.
 ~0.5–1 session (julie) + ~0.5–1 session (Miller).
@@ -220,8 +241,15 @@ with a surviving leader still logs "keeping the prior index" and never retries u
   (`PR_SET_PDEATHSIG` is Linux-only; macOS has no equivalent — the watchdog is the portable
   primitive). This amendment was Codex's round-2 objection, adopted verbatim; both models AGREE.
 - Acceptance:
-  - [ ] Kill -9 of the Miller host leaves no julie-extract running beyond the watchdog interval
+  - [x] Kill -9 of the Miller host leaves no julie-extract running beyond the watchdog interval
         (Scale, POSIX) / Job Object close (Windows).
+- **Delivered 2026-08-03.** POSIX is julie-extract's `--parent-pid` watchdog, which asks the kernel who
+  the parent is NOW rather than probing a recorded id, so PID reuse cannot defeat it (an orphan is
+  reparented to init). Windows is the job object, which Miller already had for the semantic broker —
+  `WindowsBrokerJob` was renamed `WindowsKillOnCloseJob`, moved to `Miller.Indexing`, and every
+  julie-extract spawn is now attached to one for the life of the `Run` call. The stdout-pipe-closure half
+  of the original design was dropped by julie-extractors: nothing is written to stdout during a scan, so
+  there is no mid-scan write to fail, and polling the descriptor for hangup needs `unsafe`.
 
 ### P1 — make failure recovery deliberate
 

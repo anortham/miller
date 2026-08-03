@@ -312,7 +312,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
             attachWindowsJob: _ =>
             {
                 attachAttempted = true;
-                return WindowsBrokerJobAttachment.Failed("job attach denied");
+                return WindowsKillOnCloseJobAttachment.Failed("job attach denied");
             });
         await using var session = new SemanticEmbeddingSession(
             factory,
@@ -367,7 +367,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         string counter,
         int loadDelayMs,
         bool requireWindowsJob = false,
-        Func<Process, WindowsBrokerJobAttachment>? attachWindowsJob = null,
+        Func<Process, WindowsKillOnCloseJobAttachment>? attachWindowsJob = null,
         string? crashFirstMarker = null,
         bool exitOnOwnerCloseDuringDelay = false,
         string? degradedReason = null,

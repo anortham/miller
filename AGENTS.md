@@ -232,6 +232,20 @@ scripts/test.ps1 all
   env var — it carries a caller's safety response (a post-OOM retry passes `1`) that a stale operator override
   must not undo. This bounds only the extraction/spool phase, not the artifact write; bounding how many scans
   run at once is a separate concern.
+- **Every scan is supervised (julie-extract ≥ 2.22.0).** Alongside `--jobs`, each scan argv carries three
+  process-lifecycle flags resolved from the ARTIFACT's directory by
+  [`ExtractSupervisionPolicy`](src/Miller.Indexing/ExtractSupervision.cs), so a full rebuild into
+  `symbols.db.rebuild` and a cross-workspace refresh both supervise into the right workspace:
+  `--spool-dir <.miller>/spool` (spools move off shared `$TMPDIR` and julie-extract reaps the ones no live scan
+  holds a lock on — the field report's 130GB of orphans), `--progress-file <.miller>/scan.progress` (a liveness
+  heartbeat for the long pre-artifact phase), and `--parent-pid` (julie-extract self-terminates when Miller
+  dies; Unix-only on its side, accepted and ignored elsewhere). `MILLER_EXTRACT_SUPERVISION=off` restores the
+  pre-2.22.0 argv exactly. The progress file is a SIBLING of the spool directory, never inside it: julie-extract
+  raises `spool_dir_excluded` when the spool dir holds anything that is not a spool, and a progress file living
+  there would fire that warning on every scan forever. `ProgressStamp` SUMS the heartbeat's length with the
+  artifact bytes and output lines rather than replacing them, so a progress file that cannot be written degrades
+  the stall signal to the pre-2.22.0 one instead of to nothing; a length DECREASE is progress (a new scan
+  truncated it), which the inequality comparison already handles.
 - **Scan intent, not `bool force` (load-bearing).** Every whole-repo scan carries a
   [`ScanIntent`](src/Miller.Core/Freshness/ScanIntent.cs): `IncrementalReconcile`, `UserFullRebuild`, `RootRebind`,
   `SchemaHeal`, `CorruptionHeal`, `ExtractorUpgrade`. Only `UserFullRebuild` may be downgraded to a delta on retry
