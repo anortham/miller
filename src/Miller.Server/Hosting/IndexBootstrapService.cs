@@ -328,6 +328,44 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         return BindOutcome.Started;
     }
 
+    /// <summary>
+    /// Re-run the bootstrap for the root this service is ALREADY bound to, because a different checkout now
+    /// occupies that path (<see cref="Miller.Indexing.WorkspaceRootIdentity"/>). <see cref="BootstrapForRoot"/>
+    /// deliberately answers <see cref="BindOutcome.AlreadyBound"/> for an unchanged root, so path-reuse needs its
+    /// own entry point; everything after this call is the ordinary bootstrap run, including
+    /// <see cref="ReadBootstrapScanDecision"/> — the identity fact is folded INTO that decision by
+    /// <see cref="EscalateForReplacedRoot"/> rather than deciding anything in parallel with it.
+    ///
+    /// <para>The caller must have released the workspace writer lease first: the run this starts needs it to
+    /// rebuild the artifact.</para>
+    /// </summary>
+    /// <returns>
+    /// The run generation to await with <see cref="WaitForRunAsync"/>. When a run is already in flight its
+    /// generation is returned instead of starting a second one — that run rebinds the workspace on its own, and
+    /// starting a competing one would race it for the same writer lease.
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> is null or blank.</exception>
+    internal int RebootstrapForReplacedRoot(string canonicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+
+        int runGeneration;
+        lock (_gate)
+        {
+            if (_phase == BootstrapPhase.Running)
+                return _runGeneration;
+
+            _logger.LogWarning(
+                "Workspace root {Root} is now occupied by a different checkout; re-bootstrapping it.",
+                canonicalRoot);
+            runGeneration = StartRunLocked(canonicalRoot);
+        }
+
+        _ = Task.Run(() => RunBootstrapInBackground(
+            canonicalRoot, WorkspaceBindingResolver.WorkspaceSource.Roots, runGeneration, rootReplaced: true));
+        return runGeneration;
+    }
+
     private int StartRunLocked(string canonicalRoot)
     {
         if (_phase != BootstrapPhase.Failed)
@@ -360,7 +398,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     }
 
     private void RunBootstrapInBackground(
-        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration)
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration,
+        bool rootReplaced = false)
     {
         BootstrapRunResult? result = null;
         bool published = false;
@@ -372,7 +411,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 return;
             }
 
-            result = RunBootstrap(canonicalRoot, source);
+            result = RunBootstrap(canonicalRoot, source, rootReplaced);
             published = PublishBoundWorkspace(result, runGeneration);
             if (!published && !result.UsesExistingLedger)
                 result.Bound.Ledger?.Dispose();
@@ -391,7 +430,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
-    private BootstrapRunResult RunBootstrap(string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source)
+    private BootstrapRunResult RunBootstrap(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, bool rootReplaced = false)
     {
         // The telemetry ledger is opened late but must be disposed if ANY later step throws (otherwise the
         // ledger stays open + the telemetry DB locked, but is never assigned to _ledger so Dispose() misses
@@ -432,7 +472,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 var probe = ReadBootstrapScanDecision(canonicalDbPath, canonicalRoot);
                 existingRootPath = probe.ExistingRootPath;
-                return probe.Decision;
+                return rootReplaced ? EscalateForReplacedRoot(probe.Decision) : probe.Decision;
             }
 
             var winnerArtifact = new WinnerArtifactProbe(canonicalDbPath, canonicalRoot, stableWorkspaceId);
@@ -861,6 +901,26 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
         return new BootstrapScanDecision(
             ShouldScan: false, ScanIntent.IncrementalReconcile, WorkspaceRegistryState.LoadedExisting);
+    }
+
+    /// <summary>
+    /// Fold "a DIFFERENT checkout now occupies this path" into whatever <see cref="DecideBootstrapScan"/> read off
+    /// the artifact. Workspace identity is the canonical ROOT PATH, so an artifact the previous occupant left
+    /// behind records a <c>root_path</c> that still matches and would be REUSED — serving the removed worktree's
+    /// symbols under the new one's name, with a matching freshness cursor to make it look current.
+    /// <see cref="ScanIntent.RootRebind"/> names exactly that condition ("the artifact describes another tree")
+    /// and is never downgradable, so a workspace whose scans have been failing cannot quietly turn the rebuild
+    /// into a delta against the foreign artifact.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="decision"/> is null.</exception>
+    internal static BootstrapScanDecision EscalateForReplacedRoot(BootstrapScanDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+
+        return new BootstrapScanDecision(
+            ShouldScan: true,
+            ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.RootRebind }),
+            WorkspaceRegistryState.Ready);
     }
 
     /// <summary>
@@ -1367,6 +1427,30 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             canonicalDbPath,
             WorkspaceRegistryState.Ready);
         return registry.MarkError(stableWorkspaceId, error);
+    }
+
+    /// <summary>
+    /// Record that the workspace's root is no longer on disk. The registry lives outside the workspace
+    /// (<c>~/.miller/workspaces.db</c>), so it survives the deletion and is the one place a fleet-wide view can
+    /// tell "this worktree is gone" from "this worktree is idle".
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="workspace"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="stableWorkspaceId"/> is null or blank.</exception>
+    internal static WorkspaceRegistryRow MarkRegistryMissing(
+        WorkspaceContext workspace, string stableWorkspaceId, string? reason = null)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
+
+        var (canonicalRoot, canonicalDbPath) = RequireCanonicalWorkspacePaths(workspace);
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        registry.UpsertSeen(
+            stableWorkspaceId,
+            WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
+            canonicalRoot,
+            canonicalDbPath,
+            WorkspaceRegistryState.Ready);
+        return registry.MarkMissing(stableWorkspaceId, reason);
     }
 
     private static (string CanonicalRoot, string CanonicalDbPath) RequireCanonicalWorkspacePaths(

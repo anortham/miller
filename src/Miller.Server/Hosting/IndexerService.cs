@@ -100,6 +100,11 @@ public sealed class IndexerService : BackgroundService
     private IndexerCore? _core;
     private string? _currentMillerDir;
 
+    // Whether the served root is still on disk, and whether the checkout occupying it is still the one this
+    // session bootstrapped against. Bound when leadership is won (a reader has no watchers to detach and no
+    // artifact to protect) and consulted once per debounce tick.
+    private WorkspaceRootPresenceMonitor? _rootPresence;
+
     // The scan-governor key for the workspace this session serves, captured while the bootstrap is bound. It is
     // the same value ScanGovernorKey.For yields, so a mid-rebind acquire (when the bootstrap getter throws) still
     // publishes under a root status/health actually look up instead of an invented one.
@@ -318,6 +323,7 @@ public sealed class IndexerService : BackgroundService
     private void StepDownLeadership(string? millerDir)
     {
         DisposeWatchers();
+        _rootPresence = null;
         lock (_opsGate)
             _ops = null; // stop offering inline write-through once we step down
         if (_lease is not null)
@@ -410,6 +416,7 @@ public sealed class IndexerService : BackgroundService
 
         if (_attachFileWatchers)
             AttachWatchers(canonicalRoot);
+        _rootPresence = new WorkspaceRootPresenceMonitor(canonicalRoot);
         // M8 §D2: this instance won the lease — flip the live log role to leader so every subsequent log line
         // (human + jsonl) is tagged role=leader, distinguishing it from the reader instances sharing the logs
         // directory. Readers leave the startup default (reader) untouched.
@@ -457,6 +464,7 @@ public sealed class IndexerService : BackgroundService
 
             IndexerLeadershipYieldDecision? yieldDecision = null;
             IndexerLeadershipHandoffDecision? handoffDecision = null;
+            bool rootReplaced = false;
             try
             {
                 // D4 leader side, decided BEFORE any work: a leader about to abdicate must not queue behind the
@@ -466,13 +474,19 @@ public sealed class IndexerService : BackgroundService
                 handoffDecision = _leadership.EvaluateLeaderHandoffRequests(millerDir, LogRequestDrainStats);
 
                 if (yieldDecision is null && handoffDecision is null)
-                    RunDrainTick(millerDir, workspace);
+                    rootReplaced = !RunDrainTick(millerDir, workspace);
             }
             catch (Exception ex)
             {
                 // DrainAndProcess isolates per-op failures itself; a throw here is a bug in routing, not an
                 // extract failure. Log and keep the loop alive — the watcher must not die on one bad tick.
                 _logger.LogError(ex, "Indexer drain tick failed; continuing.");
+            }
+
+            if (rootReplaced)
+            {
+                await RelinquishForReplacedRootAsync(millerDir, canonicalRoot, stoppingToken).ConfigureAwait(false);
+                return true; // re-enter the claim loop; the re-bootstrap has rebound the workspace
             }
 
             if (yieldDecision is { } decision)
@@ -527,10 +541,31 @@ public sealed class IndexerService : BackgroundService
             _core?.RequestWholeRepoScan(ScanIntent.ExtractorUpgrade);
     }
 
-    // One debounce tick's work: leader request files, then the coalesced drain. Runs only on a tick that is NOT
-    // abdicating, so `.git/HEAD` stays latched for the successor rather than being consumed and dropped.
-    private void RunDrainTick(string millerDir, WorkspaceContext workspace)
+    /// <summary>
+    /// One debounce tick's work: root presence, leader request files, then the coalesced drain. Runs only on a
+    /// tick that is NOT abdicating, so <c>.git/HEAD</c> stays latched for the successor rather than being
+    /// consumed and dropped. Returns false when a DIFFERENT checkout now occupies the root, which the caller
+    /// resolves by relinquishing leadership and re-bootstrapping — this method must not, because it runs inside
+    /// the leadership session it would be tearing down.
+    /// </summary>
+    private bool RunDrainTick(string millerDir, WorkspaceContext workspace)
     {
+        switch (_rootPresence?.Poll() ?? WorkspaceRootPresence.Present)
+        {
+            case WorkspaceRootPresence.Disappeared:
+                HandleRootDisappeared(workspace);
+                return true;
+            case WorkspaceRootPresence.Absent:
+                return true;
+            case WorkspaceRootPresence.Replaced:
+                return false;
+            case WorkspaceRootPresence.Restored:
+                HandleRootRestored(workspace);
+                break;
+            default:
+                break;
+        }
+
         bool headChanged;
         lock (_headGate)
         {
@@ -566,6 +601,72 @@ public sealed class IndexerService : BackgroundService
             if (processed)
                 TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
         }
+
+        return true;
+    }
+
+    // The root is gone. Watchers on a deleted path raise nothing useful and pin the dead directory, and every
+    // scan from here would tell julie to reconcile a tree that is not there — a delta against an empty root
+    // deletes every file in the artifact. So detach, publish the state, and let the tick keep polling: the
+    // lease stays held because a workspace with no root has nothing for a successor to index either.
+    private void HandleRootDisappeared(WorkspaceContext workspace)
+    {
+        _logger.LogWarning(
+            "Workspace root {Root} has disappeared; detaching the file watchers and marking the workspace " +
+            "missing. Indexing stays suspended until the root returns.",
+            workspace.CanonicalRoot ?? UnknownWorkspaceRootLabel);
+        DisposeWatchers();
+        TryMarkWorkspaceMissing(workspace);
+    }
+
+    // The root is back and carries the same checkout, so the loaded index still describes it — but every edit
+    // made while the watchers were detached is unobserved, which is exactly what a delta reconcile is for.
+    private void HandleRootRestored(WorkspaceContext workspace)
+    {
+        _logger.LogInformation(
+            "Workspace root {Root} is back and holds the same checkout; re-attaching the file watchers and " +
+            "reconciling the index against the tree.",
+            workspace.CanonicalRoot ?? UnknownWorkspaceRootLabel);
+        if (_attachFileWatchers && workspace.CanonicalRoot is { } canonicalRoot)
+            AttachWatchers(canonicalRoot);
+        _core?.RequestWholeRepoScan(ScanIntent.IncrementalReconcile);
+    }
+
+    private void TryMarkWorkspaceMissing(WorkspaceContext workspace)
+    {
+        if (workspace.WorkspaceId is not { } workspaceId)
+            return;
+
+        try
+        {
+            IndexBootstrapService.MarkRegistryMissing(
+                workspace, workspaceId, "The workspace root is no longer present on disk.");
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException
+                or ArgumentException or NotSupportedException)
+        {
+            _logger.LogWarning(ex,
+                "Could not record the missing workspace root in the registry; status views will keep showing " +
+                "the last known state.");
+        }
+    }
+
+    // A different checkout occupies the root, so the artifact, the in-memory index, and the freshness cursor all
+    // describe a tree that is gone. Leadership is released FIRST and completely: the re-bootstrap needs this
+    // workspace's writer lease to rebuild, and holding it here would deadlock the run against its own process.
+    private async Task RelinquishForReplacedRootAsync(
+        string millerDir, string canonicalRoot, CancellationToken stoppingToken)
+    {
+        _logger.LogWarning(
+            "Workspace root {Root} is occupied by a different checkout than the one this index was built from; " +
+            "releasing leadership and re-bootstrapping before serving another query.",
+            canonicalRoot);
+        ReleaseLeaderState(millerDir);
+        _rootPresence = null;
+        await _bootstrap
+            .WaitForRunAsync(_bootstrap.RebootstrapForReplacedRoot(canonicalRoot), stoppingToken)
+            .ConfigureAwait(false);
     }
 
     // Production own-version probe: locate the bundled binary once and ask it. Null on ANY failure (missing
@@ -619,6 +720,14 @@ public sealed class IndexerService : BackgroundService
         int requesterPid,
         DateTimeOffset requesterObservedAtUtc)
     {
+        ReleaseLeaderState(millerDir);
+        _leadership.BeginCooldown(requesterPid, requesterObservedAtUtc);
+    }
+
+    // Tear down every piece of leader-only state and release the lease. Identity is removed BEFORE the lease so
+    // no successor can have written its own file yet — a graceful release must not leave a stale "leader" behind.
+    private void ReleaseLeaderState(string millerDir)
+    {
         DisposeWatchers();
         lock (_opsGate)
         {
@@ -629,7 +738,6 @@ public sealed class IndexerService : BackgroundService
         MillerRole.SetReader();
         _lease?.Dispose();
         _lease = null;
-        _leadership.BeginCooldown(requesterPid, requesterObservedAtUtc);
     }
 
     private void RunStartupDeltaScan(WorkspaceContext workspace)
@@ -1141,12 +1249,20 @@ public sealed class IndexerService : BackgroundService
     }
 
     /// <summary>
-    /// Test seam: run ONE debounce tick's production body — leader request files, the governed peek/acquire, and
-    /// the drain — so a test can prove the real admission expression rather than a hand-supplied boolean. Not
-    /// used in production.
+    /// Test seam: run ONE debounce tick's production body — root presence, leader request files, the governed
+    /// peek/acquire, and the drain — so a test can prove the real admission expression rather than a
+    /// hand-supplied boolean. Returns what the production loop reads: false when the root was replaced. Not used
+    /// in production.
     /// </summary>
-    internal void RunDrainTickForTest(string millerDir) =>
+    internal bool RunDrainTickForTest(string millerDir) =>
         RunDrainTick(millerDir, _bootstrap.Workspace);
+
+    /// <summary>
+    /// Test seam: bind the root-presence monitor the debounce tick consults, exactly as winning leadership does,
+    /// so a test can drive disappearance and path reuse without a live <see cref="FileSystemWatcher"/>. Not used
+    /// in production.
+    /// </summary>
+    internal void SetRootPresenceMonitorForTest(WorkspaceRootPresenceMonitor? monitor) => _rootPresence = monitor;
 
     /// <summary>
     /// Test seam: invoked between the drain tick's scan-admission peek and the drain itself. The peek reads

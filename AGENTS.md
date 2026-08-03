@@ -268,6 +268,23 @@ scripts/test.ps1 all
   record, while ANY completed force clears a force-intent one — including a repair's, which `Satisfies` would
   strand forever and thereby downgrade every future automatic rebuild. Surfaced as the conditional
   `scan_failure` object in `workspace status`/`health` (`docs/contracts/cli-eros-v1.md`).
+- **A linked worktree's `.git` is a FILE (load-bearing).** `git worktree add` writes a `.git` FILE holding
+  `gitdir: <path>`, not a directory, so `Directory.Exists(<root>/.git)` is FALSE in every worktree — which meant
+  the dedicated `.git/HEAD` watch never attached there and every branch switch flooded the watcher buffer,
+  overflowed, and forced a rescan storm instead of the ONE reconcile that watch exists to produce. Resolve the
+  admin dir through [`GitWorktreeLayout`](src/Miller.Indexing/GitWorktreeLayout.cs) (no `git` subprocess), and
+  watch `GitDir`, never `CommonDir`: a linked worktree has its own HEAD, and the shared one reports the MAIN
+  checkout's branch switches. Anything else keying off a repo layout has the same trap.
+- **Root disappearance and path reuse.** `workspace_id` is SHA-256 of the canonical ROOT, so
+  `git worktree remove wt && git worktree add wt other-branch` yields the same id, the same registry row, and an
+  artifact whose recorded `root_path` still matches — a different tree served under the old index.
+  [`WorkspaceRootPresenceMonitor`](src/Miller.Indexing/WorkspaceRootPresenceMonitor.cs) polls the root once per
+  debounce tick: a disappearance detaches the watchers, marks the registry row `missing`, and SUSPENDS scanning
+  (a delta against an absent root deletes every file in the artifact); a return with a different
+  `WorkspaceRootIdentity` (git admin dir path + creation time) releases leadership and re-bootstraps at
+  `RootRebind`. Identity is compared ONLY across a disappearance — comparing every tick reads an ordinary branch
+  switch as a new checkout on any filesystem without a birth time. Missing evidence never counts as a
+  replacement, and the re-probe is bounded because a non-git workspace can never become known.
 - **Sensitive-root guard.** [`WorkspaceRootSafety`](src/Miller.Server/Tools/WorkspaceRootSafety.cs) refuses
   to index the home dir, a filesystem/drive root, or a system dir. It runs at the very top of `Program.cs`
   (before any filesystem touch) and in `workspace open`. Ported from julie's `root_safety.rs` — keep the

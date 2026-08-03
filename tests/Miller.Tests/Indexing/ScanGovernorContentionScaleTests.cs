@@ -26,6 +26,13 @@ namespace Miller.Tests.Indexing;
 /// blocked on admission is not answering <c>workspace status</c> at the same time, so a third-party observer
 /// necessarily reads the OWNER FILE and reports <c>holding_elsewhere</c>. That is the correct machine-visible
 /// fact for an out-of-process probe.</para>
+///
+/// <para><b>A spawned holder's admission window is arranged, never assumed.</b> A governed scan holds admission
+/// across the extract AND the content/search sidecar convergence that follows it, and a 40-file extract finishes
+/// in well under a second — so a test that spawns a scan and then acts on "the holder" is racing a process that
+/// has usually already exited. <see cref="Fixture.HoldContentCorpusWriteLock"/> takes the target's
+/// <c>content.lock</c> first, which parks the spawned scan inside its own admission for the content writer's 30s
+/// lock budget, and <see cref="Fixture.RequireParkedHolder"/> proves the park landed before the test acts.</para>
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class ScanGovernorContentionScaleTests
@@ -71,12 +78,15 @@ public sealed class ScanGovernorContentionScaleTests
     {
         using var fx = Fixture.Create();
 
+        using FileStream convergenceGate = fx.HoldContentCorpusWriteLock(fx.WorktreeA);
         Process holder = fx.StartOpenFull(fx.WorktreeA);
-        Assert.True(fx.WaitForOwnerFile(holder), "the spawned scan never took machine-wide admission");
+        fx.RequireParkedHolder(holder, fx.WorktreeA);
+
         holder.Kill(entireProcessTree: true);
         holder.WaitForExit();
 
         Assert.True(File.Exists(fx.Governor.OwnerFilePath), "the killed holder's advisory owner file should remain");
+        Assert.Equal(holder.Id, fx.Governor.TryReadOwner()?.Pid);
 
         using ScanGovernorLease? afterCrash = fx.Governor.TryAcquire(
             new ScanGovernorRequest(fx.WorktreeB, "after-crash", 1),
@@ -90,14 +100,14 @@ public sealed class ScanGovernorContentionScaleTests
     public void ObserverProcess_WhileAScanHoldsAdmission_ReportsTheMachineWideHolder()
     {
         using var fx = Fixture.Create();
-        fx.RunToCompletion(fx.StartOpenFull(fx.WorktreeA), "seed worktree A");
+        fx.RunSuccessfully(fx.StartOpenFull(fx.WorktreeA), "seed worktree A");
 
         using ScanGovernorLease? held = fx.Governor.TryAcquire(
             new ScanGovernorRequest(fx.WorktreeB, "scale-holder", 2), TimeSpan.Zero, CancellationToken.None);
         Assert.NotNull(held);
 
         Process observer = fx.StartStatusJson(fx.WorktreeA);
-        string output = fx.RunToCompletion(observer, "observer status");
+        string output = fx.RunSuccessfully(observer, "observer status");
 
         using JsonDocument document = JsonDocument.Parse(output);
         JsonElement governor = document.RootElement.GetProperty("scan_governor");
@@ -136,7 +146,7 @@ public sealed class ScanGovernorContentionScaleTests
     public void BlockedProcess_OnASeededRoot_ReportsLockBusy_AndKeepsServingTheExistingIndex()
     {
         using var fx = Fixture.Create();
-        fx.RunToCompletion(fx.StartOpenFull(fx.WorktreeA), "seed worktree A");
+        fx.RunSuccessfully(fx.StartOpenFull(fx.WorktreeA), "seed worktree A");
         string dbPath = Path.Combine(fx.WorktreeA, ".miller", "symbols.db");
         Assert.True(File.Exists(dbPath));
 
@@ -157,7 +167,7 @@ public sealed class ScanGovernorContentionScaleTests
         private readonly string _work;
         private readonly string _home;
         private readonly string _binary;
-        private readonly Dictionary<Process, StringBuilder> _output = new();
+        private readonly Dictionary<Process, CapturedOutput> _output = new();
 
         private Fixture(string work, string home, string binary, string worktreeA, string worktreeB)
         {
@@ -250,46 +260,105 @@ public sealed class ScanGovernorContentionScaleTests
                 info.Environment[ScanGovernor.WaitEnvVar] = seconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
             var process = Process.Start(info) ?? throw new InvalidOperationException("miller failed to start.");
-            var sink = new StringBuilder();
+            var sink = new CapturedOutput();
             _output[process] = sink;
-            process.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (sink) sink.AppendLine(e.Data); };
-            process.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (sink) sink.AppendLine(e.Data); };
+            process.OutputDataReceived += (_, e) => { if (e.Data is not null) sink.AppendStandardOutput(e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (e.Data is not null) sink.AppendStandardError(e.Data); };
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             return process;
         }
 
-        public bool Wait(Process process) => process.WaitForExit((int)ProcessBudget.TotalMilliseconds);
-
-        public bool WaitForOwnerFile(Process process)
+        /// <summary>
+        /// Wait for exit inside the budget, then drain the asynchronous output callbacks. The timeout overload
+        /// alone returns the instant the process dies, with buffered stdout still queued on the reader threads —
+        /// under a loaded full-suite run that hands the caller a TRUNCATED document to parse. Only the
+        /// parameterless overload joins the readers, and it cannot block here because the child redirects its own
+        /// <c>julie-extract</c> streams, so no grandchild ever inherits these pipes.
+        /// </summary>
+        public bool Wait(Process process)
         {
+            if (!process.WaitForExit((int)ProcessBudget.TotalMilliseconds))
+                return false;
+            process.WaitForExit();
+            return true;
+        }
+
+        /// <summary>
+        /// Take the target workspace's <c>content.lock</c>, the lock the content corpus writer needs to swap its
+        /// rebuilt DB into place. That write happens INSIDE the machine-wide scan admission a governed scan holds,
+        /// so a scan spawned afterwards parks there — still holding admission — for the writer's own 30s budget
+        /// instead of finishing a sub-second extract and releasing admission before the test can act on it.
+        /// </summary>
+        public FileStream HoldContentCorpusWriteLock(string root)
+        {
+            string millerDir = Path.Combine(root, ".miller");
+            Directory.CreateDirectory(millerDir);
+            return new FileStream(
+                Path.Combine(millerDir, ContentCorpusWriteLock.LockFileName),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+
+        /// <summary>
+        /// Block until <paramref name="holder"/> is PROVABLY parked while holding machine-wide admission: the
+        /// advisory owner record names it, its scan has already promoted a <c>symbols.db</c> (so the only work
+        /// left is the convergence <see cref="HoldContentCorpusWriteLock"/> gated), and a zero-wait probe from
+        /// this process is refused. Fails with the child's output when that premise cannot be established, so a
+        /// later assertion never blames the governor for a holder that was never holding.
+        /// </summary>
+        public void RequireParkedHolder(Process holder, string root)
+        {
+            string symbolsDb = Path.Combine(root, ".miller", "symbols.db");
             DateTimeOffset deadline = DateTimeOffset.UtcNow + ProcessBudget;
-            while (DateTimeOffset.UtcNow < deadline)
+            while (!holder.HasExited && DateTimeOffset.UtcNow < deadline)
             {
-                if (Governor.TryReadOwner() is { } owner && owner.Pid == process.Id)
-                    return true;
-                if (process.HasExited)
-                    return false;
+                if (Governor.TryReadOwner() is { } owner && owner.Pid == holder.Id && File.Exists(symbolsDb))
+                {
+                    RequireAdmissionHeldElsewhere(holder);
+                    return;
+                }
                 Thread.Sleep(25);
             }
-            return false;
+
+            Assert.Fail(
+                $"the spawned scan never parked while holding machine-wide admission (exited: {holder.HasExited}): " +
+                Output(holder));
         }
 
         public string RunToCompletion(Process process, string what)
         {
             Assert.True(Wait(process), Describe(process, what));
-            return Output(process);
+            return StandardOutput(process);
+        }
+
+        public string RunSuccessfully(Process process, string what)
+        {
+            string output = RunToCompletion(process, what);
+            Assert.True(process.ExitCode == 0, $"{what} exited {process.ExitCode}: {Output(process)}");
+            return output;
         }
 
         public string Describe(Process process, string what) =>
             $"{what} did not finish inside {ProcessBudget}: {Output(process)}";
 
-        private string Output(Process process)
+        private void RequireAdmissionHeldElsewhere(Process holder)
         {
-            StringBuilder sink = _output[process];
-            lock (sink)
-                return sink.ToString();
+            ScanGovernorLease? probe = Governor.TryAcquire(
+                new ScanGovernorRequest(WorktreeB, "scale-precondition", 1), TimeSpan.Zero, CancellationToken.None);
+            if (probe is null)
+                return;
+
+            probe.Dispose();
+            Assert.Fail(
+                "the spawned scan recorded itself as the scan-governor owner but did not hold admission: " +
+                Output(holder));
         }
+
+        private string StandardOutput(Process process) => _output[process].StandardOutput;
+
+        private string Output(Process process) => _output[process].Combined;
 
         public void Dispose()
         {
@@ -303,6 +372,43 @@ public sealed class ScanGovernorContentionScaleTests
             try { Directory.Delete(_work, recursive: true); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+        }
+
+        /// <summary>
+        /// One child's captured streams. Standard output is kept separately from the stdout+stderr transcript
+        /// because the tests parse a child's JSON document: a single interleaved buffer turns any stray warning
+        /// line into a parse failure, and the transcript is what a failure message needs.
+        /// </summary>
+        private sealed class CapturedOutput
+        {
+            private readonly object _gate = new();
+            private readonly StringBuilder _standardOutput = new();
+            private readonly StringBuilder _combined = new();
+
+            public string StandardOutput
+            {
+                get { lock (_gate) return _standardOutput.ToString(); }
+            }
+
+            public string Combined
+            {
+                get { lock (_gate) return _combined.ToString(); }
+            }
+
+            public void AppendStandardOutput(string line)
+            {
+                lock (_gate)
+                {
+                    _standardOutput.AppendLine(line);
+                    _combined.AppendLine(line);
+                }
+            }
+
+            public void AppendStandardError(string line)
+            {
+                lock (_gate)
+                    _combined.AppendLine(line);
+            }
         }
     }
 }

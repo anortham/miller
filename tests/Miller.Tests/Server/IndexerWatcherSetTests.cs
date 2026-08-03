@@ -42,6 +42,42 @@ public sealed class IndexerWatcherSetTests : IDisposable
     }
 
     [Fact]
+    public void Attach_LinkedWorktreeDotGitFile_WatchesTheWorktreesOwnGitDir()
+    {
+        string worktreeGitDir = LinkedWorktreeAdminDir("feature");
+        string worktree = Root("wt-feature");
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {worktreeGitDir}\n");
+
+        using IndexerWatcherSet watchers = IndexerWatcherSet.Attach(worktree, NoopCallbacks());
+
+        Assert.True(watchers.HasGitHeadWatcher);
+        Assert.Equal(worktreeGitDir, watchers.GitHeadWatchDirectory);
+    }
+
+    [Fact]
+    public void Attach_LinkedWorktree_DoesNotWatchTheSharedCommonDir()
+    {
+        string worktreeGitDir = LinkedWorktreeAdminDir("feature");
+        string worktree = Root("wt-feature");
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {worktreeGitDir}\n");
+
+        using IndexerWatcherSet watchers = IndexerWatcherSet.Attach(worktree, NoopCallbacks());
+
+        Assert.NotEqual(Path.Combine(Root("repo"), ".git"), watchers.GitHeadWatchDirectory);
+    }
+
+    [Fact]
+    public void Attach_DotGitFilePointingAtAMissingGitDir_SkipsHeadWatcher()
+    {
+        string worktree = Root("orphan");
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(_temp, "gone")}\n");
+
+        using IndexerWatcherSet watchers = IndexerWatcherSet.Attach(worktree, NoopCallbacks());
+
+        Assert.False(watchers.HasGitHeadWatcher);
+    }
+
+    [Fact]
     public void Attach_NestedWorkspace_CreatesAncestorIgnorePolicyWatchers()
     {
         string repo = Root("repo");
@@ -75,6 +111,14 @@ public sealed class IndexerWatcherSetTests : IDisposable
         string root = Path.Combine(_temp, name);
         Directory.CreateDirectory(root);
         return Path.GetFullPath(root);
+    }
+
+    private string LinkedWorktreeAdminDir(string name)
+    {
+        string adminDir = Path.Combine(Root("repo"), ".git", "worktrees", name);
+        Directory.CreateDirectory(adminDir);
+        File.WriteAllText(Path.Combine(adminDir, "commondir"), "../..\n");
+        return Path.GetFullPath(adminDir);
     }
 
     private static IndexerWatcherCallbacks NoopCallbacks() => new(

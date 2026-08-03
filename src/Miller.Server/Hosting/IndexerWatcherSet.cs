@@ -1,3 +1,5 @@
+using Miller.Indexing;
+
 namespace Miller.Server.Hosting;
 
 internal sealed record IndexerWatcherCallbacks(
@@ -22,6 +24,14 @@ internal sealed class IndexerWatcherSet : IDisposable
     public bool HasFileWatcher => _fileWatcher is not null;
     public bool HasDirectoryWatcher => _directoryWatcher is not null;
     public bool HasGitHeadWatcher => _gitHeadWatcher is not null;
+
+    /// <summary>
+    /// The git directory whose <c>HEAD</c> this set watches, or null when no HEAD watcher is attached. For a
+    /// linked worktree this is its own <c>.git/worktrees/&lt;name&gt;</c> admin directory, never the shared
+    /// common dir.
+    /// </summary>
+    public string? GitHeadWatchDirectory => _gitHeadWatcher?.Path;
+
     public int AncestorIgnorePolicyWatcherCount => _ancestorIgnorePolicyWatchers.Count;
 
     public static IndexerWatcherSet Attach(string canonicalRoot, IndexerWatcherCallbacks callbacks)
@@ -63,11 +73,16 @@ internal sealed class IndexerWatcherSet : IDisposable
         _directoryWatcher.Error += _callbacks.Error;
         _directoryWatcher.EnableRaisingEvents = true;
 
-        // A dedicated watch on .git/HEAD: a branch switch/checkout flips HEAD once; we force ONE scan reconcile
-        // instead of processing the thousands of per-file events a checkout produces. The .git dir is excluded
-        // from the main watcher by WatchPathFilter, so this is the only HEAD signal.
-        string gitDir = Path.Combine(canonicalRoot, ".git");
-        if (Directory.Exists(gitDir))
+        // A dedicated watch on this checkout's own HEAD: a branch switch/checkout flips HEAD once; we force ONE
+        // scan reconcile instead of processing the thousands of per-file events a checkout produces. The git dir
+        // is resolved through GitWorktreeLayout rather than assumed to be a `<root>/.git` DIRECTORY, because a
+        // linked worktree's `.git` is a FILE — Directory.Exists on it is false, so every worktree in the fleet
+        // ran with no HEAD watcher and paid the overflow-rescan storm this watch exists to prevent. The watched
+        // dir is the PER-WORKTREE admin dir, not CommonDir: a linked worktree has its own HEAD, and watching the
+        // shared one would report the main checkout's branch switches instead of this worktree's. WatchPathFilter
+        // skips `.git` in the main watcher and a linked worktree's admin dir usually sits outside the root
+        // entirely, so this stays the only HEAD signal either way.
+        if (GitWorktreeLayout.Resolve(canonicalRoot)?.GitDir is { } gitDir && Directory.Exists(gitDir))
         {
             _gitHeadWatcher = new FileSystemWatcher(gitDir, "HEAD")
             {
