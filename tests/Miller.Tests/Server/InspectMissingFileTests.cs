@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Support;
@@ -158,6 +160,90 @@ public sealed class InspectMissingFileTests : IDisposable
 
         Assert.Contains("diagnostic_code=no_file_symbols", compact, StringComparison.Ordinal);
         Assert.DoesNotContain("file_not_indexed", compact, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliInspect_PathAbsentFromTheIndex_ReportsFileNotIndexedJustLikeTheMcpTool()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+
+        (int code, string output) = Cli(dbPath, ["inspect", "src/Aplha.cs"]);
+
+        Assert.Equal(0, code);
+        Assert.Contains("diagnostic_code=file_not_indexed", output, StringComparison.Ordinal);
+        Assert.Contains("search(query=\"Aplha.cs\", mode=\"file\")", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliInspect_PathAbsentFromTheIndexAtOverviewDepth_PrefersFileNotIndexedOverTheLevelGuard()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+
+        (_, string output) = Cli(dbPath, ["inspect", "src/Aplha.cs", "--depth", "overview"]);
+
+        Assert.Contains("diagnostic_code=file_not_indexed", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("reference_layer_converging", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliInspect_PathAbsentFromTheIndex_NamesThePathAsNotIndexedInJson()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+
+        (_, string output) = Cli(dbPath, ["inspect", "src/Aplha.cs", "--json"]);
+
+        JsonElement diagnostic = JsonDocument.Parse(output).RootElement.GetProperty("diagnostic");
+        Assert.Equal("file_not_indexed", diagnostic.GetProperty("code").GetString());
+        Assert.Equal("expected_empty", diagnostic.GetProperty("class").GetString());
+    }
+
+    [Fact]
+    public void CliInspect_IndexedSymbolAtOverviewDepth_KeepsTheConvergingLevelGuard()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+
+        (_, string output) = Cli(dbPath, ["inspect", "Alpha", "--depth", "overview"]);
+
+        Assert.Contains("diagnostic_code=reference_layer_converging", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliInspect_IndexedFileCarryingNoSymbols_KeepsNoFileSymbols()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+        AddSymbolFreeIndexedFile(dbPath, "src/Empty.cs");
+
+        (_, string output) = Cli(dbPath, ["inspect", "src/Empty.cs"]);
+
+        Assert.Contains("diagnostic_code=no_file_symbols", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("file_not_indexed", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliInspect_IndexedFileWithSymbols_AttachesNoDiagnostic()
+    {
+        string dbPath = SymbolsLevelArtifact.Create(Workspace());
+
+        (_, string output) = Cli(dbPath, ["inspect", "src/Alpha.cs"]);
+
+        Assert.Contains("Alpha", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=", output, StringComparison.Ordinal);
+    }
+
+    private (int Code, string Out) Cli(string dbPath, string[] args)
+    {
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var context = new WorkspaceContext(
+            WorkspaceRoot: Path.GetDirectoryName(dbPath)!,
+            ExtractDbPath: dbPath,
+            TelemetryDbPath: Path.Combine(_dir, "telemetry.db"),
+            RegistryDbPath: Path.Combine(_dir, "workspaces.db"),
+            ToolsRoot: Path.Combine(_dir, ".tools"),
+            WorkspaceId: null);
+
+        int code = CliDispatch.Run(args, context, stdout, stderr);
+        return (code, stdout.ToString() + stderr.ToString());
     }
 
     private string Workspace() => Path.Combine(_dir, "symbols-level");

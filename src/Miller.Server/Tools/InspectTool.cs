@@ -239,32 +239,36 @@ public sealed class InspectTool
             continuation: null, boundAgentOutput: false);
     }
 
+    /// <summary>
+    /// The CLI's lookup entry point. <paramref name="diagnostic"/> is the same value the MCP tool renders, so a
+    /// CLI caller can reach the level guard's precedence rule: a tool diagnostic (a not-indexed path, an empty
+    /// file) wins, and the converging-level notice only fills in where there is none.
+    /// </summary>
     public static string RunLookup(
         ISymbolLookupIndex index, string dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
+        out ToolDiagnostic? diagnostic,
         string? compactBanner = null,
         string? continuation = null)
     {
-        ArgumentNullException.ThrowIfNull(index);
-        ArgumentException.ThrowIfNullOrWhiteSpace(target);
-        if (limit < 1) limit = 1;
-        InspectDepth parsedDepth = ParseDepth(depth);
-
-        var resolver = new SmartTargetResolver(index);
-        return RunCore(index, resolver, dbPath, workspaceRoot, target, parsedDepth, kind, scope, limit,
-            json, out resultCount, out _, compactBanner, WorkspaceId.FromCanonicalRoot(workspaceRoot),
-            continuation, boundAgentOutput: false);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        return RunLookupWithDiagnostics(
+            index, dbPath, workspaceRoot, WorkspaceId.FromCanonicalRoot(workspaceRoot),
+            target, depth, kind, scope, limit, json, continuation,
+            out resultCount, out diagnostic, compactBanner, boundAgentOutput: false);
     }
 
+    /// <inheritdoc cref="RunLookup"/>
     public static string RunSummary(
         ISymbolLookupIndex index, string dbPath, string workspaceRoot,
         string target, string? kind, string? scope, int limit, bool json,
         out int resultCount,
+        out ToolDiagnostic? diagnostic,
         string? compactBanner = null)
     {
         return RunLookup(index, dbPath, workspaceRoot, target, depth: "summary", kind, scope, limit,
-            json, out resultCount, compactBanner);
+            json, out resultCount, out diagnostic, compactBanner);
     }
 
     private static string RunCore(

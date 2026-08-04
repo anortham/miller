@@ -2033,38 +2033,45 @@ public static class CliDispatch
         string output;
         try
         {
-            if (string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase))
-            {
-                if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
-                    return 3;
+            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+                return 3;
 
+            bool rendersReferences =
+                string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase);
+            ToolDiagnostic? diagnostic;
+
+            if (rendersReferences)
+            {
                 output = InspectTool.RunLookup(
                     index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
                     target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _,
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic,
                     continuation: continuation);
-                // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs
-                // here; without this, a symbols-level artifact renders a definition whose empty refs/callers
-                // sections read as "nothing references this symbol". Only these depths render them — summary
-                // is complete at symbols level.
-                if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
-                    output = ToolDiagnosticRenderer.Attach(
-                        "inspect", output,
-                        IndexLevelGuard.Converging(
-                            "the refs/callers/callees sections are empty pending identifier extraction."),
-                        o.Has("json"));
             }
             else
             {
-                if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
-                    return 3;
-
                 output = InspectTool.RunSummary(
                     index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
                     target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _);
+                    limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic);
             }
+
+            // The CLI calls the pure tool cores directly, so the MCP wrapper's diagnostic handling never runs
+            // here. It carries two rules: the tool's own diagnostic reaches the caller at every depth (a typo'd
+            // path must answer file_not_indexed, not a bare "no indexed symbols"), and the converging notice
+            // fills in only where there is none, only at the depths that render refs/callers — summary is
+            // complete at symbols level.
+            if (diagnostic is null
+                && rendersReferences
+                && IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+            {
+                diagnostic = IndexLevelGuard.Converging(
+                    "the refs/callers/callees sections are empty pending identifier extraction.");
+            }
+
+            if (diagnostic is not null)
+                output = ToolDiagnosticRenderer.Attach("inspect", output, diagnostic, o.Has("json"));
         }
         catch (ToolDiagnosticException ex) when (
             ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
