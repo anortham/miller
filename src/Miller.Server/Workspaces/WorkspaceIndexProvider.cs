@@ -175,10 +175,12 @@ public sealed class WorkspaceIndexProvider
     }
 
     /// <summary>
-    /// The carried level describes the artifact generation this context actually serves, so it comes from the
-    /// snapshot index and never from a fresh read of <c>dbPath</c>: a full rebuild promotes a new artifact over
-    /// that path while the snapshot keeps serving the old one, and a level read from the newer file would report
-    /// a complete reference layer over data that has none.
+    /// The level comes from <c>dbPath</c> rather than from the snapshot index because every guarded consumer of a
+    /// carried level reads its reference EVIDENCE from that same path — the level and the evidence it describes
+    /// must come from one artifact. A repair scan (<c>RootRebind</c>, <c>SchemaHeal</c>, <c>CorruptionHeal</c>)
+    /// promotes a symbols-level artifact over a workspace whose holder still serves the pre-repair full index, so
+    /// a level taken from that snapshot would claim a complete reference layer over the empty one the consumer
+    /// actually reads.
     /// </summary>
     private WorkspaceReadContext ResolveCurrent()
     {
@@ -196,7 +198,7 @@ public sealed class WorkspaceIndexProvider
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId(),
-            IndexLevel: index.IndexLevel);
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     private WorkspaceArtifactContext ResolveCurrentArtifact()
@@ -216,9 +218,9 @@ public sealed class WorkspaceIndexProvider
     }
 
     /// <summary>
-    /// The carried level comes from the snapshot index, which is also the generation the search backend is keyed
-    /// to. Reading it off <c>dbPath</c> instead would describe whatever artifact a concurrent promotion left
-    /// there rather than the one this search reads.
+    /// Path-derived level, for the reason on <see cref="ResolveCurrent"/> — this context's consumer also reads
+    /// from <c>IndexDbPath</c>, and holding every resolver to one rule is what keeps a level and the evidence it
+    /// describes on the same artifact.
     /// </summary>
     private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
     {
@@ -235,13 +237,12 @@ public sealed class WorkspaceIndexProvider
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId(),
-            IndexLevel: index.IndexLevel);
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     /// <summary>
-    /// The carried level comes from the very index this context hands to the reader, so the two can never
-    /// disagree about whether the reference layer is extracted — which a per-request read of <c>dbPath</c>
-    /// allows the moment a promotion replaces the file under the live snapshot.
+    /// Path-derived level, for the reason on <see cref="ResolveCurrent"/> — the inspect guard this level arms
+    /// reads its refs/callers evidence from <c>IndexDbPath</c>, never from the index served here.
     /// </summary>
     private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
     {
@@ -257,7 +258,7 @@ public sealed class WorkspaceIndexProvider
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId(),
-            IndexLevel: index.IndexLevel);
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
