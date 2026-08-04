@@ -66,4 +66,86 @@ public sealed class SidecarStagingReaperTests : IDisposable
         Assert.True(File.Exists(searchDb));
         Assert.Empty(Directory.EnumerateFiles(_dir, ".search-build-*.db"));
     }
+
+    [Fact]
+    public void ReapWorkspaceStaging_ReclaimsBothPrefixesWithoutStartingASidecarBuild()
+    {
+        string staleSearch = Stage(".search-build-aaaa.db", TimeSpan.FromHours(2));
+        string staleContent = Stage(".content-build-bbbb.db", TimeSpan.FromHours(2));
+        string artifact = Stage("symbols.db", TimeSpan.FromHours(2));
+
+        int reaped = SidecarStagingReaper.ReapWorkspaceStaging(_dir, SidecarStagingReaper.DefaultStaleAge);
+
+        Assert.Equal(2, reaped);
+        Assert.False(File.Exists(staleSearch));
+        Assert.False(File.Exists(staleContent));
+        Assert.True(File.Exists(artifact));
+        Assert.False(File.Exists(Path.Combine(_dir, "search.db")));
+        Assert.False(File.Exists(Path.Combine(_dir, "content.db")));
+    }
+
+    [Fact]
+    public void ReapWorkspaceStaging_ReclaimsOrphansInAWorkspaceStuckInScanError()
+    {
+        string orphan = Stage(".search-build-stuck.db", TimeSpan.FromHours(2));
+        string failureJournal = Path.Combine(_dir, "scan-failure.json");
+        File.WriteAllText(
+            failureJournal,
+            """{"last_intent":"IncrementalReconcile","exit_code":2,"consecutive_failures":9}""");
+
+        int reaped = SidecarStagingReaper.ReapWorkspaceStaging(_dir, SidecarStagingReaper.DefaultStaleAge);
+
+        Assert.Equal(1, reaped);
+        Assert.False(File.Exists(orphan));
+        Assert.True(File.Exists(failureJournal));
+    }
+
+    [Fact]
+    public void ReapWorkspaceStaging_KeepsStagingFilesYoungerThanTheDefaultStaleAge()
+    {
+        string liveBuild = Stage(".search-build-live.db", TimeSpan.Zero);
+        string recent = Stage(".content-build-recent.db", TimeSpan.FromMinutes(14));
+        string stale = Stage(".search-build-dead.db", TimeSpan.FromMinutes(16));
+
+        int reaped = SidecarStagingReaper.ReapWorkspaceStaging(_dir, SidecarStagingReaper.DefaultStaleAge);
+
+        Assert.Equal(1, reaped);
+        Assert.True(File.Exists(liveBuild));
+        Assert.True(File.Exists(recent));
+        Assert.False(File.Exists(stale));
+    }
+
+    [Fact]
+    public void ReapWorkspaceStaging_AbsentOrUnnamedDirectoryReturnsZero()
+    {
+        Assert.Equal(0, SidecarStagingReaper.ReapWorkspaceStaging(null, SidecarStagingReaper.DefaultStaleAge));
+        Assert.Equal(0, SidecarStagingReaper.ReapWorkspaceStaging("   ", SidecarStagingReaper.DefaultStaleAge));
+        Assert.Equal(
+            0,
+            SidecarStagingReaper.ReapWorkspaceStaging(
+                Path.Combine(_dir, "absent"),
+                SidecarStagingReaper.DefaultStaleAge));
+    }
+
+    [Fact]
+    public void ReapWorkspaceStaging_SwallowsAReapFailureSoALifecycleCallCannotFail()
+    {
+        int reaped = SidecarStagingReaper.ReapWorkspaceStaging(
+            _dir,
+            SidecarStagingReaper.DefaultStaleAge,
+            (_, _, _, _) => throw new UnauthorizedAccessException("staging directory is not readable"));
+
+        Assert.Equal(0, reaped);
+    }
+
+    [Fact]
+    public void ReapWorkspaceStaging_StillReapsTheOtherPrefixWhenOneFails()
+    {
+        int reaped = SidecarStagingReaper.ReapWorkspaceStaging(
+            _dir,
+            SidecarStagingReaper.DefaultStaleAge,
+            (_, prefix, _, _) => prefix == ".search-build-" ? throw new IOException("held handle") : 1);
+
+        Assert.Equal(1, reaped);
+    }
 }

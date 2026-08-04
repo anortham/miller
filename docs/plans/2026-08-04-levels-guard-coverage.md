@@ -251,11 +251,11 @@
 **Approach:** Add a reap on a lifecycle path that runs even when scanning is broken — `workspace status`/`health`/`open` are the natural hooks since they already touch the workspace directory. Keep it strictly best-effort and non-throwing: this must never turn a status call into an error. Preserve the 15-minute stale age and the `exceptPath` shield; do not lower the age to make a test easier — inject the age instead. Do not add a background timer; a lifecycle hook is sufficient and keeps the CLI's no-background-service rule intact.
 
 **Acceptance criteria:**
-- [ ] Orphaned `.search-build-*.db` and `.content-build-*.db` older than the stale age are reaped by a workspace lifecycle call with no sidecar build
-- [ ] A workspace stuck in a scan-error state still reaps
-- [ ] Files newer than the stale age, and any live build's staging file, are never deleted
-- [ ] A reap failure (permissions, held handle) never fails the lifecycle call
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] Orphaned `.search-build-*.db` and `.content-build-*.db` older than the stale age are reaped by a workspace lifecycle call with no sidecar build — *proven at the lifecycle level, not only at the reaper, and mutation-checked: deleting the `RenderTargetStatus` hook makes both tests fail.*
+- [x] A workspace stuck in a scan-error state still reaps — *registry row driven into the real field state via `MarkError(..., "julie-extract reported a usage/argv error (exit 2)")`.*
+- [x] Files newer than the stale age, and any live build's staging file, are never deleted
+- [x] A reap failure (permissions, held handle) never fails the lifecycle call
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode — *scope extended by the lead to cover CLI parity: `miller workspace status/health/open` bypassed the MCP hook entirely. Reap placed before the `RequireIndex` and julie-extract `Locate` early bails rather than at the render sites, because a workspace with no artifact or no restored extractor exits before rendering — precisely the leak profile. Known gap: the five CLI call sites have no CLI-level test; they are one-line calls into the mutation-checked total function.*
 
 ---
 

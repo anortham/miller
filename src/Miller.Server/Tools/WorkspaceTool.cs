@@ -499,12 +499,29 @@ public sealed class WorkspaceTool
             OwnVerdict = ownWorkspace ? _indexer.EligibilityVerdict : null,
         };
 
+    // The sidecar writers reap their own staging orphans only as a build STARTS, so a workspace whose scans never
+    // reach them keeps every `.search-build-*.db` forever (1.18 GB observed in the field on a workspace stuck in a
+    // julie-extract exit-2 scan error). Lifecycle reads already touch that directory, and the reaper is total, so a
+    // reap here reclaims the leak without a background timer and cannot fail the call.
+    private void ReapStagingOrphans(TargetWorkspace target)
+    {
+        string? indexDbPath = target.IsCurrent ? _workspace.ExtractDbPath : target.Row?.IndexDbPath;
+        ReapStagingOrphans(string.IsNullOrWhiteSpace(indexDbPath) ? null : Path.GetDirectoryName(indexDbPath));
+    }
+
+    private static void ReapStagingOrphans(string? sidecarDirectory)
+    {
+        SidecarStagingReaper.ReapWorkspaceStaging(sidecarDirectory, SidecarStagingReaper.DefaultStaleAge);
+    }
+
     private WorkspaceOperationResult RenderTargetStatus(
         string? workspaceId, string? path, bool json)
     {
         TargetWorkspace target = ResolveTarget(workspaceId, path);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        ReapStagingOrphans(target);
 
         if (target.IsCurrent)
         {
@@ -570,6 +587,8 @@ public sealed class WorkspaceTool
         TargetWorkspace target = ResolveTarget(workspaceId, path);
         if (target.UnknownNote is { } note)
             return (Note(note, json), 0, TelemetryOutcome.Empty);
+
+        ReapStagingOrphans(target);
 
         if (target.IsCurrent)
         {
@@ -1214,6 +1233,10 @@ public sealed class WorkspaceTool
                     "workspace_open_refused",
                     "Another Miller writer is already serving the requested path."));
         }
+
+        // Under the writer lease, so no sibling build can be mid-write here; reap before the prime scan is admitted
+        // so a cold workspace reclaims its orphans even when the governor refuses and no build ever runs.
+        ReapStagingOrphans(millerDir);
 
         // SingleWriterLock -> ScanGovernor: machine-wide admission is taken inside the writer lease above and
         // held through MarkScanned below.

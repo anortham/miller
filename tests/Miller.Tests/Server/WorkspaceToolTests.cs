@@ -412,6 +412,42 @@ public sealed class WorkspaceToolTests : IDisposable
     }
 
     [Fact]
+    public void Status_ReapsStaleSidecarStagingOrphansWithoutASidecarBuild()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        var (tool, _, _, root) = BuildTool(fx, builtRevision: 4, workspaceId: Ws);
+        string orphan = StageStagingFile(root, ".search-build-orphan.db", TimeSpan.FromHours(2));
+        string liveBuild = StageStagingFile(root, ".content-build-live.db", TimeSpan.Zero);
+
+        tool.Workspace();
+
+        Assert.False(File.Exists(orphan));
+        Assert.True(File.Exists(liveBuild));
+        Assert.False(File.Exists(Path.Combine(root, "search.db")));
+    }
+
+    [Fact]
+    public void Status_ReapsStaleSidecarStagingOrphansWhenTheWorkspaceIsStuckInAScanError()
+    {
+        using var fx = CreateSynth(revision: 4, workspaceId: Ws);
+        WorkspaceToolHarness harness = BuildHarness(fx, builtRevision: 4, workspaceId: Ws);
+        harness.Registry.MarkError(Ws, "julie-extract reported a usage/argv error (exit 2)");
+        string orphan = StageStagingFile(harness.Root, ".search-build-stuck.db", TimeSpan.FromHours(2));
+
+        harness.Tool.Workspace();
+
+        Assert.False(File.Exists(orphan));
+    }
+
+    private static string StageStagingFile(string sidecarDir, string name, TimeSpan age)
+    {
+        string path = Path.Combine(sidecarDir, name);
+        File.WriteAllText(path, "staging content");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow - age);
+        return path;
+    }
+
+    [Fact]
     public void Status_WhenRebindRunning_RendersCompactNotice()
     {
         using var fx = CreateSynth(revision: 4, workspaceId: Ws);

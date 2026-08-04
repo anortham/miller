@@ -2600,6 +2600,16 @@ public static class CliDispatch
         return 0;
     }
 
+    // CLI mirror of the MCP lifecycle hook (WorkspaceTool.ReapStagingOrphans): the sidecar writers reap staging
+    // orphans only as a build STARTS, so a workspace whose scans never reach them needs a lifecycle path to
+    // reclaim the disk. `miller workspace status` is the likeliest way a person pokes at a stuck workspace.
+    private static void ReapStagingOrphans(string? indexDbPath)
+    {
+        SidecarStagingReaper.ReapWorkspaceStaging(
+            string.IsNullOrWhiteSpace(indexDbPath) ? null : Path.GetDirectoryName(indexDbPath),
+            SidecarStagingReaper.DefaultStaleAge);
+    }
+
     private static int WorkspaceStatus(
         WorkspaceContext ctx, string? id, string? path, bool json, TextWriter outw, TextWriter err)
     {
@@ -2622,6 +2632,7 @@ public static class CliDispatch
                 err.WriteLine(ex.Message);
                 return 2;
             }
+            ReapStagingOrphans(row.IndexDbPath);
             WorkspaceFacts selectedFacts = WorkspaceFactsAssembler.FromRegisteredRow(
                     registry,
                     row,
@@ -2640,6 +2651,8 @@ public static class CliDispatch
         }
 
         // Default: the current workspace. Enrich from its registry row when present, else read the local db.
+        // Reap ahead of the RequireIndex bail below: a workspace with no artifact at all is exactly the leak case.
+        ReapStagingOrphans(ctx.ExtractDbPath);
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
@@ -2706,6 +2719,7 @@ public static class CliDispatch
                 return 2;
             }
 
+            ReapStagingOrphans(row.IndexDbPath);
             WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
                 registry,
                 row,
@@ -2725,6 +2739,8 @@ public static class CliDispatch
             return 0;
         }
 
+        // Reap ahead of the RequireIndex bail below: a workspace with no artifact at all is exactly the leak case.
+        ReapStagingOrphans(ctx.ExtractDbPath);
         WorkspaceRegistryRow? currentRow = FindCurrentWorkspaceRow(registry, ctx);
         if (currentRow is not null)
         {
@@ -3240,6 +3256,10 @@ public static class CliDispatch
         string dbPath = Path.Combine(millerDir, "symbols.db");
         string id = WorkspaceId.FromCanonicalRoot(canonicalRoot);
         string display = WorkspaceId.Display(canonicalRoot, id);
+
+        // Reap ahead of the julie-extract locate below: a machine with no restored extractor never builds a
+        // sidecar here, which is precisely the workspace that would otherwise keep its orphans forever.
+        ReapStagingOrphans(dbPath);
 
         // Locate julie-extract BEFORE registering — absent ⇒ exit 3 with the restore message and NO orphan row.
         JulieExtractRunner runner;

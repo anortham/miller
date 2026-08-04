@@ -9,6 +9,42 @@ public static class SidecarStagingReaper
 {
     public static readonly TimeSpan DefaultStaleAge = TimeSpan.FromMinutes(15);
 
+    private static readonly string[] StagingPrefixes = [".search-build-", ".content-build-"];
+
+    /// <summary>
+    /// Best-effort reap of every sidecar staging prefix in <paramref name="sidecarDirectory"/> for a caller
+    /// that is NOT starting a build. The sidecar writers reap only as a build begins, so a workspace whose
+    /// scans never reach them — one stuck in a scan error, say — never reclaims its own orphans; workspace
+    /// lifecycle paths call this instead. Never throws: an unreadable directory or a held handle must leave
+    /// the lifecycle call intact.
+    /// </summary>
+    public static int ReapWorkspaceStaging(string? sidecarDirectory, TimeSpan staleAge) =>
+        ReapWorkspaceStaging(sidecarDirectory, staleAge, ReapStale);
+
+    internal static int ReapWorkspaceStaging(
+        string? sidecarDirectory,
+        TimeSpan staleAge,
+        Func<string, string, TimeSpan, string?, int> reap)
+    {
+        if (string.IsNullOrWhiteSpace(sidecarDirectory))
+            return 0;
+
+        int reaped = 0;
+        foreach (string prefix in StagingPrefixes)
+        {
+            try
+            {
+                reaped += reap(sidecarDirectory, prefix, staleAge, null);
+            }
+            catch (Exception)
+            {
+                // One unreadable prefix must not cost the other prefix its reap, nor fail the caller.
+            }
+        }
+
+        return reaped;
+    }
+
     /// <summary>
     /// Best-effort delete of <paramref name="prefix"/><c>*.db</c> files in
     /// <paramref name="directory"/> not written for at least <paramref name="staleAge"/>.
