@@ -395,6 +395,24 @@ principle, do not weaken that test.
 `tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`. Part C additionally owns
 `src/Miller.Indexing/ReferenceExportReader.cs`, the `references export` call site in
 `src/Miller.Server/Cli/CliDispatch.cs`, `docs/contracts/cli-eros-v1.md`, and the CLI export guard tests.
+**Ownership extended mid-flight by the lead** to `docs/contracts/references-export-v2.md` — the authoritative
+row-schema doc, whose field table is explicitly exhaustive and order-pinned. The original ownership list omitted
+it, which would have shipped a per-row field that the governing contract does not document.
+
+**LEAD RULING on the schema questions Part C forces** (contract calls, not worker calls):
+- `schema_version` stays `2`. A bump is a breaking contract event needing explicit user approval, which this run
+  does not have; `cli-eros-v1.md` already permits additive growth.
+- `index_level` is appended LAST, after `workspace_revision`, because the doc pins field ORDER — appending leaves
+  every documented field at its documented position.
+- It is emitted UNCONDITIONALLY, on every row at every level, matching the `artifact_id`/`workspace_revision`
+  constant-metadata idiom. A field that appears only when degraded is not a reliable in-band signal: a consumer
+  cannot distinguish "absent because full level" from "absent because older Miller".
+- **Consequence, accepted deliberately:** `references export` output is therefore NOT byte-identical at full
+  level — the single intentional exception to this plan's byte-identical guarantee, taken because an in-band
+  signal that exists only when degraded is useless. Every other surface stays byte-identical, and the exception
+  must not leak beyond this one feed.
+- `docs/contracts/cli-eros-v1.md:291-293` currently asserts `references export` is unwarned and must be gated on
+  `index_level` "not on stderr". Part C falsifies both halves; that sentence is REPLACED, not appended beside.
 
 **Serialization required:** Yes — runs alone after Lane L1 completes.
 
@@ -420,16 +438,25 @@ connection `Read` already holds — do not open a second one. Preserve fail-open
 non-facts sections.
 
 **Acceptance criteria:**
-- [ ] `workspace health` reports `StructuralFacts` as unavailable-pending-upgrade at symbols level, not as an available empty section
-- [ ] The other five health sections are unchanged at symbols level
-- [ ] MCP, CLI, and dashboard all get the fix from the single reader-level gate (no per-renderer duplication)
-- [ ] One shared symbols-level predicate remains; `IndexLevelGuard` delegates and `MetricSnapshotAggregates`' private copy is gone
-- [ ] Against a full-level artifact all health output is byte-identical to pre-change, and `Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros` still passes unmodified
-- [ ] (Part C) `references export` warns on stderr at symbols level that identifier-derived references are absent, stdout stays a pure JSONL stream, and the exit code is unchanged
-- [ ] (Part C) Emitted `references export` rows carry an additive `index_level` field, so a consumer reading stdout alone can detect the partial feed in-band; line-by-line parsing is unaffected
-- [ ] (Part C) `symbols export` and `complexity export` stay unwarned at symbols level, and `references export` is unwarned at full level
-- [ ] (Part C) `docs/contracts/cli-eros-v1.md` records the `references export` warning alongside the `patterns export` one
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] `workspace health` reports `StructuralFacts` as unavailable-pending-upgrade at symbols level, not as an available empty section — `WorkspaceHealthReader.cs:20`, reason names the `workspace full` upgrade
+- [x] The other five health sections are unchanged at symbols level — pinned by `Read_AtSymbolsLevel_LeavesTheFivePopulatedSectionsAvailable`
+- [x] MCP, CLI, and dashboard all get the fix from the single reader-level gate (no per-renderer duplication) — all three consume `WorkspaceHealthReader.Read` and branch on `Available`; lead confirmed the consumer set independently (`WorkspaceTool.cs:469,620`, `CliDispatch.cs:2840,3102`, `DashboardData.cs:1299`)
+- [x] One shared symbols-level predicate remains; `IndexLevelGuard` delegates and `MetricSnapshotAggregates`' private copy is gone — plus a FOURTH copy the plan had not spotted, inlined in `IndexLevels.UpgradeOwed`, folded into the same predicate
+- [x] Against a full-level artifact all health output is byte-identical to pre-change, and `Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros` still passes unmodified — verified unmodified in the diff, not merely reported
+- [x] (Part C) `references export` warns on stderr at symbols level that identifier-derived references are absent, stdout stays a pure JSONL stream, and the exit code is unchanged — `ArtifactExport` invokes `levelWarning` before the rows and returns `0` unconditionally, so purity and exit code are structural
+- [x] (Part C) Emitted `references export` rows carry an additive `index_level` field, so a consumer reading stdout alone can detect the partial feed in-band; line-by-line parsing is unaffected — appended last, read once, threaded through `RenderRow` like `artifact_id`
+- [x] (Part C) `symbols export` and `complexity export` stay unwarned at symbols level, and `references export` is unwarned at full level — absence pinned by `CliSymbolsExport_AtSymbolsLevel_CarriesNoIndexLevelField` and `CliComplexityExport_AtSymbolsLevel_StaysUnwarned`, so a later edit cannot spread the field silently
+- [x] (Part C) `docs/contracts/cli-eros-v1.md` records the `references export` warning alongside the `patterns export` one, and its now-false claim at `:291-293` that the feed is unwarned is replaced rather than left standing — lead verified the old sentence is gone from the diff, not merely contradicted
+- [x] (Part C) `docs/contracts/references-export-v2.md` documents `index_level` in its field table, appended last, with `schema_version` still `2`
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode — `serial-worker-commit` `30fc5d82`, 10 files matching the extended ownership exactly; lead independently re-ran ReferencesExportLevelGuard + WorkspaceHealthReader + WorkspaceRender + MetricHistory = **118 passed / 0 failed**
+
+**Accepted consequence (lead decision, escalated by the worker):** an unavailable `StructuralFacts` section adds a
+`structural_facts_unavailable` warning, so a symbols-level workspace's health verdict moves `Ready` →
+`UsableWithWarnings`. Accepted. The severity is `usable_with_warnings`, NOT `degraded`
+(`WorkspaceHealthFacts.cs:269`), so the verdict never reaches `Degraded`, and this matches the precedent stated
+at `WorkspaceHealthFacts.cs:314` — queueing behind the scan governor is "the governor working as DESIGNED, so it
+is usable_with_warnings, never degraded." A symbols-level artifact is the same shape: a by-design transient
+state, honestly reported, that must not flip a fleet workspace into `Degraded`. Full level is untouched.
 
 ---
 

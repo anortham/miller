@@ -407,3 +407,23 @@ Staged to .tools.tmp then atomically mv'd, so a concurrent worker build could ne
 Confirmed gitignored (.gitignore:24) so it can never be staged. Verified ScaleTestSupport.RepoRoot() walks up
 from the test assembly to Miller.slnx, which resolves to THIS worktree — so RequireJulieServer() finds this copy
 and the Scale gate will genuinely RUN rather than skip.
+Task 9: complete (serial-worker-commit 30fc5d82, Lead inline review clean). 10 files == the extended ownership.
+  Lead re-ran ReferencesExportLevelGuard|WorkspaceHealthReader|WorkspaceRender|MetricHistory = 118 passed / 0 failed.
+  Lead caught two brief gaps mid-flight and sent them BEFORE the worker committed, so no fix round was needed:
+  (1) ownership omitted docs/contracts/references-export-v2.md, the authoritative row-schema doc whose field table
+  is exhaustive AND order-pinned — a per-row field would have shipped undocumented there; (2) cli-eros-v1.md:291-293
+  asserted references export is unwarned and should be gated "not on stderr", which Part C falsifies on both counts.
+  Lead ruled the three contract questions rather than let the worker guess: schema_version stays 2 (a bump is a
+  visible contract event via capabilities --json, needs user approval), field appended LAST (doc pins order), emitted
+  UNCONDITIONALLY (a field present only when degraded is indistinguishable from an older Miller binary). The worker
+  had independently reached all three on the same reasoning before receiving the message.
+  ACCEPTED EXCEPTION: references export output is NOT byte-identical at full level (rows gain a field). The single
+  intentional exception to the plan's byte-identical guarantee, confined to this one feed; every other surface holds.
+  Worker found a FOURTH copy of the symbols-level predicate the plan missed — inlined in IndexLevels.UpgradeOwed,
+  three lines below the new hoisted one. Folded in. Also verified empirically rather than assumed that the feed is
+  partial-not-empty: 1 row at symbols level with no identifier_direct, 2 rows at full level with it.
+  Escalated verdict change ACCEPTED by lead: symbols-level health verdict moves Ready -> UsableWithWarnings.
+  Severity is usable_with_warnings NOT degraded (WorkspaceHealthFacts.cs:269), so it never reaches Degraded, matching
+  the stated precedent at :314 (scan-governor queueing = "working as DESIGNED, usable_with_warnings, never degraded").
+  Worker reported one transient failure in ContentCorpusContextReaderTests that did not reproduce across 2 full-suite
+  + 3 isolated runs; touches no shared path with this diff. Watch for it in the branch gate.
