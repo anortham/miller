@@ -21,9 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # The 5k+ fast cases complete in about 35s wall time on hosted Ubuntu. Keep the local wrapper at 30s,
-      # but give the slower hosted runner measured headroom while retaining a hard runaway tripwire.
-      FAST_BUDGET_SECONDS: '45'
+      # Measured hosted-Ubuntu wall times for the 5.8k fast cases span 30-58s across identical suites
+      # (runner variance, 2026-08-03 runs). Keep the local wrapper at 30s; the CI ceiling sits above the
+      # measured worst case while still catching a true runaway.
+      FAST_BUDGET_SECONDS: '90'
     steps:
       - uses: actions/checkout@v7.0.0
         with:

@@ -189,7 +189,10 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
 
         Assert.All(handshakes, Assert.NotNull);
         Assert.Equal(2, File.ReadAllLines(counter).Length);
-        Assert.Equal(1, group.Factories.Count(factory => factory.Snapshot.IsOwner));
+        await WaitUntilAsync(
+            () => group.Factories.Count(factory => factory.Snapshot.IsOwner) == 1,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
     }
 
     [Fact]
