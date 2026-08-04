@@ -178,62 +178,70 @@ public sealed class WorkspaceIndexProvider
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         var resolver = new SmartTargetResolver(index);
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceReadContext(
             index,
             resolver,
-            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            dbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
             _currentIndexFresh(revision),
             "current",
             WarningText: null,
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     private WorkspaceArtifactContext ResolveCurrentArtifact()
     {
         (_, long revision) = _holder.Snapshot();
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceArtifactContext(
-            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            dbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
             _currentIndexFresh(revision),
             "current",
             WarningText: null,
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
         ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, revision);
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceSymbolSearchContext(
             searchIndex,
-            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            dbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
             _currentIndexFresh(revision),
             "current",
             WarningText: null,
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
     {
         (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
+        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceSymbolReadContext(
             index,
-            _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath,
+            dbPath,
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
             _currentIndexFresh(revision),
             "current",
             WarningText: null,
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
@@ -269,7 +277,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+            row.DisplayId,
+            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
     }
 
     private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
@@ -291,7 +300,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId,
-            IsCurrent: false);
+            IsCurrent: false,
+            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
     }
 
     private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, bool ensureFresh)
@@ -315,7 +325,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId,
-            IsCurrent: false);
+            IsCurrent: false,
+            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
     }
 
     private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, bool ensureFresh)
@@ -333,9 +344,15 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+            row.DisplayId,
+            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
     }
 
+    // WorkspaceContentSearchContext and WorkspaceTextContentSearchContext deliberately carry NO IndexLevel,
+    // unlike every other context this provider returns: they serve content.db, which the levels split does not
+    // touch — a symbols-level scan builds the same content corpus a full-level one does, so no content read can
+    // report an unextracted layer as an empty repository. Recorded so the asymmetry reads as a boundary rather
+    // than an omission.
     private WorkspaceContentSearchContext ResolveCurrentContentSearch()
     {
         // No content index lives in the holder (the bootstrap seeds only the full repository index), so the
@@ -434,7 +451,8 @@ public sealed class WorkspaceIndexProvider
             _currentIndexFresh(revision),
             "current",
             WarningText: null,
-            DisplayId: CurrentDisplayId());
+            DisplayId: CurrentDisplayId(),
+            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
     }
 
     private WorkspaceRegionSearchContext ResolveRegisteredRegionSearch(string workspaceId, bool ensureFresh)
@@ -454,7 +472,8 @@ public sealed class WorkspaceIndexProvider
             WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId);
+            row.DisplayId,
+            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
     }
 
     /// <summary>

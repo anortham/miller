@@ -16,10 +16,19 @@ namespace Miller.Server.Tools;
 /// </summary>
 internal static class IndexLevelGuard
 {
+    /// <summary>
+    /// Whether an artifact at <paramref name="indexLevel"/> has a reference/facts layer that has not been
+    /// extracted yet. This is the form every read tool should ask, because the level travels on the read context
+    /// (read from the artifact path) and so answers the same way for a cross-workspace read, which is served by a
+    /// lean FTS index rather than a <see cref="MillerRepositoryIndex"/>.
+    /// </summary>
+    public static bool ReferenceLayerConverging(string? indexLevel) =>
+        IsSymbolsLevel(indexLevel);
+
     /// <summary>Whether <paramref name="index"/> serves a symbols-level artifact whose reference/facts layers
     /// have not been extracted yet.</summary>
     public static bool ReferenceLayerConverging(MillerRepositoryIndex index) =>
-        IsSymbolsLevel(index.IndexLevel);
+        ReferenceLayerConverging(index.IndexLevel);
 
     /// <summary>The raw-level form for callers that read the artifact directly (patterns, CLI surfaces).</summary>
     public static bool IsSymbolsLevel(string? indexLevel) =>

@@ -87,12 +87,12 @@
 **Approach:** Add the level to the context records rather than to the index objects — availability of a *layer* is a property of the artifact, not of the search implementation. Keep `ExtractIndexLevelReader`'s existing tolerance (absent key/table/file ⇒ `full`) so a broken artifact degrades to "no levels behavior". Keep the old `ReferenceLayerConverging(MillerRepositoryIndex)` overload delegating to the new string overload so Tasks 2/4/5 can migrate call sites without a flag day. Read the level once per context construction, not per guard call — these are per-request hot paths. The fixture helper goes in `tests/Miller.Tests/Support/` (namespace `Miller.Tests.Support`, alongside `StubJulieExtract`/`FakeSemanticSidecar`); it must NOT spawn `julie-extract` (it writes SQLite directly), so it stays in the fast suite with no Scale trait.
 
 **Acceptance criteria:**
-- [ ] Every read context returned by `WorkspaceIndexProvider` exposes the artifact's index level, populated from the artifact path
-- [ ] `IndexLevelGuard` exposes an overload that decides from the carried level string, with the `MillerRepositoryIndex` overload delegating to it
-- [ ] A cross-workspace read against a symbols-level artifact reports converging, proven by a test that goes through `ResolveRegisteredSymbolRead`
-- [ ] `SymbolsLevelArtifact.Create` / `.CreateFull` produce artifacts matching the verified table shape above
-- [ ] A full-level artifact reports NOT converging through both context paths
-- [ ] Worker-scope verification passes and the change is committed per commit mode
+- [x] Every read context returned by `WorkspaceIndexProvider` exposes the artifact's index level, populated from the artifact path — *5 of the 7 context types, at 10 construction sites. `WorkspaceContentSearchContext` and `WorkspaceTextContentSearchContext` are deliberately excluded and the reason is recorded at `WorkspaceIndexProvider.cs:351`: they serve `content.db`, which the levels split does not touch, so no content read can report an unextracted layer as an empty repository. First delivery covered only 2 of 7, which would have forced Tasks 2 and 5 into inline artifact reads while Task 4 used the carried level — the same two-detection-style split this plan removes. Corrected in fix round 1.*
+- [x] `IndexLevelGuard` exposes an overload that decides from the carried level string, with the `MillerRepositoryIndex` overload delegating to it
+- [x] A cross-workspace read against a symbols-level artifact reports converging, proven by a test that goes through `ResolveRegisteredSymbolRead`
+- [x] `SymbolsLevelArtifact.Create` / `.CreateFull` produce artifacts matching the verified table shape above
+- [x] A full-level artifact reports NOT converging through both context paths
+- [x] Worker-scope verification passes and the change is committed per commit mode
 
 ---
 
