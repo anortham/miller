@@ -197,6 +197,14 @@ public sealed partial class ContextTool
                     entry_symbols,
                     ToolOutputBudget.ContextMcpMaxTokens);
             }
+            else if (IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
+            {
+                // Both reference modes read reference evidence — usage enrichment for usage, outgoing evidence
+                // for off — so at symbols level the bundle silently drops it and reads as "nothing uses this".
+                IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
+                diagnostic = IndexLevelGuard.Converging(
+                    "the bundle carries no usage or outgoing-reference evidence pending identifier extraction.");
+            }
 
             if (telemetry is not null)
             {

@@ -100,11 +100,11 @@ public sealed class InspectTool
 
             // Only the refs-dependent depths degrade: summary is complete at symbols level, while
             // overview/full would otherwise render a definition with silently-absent refs/callers sections —
-            // indistinguishable from "nothing references this symbol".
+            // indistinguishable from "nothing references this symbol". The level travels on the context because a
+            // cross-workspace read is served by a lean projection, not a MillerRepositoryIndex.
             if (parsedDepth is not InspectDepth.Summary
                 && diagnostic is null
-                && context.Index is MillerRepositoryIndex repositoryIndex
-                && IndexLevelGuard.ReferenceLayerConverging(repositoryIndex))
+                && IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {
                 IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
                 diagnostic = IndexLevelGuard.Converging(

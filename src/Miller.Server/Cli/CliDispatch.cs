@@ -2014,6 +2014,16 @@ public static class CliDispatch
                     target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
                     limit: o.Int("limit", 50), json: o.Has("json"), out _,
                     continuation: continuation);
+                // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs
+                // here; without this, a symbols-level artifact renders a definition whose empty refs/callers
+                // sections read as "nothing references this symbol". Only these depths render them — summary
+                // is complete at symbols level.
+                if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+                    output = ToolDiagnosticRenderer.Attach(
+                        "inspect", output,
+                        IndexLevelGuard.Converging(
+                            "the refs/callers/callees sections are empty pending identifier extraction."),
+                        o.Has("json"));
             }
             else
             {
@@ -2133,6 +2143,17 @@ public static class CliDispatch
                 entrySymbols,
                 int.MaxValue);
             output = ToolDiagnosticRenderer.Attach("context", output, diagnostic, json);
+        }
+        // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs here;
+        // both reference modes read reference evidence, so a symbols-level artifact silently drops usage
+        // enrichment from a bundle that otherwise looks complete.
+        else if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+        {
+            output = ToolDiagnosticRenderer.Attach(
+                "context", output,
+                IndexLevelGuard.Converging(
+                    "the bundle carries no usage or outgoing-reference evidence pending identifier extraction."),
+                json);
         }
         outw.WriteLine(output);
         return 0;
