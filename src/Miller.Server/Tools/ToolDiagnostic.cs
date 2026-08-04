@@ -119,11 +119,33 @@ public sealed record ToolDiagnostic(
                     [new ToolDiagnosticAction("workspace(operation=\"health\")", "inspect artifact availability")]),
             ArgumentException =>
                 Refusal("invalid_request", exception.Message),
+            KeyNotFoundException when IsWorkspaceSelectorMistake(exception.Message) =>
+                Refusal("invalid_request", exception.Message),
+            InvalidOperationException when IsMarkerListMistake(exception.Message) =>
+                Refusal("invalid_request", exception.Message),
             NotSupportedException =>
                 Unsupported("unsupported", exception.Message),
             _ => InternalFailure("internal_failure", exception.Message),
         };
     }
+
+    /// <summary>
+    /// Recognizes the selector rejections thrown by <c>WorkspaceRegistrySelector.Resolve</c>. The rule is keyed to
+    /// those messages rather than to the exception type because a bare <see cref="KeyNotFoundException"/> is a
+    /// genuine internal fault and must keep classifying as one; <c>TelemetryScope.ClassifyError</c> keys off the
+    /// same prefix.
+    /// </summary>
+    private static bool IsWorkspaceSelectorMistake(string message) =>
+        message.StartsWith("unknown workspace selector", StringComparison.OrdinalIgnoreCase)
+        || message.StartsWith("ambiguous workspace selector", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Recognizes the marker-vocabulary rejection thrown by <c>MarkerSearch.ParseMarkers</c>. The rule is keyed to
+    /// that message rather than to the exception type because a bare <see cref="InvalidOperationException"/> is a
+    /// genuine internal fault and must keep classifying as one.
+    /// </summary>
+    private static bool IsMarkerListMistake(string message) =>
+        message.StartsWith("markers must be", StringComparison.OrdinalIgnoreCase);
 
     public string ClassName() => Class switch
     {

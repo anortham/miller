@@ -56,9 +56,44 @@ public static class ToolDiagnosticRenderer
         }
         else
         {
-            telemetry.SetErrorCategory(diagnostic.Code);
+            if (!HasClassifiedError(telemetry))
+                telemetry.SetErrorCategory(diagnostic.Code);
             telemetry.UseMcpErrorChannel = true;
         }
+    }
+
+    /// <summary>
+    /// <c>TelemetryScope.ClassifyError</c> records this when it cannot place an exception, so it says no more than
+    /// the diagnostic code does and must not block the diagnostic-code fallback below.
+    /// </summary>
+    private const string UnclassifiedErrorCategory = "internal";
+
+    /// <summary>
+    /// True when the telemetry scope already carries an error classification more specific than the diagnostic
+    /// code. <c>TelemetryScope.SetError</c> runs before the renderer at every tool call site, so overwriting here
+    /// discarded the exception-derived category (a bad selector became <c>internal_failure</c>) and inflated the
+    /// error counter <c>workspace health</c> reports.
+    /// </summary>
+    private static bool HasClassifiedError(TelemetryScope telemetry)
+    {
+        if (string.IsNullOrWhiteSpace(telemetry.MetadataJson))
+            return false;
+
+        JsonNode? metadata;
+        try
+        {
+            metadata = JsonNode.Parse(telemetry.MetadataJson);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return metadata is JsonObject fields
+            && fields["error_category"] is JsonValue value
+            && value.TryGetValue(out string? category)
+            && !string.IsNullOrEmpty(category)
+            && !string.Equals(category, UnclassifiedErrorCategory, StringComparison.Ordinal);
     }
 
     private static string RenderCompact(ToolDiagnostic diagnostic)

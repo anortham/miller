@@ -1,12 +1,25 @@
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
-public sealed class ToolDiagnosticTests
+public sealed class ToolDiagnosticTests : IDisposable
 {
+    private readonly string _dir = Path.Combine(
+        Path.GetTempPath(),
+        "miller-tool-diagnostic-" + Guid.NewGuid().ToString("N"));
+
+    public ToolDiagnosticTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+    }
+
     [Theory]
     [InlineData(ToolDiagnosticClass.ExpectedEmpty, ToolDiagnosticOutcome.Empty)]
     [InlineData(ToolDiagnosticClass.Ambiguity, ToolDiagnosticOutcome.Empty)]
@@ -126,6 +139,7 @@ public sealed class ToolDiagnosticTests
     [InlineData(typeof(UnauthorizedAccessException), "permission_denied", ToolDiagnosticClass.Unavailable)]
     [InlineData(typeof(FileNotFoundException), "artifact_missing", ToolDiagnosticClass.Unavailable)]
     [InlineData(typeof(InvalidOperationException), "internal_failure", ToolDiagnosticClass.InternalFailure)]
+    [InlineData(typeof(KeyNotFoundException), "internal_failure", ToolDiagnosticClass.InternalFailure)]
     public void FromException_ClassifiesHardFailures(
         Type exceptionType,
         string expectedCode,
@@ -152,6 +166,122 @@ public sealed class ToolDiagnosticTests
         Assert.Equal("continuation_mismatch", diagnostic.Code);
         Assert.Equal(ToolDiagnosticClass.Refusal, diagnostic.Class);
         Assert.Equal(ToolDiagnosticOutcome.Empty, diagnostic.Outcome);
+    }
+
+    [Fact]
+    public void FromException_InvalidMarkerList_IsAnInputRefusalNotAnInternalFailure()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => MarkerSearch.ParseMarkers("NOTE"));
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
+
+        Assert.Equal("invalid_request", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, diagnostic.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Empty, diagnostic.Outcome);
+    }
+
+    [Fact]
+    public void FromException_AmbiguousWorkspaceSelector_IsAnInputRefusalNotAnInternalFailure()
+    {
+        using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
+
+        var exception = Assert.Throws<KeyNotFoundException>(
+            () => WorkspaceRegistrySelector.Resolve(registry, "shared-"));
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
+
+        Assert.StartsWith("ambiguous workspace selector", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("invalid_request", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, diagnostic.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Empty, diagnostic.Outcome);
+    }
+
+    [Fact]
+    public void FromException_UnknownWorkspaceSelector_IsAnInputRefusalNotAnInternalFailure()
+    {
+        using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
+
+        var exception = Assert.Throws<KeyNotFoundException>(
+            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace"));
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(exception);
+
+        Assert.StartsWith("unknown workspace selector", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("invalid_request", diagnostic.Code);
+        Assert.Equal(ToolDiagnosticClass.Refusal, diagnostic.Class);
+        Assert.Equal(ToolDiagnosticOutcome.Empty, diagnostic.Outcome);
+    }
+
+    [Fact]
+    public void ApplyTelemetry_KeepsTheErrorCategoryTelemetryScopeAlreadyClassified()
+    {
+        using WorkspaceRegistry registry = OpenRegistryWithTwoSharedPrefixWorkspaces();
+        var exception = Assert.Throws<KeyNotFoundException>(
+            () => WorkspaceRegistrySelector.Resolve(registry, "no-such-workspace"));
+        using TelemetryLedger ledger = OpenLedger();
+        using TelemetryScope scope = ledger.Measure("workspace", op: null);
+        scope.SetError(exception);
+
+        ToolDiagnosticRenderer.ApplyTelemetry(
+            scope,
+            ToolDiagnostic.InternalFailure("internal_failure", exception.Message));
+
+        Assert.Equal("unknown_workspace", ErrorCategory(scope));
+    }
+
+    [Fact]
+    public void ApplyTelemetry_UsesTheDiagnosticCodeWhenNothingClassifiedTheError()
+    {
+        using TelemetryLedger ledger = OpenLedger();
+        using TelemetryScope scope = ledger.Measure("search", op: null);
+
+        ToolDiagnosticRenderer.ApplyTelemetry(
+            scope,
+            ToolDiagnostic.Corruption("artifact_corrupt", "The artifact is corrupt."));
+
+        Assert.Equal("artifact_corrupt", ErrorCategory(scope));
+    }
+
+    [Fact]
+    public void ApplyTelemetry_GenuineInternalFaultStillRecordsInternalFailure()
+    {
+        using TelemetryLedger ledger = OpenLedger();
+        using TelemetryScope scope = ledger.Measure("search", op: null);
+        scope.SetError(new InvalidOperationException("The resolver reached an unreachable branch."));
+
+        ToolDiagnostic diagnostic = ToolDiagnostic.FromException(
+            new InvalidOperationException("The resolver reached an unreachable branch."));
+        ToolDiagnosticRenderer.ApplyTelemetry(scope, diagnostic);
+
+        Assert.Equal(ToolDiagnosticClass.InternalFailure, diagnostic.Class);
+        Assert.Equal("internal_failure", ErrorCategory(scope));
+        Assert.Equal(TelemetryOutcome.Error, scope.Outcome);
+    }
+
+    private WorkspaceRegistry OpenRegistryWithTwoSharedPrefixWorkspaces()
+    {
+        WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_dir, "workspaces.db"));
+        foreach (string suffix in new[] { "alpha", "beta" })
+        {
+            string root = Path.Combine(_dir, suffix);
+            Directory.CreateDirectory(root);
+            registry.UpsertSeen(
+                "ws-" + suffix,
+                "shared-" + suffix,
+                PathCanonicalizer.CanonicalizeRoot(root),
+                Path.Combine(root, ".miller", "symbols.db"));
+        }
+        return registry;
+    }
+
+    private TelemetryLedger OpenLedger() =>
+        TelemetryLedger.Open(Path.Combine(_dir, "telemetry.db"), workspaceId: "ws-diagnostic");
+
+    private static string? ErrorCategory(TelemetryScope scope)
+    {
+        using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        return metadata.RootElement.TryGetProperty("error_category", out JsonElement category)
+            ? category.GetString()
+            : null;
     }
 
     [Fact]
