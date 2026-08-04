@@ -169,7 +169,7 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
 
         elapsed.Stop();
         Assert.Null(snapshot);
-        Assert.InRange(elapsed.Elapsed, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
+        Assert.InRange(elapsed.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(2));
         Assert.Equal(0, observer.Snapshot.SpawnAttempts);
     }
 

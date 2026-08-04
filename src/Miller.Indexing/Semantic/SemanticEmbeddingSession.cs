@@ -594,9 +594,8 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
     private async ValueTask CloseConnectionAsync(bool abort)
     {
-        _reader?.Dispose();
-        _reader = null;
-
+        // Transport before reader: closing the stream is what unblocks the pump's in-flight read —
+        // Windows pipe reads can outlive cancellation, and joining the pump first pays its full 1s cap.
         ISemanticSidecarConnection? connection = _connection;
         _connection = null;
         if (connection is not null)
@@ -614,6 +613,9 @@ public sealed class SemanticEmbeddingSession : IAsyncDisposable
 
             await connection.DisposeAsync().ConfigureAwait(false);
         }
+
+        _reader?.Dispose();
+        _reader = null;
     }
 
     private async Task<SidecarResponse> ExchangeAsync(
