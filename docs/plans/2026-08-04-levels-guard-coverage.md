@@ -152,11 +152,11 @@
 **Approach:** In the history writer, SKIP appending facts-derived metric rows when the artifact level is symbols — omit the row rather than writing 0, because a gap in a sparkline is honest and a zero is a lie. In `ReportTool`, render facts-derived sections as unavailable-pending-upgrade with the same next-step actions the converging diagnostic uses. Be surgical about which counters are facts-derived: complexity/clones/churn/risk read tables that ARE populated at symbols level and must be unaffected. Do not attempt to retro-clean existing `history.db` rows in this task — that is a separate migration decision; note it in the PR instead.
 
 **Acceptance criteria:**
-- [ ] No facts-derived metric row is appended to `history.db` when the artifact is symbols level (hard gate)
-- [ ] Complexity/clones/churn/risk metrics are still recorded normally at symbols level
-- [ ] `miller report` shows facts-derived sections as unavailable-pending-upgrade, not as zero counts
-- [ ] Against a full-level artifact, report output and recorded history are byte-identical to pre-change
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
+- [x] No facts-derived metric row is appended to `history.db` when the artifact is symbols level (hard gate) — *proven by reading the row back out of `snapshot_metrics` with SQL, not by inspecting the in-memory list.*
+- [x] Complexity/clones/churn/risk metrics are still recorded normally at symbols level — *and the snapshot is still `Recorded` rather than skipped, so a false zero was not traded for a missing snapshot.*
+- [x] `miller report` shows facts-derived sections as unavailable-pending-upgrade, not as zero counts — *markers is the only facts-derived render in `report`; `extraction_health` reads parse diagnostics and capability gaps, not `structural_facts`.*
+- [x] Against a full-level artifact, report output and recorded history are byte-identical to pre-change — *contrast is sharp: `CreateFull` writes a non-marker fact so `marker_total` is a genuine `0` — same number, opposite meaning, recorded at full level and absent at symbols.*
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ---
 

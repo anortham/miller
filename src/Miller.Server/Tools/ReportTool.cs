@@ -119,6 +119,11 @@ public static class ReportTool
 
     private static MarkerSection ReadMarkerSection(string dbPath, bool includeTests)
     {
+        // Markers come from `structural_facts`, which a symbols-level scan leaves EMPTY — rendering the resulting
+        // zeros as measured counts would state "this repo has no TODOs" about an unextracted layer.
+        if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(dbPath)))
+            return MarkerSection.Converging;
+
         IReadOnlyList<string> markerNames = MarkerSearch.ParseMarkers(null);
         IReadOnlyList<MarkerSearchHit> hits = MarkerSearch.FindMarkers(
             dbPath,
@@ -477,7 +482,18 @@ public static class ReportTool
         string? Reason,
         int BoundedAt,
         IReadOnlyList<MarkerCount> Counts,
-        int Total);
+        int Total)
+    {
+        public static MarkerSection Converging { get; } = new(
+            Available: false,
+            Reason: "this workspace serves a symbols-level index and marker facts have not been extracted yet, "
+                + "so a count here would read as zero rather than as measured. A session leading this workspace "
+                + "upgrades it in the background (`miller workspace status` shows progress); "
+                + "`miller workspace full` forces it now.",
+            BoundedAt: MarkerSearch.MaxLimit,
+            Counts: [],
+            Total: 0);
+    }
 
     private sealed record GitSections(
         bool Available,

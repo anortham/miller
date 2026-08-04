@@ -35,7 +35,8 @@ public static class MetricSnapshotAggregates
     private static readonly string[] MarkerNames = { "TODO", "FIXME", "HACK", "XXX" };
     /// <summary>
     /// Read the converge metric set from <paramref name="symbolsDbPath"/>, including marker counts from the
-    /// producer-owned <c>code.marker.v1</c> structural facts.
+    /// producer-owned <c>code.marker.v1</c> structural facts — except against a symbols-level artifact, whose
+    /// <c>structural_facts</c> table has not been extracted yet and so has no marker answer to record.
     /// </summary>
     public static IReadOnlyList<MetricHistoryPoint> ReadConvergeMetrics(
         string symbolsDbPath)
@@ -49,7 +50,8 @@ public static class MetricSnapshotAggregates
             AddSymbolCounts(connection, metrics);
             AddCloneGroupCount(connection, metrics);
             AddComplexityPercentiles(connection, metrics);
-            AddMarkerCounts(connection, metrics);
+            if (!IsSymbolsLevel(connection))
+                AddMarkerCounts(connection, metrics);
         }
 
         return metrics;
@@ -225,6 +227,16 @@ public static class MetricSnapshotAggregates
             return sortedAsc[lo];
         return sortedAsc[lo] + ((sortedAsc[hi] - sortedAsc[lo]) * (rank - lo));
     }
+
+    // Facts-derived metrics have no source at symbols level: `structural_facts` is EMPTY there, so a marker count
+    // reads 0 for "not extracted yet" rather than "no markers". history.db is APPEND-ONLY, so that 0 would stay a
+    // fabricated trend point long after the artifact upgraded — a gap the reader renders as `-` is the honest
+    // answer (metrics-history-v1: absent, never a fabricated 0). Fails open to full like every other level read.
+    private static bool IsSymbolsLevel(SqliteConnection connection) =>
+        string.Equals(
+            ExtractIndexLevelReader.Read(connection),
+            IndexLevels.SymbolsMetadataValue,
+            StringComparison.Ordinal);
 
     private static void AddMarkerCounts(SqliteConnection connection, List<MetricHistoryPoint> metrics)
     {
