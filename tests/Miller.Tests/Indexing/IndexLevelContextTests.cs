@@ -247,6 +247,73 @@ public sealed class IndexLevelContextTests : IDisposable
             provider.ResolveRegionSearch(workspaceId: null, ensureFresh: false).IndexLevel);
     }
 
+    [Fact]
+    public void ResolveCurrentWorkspace_FullArtifactPromotedOverThePathAfterTheSnapshot_CarriesTheServedIndexLevel()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        (WorkspaceIndexProvider provider, string dbPath) = CurrentWorkspaceAtSymbolsLevel(registry);
+
+        PromoteOver(dbPath, SymbolsLevelArtifact.CreateFull(NewDir("promoted")));
+
+        Assert.Equal(IndexLevels.FullMetadataValue, ExtractIndexLevelReader.Read(dbPath));
+        Assert.Equal(
+            IndexLevels.SymbolsMetadataValue,
+            provider.Resolve(workspaceId: null, ensureFresh: false).IndexLevel);
+        Assert.Equal(
+            IndexLevels.SymbolsMetadataValue,
+            provider.ResolveSymbolSearch(workspaceId: null, ensureFresh: false).IndexLevel);
+        Assert.Equal(
+            IndexLevels.SymbolsMetadataValue,
+            provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false).IndexLevel);
+    }
+
+    [Fact]
+    public void ResolveCurrentWorkspace_FullArtifactPromotedOverThePathAfterTheSnapshot_GuardsStayArmedForTheServedIndex()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        (WorkspaceIndexProvider provider, string dbPath) = CurrentWorkspaceAtSymbolsLevel(registry);
+
+        PromoteOver(dbPath, SymbolsLevelArtifact.CreateFull(NewDir("promoted")));
+
+        Assert.True(IndexLevelGuard.ReferenceLayerConverging(
+            provider.Resolve(workspaceId: null, ensureFresh: false).IndexLevel));
+        Assert.True(IndexLevelGuard.ReferenceLayerConverging(
+            provider.ResolveSymbolRead(workspaceId: null, ensureFresh: false).IndexLevel));
+    }
+
+    [Fact]
+    public void ResolveArtifact_CurrentWorkspaceFullArtifactPromotedOverThePath_CarriesThePromotedFileLevel()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        (WorkspaceIndexProvider provider, string dbPath) = CurrentWorkspaceAtSymbolsLevel(registry);
+
+        PromoteOver(dbPath, SymbolsLevelArtifact.CreateFull(NewDir("promoted")));
+
+        WorkspaceArtifactContext context = provider.ResolveArtifact(workspaceId: null, ensureFresh: false);
+
+        Assert.Equal(IndexLevels.FullMetadataValue, context.IndexLevel);
+        Assert.False(IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel));
+    }
+
+    private (WorkspaceIndexProvider Provider, string DbPath) CurrentWorkspaceAtSymbolsLevel(
+        WorkspaceRegistry registry)
+    {
+        string root = NewDir("current");
+        string dbPath = SymbolsLevelArtifact.Create(root);
+        WorkspaceIndexProvider provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(dbPath), builtRevision: 1),
+            CurrentWorkspaceAt(root, dbPath),
+            registry);
+        return (provider, dbPath);
+    }
+
+    private static void PromoteOver(string dbPath, string promotedDbPath)
+    {
+        File.Delete(dbPath + "-wal");
+        File.Delete(dbPath + "-shm");
+        File.Move(promotedDbPath, dbPath, overwrite: true);
+    }
+
     private WorkspaceReadContext RegisteredRead(Func<string, string> createArtifact)
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

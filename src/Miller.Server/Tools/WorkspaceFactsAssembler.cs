@@ -95,7 +95,7 @@ internal static class WorkspaceFactsAssembler
         if (string.IsNullOrWhiteSpace(indexDbPath) || !File.Exists(indexDbPath))
             return null;
         string level = ExtractIndexLevelReader.Read(indexDbPath);
-        if (!string.Equals(level, IndexLevels.SymbolsMetadataValue, StringComparison.Ordinal))
+        if (!IndexLevels.IsSymbolsLevel(level))
             return null;
         IndexLevelPolicy policy = IndexLevels.Resolve(registryPolicy);
         return new IndexLevelFacts(
