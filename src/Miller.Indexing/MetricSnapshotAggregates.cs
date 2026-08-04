@@ -50,7 +50,12 @@ public static class MetricSnapshotAggregates
             AddSymbolCounts(connection, metrics);
             AddCloneGroupCount(connection, metrics);
             AddComplexityPercentiles(connection, metrics);
-            if (!IsSymbolsLevel(connection))
+            // Facts-derived metrics have no source at symbols level: `structural_facts` is EMPTY there, so a marker
+            // count reads 0 for "not extracted yet" rather than "no markers". history.db is APPEND-ONLY, so that 0
+            // would stay a fabricated trend point long after the artifact upgraded — a gap the reader renders as
+            // `-` is the honest answer (metrics-history-v1: absent, never a fabricated 0). Fails open to full like
+            // every other level read.
+            if (!IndexLevels.IsSymbolsLevel(ExtractIndexLevelReader.Read(connection)))
                 AddMarkerCounts(connection, metrics);
         }
 
@@ -227,16 +232,6 @@ public static class MetricSnapshotAggregates
             return sortedAsc[lo];
         return sortedAsc[lo] + ((sortedAsc[hi] - sortedAsc[lo]) * (rank - lo));
     }
-
-    // Facts-derived metrics have no source at symbols level: `structural_facts` is EMPTY there, so a marker count
-    // reads 0 for "not extracted yet" rather than "no markers". history.db is APPEND-ONLY, so that 0 would stay a
-    // fabricated trend point long after the artifact upgraded — a gap the reader renders as `-` is the honest
-    // answer (metrics-history-v1: absent, never a fabricated 0). Fails open to full like every other level read.
-    private static bool IsSymbolsLevel(SqliteConnection connection) =>
-        string.Equals(
-            ExtractIndexLevelReader.Read(connection),
-            IndexLevels.SymbolsMetadataValue,
-            StringComparison.Ordinal);
 
     private static void AddMarkerCounts(SqliteConnection connection, List<MetricHistoryPoint> metrics)
     {

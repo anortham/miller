@@ -17,15 +17,28 @@ public static class WorkspaceHealthReader
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
         using SqliteTransaction transaction = connection.BeginTransaction();
+        bool factsLayerConverging = IndexLevels.IsSymbolsLevel(ExtractIndexLevelReader.Read(connection));
 
         return new WorkspaceExtractionHealthFacts(
             ParseDiagnostics: ReadSection(connection, transaction, "parse_diagnostics", ReadParseDiagnostics),
             CapabilityGaps: ReadSection(connection, transaction, "language_capability_gaps", ReadCapabilityGaps),
             LanguageCapabilities: ReadSection(connection, transaction, "language_capabilities", ReadLanguageCapabilities),
-            StructuralFacts: ReadSection(connection, transaction, "structural_facts", ReadStructuralFacts),
+            StructuralFacts: factsLayerConverging
+                ? HealthFactSection<StructuralFactGroup>.Unavailable(FactsLayerConvergingError)
+                : ReadSection(connection, transaction, "structural_facts", ReadStructuralFacts),
             ComplexityMetrics: ReadSection(connection, transaction, "complexity_metrics", ReadComplexityMetrics),
             Files: ReadSection(connection, transaction, "files", ReadFileStatuses));
     }
+
+    /// <summary>
+    /// <c>structural_facts</c> is EMPTY (not missing) at symbols level, so the ungated read returned an available,
+    /// zero-row, authoritative-looking section — "this repo has no structural facts" about a layer that has not
+    /// been extracted yet. Only this section is facts-derived; the other five read tables a symbols-level scan
+    /// fully populates.
+    /// </summary>
+    private const string FactsLayerConvergingError =
+        "table 'structural_facts' has not been extracted at symbols index level; "
+        + "run 'workspace full' to force the full-level upgrade";
 
     private static HealthFactSection<T> ReadSection<T>(
         SqliteConnection connection,

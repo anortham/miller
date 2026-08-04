@@ -29,6 +29,20 @@ Each JSON object has these fields in this order:
 | `provenance` | array of strings | Distinct evidence sources in precedence order: `identifier_direct`, `identifier_resolution`, `relationship`, `pending_resolution`, `name_fallback`. |
 | `artifact_id` | string or null | Producer artifact identity from `artifact_metadata`. |
 | `workspace_revision` | integer or null | Maximum extraction revision when present. |
+| `index_level` | non-empty string | The artifact's `artifact_metadata.index_level`: `symbols` or `full`. Absent metadata reads as `full`, since pre-levels artifacts are full-level artifacts. Present on every row at every level. |
+
+`index_level` was appended to the end of the row within `schema_version` 2 rather than bumping the schema: it
+adds a field without moving, renaming, or reshaping any field above it, so every documented field keeps its
+documented position and line-by-line parsers are unaffected.
+
+It exists because this export degrades PARTIALLY. Its query unions `identifiers`, `identifier_resolutions`,
+`relationships`, and `pending_relationships`; a symbols-level scan leaves the first two EMPTY while the rest
+stay populated. The feed therefore keeps emitting plausible rows while silently omitting every
+identifier-derived assertion: the `provenance` values `identifier_direct` and `identifier_resolution` cannot
+appear at all. A consumer reading stdout alone has no other way to tell that stream from a complete one, since
+the absence of a provenance value is not evidence that the underlying references do not exist. Treat
+`index_level = "symbols"` rows as an undercount of the workspace's reference set, never as its complete one;
+`miller references export` also warns on stderr at that level.
 
 Rows from identifiers, relationships, and resolution overlays are assertions about the same canonical site.
 Miller groups them by `reference_site_id`, target, and canonical kind; it does not deduplicate by overlapping

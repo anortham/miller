@@ -30,9 +30,11 @@ internal static class IndexLevelGuard
     public static bool ReferenceLayerConverging(MillerRepositoryIndex index) =>
         ReferenceLayerConverging(index.IndexLevel);
 
-    /// <summary>The raw-level form for callers that read the artifact directly (patterns, CLI surfaces).</summary>
+    /// <summary>The raw-level form for callers that read the artifact directly (patterns, CLI surfaces). Delegates
+    /// to <see cref="IndexLevels.IsSymbolsLevel"/> so the comparison has one spelling across the
+    /// <c>Miller.Indexing</c>/<c>Miller.Server</c> seam.</summary>
     public static bool IsSymbolsLevel(string? indexLevel) =>
-        string.Equals(indexLevel, IndexLevels.SymbolsMetadataValue, StringComparison.Ordinal);
+        IndexLevels.IsSymbolsLevel(indexLevel);
 
     /// <summary>The data-bearing "reference layer converging" diagnostic for read tools: what is missing, what
     /// still works, and how the upgrade happens. The upgrade is NOT promised as automatic — only a session
@@ -45,6 +47,23 @@ internal static class IndexLevelGuard
             + $"{missing} Symbol definitions, search, structure, and relationship edges (inheritance/imports) "
             + "are complete; per-usage identifier results are not yet. A session leading this workspace "
             + "upgrades it in the background; otherwise force it.",
+            [
+                new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+            ]);
+
+    /// <summary>The <c>references export</c> warning. Unlike <c>patterns export</c>, which goes empty at symbols
+    /// level and so cannot be mistaken for a complete answer, this feed keeps emitting its relationship-derived
+    /// rows: the degradation is PARTIAL, and a consumer streaming stdout has no way to see it. Names the two
+    /// emptied arms so the omission is identifiable rather than merely announced.</summary>
+    public static ToolDiagnostic ReferenceExportConverging() =>
+        ToolDiagnostic.ExpectedEmpty(
+            "reference_layer_converging",
+            "This workspace serves a symbols-level index: identifiers and identifier_resolutions have not been "
+            + "extracted yet, so this feed carries only relationship-derived reference rows. The stream is "
+            + "partial, NOT empty — treat it as an undercount, not as this workspace's complete reference set. "
+            + "Every emitted row carries index_level=\"symbols\". A session leading this workspace upgrades it in "
+            + "the background; otherwise force it.",
             [
                 new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
                 new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),

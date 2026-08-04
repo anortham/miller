@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -129,6 +130,73 @@ public sealed class WorkspaceHealthReaderTests
     }
 
     [Fact]
+    public void Read_AtSymbolsLevel_ReportsStructuralFactsUnavailableInsteadOfAnAuthoritativeEmptySection()
+    {
+        string dir = NewTempDir();
+        try
+        {
+            string dbPath = SymbolsLevelArtifact.Create(dir);
+
+            WorkspaceExtractionHealthFacts facts = WorkspaceHealthReader.Read(dbPath);
+
+            Assert.False(facts.StructuralFacts.Available);
+            Assert.Empty(facts.StructuralFacts.Rows);
+            Assert.Contains("structural_facts", facts.StructuralFacts.Error!, StringComparison.Ordinal);
+            Assert.Contains("symbols", facts.StructuralFacts.Error!, StringComparison.Ordinal);
+            Assert.Contains("workspace full", facts.StructuralFacts.Error!, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTempDir(dir);
+        }
+    }
+
+    [Fact]
+    public void Read_AtSymbolsLevel_LeavesTheFivePopulatedSectionsAvailable()
+    {
+        string dir = NewTempDir();
+        try
+        {
+            string dbPath = SymbolsLevelArtifact.Create(dir);
+
+            WorkspaceExtractionHealthFacts facts = WorkspaceHealthReader.Read(dbPath);
+
+            Assert.True(facts.ParseDiagnostics.Available);
+            Assert.True(facts.CapabilityGaps.Available);
+            Assert.True(facts.LanguageCapabilities.Available);
+            Assert.True(facts.ComplexityMetrics.Available);
+            Assert.True(facts.Files.Available);
+            Assert.Single(facts.ComplexityMetrics.Rows);
+            Assert.NotEmpty(facts.Files.Rows);
+        }
+        finally
+        {
+            DeleteTempDir(dir);
+        }
+    }
+
+    [Fact]
+    public void Read_AtFullLevel_KeepsStructuralFactsAvailableAndUnguarded()
+    {
+        string dir = NewTempDir();
+        try
+        {
+            string dbPath = SymbolsLevelArtifact.CreateFull(dir);
+
+            WorkspaceExtractionHealthFacts facts = WorkspaceHealthReader.Read(dbPath);
+
+            Assert.True(facts.StructuralFacts.Available);
+            Assert.Null(facts.StructuralFacts.Error);
+            StructuralFactGroup row = Assert.Single(facts.StructuralFacts.Rows);
+            Assert.Equal("csharp.class.v1", row.PatternId);
+        }
+        finally
+        {
+            DeleteTempDir(dir);
+        }
+    }
+
+    [Fact]
     public void Read_MissingLanguageCapabilityGapsTable_ThrowsIncompatibleExtract()
     {
         using var fx = JulieDbFixture.Create(
@@ -159,6 +227,19 @@ public sealed class WorkspaceHealthReaderTests
             () => WorkspaceHealthReader.Read(fx.DbPath));
         Assert.Contains("closed", ex.Message, StringComparison.Ordinal);
         Assert.Contains("open | exception", ex.Message, StringComparison.Ordinal);
+    }
+
+    private static string NewTempDir()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "whr-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static void DeleteTempDir(string dir)
+    {
+        SqliteConnection.ClearAllPools();
+        try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
     }
 
     private static void Exec(string dbPath, string sql)

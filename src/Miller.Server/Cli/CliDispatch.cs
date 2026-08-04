@@ -130,7 +130,8 @@ public static class CliDispatch
                         return ReferencesCandidates(rest.Skip(1).ToList(), context, stdout, stderr);
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller references export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                        ReferenceExportReader.WriteJsonLines);
+                        ReferenceExportReader.WriteJsonLines,
+                        ReferencesExportLevelWarning);
                 case "complexity":
                     return ArtifactExport(rest, context, stdout, stderr,
                         "miller complexity export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
@@ -1655,6 +1656,11 @@ public static class CliDispatch
     private static string? PatternsExportLevelWarning(string dbPath) =>
         PatternsTool.FactsLevelDiagnostic(ExtractIndexLevelReader.Read(dbPath)) is { } converging
             ? ToolDiagnosticRenderer.Render("patterns", converging, json: false)
+            : null;
+
+    private static string? ReferencesExportLevelWarning(string dbPath) =>
+        IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(dbPath))
+            ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ReferenceExportConverging(), json: false)
             : null;
 
     // The deterministic dead-code candidate listing (`references candidates`; dead-code candidates design rev 2):

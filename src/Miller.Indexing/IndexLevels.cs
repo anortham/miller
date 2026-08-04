@@ -49,6 +49,15 @@ public static class IndexLevels
     /// and full-level artifacts written before the key was stamped).</summary>
     public const string FullMetadataValue = "full";
 
+    /// <summary>
+    /// Whether <paramref name="recordedLevel"/> is an artifact whose identifier, region, and facts tables have not
+    /// been extracted yet. The ONE spelling of that comparison: <c>Miller.Indexing</c> cannot reference
+    /// <c>Miller.Server</c>, so every consumer on either side of that seam — <c>IndexLevelGuard</c>, the metric
+    /// converge arm, the health reader — asks here rather than re-deriving it.
+    /// </summary>
+    public static bool IsSymbolsLevel(string? recordedLevel) =>
+        string.Equals(recordedLevel, SymbolsMetadataValue, StringComparison.Ordinal);
+
     public static IndexLevelPolicy FromEnvironment() =>
         FromEnvValues(
             Environment.GetEnvironmentVariable(EnvVar),
@@ -183,8 +192,7 @@ public static class IndexLevels
     /// <summary>Whether the artifact's recorded level plus <paramref name="policy"/> leaves a level upgrade
     /// owed — the derived, restart-proof <see cref="Miller.Core.Freshness.ScanIntent.LevelUpgrade"/> latch.</summary>
     public static bool UpgradeOwed(string? recordedLevel, IndexLevelPolicy policy) =>
-        policy == IndexLevelPolicy.Progressive
-        && string.Equals(recordedLevel, SymbolsMetadataValue, StringComparison.Ordinal);
+        policy == IndexLevelPolicy.Progressive && IsSymbolsLevel(recordedLevel);
 }
 
 /// <summary>

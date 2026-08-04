@@ -12,6 +12,11 @@ namespace Miller.Indexing;
 /// resolution overlays. Producer-owned reference-site identity and provenance are preserved without
 /// consumer span matching. Rows are ordered by path, producer start byte, reference-site ID, canonical kind,
 /// and target identity so re-exporting an unchanged artifact is byte-identical.
+///
+/// <para>Every row carries the artifact's <c>index_level</c>. The union's <c>identifiers</c> and
+/// <c>identifier_resolutions</c> arms are EMPTY at symbols level while the <c>relationships</c> arm is populated,
+/// so this feed degrades to a partial — not an empty — stream, and a consumer reading stdout alone has no other
+/// way to tell a symbols-level export from a complete one.</para>
 /// </summary>
 public static class ReferenceExportReader
 {
@@ -34,10 +39,11 @@ public static class ReferenceExportReader
 
         string? artifactId = ReadArtifactId(connection);
         long? workspaceRevision = ReadWorkspaceRevision(connection);
+        string indexLevel = ExtractIndexLevelReader.Read(connection);
         IReadOnlyList<ReferenceAssertionRow> rows = ReadAssertions(connection);
         foreach (ReferenceAssertionRow row in rows)
         {
-            writer.Write(RenderRow(row, artifactId, workspaceRevision));
+            writer.Write(RenderRow(row, artifactId, workspaceRevision, indexLevel));
             writer.Write('\n');
         }
     }
@@ -176,7 +182,8 @@ public static class ReferenceExportReader
     private static string RenderRow(
         ReferenceAssertionRow assertion,
         string? artifactId,
-        long? workspaceRevision)
+        long? workspaceRevision,
+        string indexLevel)
     {
         ReferenceEvidenceExportRow row = assertion.Primary;
         var buffer = new ArrayBufferWriter<byte>();
@@ -223,6 +230,7 @@ public static class ReferenceExportReader
             writer.WriteEndArray();
             WriteNullableString(writer, "artifact_id", artifactId);
             WriteNullableLong(writer, "workspace_revision", workspaceRevision);
+            writer.WriteString("index_level", indexLevel);
             writer.WriteEndObject();
         }
 

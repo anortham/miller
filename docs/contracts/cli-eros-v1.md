@@ -289,8 +289,16 @@ stream: stdout stays a pure sequence of `structural_facts` rows (empty at symbol
 `diagnostic_class=` / `next:` block — written before the first row. A consumer parsing stdout line by line is
 unaffected; a consumer that wants the degradation signal reads stderr or gates on `workspace status --json`'s
 `index_level`. `symbols export` and `complexity export` read tables a symbols-level scan fully populates and
-are never warned. `references export` is NOT warned either, but its `identifiers` / `identifier_resolutions`
-provenance is still converging at symbols level — gate that feed on `index_level`, not on stderr.
+are never warned.
+
+`miller references export` warns on stderr the same way, with its own wording, because it degrades differently:
+its query unions `identifiers`, `identifier_resolutions`, `relationships`, and `pending_relationships`, and a
+symbols-level scan empties the first two while leaving the rest populated. The feed therefore stays NON-EMPTY
+and silently omits every identifier-derived reference — a partial answer that looks complete, which stderr
+alone cannot fix for a consumer streaming stdout. So this feed ALSO carries the signal in-band: every emitted
+row has an `index_level` field (`symbols` or `full`). Exit code stays `0`, stdout stays a pure JSONL stream, and
+line-by-line parsers are unaffected. Treat `index_level = "symbols"` rows as an undercount of that workspace's
+reference set, never as its complete one.
 
 ### `downgraded` on `refresh`/`full` (additive, conditional)
 
@@ -354,6 +362,12 @@ results, and verdicts; false flags and zero counts are not proof of absence.
 reference assertions keyed by producer-owned `reference_site_id`. See
 [`references-export-v2.md`](references-export-v2.md). Miller groups identifier, relationship, and resolution
 provenance by canonical site, target, and kind; it never guesses identity from overlapping spans.
+
+Every row additionally carries `index_level` (non-empty string, `symbols` or `full`), rendered from the
+artifact's `artifact_metadata.index_level` and read once per export like `artifact_id` and `workspace_revision`.
+An artifact without the key reads as `full`, since pre-levels artifacts are full-level artifacts. The field is
+additive within `schema_version` 2 — no line shape or field ordering changed ahead of it — and exists because
+this is the one export whose degradation is partial rather than empty (see above).
 
 Read-command JSON is allowed to grow additive recovery fields. Current examples:
 
