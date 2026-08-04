@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Miller.Core.References;
 using Miller.Indexing;
 using Miller.Server.Resolution;
@@ -298,11 +299,7 @@ public sealed class InspectTool
                     out resultCount,
                     out int matchedCount);
                 if (matchedCount == 0)
-                {
-                    diagnostic = ToolDiagnostic.ExpectedEmpty(
-                        "no_file_symbols",
-                        $"No indexed symbols matched '{file.Path}' and the requested filters.");
-                }
+                    diagnostic = FileEmptyDiagnostic(index, dbPath, file.Path);
                 return ReadToolWorkspaceRouting.PrefixCompact(
                     fileOutput,
                     json ? null : compactBanner);
@@ -408,6 +405,58 @@ public sealed class InspectTool
     }
 
     // ---------- file listing ----------
+
+    /// <summary>
+    /// Separates "this indexed file holds no matching symbols" from "this path never reached the index". Both
+    /// render an empty listing, so without the distinction a typo'd path reads as a real, symbol-free file and
+    /// the agent moves on instead of checking the path.
+    /// </summary>
+    private static ToolDiagnostic FileEmptyDiagnostic(ISymbolLookupIndex index, string dbPath, string path)
+    {
+        if (IsIndexedFile(index, dbPath, path))
+        {
+            return ToolDiagnostic.ExpectedEmpty(
+                "no_file_symbols",
+                $"No indexed symbols matched '{path}' and the requested filters.");
+        }
+
+        return ToolDiagnostic.ExpectedEmpty(
+            "file_not_indexed",
+            $"'{path}' is not in the index, so inspect has no symbols to list for it.",
+            [new ToolDiagnosticAction(
+                $"search(query=\"{EscapeDiagnosticTarget(FileSearchQuery(path))}\", mode=\"file\")",
+                "find the intended path")]);
+    }
+
+    /// <summary>
+    /// Membership evidence is the artifact's <c>files</c> table, NOT the filesystem: a path can exist on disk and
+    /// still be excluded from the index by <c>.julieignore</c>, and answering from disk would call that case
+    /// indexed. Unreadable evidence keeps the pre-existing answer — inspect must not report a path as missing on
+    /// the strength of an artifact it could not open.
+    /// </summary>
+    private static bool IsIndexedFile(ISymbolLookupIndex index, string dbPath, string path)
+    {
+        if (index.IsIndexedFilePath(path))
+            return true;
+
+        try
+        {
+            return ExtractFileHashReader.ReadFileHash(dbPath, path) is not null;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or IOException or InvalidOperationException
+                or UnauthorizedAccessException or SqliteException)
+        {
+            return true;
+        }
+    }
+
+    private static string FileSearchQuery(string path)
+    {
+        int separator = path.LastIndexOfAny(['/', '\\']);
+        string segment = separator >= 0 ? path[(separator + 1)..] : path;
+        return segment.Length == 0 ? path : segment;
+    }
 
     private static string RenderFile(
         ISymbolLookupIndex index,

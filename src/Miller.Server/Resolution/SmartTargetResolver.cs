@@ -52,6 +52,12 @@ public sealed partial class SmartTargetResolver
     /// <summary>
     /// Resolve <paramref name="target"/>. <paramref name="scope"/> (a file path) constrains a name lookup to
     /// that file before disambiguating; <paramref name="asKind"/> forces FILE or SYMBOL interpretation.
+    ///
+    /// <para>A <see cref="TargetResolution.File"/> asserts the SHAPE of the target, never that the path is
+    /// indexed: rules 1 and 4 both answer File for a path this index has never seen, so a caller that renders an
+    /// empty result must decide "indexed but empty" versus "not indexed" from the artifact's <c>files</c> table
+    /// itself. Do NOT settle that here with a filesystem existence check — a path can exist on disk and still be
+    /// excluded from the index by <c>.julieignore</c>, which is exactly the case a disk probe answers wrongly.</para>
     /// </summary>
     /// <exception cref="ArgumentException"><paramref name="target"/> is null/empty/whitespace.</exception>
     public TargetResolution Resolve(string target, string? scope = null, TargetKind asKind = TargetKind.Auto)
