@@ -194,7 +194,7 @@ public static class CliDispatch
 
         try
         {
-            outw.WriteLine(MarkerSearch.Run(
+            string output = MarkerSearch.Run(
                 ctx.ExtractDbPath,
                 markers,
                 o.Int("limit", MarkerSearch.DefaultLimit),
@@ -203,7 +203,12 @@ public static class CliDispatch
                 compactBanner: null,
                 filePattern: o.Value("file-pattern"),
                 language: o.Value("language"),
-                out _));
+                out _);
+            // The CLI calls the marker core directly, so the MCP wrapper's level check never runs here; without
+            // this a symbols-level artifact answers "no markers" about facts nobody has extracted.
+            if (SearchTool.MarkerLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)) is { } converging)
+                output = ToolDiagnosticRenderer.Attach("todos", output, converging, o.Has("json"));
+            outw.WriteLine(output);
             return 0;
         }
         catch (Exception ex) when (
@@ -417,7 +422,15 @@ public static class CliDispatch
                 {
                     SearchRouteExecutionResult markerResult =
                         SearchRouteExecutor.RunMarkers(ctx.ExtractDbPath, route, executionRequest);
-                    outw.WriteLine(markerResult.Output);
+                    string markerOutput = markerResult.Output;
+                    // Same level decision the MCP markers route makes, reached through the same helper so the two
+                    // surfaces cannot drift.
+                    if (SearchTool.MarkerLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath))
+                        is { } converging)
+                    {
+                        markerOutput = ToolDiagnosticRenderer.Attach("search", markerOutput, converging, json);
+                    }
+                    outw.WriteLine(markerOutput);
                     return 0;
                 }
                 catch (Exception ex) when (

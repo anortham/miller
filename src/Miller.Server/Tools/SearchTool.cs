@@ -330,6 +330,7 @@ public sealed class SearchTool
             string output;
             int count;
             bool regionsConverging = false;
+            ToolDiagnostic? markersConverging = null;
             if (route.Kind == SearchRouteKind.Regions)
             {
                 WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
@@ -363,6 +364,7 @@ public sealed class SearchTool
             {
                 WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
+                markersConverging = MarkerLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
                     region.IndexDbPath,
                     route,
@@ -586,9 +588,8 @@ public sealed class SearchTool
             ToolDiagnostic? diagnostic = regionsConverging
                 ? IndexLevelGuard.Converging(
                     "source regions (comments/doc comments/string literals) have not been extracted yet.")
-                : count == 0
-                    ? SearchEmptyDiagnostic(route, query)
-                    : null;
+                : markersConverging
+                    ?? (count == 0 ? SearchEmptyDiagnostic(route, query) : null);
             if (scope is not null)
             {
                 scope.SetTarget(query);
@@ -624,6 +625,24 @@ public sealed class SearchTool
                 json,
                 scope);
         }
+    }
+
+    /// <summary>
+    /// The markers route's index-level decision, shared by the MCP <c>search mode=markers</c> route and the CLI
+    /// <c>search --mode markers</c> / <c>todos</c> verbs so the two can never drift. Marker facts are
+    /// <c>structural_facts</c> rows carrying <c>code.marker.v1</c>, one of the tables a symbols-level scan leaves
+    /// EMPTY, so a zero-hit there means "not extracted yet"; rendering it as <c>no_todo_markers</c> hands the
+    /// agent a definitive "this repo has no markers" about a layer nobody has read. Returns null — the guard is
+    /// inert — for every level but symbols, so full-level output stays byte-identical.
+    /// </summary>
+    internal static ToolDiagnostic? MarkerLevelDiagnostic(string? indexLevel, TelemetryScope? telemetry = null)
+    {
+        if (!IndexLevelGuard.IsSymbolsLevel(indexLevel))
+            return null;
+
+        IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
+        return IndexLevelGuard.Converging(
+            "TODO/FIXME/HACK/XXX marker facts (code.marker.v1) have not been extracted yet.");
     }
 
     private static ToolDiagnostic SearchEmptyDiagnostic(SearchRoute route, string query)
