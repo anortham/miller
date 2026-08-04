@@ -120,11 +120,11 @@
 **Approach:** The level check must win over the zero-hit reason: when the artifact is symbols level, emit `facts_layer_converging` instead of `no_todo_markers`, mirroring how `SearchTool.cs:585` already gives the converging diagnostic priority on the regions route. Stamp the demand counter with `IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging")` so the levels program keeps its measurement of how often agents hit converging layers. Put the decision where BOTH surfaces reach it — the CLI markers branch at `CliDispatch.cs:414` and the `todos` verb at :195 currently return the `MarkerSearch` output directly, so either route it through a shared guarded helper or apply the same check at both call sites. Reuse `IndexLevelGuard.Converging(...)` with wording naming the facts layer; do not invent a new diagnostic class.
 
 **Acceptance criteria:**
-- [ ] MCP `search mode=markers` against a symbols-level artifact returns `facts_layer_converging`, not `no_todo_markers`
-- [ ] CLI `search --mode markers` and `todos` both emit the same diagnostic against a symbols-level artifact
-- [ ] Telemetry records `degraded=true` / `degraded_reason=facts_layer_converging` for those calls
-- [ ] Against a full-level artifact, all three surfaces still return `no_todo_markers` on a genuine zero-hit and output is unchanged
-- [ ] Worker-scope verification passes and the change is committed per commit mode
+- [x] MCP `search mode=markers` against a symbols-level artifact returns `facts_layer_converging`, not `no_todo_markers` — *LEAD RULING on a wording ambiguity in this criterion: `facts_layer_converging` is emitted as the telemetry `degraded_reason`, while the agent-facing diagnostic CODE stays `reference_layer_converging` (what `IndexLevelGuard.Converging` emits). This exactly matches how `PatternsTool` — the other `structural_facts` consumer — already behaves, and honors the Global Constraint "existing diagnostic vocabulary is reused, not extended ad hoc". Promoting it to a diagnostic code would be an agent-facing contract change across three surfaces for marginal gain. Task 5 must follow the same ruling.*
+- [x] CLI `search --mode markers` and `todos` both emit the same diagnostic against a symbols-level artifact — *pinned by a test asserting the two surfaces' diagnostic tails are byte-equal, not merely both non-empty.*
+- [x] Telemetry records `degraded=true` / `degraded_reason=facts_layer_converging` for those calls — *MCP only; the CLI markers/`todos` verbs open no telemetry ledger, so there is no scope to stamp. The demand counter is an MCP-side measurement.*
+- [x] Against a full-level artifact, all three surfaces still return `no_todo_markers` on a genuine zero-hit and output is unchanged — *the CLI has never emitted a `no_todo_markers` diagnostic (that code is MCP-route-only), so on the CLI the honest form of this criterion is byte-exact output equality, which the tests assert.*
+- [x] Worker-scope verification passes and the change is committed per commit mode
 
 ---
 
@@ -320,6 +320,71 @@
 - [ ] The not-indexed diagnostic carries an actionable next step for finding the intended path
 - [ ] No filesystem existence check is introduced in the resolver
 - [ ] Worker-scope verification passes and the change is committed per commit mode
+
+---
+
+### Task 9: workspace health stops reporting an unextracted facts layer as healthy zeros
+
+*(Added 2026-08-04 during execution, with explicit user approval, after Task 3 surfaced it. Not part of the
+original Codex-reviewed plan. Sequenced AFTER Lane L1 so it does not contend for `CliDispatch.cs`.)*
+
+**Files:**
+- Modify: `src/Miller.Indexing/WorkspaceHealthReader.cs:26` (the `StructuralFacts` section read)
+- Modify: `src/Miller.Indexing/IndexLevels.cs` (hoist the symbols-level predicate)
+- Modify: `src/Miller.Server/Tools/IndexLevelGuard.cs` (delegate to the hoisted predicate)
+- Modify: `src/Miller.Indexing/MetricSnapshotAggregates.cs` (drop its private duplicate)
+- Test: `tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`
+
+**Interfaces:**
+- Consumes: `ExtractIndexLevelReader.Read(SqliteConnection)`, `IndexLevels.SymbolsMetadataValue`, and the
+  EXISTING `HealthFactSection<T>.Unavailable(string reason)` shape.
+- Produces: a `StructuralFacts` section reported as unavailable-pending-upgrade at symbols level, and ONE
+  shared symbols-level predicate instead of three copies.
+
+**Contract inputs:** `WorkspaceHealthReader.Read` already returns `HealthFactSection<T>.Unavailable($"table
+'{tableName}' is missing")` when a table is absent — the established shape for "this section has no answer",
+which renders correctly on every consumer today. `structural_facts` is EMPTY (not missing) at symbols level, so
+it currently returns an available, empty, authoritative-looking section. Only `StructuralFacts` is facts-derived;
+`ParseDiagnostics`, `CapabilityGaps`, `LanguageCapabilities`, `ComplexityMetrics` and `Files` read tables that ARE
+populated at symbols level and must be untouched. The existing test
+`Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros`
+(`WorkspaceRenderTests.cs:1066`) already asserts this principle for the missing-table cause — extend the
+principle, do not weaken that test.
+
+**File ownership:** Modify `src/Miller.Indexing/WorkspaceHealthReader.cs`, `src/Miller.Indexing/IndexLevels.cs`,
+`src/Miller.Server/Tools/IndexLevelGuard.cs`, `src/Miller.Indexing/MetricSnapshotAggregates.cs`; Modify
+`tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`
+
+**Serialization required:** Yes — runs alone after Lane L1 completes.
+
+**Dependency reason:** Touches `IndexLevelGuard.cs` (Task 1's file) and `MetricSnapshotAggregates.cs` (Task 3's
+file); both are committed by the time this runs, but it must not overlap either.
+
+**What to build:** `miller workspace health` renders a `GROUP BY` rollup over `structural_facts`. At symbols
+level that section is empty and reads as "this repo has no structural facts" — the same confident false negative
+the rest of this plan removes, on a surface Task 5 does not cover. Gate it at the READER, not at each renderer:
+`WorkspaceHealthReader.Read` is the single seam behind MCP `workspace health`, the CLI verb, AND the dashboard
+(`DashboardData.ReadWorkspaceHealthPanel` / `ReadPatternInventoryPanel`), so one gate fixes all three and no
+consumer can drift.
+
+Second half: the symbols-level predicate now exists three times — `IndexLevelGuard.IsSymbolsLevel` in
+`Miller.Server.Tools`, a private copy in `MetricSnapshotAggregates`, and a third would be needed here. The cause
+is that `Miller.Indexing` cannot reference `Miller.Server`. Hoist the predicate onto `IndexLevels` (which lives in
+`Miller.Indexing`), have `IndexLevelGuard.IsSymbolsLevel` delegate to it, and delete the private copy. This is the
+fix Task 3 flagged and correctly declined to take outside its ownership.
+
+**Approach:** Reuse `HealthFactSection<T>.Unavailable` with a reason naming the upgrade, matching the wording
+style already used for the missing-table case. Do NOT invent a new section state. Read the level from the
+connection `Read` already holds — do not open a second one. Preserve fail-open-to-full. Do not touch the five
+non-facts sections.
+
+**Acceptance criteria:**
+- [ ] `workspace health` reports `StructuralFacts` as unavailable-pending-upgrade at symbols level, not as an available empty section
+- [ ] The other five health sections are unchanged at symbols level
+- [ ] MCP, CLI, and dashboard all get the fix from the single reader-level gate (no per-renderer duplication)
+- [ ] One shared symbols-level predicate remains; `IndexLevelGuard` delegates and `MetricSnapshotAggregates`' private copy is gone
+- [ ] Against a full-level artifact all health output is byte-identical to pre-change, and `Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros` still passes unmodified
+- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ---
 

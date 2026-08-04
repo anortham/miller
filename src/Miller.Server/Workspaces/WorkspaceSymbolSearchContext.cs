@@ -4,10 +4,10 @@ namespace Miller.Server.Workspaces;
 
 /// <param name="IndexLevel">
 /// The artifact's <c>artifact_metadata.index_level</c>, read from <paramref name="IndexDbPath"/> when the context
-/// is built. Search itself is complete at symbols level, but the marker route reads source-region text that a
-/// symbols-level scan has not extracted, so the route decides from this rather than from the runtime type of
-/// <paramref name="Index"/> — which is an FTS sidecar or a lean projection, never proof of a level. Defaults to
-/// <see cref="IndexLevels.FullMetadataValue"/>, the value under which no guard fires.
+/// is built. Search itself is complete at symbols level, but the marker route reads <c>code.marker.v1</c> rows
+/// from <c>structural_facts</c>, which a symbols-level scan leaves empty, so the route decides from this rather
+/// than from the runtime type of <paramref name="Index"/> — which is an FTS sidecar or a lean projection, never
+/// proof of a level. Defaults to <see cref="IndexLevels.FullMetadataValue"/>, the value under which no guard fires.
 /// </param>
 public sealed record WorkspaceSymbolSearchContext(
     ISymbolLookupIndex Index,
