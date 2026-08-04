@@ -11,7 +11,11 @@ namespace Miller.Tests.Indexing;
 /// </summary>
 public sealed class ExtractSupervisionTests
 {
-    private const string ArtifactPath = "/abs/work/.miller/symbols.db";
+    // Platform-absolute: ExtractSupervisionPolicy.For normalizes with Path.GetFullPath, which on Windows
+    // drive-qualifies a bare "/abs/..." fixture and breaks literal-path expectations.
+    private static readonly string MillerDir = Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "miller-supervision-fixture", ".miller"));
+    private static readonly string ArtifactPath = Path.Combine(MillerDir, "symbols.db");
     private const int Pid = 4242;
 
     private static Func<string, string?> Env(string? supervision) =>
@@ -23,10 +27,10 @@ public sealed class ExtractSupervisionTests
         var supervision = ExtractSupervisionPolicy.For(ArtifactPath, Pid, Env(null));
 
         Assert.Equal(
-            Path.Combine("/abs/work/.miller", ExtractSupervisionPolicy.SpoolDirectoryName),
+            Path.Combine(MillerDir, ExtractSupervisionPolicy.SpoolDirectoryName),
             supervision.SpoolDirectory);
         Assert.Equal(
-            Path.Combine("/abs/work/.miller", ExtractSupervisionPolicy.ProgressFileName),
+            Path.Combine(MillerDir, ExtractSupervisionPolicy.ProgressFileName),
             supervision.ProgressFile);
         Assert.Equal(Pid, supervision.ParentPid);
     }
