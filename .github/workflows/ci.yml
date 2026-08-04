@@ -93,7 +93,10 @@ jobs:
   windows-fast:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-2025
-    timeout-minutes: 15
+    # Must exceed worst-case setup (~4 min of checkout/restore/build) plus the test step's own
+    # FAST_BUDGET_SECONDS, so the step budget is the tripwire that fires first, with evidence —
+    # at 15 the job cap cancelled a slow-but-progressing run before its budget could rule.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.0
 
@@ -115,9 +118,10 @@ jobs:
         shell: pwsh
         env:
           # Windows hosted runners are much slower than local/Ubuntu for test discovery/execution, and restore/build
-          # consume ~2 minutes before this step starts. Two clean hosted runs completed in 619s and 637s, so keep
-          # normal runner variance below the 15-minute job timeout while still catching a true runaway.
-          FAST_BUDGET_SECONDS: 720
+          # consume ~4 minutes before this step starts. Identical suites have measured 322s to 690s+ across
+          # 2026-08-03 runs (runner variance), so the ceiling sits above the observed worst case while still
+          # catching a true runaway; the job timeout above stays the backstop.
+          FAST_BUDGET_SECONDS: 900
         run: |
           $ErrorActionPreference = 'Continue'
           $results = Join-Path $PWD 'TestResults'
