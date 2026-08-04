@@ -110,7 +110,8 @@ public static class CliDispatch
                     if (rest.Count > 0 && rest[0].Equals("export", StringComparison.OrdinalIgnoreCase))
                         return ArtifactExport(rest, context, stdout, stderr,
                             "miller patterns export [--jsonl] [--workspace-id SELECTOR] [--workspace DIR]",
-                            PatternFactsExportReader.WriteJsonLines);
+                            PatternFactsExportReader.WriteJsonLines,
+                            PatternsExportLevelWarning);
                     return Patterns(rest, context, stdout, stderr);
                 case "metrics":
                     return Metrics(rest, context, stdout, stderr);
@@ -461,7 +462,15 @@ public static class CliDispatch
                 FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision, identity);
                 SearchRouteExecutionResult result =
                     SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
-                outw.WriteLine(result.Output);
+                string regionOutput = result.Output;
+                // Same level decision the MCP regions route makes, reached through the same helper so the two
+                // surfaces cannot drift.
+                if (SearchTool.RegionLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath))
+                    is { } converging)
+                {
+                    regionOutput = ToolDiagnosticRenderer.Attach("search", regionOutput, converging, json);
+                }
+                outw.WriteLine(regionOutput);
                 return 0;
             }
             catch (Exception ex) when (
@@ -1209,7 +1218,10 @@ public static class CliDispatch
                 o.Has("json"),
                 workspaceId: ctx.WorkspaceId ?? "current",
                 continuation: o.Value("continuation"));
-            WriteOutput(outw, result.Output);
+            string output = result.LevelDiagnostic is { } converging
+                ? ToolDiagnosticRenderer.Attach("patterns", result.Output, converging, o.Has("json"))
+                : result.Output;
+            WriteOutput(outw, output);
             return 0;
         }
         catch (ToolDiagnosticException ex) when (
@@ -1616,7 +1628,8 @@ public static class CliDispatch
         TextWriter outw,
         TextWriter err,
         string usage,
-        Action<string, TextWriter> export)
+        Action<string, TextWriter> export,
+        Func<string, string?>? levelWarning = null)
     {
         if (args.Count == 0 || args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
@@ -1629,9 +1642,20 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
+        // Degradation is announced on stderr BEFORE the rows, never as a line inside them: stdout is a JSONL
+        // contract a fleet consumer parses line by line, so a prose or differently-shaped line there breaks it.
+        // The warning is per-feed because only some source tables are left empty by a symbols-level scan.
+        if (levelWarning?.Invoke(ctx.ExtractDbPath) is { } warning)
+            err.WriteLine(warning);
+
         export(ctx.ExtractDbPath, outw);
         return 0;
     }
+
+    private static string? PatternsExportLevelWarning(string dbPath) =>
+        PatternsTool.FactsLevelDiagnostic(ExtractIndexLevelReader.Read(dbPath)) is { } converging
+            ? ToolDiagnosticRenderer.Render("patterns", converging, json: false)
+            : null;
 
     // The deterministic dead-code candidate listing (`references candidates`; dead-code candidates design rev 2):
     // a fact list with NAMED suppressions, not a verdict. The Indexing reader owns all query-time work (the schema

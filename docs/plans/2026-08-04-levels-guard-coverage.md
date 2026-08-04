@@ -185,12 +185,12 @@
 **Approach:** Replace the `is MillerRepositoryIndex` type test with the context-carried level from Task 1 — that single change fixes cross-workspace inspect. Keep `depth=summary` exempt (it is complete at symbols level; guarding it would be noise). For `ContextTool`, attach the converging diagnostic whenever reference evidence contributed to — or was silently omitted from — the bundle, including the `reference_mode=off` outgoing-evidence path. The CLI verbs call the tool cores directly, so route them through the same guarded path rather than duplicating a third detection style.
 
 **Acceptance criteria:**
-- [ ] MCP `inspect depth=overview` and `depth=full` emit `reference_layer_converging` on BOTH current-workspace and cross-workspace reads against a symbols-level artifact
-- [ ] `inspect depth=summary` is unaffected at any level
-- [ ] MCP `context` emits the diagnostic at symbols level, including `reference_mode=off`
-- [ ] CLI `inspect --depth overview|full` and `context --reference-mode usage` emit it too
-- [ ] Against a full-level artifact none of these attach and output is byte-identical
-- [ ] Worker-scope verification passes and the change is committed per commit mode
+- [x] MCP `inspect depth=overview` and `depth=full` emit `reference_layer_converging` on BOTH current-workspace and cross-workspace reads against a symbols-level artifact — *the cross-workspace test asserts `Assert.IsNotType<MillerRepositoryIndex>(index)`, pinning the exact condition under which the old type test silently did nothing, so the regression cannot become unreachable.*
+- [x] `inspect depth=summary` is unaffected at any level
+- [x] MCP `context` emits the diagnostic at symbols level, including `reference_mode=off`
+- [x] CLI `inspect --depth overview|full` and `context --reference-mode usage` emit it too — *CLI attaches the byte-identical message the MCP route uses, so the two surfaces explain the same thing.*
+- [x] Against a full-level artifact none of these attach and output is byte-identical — *expressed as absence of `diagnostic_code=`, absence of the JSON `diagnostic` property, and an unstamped demand counter. A literal byte comparison has no unguarded in-process run to compare against, and a hard-coded expected render would break on unrelated formatting work while proving less about the guard.*
+- [x] Worker-scope verification passes and the change is committed per commit mode
 
 ---
 
@@ -218,12 +218,12 @@
 **Approach:** Move the level decision out of the MCP wrapper and into `PatternsTool.Run` (or a shared helper both entry points call) so there is one implementation and the CLI cannot drift again. `patterns export` is a JSONL feed — emit the degradation as a machine-readable field or a documented stderr warning rather than injecting a prose line into the JSONL stream, and record whichever choice is made in `docs/contracts/cli-eros-v1.md`. Note that `patterns export` bypasses the wrapper independently at `CliDispatch.cs:109`, so it needs its own call site fixed even after `Run` is guarded if it does not route through `Run`.
 
 **Acceptance criteria:**
-- [ ] CLI `patterns list`, `summary`, and `search` emit the converging diagnostic at symbols level
-- [ ] CLI `patterns export` signals degradation without corrupting the JSONL stream, and the contract doc records how
-- [ ] CLI `search --regions` emits the converging diagnostic at symbols level
-- [ ] The guard has ONE implementation shared by MCP and CLI (no duplicated level check)
-- [ ] Against a full-level artifact all CLI output is byte-identical to pre-change
-- [ ] Worker-scope verification passes and the change is committed per commit mode
+- [x] CLI `patterns list`, `summary`, and `search` emit the converging diagnostic at symbols level — *before the change these returned "No patterns.", "No pattern groups.", "No matches for…" — confident negatives about an unextracted table.*
+- [x] CLI `patterns export` signals degradation without corrupting the JSONL stream, and the contract doc records how — *stderr, written BEFORE the first row; stdout stays a pure JSONL sequence; exit code stays 0. Wired through an optional `levelWarning` delegate on `ArtifactExport`, so `symbols export` and `complexity export` are untouched.*
+- [x] CLI `search --regions` emits the converging diagnostic at symbols level
+- [x] The guard has ONE implementation shared by MCP and CLI (no duplicated level check) — *stronger than asked: the decision is made in `PatternsTool.Run` and RETURNED on `PatternToolResult.LevelDiagnostic`, so every entry point RECEIVES it rather than having to remember to make it. Criterion holds structurally, not by convention. Regions required a lead-granted ownership extension to `SearchTool.cs` for a `RegionLevelDiagnostic` helper — Task 2 had extracted the markers guard there but left regions inline and split across two sites, so the plan's ownership table left no in-bounds way to share it.*
+- [x] Against a full-level artifact all CLI output is byte-identical to pre-change — *the regions wording literal was moved into the helper byte-for-byte, since it is already agent-visible on the MCP route.*
+- [x] Worker-scope verification passes and the change is committed per commit mode — *lead committed: the change spans an ownership-extended file and splitting it would have landed a non-building commit.*
 
 ---
 
@@ -333,7 +333,26 @@ original Codex-reviewed plan. Sequenced AFTER Lane L1 so it does not contend for
 - Modify: `src/Miller.Indexing/IndexLevels.cs` (hoist the symbols-level predicate)
 - Modify: `src/Miller.Server/Tools/IndexLevelGuard.cs` (delegate to the hoisted predicate)
 - Modify: `src/Miller.Indexing/MetricSnapshotAggregates.cs` (drop its private duplicate)
-- Test: `tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`
+- Modify: `src/Miller.Server/Cli/CliDispatch.cs` (the `references export` call site — part C)
+- Modify: `docs/contracts/cli-eros-v1.md` (record the `references export` warning)
+- Test: `tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`, and the CLI export guard tests
+
+**Part C — `references export` warns that identifier-derived references are absent.**
+*(Added 2026-08-04 with explicit user approval, after Task 5 surfaced it and the lead verified the provenance.)*
+
+`ReferenceExportReader` (`src/Miller.Indexing/ReferenceExportReader.cs:49-90`) is a UNION of FOUR arms:
+`FROM identifiers`, `FROM identifier_resolutions`, `FROM relationships`, and `FROM pending_relationships`, each
+joined to `reference_sites`. At symbols level `identifiers` and `identifier_resolutions` are EMPTY while
+`relationships` and `reference_sites` are POPULATED. So `references export` does NOT return an empty feed — it
+returns a plausible, non-empty feed that silently omits every identifier-derived reference. A fleet consumer sees
+real rows and has no signal that a whole class of references is missing, which is worse than an obviously empty
+result.
+
+Task 5 built the mechanism: `ArtifactExport` takes an optional `Func<string, string?> levelWarning` that writes to
+stderr BEFORE the rows, leaving stdout a pure JSONL stream (`PatternsExportLevelWarning` is the worked example).
+Wire the `references export` call site (`CliDispatch.cs:133`) with its own warning naming the identifier-derived
+omission specifically — do NOT reuse the patterns wording, because the degradation is different in kind (partial,
+not empty). `symbols export` and `complexity export` read populated tables and must stay unwarned.
 
 **Interfaces:**
 - Consumes: `ExtractIndexLevelReader.Read(SqliteConnection)`, `IndexLevels.SymbolsMetadataValue`, and the
@@ -384,6 +403,9 @@ non-facts sections.
 - [ ] MCP, CLI, and dashboard all get the fix from the single reader-level gate (no per-renderer duplication)
 - [ ] One shared symbols-level predicate remains; `IndexLevelGuard` delegates and `MetricSnapshotAggregates`' private copy is gone
 - [ ] Against a full-level artifact all health output is byte-identical to pre-change, and `Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros` still passes unmodified
+- [ ] (Part C) `references export` warns on stderr at symbols level that identifier-derived references are absent, stdout stays a pure JSONL stream, and the exit code is unchanged
+- [ ] (Part C) `symbols export` and `complexity export` stay unwarned at symbols level, and `references export` is unwarned at full level
+- [ ] (Part C) `docs/contracts/cli-eros-v1.md` records the `references export` warning alongside the `patterns export` one
 - [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
 
 ---

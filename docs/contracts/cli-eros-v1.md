@@ -253,12 +253,44 @@ its absence as "the full index is being served".
 While the object is present, symbol definitions, search, structure, relationship edges, and all `metrics`
 surfaces are complete; identifier-level reference results (trace refs, impact, inspect refs sections,
 `references candidates`), source-region search, and `patterns` facts are still converging and return a
-`reference_layer_converging` diagnostic instead of silently-empty results.
+`reference_layer_converging` diagnostic instead of silently-empty results — see
+[`diagnostic` on read-command JSON](#diagnostic-on-read-command-json-additive-conditional).
 
 `miller workspace levels [--json] [--set progressive|full|symbols-only] [--clear]` shows or sets the
 per-workspace policy; its JSON payload carries `operation: "levels"`, the `level_policy` object
 (`effective`/`source`/`registry`), `index_level` (nullable), `level_upgrade_owed`, and `changed`
 (`set`/`cleared`/null).
+
+### `diagnostic` on read-command JSON (additive, conditional)
+
+Read commands whose answer depends on a layer the artifact has not extracted yet return their normal payload
+plus an OPTIONAL top-level `diagnostic` object and a `diagnostic_schema_version` integer. Both are omitted
+entirely when the command's answer is complete, so full-level and pre-levels output stays byte-identical.
+Compact (non-`--json`) output carries the same facts as trailing `diagnostic_code=` / `diagnostic_class=` /
+`next:` lines appended after the result.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `code` | string | Stable machine token. `reference_layer_converging` is the levels code. |
+| `class` | string | One of `expected_empty`, `ambiguity`, `refusal`, `unsupported`, `corruption`, `unavailable`, `internal_failure`. |
+| `outcome` | string | `empty` for the first four classes, `error` for the last three. |
+| `message` | string | Human-readable explanation; wording is not a contract. |
+| `next_actions` | array | `{call, reason}` objects naming a recovery command. |
+
+At symbols level the emitting commands are `search --mode markers`, `search --regions`, `todos`, `inspect`
+(`--depth overview|full` only; `summary` is complete), `context`, `impact`, `trace`, and `patterns`. Exit code stays
+`0` and the payload stays ingestable — `diagnostic.code = reference_layer_converging` means "this result is
+empty or undercounted because the layer is still converging", NOT "this workspace has no such facts". The one
+levels surface that refuses instead is `references candidates`, which exits `3` with a stderr message.
+
+`miller patterns export` is a JSONL feed, so it signals the same degradation on **stderr** rather than in the
+stream: stdout stays a pure sequence of `structural_facts` rows (empty at symbols level), the exit code stays
+`0`, and stderr carries the compact rendering of the same diagnostic — a `diagnostic_code=` /
+`diagnostic_class=` / `next:` block — written before the first row. A consumer parsing stdout line by line is
+unaffected; a consumer that wants the degradation signal reads stderr or gates on `workspace status --json`'s
+`index_level`. `symbols export` and `complexity export` read tables a symbols-level scan fully populates and
+are never warned. `references export` is NOT warned either, but its `identifiers` / `identifier_resolutions`
+provenance is still converging at symbols level — gate that feed on `index_level`, not on stderr.
 
 ### `downgraded` on `refresh`/`full` (additive, conditional)
 
@@ -350,6 +382,9 @@ Read-command JSON is allowed to grow additive recovery fields. Current examples:
 - `containing_symbol_id` (nullable), `confidence`.
 - `start_line`, `start_column`, `end_line`, `end_column`, `start_byte`, `end_byte`.
 - `metadata_json` (nullable raw JSON text).
+
+A symbols-level workspace has no `structural_facts` rows yet, so this feed is legitimately empty there and says
+so on stderr. See [`diagnostic` on read-command JSON](#diagnostic-on-read-command-json-additive-conditional).
 
 `miller complexity export --jsonl [--workspace-id SELECTOR] [--workspace DIR]` emits one JSON line per
 `complexity_metrics` row (file-scope and symbol-scope; emitted broadly since julie-extract 2.3.0), ordered

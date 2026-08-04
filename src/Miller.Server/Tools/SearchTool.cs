@@ -329,17 +329,13 @@ public sealed class SearchTool
 
             string output;
             int count;
-            bool regionsConverging = false;
+            ToolDiagnostic? regionsConverging = null;
             ToolDiagnostic? markersConverging = null;
             if (route.Kind == SearchRouteKind.Regions)
             {
                 WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
-                if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(region.IndexDbPath)))
-                {
-                    regionsConverging = true;
-                    IndexLevelGuard.MarkDegraded(scope, "regions_layer_converging");
-                }
+                regionsConverging = RegionLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
                     region.Index,
                     route,
@@ -586,10 +582,8 @@ public sealed class SearchTool
 
             RequireSearchMcpOutput(output);
             ToolDiagnostic? diagnostic = regionsConverging
-                ? IndexLevelGuard.Converging(
-                    "source regions (comments/doc comments/string literals) have not been extracted yet.")
-                : markersConverging
-                    ?? (count == 0 ? SearchEmptyDiagnostic(route, query) : null);
+                ?? markersConverging
+                ?? (count == 0 ? SearchEmptyDiagnostic(route, query) : null);
             if (scope is not null)
             {
                 scope.SetTarget(query);
@@ -643,6 +637,23 @@ public sealed class SearchTool
         IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
         return IndexLevelGuard.Converging(
             "TODO/FIXME/HACK/XXX marker facts (code.marker.v1) have not been extracted yet.");
+    }
+
+    /// <summary>
+    /// The regions route's index-level decision, shared by the MCP <c>search regions=…</c> route and the CLI
+    /// <c>search --regions</c> verb so the two can never drift. <c>source_regions</c> is one of the tables a
+    /// symbols-level scan leaves EMPTY, so the region arm of <c>search.db</c> converges from nothing and a
+    /// zero-hit there means "not extracted yet", not "no comment/doc/string text matches". Returns null — the
+    /// guard is inert — for every level but symbols, so full-level output stays byte-identical.
+    /// </summary>
+    internal static ToolDiagnostic? RegionLevelDiagnostic(string? indexLevel, TelemetryScope? telemetry = null)
+    {
+        if (!IndexLevelGuard.IsSymbolsLevel(indexLevel))
+            return null;
+
+        IndexLevelGuard.MarkDegraded(telemetry, "regions_layer_converging");
+        return IndexLevelGuard.Converging(
+            "source regions (comments/doc comments/string literals) have not been extracted yet.");
     }
 
     private static ToolDiagnostic SearchEmptyDiagnostic(SearchRoute route, string query)

@@ -125,15 +125,10 @@ public sealed class PatternsTool
                 json,
                 outputBudget,
                 context.WorkspaceId ?? "current",
-                continuation);
-            ToolDiagnostic? diagnostic = null;
-            if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(context.IndexDbPath)))
-            {
-                IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
-                diagnostic = IndexLevelGuard.Converging(
-                    "structural facts have not been extracted yet, so pattern results are empty.");
-            }
-            else if (result.ResultCount == 0)
+                continuation,
+                telemetry);
+            ToolDiagnostic? diagnostic = result.LevelDiagnostic;
+            if (diagnostic is null && result.ResultCount == 0)
             {
                 diagnostic = ToolDiagnostic.ExpectedEmpty(
                     result.EmptyReason ?? "no_facts",
@@ -196,7 +191,8 @@ public sealed class PatternsTool
         bool json,
         int? outputByteBudget = null,
         string workspaceId = "current",
-        string? continuation = null)
+        string? continuation = null,
+        TelemetryScope? telemetry = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
@@ -232,7 +228,7 @@ public sealed class PatternsTool
             Math.Clamp(limit, 1, MaxLimit).ToString(CultureInfo.InvariantCulture),
             json ? "json" : "compact");
 
-        return op switch
+        PatternToolResult result = op switch
         {
             "list" => List(
                 reader, dbPath, patternId, language, path, metadataFilters, json, outputByteBudget,
@@ -267,6 +263,28 @@ public sealed class PatternsTool
                 continuation),
             _ => throw InvalidRequest("patterns operation must be list, summary, or search."),
         };
+
+        return result with
+        {
+            LevelDiagnostic = FactsLevelDiagnostic(ExtractIndexLevelReader.Read(dbPath), telemetry),
+        };
+    }
+
+    /// <summary>
+    /// The patterns surface's index-level decision. It lives inside <see cref="Run"/> rather than in the
+    /// <c>[McpServerTool]</c> wrapper because the CLI verbs call <see cref="Run"/> directly: while the check sat
+    /// in the wrapper, `miller patterns` served a symbols-level workspace a clean, empty, authoritative-looking
+    /// answer about the <c>structural_facts</c> table nobody had extracted yet. Returns null — the guard is
+    /// inert — for every level but symbols, so full-level output stays byte-identical.
+    /// </summary>
+    internal static ToolDiagnostic? FactsLevelDiagnostic(string? indexLevel, TelemetryScope? telemetry = null)
+    {
+        if (!IndexLevelGuard.IsSymbolsLevel(indexLevel))
+            return null;
+
+        IndexLevelGuard.MarkDegraded(telemetry, "facts_layer_converging");
+        return IndexLevelGuard.Converging(
+            "structural facts have not been extracted yet, so pattern results are empty.");
     }
 
     private static void ValidateInputLength(string? value, string parameterName, int maxEncodedBytes)
@@ -1906,4 +1924,13 @@ public sealed class PatternsTool
         new(buffer, new JsonWriterOptions { Encoder = PatternJsonEncoder });
 }
 
-internal readonly record struct PatternToolResult(string Output, int ResultCount, string? EmptyReason = null);
+/// <summary>
+/// A rendered patterns result. <paramref name="LevelDiagnostic"/> is set by <see cref="PatternsTool.Run"/> when
+/// the artifact serves a symbols-level index, so every entry point receives the level decision rather than
+/// having to remember to make it.
+/// </summary>
+internal readonly record struct PatternToolResult(
+    string Output,
+    int ResultCount,
+    string? EmptyReason = null,
+    ToolDiagnostic? LevelDiagnostic = null);

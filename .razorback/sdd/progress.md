@@ -245,3 +245,124 @@ two-session default-on dogfood, impact review, and Grok RC5 pin/evidence review 
 macOS production-connector soak passed with zero hangs/failures, 17/17 normal completions, sub-second
 broker/owner recovery, and zero final broker processes; hosted candidate-branch Windows/package gates
 and the physical 6GB NVIDIA gate remain before final main/tag/release approval.
+
+---
+
+# Run: levels-guard-coverage (plan docs/plans/2026-08-04-levels-guard-coverage.md)
+
+Branch `levels-guard-coverage`, worktree `.worktrees/levels-guard-coverage`, base `98b63273`.
+Everything ABOVE this heading belongs to the earlier semantic-integration run and does not
+apply here; this run's briefs/reports are namespaced `lgc-task-N-*`.
+
+Dispatch order: Batch A (6, 7) + Task 1 in parallel -> Lane L1 (2 -> 4 -> 5 -> 8) serial ->
+Batch B (3) after Task 1.
+
+Lead decision: Task 1 runs `parallel-lead-commit` (the plan leaves its mode unstated) because it
+is dispatched concurrently with Batch A and concurrent workers must not race the git index.
+
+Task 7: complete (parallel-lead-commit, Lead inline review clean, lead commit cd763f84).
+  Criterion 2's telemetry clause satisfied differently and better — Refusal maps to Outcome.Empty
+  so selector mistakes leave the errors=N counter entirely (outcome=empty/empty_reason=invalid_request)
+  rather than being recategorised inside it. Lead verified ToolDiagnostic.cs:36 and ClassifyError.
+  Plan mismatches confirmed by lead: MarkerSearch is at src/Miller.Server/Tools/MarkerSearch.cs (not
+  Miller.Indexing); ClassifyError maps *ambiguous* selector to not_found, not unknown_workspace.
+  Watch item: renderer no longer clobbering means IncompatibleExtract/Unauthorized/FileNotFound/IO
+  now record ClassifyError's category instead of the diagnostic code. diagnostic_code metadata still
+  carries the old value on the same row; flag in the final report as a telemetry-shape change.
+Task 1: fix round 1 dispatched (NOT complete). Lead review found AC1 ("every read context") unmet —
+  only WorkspaceReadContext + WorkspaceSymbolReadContext carried the level, but SearchTool.cs:364
+  markers uses WorkspaceSymbolSearchContext (Task 2's surface) and PatternsTool.cs:106 uses
+  WorkspaceArtifactContext (Task 5's surface). Leaving it would force Tasks 2/5 to write inline
+  artifact reads while Task 4 reads context.IndexLevel — re-creating the two-detection-style split
+  the plan exists to remove. Fix: extend SymbolSearch/Artifact/RegionSearch contexts; Content and
+  TextContent deliberately excluded (content.db, no index_level concept, no consumer in this plan).
+  Lead ACCEPTED worker Concern #2 (promote/swap window where artifact reads full while holder still
+  serves symbols) as a documented follow-up, not a defect — brief mandates artifact-path derivation.
+Task 6: fix round 1 dispatched (NOT complete). Lead review found the three ReapStagingOrphans call
+  sites untested (delete them and the suite still passes) and CLI workspace verbs bypassing the hook
+  entirely (CliDispatch.cs:2634/2655/2674 render WorkspaceRender.Status directly). Authorized
+  ownership extension to WorkspaceToolTests.cs and CliDispatch.cs. CliDispatch window is exclusive
+  right now — Lane L1 is HELD until Task 6 lands to avoid two agents editing that file concurrently.
+Task 1: complete (parallel-lead-commit, Lead inline review clean after fix round 1, lead commit 90dcb615).
+  Level carried on 5 of 7 context types at 10 construction sites; Content/TextContent excluded with the
+  reason recorded at WorkspaceIndexProvider.cs:351. Lead independently re-ran the assigned gate: 18/18 pass.
+  Open follow-up (accepted, not a defect): promote/swap window where a full rebuild promotes the artifact
+  before IndexHolder.Swap publishes the reloaded index — artifact reads `full` while the holder still serves
+  symbols, so a current-workspace guard would not fire for ~one index load. Self-healing; freshness banner
+  already reports the rebuild. Do NOT "fix" by OR-ing in the holder level without a plan amendment.
+Task 6: CliDispatch.cs portion DONE and released (Lane L1 unblocked). Lead APPROVED the worker's deviation
+  from the instruction: reap placed before the RequireIndex early-bail (status/health) and before the
+  julie-extract Locate bail (open) rather than at the literal render sites, because a workspace with no
+  artifact or no restored extractor bails before rendering — which is exactly the leak case. +20 lines,
+  pure insertions, no refactor. WorkspaceToolTests lifecycle test still in progress.
+Task 6: complete (parallel-lead-commit, Lead inline review clean after fix round 1, lead commit 34f06e86).
+  Lead independently re-ran the gate: 102/102 pass. Worker mutation-checked its own lifecycle test (deleted
+  the hook, both tests failed, restored) — that was the lead's actual objection and it is answered.
+  OPEN COVERAGE GAP to revisit before the branch gate: the 5 CLI reap call sites have no CLI-level test.
+  They are one-line calls into the mutation-checked total function, and CliDispatch.cs was released to
+  Lane L1 rather than held longer. Lead may add a CLI status test after Lane L1 completes.
+
+## Phase 1 complete — Batch A + foundation
+Commits: cd763f84 (T7), 90dcb615 (T1), 34f06e86 (T6). Lane L1 in flight (T2), Batch B in flight (T3).
+Task 3: complete (parallel-lead-commit, Lead inline review clean, lead commit c518962c).
+  Lead independently re-ran the gate: 12/12 (10 MetricSnapshotLevelTests + 2 of Task 6's new CLI tests).
+  Task 6's CLI tests were failing at Task 3's run but pass now — Task 6 fixed them in its follow-up round.
+
+## Findings raised by Task 3 that are NOT in the approved plan
+F1 (SCOPE QUESTION for the user): `workspace health` renders WorkspaceExtractionHealthFacts.StructuralFacts
+   (WorkspaceHealthReader.cs:25), a GROUP BY over structural_facts. At symbols level that section renders
+   EMPTY and reads as "this repo has no structural facts" — the SAME confident-false-negative class this
+   plan exists to remove, on a surface no task covers. Task 5 is patterns/regions, not workspace health.
+   Within the plan's stated GOAL but outside its 8 enumerated tasks. Do not silently add a Task 9.
+F2 (follow-up, architectural): IsSymbolsLevel is now duplicated — IndexLevelGuard.IsSymbolsLevel in
+   Miller.Server.Tools and a private copy in MetricSnapshotAggregates — because Miller.Indexing cannot
+   reference Miller.Server (proven from the csproj ProjectReference graph). Correct long-term shape is to
+   hoist the predicate onto IndexLevels (Miller.Indexing) and have IndexLevelGuard delegate. Worker
+   correctly flagged rather than took it (IndexLevels.cs/IndexLevelGuard.cs outside its ownership).
+F3 (doc drift): docs/contracts/report-json-v1.md:54-55 says the markers section is unavailable only when
+   the sidecar is disabled or search.db cannot be opened. Symbols level is now a third cause. JSON SHAPE
+   unchanged so no consumer breaks, but the prose is incomplete.
+F4 (pre-existing, unrelated): ReportTool.Run's `regionIndex` parameter appears unused, which would make
+   CliDispatch.Report's sidecar-opening block dead work. Not touched.
+F1 RESOLVED by user 2026-08-04: "Add as Task 9, after Lane L1". Task 9 written into the plan document,
+  marked as added-during-execution and NOT covered by the original Codex review. Design decided from
+  Miller evidence: gate at WorkspaceHealthReader.Read (the single seam behind MCP health, the CLI verb,
+  and the dashboard's ReadWorkspaceHealthPanel/ReadPatternInventoryPanel) reusing the EXISTING
+  HealthFactSection<T>.Unavailable shape — the codebase already holds this principle for the
+  missing-table cause (test Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros).
+  Task 9 also absorbs F2: hoist IsSymbolsLevel onto IndexLevels so the predicate stops being duplicated
+  (would have become 3 copies).
+Task 2: complete (serial-worker-commit, worker commit 1d5cb8c0, Lead inline review clean). Lead re-ran: 10/10.
+  LEAD RULING recorded in the plan: the plan's AC wording "returns facts_layer_converging" is ambiguous
+  between diagnostic CODE and telemetry degraded_reason. Binding decision: code stays
+  reference_layer_converging (what IndexLevelGuard.Converging emits), facts_/regions_layer_converging remain
+  MarkDegraded reasons. Matches PatternsTool + SearchTool regions. Passed to Task 5 as binding.
+  Task 2 also caught a DOC ERROR in Task 1's committed file (WorkspaceSymbolSearchContext.IndexLevel doc
+  attributed markers to source-region text; they are code.marker.v1 rows in structural_facts — the exact
+  hypothesis plan validation corrected). Lead fixed it in 635febb7.
+Task 6 follow-up: complete (lead commit 635febb7) — WorkspaceStagingReaperCliTests pins the 5 CLI reap call
+  sites; worker mutation-checked in an ISOLATED detached worktree rather than mutating the shared tree.
+  Coverage gap from Task 6 review is now CLOSED.
+Task 4: complete (serial-worker-commit, worker commit 1b7875ac, Lead inline review clean). Lead re-ran: 27/27.
+  Core fix is 2 lines out / 1 in: `context.Index is MillerRepositoryIndex` replaced by the carried level.
+  Findings carried forward:
+  - `inspect <file-path> --depth overview` (a file LISTING, which renders no refs sections) still gets the
+    "refs/callers/callees are empty" message at symbols level. PRE-EXISTING on the MCP route; worker kept
+    CLI/MCP in lock-step rather than special-casing. Cosmetic. NOT added to Task 8's scope.
+  - CLI JSON `diagnostic` object added by Tasks 2 and 4 was undocumented in docs/contracts/cli-eros-v1.md.
+    FOLDED INTO TASK 5, which already had a doc obligation for patterns export.
+F5 (references export) RESOLVED by user 2026-08-04: "Fold into Task 9" — now Task 9 Part C in the plan.
+  LEAD-VERIFIED provenance before asking (did not take the worker's claim on trust):
+  ReferenceExportReader.cs:49-90 is a UNION of FOUR arms — identifiers, identifier_resolutions,
+  relationships, pending_relationships, each joined to reference_sites. At symbols level the first two are
+  EMPTY and the last two are POPULATED. So references export returns a PLAUSIBLE NON-EMPTY feed that
+  silently drops all identifier-derived references. That is worse than an empty feed: a fleet consumer sees
+  real rows and gets no signal a whole class is missing. Warning must name the partial-omission specifically,
+  NOT reuse the patterns wording. symbols/complexity export read populated tables — leave unwarned.
+Task 5: ownership EXTENDED to src/Miller.Server/Tools/SearchTool.cs (lead-granted, verified no concurrent
+  owner). Reason: Task 2 extracted MarkerLevelDiagnostic into SearchTool, but the regions guard was left
+  inline and SPLIT across SearchTool.cs:338 (level check) and :588 (wording literal). Task 5 owns CliDispatch
+  but not SearchTool, so its only in-bounds option was copying that literal into the CLI — the exact drift its
+  own AC4 forbids. The plan's file-ownership table did not anticipate this. Also had Task 5 switch the MCP
+  regions site from re-reading the artifact to region.IndexLevel (Task 1 added it for exactly this; the
+  markers route at :367 already used it).
