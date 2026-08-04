@@ -443,3 +443,18 @@ Proof it is not this branch: git diff --name-only 98b63273..HEAD touches no sema
 file; building the probe in Release and re-running the class gave 2 passed / 2 skipped / 0 failed with zero
 source changes. NOT fixed on this branch (unrelated harness change; would enlarge the pre-merge review surface).
 Deserves its own ticket: the failure mode is a 30s timeout that reads like a product regression.
+
+## PRE-MERGE REVIEW (codex + grok) and FINAL GATE
+codex: 4 findings — 2 fixed (ad369bab), 2 dismissed with written reasons (full-level output changes that are
+Tasks 7/8, deliberate all-levels fixes adding no guard; the plan's guard-scoped wording was tightened).
+grok (added at user request): 1 finding, and it REVERSED codex's HIGH fix. Lead traced every guard consumer and
+the code settled it — no guarded surface reads evidence from the in-memory index, so ad369bab pointed the level
+at the snapshot for two guards (InspectTool:108, ContextTool:200) whose evidence comes from the file. Real, not
+theoretical: LevelForScan:184 maps RootRebind/SchemaHeal/CorruptionHeal to Symbols, so a REPAIR promotes a
+symbols artifact over a full workspace while the holder serves the old full index. Reverted in 6c4a4b34;
+provider now byte-identical to pre-ad369bab apart from XML docs. LEAD RULING ERROR, not a worker error.
+Testing lesson: InspectContextLevelGuardTests drives a FAKE provider handed a level, so it could never catch a
+mis-BOUND level — which is why the error passed the first fix round. Two new tests drive the REAL provider
+through InspectTool/ContextTool and assert the user-visible diagnostic.
+FINAL GATE (HEAD 6c4a4b34): build 0/0; fast 5968 passed / 0 failed; Scale 120 passed / 0 failed; GATE_EXIT=0.
+NOT PUSHED — push/PR needs explicit user approval.

@@ -408,9 +408,21 @@ it, which would have shipped a per-row field that the governing contract does no
   constant-metadata idiom. A field that appears only when degraded is not a reliable in-band signal: a consumer
   cannot distinguish "absent because full level" from "absent because older Miller".
 - **Consequence, accepted deliberately:** `references export` output is therefore NOT byte-identical at full
-  level — the single intentional exception to this plan's byte-identical guarantee, taken because an in-band
-  signal that exists only when degraded is useless. Every other surface stays byte-identical, and the exception
-  must not leak beyond this one feed.
+  level. It is the only place where a GUARD-bearing surface changes full-level bytes, taken because an in-band
+  signal that exists only when degraded is useless. No other guard may leak a full-level difference.
+
+**Precision note on the byte-identical guarantee** *(added after the codex pre-merge review flagged two apparent
+violations; both dismissed, but the plan's wording was genuinely loose).* The guarantee in the Non-negotiables is
+scoped exactly as written there: **every GUARD added here** must be inert at full level. It is not a blanket
+promise that no output anywhere on this branch changes at full level. Two tasks deliberately change behavior at
+EVERY level because the defects they fix exist at every level, and neither adds a guard:
+- **Task 7** reclassifies validation mistakes from `internal_failure` to `invalid_request`/refusal. A workspace
+  selector typo was never an internal failure at any level. (This task exists BECAUSE the earlier codex review of
+  this plan found `ToolDiagnosticRenderer` clobbering a correctly-computed telemetry category.)
+- **Task 8** distinguishes a not-indexed path from a symbol-empty file. A typo'd path was equally
+  indistinguishable at full level; fixing it only at symbols level would be incoherent.
+Both are in-scope plan tasks, not smuggled changes. A reviewer checking "does this branch change full-level
+output" should expect exactly three sites — `references export`, Task 7, Task 8 — and treat a fourth as a defect.
 - `docs/contracts/cli-eros-v1.md:291-293` currently asserts `references export` is unwarned and must be gated on
   `index_level` "not on stderr". Part C falsifies both halves; that sentence is REPLACED, not appended beside.
 
@@ -459,6 +471,52 @@ is usable_with_warnings, never degraded." A symbols-level artifact is the same s
 state, honestly reported, that must not flip a fleet workspace into `Degraded`. Full level is untouched.
 
 ---
+
+## Pre-merge external review
+
+Two reviewers, both adversarial, read-only, against the same diff and the same focus text: **codex** (the
+reviewer chosen at plan approval) and **grok** (added at the user's request during the review). Running both is
+what saved this branch — they disagreed, and the disagreement was the finding.
+
+### codex — 4 findings
+
+| Severity | Finding | Disposition |
+|---|---|---|
+| HIGH | Carried `IndexLevel` not bound to the artifact generation it describes | Fixed in `ad369bab` — **then REVERSED by `6c4a4b34`; see below** |
+| MEDIUM | `InspectTool` changes full-level output | Dismissed — Task 8 is a deliberate all-levels fix and adds no guard |
+| MEDIUM | `ToolDiagnostic` reclassification changes full-level output | Dismissed — Task 7, same reasoning; it exists BECAUSE codex's own earlier plan review flagged it |
+| LOW | A duplicate symbols-level predicate survived the hoist (`WorkspaceFactsAssembler.cs:98`) | Fixed in `ad369bab`, retained through the reversal; `grep` now confirms zero direct comparisons in `src/` |
+
+Both MEDIUM dismissals are factually correct that full-level output changes — the miss was the LEAD's, whose
+focus text told codex "any other byte-difference at full level is a defect," broader than the plan's actual
+guard-scoped rule. The plan's wording was tightened in response (see the precision note above).
+
+### grok — 1 finding, and it reversed the codex fix
+
+grok read the POST-fix code and argued `ad369bab` was wrong. The lead traced every guard consumer rather than
+choose between reviewers, and the code settled it: **no guarded surface reads its evidence from the in-memory
+index** — `SearchTool` markers/regions, `ContextTool`, and `InspectTool` all read from a file path. `ad369bab`
+pointed the level at the snapshot for two guards whose evidence comes from the file.
+
+The failure is real, not theoretical: `IndexLevels.LevelForScan:184` maps `RootRebind`/`SchemaHeal`/
+`CorruptionHeal` to `ExtractIndexLevel.Symbols`, so a REPAIR promotes a symbols artifact over a previously-full
+workspace while the holder keeps serving the old full index. In that window the guard would go silent over an
+empty identifier layer — the exact confident false negative this plan exists to remove, occurring during a
+repair.
+
+Reverted in `6c4a4b34`. The provider is byte-identical to its pre-`ad369bab` state apart from XML docs.
+
+**This was a lead ruling error, not a worker error** — the principle ("the level must describe the same artifact
+generation as the data its consumer reads") was right; the lead mapped the contexts to the wrong side of it.
+
+### The testing lesson
+
+`InspectContextLevelGuardTests` drives a fake provider that is HANDED a level, so no amount of thoroughness
+there could catch a mis-BOUND level — which is why the error passed the first fix round's gates. Two new tests
+drive the REAL `WorkspaceIndexProvider` through `InspectTool` and `ContextTool` and assert the user-visible
+diagnostic. Asserting what a context *carries* is not a substitute for asserting what the user is *told*.
+
+Cost: grok reported $1.65 (175,521 in / 24,723 out). codex-cli does not surface per-request token counts.
 
 ## Out of Scope
 
