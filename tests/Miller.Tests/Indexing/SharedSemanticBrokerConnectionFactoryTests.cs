@@ -53,8 +53,13 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
                 handshakes[i]?.Pin.ModelSha256 == SemanticEncoderSelection.Active.ModelSha256,
                 group.Sessions[i].UnavailableReason);
         Assert.Single(File.ReadAllLines(counter));
-        Assert.Equal(1, group.Factories.Count(factory => factory.Snapshot.IsOwner));
-        Assert.All(group.Factories, factory => Assert.True(factory.Snapshot.SpawnAttempts >= 1));
+        await WaitUntilAsync(
+            () => group.Factories.Count(factory => factory.Snapshot.IsOwner) == 1,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        SharedSemanticBrokerConnectionFactory owner =
+            Assert.Single(group.Factories, factory => factory.Snapshot.IsOwner);
+        Assert.True(owner.Snapshot.SpawnAttempts >= 1);
         Assert.All(group.Factories, factory =>
         {
             Assert.Equal("ready", factory.Snapshot.State);
@@ -201,6 +206,10 @@ public sealed class SharedSemanticBrokerConnectionFactoryTests : IAsyncLifetime
         string counter = Path.Combine(_root, "loads.txt");
         await using BrokerFactoryGroup group = CreateGroup(3, counter, loadDelayMs: 250);
         _ = await group.HandshakesAsync(TestContext.Current.CancellationToken);
+        await WaitUntilAsync(
+            () => group.Factories.Count(factory => factory.Snapshot.IsOwner) == 1,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
         SharedSemanticBrokerConnectionFactory owner =
             Assert.Single(group.Factories, factory => factory.Snapshot.IsOwner);
         SharedSemanticBrokerConnectionFactory[] nonOwners =
