@@ -434,15 +434,18 @@ scripts/test.sh all: Release build 0 warnings / 0 errors; fast 5963 passed / 0 f
 The ContentCorpusContextReaderTests flake Task 9 saw did NOT recur.
 
 First attempt failed Scale 1 test: SemanticBrokerScaleTests.EightSameModelProcesses (keeper probe did not bind
-within 30s). Root cause is a PRE-EXISTING harness gap, not this branch: the test runs its probe via
-`dotnet run --project scripts/Miller.SemanticBrokerProbe -c Release --no-build`, but that project is NOT in
-Miller.slnx, so scripts/test.sh's Release solution build never produces its Release output. A fresh worktree has
-only bin/Debug, so there was nothing to launch and the test waited out the full bind timeout. The MAIN checkout
-has bin/Release dated 2026-07-28, left by a by-hand semantic-broker-soak run — the only reason it passes there.
-Proof it is not this branch: git diff --name-only 98b63273..HEAD touches no semantic/broker/probe/test.sh/slnx
-file; building the probe in Release and re-running the class gave 2 passed / 2 skipped / 0 failed with zero
-source changes. NOT fixed on this branch (unrelated harness change; would enlarge the pre-merge review surface).
-Deserves its own ticket: the failure mode is a 30s timeout that reads like a product regression.
+within 30s). Re-running the class after building the probe in Release gave 2 passed / 2 skipped / 0 failed with
+zero source changes, and it passed again in the final gate and in the post-merge gate on main.
+
+CORRECTION (2026-08-04): the root cause first recorded here — "the probe project is not in Miller.slnx, so the
+Release solution build never produces its Release output" — is WRONG. Miller.Tests.csproj:45 carries a
+ProjectReference to Miller.SemanticBrokerProbe and Miller.Tests IS in Miller.slnx, so the Release solution build
+produces the probe transitively; the main checkout's bin/Release is dated 2026-08-03, not the 2026-07-28 soak run
+the original note blamed. The real cause is unresolved; a 30s bind timeout on a loaded machine is the likeliest
+explanation. Treat this as a flake to watch, NOT as a known fresh-clone gap.
+
+Proof it is not this branch either way: git diff --name-only 98b63273..HEAD touches no
+semantic/broker/probe/test.sh/slnx file.
 
 ## PRE-MERGE REVIEW (codex + grok) and FINAL GATE
 codex: 4 findings — 2 fixed (ad369bab), 2 dismissed with written reasons (full-level output changes that are
