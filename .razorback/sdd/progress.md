@@ -366,3 +366,44 @@ Task 5: ownership EXTENDED to src/Miller.Server/Tools/SearchTool.cs (lead-grante
   own AC4 forbids. The plan's file-ownership table did not anticipate this. Also had Task 5 switch the MCP
   regions site from re-reading the artifact to region.IndexLevel (Task 1 added it for exactly this; the
   markers route at :367 already used it).
+Task 5: complete (LEAD commit 959eaa4a — lead committed rather than the worker because the change spanned the
+  ownership-extended SearchTool.cs and splitting it would have landed a non-building commit; worker correctly
+  held at the approval boundary twice). Lead re-ran gates: 84/84 (PatternsRegionCli 20 + PatternsTool 54 +
+  MarkerLevelGuard 10). Delivered BETTER than the brief: the level decision is RETURNED on
+  PatternToolResult.LevelDiagnostic, so every entry point receives it rather than remembering to make it —
+  AC4 now holds structurally, not by convention.
+  Note (not a defect): PatternsTool.Run reads the level from dbPath even on the MCP path where
+  context.IndexLevel was already available — one redundant scalar read per patterns call. Judged worth it:
+  threading a level parameter into Run would let a caller pass the wrong one. Non-hot path.
+  Known wart preserved deliberately for MCP parity: CLI region search at symbols level with a missing/stale
+  search.db still exits 3 with "region search requires a refreshed source-region search sidecar", which
+  misdirects (no sidecar refresh can populate a region arm converging from an empty source_regions). MCP has
+  the identical wart; fixing one surface only would create drift. Separate decision.
+
+## Branch-gate prerequisite
+.tools/ is ABSENT in this worktree (all workers built with MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 /
+MILLER_ALLOW_MISSING_SEMANTIC=1). Main checkout has julie-extract 2.25.0 == scripts/julie-pins.json pin, plus
+the julie-semantic-sidecar-runtime package dir. Plan: copy .tools/ from the main checkout after Task 8 commits
+(no network needed, version-matched so both build guards pass silently), THEN run scripts/test.sh scale.
+A Scale SKIP is not a pass — the plan's escalation triggers require Scale because Task 1 changed
+WorkspaceIndexProvider context shapes.
+Task 8: complete (serial-worker-commit b752acfc, Lead inline review clean). Lead independently re-ran
+  InspectMissingFileTests|InspectTool|ScaleTraitConvention = 118 passed / 0 failed, deliberately WITHOUT the
+  MILLER_ALLOW_MISSING_* escape hatches so the run also proved the restored .tools/ satisfies both
+  VerifyPinnedJulieExtractVersion and VerifyPinnedSemanticSidecarVersion. Commit touched exactly 3 files.
+  Worker's design finding worth keeping: its first instinct, index.IsIndexedFilePath as sole evidence, is
+  SYMBOL-derived (_byFilePath from symbols), so it would have reported every genuinely symbol-empty indexed
+  file as "not indexed" — inverting AC2 while looking right. Kept only as a positive-only short-circuit,
+  where symbol-derived is sound; the real evidence is ExtractFileHashReader against the files table.
+  Two gaps it flagged were recorded in the plan's Out of Scope rather than absorbed: CLI inspect discards
+  diagnostics entirely (pre-existing, NOT a levels gap — the level guards do reach the CLI by manual
+  re-attachment; neither no_file_symbols nor file_not_indexed was ever printed, so nothing regressed), and
+  ImpactTool asserts an indexed file path it never proves (same shape, adjacent).
+
+## .tools/ INSTALLED (branch-gate prerequisite discharged)
+Copied julie-extract (2.25.0 == pin), julie-semantic-sidecar-runtime (0.1.0 == scripts/semantic-pins.json
+sidecar.version), and vec0.dylib into the worktree; skipped 140M of stale julie-server / julie-extract.orig-2.9.0.
+Staged to .tools.tmp then atomically mv'd, so a concurrent worker build could never observe a partial binary.
+Confirmed gitignored (.gitignore:24) so it can never be staged. Verified ScaleTestSupport.RepoRoot() walks up
+from the test assembly to Miller.slnx, which resolves to THIS worktree — so RequireJulieServer() finds this copy
+and the Scale gate will genuinely RUN rather than skip.

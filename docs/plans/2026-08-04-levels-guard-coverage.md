@@ -315,11 +315,11 @@
 **Approach:** Distinguish the two cases using the `files` table — a path present in `files` with zero symbols is genuinely symbol-empty; a path absent from `files` is not indexed. Give the not-indexed case its own diagnostic code and a next-step action suggesting `search mode=file` to find the intended path. Keep `no_file_symbols` semantics unchanged for the genuinely-empty case so existing consumers and tests are unaffected. Do not make the resolver hit the filesystem to check existence — the question is whether the path is in the INDEX, and a file can exist on disk yet be excluded by `.julieignore`.
 
 **Acceptance criteria:**
-- [ ] `inspect` on a path absent from the index returns a distinct diagnostic naming the path as not indexed
-- [ ] `inspect` on an indexed file with zero symbols still returns `no_file_symbols` unchanged
-- [ ] The not-indexed diagnostic carries an actionable next step for finding the intended path
-- [ ] No filesystem existence check is introduced in the resolver
-- [ ] Worker-scope verification passes and the change is committed per commit mode
+- [x] `inspect` on a path absent from the index returns a distinct diagnostic naming the path as not indexed — new `file_not_indexed` (`ExpectedEmpty`), `InspectTool.cs:411`
+- [x] `inspect` on an indexed file with zero symbols still returns `no_file_symbols` unchanged — message string byte-identical; lead re-read the diff to confirm, and its four preserved-behavior tests were green both before and after the change
+- [x] The not-indexed diagnostic carries an actionable next step for finding the intended path — `search(query="<basename>", mode="file")`; the basename, not the typo'd full path, because that full path is the one string guaranteed not to match
+- [x] No filesystem existence check is introduced in the resolver — resolver change is doc-only; membership evidence is `ExtractFileHashReader.ReadFileHash` against the `files` table, and `Inspect_PathPresentOnDiskButAbsentFromTheIndex_StillReportsFileNotIndexed` writes a real on-disk file that a probe would answer wrongly
+- [x] Worker-scope verification passes and the change is committed per commit mode — `serial-worker-commit` `b752acfc`, exactly 3 files; lead independently re-ran `InspectMissingFileTests|InspectTool|ScaleTraitConvention` = **118 passed / 0 failed**, with the build guards live (no escape hatches)
 
 ---
 
@@ -350,9 +350,29 @@ result.
 
 Task 5 built the mechanism: `ArtifactExport` takes an optional `Func<string, string?> levelWarning` that writes to
 stderr BEFORE the rows, leaving stdout a pure JSONL stream (`PatternsExportLevelWarning` is the worked example).
-Wire the `references export` call site (`CliDispatch.cs:133`) with its own warning naming the identifier-derived
+Wire the `references export` call site (`CliDispatch.cs:130`) with its own warning naming the identifier-derived
 omission specifically — do NOT reuse the patterns wording, because the degradation is different in kind (partial,
 not empty). `symbols export` and `complexity export` read populated tables and must stay unwarned.
+
+**LEAD RULING — stderr alone is NOT sufficient here, unlike `patterns export`.** That distinction is the whole
+point of Part C. At symbols level `patterns export` emits an EMPTY stdout, so a consumer cannot mistake it for a
+complete answer and an out-of-band stderr note suffices. `references export` emits a POPULATED stdout, so a
+consumer streaming stdout alone ingests partial data as complete with no in-band signal at all. Signalling
+in-band data loss purely out-of-band is the weak option.
+
+Emit BOTH:
+1. The stderr warning, for consistency with `patterns export`.
+2. An additive per-row `index_level` field on the emitted rows. This does NOT break the JSONL contract: it adds a
+   field rather than a line, so every line-by-line parser is unaffected, and `cli-eros-v1.md` already states that
+   read-command JSON may grow additive recovery fields. It follows the feed's own established pattern for
+   constant metadata — `WriteJsonLines` already reads `artifactId` and `workspaceRevision` ONCE and renders them
+   on every row via `RenderRow(row, artifactId, workspaceRevision)`; thread the level the same way. Rows already
+   carry provenance/quality metadata (`site_provenance`, `resolution_status`, `confidence`), so this is idiomatic
+   for the shape rather than a new concept.
+
+Scope discipline: add the per-row field to `references export` ONLY. `patterns export` degrades visibly (empty),
+and `symbols`/`complexity export` read fully-populated tables — neither needs it, and adding it everywhere would
+be an unrequested contract change across three feeds.
 
 **Interfaces:**
 - Consumes: `ExtractIndexLevelReader.Read(SqliteConnection)`, `IndexLevels.SymbolsMetadataValue`, and the
@@ -372,7 +392,9 @@ principle, do not weaken that test.
 
 **File ownership:** Modify `src/Miller.Indexing/WorkspaceHealthReader.cs`, `src/Miller.Indexing/IndexLevels.cs`,
 `src/Miller.Server/Tools/IndexLevelGuard.cs`, `src/Miller.Indexing/MetricSnapshotAggregates.cs`; Modify
-`tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`
+`tests/Miller.Tests/Indexing/WorkspaceHealthReaderTests.cs`. Part C additionally owns
+`src/Miller.Indexing/ReferenceExportReader.cs`, the `references export` call site in
+`src/Miller.Server/Cli/CliDispatch.cs`, `docs/contracts/cli-eros-v1.md`, and the CLI export guard tests.
 
 **Serialization required:** Yes — runs alone after Lane L1 completes.
 
@@ -404,6 +426,7 @@ non-facts sections.
 - [ ] One shared symbols-level predicate remains; `IndexLevelGuard` delegates and `MetricSnapshotAggregates`' private copy is gone
 - [ ] Against a full-level artifact all health output is byte-identical to pre-change, and `Health_Compact_MarksUnavailableExtractionSectionsInsteadOfReportingHealthyZeros` still passes unmodified
 - [ ] (Part C) `references export` warns on stderr at symbols level that identifier-derived references are absent, stdout stays a pure JSONL stream, and the exit code is unchanged
+- [ ] (Part C) Emitted `references export` rows carry an additive `index_level` field, so a consumer reading stdout alone can detect the partial feed in-band; line-by-line parsing is unaffected
 - [ ] (Part C) `symbols export` and `complexity export` stay unwarned at symbols level, and `references export` is unwarned at full level
 - [ ] (Part C) `docs/contracts/cli-eros-v1.md` records the `references export` warning alongside the `patterns export` one
 - [ ] Worker-scope verification passes and the change is handed to the lead per commit mode
@@ -416,3 +439,5 @@ non-facts sections.
 - **Query-triggered extraction** (extracting a layer on demand when an agent hits it). The `degraded` telemetry counter exists precisely to decide whether that is ever worth building; this plan preserves and extends that counter rather than pre-empting the decision.
 - **Re-running the levels benchmark** with the methodology corrections identified during validation (randomized AB/BA order, 5+ repetitions, median and spread, separately captured governor-wait / extractor / sidecar / semantic timings). Worth doing before any published performance claim, but it is measurement work, not a fix.
 - **`MILLER_FULL_REBUILD_INPLACE=1` stranding a symbols artifact.** The hatch forces policy `Full`, which suppresses the upgrade latch because `UpgradeOwed` requires progressive policy, so an existing symbols artifact never becomes full until the hatch is removed. Behaviorally consistent with the documented escape-hatch contract; flagged here as a documentation gap rather than a defect.
+- **CLI `inspect` discards tool diagnostics entirely.** *(Surfaced by Task 8; lead-confirmed pre-existing.)* `CliDispatch.Inspect` calls `InspectTool.RunLookup`/`RunSummary` with `out _` (`CliDispatch.cs:2036-2060`) and re-attaches only the level guard by hand, so the CLI prints neither `no_file_symbols` today nor Task 8's new `file_not_indexed`. This is NOT a levels-coverage gap — the plan's level guards do reach the CLI via that manual re-attachment — and Task 8 regressed nothing, since neither code was ever printed. Closing it means rethinking CLI diagnostic plumbing generally, which is a different concern from this plan's subject.
+- **`impact` asserts an indexed file path it never proves.** *(Surfaced by Task 8.)* `ImpactTool` already suggests `search(query=..., mode="file")` to "confirm the indexed file path" but performs no membership check of its own — the same blind spot Task 8 closed for `inspect`. An adjacent instance of the same shape, outside this plan's task list.
