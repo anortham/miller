@@ -427,3 +427,19 @@ Task 9: complete (serial-worker-commit 30fc5d82, Lead inline review clean). 10 f
   the stated precedent at :314 (scan-governor queueing = "working as DESIGNED, usable_with_warnings, never degraded").
   Worker reported one transient failure in ContentCorpusContextReaderTests that did not reproduce across 2 full-suite
   + 3 isolated runs; touches no shared path with this diff. Watch for it in the branch gate.
+
+## BRANCH GATE — PASS (HEAD 77f4aa15)
+scripts/test.sh all: Release build 0 warnings / 0 errors; fast 5963 passed / 0 failed / 2 skipped (24s, ceiling
+30s); Scale 120 passed / 0 failed / 5 skipped; GATE_EXIT=0. Scale genuinely RAN (not skipped) — .tools/ installed.
+The ContentCorpusContextReaderTests flake Task 9 saw did NOT recur.
+
+First attempt failed Scale 1 test: SemanticBrokerScaleTests.EightSameModelProcesses (keeper probe did not bind
+within 30s). Root cause is a PRE-EXISTING harness gap, not this branch: the test runs its probe via
+`dotnet run --project scripts/Miller.SemanticBrokerProbe -c Release --no-build`, but that project is NOT in
+Miller.slnx, so scripts/test.sh's Release solution build never produces its Release output. A fresh worktree has
+only bin/Debug, so there was nothing to launch and the test waited out the full bind timeout. The MAIN checkout
+has bin/Release dated 2026-07-28, left by a by-hand semantic-broker-soak run — the only reason it passes there.
+Proof it is not this branch: git diff --name-only 98b63273..HEAD touches no semantic/broker/probe/test.sh/slnx
+file; building the probe in Release and re-running the class gave 2 passed / 2 skipped / 0 failed with zero
+source changes. NOT fixed on this branch (unrelated harness change; would enlarge the pre-merge review surface).
+Deserves its own ticket: the failure mode is a 30s timeout that reads like a product regression.
