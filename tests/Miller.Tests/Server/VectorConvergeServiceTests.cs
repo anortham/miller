@@ -106,6 +106,142 @@ public sealed class VectorConvergePortScaleTests : IDisposable
     }
 
     [Fact]
+    public async Task Converge_ArtifactReplacementWithUnchangedCards_ReusesStoredVectors()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        var sidecar = new VectorSidecar(SemanticMode.On);
+        IVectorConvergePort live = SqliteVectorConvergePort.TryOpen(workspace)!;
+        Assert.NotNull(live);
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+
+        await NewService(sidecar)
+            .DrainAsync(live, session, TestContext.Current.CancellationToken);
+
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   $"Data Source={workspace.CanonicalExtractDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "UPDATE artifact_metadata SET value = 'artifact-rebuilt' WHERE key = 'artifact_id';";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        IVectorShadowRebuilder rebuilder = SqliteVectorShadowRebuilder.TryOpen(workspace)!;
+        Assert.NotNull(rebuilder);
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, symbols.Decision);
+        Assert.Equal(VectorEscalationTrigger.ArtifactIdChanged, symbols.Trigger);
+        Assert.Equal(0, symbols.Embedded);
+
+        using VectorStore promoted = sidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal("artifact-rebuilt", promoted.Meta("artifact_id"));
+        Assert.Equal(2, promoted.MappedCount(VectorUnitKind.Symbol));
+    }
+
+    [Fact]
+    public async Task Converge_ArtifactReplacement_RemovesVectorsForDeletedSymbolsFromTheSeededShadow()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        var sidecar = new VectorSidecar(SemanticMode.On);
+        IVectorConvergePort live = SqliteVectorConvergePort.TryOpen(workspace)!;
+        Assert.NotNull(live);
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+
+        await NewService(sidecar)
+            .DrainAsync(live, session, TestContext.Current.CancellationToken);
+
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   $"Data Source={workspace.CanonicalExtractDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM symbols WHERE symbol_id = 'sym-b';
+                UPDATE artifact_metadata SET value = 'artifact-rebuilt' WHERE key = 'artifact_id';
+                """;
+            Assert.Equal(2, command.ExecuteNonQuery());
+        }
+
+        IVectorShadowRebuilder rebuilder = SqliteVectorShadowRebuilder.TryOpen(workspace)!;
+        Assert.NotNull(rebuilder);
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(0, symbols.Embedded);
+        Assert.Equal(1, symbols.Deleted);
+
+        using VectorStore promoted = sidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal("sym-a", Assert.Single(promoted.MappedUnits(VectorUnitKind.Symbol, null)).UnitId);
+    }
+
+    [Fact]
+    public async Task Converge_ArtifactReplacementFromAnOlderMillerBuild_StillReusesStoredVectors()
+    {
+        string extension = SqliteVecTestSupport.RequireExtension();
+        Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+
+        WorkspaceContext workspace = SeedWorkspace();
+        var sidecar = new VectorSidecar(SemanticMode.On);
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+
+        using (IVectorConvergePort first = SqliteVectorConvergePort.TryOpen(workspace)!)
+        {
+            Assert.NotNull(first);
+            await NewService(sidecar).DrainAsync(first, session, TestContext.Current.CancellationToken);
+        }
+
+        string vectorsPath = Path.Combine(
+            Path.GetDirectoryName(workspace.CanonicalExtractDbPath)!, "vectors.db");
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={vectorsPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "UPDATE vectors_meta SET value = '0.0.1+olderbuild' WHERE key = 'writer_version';";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                   $"Data Source={workspace.CanonicalExtractDbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "UPDATE artifact_metadata SET value = 'artifact-rebuilt' WHERE key = 'artifact_id';";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        IVectorConvergePort live = SqliteVectorConvergePort.TryOpen(workspace)!;
+        Assert.NotNull(live);
+        Assert.NotEqual(MillerVersion.Current, live.StoredIdentity.WriterVersion);
+
+        IVectorShadowRebuilder rebuilder = SqliteVectorShadowRebuilder.TryOpen(workspace)!;
+        Assert.NotNull(rebuilder);
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(sidecar)
+            .DrainAsync(live, session, rebuilder, TestContext.Current.CancellationToken);
+
+        VectorCursorOutcome symbols = outcomes.Single(outcome => outcome.Kind is VectorUnitKind.Symbol);
+        Assert.Equal(VectorConvergeDecision.ShadowRebuild, symbols.Decision);
+        Assert.Equal(0, symbols.Embedded);
+
+        using VectorStore promoted = sidecar.OpenRequired(workspace.WorkspaceRoot);
+        Assert.Equal(2, promoted.MappedCount(VectorUnitKind.Symbol));
+        Assert.Equal(MillerVersion.Current, promoted.Meta("writer_version"));
+        Assert.Equal("ready", promoted.Meta("build_state"));
+    }
+
+    [Fact]
     public async Task Converge_InjectedCodeRankPin_BuildsAndQueriesAReal768DimensionGeneration()
     {
         string extension = SqliteVecTestSupport.RequireExtension();
@@ -1677,7 +1813,7 @@ public sealed class VectorConvergeServiceTests
 
         public Exception? OpenFault { get; init; }
 
-        public IVectorConvergePort? OpenShadow()
+        public IVectorConvergePort? OpenShadow(IVectorConvergePort live)
         {
             OpenShadowCalls++;
             return OpenFault is null ? shadow : throw OpenFault;

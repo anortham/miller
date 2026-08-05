@@ -199,6 +199,24 @@ public sealed class VectorStore : IDisposable
         });
     }
 
+    /// <summary>Writes a transactionally consistent copy of this generation to <paramref name="path"/>.</summary>
+    public void BackupTo(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        Guard($"back up the vector store to '{path}'", () =>
+        {
+            using var destination = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString());
+            destination.Open();
+            _connection.BackupDatabase(destination);
+        });
+    }
+
     /// <summary>
     /// Writes one unit's vector and its mapping row in a single transaction, so no observable state has a
     /// vec0 row without the mapping row that explains it.

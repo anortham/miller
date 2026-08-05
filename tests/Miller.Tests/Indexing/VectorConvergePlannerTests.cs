@@ -267,6 +267,16 @@ public sealed class VectorConvergePlannerTests
     }
 
     [Fact]
+    public void RebuildDeleteList_ReturnsOnlyStoredUnitsMissingFromTheCandidateCorpus()
+    {
+        IReadOnlyList<string> delete = VectorConvergePlanner.RebuildDeleteList(
+            [Unit("keep", "src/A.cs", "card")],
+            [Stored("keep", "src/A.cs", "card"), Stored("gone", "src/B.cs", "old")]);
+
+        Assert.Equal(["gone"], delete);
+    }
+
+    [Fact]
     public void Plan_WithDeferredPaths_StillEmbedsButHoldsTheCursor()
     {
         VectorConvergePlan plan = VectorConvergePlanner.Plan(

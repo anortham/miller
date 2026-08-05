@@ -137,9 +137,9 @@ internal interface IVectorConvergePort : IDisposable
 /// </summary>
 internal interface IVectorShadowRebuilder
 {
-    /// <summary>Reclaims any stale shadow trio and opens a fresh shadow generation. Null ⟹ one cannot be built
-    /// now (no pinned extension, no artifact id yet) and the cursor holds.</summary>
-    IVectorConvergePort? OpenShadow();
+    /// <summary>Reclaims any stale shadow trio and opens a shadow generation, seeded from the live generation
+    /// when its semantic identity is reusable. Null ⟹ one cannot be built now and the cursor holds.</summary>
+    IVectorConvergePort? OpenShadow(IVectorConvergePort live);
 
     /// <summary>Promotes the built shadow over the live artifact, retaining the superseded generation when the
     /// generation tag changed. The caller has already disposed both ports.</summary>
@@ -846,15 +846,28 @@ public sealed class VectorConvergeService : BackgroundService
 
         try
         {
-            shadow = state.Rebuilder.OpenShadow();
+            shadow = state.Rebuilder.OpenShadow(live);
             if (shadow is null)
             {
                 return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey,
                     "a shadow generation could not be created; the cursor holds"));
             }
 
+            int seeded = shadow.TotalStored(VectorUnitKind.Symbol);
+            if (seeded > 0)
+            {
+                _logger.LogInformation(
+                    "Shadow vector rebuild seeded with {Count} reusable symbol cards from the live generation.",
+                    seeded);
+            }
+            else if (live.TotalStored(VectorUnitKind.Symbol) > 0)
+            {
+                _logger.LogInformation(
+                    "Shadow vector rebuild starts unseeded: the live generation's identity is not reuse-compatible.");
+            }
+
             var buildClock = Stopwatch.StartNew();
-            (int embedded, int flagged, string? failure) =
+            (int embedded, int deleted, int flagged, string? failure) =
                 await BuildShadowAsync(shadow, embedding, state, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
                 return Escalated(kind, plan, completed, RecordError(live, errorKey, errorAtKey, failure));
@@ -871,14 +884,16 @@ public sealed class VectorConvergeService : BackgroundService
             state.Rebuilder.Promote(superseded, built);
             buildClock.Stop();
             _logger.LogInformation(
-                "Promoted a shadow vector generation with {Embedded} embedded symbol cards ({Flagged} flagged) " +
+                "Promoted a shadow vector generation with {Embedded} embedded symbol cards, {Deleted} deleted " +
+                "({Flagged} flagged) " +
                 "in {ElapsedMs} ms ({CardsPerSecond:F0} cards/s).",
                 embedded,
+                deleted,
                 flagged,
                 buildClock.ElapsedMilliseconds,
                 embedded / Math.Max(buildClock.Elapsed.TotalSeconds, 0.001));
 
-            return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, embedded, 0, completed, null);
+            return new VectorCursorOutcome(kind, plan.Decision, plan.Trigger, embedded, deleted, completed, null);
         }
         catch (Exception ex) when (IsConvergeException(ex))
         {
@@ -896,15 +911,12 @@ public sealed class VectorConvergeService : BackgroundService
     }
 
     /// <summary>
-    /// Fills a fresh shadow generation with the whole symbol corpus, committing in bounded slices so the
-    /// corpus size never hits the one-transaction cap — the incremental planner is deliberately NOT reused
-    /// here, because its escalation triggers would return an empty work list for exactly the spans a rebuild
-    /// exists to cover. Flagged units are tolerated (their absent hashes retry incrementally after the
-    /// promote); a build that embeds nothing at all refuses to promote. The chunk cursor is deliberately left
-    /// at zero: it may only advance past what <c>content.db</c> proves under all four preconditions, so it
-    /// converges on the promoted artifact through its own gate rather than being stamped here.
+    /// Fills a shadow generation with the whole symbol corpus, reusing hash-identical vectors from a compatible
+    /// seed and committing changed cards in bounded slices. Flagged cards are removed from the seed so stale
+    /// embeddings cannot survive the promote; a build with no usable vectors refuses to promote. The chunk cursor
+    /// is left at zero so it converges on the promoted artifact through its own gate.
     /// </summary>
-    private async Task<(int Embedded, int Flagged, string? Failure)> BuildShadowAsync(
+    private async Task<(int Embedded, int Deleted, int Flagged, string? Failure)> BuildShadowAsync(
         IVectorConvergePort shadow,
         EmbeddingClient embedding,
         DrainState state,
@@ -913,16 +925,28 @@ public sealed class VectorConvergeService : BackgroundService
         (string completedKey, string targetKey, _, _) = Keys(VectorUnitKind.Symbol);
         VectorConvergeSnapshot snapshot = shadow.Snapshot(0);
         long target = snapshot.TargetRevision;
+        shadow.SetMeta("artifact_id", snapshot.ArtifactId);
         shadow.SetMeta(targetKey, Number(target));
+        shadow.SetMeta(completedKey, "0");
+        shadow.SetMeta(ChunkCompletedKey, "0");
+        shadow.SetMeta(ChunkTargetKey, "0");
+        shadow.SetMeta(ChunkSourceArtifactKey, snapshot.ArtifactId);
+        shadow.SetMeta(ChunkErrorKey, string.Empty);
+        shadow.SetMeta(ChunkErrorAtKey, string.Empty);
+        shadow.SetMeta(SymbolErrorKey, string.Empty);
+        shadow.SetMeta(SymbolErrorAtKey, string.Empty);
+        shadow.SetMeta(ConvergePauseStateKey, string.Empty);
+        shadow.SetMeta(ConvergePauseReasonKey, string.Empty);
 
-        IReadOnlyList<VectorWorkUnit> work = VectorConvergePlanner.RebuildWorkList(
-            shadow.Units(VectorUnitKind.Symbol, null),
-            shadow.Stored(VectorUnitKind.Symbol, null));
+        IReadOnlyList<VectorCorpusUnit> candidates = shadow.Units(VectorUnitKind.Symbol, null);
+        IReadOnlyList<VectorUnitState> stored = shadow.Stored(VectorUnitKind.Symbol, null);
+        IReadOnlyList<VectorWorkUnit> work = VectorConvergePlanner.RebuildWorkList(candidates, stored);
+        IReadOnlyList<string> vanished = VectorConvergePlanner.RebuildDeleteList(candidates, stored);
 
         if (work.Count == 0)
         {
-            shadow.Commit(VectorUnitKind.Symbol, [], [], completedKey, target, target);
-            return (0, 0, null);
+            shadow.Commit(VectorUnitKind.Symbol, [], vanished, completedKey, target, target);
+            return (0, vanished.Count, 0, null);
         }
 
         int embeddedTotal = 0;
@@ -932,28 +956,36 @@ public sealed class VectorConvergeService : BackgroundService
             // Re-check at each slice boundary as the shadow grows: space that held at entry can be exhausted by
             // the slices already written, and a mid-build stop must refuse rather than write on into a corruption.
             if (BlockedForDisk(state, work.Count - offset) is { } failed)
-                return (0, 0, failed);
+                return (0, 0, 0, failed);
 
             IReadOnlyList<VectorWorkUnit> slice =
                 [.. work.Skip(offset).Take(VectorConvergePlanner.MaxUnitsPerTransaction)];
             (List<VectorCommit> embedded, int flagged, string? failure) =
                 await EmbedAsync(embedding, slice, cancellationToken).ConfigureAwait(false);
             if (failure is not null)
-                return (0, 0, failure);
+                return (0, 0, 0, failure);
 
             if (embedded.Count + flagged != slice.Count)
-                return (0, 0, "some units could not be embedded into the shadow generation");
+                return (0, 0, 0, "some units could not be embedded into the shadow generation");
 
             bool final = offset + slice.Count >= work.Count;
-            shadow.Commit(VectorUnitKind.Symbol, embedded, [], completedKey, final ? target : 0, target);
+            var embeddedIds = embedded.Select(static commit => commit.Unit.UnitId).ToHashSet(StringComparer.Ordinal);
+            List<string> delete =
+            [
+                .. slice.Where(unit => !embeddedIds.Contains(unit.UnitId)).Select(static unit => unit.UnitId),
+            ];
+            if (final)
+                delete.AddRange(vanished);
+
+            shadow.Commit(VectorUnitKind.Symbol, embedded, delete, completedKey, final ? target : 0, target);
             embeddedTotal += embedded.Count;
             flaggedTotal += flagged;
         }
 
-        if (embeddedTotal == 0)
-            return (0, flaggedTotal, "every unit was flagged by the sidecar; refusing to promote an empty shadow generation");
+        if (embeddedTotal == 0 && shadow.TotalStored(VectorUnitKind.Symbol) == 0)
+            return (0, 0, flaggedTotal, "every unit was flagged by the sidecar; refusing to promote an empty shadow generation");
 
-        return (embeddedTotal, flaggedTotal, null);
+        return (embeddedTotal, vanished.Count, flaggedTotal, null);
     }
 
     /// <summary>Inference, OUTSIDE any gate, in bounded batches.</summary>
@@ -1225,10 +1257,38 @@ internal sealed class SqliteVectorShadowRebuilder(
                 encoder ?? SemanticEncoderSelection.Active);
     }
 
-    public IVectorConvergePort? OpenShadow()
+    public IVectorConvergePort? OpenShadow(IVectorConvergePort live)
     {
+        ArgumentNullException.ThrowIfNull(live);
+
         manager.PrepareShadow();
-        return SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath, encoder);
+        SemanticGenerationIdentity target =
+            MillerSemanticContract.PinnedIdentity(encoder, MillerVersion.Current);
+
+        // Reusability is identity fields 1–3 only. writer_version differs on every Miller build, so full
+        // record equality would skip the seed on exactly the upgrade rescans this reuse exists for; the
+        // vectors-v1 matrix says reader_compatibility and fusion_profile never invalidate stored vectors.
+        bool seed = live is SqliteVectorConvergePort
+            && MillerSemanticContract.ClassifyChange(live.StoredIdentity, target)
+                is InvalidationAction.None
+                or InvalidationAction.QueryTimeOnly
+                or InvalidationAction.ReaderGate;
+        if (seed)
+            ((SqliteVectorConvergePort)live).BackupTo(manager.ShadowPath);
+
+        IVectorConvergePort? shadow = SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath, encoder);
+        if (seed && shadow is not null)
+        {
+            shadow.SetMeta("writer_version", target.WriterVersion);
+            shadow.SetMeta("min_reader_version", target.MinReaderVersion);
+            shadow.SetMeta("fusion_profile", target.FusionProfile);
+
+            // The copy inherits the live generation's sticky "ready" label; a shadow must read as building
+            // until its own cursor completes, or RecoverInterruptedPromote could adopt a half-built seed.
+            shadow.SetMeta("build_state", "building");
+        }
+
+        return shadow;
     }
 
     public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built) =>
@@ -1313,6 +1373,8 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     }
 
     public SemanticGenerationIdentity StoredIdentity => _vectors.Identity;
+
+    internal void BackupTo(string path) => _vectors.BackupTo(path);
 
     /// <summary>
     /// Opens (creating on first run) the active generation. Returns null — never throws — when the pinned

@@ -190,11 +190,7 @@ public static class VectorConvergePlanner
 
         IReadOnlyList<VectorWorkUnit> reEmbed = HashGate(request.Candidates, request.Stored);
 
-        var live = request.Candidates.Select(static c => c.UnitId).ToHashSet(StringComparer.Ordinal);
-        List<string> delete = [.. request.Stored
-            .Select(static s => s.UnitId)
-            .Where(id => !live.Contains(id))
-            .Distinct(StringComparer.Ordinal)];
+        IReadOnlyList<string> delete = RebuildDeleteList(request.Candidates, request.Stored);
 
         if (reEmbed.Count > MaxUnitsPerTransaction)
         {
@@ -321,6 +317,24 @@ public static class VectorConvergePlanner
         ArgumentNullException.ThrowIfNull(stored);
 
         return HashGate(candidates, stored);
+    }
+
+    /// <summary>The stored units absent from a whole-corpus rebuild candidate set.</summary>
+    public static IReadOnlyList<string> RebuildDeleteList(
+        IReadOnlyList<VectorCorpusUnit> candidates,
+        IReadOnlyList<VectorUnitState> stored)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(stored);
+
+        var live = candidates.Select(static candidate => candidate.UnitId).ToHashSet(StringComparer.Ordinal);
+        return
+        [
+            .. stored
+                .Select(static unit => unit.UnitId)
+                .Where(id => !live.Contains(id))
+                .Distinct(StringComparer.Ordinal),
+        ];
     }
 
     private static List<VectorWorkUnit> HashGate(
