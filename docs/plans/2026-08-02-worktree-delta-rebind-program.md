@@ -121,7 +121,16 @@ whole-repo scan drops from ~14 s to roughly the 2.5 s the `update` verb costs fo
         [`2026-08-05-rebind-p1-cost-model.md`](../findings/2026-08-05-rebind-p1-cost-model.md)
         re-run, showing delta cost tracking delta size rather than artifact size.
 
-### P1 — Rebind contract design doc. ~1 agent session. Gated on P1a.
+### P1 — Rebind contract design doc. ~1 agent session. Gated on P1a. **DELIVERED 2026-08-05.**
+
+> Contract frozen in
+> [`2026-08-05-rebind-contract-design.md`](2026-08-05-rebind-contract-design.md) after a
+> two-round Codex + Grok gate. Notable corrections to the leans below: the copy protocol is a
+> lock-free page-stepped SQLite online backup under one governor admission (the source
+> `SingleWriterLock` is the lifetime leadership lease, so no brief-lock fence exists; clonefile
+> is deferred to a leader-cooperative follow-up), the lineage columns persist BOTH halves of
+> `WorkspaceRootIdentity` plus a bootstrap replacement rule, and extractor identity is gated on
+> parser/capability fingerprints in the `rebind` verb, not `binary_version` alone.
 
 julie-extractors-owned contract: given a source artifact + a new root, julie-extract rewrites the
 recorded root/identity metadata itself and runs an incremental delta scan keyed on the existing
@@ -144,8 +153,9 @@ blake3 `files.content_hash`.
   and fall back cleanly to a full scan under the W8 backoff policy.
 - Cross-model review gate (Codex + Grok) before the contract freezes, per repo convention.
 - Acceptance:
-  - [ ] Design doc in `docs/plans/` with the v1 shape, identity call, and failure semantics;
+  - [x] Design doc in `docs/plans/` with the v1 shape, identity call, and failure semantics;
         cross-model review recorded.
+        ([`2026-08-05-rebind-contract-design.md`](2026-08-05-rebind-contract-design.md))
 
 ### P2 — julie-extractors implementation. ~1–2 agent sessions + release/pin-bump approval.
 
