@@ -240,21 +240,24 @@ one is allowed", and use the existing freshness/health fields for whether the ar
 ### `index_level` (additive, conditional)
 
 `workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `index_level` object,
-emitted ONLY while the workspace serves a SYMBOLS-level artifact (progressive indexing levels, julie-extract ≥
-2.25.0). Full-level and pre-levels artifacts omit it entirely, so default output stays byte-identical; treat
-its absence as "the full index is being served".
+emitted ONLY while the workspace serves a SYMBOLS-level artifact (indexing levels, julie-extract ≥ 2.25.0).
+Full-level and pre-levels artifacts omit it entirely; treat its absence as "the full index is being served".
 
 | Field | Type | Meaning |
 |---|---|---|
 | `level` | string | The artifact's recorded extraction level; currently always `symbols` when present. |
 | `upgrade_owed` | boolean | Whether policy wants full and the background full-level upgrade rebuild is owed or running. `false` means the workspace is deliberately pinned at symbols level (`symbols-only` policy). |
-| `policy` | string | The effective policy: `progressive`, `full`, or `symbols-only` (env `MILLER_INDEX_LEVELS` > per-workspace registry policy > default `progressive`). |
+| `policy` | string | The effective policy: `progressive`, `full`, or `symbols-only` (env `MILLER_INDEX_LEVELS` > per-workspace registry policy > default `full`). |
 
 While the object is present, symbol definitions, search, structure, relationship edges, and all `metrics`
-surfaces are complete; identifier-level reference results (trace refs, impact, inspect refs sections,
-`references candidates`), source-region search, and `patterns` facts are still converging and return a
-`reference_layer_converging` diagnostic instead of silently-empty results — see
-[`diagnostic` on read-command JSON](#diagnostic-on-read-command-json-additive-conditional).
+surfaces are complete. `inspect depth=overview|full` returns those definitions plus relationship-derived refs,
+callers, and callees, with `usage_evidence: "unavailable"` in JSON (or
+`usage_evidence=unavailable` in compact output) to state that complete per-usage identifier coverage is absent.
+Other identifier-level reference results (`trace refs`, impact, `references candidates`), source-region search,
+and `patterns` facts return a `reference_layer_converging` diagnostic instead of silently-empty results — see
+[`diagnostic` on read-command JSON](#diagnostic-on-read-command-json-additive-conditional). Under an explicit
+`progressive` policy they may still be converging; under `symbols-only` they remain unavailable until the policy
+is changed.
 
 `miller workspace levels [--json] [--set progressive|full|symbols-only] [--clear]` shows or sets the
 per-workspace policy; its JSON payload carries `operation: "levels"`, the `level_policy` object

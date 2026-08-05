@@ -285,7 +285,7 @@ public sealed class IndexLevelContextTests : IDisposable
     }
 
     [Fact]
-    public void McpInspect_RepairPromotedSymbolsArtifactUnderAFullSnapshot_StillReportsReferenceLayerConverging()
+    public void McpInspect_RepairPromotedSymbolsArtifactUnderAFullSnapshot_MarksUsageEvidenceUnavailable()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         (WorkspaceIndexProvider provider, string dbPath, _) =
@@ -295,7 +295,8 @@ public sealed class IndexLevelContextTests : IDisposable
 
         string compact = new InspectTool(provider).Inspect("Alpha", depth: "overview");
 
-        Assert.Contains("diagnostic_code=reference_layer_converging", compact, StringComparison.Ordinal);
+        Assert.Contains("usage_evidence=unavailable", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=", compact, StringComparison.Ordinal);
     }
 
     [Fact]

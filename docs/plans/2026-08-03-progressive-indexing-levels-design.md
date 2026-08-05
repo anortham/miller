@@ -1,5 +1,14 @@
 # Progressive Indexing Levels — P0 design (final)
 
+> **Default superseded 2026-08-04.** The level mechanics and explicit policies in this design remain current,
+> but the global `progressive` default does not: the frozen agent benchmark passed correctness while failing its
+> relevance and strict-efficiency gates, so the default is now `full` for every checkout. `symbols-only`
+> (57.5% less prepared `.miller` storage) stays an explicit opt-in for storage-lean worktrees; a
+> linked-worktree `symbols-only` default was drafted and reverted in review — forced rescans (extractor
+> upgrades) would have silently downgraded existing full worktree artifacts, and the approved delta-rebind
+> program addresses the same worktree cost without giving up the reference layer. See
+> [`2026-08-04-full-vs-symbols-agent-benchmark.md`](../findings/2026-08-04-full-vs-symbols-agent-benchmark.md).
+
 **Status:** decided 2026-08-03, implementing in the same working session (P1 julie-extractors +
 P2 Miller). Executes the program plan
 [`2026-08-03-progressive-indexing-levels-program.md`](2026-08-03-progressive-indexing-levels-program.md);

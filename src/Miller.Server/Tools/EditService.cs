@@ -1057,8 +1057,8 @@ public sealed class EditService
         {
             return Error(
                 "rename is refused while this workspace serves a symbols-level index: identifier extraction " +
-                "has not run yet, so the rename cannot prove it found every usage site. Re-run after the " +
-                "background full-level upgrade completes (workspace status shows progress).",
+                "has not run yet, so the rename cannot prove it found every usage site. Set this workspace's " +
+                "level policy to full, rebuild it, then retry.",
                 json,
                 failureReason: FailureReferenceLayerConverging);
         }

@@ -6,7 +6,7 @@ using Xunit;
 namespace Miller.Tests.Indexing;
 
 /// <summary>
-/// Pins <see cref="IndexLevels"/>: the policy parse (fail-closed), the env &gt; registry &gt; default
+/// Pins <see cref="IndexLevels"/>: the policy parse (fail-closed), the env &gt; registry &gt; full-default
 /// resolution, the one shared level-for-scan decision, and the derived upgrade-owed rule. All through the pure
 /// overloads — no test mutates the process environment (xUnit runs collections in parallel).
 /// </summary>
@@ -48,9 +48,9 @@ public sealed class IndexLevelsTests
             IndexLevels.Resolve(envRaw: null, inPlaceRebuild: null, registryPolicy: "symbols-only"));
 
     [Fact]
-    public void Resolve_NothingSetIsProgressive() =>
+    public void Resolve_NothingSetIsFull() =>
         Assert.Equal(
-            IndexLevelPolicy.Progressive,
+            IndexLevelPolicy.Full,
             IndexLevels.Resolve(envRaw: null, inPlaceRebuild: null, registryPolicy: null));
 
     [Fact]
@@ -128,9 +128,9 @@ public sealed class IndexLevelsTests
     [InlineData("symbols", IndexLevelPolicy.Progressive, true)]
     [InlineData("full", IndexLevelPolicy.Progressive, false)]
     [InlineData("symbols", IndexLevelPolicy.SymbolsOnly, false)]
-    [InlineData("symbols", IndexLevelPolicy.Full, false)]
+    [InlineData("symbols", IndexLevelPolicy.Full, true)]
     [InlineData(null, IndexLevelPolicy.Progressive, false)]
-    public void UpgradeOwed_OnlyASymbolsArtifactUnderProgressiveOwesTheUpgrade(
+    public void UpgradeOwed_AnyPolicyThatWantsFullOwesItForASymbolsArtifact(
         string? recorded, IndexLevelPolicy policy, bool expected) =>
         Assert.Equal(expected, IndexLevels.UpgradeOwed(recorded, policy));
 }

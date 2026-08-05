@@ -39,28 +39,31 @@ public sealed class InspectContextLevelGuardTests : IDisposable
     [Theory]
     [InlineData("overview")]
     [InlineData("full")]
-    public void McpInspect_CurrentWorkspaceAtSymbolsLevel_ReportsReferenceLayerConverging(string depth)
+    public void McpInspect_CurrentWorkspaceAtSymbolsLevel_ReturnsRelationshipOverviewAndMarksUsageUnavailable(
+        string depth)
     {
         string dbPath = SymbolsLevelArtifact.Create(Path.Combine(_dir, "symbols-level"));
         var tool = new InspectTool(CurrentSymbolReadProvider(dbPath, IndexLevels.SymbolsMetadataValue));
 
         string compact = tool.Inspect("Alpha", depth: depth);
         using JsonDocument document = JsonDocument.Parse(tool.Inspect("Alpha", depth: depth, format: "json"));
-        JsonElement diagnostic = document.RootElement.GetProperty("diagnostic");
+        JsonElement root = document.RootElement;
+        JsonElement reference = Assert.Single(root.GetProperty("refs").EnumerateArray());
 
-        Assert.Contains("diagnostic_code=reference_layer_converging", compact, StringComparison.Ordinal);
-        Assert.Contains("diagnostic_class=expected_empty", compact, StringComparison.Ordinal);
-        Assert.Equal("reference_layer_converging", diagnostic.GetProperty("code").GetString());
-        Assert.Contains(
-            "refs/callers/callees",
-            diagnostic.GetProperty("message").GetString()!,
-            StringComparison.Ordinal);
+        Assert.Contains("## references", compact, StringComparison.Ordinal);
+        Assert.Contains("## callers", compact, StringComparison.Ordinal);
+        Assert.Contains("usage_evidence=unavailable", compact, StringComparison.Ordinal);
+        Assert.Equal("unavailable", root.GetProperty("usage_evidence").GetString());
+        Assert.Equal("relationship", reference.GetProperty("source").GetString());
+        Assert.Equal("call", reference.GetProperty("kind").GetString());
+        Assert.Equal("Beta", Assert.Single(root.GetProperty("callers").EnumerateArray()).GetString());
+        Assert.False(root.TryGetProperty("diagnostic", out _));
     }
 
     [Theory]
     [InlineData("overview")]
     [InlineData("full")]
-    public void McpInspect_CrossWorkspaceAtSymbolsLevel_ReportsConvergingThoughNoRepositoryIndexServesTheRead(
+    public void McpInspect_CrossWorkspaceAtSymbolsLevel_MarksUsageUnavailableThoughNoRepositoryIndexServesTheRead(
         string depth)
     {
         string dbPath = SymbolsLevelArtifact.Create(Path.Combine(_dir, "symbols-level"));
@@ -70,9 +73,13 @@ public sealed class InspectContextLevelGuardTests : IDisposable
                 SymbolReadContext(index, dbPath, IndexLevels.SymbolsMetadataValue, isCurrent: false)));
 
         string compact = tool.Inspect("Alpha", depth: depth, workspace_id: "levels");
+        using JsonDocument document = JsonDocument.Parse(
+            tool.Inspect("Alpha", depth: depth, format: "json", workspace_id: "levels"));
 
         Assert.IsNotType<MillerRepositoryIndex>(index);
-        Assert.Contains("diagnostic_code=reference_layer_converging", compact, StringComparison.Ordinal);
+        Assert.Contains("usage_evidence=unavailable", compact, StringComparison.Ordinal);
+        Assert.Equal("unavailable", document.RootElement.GetProperty("usage_evidence").GetString());
+        Assert.False(document.RootElement.TryGetProperty("diagnostic", out _));
     }
 
     [Fact]
@@ -86,6 +93,7 @@ public sealed class InspectContextLevelGuardTests : IDisposable
         tool.Inspect("Alpha", depth: "overview");
 
         using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
+        Assert.Equal(TelemetryOutcome.Ok, scope.Outcome);
         Assert.True(metadata.RootElement.GetProperty("degraded").GetBoolean());
         Assert.Equal("reference_layer_converging", metadata.RootElement.GetProperty("degraded_reason").GetString());
     }
@@ -121,7 +129,9 @@ public sealed class InspectContextLevelGuardTests : IDisposable
 
         using JsonDocument metadata = JsonDocument.Parse(scope.MetadataJson);
         Assert.DoesNotContain("diagnostic_code=", compact, StringComparison.Ordinal);
+        Assert.DoesNotContain("usage_evidence=", compact, StringComparison.Ordinal);
         Assert.False(document.RootElement.TryGetProperty("diagnostic", out _));
+        Assert.False(document.RootElement.TryGetProperty("usage_evidence", out _));
         Assert.False(metadata.RootElement.TryGetProperty("degraded", out _));
     }
 
@@ -192,7 +202,7 @@ public sealed class InspectContextLevelGuardTests : IDisposable
     [Theory]
     [InlineData("overview")]
     [InlineData("full")]
-    public void CliInspect_AtSymbolsLevel_ReportsReferenceLayerConverging(string depth)
+    public void CliInspect_AtSymbolsLevel_ReturnsRelationshipOverviewAndMarksUsageUnavailable(string depth)
     {
         string dbPath = SymbolsLevelArtifact.Create(Path.Combine(_dir, "symbols-level"));
 
@@ -200,12 +210,14 @@ public sealed class InspectContextLevelGuardTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Contains("diagnostic_code=reference_layer_converging", outText, StringComparison.Ordinal);
-        Assert.Contains("diagnostic_class=expected_empty", outText, StringComparison.Ordinal);
+        Assert.Contains("## references", outText, StringComparison.Ordinal);
+        Assert.Contains("## callers", outText, StringComparison.Ordinal);
+        Assert.Contains("usage_evidence=unavailable", outText, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=", outText, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void CliInspect_AtSymbolsLevel_CarriesTheDiagnosticIntoJson()
+    public void CliInspect_AtSymbolsLevel_CarriesUsageAvailabilityIntoJson()
     {
         string dbPath = SymbolsLevelArtifact.Create(Path.Combine(_dir, "symbols-level"));
 
@@ -213,9 +225,8 @@ public sealed class InspectContextLevelGuardTests : IDisposable
 
         using JsonDocument document = JsonDocument.Parse(outText);
         Assert.Equal(0, code);
-        Assert.Equal(
-            "reference_layer_converging",
-            document.RootElement.GetProperty("diagnostic").GetProperty("code").GetString());
+        Assert.Equal("unavailable", document.RootElement.GetProperty("usage_evidence").GetString());
+        Assert.False(document.RootElement.TryGetProperty("diagnostic", out _));
     }
 
     [Fact]
@@ -243,6 +254,7 @@ public sealed class InspectContextLevelGuardTests : IDisposable
         Assert.Equal(0, code);
         Assert.Empty(errText);
         Assert.DoesNotContain("diagnostic_code=", outText, StringComparison.Ordinal);
+        Assert.DoesNotContain("usage_evidence=", outText, StringComparison.Ordinal);
     }
 
     [Theory]

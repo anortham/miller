@@ -45,11 +45,14 @@ internal static class IndexLevelGuard
             "reference_layer_converging",
             $"This workspace serves a symbols-level index; the full-level layer has not been extracted yet: "
             + $"{missing} Symbol definitions, search, structure, and relationship edges (inheritance/imports) "
-            + "are complete; per-usage identifier results are not yet. A session leading this workspace "
-            + "upgrades it in the background; otherwise force it.",
+            + "are complete; per-usage identifier results are unavailable. Progressive policy upgrades it in "
+            + "the background; symbols-only policy requires an explicit policy change before a full rebuild.",
             [
                 new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
-                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+                new ToolDiagnosticAction(
+                    "miller workspace levels --set full",
+                    "opt this workspace into complete usage extraction"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "rebuild at the selected level"),
             ]);
 
     /// <summary>The <c>references export</c> warning. Unlike <c>patterns export</c>, which goes empty at symbols
@@ -62,11 +65,14 @@ internal static class IndexLevelGuard
             "This workspace serves a symbols-level index: identifiers and identifier_resolutions have not been "
             + "extracted yet, so this feed carries only relationship-derived reference rows. The stream is "
             + "partial, NOT empty — treat it as an undercount, not as this workspace's complete reference set. "
-            + "Every emitted row carries index_level=\"symbols\". A session leading this workspace upgrades it in "
-            + "the background; otherwise force it.",
+            + "Every emitted row carries index_level=\"symbols\". Progressive policy upgrades it in the "
+            + "background; symbols-only policy requires an explicit policy change before a full rebuild.",
             [
                 new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
-                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+                new ToolDiagnosticAction(
+                    "miller workspace levels --set full",
+                    "opt this workspace into complete usage extraction"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "rebuild at the selected level"),
             ]);
 
     /// <summary>The rename refusal: an unproven rename is worse than a delayed one — with an empty identifier
@@ -76,11 +82,14 @@ internal static class IndexLevelGuard
             "reference_layer_converging",
             "rename is refused while this workspace serves a symbols-level index: identifier extraction has "
             + "not run yet, so the rename cannot prove it found every usage site (it would rename definitions "
-            + "and miss references). Re-run after the full-level upgrade completes — a leading session runs "
-            + "it in the background; otherwise force it.",
+            + "and miss references). Re-run after a full-level upgrade; symbols-only policy requires an explicit "
+            + "policy change first.",
             [
                 new ToolDiagnosticAction("workspace(operation=\"status\")", "check index level and upgrade state"),
-                new ToolDiagnosticAction("workspace(operation=\"full\")", "force the full-level upgrade now"),
+                new ToolDiagnosticAction(
+                    "miller workspace levels --set full",
+                    "opt this workspace into complete usage extraction"),
+                new ToolDiagnosticAction("workspace(operation=\"full\")", "rebuild at the selected level"),
             ]);
 
     /// <summary>Stamp the demand counter on a degraded call.</summary>

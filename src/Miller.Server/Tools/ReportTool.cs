@@ -487,9 +487,9 @@ public static class ReportTool
         public static MarkerSection Converging { get; } = new(
             Available: false,
             Reason: "this workspace serves a symbols-level index and marker facts have not been extracted yet, "
-                + "so a count here would read as zero rather than as measured. A session leading this workspace "
-                + "upgrades it in the background (`miller workspace status` shows progress); "
-                + "`miller workspace full` forces it now.",
+                + "so a count here would read as zero rather than as measured. Progressive policy upgrades it "
+                + "in the background (`miller workspace status` shows the effective policy); symbols-only policy "
+                + "requires `miller workspace levels --set full` before `miller workspace full`.",
             BoundedAt: MarkerSearch.MaxLimit,
             Counts: [],
             Total: 0);

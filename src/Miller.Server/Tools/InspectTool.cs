@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using Miller.Core.References;
 using Miller.Indexing;
@@ -38,15 +39,13 @@ public sealed class InspectTool
 
     [McpServerTool(Name = "inspect")]
     [Description(
-        "Inspect a file or symbol you can already name. A file path lists its symbols; a symbol name gives " +
-        "definition, signature, docs — depth=overview adds bounded refs/callers/callees and a body preview " +
-        "(the right first symbol read); overview/full also expose test locations and typed inheritance or " +
-        "implementation relations when extractor evidence exists; depth=full adds relation lists and a bounded body page. For constants, " +
-        "fields, properties, and variables, a full result with value_declaration_complete=true is authoritative " +
-        "and needs no search confirmation. Use before reading " +
-        "any entire file. NOT for: discovering which symbol matters in an unfamiliar area (use context) or full " +
-        "reference lists across the repo (use trace mode=refs). Example: inspect target=FullRebuildPromotion " +
-        "depth=overview.")]
+        "Inspect a file or symbol you can name. A file lists symbols; a symbol gives definition, signature, and " +
+        "docs. overview adds bounded refs/callers/callees, test locations, typed inheritance, and a body preview; " +
+        "full adds relation lists and a bounded body page. For constants, fields, properties, and variables, a " +
+        "full result with value_declaration_complete=true is authoritative. At symbols level, overview/full keeps " +
+        "relationship-derived callers/callees and reports usage_evidence=unavailable for the omitted identifier " +
+        "layer. Use before reading an entire file. NOT for: discovering which symbol matters (use context) or " +
+        "full reference lists (use trace mode=refs). Example: inspect target=FullRebuildPromotion depth=overview.")]
     public string Inspect(
         [Description("A file path or a symbol name/id (smart-resolved).")] string target,
         [Description("summary|overview|full. overview adds bounded refs/callers/callees/body preview; full adds complete body.")]
@@ -99,17 +98,12 @@ public sealed class InspectTool
             if (telemetry is not null)
                 ReadToolWorkspaceRouting.ApplyTelemetry(telemetry, context);
 
-            // Only the refs-dependent depths degrade: summary is complete at symbols level, while
-            // overview/full would otherwise render a definition with silently-absent refs/callers sections —
-            // indistinguishable from "nothing references this symbol". The level travels on the context because a
-            // cross-workspace read is served by a lean projection, not a MillerRepositoryIndex.
             if (parsedDepth is not InspectDepth.Summary
                 && diagnostic is null
                 && IndexLevelGuard.ReferenceLayerConverging(context.IndexLevel))
             {
                 IndexLevelGuard.MarkDegraded(telemetry, "reference_layer_converging");
-                diagnostic = IndexLevelGuard.Converging(
-                    "the refs/callers/callees sections are empty pending identifier extraction.");
+                output = AttachUsageEvidenceUnavailable(output, json);
             }
 
             if (telemetry is not null)
@@ -160,6 +154,28 @@ public sealed class InspectTool
             ToolDiagnostic.Refusal(
                 "output_metadata_too_large",
                 "Inspect output metadata exceeds the 12 KiB MCP budget; use CLI output for exhaustive metadata or narrow the target or depth."));
+    }
+
+    private const string UsageEvidenceUnavailableReason =
+        "symbols-level index omits complete per-usage identifier evidence; relationship-derived callers and callees remain available";
+
+    internal static string AttachUsageEvidenceUnavailable(string output, bool json)
+    {
+        if (!json)
+        {
+            return output.TrimEnd('\n')
+                + "\nusage_evidence=unavailable"
+                + $"\nusage_evidence_reason={UsageEvidenceUnavailableReason}";
+        }
+
+        JsonObject root = JsonNode.Parse(output) as JsonObject
+            ?? throw new ToolDiagnosticException(ToolDiagnostic.InternalFailure(
+                "invalid_json_output",
+                "inspect produced a non-object JSON value."));
+        root["usage_evidence"] = "unavailable";
+        root["usage_evidence_reason"] = UsageEvidenceUnavailableReason;
+        return root.ToJsonString(
+            new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 
     private const int RefLimit = 50;
@@ -1587,7 +1603,7 @@ public sealed class InspectTool
         WriteNullableNumber(writer, "end_column", reference.EndColumn);
         WriteNullableNumber(writer, "start_byte", reference.StartByte);
         WriteNullableNumber(writer, "end_byte", reference.EndByte);
-        writer.WriteString("kind", reference.SourceKind);
+        writer.WriteString("kind", CanonicalReferenceKind(reference.Kind, reference.SourceKind));
         writer.WriteString("resolution_status", ResolutionStatusLabel(reference.ResolutionStatus));
         writer.WriteString("source", EvidenceSourceLabel(reference.Source));
         WriteNullableNumber(writer, "resolution_tier", reference.ResolutionTier);
@@ -1628,7 +1644,7 @@ public sealed class InspectTool
         }
         writer.WriteString("site_file", reference.FilePath);
         WriteNullableNumber(writer, "site_line", reference.StartLine);
-        writer.WriteString("kind", reference.SourceKind);
+        writer.WriteString("kind", CanonicalReferenceKind(reference.Kind, reference.SourceKind));
         writer.WriteString("resolution_status", ResolutionStatusLabel(reference.ResolutionStatus));
         writer.WriteString("source", EvidenceSourceLabel(reference.Source));
         WriteNullableNumber(writer, "resolution_tier", reference.ResolutionTier);
@@ -1658,6 +1674,22 @@ public sealed class InspectTool
         WriteOutgoingCoverageObject(writer, evidence.Coverage);
         writer.WriteEndObject();
     }
+
+    private static string CanonicalReferenceKind(ReferenceKind kind, string sourceKind) => kind switch
+    {
+        ReferenceKind.Call => "call",
+        ReferenceKind.TypeUsage => "type_usage",
+        ReferenceKind.MemberAccess => "member_access",
+        ReferenceKind.VariableReference => "variable_ref",
+        ReferenceKind.Instantiation => "instantiates",
+        ReferenceKind.Inheritance => "extends",
+        ReferenceKind.Implementation => "implements",
+        ReferenceKind.Import => "import",
+        ReferenceKind.Reference => "reference",
+        ReferenceKind.Usage => "usage",
+        ReferenceKind.Unknown => sourceKind,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
 
     private static void WriteTypedInboundRelationshipSet(
         Utf8JsonWriter writer,

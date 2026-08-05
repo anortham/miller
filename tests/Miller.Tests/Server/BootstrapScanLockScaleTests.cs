@@ -19,7 +19,7 @@ namespace Miller.Tests.Server;
 public sealed class BootstrapScanLockScaleTests
 {
     [Fact]
-    public void Bootstrap_LosesTheLockAndTheWinnerFinishesMidWait_BindsThatArtifactWithoutScanning()
+    public void Bootstrap_ArtifactAppearsAfterInitialProbeWhileLockIsHeld_BindsItWithoutScanning()
     {
         ScaleTestSupport.RequireJulieServer();
         using var fx = Fixture.Create();
@@ -29,7 +29,7 @@ public sealed class BootstrapScanLockScaleTests
         Assert.NotNull(held);
 
         using var bootstrap = fx.CreateBootstrap();
-        using var winner = fx.PublishArtifactAfter(staged, TimeSpan.FromSeconds(1.5));
+        bootstrap.TestBeforeBootstrapScanLease = () => File.Move(staged, fx.DbPath);
 
         fx.RunBootstrapToCompletion(bootstrap);
 
@@ -323,21 +323,6 @@ public sealed class BootstrapScanLockScaleTests
         }
 
         /// <summary>
-        /// Move a finished artifact into place after <paramref name="delay"/>, modelling the winner committing
-        /// mid-wait. The move is atomic so a poll never observes a half-copied file.
-        /// </summary>
-        public IDisposable PublishArtifactAfter(string stagedArtifact, TimeSpan delay)
-        {
-            var cts = new CancellationTokenSource();
-            Task publish = Task.Run(async () =>
-            {
-                await Task.Delay(delay, cts.Token).ConfigureAwait(false);
-                File.Move(stagedArtifact, DbPath);
-            });
-            return new Publication(cts, publish);
-        }
-
-        /// <summary>
         /// Reproduce the artifact julie-extract has on disk between opening its writer and committing: the full
         /// schema and every <c>artifact_metadata</c> row (both written in autocommit), and not one committed
         /// data row. Copied off a real artifact so the shape stays faithful as the extractor's schema moves.
@@ -459,21 +444,5 @@ public sealed class BootstrapScanLockScaleTests
             }
         }
 
-        private sealed class Publication(CancellationTokenSource cancellation, Task publish) : IDisposable
-        {
-            public void Dispose()
-            {
-                cancellation.Cancel();
-                try
-                {
-                    publish.Wait(TimeSpan.FromSeconds(30));
-                }
-                catch (AggregateException)
-                {
-                }
-
-                cancellation.Dispose();
-            }
-        }
     }
 }

@@ -248,6 +248,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     internal Action? TestScanObserver { get; set; }
 
+    internal Action? TestBeforeBootstrapScanLease { get; set; }
+
     /// <summary>
     /// Test-only home directory override for <see cref="WorkspaceContext.Create"/>. When set, every workspace
     /// context the bootstrap builds (including <see cref="MarkBootstrapFailed"/>) routes registry/telemetry
@@ -501,6 +503,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 if (scanDecision.ShouldScan)
                 {
+                    TestBeforeBootstrapScanLease?.Invoke();
                     var scanLease = AcquireBootstrapScanLease(
                         tryAcquire: () => SingleWriterLock.TryAcquire(millerDir),
                         decide: ReadDecision,

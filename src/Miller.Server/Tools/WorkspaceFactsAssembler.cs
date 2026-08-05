@@ -86,7 +86,7 @@ internal static class WorkspaceFactsAssembler
     }
 
     /// <summary>
-    /// The progressive-indexing fact for status/health. Non-null ONLY for a symbols-level artifact — full-level
+    /// The index-level fact for status/health. Non-null ONLY for a symbols-level artifact — full-level
     /// and pre-levels artifacts render nothing, keeping default output byte-identical.
     /// <paramref name="registryPolicy"/> is the row's stored per-workspace policy (null when unset or unknown).
     /// </summary>

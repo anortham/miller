@@ -198,13 +198,14 @@ public sealed class InspectMissingFileTests : IDisposable
     }
 
     [Fact]
-    public void CliInspect_IndexedSymbolAtOverviewDepth_KeepsTheConvergingLevelGuard()
+    public void CliInspect_IndexedSymbolAtOverviewDepth_MarksUsageEvidenceUnavailable()
     {
         string dbPath = SymbolsLevelArtifact.Create(Workspace());
 
         (_, string output) = Cli(dbPath, ["inspect", "Alpha", "--depth", "overview"]);
 
-        Assert.Contains("diagnostic_code=reference_layer_converging", output, StringComparison.Ordinal);
+        Assert.Contains("usage_evidence=unavailable", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("diagnostic_code=", output, StringComparison.Ordinal);
     }
 
     [Fact]

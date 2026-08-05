@@ -3,16 +3,16 @@ using Miller.Core.Freshness;
 
 namespace Miller.Indexing;
 
-/// <summary>The three progressive-indexing policies for a workspace (levels design,
+/// <summary>The three index-level policies for a workspace (levels design,
 /// docs/plans/2026-08-03-progressive-indexing-levels-design.md).</summary>
 public enum IndexLevelPolicy
 {
     /// <summary>First open builds the symbols-level core and serves immediately; the full index converges in the
-    /// background via a <see cref="Miller.Core.Freshness.ScanIntent.LevelUpgrade"/> rebuild. The default.</summary>
+    /// background via a <see cref="Miller.Core.Freshness.ScanIntent.LevelUpgrade"/> rebuild.</summary>
     Progressive,
 
-    /// <summary>Pre-levels behavior: every build runs at full level, first open blocks on the whole index. The
-    /// permanent zero-behavior-change escape hatch, like <c>MILLER_SEMANTIC=off</c>.</summary>
+    /// <summary>Pre-levels behavior: every build runs at full level, first open blocks on the whole index.
+    /// The default, and the permanent zero-behavior-change state, like <c>MILLER_SEMANTIC=off</c>.</summary>
     Full,
 
     /// <summary>Pin the workspace at symbols level forever: no upgrade is ever owed or scheduled. Reversible by
@@ -33,10 +33,11 @@ public enum ExtractIndexLevel
 
 /// <summary>
 /// Parses the <c>MILLER_INDEX_LEVELS</c> policy switch and owns the pure level decisions the scan paths share.
-/// Progressive is the default; <c>full</c> preserves pre-levels behavior exactly; an unrecognized value fails
-/// closed to <see cref="IndexLevelPolicy.Full"/> (the do-no-new-thing state). <c>MILLER_FULL_REBUILD_INPLACE</c>
-/// also forces <see cref="IndexLevelPolicy.Full"/>: an in-place environment can never promote an upgrade
-/// rebuild, and julie-extract refuses in-place level changes by design.
+/// With no override, the default is <c>full</c>; <c>progressive</c> and <c>symbols-only</c> remain available
+/// explicitly. An unrecognized value fails closed to <see cref="IndexLevelPolicy.Full"/> (the do-no-new-thing
+/// state). <c>MILLER_FULL_REBUILD_INPLACE</c> also forces <see cref="IndexLevelPolicy.Full"/>: an in-place
+/// environment can never promote an upgrade rebuild, and julie-extract refuses in-place level changes by
+/// design.
 /// </summary>
 public static class IndexLevels
 {
@@ -63,8 +64,8 @@ public static class IndexLevels
             Environment.GetEnvironmentVariable(EnvVar),
             Environment.GetEnvironmentVariable("MILLER_FULL_REBUILD_INPLACE"));
 
-    /// <summary>The pure env-value ⇒ policy mapping behind <see cref="FromEnvironment"/> — testable without
-    /// mutating the process environment (which would leak across xUnit's parallel collections).</summary>
+    /// <summary>The pure token parser used by environment and registry overrides — testable without mutating
+    /// the process environment (which would leak across xUnit's parallel collections).</summary>
     public static IndexLevelPolicy FromEnvValues(string? raw, string? inPlaceRebuild = null)
     {
         if (string.Equals(inPlaceRebuild?.Trim(), "1", StringComparison.Ordinal))
@@ -85,7 +86,7 @@ public static class IndexLevels
     /// <summary>
     /// Resolves the effective policy for a workspace: the environment always wins (it is the operator's
     /// per-process override and the in-place escape hatch), then a per-workspace registry policy, then the
-    /// progressive default. <paramref name="registryPolicy"/> is the raw stored string (null when unset).
+    /// full default. <paramref name="registryPolicy"/> is the raw stored string (null when unset).
     /// </summary>
     public static IndexLevelPolicy Resolve(string? registryPolicy) =>
         Resolve(
@@ -102,7 +103,7 @@ public static class IndexLevels
             return FromEnvValues(envRaw);
         if (!string.IsNullOrWhiteSpace(registryPolicy))
             return FromEnvValues(registryPolicy);
-        return IndexLevelPolicy.Progressive;
+        return IndexLevelPolicy.Full;
     }
 
     /// <summary>
@@ -192,7 +193,7 @@ public static class IndexLevels
     /// <summary>Whether the artifact's recorded level plus <paramref name="policy"/> leaves a level upgrade
     /// owed — the derived, restart-proof <see cref="Miller.Core.Freshness.ScanIntent.LevelUpgrade"/> latch.</summary>
     public static bool UpgradeOwed(string? recordedLevel, IndexLevelPolicy policy) =>
-        policy == IndexLevelPolicy.Progressive && IsSymbolsLevel(recordedLevel);
+        policy != IndexLevelPolicy.SymbolsOnly && IsSymbolsLevel(recordedLevel);
 }
 
 /// <summary>

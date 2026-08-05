@@ -1692,7 +1692,7 @@ public static class CliDispatch
             err.WriteLine(
                 "references candidates is unavailable while this workspace serves a symbols-level index: " +
                 "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
-                "after the background full-level upgrade completes (`miller workspace status` shows progress).");
+                "after setting this workspace's level policy to full and rebuilding it.");
             return 3;
         }
 
@@ -2057,17 +2057,11 @@ public static class CliDispatch
                     limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic);
             }
 
-            // The CLI calls the pure tool cores directly, so the MCP wrapper's diagnostic handling never runs
-            // here. It carries two rules: the tool's own diagnostic reaches the caller at every depth (a typo'd
-            // path must answer file_not_indexed, not a bare "no indexed symbols"), and the converging notice
-            // fills in only where there is none, only at the depths that render refs/callers — summary is
-            // complete at symbols level.
             if (diagnostic is null
                 && rendersReferences
                 && IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
             {
-                diagnostic = IndexLevelGuard.Converging(
-                    "the refs/callers/callees sections are empty pending identifier extraction.");
+                output = InspectTool.AttachUsageEvidenceUnavailable(output, o.Has("json"));
             }
 
             if (diagnostic is not null)
