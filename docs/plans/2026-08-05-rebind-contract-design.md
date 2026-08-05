@@ -343,15 +343,27 @@ defers on the timer. So rebind's "one-shot" discipline is carried by the RECORD,
 
 ## 9. Acceptance criteria (feeding P2/P3)
 
-P2 (julie-extractors):
-- [ ] `rebind` verb per §3 with crate tests: retarget correctness, same-root no-op, interrupted-
+P2 (julie-extractors) — **implemented 2026-08-05** (branch `rebind-verb` merged to main at
+`13182d9`; release + pin bump pending approval). One addition beyond this spec, from the Codex
+pre-merge review: the write transaction re-verifies the validated `root_path`/`artifact_id` and
+refuses with a new `artifact_changed` code (exit 1, recoverable), and the write connection opens
+without `SQLITE_OPEN_CREATE` — defense-in-depth for direct CLI callers; Miller's staging protocol
+is unchanged.
+- [x] `rebind` verb per §3 with crate tests: retarget correctness, same-root no-op, interrupted-
       transaction atomicity, fingerprint-mismatch and no-committed-revision refusals, report
       shape, random-component artifact id.
-- [ ] Row-level equivalence: backup-copy → rebind → delta scan of tree B is row-equivalent to a
-      fresh scan of tree B (excluding `artifact_id`, timestamps, provenance keys, and
-      `extraction_revisions` history) on a **multi-language fixture** (language-parity rule), for
-      (a) byte-identical trees, (b) modify-only deltas, (c) add/delete deltas.
-- [ ] Contract docs updated (`docs/contracts/cli.md`, `docs/contracts/reports.md`).
+- [x] Row-level equivalence: backup-copy → rebind → delta scan of tree B is row-equivalent to a
+      fresh scan of tree B on a **multi-language fixture** (language-parity rule), for
+      (a) byte-identical trees, (b) modify-only deltas, (c) add/delete deltas. Exclusions, as
+      refined by the shipped gate (`tests/rebind_equivalence.rs`): `artifact_id`, timestamp keys,
+      provenance keys, and **revision ids and scan-time stamps wherever they live** — including
+      `files.indexed_at`, `files.last_revision_id`, `*.resolved_at_revision`, the
+      `reference_resolution_last_full_revision` metadata key, and the
+      `extraction_revisions`/`revision_file_changes` history tables. `*_json` columns are compared
+      content-wise (sorted keys): extractor hash-map serialization makes artifact bytes
+      non-reproducible across identical scans — a standing julie-extractors finding, not a rebind
+      artifact.
+- [x] Contract docs updated (`docs/contracts/cli.md`, `docs/contracts/reports.md`).
 
 P3 (Miller):
 - [ ] Eligibility (§6) as pure, fast-suite-testable decisions; snapshot validation proven against
