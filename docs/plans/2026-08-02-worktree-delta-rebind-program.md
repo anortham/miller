@@ -30,6 +30,20 @@ nothing and founds both.
 **Status:** approved as the successor program. Gated on the fleet-safety plan landing; each phase
 still requires explicit user approval to begin implementation.
 
+> **RESEQUENCED 2026-08-05 (user-approved).** P1's measurement pass
+> ([`docs/findings/2026-08-05-rebind-p1-cost-model.md`](../findings/2026-08-05-rebind-p1-cost-model.md))
+> found that rebind's mechanism is far cheaper than assumed — the artifact is root-portable and the
+> rebind surface is a single `artifact_metadata.root_path` row — but that rebind eliminates the wrong
+> cost. Extraction of unchanged files is 0.2–20% of a delta scan; the dominant cost is identifier
+> resolution, which a whole-repo scan runs over the entire artifact no matter how little changed. On a
+> 1,397-file repo a rebind saves 12% at one changed file and is *slower* than a full rebuild past
+> ~120–150 changed files. A new **P1a** now precedes the contract: teach whole-repo scans to honour the
+> delta scope they already compute. P1a is independently valuable — it is on the path of every
+> session-start reconcile, `workspace refresh`, and cross-workspace read on every workspace, not only
+> worktrees. **base+overlay is removed from this plan** rather than deferred: symbol IDs fold the byte
+> span, so any edit re-IDs symbols and a base∪overlay union silently loses references (reproduced; see
+> the findings doc §5).
+
 ## Start gate
 
 - Fleet-safety plan landed in both repos. Hard dependencies: W7 (git-worktree metadata adapter),
@@ -88,17 +102,39 @@ missing; these numbers drive the P1 design choices.
   - [ ] A clean, crash-free timed extract of dotnet/runtime @ pinned commit with final DB/WAL
         sizes and phase timings (extract vs artifact write).
 
-### P1 — Rebind contract design doc. ~1 agent session.
+### P1a — Delta-scoped resolution on whole-repo scans (julie-extractors). NEW, 2026-08-05.
+
+**Prerequisite for the rest of the program, and worth shipping on its own.** Both whole-repo write
+sites hard-code `is_full_scan: true`
+(`crates/julie-extract-artifact/src/writer.rs:1087`, `:1390`) while already computing and passing
+`changed_file_ids` at those same sites (`:1085`, `:1388`); the hook then takes the whole-workspace
+branch (`crates/julie-extract-cli/src/resolution.rs:1551`). The scoped branch already exists and
+serves the single-file `update`/`delete` verbs. Measured prize on a 1,397-file repo: a one-changed-file
+whole-repo scan drops from ~14 s to roughly the 2.5 s the `update` verb costs for the same edit.
+
+- Establish the safety conditions under which a whole-repo scan may scope resolution, and where it
+  must still fall back to a full pass (v3-artifact backfill via `prior.is_none()` at minimum).
+- Acceptance:
+  - [ ] An equivalence gate: an artifact built by N incremental steps has resolution state identical
+        to one built by a single full scan.
+  - [ ] The measured curve in
+        [`2026-08-05-rebind-p1-cost-model.md`](../findings/2026-08-05-rebind-p1-cost-model.md)
+        re-run, showing delta cost tracking delta size rather than artifact size.
+
+### P1 — Rebind contract design doc. ~1 agent session. Gated on P1a.
 
 julie-extractors-owned contract: given a source artifact + a new root, julie-extract rewrites the
 recorded root/identity metadata itself and runs an incremental delta scan keyed on the existing
 blake3 `files.content_hash`.
 
-- Decide v1 shape: **copy-and-rebind (recommended)** — clone/copy the artifact, rebind, delta-scan
-  — vs **base+overlay** — SQLite ATTACH read-through to the main artifact plus a per-worktree
-  overlay DB of changed files. Evaluate overlay on paper with P0 clone-cost data; keep it
-  documented as the possible future shape (near-zero disk, instant open; harder consistency:
-  cross-boundary references, base artifact changing underneath).
+- v1 shape: **copy-and-rebind**, settled 2026-08-05. The artifact is root-portable (every path column
+  is root-relative; IDs hash the relative path; only `artifact_metadata.root_path` is root-derived), so
+  retargeting is a single-row update. **base+overlay is refuted, not deferred** — see the resequencing
+  note above.
+- Amend the P0 clone-cost citation before reusing it: the "clonefile is free" number was measured on a
+  *quiescent* artifact, and a live source under its own leader has no order-safe quiescence protocol
+  (`src/Miller.Indexing/ScanGovernor.cs:79-82` forbids taking a second workspace's writer lock while
+  holding the lease).
 - Decide identity approach. Lean: keep `WorkspaceId.FromCanonicalRoot`
   (`src/Miller.Indexing/WorkspaceId.cs:10`) unchanged and add registry **lineage columns** (git
   common dir + admin-dir generation, resolved via the W7 adapter) for sibling-artifact lookup and
@@ -208,13 +244,14 @@ Documented so they stop being open questions; revisit only when the trigger fire
 | Order | Item | Depends on |
 |---|---|---|
 | 1 | P0 measurement riders | fleet-safety W10 fixture |
-| 2 | P1 contract design doc | P0 data; W7 adapter shape |
-| 3 | P2 julie-extractors rebind + release + pin bump | P1 freeze; user approval |
-| 4 | P3 Miller wiring | P2 pin bump; W1/W3/W8 landed |
-| 5 | P4 scale validation | P3 |
+| 2 | **P1a delta-scoped resolution (julie-extractors)** | P0/P1 cost model; user approval 2026-08-05 |
+| 3 | P1 contract design doc | P1a landed; W7 adapter shape |
+| 4 | P2 julie-extractors rebind + release + pin bump | P1 freeze; user approval |
+| 5 | P3 Miller wiring | P2 pin bump; W1/W3/W8 landed |
+| 6 | P4 scale validation | P3 |
 
-Estimated total: **~5–7 agent sessions** across both repos, plus two human approval points (the
-julie-extract release/pin bump, and the Miller release that ships rebind).
+Estimated total: **~6–8 agent sessions** across both repos, plus the human approval points (the
+julie-extract release/pin bumps — P1a and P2 may share one — and the Miller release that ships rebind).
 
 ## Verification strategy
 
