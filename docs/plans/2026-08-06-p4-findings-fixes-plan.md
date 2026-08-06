@@ -107,11 +107,11 @@
 **Approach:** The retry timer is `Task.Delay` with the shutdown token — no new hosted service, no persisted state (the admission timeout is process-local contention, unlike W8's cross-process scan failures). Use the deterministic-clock seam pattern only if a real `Task.Delay(60s)` cannot be short-circuited in tests — prefer an internal `TimeSpan` override field (`TestAdmissionRetryDelay`) defaulting to the production value, matching the existing `TestBootstrapScanAdmissionWait` precedent (`:1114`). Assert: a timeout failure schedules a re-run and flips phase back to Running; a deterministic failure does not; the generation guard prevents a stale retry from clobbering a newer run; jitter stays within bounds.
 
 **Acceptance criteria:**
-- [ ] An admission-timeout bootstrap failure re-runs the bootstrap after the (test-shortened) delay; success on the retry binds the workspace.
-- [ ] A non-timeout bootstrap failure remains terminal (no retry scheduled).
-- [ ] A stale retry (generation advanced by a replaced-root re-run) is a no-op.
-- [ ] An `Ineligible` rebind logs one Information line with the reason; `Promoted`/`Failed` logging is unchanged.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] An admission-timeout bootstrap failure re-runs the bootstrap after the (test-shortened) delay; success on the retry binds the workspace.
+- [x] A non-timeout bootstrap failure remains terminal (no retry scheduled).
+- [x] A stale retry (generation advanced by a replaced-root re-run) is a no-op.
+- [x] An `Ineligible` rebind logs one Information line with the reason; `Promoted`/`Failed` logging is unchanged.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 3: Wait out the source-scan heartbeat window instead of falling back to a full scan
 

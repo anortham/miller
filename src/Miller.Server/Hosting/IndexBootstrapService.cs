@@ -429,7 +429,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         {
             if (result is not null && !published && !result.UsesExistingLedger)
                 result.Bound.Ledger?.Dispose();
-            MarkBootstrapFailed(canonicalRoot, runGeneration, ex);
+            MarkBootstrapFailed(canonicalRoot, source, runGeneration, ex);
         }
     }
 
@@ -573,7 +573,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         AcquireBootstrapScanAdmission(canonicalRoot, "bootstrap");
                     if (admission is null)
                     {
-                        throw new InvalidOperationException(
+                        throw new ScanAdmissionTimeoutException(
                             $"Timed out waiting for machine-wide scan admission to index {canonicalRoot}, and no " +
                             $"usable index exists at {canonicalDbPath}. {_governor.DescribeHolder()}");
                     }
@@ -605,13 +605,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     }
                     else
                     {
-                        if (rebind.Result == RebindBootstrapOutcome.Kind.Failed)
-                        {
-                            _logger.LogWarning(
-                                "Rebinding the index of {SourceRoot} into {Root} failed at {Stage}: {Reason}. " +
-                                "Falling back to a full scan.",
-                                rebind.SourceRoot, canonicalRoot, rebind.Stage, rebind.Reason);
-                        }
+                        LogRebindFallback(_logger, canonicalRoot, rebind);
 
                         // Also at the fallback entry, because a SIGKILLed rebind is the one failure path that
                         // cannot clear its own staging, and a stranded trio is full-artifact sized.
@@ -805,6 +799,30 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Report why a bootstrap fell back to a full scan instead of rebinding a sibling checkout's index. An
+    /// <see cref="RebindBootstrapOutcome.Kind.Ineligible"/> outcome logs one Information line naming the reason:
+    /// it used to log NOTHING, which left the difference between a rebind and a full extraction diagnosable only
+    /// by reading the code (2026-08-06 P4 scale validation §6). Fresh-workspace bootstraps are rare, so one line
+    /// per bootstrap costs nothing. A failure keeps its warning.
+    /// </summary>
+    internal static void LogRebindFallback(
+        ILogger logger, string canonicalRoot, RebindBootstrapOutcome rebind)
+    {
+        if (rebind.Result == RebindBootstrapOutcome.Kind.Failed)
+        {
+            logger.LogWarning(
+                "Rebinding the index of {SourceRoot} into {Root} failed at {Stage}: {Reason}. " +
+                "Falling back to a full scan.",
+                rebind.SourceRoot, canonicalRoot, rebind.Stage, rebind.Reason);
+            return;
+        }
+
+        logger.LogInformation(
+            "Worktree rebind not eligible for {Root} ({Reason}); scanning it in full.",
+            canonicalRoot, rebind.Reason);
+    }
+
     private bool PublishBoundWorkspace(BootstrapRunResult result, int runGeneration)
     {
         lock (_gate)
@@ -869,7 +887,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             cancellation, "Bootstrap for {Root} abandoned during host shutdown.", canonicalRoot);
     }
 
-    private void MarkBootstrapFailed(string canonicalRoot, int runGeneration, Exception error)
+    private void MarkBootstrapFailed(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int runGeneration, Exception error)
     {
         bool shouldMarkRegistry;
         lock (_gate)
@@ -907,7 +926,91 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         {
             _logger.LogWarning(markError, "Failed to mark bootstrap error for {Root}.", canonicalRoot);
         }
+
+        if (error is ScanAdmissionTimeoutException)
+            ScheduleAdmissionRetry(canonicalRoot, source, runGeneration);
     }
+
+    /// <summary>
+    /// Re-run a bootstrap that ended in <see cref="ScanAdmissionTimeoutException"/>, once, after a jittered delay.
+    /// Unbounded by design: each cycle is one BOUNDED admission wait that runs no scan and writes no scan-failure
+    /// record, so the cost of retrying forever is a poll, while the cost of giving up is a server that serves
+    /// nothing until a person restarts it (2026-08-06 P4 scale validation §3). Host shutdown cancels the pending
+    /// delay; a generation or phase change means a newer run already owns the workspace, so the stale retry exits.
+    /// </summary>
+    private void ScheduleAdmissionRetry(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int failedGeneration)
+    {
+        CancellationToken shutdown;
+        try
+        {
+            shutdown = _shutdown.Token;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        TimeSpan delay = JitterAdmissionRetryDelay(
+            TestAdmissionRetryDelay ?? DefaultAdmissionRetryDelay, Random.Shared.NextDouble());
+
+        _logger.LogInformation(
+            "Bootstrap for {Root} timed out waiting for machine-wide scan admission; retrying in {DelaySeconds}s.",
+            canonicalRoot, Math.Round(delay.TotalSeconds, 1));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, shutdown).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            int runGeneration;
+            lock (_gate)
+            {
+                if (shutdown.IsCancellationRequested ||
+                    _phase != BootstrapPhase.Failed ||
+                    _runGeneration != failedGeneration)
+                {
+                    return;
+                }
+
+                runGeneration = StartRunLocked(canonicalRoot);
+            }
+
+            RunBootstrapInBackground(canonicalRoot, source, runGeneration);
+        });
+    }
+
+    /// <summary>
+    /// The retry delay: the base wait plus up to a quarter of it, so a machine full of workspaces that all lost
+    /// the same admission race does not re-queue in lockstep. <paramref name="sample"/> is clamped to [0,1].
+    /// </summary>
+    internal static TimeSpan JitterAdmissionRetryDelay(TimeSpan baseDelay, double sample) =>
+        baseDelay + (baseDelay * (AdmissionRetryJitterFraction * Math.Clamp(sample, 0d, 1d)));
+
+    private const double AdmissionRetryJitterFraction = 0.25;
+
+    /// <summary>
+    /// How long a failed admission wait rests before the bootstrap re-runs itself. Long enough that a retry
+    /// storm cannot itself become the contention, short enough that a workspace freed within the hour binds
+    /// without operator action.
+    /// </summary>
+    internal static readonly TimeSpan DefaultAdmissionRetryDelay = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Test-only override for <see cref="DefaultAdmissionRetryDelay"/>, so a retry test does not sit out the
+    /// production minute.
+    /// </summary>
+    internal TimeSpan? TestAdmissionRetryDelay { get; set; }
 
     /// <summary>
     /// Open the telemetry ledger and prune in one step, GUARANTEEING the just-opened ledger is disposed if the
