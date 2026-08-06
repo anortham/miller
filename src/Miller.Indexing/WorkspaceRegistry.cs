@@ -16,9 +16,27 @@ public sealed class WorkspaceRegistry : IDisposable
             last_revision INTEGER CHECK (last_revision IS NULL OR last_revision >= 0),
             state TEXT NOT NULL CHECK (state IN ('current','ready','loaded_existing','stale','refreshing','missing','error')),
             last_error TEXT,
-            level_policy TEXT
+            level_policy TEXT,
+            git_common_dir TEXT,
+            git_is_linked INTEGER,
+            git_dir TEXT,
+            git_dir_created_at TEXT
         ) STRICT;
         """;
+
+    private const string RowColumns =
+        "workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at, " +
+        "last_revision, state, last_error, level_policy, git_common_dir, git_is_linked, git_dir, " +
+        "git_dir_created_at";
+
+    private static readonly (string Name, string Type)[] AdditiveColumns =
+    [
+        ("level_policy", "TEXT"),
+        ("git_common_dir", "TEXT"),
+        ("git_is_linked", "INTEGER"),
+        ("git_dir", "TEXT"),
+        ("git_dir_created_at", "TEXT"),
+    ];
 
     private readonly object _gate = new();
     private readonly SqliteConnection _connection;
@@ -63,7 +81,7 @@ public sealed class WorkspaceRegistry : IDisposable
                 ddl.ExecuteNonQuery();
             }
 
-            EnsureLevelPolicyColumn(connection);
+            EnsureAdditiveColumns(connection);
 
             return new WorkspaceRegistry(connection);
         }
@@ -74,19 +92,34 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    /// <summary>
+    /// Record that a workspace was seen, inserting its row or refreshing the mutable facts of an existing one.
+    /// </summary>
+    /// <param name="lineage">
+    /// The repository lineage observed for this root, or null when the caller resolved no git layout. Null leaves
+    /// any lineage another process already stored UNTOUCHED — an upsert from a context without git resolution must
+    /// not erase a persisted checkout generation. A non-null lineage replaces all four stored values together, so a
+    /// half-known lineage cannot inherit the other half from a previous generation.
+    /// <see cref="WorkspaceLineage.GitCommonDir"/> is canonicalized here through
+    /// <see cref="PathCanonicalizer"/> — callers pass the raw <see cref="GitWorktreeLayout.CommonDir"/>, and
+    /// <see cref="FindMainCheckoutByCommonDir"/> expects the same canonical spelling.
+    /// </param>
     public WorkspaceRegistryRow UpsertSeen(
         string workspaceId,
         string displayId,
         string canonicalRoot,
         string indexDbPath,
         WorkspaceRegistryState state = WorkspaceRegistryState.Ready,
-        DateTimeOffset? seenAtUtc = null)
+        DateTimeOffset? seenAtUtc = null,
+        WorkspaceLineage? lineage = null)
     {
         ThrowIfDisposed();
         ValidateRequired(workspaceId, nameof(workspaceId));
         ValidateRequired(displayId, nameof(displayId));
         ValidateRequired(canonicalRoot, nameof(canonicalRoot));
         ValidateRequired(indexDbPath, nameof(indexDbPath));
+        if (lineage is not null)
+            ValidateRequired(lineage.GitCommonDir, nameof(lineage));
 
         DateTimeOffset seen = NormalizeUtc(seenAtUtc ?? DateTimeOffset.UtcNow);
         lock (_gate)
@@ -96,16 +129,26 @@ public sealed class WorkspaceRegistry : IDisposable
             cmd.Transaction = tx;
             cmd.CommandText = """
                 INSERT INTO workspaces
-                    (workspace_id, display_id, canonical_root, index_db_path, last_seen_at, state, last_error)
+                    (workspace_id, display_id, canonical_root, index_db_path, last_seen_at, state, last_error,
+                     git_common_dir, git_is_linked, git_dir, git_dir_created_at)
                 VALUES
-                    ($workspace_id, $display_id, $canonical_root, $index_db_path, $last_seen_at, $state, NULL)
+                    ($workspace_id, $display_id, $canonical_root, $index_db_path, $last_seen_at, $state, NULL,
+                     $git_common_dir, $git_is_linked, $git_dir, $git_dir_created_at)
                 ON CONFLICT(workspace_id) DO UPDATE SET
                     display_id = excluded.display_id,
                     canonical_root = excluded.canonical_root,
                     index_db_path = excluded.index_db_path,
                     last_seen_at = excluded.last_seen_at,
                     state = excluded.state,
-                    last_error = NULL;
+                    last_error = NULL,
+                    git_common_dir = CASE WHEN $has_lineage = 1
+                        THEN excluded.git_common_dir ELSE workspaces.git_common_dir END,
+                    git_is_linked = CASE WHEN $has_lineage = 1
+                        THEN excluded.git_is_linked ELSE workspaces.git_is_linked END,
+                    git_dir = CASE WHEN $has_lineage = 1
+                        THEN excluded.git_dir ELSE workspaces.git_dir END,
+                    git_dir_created_at = CASE WHEN $has_lineage = 1
+                        THEN excluded.git_dir_created_at ELSE workspaces.git_dir_created_at END;
                 """;
             cmd.Parameters.AddWithValue("$workspace_id", workspaceId);
             cmd.Parameters.AddWithValue("$display_id", displayId);
@@ -113,6 +156,17 @@ public sealed class WorkspaceRegistry : IDisposable
             cmd.Parameters.AddWithValue("$index_db_path", indexDbPath);
             cmd.Parameters.AddWithValue("$last_seen_at", FormatTimestamp(seen));
             cmd.Parameters.AddWithValue("$state", state.ToStorageString());
+            cmd.Parameters.AddWithValue("$has_lineage", lineage is null ? 0 : 1);
+            cmd.Parameters.AddWithValue(
+                "$git_common_dir",
+                lineage is null
+                    ? DBNull.Value
+                    : WorkspaceLineage.CanonicalizeCommonDir(lineage.GitCommonDir));
+            cmd.Parameters.AddWithValue("$git_is_linked", lineage is null ? DBNull.Value : lineage.IsLinkedWorktree ? 1 : 0);
+            cmd.Parameters.AddWithValue("$git_dir", (object?)lineage?.GitDir ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(
+                "$git_dir_created_at",
+                lineage?.GitDirCreatedAtUtc is { } created ? FormatTimestamp(created) : DBNull.Value);
             cmd.ExecuteNonQuery();
 
             PruneDuplicatePathRowsUnderLock(tx, workspaceId, canonicalRoot, indexDbPath);
@@ -296,9 +350,8 @@ public sealed class WorkspaceRegistry : IDisposable
         lock (_gate)
         {
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = """
-                SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
-                       last_revision, state, last_error, level_policy
+            cmd.CommandText = $"""
+                SELECT {RowColumns}
                 FROM workspaces
                 ORDER BY CASE WHEN state IN ('current','ready','loaded_existing') THEN 0 ELSE 1 END,
                          display_id COLLATE NOCASE,
@@ -310,6 +363,43 @@ public sealed class WorkspaceRegistry : IDisposable
             while (reader.Read())
                 rows.Add(ReadRow(reader));
             return rows;
+        }
+    }
+
+    /// <summary>
+    /// The registered MAIN CHECKOUT of the repository whose shared git directory is
+    /// <paramref name="canonicalCommonDir"/>, or null when no such row is registered. Linked worktrees of the same
+    /// repository are skipped: a rebind sources from the main checkout only, never worktree-to-worktree.
+    ///
+    /// <para>Pass the same canonical spelling <see cref="UpsertSeen"/> stores —
+    /// <see cref="WorkspaceLineage.CanonicalizeCommonDir"/> output. Rows are compared with
+    /// <see cref="ArtifactRootIdentity.Matches"/>, so path case follows the platform rather than SQLite's
+    /// ASCII-only <c>NOCASE</c> collation.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalCommonDir"/> is null or blank.</exception>
+    public WorkspaceRegistryRow? FindMainCheckoutByCommonDir(string canonicalCommonDir)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(canonicalCommonDir, nameof(canonicalCommonDir));
+
+        lock (_gate)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"""
+                SELECT {RowColumns}
+                FROM workspaces
+                WHERE git_common_dir IS NOT NULL AND git_is_linked = 0
+                ORDER BY workspace_id;
+                """;
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                WorkspaceRegistryRow row = ReadRow(reader);
+                if (ArtifactRootIdentity.Matches(row.GitCommonDir, canonicalCommonDir))
+                    return row;
+            }
+
+            return null;
         }
     }
 
@@ -334,31 +424,40 @@ public sealed class WorkspaceRegistry : IDisposable
         _disposed = true;
     }
 
-    // Registries created before the levels work lack the column, and the registry has no migration
-    // machinery -- one additive nullable column rides the same pragma_table_info + ALTER pattern the
-    // telemetry ledger uses. STRICT tables accept ALTER TABLE ... ADD COLUMN for nullable TEXT.
-    private static void EnsureLevelPolicyColumn(SqliteConnection connection)
+    // Registries created before the levels and lineage work lack those columns, and the registry has no
+    // migration machinery -- each additive nullable column rides the same pragma_table_info + ALTER pattern
+    // the telemetry ledger uses. STRICT tables accept ALTER TABLE ... ADD COLUMN for nullable columns.
+    private static void EnsureAdditiveColumns(SqliteConnection connection)
     {
-        using (var probe = connection.CreateCommand())
+        foreach ((string name, string type) in AdditiveColumns)
         {
-            probe.CommandText =
-                "SELECT COUNT(*) FROM pragma_table_info('workspaces') WHERE name = 'level_policy';";
-            if (Convert.ToInt64(probe.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
-                return;
-        }
+            using (var probe = connection.CreateCommand())
+            {
+                probe.CommandText =
+                    "SELECT COUNT(*) FROM pragma_table_info('workspaces') WHERE name = $name;";
+                probe.Parameters.AddWithValue("$name", name);
+                if (Convert.ToInt64(probe.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
+                    continue;
+            }
 
-        AddLevelPolicyColumnToleratingConcurrentAdder(connection);
+            AddColumnToleratingConcurrentAdder(connection, name, type);
+        }
     }
 
     /// <summary>
-    /// The ALTER half of <see cref="EnsureLevelPolicyColumn"/>. The pragma probe above it is only a fast
+    /// The ALTER half of <see cref="EnsureAdditiveColumns"/>. The pragma probe above it is only a fast
     /// path: the registry is machine-global, so another Miller process can add the column between that
     /// check and this statement. A duplicate-column failure means the intended end state already holds.
     /// </summary>
-    internal static void AddLevelPolicyColumnToleratingConcurrentAdder(SqliteConnection connection)
+    internal static void AddColumnToleratingConcurrentAdder(
+        SqliteConnection connection,
+        string column,
+        string type)
     {
         using var alter = connection.CreateCommand();
-        alter.CommandText = "ALTER TABLE workspaces ADD COLUMN level_policy TEXT;";
+        alter.CommandText = string.Create(
+            CultureInfo.InvariantCulture,
+            $"ALTER TABLE workspaces ADD COLUMN {column} {type};");
         try
         {
             alter.ExecuteNonQuery();
@@ -376,9 +475,8 @@ public sealed class WorkspaceRegistry : IDisposable
     private WorkspaceRegistryRow? GetUnderLock(string workspaceId)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
-            SELECT workspace_id, display_id, canonical_root, index_db_path, last_seen_at, last_scan_at,
-                   last_revision, state, last_error, level_policy
+        cmd.CommandText = $"""
+            SELECT {RowColumns}
             FROM workspaces
             WHERE workspace_id = $workspace_id;
             """;
@@ -426,7 +524,11 @@ public sealed class WorkspaceRegistry : IDisposable
             reader.IsDBNull(6) ? null : reader.GetInt64(6),
             WorkspaceRegistryStateExtensions.FromStorage(reader.GetString(7)),
             reader.IsDBNull(8) ? null : reader.GetString(8),
-            reader.IsDBNull(9) ? null : reader.GetString(9));
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.IsDBNull(11) ? null : reader.GetInt64(11) != 0,
+            reader.IsDBNull(12) ? null : reader.GetString(12),
+            reader.IsDBNull(13) ? null : ParseTimestamp(reader.GetString(13)));
 
     private static void ExecuteExistingRowUpdate(SqliteCommand cmd, string workspaceId)
     {
@@ -463,4 +565,47 @@ public sealed class WorkspaceRegistry : IDisposable
 
     private static DateTimeOffset ParseTimestamp(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+}
+
+/// <summary>
+/// The repository lineage of a workspace root, persisted so a later process can answer two questions the root
+/// path alone cannot: which repository family this workspace belongs to (for sibling lookup), and which checkout
+/// generation occupied the root when the row was written (for path-reuse detection across restarts).
+/// </summary>
+/// <param name="GitCommonDir">
+/// <see cref="GitWorktreeLayout.CommonDir"/> — the repository's shared git directory, which every worktree of one
+/// repository has in common. Pass the raw layout value; <see cref="WorkspaceRegistry.UpsertSeen"/> canonicalizes it.
+/// </param>
+/// <param name="IsLinkedWorktree">
+/// <see cref="GitWorktreeLayout.IsLinkedWorktree"/> — false for the main checkout (a rebind source), true for a
+/// linked worktree (a rebind target).
+/// </param>
+/// <param name="GitDir">The <see cref="WorkspaceRootIdentity.GitDir"/> half of the checkout generation.</param>
+/// <param name="GitDirCreatedAtUtc">
+/// The <see cref="WorkspaceRootIdentity.GitDirCreatedAtUtc"/> half. Null when the platform reported no usable
+/// creation time, which is what <see cref="WorkspaceRootIdentity.IsKnown"/> reads as an unknown generation.
+/// </param>
+public sealed record WorkspaceLineage(
+    string GitCommonDir,
+    bool IsLinkedWorktree,
+    string? GitDir,
+    DateTimeOffset? GitDirCreatedAtUtc)
+{
+    /// <summary>
+    /// The canonical spelling used for both the stored <c>git_common_dir</c> and
+    /// <see cref="WorkspaceRegistry.FindMainCheckoutByCommonDir"/> lookups.
+    ///
+    /// <para><see cref="GitWorktreeLayout"/> only normalizes lexically while registry roots are symlink-resolved,
+    /// so a raw layout path would silently miss an eligible main checkout on a macOS <c>/var</c>→<c>/private/var</c>
+    /// layout. This resolves as far as the path exists instead of throwing on a vanished directory, because
+    /// registering a workspace must not fail when a git directory disappears mid-flight.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="commonDir"/> is null or blank.</exception>
+    public static string CanonicalizeCommonDir(string commonDir)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commonDir);
+
+        string absolute = Path.GetFullPath(commonDir);
+        return PathCanonicalizer.CanonicalizeFile(canonicalRoot: absolute, path: absolute);
+    }
 }

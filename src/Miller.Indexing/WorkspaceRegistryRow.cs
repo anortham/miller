@@ -23,7 +23,11 @@ public sealed record WorkspaceRegistryRow(
     long? LastRevision,
     WorkspaceRegistryState State,
     string? LastError,
-    string? LevelPolicy = null)
+    string? LevelPolicy = null,
+    string? GitCommonDir = null,
+    bool? GitIsLinked = null,
+    string? GitDir = null,
+    DateTimeOffset? GitDirCreatedAtUtc = null)
 {
     public string StateText => State.ToStorageString();
 }

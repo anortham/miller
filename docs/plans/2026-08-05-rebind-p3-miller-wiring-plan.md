@@ -146,13 +146,13 @@ Windows/macOS) — compare via SQL `COLLATE NOCASE` only if the existing registr
 for paths; otherwise filter in C# for consistency with `ArtifactRootIdentity.Matches`.
 
 **Acceptance criteria:**
-- [ ] Lineage columns migrate on an existing registry DB (fixture with the old schema opens
+- [x] Lineage columns migrate on an existing registry DB (fixture with the old schema opens
       cleanly and reads null lineage), and round-trip values exactly, including the
       creation-timestamp half.
-- [ ] `FindMainCheckoutByCommonDir` returns the main-checkout row among mixed rows, ignores linked
+- [x] `FindMainCheckoutByCommonDir` returns the main-checkout row among mixed rows, ignores linked
       rows and other repos, and applies platform path-comparison semantics.
-- [ ] Null-lineage upsert preserves previously stored lineage.
-- [ ] Worker-scope verification passes and the change is handed to the lead per
+- [x] Null-lineage upsert preserves previously stored lineage.
+- [x] Worker-scope verification passes and the change is handed to the lead per
       parallel-lead-commit.
 
 ### Task 2: Bootstrap lineage capture + replacement consumption rule
