@@ -412,16 +412,16 @@ and a killed/failed rebind leaves no `.rebuild` debris after the fallback comple
 argv pointed at the `.rebuild` file with the recorded level.
 
 **Acceptance criteria:**
-- [ ] Fresh linked-worktree open with an eligible sibling artifact runs rebind, not a full scan
+- [x] Fresh linked-worktree open with an eligible sibling artifact runs rebind, not a full scan
       (Scale test; provenance keys present; source untouched by hash comparison).
-- [ ] Byte-identical tree → delta scan reports `no_change`.
-- [ ] Every failure stage (budget exhausted, snapshot invalid, rebind refused, scan failed,
+- [x] Byte-identical tree → delta scan reports `no_change`.
+- [x] Every failure stage (budget exhausted, snapshot invalid, rebind refused, scan failed,
       promote failed-before-move) cleans staging, records under W8 with
       `ScanIntent.IncrementalReconcile`, and falls back to the plain scan (fast tests).
-- [ ] Promote-exception probe adopts a post-move artifact as success.
-- [ ] Plain-bootstrap fallback entry runs staging cleanup (debris-free after a simulated dead
+- [x] Promote-exception probe adopts a post-move artifact as success.
+- [x] Plain-bootstrap fallback entry runs staging cleanup (debris-free after a simulated dead
       rebind).
-- [ ] Worker-scope verification passes and the change is handed to the lead per
+- [x] Worker-scope verification passes and the change is handed to the lead per
       parallel-lead-commit.
 
 ### Task 7: Provenance surfacing + contract docs

@@ -581,25 +581,59 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     TestScanObserver?.Invoke();
                     ScanAttemptDecision attempt =
                         failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
-                    // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
-                    // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
-                    // arm). Both are first builds: julie records index_level only with extraction history, so a
-                    // level-less shell accepts the policy's first-build level without conflict. The force case
-                    // is a root rebind, which LevelForScan routes by intent.
-                    ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
-                        attempt.EffectiveIntent, newArtifact: !scanDecision.Force,
-                        IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId));
-                    ExtractReport report = RunRecordedScan(
-                        failurePolicy, attempt,
-                        () => runner.Scan(
-                            canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs, bootstrapLevel));
-                    scanned = true;
-                    scanRevision = report.Revision;
-                    _logger.LogInformation(
-                        "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                        report.SymbolsExtracted, report.Revision);
-                    if (ExtractReportLog.DescribeWarning(report) is { } warning)
-                        _logger.LogWarning("Bootstrap scan: {Warning}", warning);
+                    IndexLevelPolicy levelPolicy =
+                        IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId);
+
+                    // A fresh linked worktree whose repository already has an indexed main checkout can be seeded
+                    // from that artifact instead of re-extracting the whole tree. The attempt runs under the lease
+                    // and admission this block already holds, and every non-promoted outcome falls through to the
+                    // plain scan below with the target untouched.
+                    RebindBootstrapOutcome rebind = TryRebindFromMainCheckout(
+                        canonicalRoot, canonicalDbPath, ctx, runner, failurePolicy, attempt, levelPolicy,
+                        rootReplaced || persistedRootReplaced);
+                    if (rebind.Result == RebindBootstrapOutcome.Kind.Promoted)
+                    {
+                        scanned = true;
+                        scanRevision = rebind.Revision;
+                        _logger.LogInformation(
+                            "Bootstrapped {Root} by rebinding the index of {SourceRoot} ({SourceDisplayId}) " +
+                            "instead of a full extraction: {Reason} (revision {Rev}).",
+                            canonicalRoot, rebind.SourceRoot, rebind.SourceDisplayId, rebind.Reason,
+                            rebind.Revision);
+                    }
+                    else
+                    {
+                        if (rebind.Result == RebindBootstrapOutcome.Kind.Failed)
+                        {
+                            _logger.LogWarning(
+                                "Rebinding the index of {SourceRoot} into {Root} failed at {Stage}: {Reason}. " +
+                                "Falling back to a full scan.",
+                                rebind.SourceRoot, canonicalRoot, rebind.Stage, rebind.Reason);
+                        }
+
+                        // Also at the fallback entry, because a SIGKILLed rebind is the one failure path that
+                        // cannot clear its own staging, and a stranded trio is full-artifact sized.
+                        RebindBootstrap.DiscardStaging(canonicalDbPath);
+
+                        // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
+                        // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
+                        // arm). Both are first builds: julie records index_level only with extraction history, so a
+                        // level-less shell accepts the policy's first-build level without conflict. The force case
+                        // is a root rebind, which LevelForScan routes by intent.
+                        ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
+                            attempt.EffectiveIntent, newArtifact: !scanDecision.Force, levelPolicy);
+                        ExtractReport report = RunRecordedScan(
+                            failurePolicy, attempt,
+                            () => runner.Scan(
+                                canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs, bootstrapLevel));
+                        scanned = true;
+                        scanRevision = report.Revision;
+                        _logger.LogInformation(
+                            "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                            report.SymbolsExtracted, report.Revision);
+                        if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                            _logger.LogWarning("Bootstrap scan: {Warning}", warning);
+                    }
                 }
                 else
                 {
@@ -1449,6 +1483,48 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment());
             throw;
         }
+    }
+
+    /// <summary>
+    /// Attempt to seed this workspace from its repository's main-checkout artifact instead of extracting the
+    /// whole tree (rebind contract design §7). Called INSIDE the bootstrap writer lease and the one governor
+    /// admission the scan already holds — a multi-GB snapshot copy is the same class of machine load a scan is,
+    /// and the sequence never takes the SOURCE workspace's writer lock, so the lock order is untouched.
+    ///
+    /// <para>The two seams without a default are the ones that need this bootstrap's located runner. The delta
+    /// scan is a NON-force scan pointed at the staging file, so it inherits the whole shared scan chokepoint —
+    /// <c>--jobs</c>, the invariant ignore file, and supervision paths resolved from the staging file's own
+    /// <c>.miller</c> directory — while a force scan would delete the seed it is meant to reconcile.</para>
+    /// </summary>
+    private RebindBootstrapOutcome TryRebindFromMainCheckout(
+        string canonicalRoot,
+        string canonicalDbPath,
+        WorkspaceContext ctx,
+        JulieExtractRunner runner,
+        IScanFailurePolicy failurePolicy,
+        ScanAttemptDecision attempt,
+        IndexLevelPolicy levelPolicy,
+        bool rootReplacementDetected)
+    {
+        int jobs = attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment();
+        return RebindBootstrap.TryRebind(
+            new RebindBootstrapRequest
+            {
+                TargetRoot = canonicalRoot,
+                TargetDbPath = canonicalDbPath,
+                RegistryDbPath = ctx.RegistryDbPath,
+                RootReplacementDetected = rootReplacementDetected,
+                TargetLevelPolicy = levelPolicy,
+                FailurePolicy = failurePolicy,
+                Jobs = jobs,
+            },
+            new RebindBootstrapSeams
+            {
+                Rebind = (snapshotDb, targetRoot, ct) => runner.Rebind(snapshotDb, targetRoot, ct),
+                RunDeltaScan = (snapshotDb, level) =>
+                    runner.Scan(canonicalRoot, snapshotDb, force: false, jobs, level),
+            },
+            _shutdown.Token);
     }
 
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(
