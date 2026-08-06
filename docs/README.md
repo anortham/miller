@@ -123,6 +123,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`release-process.md`](release-process.md) - current release validation and promotion flow.
 - [`release-notes/v1.17.0.md`](release-notes/v1.17.0.md) - latest release notes.
 - [`release-notes/v1.16.1.md`](release-notes/v1.16.1.md) - previous release notes.
+- [`findings/2026-08-06-v1.17.0-release-verification.md`](findings/2026-08-06-v1.17.0-release-verification.md) - live `v1.17.0` release verification.
 - [`findings/2026-08-04-v1.16.1-release-verification.md`](findings/2026-08-04-v1.16.1-release-verification.md) - live `v1.16.1` release verification.
 - [`findings/2026-08-04-v1.16.0-release-verification.md`](findings/2026-08-04-v1.16.0-release-verification.md) - live `v1.16.0` release verification.
 - [`findings/2026-08-04-index-levels-indexing-benchmark.md`](findings/2026-08-04-index-levels-indexing-benchmark.md) - cold-index timing for `MILLER_INDEX_LEVELS=symbols` vs `full` (2.82x, randomized order, 5 reps).
