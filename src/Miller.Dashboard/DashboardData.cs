@@ -139,7 +139,11 @@ public sealed record DashboardWorkspaceFacts(
     [property: JsonPropertyName("extractor_version")] string? ExtractorVersion = null,
     [property: JsonPropertyName("artifact_id")] string? ArtifactId = null,
     [property: JsonPropertyName("index_revision")] long? IndexRevision = null,
-    [property: JsonPropertyName("freshness_status")] string FreshnessStatus = "unknown");
+    [property: JsonPropertyName("freshness_status")] string FreshnessStatus = "unknown",
+    [property: JsonPropertyName("rebound_from_root")] string? ReboundFromRoot = null,
+    [property: JsonPropertyName("rebound_from_workspace")] string? ReboundFromWorkspace = null,
+    [property: JsonPropertyName("rebound_from_artifact_id")] string? ReboundFromArtifactId = null,
+    [property: JsonPropertyName("rebound_at")] string? ReboundAt = null);
 
 public sealed record DashboardHealthWarning(
     [property: JsonPropertyName("code")] string Code,
@@ -945,7 +949,7 @@ public static class DashboardData
             row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
         DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
             ? null
-            : DashboardIndexFactsCache.Read(selectedWorkspace);
+            : WithRebindProvenance(DashboardIndexFactsCache.Read(selectedWorkspace), workspaces);
         IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
             ? Array.Empty<DashboardWorkspaceFacts>()
             : new[] { selectedFacts };
@@ -1205,6 +1209,30 @@ public static class DashboardData
         }
     }
 
+    /// <summary>
+    /// Enriches the DETAIL view's facts with the artifact's rebind provenance. An artifact that was never
+    /// rebound returns the facts unchanged, so the detail panel renders exactly as before. The source root is
+    /// resolved to a display id against the registry rows this snapshot already read — no extra registry open,
+    /// and no index hydration.
+    /// </summary>
+    private static DashboardWorkspaceFacts WithRebindProvenance(
+        DashboardWorkspaceFacts facts,
+        IReadOnlyList<DashboardWorkspaceRow> workspaces)
+    {
+        if (RebindProvenanceReader.Read(facts.IndexDbPath) is not { } provenance)
+            return facts;
+
+        return facts with
+        {
+            ReboundFromRoot = provenance.SourceRoot,
+            ReboundFromWorkspace = workspaces
+                .FirstOrDefault(row => ArtifactRootIdentity.Matches(row.CanonicalRoot, provenance.SourceRoot))
+                ?.DisplayId,
+            ReboundFromArtifactId = provenance.SourceArtifactId,
+            ReboundAt = provenance.ReboundAt,
+        };
+    }
+
     private static WorkspaceFacts BuildWorkspaceFacts(
         DashboardWorkspaceRow workspace,
         DashboardWorkspaceFacts dashboardFacts)
@@ -1239,7 +1267,14 @@ public static class DashboardData
             WarningText: dashboardFacts.Message ?? dashboardFacts.RegistryLastError,
             DisplayId: workspace.DisplayId,
             SearchSidecar: searchSidecar,
-            ContentCorpus: contentCorpus);
+            ContentCorpus: contentCorpus,
+            RebindProvenance: dashboardFacts.ReboundFromRoot is { Length: > 0 } reboundFromRoot
+                ? new RebindProvenanceFacts(
+                    reboundFromRoot,
+                    dashboardFacts.ReboundFromWorkspace,
+                    dashboardFacts.ReboundFromArtifactId,
+                    dashboardFacts.ReboundAt)
+                : null);
     }
 
     private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(

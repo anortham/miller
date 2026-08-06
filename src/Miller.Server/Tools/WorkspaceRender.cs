@@ -45,6 +45,8 @@ namespace Miller.Server.Tools;
 /// byte-identical.</param>
 /// <param name="ScanFailure">The persisted whole-repo scan-failure record, when one exists. Null — the normal
 /// state — renders nowhere, so default status output stays byte-identical.</param>
+/// <param name="RebindProvenance">Where this artifact was rebound from, when it was rebound at all. Null — the
+/// normal state — renders nowhere, so default status output stays byte-identical.</param>
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -68,7 +70,27 @@ public readonly record struct WorkspaceFacts(
     SemanticBrokerFacts? SemanticBroker = null,
     ScanGovernorSnapshot? ScanGovernor = null,
     ScanFailureRecord? ScanFailure = null,
-    IndexLevelFacts? IndexLevel = null);
+    IndexLevelFacts? IndexLevel = null,
+    RebindProvenanceFacts? RebindProvenance = null);
+
+/// <summary>
+/// Where a rebound artifact came from (P3 provenance surfacing): the source root recorded in the artifact's
+/// additive <c>rebound_from_root</c> key, that root's registered display id when it is registered on this
+/// machine, the source artifact's generation id, and the retarget instant AS THE EXTRACTOR STORED IT. An
+/// artifact that was never rebound produces a NULL fact, which renders nowhere — default status/health output
+/// stays byte-identical, the same emit-nothing rule scan_failure follows.
+/// </summary>
+/// <param name="SourceRoot">The previous recorded root, always present when the fact exists.</param>
+/// <param name="SourceWorkspace">The source root's registered display id, or null when that root is not
+/// registered on this machine. The raw root still renders either way.</param>
+/// <param name="SourceArtifactId">The source artifact's generation id, null when the artifact omits it.</param>
+/// <param name="ReboundAt">The retarget instant, rendered verbatim as stored (never reparsed or
+/// reformatted).</param>
+public sealed record RebindProvenanceFacts(
+    string SourceRoot,
+    string? SourceWorkspace,
+    string? SourceArtifactId,
+    string? ReboundAt);
 
 /// <summary>
 /// The progressive-indexing facts for a workspace serving a SYMBOLS-level artifact. A full-level artifact (and
@@ -401,6 +423,8 @@ public static class WorkspaceRender
             sb.Append("scan_failure: ").Append(scanFailureLabel).Append('\n');
         if (IndexLevelLabel(facts.IndexLevel) is { } indexLevelLabel)
             sb.Append("index_level: ").Append(indexLevelLabel).Append('\n');
+        if (RebindProvenanceLabel(facts.RebindProvenance) is { } rebindLabel)
+            sb.Append("rebound_from: ").Append(rebindLabel).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -530,6 +554,36 @@ public static class WorkspaceRender
         w.WriteString(
             "next_attempt_utc", facts.NextAttemptAtUtc.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
         w.WriteNumber("retry_in_seconds", RemainingSeconds(facts.NextAttemptAtUtc));
+        w.WriteEndObject();
+    }
+
+    // Null ⇒ render no `rebound_from:` line at all — the same emit-nothing rule ScanFailureLabel follows, so an
+    // artifact that was never rebound produces byte-identical output to a build without provenance.
+    private static string? RebindProvenanceLabel(RebindProvenanceFacts? facts)
+    {
+        if (facts is null)
+            return null;
+
+        var label = new StringBuilder();
+        if (string.IsNullOrWhiteSpace(facts.SourceWorkspace))
+            label.Append(facts.SourceRoot);
+        else
+            label.Append(facts.SourceWorkspace).Append(" (").Append(facts.SourceRoot).Append(')');
+        if (!string.IsNullOrWhiteSpace(facts.ReboundAt))
+            label.Append(" at ").Append(facts.ReboundAt);
+        return label.ToString();
+    }
+
+    private static void WriteRebindProvenanceJson(Utf8JsonWriter w, RebindProvenanceFacts facts)
+    {
+        w.WriteStartObject();
+        w.WriteString("source_root", facts.SourceRoot);
+        if (facts.SourceWorkspace is null) w.WriteNull("source_workspace");
+        else w.WriteString("source_workspace", facts.SourceWorkspace);
+        if (facts.SourceArtifactId is null) w.WriteNull("source_artifact_id");
+        else w.WriteString("source_artifact_id", facts.SourceArtifactId);
+        if (facts.ReboundAt is null) w.WriteNull("rebound_at");
+        else w.WriteString("rebound_at", facts.ReboundAt);
         w.WriteEndObject();
     }
 
@@ -746,6 +800,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("index_level");
                 WriteIndexLevelJson(w, indexLevel);
+            }
+
+            if (facts.RebindProvenance is { } rebindProvenance)
+            {
+                w.WritePropertyName("rebound_from");
+                WriteRebindProvenanceJson(w, rebindProvenance);
             }
 
             w.WritePropertyName("index");
@@ -1085,6 +1145,8 @@ public static class WorkspaceRender
             sb.Append("scan_governor: ").Append(HealthCompactValue(governorLabel)).Append('\n');
         if (ScanFailureLabel(status.ScanFailure) is { } scanFailureLabel)
             sb.Append("scan_failure: ").Append(HealthCompactValue(scanFailureLabel)).Append('\n');
+        if (RebindProvenanceLabel(status.RebindProvenance) is { } rebindLabel)
+            sb.Append("rebound_from: ").Append(HealthCompactValue(rebindLabel)).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -1272,6 +1334,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("index_level");
                 WriteIndexLevelJson(w, healthIndexLevel);
+            }
+
+            if (status.RebindProvenance is { } healthRebindProvenance)
+            {
+                w.WritePropertyName("rebound_from");
+                WriteRebindProvenanceJson(w, healthRebindProvenance);
             }
 
             w.WritePropertyName("index");

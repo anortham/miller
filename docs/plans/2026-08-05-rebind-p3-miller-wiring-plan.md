@@ -195,13 +195,13 @@ Compare stored-vs-current BEFORE the first `UpsertSeen` refreshes the row. Exten
 involvement) escalates and would-disqualify.
 
 **Acceptance criteria:**
-- [ ] A registry row carrying a different known persisted identity escalates the bootstrap
+- [x] A registry row carrying a different known persisted identity escalates the bootstrap
       decision to `RootRebind` (via `EscalateForReplacedRoot`) with no live
       `WorkspaceRootPresenceMonitor` involvement.
-- [ ] Unknown stored identity or unknown current identity never escalates and never disqualifies.
-- [ ] Lineage is persisted on bootstrap and refreshed after the decision (stored generation is
+- [x] Unknown stored identity or unknown current identity never escalates and never disqualifies.
+- [x] Lineage is persisted on bootstrap and refreshed after the decision (stored generation is
       the CURRENT one post-open).
-- [ ] Worker-scope verification passes and the worker commits per serial-worker-commit.
+- [x] Worker-scope verification passes and the worker commits per serial-worker-commit.
 
 ### Task 3: RebindEligibility pure decisions
 
@@ -464,11 +464,11 @@ exactly for JSON shape and doc language. Source display id resolves via the regi
 source root is registered; otherwise `source_workspace` is null and the raw root still renders.
 
 **Acceptance criteria:**
-- [ ] `workspace status --json` and `health --json` include `rebound_from` exactly when the
+- [x] `workspace status --json` and `health --json` include `rebound_from` exactly when the
       artifact carries the provenance keys; never an empty object.
-- [ ] Compact status renders the one-line provenance; dashboard detail shows the same facts.
-- [ ] `docs/contracts/cli-eros-v1.md` documents the additive object in the `scan_failure` style.
-- [ ] Worker-scope verification passes and the change is handed to the lead per
+- [x] Compact status renders the one-line provenance; dashboard detail shows the same facts.
+- [x] `docs/contracts/cli-eros-v1.md` documents the additive object in the `scan_failure` style.
+- [x] Worker-scope verification passes and the change is handed to the lead per
       parallel-lead-commit.
 
 ---
