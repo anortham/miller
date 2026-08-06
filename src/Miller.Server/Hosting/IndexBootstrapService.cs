@@ -97,7 +97,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         int Pruned,
         long ElapsedMilliseconds,
         int DocumentCount,
-        bool UsesExistingLedger);
+        bool UsesExistingLedger,
+        WorkspaceLineage? Lineage);
 
     private BoundWorkspace CurrentBound =>
         Volatile.Read(ref _bound) ?? throw new InvalidOperationException("Holder requested before bootstrap completed.");
@@ -450,6 +451,18 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             string millerDir = Path.GetDirectoryName(canonicalDbPath)!;
             Directory.CreateDirectory(millerDir);
 
+            // One lineage sample per run, read BEFORE any registry write: the comparison below asks what the
+            // stored row says about the PREVIOUS occupant, and the same run refreshes that row on the way out.
+            var lineage = CaptureLineage(canonicalRoot);
+            bool persistedRootReplaced = DisqualifiesRebind(
+                ReadRegistryRow(ctx, stableWorkspaceId), IdentityOf(lineage));
+            if (persistedRootReplaced)
+            {
+                _logger.LogWarning(
+                    "Workspace root {Root} was occupied by a different checkout when it was last registered; " +
+                    "rebuilding its index.", canonicalRoot);
+            }
+
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
             var runner = JulieExtractRunner.Locate(
@@ -478,7 +491,9 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 var probe = ReadBootstrapScanDecision(canonicalDbPath, canonicalRoot);
                 existingRootPath = probe.ExistingRootPath;
-                return rootReplaced ? EscalateForReplacedRoot(probe.Decision) : probe.Decision;
+                return rootReplaced || persistedRootReplaced
+                    ? EscalateForReplacedRoot(probe.Decision)
+                    : probe.Decision;
             }
 
             var winnerArtifact = new WinnerArtifactProbe(canonicalDbPath, canonicalRoot, stableWorkspaceId);
@@ -566,25 +581,67 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     TestScanObserver?.Invoke();
                     ScanAttemptDecision attempt =
                         failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true);
-                    // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
-                    // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
-                    // arm). Both are first builds: julie records index_level only with extraction history, so a
-                    // level-less shell accepts the policy's first-build level without conflict. The force case
-                    // is a root rebind, which LevelForScan routes by intent.
-                    ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
-                        attempt.EffectiveIntent, newArtifact: !scanDecision.Force,
-                        IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId));
-                    ExtractReport report = RunRecordedScan(
-                        failurePolicy, attempt,
-                        () => runner.Scan(
-                            canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs, bootstrapLevel));
-                    scanned = true;
-                    scanRevision = report.Revision;
-                    _logger.LogInformation(
-                        "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
-                        report.SymbolsExtracted, report.Revision);
-                    if (ExtractReportLog.DescribeWarning(report) is { } warning)
-                        _logger.LogWarning("Bootstrap scan: {Warning}", warning);
+                    IndexLevelPolicy levelPolicy =
+                        IndexLevels.ResolveForWorkspace(ctx.RegistryDbPath, stableWorkspaceId);
+
+                    // A fresh linked worktree whose repository already has an indexed main checkout can be seeded
+                    // from that artifact instead of re-extracting the whole tree. The attempt runs under the lease
+                    // and admission this block already holds, and every non-promoted outcome falls through to the
+                    // plain scan below with the target untouched.
+                    RebindBootstrapOutcome rebind = TryRebindFromMainCheckout(
+                        canonicalRoot, canonicalDbPath, ctx, runner, failurePolicy, attempt, levelPolicy,
+                        rootReplaced || persistedRootReplaced);
+                    if (rebind.Result == RebindBootstrapOutcome.Kind.Promoted)
+                    {
+                        scanned = true;
+                        scanRevision = rebind.Revision;
+                        _logger.LogInformation(
+                            "Bootstrapped {Root} by rebinding the index of {SourceRoot} ({SourceDisplayId}) " +
+                            "instead of a full extraction: {Reason} (revision {Rev}).",
+                            canonicalRoot, rebind.SourceRoot, rebind.SourceDisplayId, rebind.Reason,
+                            rebind.Revision);
+                        if (rebind.Warning is { } rebindWarning)
+                            _logger.LogWarning("Bootstrap scan: {Warning}", rebindWarning);
+                    }
+                    else
+                    {
+                        if (rebind.Result == RebindBootstrapOutcome.Kind.Failed)
+                        {
+                            _logger.LogWarning(
+                                "Rebinding the index of {SourceRoot} into {Root} failed at {Stage}: {Reason}. " +
+                                "Falling back to a full scan.",
+                                rebind.SourceRoot, canonicalRoot, rebind.Stage, rebind.Reason);
+                        }
+
+                        // Also at the fallback entry, because a SIGKILLed rebind is the one failure path that
+                        // cannot clear its own staging, and a stranded trio is full-artifact sized.
+                        RebindBootstrap.DiscardStaging(canonicalDbPath);
+
+                        // A failed rebind journalled its own failure, so the pre-attempt decision is stale — most
+                        // importantly it predates the post-SIGKILL --jobs clamp an OOM-killed delta just earned.
+                        ScanAttemptDecision fallbackAttempt = RebindBootstrap.FallbackAttemptAfterRebind(
+                            failurePolicy, scanDecision.Intent, attempt, rebind);
+
+                        // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
+                        // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
+                        // arm). Both are first builds: julie records index_level only with extraction history, so a
+                        // level-less shell accepts the policy's first-build level without conflict. The force case
+                        // is a root rebind, which LevelForScan routes by intent.
+                        ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
+                            fallbackAttempt.EffectiveIntent, newArtifact: !scanDecision.Force, levelPolicy);
+                        ExtractReport report = RunRecordedScan(
+                            failurePolicy, fallbackAttempt,
+                            () => runner.Scan(
+                                canonicalRoot, canonicalDbPath, scanDecision.Force, fallbackAttempt.Jobs,
+                                bootstrapLevel));
+                        scanned = true;
+                        scanRevision = report.Revision;
+                        _logger.LogInformation(
+                            "Scan complete: {Symbols} symbols extracted (revision {Rev}).",
+                            report.SymbolsExtracted, report.Revision);
+                        if (ExtractReportLog.DescribeWarning(report) is { } warning)
+                            _logger.LogWarning("Bootstrap scan: {Warning}", warning);
+                    }
                 }
                 else
                 {
@@ -734,7 +791,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 pruned,
                 (long)elapsed.TotalMilliseconds,
                 index.DocumentCount,
-                usesExistingLedger);
+                usesExistingLedger,
+                lineage);
         }
         catch
         {
@@ -755,13 +813,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 return false;
 
             if (result.DidScan)
-                MarkRegistryScanned(result.Bound.Workspace, result.StableWorkspaceId, result.ScanRevision ?? result.BuiltRevision);
+                MarkRegistryScanned(
+                    result.Bound.Workspace, result.StableWorkspaceId,
+                    result.ScanRevision ?? result.BuiltRevision, result.Lineage);
             else
                 RegisterBootstrapWorkspace(
                     result.Bound.Workspace,
                     result.StableWorkspaceId,
                     result.RegistryStateAfterLoad,
-                    result.BuiltRevision);
+                    result.BuiltRevision,
+                    result.Lineage);
 
             if (result.UsesExistingLedger)
                 result.Bound.Ledger?.RebindWorkspace(result.StableWorkspaceId, result.Bound.Workspace.WorkspaceRoot);
@@ -943,6 +1004,54 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             ShouldScan: true,
             ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.RootRebind }),
             WorkspaceRegistryState.Ready);
+    }
+
+    /// <summary>
+    /// Whether the registry row was written by a DIFFERENT checkout generation than the one occupying the root
+    /// now. Such a row and the artifact beside it both describe the previous occupant, so this open must rebuild
+    /// (<see cref="EscalateForReplacedRoot"/>) and must not seed itself from a sibling worktree's index.
+    ///
+    /// <para>The stored identity is the persisted half of the fact
+    /// <see cref="WorkspaceRootPresenceMonitor"/> samples in memory; persisting it is what makes
+    /// <c>git worktree remove</c> followed by <c>git worktree add</c> visible when no Miller was running to watch
+    /// it happen. Missing evidence never counts as a replacement — an unregistered workspace, a row written
+    /// before the lineage columns existed, and an unreadable current layout all answer false, because the verdict
+    /// costs a whole-repo rebuild. <see cref="WorkspaceRootIdentity.IsReplacement"/> enforces that rule for both
+    /// operands; the null row is the only case this method adds.</para>
+    /// </summary>
+    internal static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current) =>
+        stored is not null
+        && WorkspaceRootIdentity.IsReplacement(
+            new WorkspaceRootIdentity(stored.GitDir, stored.GitDirCreatedAtUtc), current);
+
+    /// <summary>
+    /// The repository lineage of <paramref name="canonicalRoot"/>: the key every worktree of one repository
+    /// shares, plus the generation of the checkout occupying the root right now. Null when the root resolves no
+    /// git layout, which <see cref="WorkspaceRegistry.UpsertSeen"/> reads as "leave the stored lineage alone".
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> is null or blank.</exception>
+    internal static WorkspaceLineage? CaptureLineage(string canonicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+
+        if (GitWorktreeLayout.Resolve(canonicalRoot) is not { } layout)
+            return null;
+
+        var identity = WorkspaceRootIdentity.Capture(canonicalRoot);
+        return new WorkspaceLineage(
+            layout.CommonDir, layout.IsLinkedWorktree, identity.GitDir, identity.GitDirCreatedAtUtc);
+    }
+
+    /// <summary>The checkout-generation half of a captured lineage, or unknown when no git layout resolved.</summary>
+    internal static WorkspaceRootIdentity IdentityOf(WorkspaceLineage? lineage) =>
+        lineage is null
+            ? WorkspaceRootIdentity.Unknown
+            : new WorkspaceRootIdentity(lineage.GitDir, lineage.GitDirCreatedAtUtc);
+
+    private static WorkspaceRegistryRow? ReadRegistryRow(WorkspaceContext workspace, string stableWorkspaceId)
+    {
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        return registry.Get(stableWorkspaceId);
     }
 
     /// <summary>
@@ -1384,11 +1493,56 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// Attempt to seed this workspace from its repository's main-checkout artifact instead of extracting the
+    /// whole tree (rebind contract design §7). Called INSIDE the bootstrap writer lease and the one governor
+    /// admission the scan already holds — a multi-GB snapshot copy is the same class of machine load a scan is,
+    /// and the sequence never takes the SOURCE workspace's writer lock, so the lock order is untouched.
+    ///
+    /// <para>The seams without a default are the two that need this bootstrap's located runner plus the report
+    /// describer, which lives in this layer rather than in <c>Miller.Indexing</c>. The delta
+    /// scan is a NON-force scan pointed at the staging file, so it inherits the whole shared scan chokepoint —
+    /// <c>--jobs</c>, the invariant ignore file, and supervision paths resolved from the staging file's own
+    /// <c>.miller</c> directory — while a force scan would delete the seed it is meant to reconcile.</para>
+    /// </summary>
+    private RebindBootstrapOutcome TryRebindFromMainCheckout(
+        string canonicalRoot,
+        string canonicalDbPath,
+        WorkspaceContext ctx,
+        JulieExtractRunner runner,
+        IScanFailurePolicy failurePolicy,
+        ScanAttemptDecision attempt,
+        IndexLevelPolicy levelPolicy,
+        bool rootReplacementDetected)
+    {
+        int jobs = attempt.Jobs ?? ExtractJobsPolicy.FromEnvironment();
+        return RebindBootstrap.TryRebind(
+            new RebindBootstrapRequest
+            {
+                TargetRoot = canonicalRoot,
+                TargetDbPath = canonicalDbPath,
+                RegistryDbPath = ctx.RegistryDbPath,
+                RootReplacementDetected = rootReplacementDetected,
+                TargetLevelPolicy = levelPolicy,
+                FailurePolicy = failurePolicy,
+                Jobs = jobs,
+            },
+            new RebindBootstrapSeams
+            {
+                Rebind = (snapshotDb, targetRoot, ct) => runner.Rebind(snapshotDb, targetRoot, ct),
+                RunDeltaScan = (snapshotDb, level) =>
+                    runner.Scan(canonicalRoot, snapshotDb, force: false, jobs, level),
+                DescribeScanWarning = ExtractReportLog.DescribeWarning,
+            },
+            _shutdown.Token);
+    }
+
     internal static WorkspaceRegistryRow RegisterBootstrapWorkspace(
         WorkspaceContext workspace,
         string stableWorkspaceId,
         WorkspaceRegistryState state,
-        long? revision)
+        long? revision,
+        WorkspaceLineage? lineage = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
@@ -1403,7 +1557,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
                 canonicalRoot,
                 canonicalDbPath,
-                state);
+                state,
+                lineage: lineage);
             if (revision is null)
                 return row;
 
@@ -1414,8 +1569,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// The lineage-free shape, kept as its own overload because callers bind it as a
+    /// <see cref="Func{T1, T2, T3, TResult}"/> method group, which an optional parameter cannot satisfy.
+    /// </summary>
     internal static WorkspaceRegistryRow MarkRegistryScanned(
-        WorkspaceContext workspace, string stableWorkspaceId, long? revision)
+        WorkspaceContext workspace, string stableWorkspaceId, long? revision) =>
+        MarkRegistryScanned(workspace, stableWorkspaceId, revision, lineage: null);
+
+    internal static WorkspaceRegistryRow MarkRegistryScanned(
+        WorkspaceContext workspace, string stableWorkspaceId, long? revision, WorkspaceLineage? lineage)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
@@ -1429,7 +1592,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
             canonicalRoot,
             canonicalDbPath,
-            WorkspaceRegistryState.Ready);
+            WorkspaceRegistryState.Ready,
+            lineage: lineage);
         return revision is { } rev ? registry.MarkScanned(stableWorkspaceId, rev) : row;
     }
 

@@ -1,74 +1,53 @@
-### Task 3: Make Miller semantic sessions connection-factory based
+### Task 3: RebindEligibility pure decisions
 
 **Files:**
-- Modify: Miller `src/Miller.Indexing/Semantic/SemanticEmbeddingSession.cs:60-1097`
-- Modify: Miller `src/Miller.Indexing/Semantic/SemanticEvaluationAdapter.cs`
-- Modify: Miller `scripts/Miller.PackageSemanticSmoke/PackageSemanticSmoke.cs`
-- Modify: Miller `tests/Miller.Tests/Support/FakeSemanticSidecar.cs`
-- Modify: Miller `tests/Miller.Tests/Indexing/SemanticEmbeddingSessionTests.cs`
-- Modify: Miller `tests/Miller.Tests/Indexing/SemanticEmbeddingSessionBrokerTests.cs`
-- Modify: Miller `tests/Miller.Tests/Indexing/SemanticEvaluationAdapterTests.cs`
+- Create: `src/Miller.Indexing/RebindEligibility.cs`
+- Test: `tests/Miller.Tests/Indexing/RebindEligibilityTests.cs`
 
 **Interfaces:**
-- Consumes: existing session retry/circuit/handshake behavior.
-- Produces: async, transport-neutral `ISemanticSidecarConnectionFactory` and `ISemanticSidecarConnection`; `StdioSemanticSidecarConnectionFactory` preserves current process behavior.
+- Consumes: `LeadershipEligibility`'s numeric `major.minor.patch` comparison
+  (`src/Miller.Indexing/LeadershipEligibility.cs` — reuse/extract its version-triple parser rather
+  than duplicating), `ArtifactRootIdentity.Matches`, `IndexLevels.ResolveForWorkspace` semantics,
+  `MillerExtractContract.PinnedJulieExtractVersion`.
+- Produces: pure statics Task 6 calls, split in two stages —
+  `RebindPrefilter.Evaluate(RebindPrefilterInputs) → RebindDecision` (registry-level, cheap,
+  provisional) and `RebindSnapshotValidation.Evaluate(RebindSnapshotInputs) → RebindDecision`
+  (authoritative, against the copied `.rebuild`). `RebindDecision` carries eligible/ineligible + a
+  human-readable reason string (surfaced in logs/status). Inputs are plain records (bools,
+  strings, versions) — NO I/O in this file; callers gather facts.
 
-**Contract inputs:** Task 1 client-disposal and deadline rules.
+**Contract inputs:** contract design §6, all eight numbered conditions. Prefilters: linked
+worktree + `!dbExists` + no replacement (Task 2's fold) + registered main-checkout sibling with an
+existing `symbols.db` + numeric-triple pin equality + NO standing W8 failure record (any record —
+conservative, §7.4) + `MILLER_FULL_REBUILD_INPLACE` unset + `MILLER_WORKTREE_REBIND` not `off`
+(env read happens in the caller; the pure input is a bool). Snapshot validation: schema/contract
+compatible + `hash_algorithm = blake3` + recorded `root_path` matches the SOURCE root + at least
+one committed extraction revision (`ServableFor` alone is NOT sufficient — crash shells pass it) +
+`binary_version` numeric equality re-check + recorded `index_level` satisfies the target's
+resolved level policy (full satisfies all; symbols satisfies SymbolsOnly/Progressive but NOT
+Full). Level changes require a fresh force rebuild, never a rebind.
 
-**File ownership:** Miller session abstractions and existing fake/session tests only.
+**File ownership:** Create `src/Miller.Indexing/RebindEligibility.cs`; Test `tests/Miller.Tests/Indexing/RebindEligibilityTests.cs`
 
-**Serialization required:** No.
+**Serialization required:** No
 
 **Dependency reason:** None - safe parallel batch.
 
-**Step 1: Write failing async-factory tests**
+**What to build:** Every go/no-go decision in the rebind path as I/O-free, fast-suite-testable
+statics, in the `LeadershipEligibility` style. This is the P3 acceptance item "eligibility as
+pure, fast-suite-testable decisions".
 
-```csharp
-[Fact]
-public async Task TransportFailure_AbortsOnlyTheConnectionThenReconnectsThroughTheFactory()
-{
-    var factory = new SequencedConnectionFactory(faultedConnection, healthyConnection);
-    await using var session = new SemanticEmbeddingSession(factory, expectedEncoder: Pin);
-    Assert.True((await session.EmbedQueryAsync("natural language")).Success);
-    Assert.Equal(2, factory.ConnectCount);
-    Assert.True(faultedConnection.Aborted);
-}
-```
-
-**Step 2: Verify red**
-
-Run: `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticEmbeddingSessionTests`
-
-**Step 3: Replace process-specific interfaces**
-
-```csharp
-public interface ISemanticSidecarConnectionFactory : IAsyncDisposable
-{
-    ValueTask<ISemanticSidecarConnection> ConnectAsync(CancellationToken cancellationToken);
-}
-
-public interface ISemanticSidecarConnection : IAsyncDisposable
-{
-    TextWriter Input { get; }
-    TextReader Output { get; }
-    bool IsClosed { get; }
-    void Abort();
-}
-```
-
-`SemanticEmbeddingSession.StartIfNeededAsync` awaits `ConnectAsync`. Fatal recovery aborts only the connection. Session disposal always closes its connection. It disposes the factory only when constructed with explicit factory ownership for stdio/evaluation/test use; production broker sessions borrow the server/CLI-owned factory and never dispose it. The server host disposes its DI singleton, while `CliSemanticSession` disposes its invocation-wide factory after disposing the session.
-
-**Step 4: Run focused and Miller fast gates**
-
-Run the three semantic session test classes, then `scripts/test.sh`.
-
-**Step 5: Apply commit mode**
-
-`parallel-lead-commit`: hand the verified diff to the lead; do not commit from this lane.
+**Approach:** One test per condition per stage, plus the crash-shell case: a snapshot input with
+`hasCommittedRevision: false` and everything else valid is ineligible with a reason naming the
+missing committed revision. If `LeadershipEligibility`'s triple parser is private, extract it to a
+shared internal helper (do not change its public behavior).
 
 **Acceptance criteria:**
-- [ ] All existing retry, circuit, handshake, application-error, timeout, and byte-identity tests remain green.
-- [ ] A connection factory may represent either a child process or shared IPC without session branching.
-- [ ] Session disposal cannot tear down a borrowed shared factory or broker owner lease.
-- [ ] Disposal has no implicit global `shutdown`.
+- [ ] Each §6 condition flips the decision independently (table-driven tests, both stages).
+- [ ] Crash-shell (no committed revision) is ineligible at snapshot validation even though
+      `ServableFor`-style facts pass.
+- [ ] Version comparison uses the numeric triple, proven by a case raw string equality would get
+      wrong (e.g. `2.27.0` vs `v2.27.0` spelling divergence).
+- [ ] Worker-scope verification passes and the change is handed to the lead per
+      parallel-lead-commit.
 

@@ -1,69 +1,48 @@
-### Task 2: Extract a reusable sidecar protocol processor without changing stdio
+### Task 2: Bootstrap lineage capture + replacement consumption rule
 
 **Files:**
-- Modify: sidecar `src/protocol.rs:36-214`
-- Test: sidecar `tests/protocol_tests.rs`
-- Test: sidecar `tests/serve_tests.rs`
+- Modify: `src/Miller.Server/Hosting/IndexBootstrapService.cs` (`UpsertSeen` call sites; the
+  decision fold around `DecideBootstrapScan` :907-926 / `EscalateForReplacedRoot` :938-946)
+- Test: `tests/Miller.Tests/Server/BootstrapReplacedRootTests.cs`
 
 **Interfaces:**
-- Consumes: frozen protocol-v1 request limits and `EmbedEngine`.
-- Produces: `ProtocolReply` and `process_line`, usable by stdio and broker connections.
+- Consumes: Task 1's `WorkspaceLineage` record + extended `UpsertSeen` + row fields;
+  `WorkspaceRootIdentity.Capture`/`IsReplacement`
+  (`src/Miller.Indexing/WorkspaceRootIdentity.cs:40,69-79`); the existing in-memory replacement
+  escalation path.
+- Produces: a pure fold `static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current)`
+  (name at implementer's discretion, but pure and fast-suite-tested) that Task 6 calls: true when
+  the stored persisted identity is known and `IsReplacement(stored, current)`; the bootstrap
+  escalates to `EscalateForReplacedRoot` in exactly that case, BEFORE any rebind attempt.
 
-**Contract inputs:** Task 1 contract; protocol conformance A1-A23 and B1-B6.
+**Contract inputs:** contract design §5 consumption rule (load-bearing): a replaced root both
+escalates the scan decision to `ScanIntent.RootRebind` AND disqualifies rebind for that open —
+the on-disk artifact and registry row describe a different checkout generation. Columns refresh
+via the normal `UpsertSeen` afterward. Missing/unknown stored identity NEVER counts as a
+replacement (missing evidence must not cost a rebuild).
 
-**File ownership:** Sidecar `src/protocol.rs`, protocol tests only.
+**File ownership:** Modify `src/Miller.Server/Hosting/IndexBootstrapService.cs`; Test `tests/Miller.Tests/Server/BootstrapReplacedRootTests.cs`
 
-**Serialization required:** No.
+**Serialization required:** Yes
 
-**Dependency reason:** None - safe parallel batch.
+**Dependency reason:** Consumes Task 1's row fields and `UpsertSeen` shape.
 
-**Step 1: Write failing equivalence tests**
+**What to build:** Persist lineage at every bootstrap `UpsertSeen`, and make the persisted
+identity feed the existing replacement escalation so `git worktree remove`+`add` while no Miller
+runs is detected on the next open (today the identity sample is in-memory only).
 
-```rust
-#[test]
-fn reusable_processor_matches_stdio_for_success_error_blank_and_shutdown() {
-    for line in fixture_lines() {
-        assert_eq!(processor_reply(line), stdio_reply(line));
-    }
-}
-```
-
-**Step 2: Verify red**
-
-Run: `cargo test reusable_processor_matches_stdio`
-
-Expected: FAIL because the reusable processor does not exist.
-
-**Step 3: Extract the interface**
-
-```rust
-pub struct ProtocolReply {
-    pub line: String,
-    pub stop_connection: bool,
-}
-
-pub fn process_line<E: EmbedEngine>(
-    line: &[u8],
-    engine: &E,
-    limits: RequestLimits,
-) -> std::io::Result<Option<ProtocolReply>>;
-```
-
-`run_loop_with_limits` becomes only capped line reading plus `process_line` plus write/flush. Blank lines return `Ok(None)`. In stdio mode, `stop_connection` exits the process loop exactly as today. In broker mode, the response is flushed and only that connection handler exits; the accept loop, service lock, accelerator lease, and engine remain live. No envelope or error literal changes.
-
-**Step 4: Run focused and full fast sidecar gates**
-
-Run: `cargo test protocol_tests && cargo test serve_tests`
-
-Then: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and the Python harness tests.
-
-**Step 5: Apply commit mode**
-
-`parallel-lead-commit`: hand the verified diff to the lead; do not commit from this lane.
+**Approach:** Capture `GitWorktreeLayout.Resolve` + `WorkspaceRootIdentity.Capture` once per
+bootstrap (they are already resolved nearby for the presence monitor — reuse, don't re-probe).
+Compare stored-vs-current BEFORE the first `UpsertSeen` refreshes the row. Extend the existing
+`BootstrapReplacedRootTests` scenario style: persisted-identity replacement (no live monitor
+involvement) escalates and would-disqualify.
 
 **Acceptance criteria:**
-- [ ] Existing stdio output is byte-identical for every fixture row.
-- [ ] EOF and `shutdown` retain existing behavior in stdio mode.
-- [ ] Broker `shutdown` closes only the requesting connection after its response is flushed.
-- [ ] No new protocol field, method, or error code exists.
+- [ ] A registry row carrying a different known persisted identity escalates the bootstrap
+      decision to `RootRebind` (via `EscalateForReplacedRoot`) with no live
+      `WorkspaceRootPresenceMonitor` involvement.
+- [ ] Unknown stored identity or unknown current identity never escalates and never disqualifies.
+- [ ] Lineage is persisted on bootstrap and refreshed after the decision (stored generation is
+      the CURRENT one post-open).
+- [ ] Worker-scope verification passes and the worker commits per serial-worker-commit.
 

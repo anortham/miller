@@ -54,6 +54,10 @@ public sealed class WorkspaceRegistryTests : IDisposable
                 ("state", "TEXT", true),
                 ("last_error", "TEXT", false),
                 ("level_policy", "TEXT", false),
+                ("git_common_dir", "TEXT", false),
+                ("git_is_linked", "INTEGER", false),
+                ("git_dir", "TEXT", false),
+                ("git_dir_created_at", "TEXT", false),
             },
             ReadTableInfo(c));
         Assert.Equal(("wal", 1, 3000), registry.ReadPragmasForTest());
@@ -438,30 +442,7 @@ public sealed class WorkspaceRegistryTests : IDisposable
     [Fact]
     public void Open_APreLevelsRegistryGainsTheLevelPolicyColumn()
     {
-        using (var c = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = _dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false,
-        }.ToString()))
-        {
-            c.Open();
-            using var ddl = c.CreateCommand();
-            ddl.CommandText = """
-                CREATE TABLE workspaces (
-                    workspace_id TEXT NOT NULL PRIMARY KEY,
-                    display_id TEXT NOT NULL,
-                    canonical_root TEXT NOT NULL,
-                    index_db_path TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    last_scan_at TEXT,
-                    last_revision INTEGER CHECK (last_revision IS NULL OR last_revision >= 0),
-                    state TEXT NOT NULL CHECK (state IN ('current','ready','loaded_existing','stale','refreshing','missing','error')),
-                    last_error TEXT
-                ) STRICT;
-                """;
-            ddl.ExecuteNonQuery();
-        }
+        WriteLegacyPreLevelsSchema();
 
         using var registry = WorkspaceRegistry.Open(_dbPath);
         registry.UpsertSeen(
@@ -471,7 +452,7 @@ public sealed class WorkspaceRegistryTests : IDisposable
     }
 
     [Fact]
-    public void AddLevelPolicyColumn_ToleratesAConcurrentAdderWinningTheRace()
+    public void AddAdditiveColumn_ToleratesAConcurrentAdderWinningTheRace()
     {
         using var registry = WorkspaceRegistry.Open(_dbPath);
         using var c = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -482,7 +463,230 @@ public sealed class WorkspaceRegistryTests : IDisposable
         }.ToString());
         c.Open();
 
-        WorkspaceRegistry.AddLevelPolicyColumnToleratingConcurrentAdder(c);
+        WorkspaceRegistry.AddColumnToleratingConcurrentAdder(c, "level_policy", "TEXT");
+        WorkspaceRegistry.AddColumnToleratingConcurrentAdder(c, "git_common_dir", "TEXT");
+    }
+
+    [Fact]
+    public void Open_APreLineageRegistryGainsTheLineageColumns_AndReadsNullLineage()
+    {
+        WriteLegacyPreLevelsSchema();
+
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        WorkspaceRegistryRow migrated = registry.UpsertSeen(
+            "ws1", "alpha-11111111", "/work/alpha", "/work/alpha/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1));
+
+        Assert.Null(migrated.GitCommonDir);
+        Assert.Null(migrated.GitIsLinked);
+        Assert.Null(migrated.GitDir);
+        Assert.Null(migrated.GitDirCreatedAtUtc);
+
+        string commonDir = MakeDirectory("repo", ".git");
+        WorkspaceRegistryRow written = registry.UpsertSeen(
+            "ws1", "alpha-11111111", "/work/alpha", "/work/alpha/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(2),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: false, commonDir, Utc(3)));
+
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(commonDir), written.GitCommonDir);
+    }
+
+    [Fact]
+    public void UpsertSeen_RoundTripsLineageIncludingTheGitDirCreationTimestamp()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = MakeDirectory("repo", ".git");
+        string gitDir = MakeDirectory("repo", ".git", "worktrees", "wt");
+        DateTimeOffset created = new DateTimeOffset(2026, 8, 5, 9, 30, 15, TimeSpan.Zero).AddTicks(1234567);
+
+        WorkspaceRegistryRow written = registry.UpsertSeen(
+            "ws1", "wt-11111111", "/work/wt", "/work/wt/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: true, gitDir, created));
+
+        WorkspaceRegistryRow reread = Assert.Single(registry.List());
+        foreach (WorkspaceRegistryRow row in new[] { written, reread })
+        {
+            Assert.Equal(PathCanonicalizer.CanonicalizeRoot(commonDir), row.GitCommonDir);
+            Assert.True(row.GitIsLinked);
+            Assert.Equal(gitDir, row.GitDir);
+            Assert.Equal(created, row.GitDirCreatedAtUtc);
+        }
+    }
+
+    [Fact]
+    public void UpsertSeen_StoresAMainCheckoutLineageWithoutACreationTimestamp()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = MakeDirectory("repo", ".git");
+
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws1", "repo-11111111", "/work/repo", "/work/repo/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: false, commonDir, null));
+
+        Assert.False(row.GitIsLinked);
+        Assert.Null(row.GitDirCreatedAtUtc);
+    }
+
+    [Fact]
+    public void UpsertSeen_CanonicalizesTheStoredCommonDirThroughASymlinkedAncestor()
+    {
+        SkipIfNoSymlinks();
+        string realCommonDir = MakeDirectory("real", ".git");
+        string linkedRepo = Path.Combine(_dir, "link");
+        Directory.CreateSymbolicLink(linkedRepo, Path.Combine(_dir, "real"));
+        string linkedCommonDir = Path.Combine(linkedRepo, ".git");
+
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws1", "repo-11111111", "/work/repo", "/work/repo/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(linkedCommonDir, IsLinkedWorktree: false, linkedCommonDir, null));
+
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(realCommonDir), row.GitCommonDir);
+        Assert.NotEqual(linkedCommonDir, row.GitCommonDir);
+    }
+
+    [Fact]
+    public void UpsertSeen_WithoutLineage_LeavesPreviouslyStoredLineageIntact()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = MakeDirectory("repo", ".git");
+        string gitDir = MakeDirectory("repo", ".git", "worktrees", "wt");
+
+        registry.UpsertSeen(
+            "ws1", "wt-11111111", "/work/wt", "/work/wt/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: true, gitDir, Utc(2)));
+
+        WorkspaceRegistryRow after = registry.UpsertSeen(
+            "ws1", "wt-11111111", "/work/wt", "/work/wt/.miller/symbols.db",
+            WorkspaceRegistryState.Current, Utc(3));
+
+        Assert.Equal(PathCanonicalizer.CanonicalizeRoot(commonDir), after.GitCommonDir);
+        Assert.True(after.GitIsLinked);
+        Assert.Equal(gitDir, after.GitDir);
+        Assert.Equal(Utc(2), after.GitDirCreatedAtUtc);
+    }
+
+    [Fact]
+    public void FindMainCheckoutByCommonDir_ReturnsTheMainCheckoutAndIgnoresLinkedWorktreesAndOtherRepos()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = PathCanonicalizer.CanonicalizeRoot(MakeDirectory("repo", ".git"));
+        string otherCommonDir = PathCanonicalizer.CanonicalizeRoot(MakeDirectory("other", ".git"));
+
+        registry.UpsertSeen(
+            "wt", "wt-11111111", "/work/wt", "/work/wt/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: true, "/work/wt/gitdir", Utc(1)));
+        registry.UpsertSeen(
+            "main", "repo-22222222", "/work/repo", "/work/repo/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(2),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: false, commonDir, Utc(2)));
+        registry.UpsertSeen(
+            "other", "other-33333333", "/work/other", "/work/other/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(3),
+            new WorkspaceLineage(otherCommonDir, IsLinkedWorktree: false, otherCommonDir, Utc(3)));
+        registry.UpsertSeen(
+            "nogit", "nogit-44444444", "/work/nogit", "/work/nogit/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(4));
+
+        WorkspaceRegistryRow? found = registry.FindMainCheckoutByCommonDir(commonDir);
+
+        Assert.NotNull(found);
+        Assert.Equal("main", found.WorkspaceId);
+        Assert.Equal("/work/repo", found.CanonicalRoot);
+    }
+
+    [Fact]
+    public void FindMainCheckoutByCommonDir_ReturnsNull_WhenOnlyLinkedWorktreesShareTheCommonDir()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = PathCanonicalizer.CanonicalizeRoot(MakeDirectory("repo", ".git"));
+
+        registry.UpsertSeen(
+            "wt", "wt-11111111", "/work/wt", "/work/wt/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: true, "/work/wt/gitdir", Utc(1)));
+
+        Assert.Null(registry.FindMainCheckoutByCommonDir(commonDir));
+    }
+
+    [Fact]
+    public void FindMainCheckoutByCommonDir_OnAnEmptyRegistry_ReturnsNull()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+
+        Assert.Null(registry.FindMainCheckoutByCommonDir("/work/repo/.git"));
+    }
+
+    [Fact]
+    public void FindMainCheckoutByCommonDir_AppliesPlatformPathComparisonSemantics()
+    {
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        string commonDir = PathCanonicalizer.CanonicalizeRoot(MakeDirectory("repo", ".git"));
+
+        registry.UpsertSeen(
+            "main", "repo-11111111", "/work/repo", "/work/repo/.miller/symbols.db",
+            WorkspaceRegistryState.Ready, Utc(1),
+            new WorkspaceLineage(commonDir, IsLinkedWorktree: false, commonDir, Utc(1)));
+
+        WorkspaceRegistryRow? found = registry.FindMainCheckoutByCommonDir(commonDir.ToUpperInvariant());
+
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            Assert.Equal("main", found?.WorkspaceId);
+        else
+            Assert.Null(found);
+    }
+
+    [Fact]
+    public void FindMainCheckoutByCommonDir_OnADisposedRegistry_Throws()
+    {
+        var registry = WorkspaceRegistry.Open(_dbPath);
+        registry.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => registry.FindMainCheckoutByCommonDir("/work/repo/.git"));
+    }
+
+    private string MakeDirectory(params string[] segments)
+    {
+        string path = Path.Combine(new[] { _dir }.Concat(segments).ToArray());
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private void WriteLegacyPreLevelsSchema()
+    {
+        using var c = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = false,
+        }.ToString());
+        c.Open();
+        using var ddl = c.CreateCommand();
+        ddl.CommandText = """
+            CREATE TABLE workspaces (
+                workspace_id TEXT NOT NULL PRIMARY KEY,
+                display_id TEXT NOT NULL,
+                canonical_root TEXT NOT NULL,
+                index_db_path TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_scan_at TEXT,
+                last_revision INTEGER CHECK (last_revision IS NULL OR last_revision >= 0),
+                state TEXT NOT NULL CHECK (state IN ('current','ready','loaded_existing','stale','refreshing','missing','error')),
+                last_error TEXT
+            ) STRICT;
+            """;
+        ddl.ExecuteNonQuery();
+    }
+
+    private static void SkipIfNoSymlinks()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Symbolic-link creation requires elevation / Developer Mode on Windows; POSIX-only test.");
     }
 
     private string ReadState(string workspaceId)

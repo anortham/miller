@@ -868,7 +868,9 @@ public sealed class WorkspaceTool
             SemanticBroker: CurrentSemanticBrokerFacts(),
             ScanGovernor: WorkspaceFactsAssembler.ScanGovernorFacts(
                 ScanGovernorKey.For(_workspace) ?? _workspace.WorkspaceRoot, _governor),
-            ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(_workspace.ExtractDbPath));
+            ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(_workspace.ExtractDbPath),
+            RebindProvenance: WorkspaceFactsAssembler.RebindProvenanceFactsFor(
+                _workspace.ExtractDbPath, _registry));
     }
 
     private SemanticBrokerFacts CurrentSemanticBrokerFacts() =>

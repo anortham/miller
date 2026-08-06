@@ -237,6 +237,37 @@ the rebuild stays owed and retries on the next allowed attempt. A direct user re
 runs the force scan or reports why it did not. Read the object as "scans are failing and here is when the next
 one is allowed", and use the existing freshness/health fields for whether the artifact itself is usable.
 
+### `rebound_from` (additive, conditional)
+
+`workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `rebound_from` object naming
+the checkout this workspace's artifact was seeded from. Miller builds a fresh linked worktree's index by copying
+the main checkout's artifact, retargeting it with the julie-extract `rebind` verb (≥ 2.27.0), and delta-scanning
+the difference, instead of paying a full extraction; the verb records that on the artifact in three additive,
+optional `artifact_metadata` keys (`rebound_from_root`, `rebound_from_artifact_id`, `rebound_at`). The object is
+**omitted entirely** when the artifact carries no `rebound_from_root` — every artifact built by a normal scan,
+and every build that predates the feature — so default output stays byte-identical to the previous contract and
+Eros must treat its absence as "this index was extracted, not rebound", never as an error. It is never an empty
+object. It is NOT part of `workspace health --format json-summary`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `source_root` | string | The root the copied artifact was extracted from — the artifact's previous recorded `root_path`. Always present when the object is. |
+| `source_workspace` | string \| null | That root's registered display id, when it is registered on THIS machine. Null when it is not registered (or no longer resolvable); `source_root` still names it. |
+| `source_artifact_id` | string \| null | The source artifact's generation id. Null when the artifact omits the key. |
+| `rebound_at` | string \| null | The instant of the retarget, ISO-8601 as the EXTRACTOR stored it and rendered verbatim — Miller does not reparse or reformat it. Equal to the artifact's refreshed `updated_at`. Null when the artifact omits the key. |
+
+A rebound artifact is a new generation, not a shared one: the rebind verb assigns a fresh random-component
+`artifact_id`, so `index.artifact_id` never equals `rebound_from.source_artifact_id` and the sidecars converge as
+they would after any rebuild. The provenance is history, not state: later delta scans of the same artifact leave
+the keys in place, and a full rebuild extracts a fresh artifact that carries none of them. So a present
+`rebound_from` says how this index STARTED — never that anything is pending or degraded. Read it for lineage and
+for reproducing a worktree's index origin; use the existing freshness/health fields for whether the index is
+current.
+
+Compact `workspace status` and `workspace health` render one line for the same fact:
+`rebound_from: <display id> (<source root>) at <rebound_at>`, dropping the display id and its parentheses when
+the source root is unregistered and dropping the ` at …` clause when the artifact records no instant.
+
 ### `index_level` (additive, conditional)
 
 `workspace status --json` and `workspace health --json` gain an OPTIONAL top-level `index_level` object,

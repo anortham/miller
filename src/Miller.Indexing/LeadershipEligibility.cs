@@ -116,7 +116,7 @@ public static class LeadershipEligibility
         return Compare(pa, pb);
     }
 
-    private static (long Major, long Minor, long Patch)? TryParseTriple(string? version)
+    internal static (long Major, long Minor, long Patch)? TryParseTriple(string? version)
     {
         if (string.IsNullOrWhiteSpace(version))
             return null;

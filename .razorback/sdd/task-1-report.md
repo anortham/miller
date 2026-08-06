@@ -1,391 +1,223 @@
-# Task 1 report: freeze the broker lifecycle and transport contract
+# Task 1 report — Registry lineage columns + sibling lookup
 
-## Status
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/rebind-p3-miller-wiring`
+**Branch:** `rebind-p3-miller-wiring`
+**HEAD at start:** `b0d96b75`
+**Commit SHA:** none — `parallel-lead-commit`
 
-Complete on `codex/shared-semantic-broker-plan`.
+## What I implemented
 
-- Commit: `fff0f306de28ce353dd2dd19fe2e529ba17b1ebd`
-- Commit message: `docs: freeze shared semantic broker contract`
-- No push or release action was performed.
-- Lead-owned `.razorback/sdd/progress.md` and `.razorback/sdd/task-1-brief.md` were not edited by
-  this worker and were not staged or committed.
+### Schema (`src/Miller.Indexing/WorkspaceRegistry.cs`)
 
-## Implemented contract
+Four additive nullable columns on `workspaces`, in the `CREATE TABLE` head for fresh registries and in a
+migration for existing ones:
 
-`docs/contracts/semantic-broker-v1.md` now freezes:
+- `git_common_dir TEXT` — the repository's shared git directory, canonicalized before storage.
+- `git_is_linked INTEGER` — `0` for a main checkout, `1` for a linked worktree.
+- `git_dir TEXT` — the `WorkspaceRootIdentity.GitDir` half of the checkout generation.
+- `git_dir_created_at TEXT` — the `WorkspaceRootIdentity.GitDirCreatedAtUtc` half, ISO-8601 `"O"` round-trip,
+  the same format the existing `*_at` columns use.
 
-- Pure compute over the separately frozen `julie.embedding.sidecar` v1 methods; no
-  workspace/index/database/watcher/HTTP/PID/state/token/self-update control plane.
-- Exact identity input
-  `julie.semantic.broker|1|julie.embedding.sidecar|1|<model_id>|<model_sha256>`, SHA-256
-  truncation, and binary-version exclusion.
-- The approved flat `<miller-home>/semantic/` layout:
-  `broker-<identity>.lock`, `broker-<identity>.sock`, `accelerator-v1.lock`,
-  `miller-semantic-<identity>`, and `\\.\pipe\miller-semantic-<identity>`.
-- Unix `0700` directory / `0600` socket permissions and service-lock-holder-only stale unlink.
-- Windows full server versus short .NET client names, current-user ACL,
-  `PIPE_REJECT_REMOTE_CLIENTS`, overlapped cancellable I/O, and visible degraded ownership if Job
-  Object attachment fails.
-- Owner stdin watcher before model load, authoritative stdin EOF, Windows
-  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and distinct owner/non-owner disposal.
-- Spawn-loser polling through the 120-second initialization budget, capacity 64, 8:1
-  interactive-to-waiting-batch fairness, and the 60-second active-request watchdog.
-- One user-global accelerator lock, direct CPU startup for non-holders, and one CPU retry only
-  after typed `ResourceExhausted` (`ContextAlloc` initially); ordinary `Decode`, `Encode`,
-  protocol, and application failures do not demote.
-- Broker-mode connection-scoped `shutdown` while stdio `shutdown` retains process-loop behavior.
-- `MILLER_SEMANTIC=off` zero work, lexical fail-open without a hidden per-process model fallback,
-  no new MCP tool, and approval-gated releases.
+### Migration
 
-The ADR, 2026-07-19 program design, and 2026-07-21 production-readiness design explicitly
-supersede process-local embedding ownership with this broker while preserving Miller's vector
-artifact ownership. `docs/README.md` lists the new contract as current.
+`EnsureLevelPolicyColumn` / `AddLevelPolicyColumnToleratingConcurrentAdder` became
+`EnsureAdditiveColumns` / `AddColumnToleratingConcurrentAdder(connection, column, type)`, driven by a static
+`AdditiveColumns` array of `(Name, Type)` pairs that now lists `level_policy` plus the four lineage columns.
+Each column keeps the original two-step shape: a `pragma_table_info` fast-path probe, then a
+duplicate-column-tolerant `ALTER TABLE ... ADD COLUMN`. The old test
+`AddLevelPolicyColumn_ToleratesAConcurrentAdderWinningTheRace` became
+`AddAdditiveColumn_ToleratesAConcurrentAdderWinningTheRace` and exercises both a text and a lineage column.
 
-## TDD evidence
+### Row
 
-### RED
+`WorkspaceRegistryRow` gained four trailing optional members — `GitCommonDir`, `GitIsLinked` (`bool?`),
+`GitDir`, `GitDirCreatedAtUtc` — after `LevelPolicy`, so every existing positional construction still compiles.
 
-Command:
+The three `SELECT` sites (`List`, `GetUnderLock`, the new lookup) now share one `RowColumns` constant, because
+their column order has to agree with `ReadRow`'s ordinals and three hand-maintained copies would drift.
 
-```text
-dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
-```
+### `UpsertSeen`
 
-Observed before the contract file existed:
+A trailing optional `WorkspaceLineage? lineage = null` parameter, after `seenAtUtc`. Semantics:
 
-- Exit code: `1`
-- Failed: `3`
-- Passed: `0`
-- All three failures were `FileNotFoundException` for
-  `docs/contracts/semantic-broker-v1.md`.
-- The failure was the intended missing-production-contract failure, not a compile error or test
-  typo.
+- `null` leaves all four stored values untouched. Implemented with a `$has_lineage` flag and a
+  `CASE WHEN $has_lineage = 1 THEN excluded.x ELSE workspaces.x END` per column in the `ON CONFLICT` update.
+- A non-null lineage replaces all four values together. I deliberately did **not** use per-column
+  `COALESCE(excluded.x, workspaces.x)`: `GitDirCreatedAtUtc` is legitimately null on a filesystem with no
+  birth time, and `COALESCE` would then let a previous generation's timestamp survive beside a new `git_dir` —
+  a hybrid identity that never existed.
+- `GitCommonDir` is canonicalized at write time through `WorkspaceLineage.CanonicalizeCommonDir`, so a caller
+  cannot store a raw `GitWorktreeLayout` path. Documented in the parameter's XML doc.
 
-### GREEN
+### `WorkspaceLineage`
 
-The same command after the contract and supersession docs:
+A record in `WorkspaceRegistry.cs`: `(string GitCommonDir, bool IsLinkedWorktree, string? GitDir,
+DateTimeOffset? GitDirCreatedAtUtc)`, plus one static `CanonicalizeCommonDir(string)` that both the write path
+and the lookup caller use, so the two sides cannot disagree on spelling.
 
-- Exit code: `0`
-- Failed: `0`
-- Passed: `3`
-- Skipped: `0`
+`CanonicalizeCommonDir` uses `PathCanonicalizer.CanonicalizeFile(absolute, absolute)` rather than
+`CanonicalizeRoot`. Both resolve every existing symlink component identically for a directory that exists, but
+`CanonicalizeRoot` throws `DirectoryNotFoundException` when the directory is gone, and registering a workspace
+must not fail because a git directory disappeared between layout resolution and the upsert. Named arguments
+make it explicit that the base-directory argument is inert (the path is already absolute).
 
-This proves the contract contains the exact lifecycle, identity, transport, security, scheduling,
-OOM, activation, and approval literals guarded by `SemanticBrokerContractTests`.
+### `FindMainCheckoutByCommonDir`
 
-### Worker ceiling
+`public WorkspaceRegistryRow? FindMainCheckoutByCommonDir(string canonicalCommonDir)`. SQL narrows to
+`git_common_dir IS NOT NULL AND git_is_linked = 0` with a deterministic `ORDER BY workspace_id`, then the
+path comparison runs in C# via `ArtifactRootIdentity.Matches` — the exact function the design doc §5 names,
+so the platform rule (`OrdinalIgnoreCase` on Windows/macOS, `Ordinal` on Linux) and the Windows
+verbatim-prefix strip come from one place instead of being restated. Returns the first matching row, or null.
 
-Command:
+## Verification
 
-```text
-scripts/test.sh
-```
+| | |
+|---|---|
+| Scope label | `worker-red-green` |
+| TDD command | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~WorkspaceRegistryTests"` |
+| Result | **Passed — 34 passed, 0 failed, 0 skipped, 367 ms** |
+| Ceiling command | `scripts/test.sh` (full fast suite) |
+| Result | **Passed — 6054 passed, 0 failed, 2 skipped, 6056 total.** The script's wall-clock tripwire fired (103s vs a 30s ceiling) — see "Fast-suite result". |
+| Timestamp | 2026-08-05 |
 
-Fresh result at committed HEAD `fff0f306`:
+Red-first was observed: before implementation the filtered run failed to compile with `CS0117` /`CS1061`
+/`CS0246` on `AddColumnToleratingConcurrentAdder`, `WorkspaceRegistryRow.GitCommonDir`, `GitIsLinked`,
+`GitDir`, `GitDirCreatedAtUtc`, and `WorkspaceLineage` — the right reason (API absent), not an assertion typo.
 
-- Exit code: `0`
-- Failed: `0`
-- Passed: `5,214`
-- Skipped: `2`
-- Total: `5,216`
-- Wall time: `26s`, below the enforced `30s` ceiling.
+### Invariants the new tests prove
 
-This proves the new docs guard participates in the default fast suite without breaking existing
-Miller behavior or test conventions. `git diff --check` also passed.
+| Test | Invariant |
+|---|---|
+| `Open_CreatesSchemaAndConfiguresWalNormalSyncAndBusyTimeout` (extended) | A fresh registry carries all four lineage columns with the declared SQLite types, all nullable. |
+| `Open_APreLineageRegistryGainsTheLineageColumns_AndReadsNullLineage` | A pre-levels registry DB opens cleanly, reads null lineage, and accepts a lineage write afterwards — the migration is not a fresh-DB-only path. |
+| `UpsertSeen_RoundTripsLineageIncludingTheGitDirCreationTimestamp` | All four values survive a write and a re-read, including sub-second creation-timestamp ticks — `WorkspaceRootIdentity.IsReplacement` compares that timestamp for equality, so a lossy round-trip would read as a replaced checkout on every restart. |
+| `UpsertSeen_StoresAMainCheckoutLineageWithoutACreationTimestamp` | A half-known identity (`GitDirCreatedAtUtc` null) stores as null rather than as a default value. |
+| `UpsertSeen_CanonicalizesTheStoredCommonDirThroughASymlinkedAncestor` | The stored common dir is symlink-resolved, so a `/var`→`/private/var`-style layout still matches a symlink-canonicalized registry root. |
+| `UpsertSeen_WithoutLineage_LeavesPreviouslyStoredLineageIntact` | A lineage-free upsert does not erase identity another process persisted. |
+| `FindMainCheckoutByCommonDir_ReturnsTheMainCheckoutAndIgnoresLinkedWorktreesAndOtherRepos` | The lookup picks the non-linked row of the right repo among a linked sibling, another repo's main checkout, and a lineage-free row. |
+| `FindMainCheckoutByCommonDir_ReturnsNull_WhenOnlyLinkedWorktreesShareTheCommonDir` | No worktree-to-worktree sourcing. |
+| `FindMainCheckoutByCommonDir_OnAnEmptyRegistry_ReturnsNull` | The empty-registry path returns null rather than throwing. |
+| `FindMainCheckoutByCommonDir_AppliesPlatformPathComparisonSemantics` | Path case follows `ArtifactRootIdentity.ComparisonFor` — a match on Windows/macOS, a miss on Linux. |
+| `FindMainCheckoutByCommonDir_OnADisposedRegistry_Throws` | The new read honours the same disposal guard as every other public method. |
 
-## Acceptance criteria
+### Fast-suite result
 
-- [x] **No forbidden mechanism:** The contract explicitly rejects PID/state/token/HTTP/port,
-  workspace/index/watcher, database, self-update, and broker-initiated restart mechanisms. The
-  broker owns embedding compute only.
-- [x] **Frozen sidecar protocol remains separate:** The contract consumes and links
-  `docs/contracts/semantic-sidecar-protocol-v1.md`; it does not alter that protocol or a sidecar
+The full fast suite could not be built for a stretch of this task because sibling P3 workers were mid-red-phase
+in the SAME assemblies: `JulieExtractRunnerRebindTests.cs` / `RebindVerbScaleTests.cs` referenced
+`JulieExtractRunner.BuildRebindArgs`, `ParseRebindReport`, `Rebind`, and `RebindReport` before Task 5 wrote
+them, `JulieExtractRunner.cs` referenced `RebindReport` before it existed, and Task 4's
+`SqliteOnlineBackup.cs:149` failed the Release build with `CS0162 Unreachable code detected`. None of these are
+in my owned files. I polled the build until it cleared, then ran the suite three times:
+
+1. **6053 passed, 1 failed** — the failure was
+   `SqliteOnlineBackupTests.Copy_BudgetElapsedBetweenSteps_ReportsExhaustedAndDeletesThePartialDestination`
+   (Task 4, timing-sensitive, not mine).
+2. **6054 passed, 0 failed, 2 skipped** — that test passed on the next run.
+3. **6054 passed, 0 failed, 2 skipped** — confirmed.
+
+**The wall-clock tripwire fired on the clean runs: 103s against a 30s ceiling.** This is machine contention
+from the parallel batch, not a slow test I introduced:
+
+- Load average was 18.5 with 15 concurrent `dotnet` processes while the suite ran.
+- The FIRST full run in this same session, on the same code, reported `Duration: 30 s` for the same 6056 tests.
+- The slowest individual tests are all pre-existing (`CanarySearchTests` 951 ms,
+  `MillerExtractContractTests` 928 ms, `WorkspaceIndexProviderTests` 925 ms); no rebind-program test appears
+  near the top.
+- `WorkspaceRegistryTests` alone — all 34, including my 10 — runs in **367 ms**.
+
+The lead should re-run `scripts/test.sh` on a quiet machine once every worker has reported, to confirm the
+tripwire is clear.
+
+## Miller calls used
+
+| Call | What it confirmed |
+|---|---|
+| `inspect target='src/Miller.Indexing/WorkspaceRegistry.cs'` | The class's method inventory and line ranges: `Open :32-75`, `UpsertSeen :77-123`, `SetLevelPolicy :247-265`, and that no lineage surface existed. |
+| `inspect target='WorkspaceRegistryRow' depth=full` | The record is a `sealed record` at `src/Miller.Indexing/WorkspaceRegistryRow.cs:16` — **not** in `WorkspaceRegistry.cs` — with 10 members ending in `LevelPolicy`, and 141 references across the codebase. |
+| `trace target='UpsertSeen' mode=refs` | 17 exact call sites, all positional, in `CliDispatch.cs:3348`, `WorkspaceTool.cs:1297`, and 15 test sites. This is why lineage is a trailing optional parameter rather than an inserted one. |
+| `inspect target='PathCanonicalizer' depth=overview` | `CanonicalizeRoot` (throws on a missing directory), `CanonicalizeFile(canonicalRoot, path)` (tolerates a non-existent tail), `StripWindowsVerbatimPrefix`. |
+| `inspect target='ArtifactRootIdentity' depth=overview` | `Matches(string? recordedRootPath, string canonicalRoot)` and `ComparisonFor(bool, bool)` — the exact comparison the design doc names, and a shape that takes a nullable recorded value, so the stored column feeds it directly. |
+
+## API-shape evidence
+
+- **`UpsertSeen` signature** — proven by `inspect` (`public WorkspaceRegistryRow UpsertSeen(string workspaceId,
+  string displayId, string canonicalRoot, string indexDbPath, WorkspaceRegistryState state = Ready,
+  DateTimeOffset? seenAtUtc = null)`) and by `trace mode=refs` showing every call site passes positionally up to
+  `seenAtUtc`. A trailing optional parameter breaks none of them; the build confirms it.
+- **Row record shape** — `inspect target='WorkspaceRegistryRow' depth=full`, plus a direct read of
+  `WorkspaceRegistryRow.cs` for the trailing `string? LevelPolicy = null` that establishes the
+  optional-trailing-member convention.
+- **Migration pattern** — read directly at `WorkspaceRegistry.cs:337-370` (`pragma_table_info` probe +
+  duplicate-column-tolerant `ALTER`); Miller listed the symbols, the exact text came from the file.
+- **`PathCanonicalizer` entry point** — `inspect depth=overview` listed `CanonicalizeRoot` and
+  `CanonicalizeFile`; the throwing/tolerant distinction came from their XML docs in the file.
+- **`GitWorktreeLayout` / `WorkspaceRootIdentity`** — read directly (small pure files); their member names
+  (`CommonDir`, `IsLinkedWorktree`, `GitDir`, `GitDirCreatedAtUtc`) are what `WorkspaceLineage` mirrors.
+
+## Judgment calls
+
+- **`src/Miller.Indexing/WorkspaceRegistryRow.cs` — edited, though the brief listed only
+  `WorkspaceRegistry.cs`.** The brief requires four nullable members on `WorkspaceRegistryRow`, and Miller
+  proved that record lives in its own file, not in `WorkspaceRegistry.cs` as the file list assumed. The edit is
+  four trailing optional parameters and nothing else. Flagging it because a sibling task may touch the same
   file.
-- [x] **Ownership supersession is explicit:** ADR-0003 and both named historical designs point to
-  `semantic-broker-v1` and state that it supersedes process-local resident-child ownership.
-- [x] **Focused guard passes:** 3/3 tests passed at committed HEAD.
-- [x] **No new MCP tool:** The contract states the prohibition and no runtime/tool surface changed.
-- [x] **Off remains zero work:** Broker paths and resources are derived only after semantic
-  activation is enabled.
-- [x] **Release boundary preserved:** No push, publish, tag, or release occurred; releases remain
-  approval-gated.
+- **`WorkspaceRegistry.cs:~500 — `CanonicalizeCommonDir` uses `CanonicalizeFile` over `CanonicalizeRoot`.**
+  Identical resolution for an existing directory; `CanonicalizeRoot` additionally throws when the directory is
+  gone, which would turn a vanished git dir into a failed workspace registration. One code path, no exception
+  control flow.
+- **`WorkspaceRegistry.cs` `UpsertSeen` — canonicalization at write time, not required of the caller.** The
+  brief allowed either; write-time enforcement means no caller can store a raw path. The lookup keeps the
+  brief's `canonicalCommonDir` parameter name and the caller (Task 6) is directed to
+  `WorkspaceLineage.CanonicalizeCommonDir` by the XML doc, so both sides run the same function.
+- **`FindMainCheckoutByCommonDir` — C# comparison via `ArtifactRootIdentity.Matches`, not SQL `COLLATE
+  NOCASE`.** `PruneDuplicatePathRowsUnderLock` does compare paths in SQL, so the brief permitted either.
+  SQLite's `NOCASE` is ASCII-only while `ComparisonFor` yields full-Unicode `OrdinalIgnoreCase`, and `Matches`
+  also strips the Windows verbatim prefix — reusing it means zero drift from the semantics §5 names. The
+  registry holds tens of rows, so the scan cost is irrelevant.
+- **`WorkspaceLineage` has no `RootIdentity` convenience property.** I wrote one, then removed it: Task 2's
+  consumption rule rebuilds `WorkspaceRootIdentity` from the ROW, not from this record, so it was dead surface.
+- **`RowColumns` shared constant.** Three `SELECT`s must agree with `ReadRow`'s ordinals; adding a fourth
+  hand-maintained copy for the lookup invited exactly the drift bug that reads a column into the wrong member.
+- **`ORDER BY workspace_id` in the lookup.** One repo should have one main checkout, but an unordered scan
+  would pick nondeterministically if it ever had two.
 
-## Architecture quality
+## Self-review
 
-**Affected modules:** Documentation contracts and a file-content guard only.
-
-**Caller-facing interface:** The new contract is smaller than the later runtime behavior it
-unlocks: frozen protocol envelopes remain unchanged while lifecycle, IPC, ownership, scheduling,
-security, and failure policy are specified separately.
-
-**Depth/locality check:** No runtime code, sidecar code, vector artifact, MCP surface, or extraction
-surface changed.
-
-**Test surface:** Tests read the same published Markdown contract later implementers and reviewers
-consume.
-
-**Seams/adapters:** No runtime seam was introduced in this task.
-
-**Rejected shortcuts:** Per-process stdio fallback, a general machine daemon, PID/state files,
-HTTP/token control planes, model duplication after spawn races, unbounded queues, and untyped OOM
-demotion.
-
-**Architecture risk:** Low for this documentation-only slice; the frozen contract governs later
-high-risk cross-process implementation.
-
-## Miller evidence
-
-Every Miller call made for this task and the shape it proved:
-
-1. `workspace onboarding(path=<worktree>)` — proved the worktree was not registered and required
-   an explicit `workspace open`; no code assumption was made from the failed onboarding.
-2. `workspace open(path=<worktree>)` — registered and primed the exact worktree index at revision
-   1.
-3. `context(query="Contract-first documentation and test slice ...")` — located the existing
-   process-scoped `SemanticEmbeddingSessionBroker` and semantic implementation area; disposition
-   was partial, so targeted doc/test discovery followed.
-4. `search(query="semantic broker ownership sidecar lifecycle", mode=content, docs/**)` — proved
-   the implementation-plan prose is the only existing broker-oriented document before this task.
-5. `inspect(ADR-0003...)` — proved the ADR path exists and is Markdown with no code-symbol API.
-6. `inspect(2026-07-19...design.md)` — proved the historical program-design path exists.
-7. `inspect(2026-07-21...design.md)` — proved the repair-design path exists.
-8. `inspect(docs/README.md)` — proved the current documentation-map path exists.
-9. `search(...ContractTests RepoFile File.ReadAllText..., mode=source)` — no combined phrase hit;
-   this prevented inventing a test helper.
-10. `search(RepoFile, tests/Miller.Tests/Docs/**)` — proved no existing `RepoFile` helper in the
-    requested test area.
-11. `search("docs contracts documentation guard", tests/Miller.Tests/Docs/**)` — proved no
-    pre-existing Docs contract-test convention at that path.
-12. `search(File.ReadAllText, mode=source, tests/Miller.Tests/**)` — proved file-content contract
-    guards use direct `File.ReadAllText`.
-13. `search("docs/contracts/", mode=source, tests/Miller.Tests/**)` — proved existing tests assert
-    public contract paths.
-14. `search(AppContext.BaseDirectory, mode=source, tests/Miller.Tests/**)` — located existing
-    repo-root resolution patterns rather than guessing one.
-15. `search("tests/Miller.Tests/Docs", mode=file)` — proved the Docs test directory did not yet
-    exist.
-16. `search(RepoRoot, tests/Miller.Tests/**)` — resolved the public
-    `ScaleTestSupport.RepoRoot()` helper and its test callers.
-17. `search(Miller.slnx, mode=source, tests/Miller.Tests/**)` — proved the repository-root sentinel
-    used by the helper.
-18. `search("docs/adr/", mode=source, tests/Miller.Tests/**)` — found the existing docs/ADR
-    reference convention in `AgentInstructionsTests`.
-19. `search(LocateRepoRoot, tests/Miller.Tests/**)` — resolved the helper's implementation and
-    tests.
-20. `inspect(MillerExtractContractTests.cs)` — listed the existing contract-test class and
-    fact/theory organization before reading its convention.
-21. `inspect(MillerExtractContractTests, depth=overview)` — proved its public xUnit class/fact
-    surface.
-22. `inspect(Miller.Tests.csproj)` — proved the project is an XML test project with no indexed
-    code symbols; the bounded file read then confirmed xUnit v3 and default fast filtering.
-23. `inspect(ScaleTestSupport.RepoRoot, depth=full)` — proved the exact public, zero-argument
-    helper and its multi-fallback behavior.
-24. `impact(changed_paths=[six Task 1 paths])` before editing — classified the four existing docs
-    as having no graph dependents and the two new paths as not yet indexed; risk was documentation
-    local.
-25. `workspace refresh` after editing — indexed the new contract/test at revision 2.
-26. `inspect(SemanticBrokerContractTests.cs)` — listed the three public facts and shared contract
-    path.
-27. `inspect(SemanticBrokerContractTests, depth=full)` — proved the complete caller-facing test
-    shape and exact use of `ScaleTestSupport.RepoRoot()`.
-28. `search(exact identity prefix, mode=content, semantic-broker-v1.md)` — proved the normative
-    identity input is present in the published contract.
-29. `search(process-local supersession phrase, mode=content)` — returned the ADR and historical
-    design supersession text outside the brace-style file glob, proving the prose while exposing
-    the glob mismatch rather than treating it as absence.
-30. `impact(git=true)` after editing — seeded all tracked documentation changes and reported no
-    dependent runtime symbols; parent-owned orchestration files were unseeded.
-31. `impact(git=true, base=HEAD^)` after commit — seeded all six Task 1 contract/test paths and
-    confirmed no runtime dependents or additional test candidates.
-
-## Commit scope
-
-Committed Task 1 files:
-
-- `docs/contracts/semantic-broker-v1.md`
-- `docs/adr/ADR-0003-semantic-retrieval-ownership.md`
-- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
-- `docs/plans/2026-07-21-semantic-production-readiness-repair-design.md`
-- `docs/README.md`
-- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
-
-Sole system-required ownership extension:
-
-- `.memories/2026-07-28/030241_c802.md` — Goldfish pre-commit checkpoint, explicitly approved by
-  the lead for inclusion because project instructions require checkpoints to ride with commits.
-
-No extra product, runtime, sidecar, plan, progress, brief, or orchestration file was committed.
-This report is intentionally written after the commit so it can record the SHA; it is an
-uncommitted SDD handoff artifact for the lead.
-
-## Review fix round 1
-
-Lead inline review identified four contract ambiguities. They are fixed in commit
-`4fcca1020b9b3ad71c6bfa6cd4acafb798c53b08`
-(`docs: tighten semantic broker invariants`).
-
-### Corrections
-
-- **Ownership vocabulary:** `owner` now means only the spawning Miller factory/process that holds
-  stdin and Windows Job ownership. The sidecar is the `service broker` / `service-lock holder`;
-  it holds the model service lock and, when accelerated, the accelerator lock.
-- **Queue saturation:** A full queue returns the existing protocol-v1 `internal_error` envelope.
-  The contract forbids a new method, field, or error code for saturation.
-- **Owner EOF:** The watcher is armed before model load, and stdin EOF must terminate the broker
-  even when load is blocked. Cooperative cancellation is preferred; process-fatal exit is
-  permitted for non-cancellable load so the OS releases locks and no orphan remains.
-- **Identity and privacy:** The ADR and both supersession designs use
-  `broker-contract/protocol/model identity`. Diagnostics, logs, and telemetry forbid query,
-  document, and source text; workspace paths; symbols; snippets; vectors; and authentication
-  material.
-
-### Review TDD evidence
-
-Focused command:
-
-```text
-dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
-```
-
-RED before documentation fixes:
-
-- Exit code: `1`
-- Failed: `4`
-- Passed: `3`
-- Each new review assertion failed on its intended missing guarantee: owner/service-lock
-  separation, frozen `internal_error`, fatal EOF/privacy, and complete identity vocabulary.
-
-GREEN at committed HEAD `4fcca102`:
-
-- Exit code: `0`
-- Failed: `0`
-- Passed: `7`
-- Skipped: `0`
-
-Worker ceiling at committed HEAD:
-
-- `scripts/test.sh`
-- Exit code: `0`
-- Failed: `0`
-- Passed: `5,218`
-- Skipped: `2`
-- Total: `5,220`
-- Wall time: `25s`, below the `30s` ceiling.
-
-### Review Miller evidence
-
-1. `inspect(SemanticBrokerContractTests, depth=full)` proved the pre-review seven-path contract
-   test surface and exact helper use.
-2. Four targeted content searches proved the ambiguous owner sentence, generic queue-error
-   wording, overstated orderly EOF guarantee, and incomplete privacy vocabulary at current HEAD.
-3. `impact(changed_paths=[contract, ADR, two designs, test])` reported a documentation/test-local
-   change with no runtime dependents.
-4. `search(owner, semantic-broker-v1.md)` plus the bounded exact-text audit located all
-   owner-sensitive clauses before editing.
-5. `workspace refresh` indexed the corrected contract/test at revision 4.
-6. Post-edit `inspect` proved all seven fact methods; searches proved service-broker ownership,
-   fatal EOF, complete privacy, and complete identity vocabulary.
-7. The broad queue search missed because Miller content search is literal; the required follow-up
-   `search(internal_error, mode=content)` proved the existing protocol error and no-new-code clause.
-8. `impact(git=true)` after edits and `impact(git=true, base=HEAD^)` after commit both reported no
-   runtime dependents; the five owned task paths were seeded.
-
-### Review commit scope
-
-Committed owned files:
-
-- `docs/contracts/semantic-broker-v1.md`
-- `docs/adr/ADR-0003-semantic-retrieval-ownership.md`
-- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
-- `docs/plans/2026-07-21-semantic-production-readiness-repair-design.md`
-- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
-
-System-required checkpoint:
-
-- `.memories/2026-07-28/031104_b3e8.md`
-
-Lead-owned SDD brief/progress, the implementation plan, and this report were not included in the
-fix commit.
+- **Acceptance criteria** — all four met. Migration on an existing DB with null reads: covered. Exact
+  round-trip including the creation timestamp: covered. Main checkout among mixed rows, ignoring linked rows,
+  other repos, and platform comparison: covered. Null-lineage preservation: covered.
+- **Quality** — no narration comments added; the one existing block comment above the migration was updated
+  because the lines were already being changed. Test bodies carry zero comments. The single pre-existing
+  comment inside `SetLevelPolicy_StoresClearsAndSurvivesUpsertSeen` was left alone (not a line I changed).
+- **YAGNI** — the delivered surface is exactly: four columns, four row members, one `WorkspaceLineage` record
+  with one static, one lookup method. No generic lineage framework, no query-by-repo helper, no
+  `SetLineage` mutator.
+- **Tests assert meaningful values** — the round-trip test asserts against a timestamp carrying odd ticks and
+  checks both the returned row and a re-read row; the canonicalization test asserts equality with an
+  independently canonicalized real path AND inequality with the symlinked input, so it cannot pass by storing
+  the input verbatim; the platform test asserts a null on Linux rather than skipping.
+- **Duplication removed** — `Open_APreLevelsRegistryGainsTheLevelPolicyColumn` now shares the
+  `WriteLegacyPreLevelsSchema()` helper with the new migration test instead of carrying its own inline DDL.
 
 ## Concerns
 
-- Real Windows named-pipe/Job Object behavior and Windows/NVIDIA VRAM exhaustion are intentionally
-  not claimed by this contract-only task; later implementation and soak tasks must prove them.
-- The fast suite completed close to its 30-second tripwire (25 seconds at current HEAD), though
-  it passed.
+1. **Shared-assembly collisions during the parallel batch.** Tasks 4 and 5 were mid-red-phase in
+   `Miller.Indexing` and `Miller.Tests` while I verified, so the suite was uncompilable for stretches through
+   no fault of any single task. The lead should re-run `scripts/test.sh` once all workers report.
+2. **`WorkspaceRegistryRow.cs` is outside my declared ownership** but had to change (see judgment calls). If
+   Task 2 also edits it, the lead should reconcile.
+3. **The lookup's contract depends on the caller canonicalizing.** A raw path passed to
+   `FindMainCheckoutByCommonDir` fails silently — it returns null, so a rebind degrades to a plain bootstrap
+   scan rather than doing anything wrong, but Task 6 must call `WorkspaceLineage.CanonicalizeCommonDir` first.
+   The XML doc says so; the type system does not enforce it.
+4. **No test covers two non-linked rows sharing one `git_common_dir`.** It should not happen (one main checkout
+   per repository), and the `ORDER BY` makes the pick deterministic if it ever does.
 
-## Review fix round 2
+## Files changed
 
-Grok's progress review found one remaining ownership-terminology contradiction. It is fixed in
-commit `3d0e61731ac629a91a915f7ff38192d76e87f120`
-(`docs: separate broker service arbitration`) on branch
-`codex/shared-semantic-broker-plan`.
-
-### Correction
-
-- Miller owner recovery now occurs through factory lifecycle: a new Miller process establishes the
-  owner stdin lease and Windows Job Object, then starts a service-broker contender.
-- The model service lock separately arbitrates only which sidecar service broker may load and
-  serve.
-- The historical integration-design summary uses the same division and describes losing factories
-  as polling rather than acquiring ownership through the service lock.
-
-### TDD and verification
-
-Focused command:
-
-```text
-dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --filter FullyQualifiedName~SemanticBrokerContractTests
-```
-
-RED:
-
-- Exit code: `1`
-- Failed: `1`
-- Passed: `7`
-- The new test failed because the contract lacked the required factory-lifecycle sentence; the
-  seven previous contract guards stayed green.
-
-GREEN at committed HEAD `3d0e6173`:
-
-- Exit code: `0`
-- Failed: `0`
-- Passed: `8`
-- Skipped: `0`
-
-Fast suite at committed HEAD:
-
-- Exit code: `0`
-- Failed: `0`
-- Passed: `5,219`
-- Skipped: `2`
-- Total: `5,221`
-- Wall time: `25s`, below the `30s` ceiling.
-
-### Miller evidence
-
-- Pre-edit content searches proved both misleading phrases exactly.
-- `inspect(BrokerContract_SeparatesFactoryRecoveryFromServiceBrokerArbitration, depth=full)` proved
-  the new caller-facing test surface.
-- Post-edit searches proved factory-lifecycle recovery in the contract and sidecar-only service
-  arbitration in both docs.
-- Pre-edit, post-edit, and committed-diff impact checks seeded all three owned paths and reported
-  no runtime dependents.
-
-### Commit scope and dirty state
-
-Committed:
-
-- `docs/contracts/semantic-broker-v1.md`
-- `docs/plans/2026-07-19-miller-semantic-integration-design.md`
-- `tests/Miller.Tests/Docs/SemanticBrokerContractTests.cs`
-- `.memories/2026-07-28/031810_513f.md`
-
-After the commit, no task implementation file is dirty or staged. The remaining dirty paths are
-lead-owned SDD orchestration artifacts:
-
-- `.razorback/sdd/progress.md`
-- `.razorback/sdd/task-1-brief.md`
-- `.razorback/sdd/task-1-report.md`
-- `.razorback/sdd/task-2-brief.md`
-- `.razorback/sdd/task-3-brief.md`
+- `src/Miller.Indexing/WorkspaceRegistry.cs` — schema head, `RowColumns`, `AdditiveColumns`, generalized
+  migration, `UpsertSeen` lineage parameter and SQL, `FindMainCheckoutByCommonDir`, `ReadRow` ordinals,
+  `WorkspaceLineage` record.
+- `src/Miller.Indexing/WorkspaceRegistryRow.cs` — four trailing optional record members.
+- `tests/Miller.Tests/Indexing/WorkspaceRegistryTests.cs` — extended schema assertion, renamed concurrent-adder
+  test, 10 new tests, two shared helpers (`MakeDirectory`, `WriteLegacyPreLevelsSchema`), `SkipIfNoSymlinks`.

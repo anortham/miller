@@ -461,6 +461,174 @@ public sealed class WorkspaceRenderTests
         Assert.InRange(failure.GetProperty("retry_in_seconds").GetInt64(), 500, 600);
     }
 
+    // ---- rebind provenance (P3 §8, additive and conditional like scan_failure) ----
+
+    private static RebindProvenanceFacts RebindProvenance() => new(
+        SourceRoot: "/repo-main",
+        SourceWorkspace: "repo-main-0123456789ab",
+        SourceArtifactId: "artifact-source-77",
+        ReboundAt: "2026-08-05T09:14:22.123456789Z");
+
+    [Fact]
+    public void Status_Compact_IsByteIdenticalWhenTheArtifactWasNeverRebound()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: false);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { RebindProvenance = null }, Telemetry, json: false));
+        Assert.DoesNotContain("rebound_from", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Json_IsByteIdenticalWhenTheArtifactWasNeverRebound()
+    {
+        string baseline = WorkspaceRender.Status(Facts(), Telemetry, json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Status(Facts() with { RebindProvenance = null }, Telemetry, json: true));
+        Assert.DoesNotContain("rebound_from", baseline, StringComparison.Ordinal);
+        Assert.False(Json(baseline).TryGetProperty("rebound_from", out _));
+    }
+
+    [Fact]
+    public void Health_Compact_IsByteIdenticalWhenTheArtifactWasNeverRebound()
+    {
+        string baseline = WorkspaceRender.Health(HealthFacts(Facts()), json: false);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Health(HealthFacts(Facts() with { RebindProvenance = null }), json: false));
+        Assert.DoesNotContain("rebound_from", baseline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Json_IsByteIdenticalWhenTheArtifactWasNeverRebound()
+    {
+        string baseline = WorkspaceRender.Health(HealthFacts(Facts()), json: true);
+
+        Assert.Equal(
+            baseline,
+            WorkspaceRender.Health(HealthFacts(Facts() with { RebindProvenance = null }), json: true));
+        Assert.DoesNotContain("rebound_from", baseline, StringComparison.Ordinal);
+        Assert.False(Json(baseline).TryGetProperty("rebound_from", out _));
+    }
+
+    [Fact]
+    public void Status_Json_AReboundArtifact_ExposesEveryProvenanceField()
+    {
+        JsonElement rebound = Json(WorkspaceRender.Status(
+                Facts() with { RebindProvenance = RebindProvenance() }, TelemetrySummary.Empty, json: true))
+            .GetProperty("rebound_from");
+
+        Assert.Equal("/repo-main", rebound.GetProperty("source_root").GetString());
+        Assert.Equal("repo-main-0123456789ab", rebound.GetProperty("source_workspace").GetString());
+        Assert.Equal("artifact-source-77", rebound.GetProperty("source_artifact_id").GetString());
+        Assert.Equal("2026-08-05T09:14:22.123456789Z", rebound.GetProperty("rebound_at").GetString());
+    }
+
+    [Fact]
+    public void Status_Json_AnUnregisteredSourceRoot_RendersANullSourceWorkspaceAndKeepsTheRoot()
+    {
+        JsonElement rebound = Json(WorkspaceRender.Status(
+                Facts() with { RebindProvenance = RebindProvenance() with { SourceWorkspace = null } },
+                TelemetrySummary.Empty,
+                json: true))
+            .GetProperty("rebound_from");
+
+        Assert.Equal(JsonValueKind.Null, rebound.GetProperty("source_workspace").ValueKind);
+        Assert.Equal("/repo-main", rebound.GetProperty("source_root").GetString());
+    }
+
+    [Fact]
+    public void Status_Json_AProvenanceMissingTheOptionalKeys_RendersExplicitNulls()
+    {
+        JsonElement rebound = Json(WorkspaceRender.Status(
+                Facts() with
+                {
+                    RebindProvenance =
+                        RebindProvenance() with { SourceArtifactId = null, ReboundAt = null },
+                },
+                TelemetrySummary.Empty,
+                json: true))
+            .GetProperty("rebound_from");
+
+        Assert.Equal(JsonValueKind.Null, rebound.GetProperty("source_artifact_id").ValueKind);
+        Assert.Equal(JsonValueKind.Null, rebound.GetProperty("rebound_at").ValueKind);
+    }
+
+    [Fact]
+    public void Status_Compact_AReboundArtifact_NamesTheSourceDisplayIdRootAndInstant()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { RebindProvenance = RebindProvenance() }, TelemetrySummary.Empty, json: false);
+
+        Assert.Contains(
+            "rebound_from: repo-main-0123456789ab (/repo-main) at 2026-08-05T09:14:22.123456789Z",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_AnUnregisteredSourceRoot_NamesTheRawRoot()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { RebindProvenance = RebindProvenance() with { SourceWorkspace = null } },
+            TelemetrySummary.Empty,
+            json: false);
+
+        Assert.Contains(
+            "rebound_from: /repo-main at 2026-08-05T09:14:22.123456789Z", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_Compact_AProvenanceWithNoRecordedInstant_OmitsTheAtClause()
+    {
+        string text = WorkspaceRender.Status(
+            Facts() with { RebindProvenance = RebindProvenance() with { ReboundAt = null } },
+            TelemetrySummary.Empty,
+            json: false);
+
+        Assert.Contains("rebound_from: repo-main-0123456789ab (/repo-main)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("(/repo-main) at", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Compact_AReboundArtifact_NamesTheSourceDisplayIdRootAndInstant()
+    {
+        string text = WorkspaceRender.Health(
+            HealthFacts(Facts() with { RebindProvenance = RebindProvenance() }), json: false);
+
+        Assert.Contains(
+            "rebound_from: repo-main-0123456789ab (/repo-main) at 2026-08-05T09:14:22.123456789Z",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Health_Json_AReboundArtifact_MatchesTheStatusJsonObject()
+    {
+        WorkspaceFacts facts = Facts() with { RebindProvenance = RebindProvenance() };
+
+        JsonElement fromStatus = Json(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true))
+            .GetProperty("rebound_from");
+        JsonElement fromHealth = Json(WorkspaceRender.Health(HealthFacts(facts), json: true))
+            .GetProperty("rebound_from");
+
+        Assert.Equal(fromStatus.GetRawText(), fromHealth.GetRawText());
+    }
+
+    [Fact]
+    public void Health_JsonSummary_OmitsTheRebindProvenanceEntirely()
+    {
+        JsonElement root = Json(WorkspaceRender.Health(
+            HealthFacts(Facts() with { RebindProvenance = RebindProvenance() }),
+            WorkspaceHealthFormat.JsonSummary));
+
+        Assert.False(root.TryGetProperty("rebound_from", out _));
+    }
+
     // ---- status role string (version-aware leadership D6) ----
 
     [Fact]

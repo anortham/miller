@@ -102,6 +102,37 @@ internal static class WorkspaceFactsAssembler
             level, IndexLevels.UpgradeOwed(level, policy), IndexLevels.StorageValue(policy));
     }
 
+    /// <summary>
+    /// The rebind-provenance fact for status/health, or null when the artifact carries no
+    /// <c>rebound_from_root</c> key — the never-rebound state, which renders nowhere and keeps default output
+    /// byte-identical. <paramref name="registry"/> resolves the source root to its registered display id;
+    /// an unregistered (or unresolvable) source root leaves <c>SourceWorkspace</c> null while the raw root
+    /// still renders.
+    /// </summary>
+    internal static RebindProvenanceFacts? RebindProvenanceFactsFor(string? indexDbPath, WorkspaceRegistry? registry)
+    {
+        if (RebindProvenanceReader.Read(indexDbPath) is not { } provenance)
+            return null;
+
+        return new RebindProvenanceFacts(
+            provenance.SourceRoot,
+            registry is null ? null : SourceDisplayId(registry, provenance.SourceRoot),
+            provenance.SourceArtifactId,
+            provenance.ReboundAt);
+    }
+
+    private static string? SourceDisplayId(WorkspaceRegistry registry, string sourceRoot)
+    {
+        try
+        {
+            return registry.Get(WorkspaceId.FromCanonicalRoot(sourceRoot))?.DisplayId;
+        }
+        catch (Exception ex) when (ex is ArgumentException or SqliteException or ObjectDisposedException)
+        {
+            return null;
+        }
+    }
+
     public static WorkspaceFacts FromRegisteredRow(
         WorkspaceRegistry registry,
         WorkspaceRegistryRow row,
@@ -145,7 +176,8 @@ internal static class WorkspaceFactsAssembler
                 SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
                 ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
                 ScanFailure: ScanFailureFacts(row.IndexDbPath),
-                IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy));
+                IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy),
+                RebindProvenance: RebindProvenanceFactsFor(row.IndexDbPath, registry));
         }
         catch (FileNotFoundException)
         {
@@ -198,7 +230,8 @@ internal static class WorkspaceFactsAssembler
             SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
             ScanGovernor: ScanGovernorFacts(ScanGovernorKey.For(context) ?? context.WorkspaceRoot, scanGovernor),
             ScanFailure: ScanFailureFacts(context.ExtractDbPath),
-            IndexLevel: IndexLevelFactsFor(context.ExtractDbPath, registryPolicy: null));
+            IndexLevel: IndexLevelFactsFor(context.ExtractDbPath, registryPolicy: null),
+            RebindProvenance: RebindProvenanceFactsFor(context.ExtractDbPath, registry: null));
     }
 
     public static WorkspaceFacts FromRegisteredHealthReadError(

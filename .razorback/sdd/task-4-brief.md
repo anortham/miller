@@ -1,101 +1,48 @@
-### Task 4: Build the lease-owned Unix broker and bounded scheduler
+### Task 4: SqliteOnlineBackup page-stepped copier
 
 **Files:**
-- Modify: sidecar `src/lib.rs`
-- Modify: sidecar `src/main.rs`
-- Modify: sidecar `AGENTS.md`
-- Modify: sidecar `README.md`
-- Create: sidecar `src/broker/mod.rs`
-- Create: sidecar `src/broker/queue.rs`
-- Create: sidecar `src/broker/lease.rs`
-- Create: sidecar `src/broker/watchdog.rs`
-- Create: sidecar `src/broker/transport/mod.rs`
-- Create: sidecar `src/broker/transport/unix.rs`
-- Create: sidecar `src/broker/engine.rs`
-- Test: sidecar `tests/broker_protocol_tests.rs`
-- Test: sidecar `tests/broker_lifecycle_tests.rs`
-- Test: sidecar `tests/broker_scheduler_tests.rs`
+- Create: `src/Miller.Indexing/SqliteOnlineBackup.cs`
+- Test: `tests/Miller.Tests/Indexing/SqliteOnlineBackupTests.cs`
 
 **Interfaces:**
-- Consumes: Task 1 `broker` argv/identity and Task 2 `process_line`.
-- Produces: `broker::serve(BrokerConfig)`, UDS transport, singleton-before-model-load, owner EOF, watchdog, and 64-item weighted scheduler.
+- Consumes: `SQLitePCL.raw` (`sqlite3_backup_init`, `sqlite3_backup_step`, `sqlite3_backup_finish`,
+  `sqlite3_backup_remaining`/`pagecount`) via the already-referenced
+  `SQLitePCLRaw.bundle_e_sqlite3`; `SqliteReadOnlyAccess` conventions for the source open
+  (read-only, `Pooling=false`).
+- Produces: `SqliteOnlineBackup.Copy(string sourceDb, string destinationDb, TimeSpan budget, Func<DateTimeOffset> clock, CancellationToken ct) → BackupOutcome`
+  where `BackupOutcome` is `Completed | BudgetExhausted | Failed(reason)`. A public
+  `static TimeSpan ResolveBudget()` reading `MILLER_REBIND_COPY_BUDGET` (seconds or `TimeSpan`
+  format, default 3 minutes — same parsing shape as `MILLER_PROMOTE_RETRY_TIMEOUT`).
 
-**Contract inputs:** Current `LlamaEngine::load`, `UnreadyEngine`, `fs4`, request limits, current-user Unix permissions.
+**Contract inputs:** contract design §4: page-stepped loop (NOT `Microsoft.Data.Sqlite`'s
+`BackupDatabase` — one uncancellable `step(-1)` makes the budget unenforceable); budget checked
+between steps; a source write restarting the backup is expected behavior the budget bounds;
+zero writes to the source (read-only open, no checkpoint). Destination is the caller-supplied
+`.rebuild` path; on `BudgetExhausted`/`Failed` the helper deletes its partial destination trio
+before returning.
 
-**File ownership:** Sidecar broker core, Unix transport, CLI/lib exports, broker tests.
+**File ownership:** Create `src/Miller.Indexing/SqliteOnlineBackup.cs`; Test `tests/Miller.Tests/Indexing/SqliteOnlineBackupTests.cs`
 
-**Serialization required:** Yes.
+**Serialization required:** No
 
-**Dependency reason:** Requires Task 2's processor contract.
+**Dependency reason:** None - safe parallel batch.
 
-**Task 4/Task 6 boundary:** Task 4 owns both OS-lock lifetimes: it creates the service-lock and
-accelerator-lock primitives, holds any acquired handles for the broker lifetime, and proves owner EOF
-releases both. Task 6 owns accelerator policy: only the accelerator-lock holder may select `Auto`, a
-non-holder selects `CpuOnly` without a GPU probe, and typed runtime resource exhaustion demotes and
-retries once. Task 4 must not invent Task 6's backend-selection or demotion policy.
+**What to build:** The bounded, cancellable artifact snapshot: a raw SQLite backup loop stepping N
+pages (start at 1024; constant, not configurable) with the wall-clock budget and cancellation
+token checked between steps.
 
-**Step 1: Write failing real-process tests**
-
-```rust
-#[test]
-fn concurrent_broker_starts_load_one_engine_and_losers_exit() { /* 8 processes */ }
-
-#[test]
-fn owner_stdin_eof_removes_socket_and_releases_lock() { /* close owner pipe */ }
-
-#[test]
-fn waiting_batch_runs_after_at_most_eight_interactive_dequeues() { /* fake engine */ }
-
-#[test]
-fn stale_socket_is_unlinked_only_after_service_lock_acquisition() { /* hard-kill first owner */ }
-
-#[test]
-fn shutdown_response_closes_only_its_connection() { /* second connection remains healthy */ }
-
-#[test]
-fn owner_eof_during_model_load_terminates_before_endpoint_bind() { /* blocking fake loader */ }
-```
-
-**Step 2: Verify red**
-
-Run: `cargo test --test broker_lifecycle_tests --test broker_scheduler_tests`
-
-**Step 3: Implement the broker core**
-
-```rust
-pub struct BrokerConfig {
-    pub model_id: String,
-    pub endpoint: BrokerEndpoint,
-    pub service_lock: PathBuf,
-    pub accelerator_lock: PathBuf,
-}
-
-pub fn serve(config: BrokerConfig) -> std::io::Result<()> {
-    let service_lease = ServiceLease::try_acquire(&config.service_lock)?;
-    let owner = OwnerWatchdog::start(std::io::stdin())?;
-    let engine = BrokerEngine::load(&config)?;
-    BrokerServer::bind(config, service_lease, owner, engine)?.run()
-}
-```
-
-The service lock is acquired before owner-watchdog startup and engine construction. The lock holder removes any stale Unix socket immediately before bind. `BrokerQueue` uses `Mutex<State>` plus `Condvar`, rejects at 64, and, while batch work waits, schedules at most eight interactive dequeues before one batch dequeue. The dedicated watchdog is armed before model load; owner EOF terminates even a blocked cold load, while an active request older than 60 seconds calls `std::process::abort()`. Sidecar `AGENTS.md` and `README.md` document the additive `broker` verb without adding environment knobs.
-
-**Step 4: Run broker and existing conformance gates**
-
-Run focused broker tests, all four sidecar fast gates, and `cargo test --release --test conformance -- --ignored --test-threads=1 --nocapture` on the reference machine.
-
-**Step 5: Apply commit mode**
-
-`serial-worker-commit`: commit after lead review and record the SHA.
+**Approach:** Fast tests use small real SQLite files in temp dirs (registry tests already do this
+in the fast suite). Prove: a live-writer copy is consistent (write to the source between steps via
+a hook seam or small page count, destination still passes `PRAGMA integrity_check`), and budget
+exhaustion via an injected clock that jumps past the budget after the first step — no real
+waiting. Verify the source file's bytes/mtime are untouched after a copy.
 
 **Acceptance criteria:**
-- [ ] Eight concurrent starts produce one model-loaded broker; losing processes exit before engine load.
-- [ ] Closing owner stdin ends the broker and releases endpoint/service lock.
-- [ ] A killed owner leaves no child or cleanup requirement.
-- [ ] A stale Unix endpoint is removed only by the next service-lock holder.
-- [ ] `shutdown` closes one broker connection without releasing the service or accelerator lease.
-- [ ] Owner EOF during model load terminates before endpoint bind and releases both locks.
-- [ ] While batch work waits, one batch is dequeued after at most eight interactive dequeues.
-- [ ] Queue-full and expired requests receive `internal_error`; connections remain usable.
-- [ ] Stdio conformance is unchanged.
+- [ ] Copy of a populated DB passes `PRAGMA integrity_check` and row-count equality.
+- [ ] Budget exhaustion (injected clock) returns `BudgetExhausted`, deletes the partial
+      destination trio, and leaves the source byte-identical.
+- [ ] Source opened read-only: a copy of a write-locked/live source succeeds without writing to it.
+- [ ] `ResolveBudget` parses seconds and `TimeSpan` spellings and defaults sanely.
+- [ ] Worker-scope verification passes and the change is handed to the lead per
+      parallel-lead-commit.
 

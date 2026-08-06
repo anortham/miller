@@ -120,6 +120,23 @@
                     }
                 </dd>
             </div>
+            @if (!string.IsNullOrWhiteSpace(Facts.ReboundFromRoot))
+            {
+                <div>
+                    <dt title="This index was seeded from another checkout's artifact and retargeted, instead of being extracted from scratch.">Rebound from</dt>
+                    <dd>
+                        <span title="@Facts.ReboundFromRoot">@(Facts.ReboundFromWorkspace ?? Facts.ReboundFromRoot)</span>
+                        @if (!string.IsNullOrWhiteSpace(Facts.ReboundAt))
+                        {
+                            <time class="rel-ts timestamp" datetime="@Facts.ReboundAt" data-ts="@Facts.ReboundAt">@RelativeTime(Facts.ReboundAt, Now)</time>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(Facts.ReboundFromArtifactId))
+                        {
+                            <span class="id-chip" title="@Facts.ReboundFromArtifactId">@ChipText(Facts.ReboundFromArtifactId)</span>
+                        }
+                    </dd>
+                </div>
+            }
             <div>
                 <dt title="A derived search index Miller builds next to the main database so symbol lookups stay fast.">Search sidecar</dt>
                 <dd>
