@@ -181,6 +181,48 @@ public sealed class WorkspaceBindingServiceTests
         }
     }
 
+    [Fact]
+    public async Task MarkBootstrapFailed_WhenRootDisappeared_DoesNotRecreateRootDirectory()
+    {
+        string project = CreateTempDir("project");
+        string tempHome = CreateTempDir("home");
+        try
+        {
+            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(project);
+            var bootstrap = NewBootstrap(tempHome);
+            bootstrap.TestRunBootstrapOverride = _ =>
+            {
+                Directory.Delete(canonicalRoot, recursive: true);
+                throw new InvalidOperationException("root vanished");
+            };
+
+            Assert.Equal(
+                BindOutcome.Started,
+                bootstrap.BootstrapForRoot(project, WorkspaceBindingResolver.WorkspaceSource.Roots));
+            int runGeneration = bootstrap.Snapshot.RunGeneration;
+            await bootstrap.WaitForRunAsync(runGeneration, TestContext.Current.CancellationToken);
+
+            Assert.Equal(BootstrapPhase.Failed, bootstrap.Snapshot.Phase);
+            Assert.False(Directory.Exists(canonicalRoot));
+
+            string workspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
+            string registryPath = WorkspaceContext.Create(canonicalRoot, AppContext.BaseDirectory, tempHome).RegistryDbPath;
+            WorkspaceRegistryRow? row = null;
+            await WaitUntilAsync(() =>
+            {
+                using var registry = WorkspaceRegistry.Open(registryPath);
+                row = registry.Get(workspaceId);
+                return row?.State == WorkspaceRegistryState.Error;
+            }, TestContext.Current.CancellationToken);
+            Assert.Equal("root vanished", row!.LastError);
+        }
+        finally
+        {
+            DeleteTempDir(project);
+            DeleteTempDir(tempHome);
+        }
+    }
+
     // Stopping Miller mid-bootstrap used to be reported as a scan-admission TIMEOUT and persisted to the
     // registry as an actionable workspace error, so a later run rendered a failure that never happened.
     [Fact]

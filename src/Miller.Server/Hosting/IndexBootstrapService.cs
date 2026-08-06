@@ -913,7 +913,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         {
             string stableWorkspaceId = WorkspaceId.FromCanonicalRoot(canonicalRoot);
             string canonicalDbPath = Path.Combine(canonicalRoot, ".miller", "symbols.db");
-            Directory.CreateDirectory(Path.GetDirectoryName(canonicalDbPath)!);
+            // A vanished root must stay vanished: CreateDirectory recreates every missing parent, and a
+            // resurrected empty root reads as "root returned" to WorkspaceRootPresenceMonitor.
+            if (Directory.Exists(canonicalRoot))
+                Directory.CreateDirectory(Path.GetDirectoryName(canonicalDbPath)!);
             var workspace = CreateWorkspaceContext(canonicalRoot) with
             {
                 WorkspaceId = stableWorkspaceId,
