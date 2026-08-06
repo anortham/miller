@@ -149,8 +149,14 @@ them:
    No source `SingleWriterLock` is ever taken, so the governor's lock-order rule
    (`ScanGovernor.cs:80-82`) is never in tension.
 2. Snapshot via the **SQLite online backup API** from a read-only source connection into the
-   target's `symbols.db.rebuild`. Consistent by construction under a live writer; **zero writes
-   to the source** — no checkpoint, no lock, no WAL disturbance. Cost is a byte copy (~0.25 s at
+   target's `symbols.db.rebuild`. Consistent by construction under a live writer; **the source
+   ARTIFACT is untouched** — no writer lock, no checkpoint, and no page of `symbols.db` or its
+   `-wal` is written. The copy does take part in the standard WAL-reader protocol every Miller
+   cross-workspace read already uses (`SqliteReadOnlyAccess.Open`): the wal-index `-shm` is
+   created or updated, and the DB's directory is probed once per process for writability. So
+   rebind requires source-directory writability exactly as every existing reader does; the
+   `immutable=1` alternative that would avoid even that is rejected repo-wide because it silently
+   drops uncheckpointed `-wal` rows under a live julie writer. Cost is a byte copy (~0.25 s at
    755 MiB; tens of seconds at the 22.84 GiB dotnet/runtime artifact — noise against a 25–40 min
    full scan). NOT `Microsoft.Data.Sqlite`'s `BackupDatabase` wrapper: it is one synchronous
    uncancellable `sqlite3_backup_step(-1)`, which makes the budget below unenforceable (a timeout
@@ -248,8 +254,12 @@ Any prefilter or validation failure → plain bootstrap scan (§7), after stagin
 
 ## 7. Orchestration and failure semantics
 
-**Invariant: no rebind step writes to the source artifact — not even a checkpoint.** The backup
-API reads through a read-only connection; everything else operates on the target's staging file.
+**Invariant: no rebind step writes the source ARTIFACT — no writer lock, no checkpoint, and no
+page of `symbols.db` or its `-wal`.** The backup API reads through a read-only connection;
+everything else operates on the target's staging file. The read-only open is the standard Miller
+WAL-reader protocol (§4.2): wal-index `-shm` creation/update and a one-time directory writability
+probe are permitted and expected, so rebind needs source-directory writability exactly as every
+existing cross-workspace read does.
 
 ### 7.1 The sequence (all under the target's bootstrap writer lease + one governor admission)
 
@@ -429,3 +439,17 @@ the `BackupDatabase` wrapper is uncancellable so the budget needs a page-stepped
 ineligible there (§6.5); `Promote` can throw after the live-file move so recovery probes instead
 of assumes (§7.2); and the W8 record cannot carry a rebind-stage marker so suppression is
 conservative on any standing record (§7.4).
+
+**2026-08-05 pre-merge review (P3 implementation).** Codex read the shipped P3 branch against this
+contract and flagged that "zero writes to the source" over-stated what the copy does: the read-only
+open probes the source directory's writability once per process and, as a WAL reader, creates or
+updates the source `-shm`. The copy protocol is unchanged — that is the deliberate house protocol
+for every Miller reader, and `immutable=1` stays rejected because it drops uncheckpointed `-wal`
+rows. §4.2 and the §7 invariant were reworded to the precise claim (the source ARTIFACT — database
+and `-wal` — is byte-untouched; wal-index and probe activity are permitted), and
+`RebindBootstrapScaleTests` now fingerprints `symbols.db` **and** its `-wal` before and after a
+rebind bootstrap rather than the database alone. The same pass also found the fallback bootstrap
+scan reusing the pre-rebind `ScanAttemptDecision` — which bypassed the post-SIGKILL `--jobs 1`
+clamp a just-OOM-killed rebind delta had earned (fixed: `RebindBootstrap.FallbackAttemptAfterRebind`
+re-evaluates after a failed attempt) — and a `status=partial` reconciling scan reported as a clean
+rebind (fixed: `RebindBootstrapOutcome.Warning`, logged on the promoted arm).

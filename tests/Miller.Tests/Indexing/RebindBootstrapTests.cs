@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Server.Logging;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -321,6 +322,102 @@ public sealed class RebindBootstrapTests : IDisposable
     }
 
     [Fact]
+    public void TryRebind_WhenTheReconciledScanIsClean_PromotesWithNoWarning()
+    {
+        RebindBootstrapOutcome outcome = Run();
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Null(outcome.Warning);
+    }
+
+    [Fact]
+    public void TryRebind_WhenTheReconciledScanIsPartial_PromotesCarryingTheWarning()
+    {
+        RebindBootstrapOutcome outcome = Run(
+            Seams() with
+            {
+                RunDeltaScan = (_, _) =>
+                {
+                    _scanCalls++;
+                    return PartialReport(revision: 41);
+                },
+            });
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Contains("PARTIAL", outcome.Warning ?? "", StringComparison.Ordinal);
+        Assert.Contains("broken.cs", outcome.Warning ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryRebind_WhenPromoteThrowsAfterTheMoveOnAPartialScan_AdoptsAndStillCarriesTheWarning()
+    {
+        RebindBootstrapOutcome outcome = Run(
+            Seams() with
+            {
+                RunDeltaScan = (_, _) =>
+                {
+                    _scanCalls++;
+                    return PartialReport(revision: 41);
+                },
+                Promote = liveDb =>
+                {
+                    _promoteCalls++;
+                    File.Move(_stagingDb, liveDb, overwrite: true);
+                    throw new IOException("failed while clearing the rebuild sidecars");
+                },
+                LiveArtifactUsable = (liveDb, _) => File.Exists(liveDb),
+            });
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Contains("PARTIAL", outcome.Warning ?? "", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FallbackAttemptAfterRebind_WhenTheRebindFailed_ReEvaluatesSoAPostSigkillClampIsNotLost()
+    {
+        var policy = new CountingScanFailurePolicy(Decision(jobs: ScanFailurePolicy.PostSigkillJobs));
+        ScanAttemptDecision original = Decision(jobs: null);
+
+        ScanAttemptDecision fallback = RebindBootstrap.FallbackAttemptAfterRebind(
+            policy, ScanIntent.IncrementalReconcile, original,
+            RebindBootstrapOutcome.Failed(RebindStage.DeltaScan, "killed", _sourceRoot, "ab12cd"));
+
+        Assert.Equal(1, policy.Evaluations);
+        Assert.Equal(ScanFailurePolicy.PostSigkillJobs, fallback.Jobs);
+    }
+
+    [Fact]
+    public void FallbackAttemptAfterRebind_WhenTheRebindFailed_ReEvaluatesWithTheBackoffTimerBypassed()
+    {
+        var policy = new CountingScanFailurePolicy(Decision(jobs: ScanFailurePolicy.PostSigkillJobs));
+
+        RebindBootstrap.FallbackAttemptAfterRebind(
+            policy, ScanIntent.IncrementalReconcile, Decision(jobs: null),
+            RebindBootstrapOutcome.Failed(RebindStage.DeltaScan, "killed", _sourceRoot, "ab12cd"));
+
+        Assert.True(policy.LastBypassBackoff);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FallbackAttemptAfterRebind_WhenTheRebindDidNotFail_KeepsTheOriginalWithoutReEvaluating(
+        bool promoted)
+    {
+        var policy = new CountingScanFailurePolicy(Decision(jobs: ScanFailurePolicy.PostSigkillJobs));
+        ScanAttemptDecision original = Decision(jobs: null);
+        RebindBootstrapOutcome outcome = promoted
+            ? RebindBootstrapOutcome.Promoted("rebound", 41L, _sourceRoot, "ab12cd", warning: null)
+            : RebindBootstrapOutcome.Ineligible("not a linked worktree");
+
+        ScanAttemptDecision fallback =
+            RebindBootstrap.FallbackAttemptAfterRebind(policy, ScanIntent.IncrementalReconcile, original, outcome);
+
+        Assert.Equal(0, policy.Evaluations);
+        Assert.Same(original, fallback);
+    }
+
+    [Fact]
     public void TryRebind_WhenTheTargetAlreadyHasAnArtifact_IsIneligibleAndNeverCopies()
     {
         File.WriteAllText(_targetDb, "live artifact");
@@ -441,6 +538,7 @@ public sealed class RebindBootstrapTests : IDisposable
             File.Move(_stagingDb, liveDb, overwrite: true);
         },
         LiveArtifactUsable = (_, _) => false,
+        DescribeScanWarning = ExtractReportLog.DescribeWarning,
     };
 
     private static RebindSnapshotInputs SnapshotInputs(string sourceRoot, IndexLevelPolicy policy) => new()
@@ -462,4 +560,48 @@ public sealed class RebindBootstrapTests : IDisposable
         RevisionBlock: new ExtractRevision(revision, revision),
         Counts: null,
         Errors: Array.Empty<ReportDiagnostic>(), Warnings: Array.Empty<ReportDiagnostic>());
+
+    private static ExtractReport PartialReport(long revision) => Report(revision) with
+    {
+        Status = "partial",
+        Counts = new ExtractCounts(
+            FilesScanned: 2, FilesChanged: 1, FilesUnchanged: 0, FilesUnsupported: 0, FilesDeleted: 0,
+            FilesFailed: 1, RowsWritten: null, Totals: null),
+        Errors = new[]
+        {
+            new ReportDiagnostic("parse_failed", "unbalanced braces", "broken.cs", "broken.cs", Recoverable: true),
+        },
+    };
+
+    private static ScanAttemptDecision Decision(int? jobs) => new(
+        Attempt: true, ScanIntent.IncrementalReconcile, jobs, Downgraded: false, RetryAtUtc: null,
+        ConsecutiveFailures: 0);
+
+    private sealed class CountingScanFailurePolicy(ScanAttemptDecision decision) : IScanFailurePolicy
+    {
+        public int Evaluations { get; private set; }
+
+        public bool LastBypassBackoff { get; private set; }
+
+        public ScanAttemptDecision Evaluate(ScanIntent intent, bool bypassBackoff = false)
+        {
+            Evaluations++;
+            LastBypassBackoff = bypassBackoff;
+            return decision;
+        }
+
+        public void RecordSuccess(ScanIntent completed)
+        {
+        }
+
+        public void RecordDowngradedServe()
+        {
+        }
+
+        public void RecordFailure(ScanIntent intent, int? exitCode, int jobs)
+        {
+        }
+
+        public ScanFailureRecord? Read() => null;
+    }
 }

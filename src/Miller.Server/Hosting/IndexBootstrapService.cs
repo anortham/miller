@@ -600,6 +600,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                             "instead of a full extraction: {Reason} (revision {Rev}).",
                             canonicalRoot, rebind.SourceRoot, rebind.SourceDisplayId, rebind.Reason,
                             rebind.Revision);
+                        if (rebind.Warning is { } rebindWarning)
+                            _logger.LogWarning("Bootstrap scan: {Warning}", rebindWarning);
                     }
                     else
                     {
@@ -615,17 +617,23 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         // cannot clear its own staging, and a stranded trio is full-artifact sized.
                         RebindBootstrap.DiscardStaging(canonicalDbPath);
 
+                        // A failed rebind journalled its own failure, so the pre-attempt decision is stale — most
+                        // importantly it predates the post-SIGKILL --jobs clamp an OOM-killed delta just earned.
+                        ScanAttemptDecision fallbackAttempt = RebindBootstrap.FallbackAttemptAfterRebind(
+                            failurePolicy, scanDecision.Intent, attempt, rebind);
+
                         // A non-force bootstrap scan means no COMMITTED artifact exists — either no DB file, or a
                         // metadata-only shell from a crashed first scan (DecideBootstrapScan's !hasCommittedRevision
                         // arm). Both are first builds: julie records index_level only with extraction history, so a
                         // level-less shell accepts the policy's first-build level without conflict. The force case
                         // is a root rebind, which LevelForScan routes by intent.
                         ExtractIndexLevel bootstrapLevel = IndexLevels.LevelForScan(
-                            attempt.EffectiveIntent, newArtifact: !scanDecision.Force, levelPolicy);
+                            fallbackAttempt.EffectiveIntent, newArtifact: !scanDecision.Force, levelPolicy);
                         ExtractReport report = RunRecordedScan(
-                            failurePolicy, attempt,
+                            failurePolicy, fallbackAttempt,
                             () => runner.Scan(
-                                canonicalRoot, canonicalDbPath, scanDecision.Force, attempt.Jobs, bootstrapLevel));
+                                canonicalRoot, canonicalDbPath, scanDecision.Force, fallbackAttempt.Jobs,
+                                bootstrapLevel));
                         scanned = true;
                         scanRevision = report.Revision;
                         _logger.LogInformation(
@@ -1491,7 +1499,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// admission the scan already holds — a multi-GB snapshot copy is the same class of machine load a scan is,
     /// and the sequence never takes the SOURCE workspace's writer lock, so the lock order is untouched.
     ///
-    /// <para>The two seams without a default are the ones that need this bootstrap's located runner. The delta
+    /// <para>The seams without a default are the two that need this bootstrap's located runner plus the report
+    /// describer, which lives in this layer rather than in <c>Miller.Indexing</c>. The delta
     /// scan is a NON-force scan pointed at the staging file, so it inherits the whole shared scan chokepoint —
     /// <c>--jobs</c>, the invariant ignore file, and supervision paths resolved from the staging file's own
     /// <c>.miller</c> directory — while a force scan would delete the seed it is meant to reconcile.</para>
@@ -1523,6 +1532,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 Rebind = (snapshotDb, targetRoot, ct) => runner.Rebind(snapshotDb, targetRoot, ct),
                 RunDeltaScan = (snapshotDb, level) =>
                     runner.Scan(canonicalRoot, snapshotDb, force: false, jobs, level),
+                DescribeScanWarning = ExtractReportLog.DescribeWarning,
             },
             _shutdown.Token);
     }

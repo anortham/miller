@@ -59,13 +59,22 @@ public sealed record RebindBootstrapOutcome
     /// <summary>The rebind source's registry display id, once one was resolved.</summary>
     public string? SourceDisplayId { get; private init; }
 
+    /// <summary>
+    /// Operator-facing warning text the reconciling delta scan produced, on <see cref="Kind.Promoted"/>; null when
+    /// that scan was clean. A partial julie-extract report is a SUCCESS whose failed files are absent from the
+    /// index, so a rebind that reduced the report to its revision would report a clean bootstrap over a
+    /// silently incomplete artifact.
+    /// </summary>
+    public string? Warning { get; private init; }
+
     internal static RebindBootstrapOutcome Promoted(
-        string reason, long? revision, string sourceRoot, string sourceDisplayId) =>
+        string reason, long? revision, string sourceRoot, string sourceDisplayId, string? warning) =>
         new(Kind.Promoted, reason)
         {
             Revision = revision,
             SourceRoot = sourceRoot,
             SourceDisplayId = sourceDisplayId,
+            Warning = warning,
         };
 
     internal static RebindBootstrapOutcome Ineligible(string reason) => new(Kind.Ineligible, reason);
@@ -116,8 +125,9 @@ public sealed record RebindBootstrapRequest
 /// <summary>
 /// Every side effect one rebind attempt can have, as injectable delegates. Production defaults are wired here;
 /// <see cref="Rebind"/> and <see cref="RunDeltaScan"/> have none because they need the located
-/// <see cref="JulieExtractRunner"/>, which is the caller's. Fast tests replace whichever seam a branch needs and
-/// drive the whole sequence — including the promote-after-move probe — with no subprocess.
+/// <see cref="JulieExtractRunner"/>, which is the caller's, and <see cref="DescribeScanWarning"/> has none because
+/// the describer lives in the server layer. Fast tests replace whichever seam a branch needs and drive the whole
+/// sequence — including the promote-after-move probe — with no subprocess.
 /// </summary>
 public sealed record RebindBootstrapSeams
 {
@@ -150,6 +160,11 @@ public sealed record RebindBootstrapSeams
 
     /// <summary>Reconcile the retargeted snapshot against the target tree (snapshot path, recorded level).</summary>
     public required Func<string, ExtractIndexLevel, ExtractReport> RunDeltaScan { get; init; }
+
+    /// <summary>Operator-facing warning text for the reconciling scan's report, or null when it is clean. Required
+    /// rather than defaulted to null, because a caller that silently dropped a partial report would present an
+    /// incomplete artifact as a clean bootstrap.</summary>
+    public required Func<ExtractReport, string?> DescribeScanWarning { get; init; }
 
     /// <summary>Clear the staging trio beside a live artifact path.</summary>
     public Action<string> PrepareStaging { get; init; } = FullRebuildPromotion.PrepareRebuildTarget;
@@ -347,6 +362,32 @@ public static class RebindBootstrap
     }
 
     /// <summary>
+    /// The decision the fallback bootstrap scan must run under, given what the rebind attempt did.
+    ///
+    /// <para>A <see cref="RebindBootstrapOutcome.Kind.Failed"/> attempt WROTE to the scan-failure journal, so
+    /// <paramref name="original"/> — evaluated before the attempt — is stale: a delta scan the OOM killer took
+    /// (exit 137) leaves a standing record whose clamp only a fresh evaluation applies, and the fallback is the
+    /// heaviest scan of the run. Any other outcome recorded nothing, so re-reading the journal would only cost a
+    /// read.</para>
+    ///
+    /// <para>The re-evaluation bypasses the retry timer for the same reason the original did: a bootstrap with no
+    /// artifact must either build one or fail with a reason, never defer. The clamp is not part of the timer and
+    /// is applied regardless.</para>
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    public static ScanAttemptDecision FallbackAttemptAfterRebind(
+        IScanFailurePolicy policy, ScanIntent intent, ScanAttemptDecision original, RebindBootstrapOutcome rebind)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(rebind);
+
+        return rebind.Result == RebindBootstrapOutcome.Kind.Failed
+            ? policy.Evaluate(intent, bypassBackoff: true)
+            : original;
+    }
+
+    /// <summary>
     /// Attempt the rebind sequence for one bootstrap. Returns <see cref="RebindBootstrapOutcome.Kind.Promoted"/>
     /// when the target now holds a complete, reconciled artifact; anything else means the caller must run the
     /// plain bootstrap scan.
@@ -475,6 +516,8 @@ public static class RebindBootstrap
             return Fail(stage, ex.Message, JulieExtractException.ExitCodeOf(ex));
         }
 
+        string? warning = seams.DescribeScanWarning(reconciled);
+
         try
         {
             seams.Promote(liveDb);
@@ -491,13 +534,13 @@ public static class RebindBootstrap
             return RebindBootstrapOutcome.Promoted(
                 $"rebound from '{source.CanonicalRoot}'; the promoted artifact survived a failing promote " +
                 $"({ex.Message})",
-                reconciled.Revision, source.CanonicalRoot, source.DisplayId);
+                reconciled.Revision, source.CanonicalRoot, source.DisplayId, warning);
         }
 
         request.FailurePolicy.RecordSuccess(ScanIntent.IncrementalReconcile);
         return RebindBootstrapOutcome.Promoted(
             $"rebound from '{source.CanonicalRoot}' and reconciled with a delta scan",
-            reconciled.Revision, source.CanonicalRoot, source.DisplayId);
+            reconciled.Revision, source.CanonicalRoot, source.DisplayId, warning);
     }
 
     private static WorkspaceRegistryRow? ResolveSourceSibling(

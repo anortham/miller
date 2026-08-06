@@ -28,8 +28,11 @@ than redesigning locally.
 
 ## Global Constraints
 
-- **No writes to the source (main checkout) artifact — not even a WAL checkpoint.** The backup
-  reads through a read-only connection; everything else touches only the target's staging file.
+- **The source (main checkout) ARTIFACT stays byte-untouched — no writer lock, no checkpoint, and
+  no page of `symbols.db` or its `-wal`.** The backup reads through a read-only connection;
+  everything else touches only the target's staging file. The copy still takes part in the standard
+  Miller WAL-reader protocol (`-shm` creation/update, a one-time directory writability probe), so
+  rebind needs source-directory writability exactly as every existing cross-workspace read does.
 - **Never route rebind through `JulieExtractRunner.Scan(force: true)`** — its
   `PrepareRebuildTarget` deletes the seed (`src/Miller.Indexing/JulieExtractRunner.cs:480-493`).
 - **No new `ScanIntent`, and explicitly NOT `ScanIntent.RootRebind`** for rebind failures — record

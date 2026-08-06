@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Logging;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -29,7 +30,7 @@ public sealed class RebindBootstrapScaleTests
         fx.BootstrapMainCheckout();
         string worktree = fx.AddLinkedWorktree("feature");
         fx.AgeSourceScanHeartbeat();
-        string sourceHash = fx.HashArtifact(fx.MainDbPath);
+        string sourceFingerprint = fx.ArtifactFingerprint(fx.MainDbPath);
         string sourceArtifactId = fx.ReadMetadata(fx.MainDbPath, "artifact_id")!;
 
         fx.BootstrapWorkspace(worktree);
@@ -42,7 +43,7 @@ public sealed class RebindBootstrapScaleTests
         Assert.NotNull(fx.ReadMetadata(worktreeDb, "rebound_at"));
         Assert.NotEqual(sourceArtifactId, fx.ReadMetadata(worktreeDb, "artifact_id"));
         Assert.Contains(fx.Log, m => m.Contains("by rebinding the index of", StringComparison.Ordinal));
-        Assert.Equal(sourceHash, fx.HashArtifact(fx.MainDbPath));
+        Assert.Equal(sourceFingerprint, fx.ArtifactFingerprint(fx.MainDbPath));
         Assert.False(File.Exists(FullRebuildPromotion.RebuildDbPathFor(worktreeDb)));
     }
 
@@ -54,7 +55,7 @@ public sealed class RebindBootstrapScaleTests
         fx.BootstrapMainCheckout();
         string worktree = fx.AddLinkedWorktree("identical");
         fx.AgeSourceScanHeartbeat();
-        string sourceHash = fx.HashArtifact(fx.MainDbPath);
+        string sourceFingerprint = fx.ArtifactFingerprint(fx.MainDbPath);
         Directory.CreateDirectory(Path.Combine(worktree, ".miller"));
 
         var runner = new JulieExtractRunner(binary);
@@ -78,13 +79,14 @@ public sealed class RebindBootstrapScaleTests
                     delta = runner.Scan(worktree, db, force: false, jobs: 1, level);
                     return delta;
                 },
+                DescribeScanWarning = ExtractReportLog.DescribeWarning,
             },
             TestContext.Current.CancellationToken);
 
         Assert.True(outcome.Result == RebindBootstrapOutcome.Kind.Promoted, outcome.Reason);
         Assert.NotNull(delta);
         Assert.True(delta.IsNoChange, $"expected no_change, got {delta.Status}");
-        Assert.Equal(sourceHash, fx.HashArtifact(fx.MainDbPath));
+        Assert.Equal(sourceFingerprint, fx.ArtifactFingerprint(fx.MainDbPath));
     }
 
     [Fact]
@@ -202,11 +204,29 @@ public sealed class RebindBootstrapScaleTests
                 File.SetLastWriteTimeUtc(heartbeat, DateTime.UtcNow - TimeSpan.FromHours(1));
         }
 
-        public string HashArtifact(string dbPath)
+        /// <summary>
+        /// The byte identity of an ARTIFACT: <c>symbols.db</c> plus its <c>-wal</c> when one exists, each as
+        /// length and digest so an appearing or vanishing log is a difference too. The <c>-shm</c> is
+        /// deliberately excluded — creating and updating the wal-index is the standard WAL-reader protocol every
+        /// Miller cross-workspace read takes part in, and the rebind copy is one of those readers. What may never
+        /// change is a page of the database or of its write-ahead log.
+        /// </summary>
+        public string ArtifactFingerprint(string dbPath)
         {
             SqliteConnection.ClearAllPools();
-            using FileStream stream = File.OpenRead(dbPath);
-            return Convert.ToHexString(SHA256.HashData(stream));
+            return string.Join(
+                " | ",
+                new[] { dbPath, dbPath + "-wal" }
+                    .Select(path => $"{Path.GetFileName(path)}={FingerprintFile(path)}"));
+        }
+
+        private static string FingerprintFile(string path)
+        {
+            if (!File.Exists(path))
+                return "(absent)";
+
+            using FileStream stream = File.OpenRead(path);
+            return $"{stream.Length}:{Convert.ToHexString(SHA256.HashData(stream))}";
         }
 
         public string? ReadMetadata(string dbPath, string key)
