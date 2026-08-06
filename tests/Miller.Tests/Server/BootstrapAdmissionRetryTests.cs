@@ -94,6 +94,67 @@ public sealed class BootstrapAdmissionRetryTests : IDisposable
         Assert.NotEqual(timedOutGeneration, bootstrap.Snapshot.RunGeneration);
     }
 
+    [Fact]
+    public void ARetryWhoseRootVanishedDuringTheDelayNeverStartsARun()
+    {
+        string root = NewTempDirectory("vanished-root");
+        string home = NewTempDirectory("vanished-home");
+        using var bootstrap = NewBootstrap(home, TimeSpan.FromSeconds(1));
+
+        int runs = 0;
+        bootstrap.TestRunBootstrapOverride = _ =>
+        {
+            Interlocked.Increment(ref runs);
+            throw new ScanAdmissionTimeoutException("Timed out waiting for machine-wide scan admission.");
+        };
+
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
+        Assert.True(WaitUntil(() => Directory.Exists(Path.Combine(root, ".miller"))));
+        Directory.Delete(root, recursive: true);
+        Thread.Sleep(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, Volatile.Read(ref runs));
+        Assert.Equal(BootstrapPhase.Failed, bootstrap.Snapshot.Phase);
+        Assert.False(Directory.Exists(root));
+        Assert.False(Directory.Exists(Path.Combine(root, ".miller")));
+    }
+
+    [Fact]
+    public void ARetryWhoseRootWasReplacedByASymlinkNeverStartsARun()
+    {
+        SkipIfNoSymlinks();
+        string root = NewTempDirectory("swapped-root");
+        string replacement = NewTempDirectory("swapped-replacement");
+        string home = NewTempDirectory("swapped-home");
+        using var bootstrap = NewBootstrap(home, TimeSpan.FromSeconds(1));
+
+        int runs = 0;
+        bootstrap.TestRunBootstrapOverride = _ =>
+        {
+            Interlocked.Increment(ref runs);
+            throw new ScanAdmissionTimeoutException("Timed out waiting for machine-wide scan admission.");
+        };
+
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
+        Assert.True(WaitUntil(() => Directory.Exists(Path.Combine(root, ".miller"))));
+        Directory.Delete(root, recursive: true);
+        try
+        {
+            Directory.CreateSymbolicLink(root, replacement);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            Assert.Skip($"Symlink creation is unavailable on this host: {ex.Message}");
+        }
+
+        Thread.Sleep(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(
+            PathCanonicalizer.CanonicalizeRoot(replacement), PathCanonicalizer.CanonicalizeRoot(root));
+        Assert.Equal(1, Volatile.Read(ref runs));
+        Assert.Equal(BootstrapPhase.Failed, bootstrap.Snapshot.Phase);
+    }
+
     [Theory]
     [InlineData(0.0)]
     [InlineData(0.5)]
@@ -147,6 +208,12 @@ public sealed class BootstrapAdmissionRetryTests : IDisposable
         Assert.Equal(LogLevel.Warning, entry.Level);
         Assert.Contains("the snapshot copy was interrupted", entry.Message, StringComparison.Ordinal);
         Assert.Contains("/repo/main", entry.Message, StringComparison.Ordinal);
+    }
+
+    private static void SkipIfNoSymlinks()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Skip("Symbolic-link creation requires elevation / Developer Mode on Windows; POSIX-only test.");
     }
 
     private static IndexBootstrapService NewBootstrap(string home, TimeSpan retryDelay) =>

@@ -937,6 +937,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// record, so the cost of retrying forever is a poll, while the cost of giving up is a server that serves
     /// nothing until a person restarts it (2026-08-06 P4 scale validation §3). Host shutdown cancels the pending
     /// delay; a generation or phase change means a newer run already owns the workspace, so the stale retry exits.
+    ///
+    /// <para>The retry RE-VALIDATES the captured root at fire time (<see cref="RetryRootStillBindable"/>), because
+    /// the bind-time sensitive-root guard speaks only for the tree that existed when the wait started. A root that
+    /// is missing, swapped for another directory, or now sensitive drops the retry; that path belongs to the normal
+    /// bind and root-replacement flows.</para>
     /// </summary>
     private void ScheduleAdmissionRetry(
         string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int failedGeneration)
@@ -973,6 +978,9 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 return;
             }
 
+            if (!RetryRootStillBindable(canonicalRoot))
+                return;
+
             int runGeneration;
             lock (_gate)
             {
@@ -988,6 +996,41 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
 
             RunBootstrapInBackground(canonicalRoot, source, runGeneration);
         });
+    }
+
+    /// <summary>
+    /// True when <paramref name="canonicalRoot"/> is still the directory the bind validated, so a scheduled
+    /// admission retry may start a run against it. The retry captured a path, not a directory: during the wait the
+    /// path can be deleted, or replaced by a symlink that resolves somewhere else, and either case would make the
+    /// retry recreate a deleted workspace's <c>.miller</c> or scan a new occupant under the old workspace identity
+    /// with the bind-time sensitive-root guard already spent. Re-canonicalizing catches all three shapes: a missing
+    /// root throws, a swapped root resolves to a different canonical path, and a now-sensitive root is refused.
+    /// Filesystem work only — the caller must not hold <c>_gate</c>.
+    /// </summary>
+    private bool RetryRootStillBindable(string canonicalRoot)
+    {
+        string? rejection;
+        try
+        {
+            string revalidated = WorkspaceRootSafety.CanonicalizeAndRejectSensitiveRoot(
+                canonicalRoot, fromCwd: false);
+            rejection = !Directory.Exists(revalidated)
+                ? "the workspace root no longer exists"
+                : !RootPathsEqual(revalidated, canonicalRoot)
+                    ? $"the path now resolves to '{revalidated}'"
+                    : null;
+        }
+        catch (Exception ex) when (
+            ex is InvalidOperationException or IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            rejection = ex.Message;
+        }
+
+        if (rejection is null)
+            return true;
+
+        _logger.LogInformation("Dropping the admission retry for {Root}: {Reason}.", canonicalRoot, rejection);
+        return false;
     }
 
     /// <summary>
