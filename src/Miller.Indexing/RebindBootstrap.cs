@@ -417,7 +417,9 @@ public static class RebindBootstrap
     /// plain bootstrap scan.
     /// </summary>
     /// <exception cref="ArgumentNullException"><paramref name="request"/> or <paramref name="seams"/> is null.</exception>
-    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled; staging is cleared first.</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled — including during the wait
+    /// for the source checkout's scan to finish, which precedes any staging. Whatever staging the attempt had
+    /// created is cleared first.</exception>
     public static RebindBootstrapOutcome TryRebind(
         RebindBootstrapRequest request, RebindBootstrapSeams seams, CancellationToken ct = default)
     {
@@ -459,9 +461,12 @@ public static class RebindBootstrap
         SourceScanWait wait = WaitOutSourceScan(seams, source.CanonicalRoot, ct);
         if (wait.Result == SourceScanWait.Kind.Cancelled)
         {
-            return RebindBootstrapOutcome.Ineligible(
-                $"the wait for the source checkout '{source.CanonicalRoot}' to stop scanning was cancelled after " +
-                $"{Format(wait.Waited)}");
+            // Every non-promoted outcome is the caller's permission to run the fallback full extraction, and that
+            // scan takes no cancellation token — so a shutdown here must leave as a cancellation, not as a verdict.
+            throw new OperationCanceledException(
+                $"The wait for the source checkout '{source.CanonicalRoot}' to stop scanning was cancelled after " +
+                $"{Format(wait.Waited)}.",
+                ct);
         }
 
         if (wait.Result == SourceScanWait.Kind.StillLive)

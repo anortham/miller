@@ -200,31 +200,56 @@ public sealed class RebindBootstrapTests : IDisposable
     }
 
     [Fact]
-    public void TryRebind_WhenCancellationEndsTheWait_IsIneligibleAndStartsNoScan()
+    public void TryRebind_WhenCancellationEndsTheWait_ThrowsAndStartsNoScan()
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
-        RebindBootstrapOutcome outcome = RebindBootstrap.TryRebind(
-            Request(),
-            Seams() with
-            {
-                ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromSeconds(1),
-                WaitBeforeRetry = (_, _) =>
+        OperationCanceledException thrown = Assert.ThrowsAny<OperationCanceledException>(() =>
+            RebindBootstrap.TryRebind(
+                Request(),
+                Seams() with
                 {
-                    _waitCalls++;
-                    cts.Cancel();
-                    return false;
+                    ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromSeconds(1),
+                    WaitBeforeRetry = (_, _) =>
+                    {
+                        _waitCalls++;
+                        cts.Cancel();
+                        return false;
+                    },
                 },
-            },
-            cts.Token);
+                cts.Token));
 
-        Assert.Equal(RebindBootstrapOutcome.Kind.Ineligible, outcome.Result);
+        Assert.Equal(cts.Token, thrown.CancellationToken);
         Assert.Equal(1, _waitCalls);
         Assert.Equal(0, _copyCalls);
         Assert.Equal(0, _scanCalls);
-        Assert.False(File.Exists(_stagingDb));
-        Assert.False(File.Exists(_targetDb));
         Assert.Null(_failurePolicy.Read());
+    }
+
+    [Fact]
+    public void TryRebind_WhenCancellationEndsTheWait_LeavesNoStagingTrio()
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            RebindBootstrap.TryRebind(
+                Request(),
+                Seams() with
+                {
+                    ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromSeconds(1),
+                    WaitBeforeRetry = (_, _) =>
+                    {
+                        _waitCalls++;
+                        cts.Cancel();
+                        return false;
+                    },
+                },
+                cts.Token));
+
+        Assert.False(File.Exists(_stagingDb));
+        Assert.False(File.Exists(_stagingDb + "-wal"));
+        Assert.False(File.Exists(_stagingDb + "-shm"));
+        Assert.False(File.Exists(_targetDb));
     }
 
     [Fact]
