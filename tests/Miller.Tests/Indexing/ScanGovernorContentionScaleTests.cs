@@ -27,12 +27,12 @@ namespace Miller.Tests.Indexing;
 /// necessarily reads the OWNER FILE and reports <c>holding_elsewhere</c>. That is the correct machine-visible
 /// fact for an out-of-process probe.</para>
 ///
-/// <para><b>A spawned holder's admission window is arranged, never assumed.</b> A governed scan holds admission
-/// across the extract AND the content/search sidecar convergence that follows it, and a 40-file extract finishes
-/// in well under a second — so a test that spawns a scan and then acts on "the holder" is racing a process that
-/// has usually already exited. <see cref="Fixture.HoldContentCorpusWriteLock"/> takes the target's
-/// <c>content.lock</c> first, which parks the spawned scan inside its own admission for the content writer's 30s
-/// lock budget, and <see cref="Fixture.RequireParkedHolder"/> proves the park landed before the test acts.</para>
+/// <para><b>A spawned holder's admission window is arranged, never assumed.</b> Machine-wide admission covers
+/// the extract subprocess only — it is released the moment the scan returns, BEFORE the content/search sidecar
+/// convergence that follows — and a 40-file extract finishes in well under a second, so a test that spawns a
+/// scan and then acts on "the holder" is racing a process that has usually already released.
+/// <see cref="Fixture.SeedLargeWorktree"/> seeds enough files that the extract itself spans seconds, and
+/// <see cref="Fixture.RequireLiveHolder"/> proves the admission is held before the test acts.</para>
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class ScanGovernorContentionScaleTests
@@ -78,9 +78,9 @@ public sealed class ScanGovernorContentionScaleTests
     {
         using var fx = Fixture.Create();
 
-        using FileStream convergenceGate = fx.HoldContentCorpusWriteLock(fx.WorktreeA);
-        Process holder = fx.StartOpenFull(fx.WorktreeA);
-        fx.RequireParkedHolder(holder, fx.WorktreeA);
+        string large = fx.SeedLargeWorktree();
+        Process holder = fx.StartOpenFull(large);
+        fx.RequireLiveHolder(holder);
 
         holder.Kill(entireProcessTree: true);
         holder.WaitForExit();
@@ -213,11 +213,18 @@ public sealed class ScanGovernorContentionScaleTests
             return found!;
         }
 
-        private static string SeedWorktree(string work, string name)
+        /// <summary>
+        /// A worktree whose extract — the whole of the machine-wide admission lease, now that admission is
+        /// released as soon as the scan returns — spans SECONDS instead of the default worktrees' sub-second
+        /// blip, so <see cref="RequireLiveHolder"/> observes a live holder instead of racing one.
+        /// </summary>
+        public string SeedLargeWorktree() => SeedWorktree(_work, "wt-large", files: 4000);
+
+        private static string SeedWorktree(string work, string name, int files = 40)
         {
             string root = Path.Combine(work, name);
             Directory.CreateDirectory(root);
-            for (int i = 0; i < 40; i++)
+            for (int i = 0; i < files; i++)
             {
                 File.WriteAllText(Path.Combine(root, $"Widget{i}.cs"), $$"""
                     namespace Demo{{i}};
@@ -285,45 +292,27 @@ public sealed class ScanGovernorContentionScaleTests
         }
 
         /// <summary>
-        /// Take the target workspace's <c>content.lock</c>, the lock the content corpus writer needs to swap its
-        /// rebuilt DB into place. That write happens INSIDE the machine-wide scan admission a governed scan holds,
-        /// so a scan spawned afterwards parks there — still holding admission — for the writer's own 30s budget
-        /// instead of finishing a sub-second extract and releasing admission before the test can act on it.
-        /// </summary>
-        public FileStream HoldContentCorpusWriteLock(string root)
-        {
-            string millerDir = Path.Combine(root, ".miller");
-            Directory.CreateDirectory(millerDir);
-            return new FileStream(
-                Path.Combine(millerDir, ContentCorpusWriteLock.LockFileName),
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.None);
-        }
-
-        /// <summary>
-        /// Block until <paramref name="holder"/> is PROVABLY parked while holding machine-wide admission: the
-        /// advisory owner record names it, its scan has already promoted a <c>symbols.db</c> (so the only work
-        /// left is the convergence <see cref="HoldContentCorpusWriteLock"/> gated), and a zero-wait probe from
-        /// this process is refused. Fails with the child's output when that premise cannot be established, so a
+        /// Block until <paramref name="holder"/> PROVABLY holds machine-wide admission: the advisory owner
+        /// record names it and a zero-wait probe from this process is refused. The holder must be scanning a
+        /// <see cref="SeedLargeWorktree"/> root, whose seconds-wide extract is what makes acting on the live
+        /// holder afterwards safe. Fails with the child's output when that premise cannot be established, so a
         /// later assertion never blames the governor for a holder that was never holding.
         /// </summary>
-        public void RequireParkedHolder(Process holder, string root)
+        public void RequireLiveHolder(Process holder)
         {
-            string symbolsDb = Path.Combine(root, ".miller", "symbols.db");
             DateTimeOffset deadline = DateTimeOffset.UtcNow + ProcessBudget;
             while (!holder.HasExited && DateTimeOffset.UtcNow < deadline)
             {
-                if (Governor.TryReadOwner() is { } owner && owner.Pid == holder.Id && File.Exists(symbolsDb))
+                if (Governor.TryReadOwner() is { } owner && owner.Pid == holder.Id)
                 {
                     RequireAdmissionHeldElsewhere(holder);
                     return;
                 }
-                Thread.Sleep(25);
+                Thread.Sleep(10);
             }
 
             Assert.Fail(
-                $"the spawned scan never parked while holding machine-wide admission (exited: {holder.HasExited}): " +
+                $"the spawned scan never held machine-wide admission (exited: {holder.HasExited}): " +
                 Output(holder));
         }
 
