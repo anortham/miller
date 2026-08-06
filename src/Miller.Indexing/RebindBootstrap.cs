@@ -148,6 +148,11 @@ public sealed record RebindBootstrapSeams
 
     public Func<DateTimeOffset> UtcNow { get; init; } = static () => DateTimeOffset.UtcNow;
 
+    /// <summary>Block for the given span while the source's scan heartbeat is waited out, returning false when
+    /// cancellation ended the wait early. Defaulted rather than required because an absent injection must still
+    /// wait in production; fast tests inject an instant fake that advances their clock.</summary>
+    public Func<TimeSpan, CancellationToken, bool> WaitBeforeRetry { get; init; } = DefaultWaitBeforeRetry;
+
     /// <summary>Snapshot the source artifact into the staging path (source, destination, cancellation).</summary>
     public Func<string, string, CancellationToken, BackupOutcome> CopySnapshot { get; init; } = DefaultCopySnapshot;
 
@@ -203,6 +208,9 @@ public sealed record RebindBootstrapSeams
             return null;
         }
     }
+
+    private static bool DefaultWaitBeforeRetry(TimeSpan delay, CancellationToken ct) =>
+        !ct.WaitHandle.WaitOne(delay);
 
     private static BackupOutcome DefaultCopySnapshot(string sourceDb, string destinationDb, CancellationToken ct) =>
         SqliteOnlineBackup.Copy(
@@ -328,18 +336,34 @@ public static class RebindBootstrap
     public const string EnabledEnvVar = "MILLER_WORKTREE_REBIND";
 
     /// <summary>
-    /// How recently the source's <c>scan.progress</c> heartbeat must have been written for this attempt to stand
-    /// down. A live extraction on the source is exactly the state that makes the online backup restart on every
-    /// source commit and burn its whole budget, so the cheap pre-check skips the attempt entirely and lets the
-    /// plain scan run.
+    /// How recently the source's <c>scan.progress</c> heartbeat must have been written for this attempt to hold
+    /// off. A live extraction on the source is exactly the state that makes the online backup restart on every
+    /// source commit and burn its whole budget, so the attempt waits the window out rather than copying under it.
     ///
     /// <para>Thirty seconds sits well above the cadence julie-extract stamps progress at during an active scan, so
-    /// a running scan reliably suppresses the attempt. julie does not delete the file when it finishes, so the
-    /// cost of that margin is real and deliberate: a worktree opened within thirty seconds of the source's last
-    /// scan COMPLETING pays a full extraction instead of a rebind. Best-effort by design — the copy budget is the
-    /// real bound, and both mistakes cost one scan, not correctness.</para>
+    /// a running scan reliably suppresses the attempt. julie does not delete the file when it finishes, so a
+    /// heartbeat written within the last thirty seconds is ambiguous: a live scan and a scan that finished
+    /// twenty-nine seconds ago look identical. <see cref="SourceScanWaitBudget"/> resolves the ambiguity by
+    /// waiting instead of guessing.</para>
     /// </summary>
     public static readonly TimeSpan SourceScanHeartbeatWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// The longest one attempt waits for the source's heartbeat to leave <see cref="SourceScanHeartbeatWindow"/>
+    /// before giving up and letting the plain bootstrap scan run.
+    ///
+    /// <para>Waiting beats refusing because of what holds the machine while the decision is made: every Miller
+    /// scan runs under the machine-wide governor admission, and this attempt already holds the target's. So a
+    /// fresh heartbeat under a held admission almost always means a JUST-FINISHED source scan whose window has
+    /// not yet expired, not a live one — and the fallback the refusal chose is a full extraction under that same
+    /// admission, measured at 110-1,345 s against a wait of at most thirty (2026-08-06 P4 scale validation §6).
+    /// The budget is twice the window so a heartbeat stamped one tick before the read still resolves.</para>
+    ///
+    /// <para>A heartbeat that stays fresh for the whole budget is the case the window was written for — a
+    /// genuinely live scan, which at that point means an extractor outside this Miller — and the attempt stands
+    /// down exactly as it did before.</para>
+    /// </summary>
+    internal static readonly TimeSpan SourceScanWaitBudget = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Best-effort removal of the staging trio beside <paramref name="liveDbPath"/>. The plain bootstrap scan
@@ -432,11 +456,20 @@ public static class RebindBootstrap
         if (!prefilter.Eligible || source is null)
             return RebindBootstrapOutcome.Ineligible(prefilter.Reason);
 
-        if (SourceScanLooksLive(seams, source.CanonicalRoot))
+        SourceScanWait wait = WaitOutSourceScan(seams, source.CanonicalRoot, ct);
+        if (wait.Result == SourceScanWait.Kind.Cancelled)
+        {
+            return RebindBootstrapOutcome.Ineligible(
+                $"the wait for the source checkout '{source.CanonicalRoot}' to stop scanning was cancelled after " +
+                $"{Format(wait.Waited)}");
+        }
+
+        if (wait.Result == SourceScanWait.Kind.StillLive)
         {
             return RebindBootstrapOutcome.Ineligible(
                 $"the source checkout '{source.CanonicalRoot}' is scanning right now; a snapshot taken under a " +
-                "live writer would restart until its budget ran out");
+                $"live writer would restart until its budget ran out (waited {Format(wait.Waited)} for its " +
+                "heartbeat to go stale)");
         }
 
         try
@@ -573,9 +606,57 @@ public static class RebindBootstrap
             or UnauthorizedAccessException or InvalidOperationException or InvalidDataException
             or System.Text.Json.JsonException;
 
-    private static bool SourceScanLooksLive(RebindBootstrapSeams seams, string sourceRoot) =>
-        seams.ReadSourceHeartbeatUtc(sourceRoot) is { } heartbeat
-        && seams.UtcNow() - heartbeat < SourceScanHeartbeatWindow;
+    /// <summary>How much of <see cref="SourceScanHeartbeatWindow"/> the source's heartbeat still has left, or null
+    /// when it is absent or already stale.</summary>
+    private static TimeSpan? SourceScanFreshnessRemainder(RebindBootstrapSeams seams, string sourceRoot)
+    {
+        if (seams.ReadSourceHeartbeatUtc(sourceRoot) is not { } heartbeat)
+            return null;
+
+        TimeSpan age = seams.UtcNow() - heartbeat;
+        return age < SourceScanHeartbeatWindow ? SourceScanHeartbeatWindow - age : null;
+    }
+
+    /// <summary>
+    /// Wait until the source's heartbeat leaves the window, for at most <see cref="SourceScanWaitBudget"/>.
+    /// Each slice is the remainder the heartbeat reports at that moment, so a heartbeat that stopped advancing
+    /// resolves in one wait and a live one is re-read on every slice.
+    /// </summary>
+    private static SourceScanWait WaitOutSourceScan(
+        RebindBootstrapSeams seams, string sourceRoot, CancellationToken ct)
+    {
+        TimeSpan waited = TimeSpan.Zero;
+        while (SourceScanFreshnessRemainder(seams, sourceRoot) is { } remainder)
+        {
+            if (waited >= SourceScanWaitBudget)
+                return new SourceScanWait(SourceScanWait.Kind.StillLive, waited);
+
+            // Accumulating the REQUESTED slices rather than clock deltas keeps the budget monotonic, so an
+            // injected clock that does not advance still terminates the loop.
+            TimeSpan slice = remainder < SourceScanWaitBudget - waited ? remainder : SourceScanWaitBudget - waited;
+            if (!seams.WaitBeforeRetry(slice, ct))
+                return new SourceScanWait(SourceScanWait.Kind.Cancelled, waited);
+
+            waited += slice;
+        }
+
+        return new SourceScanWait(SourceScanWait.Kind.Settled, waited);
+    }
+
+    private readonly record struct SourceScanWait(SourceScanWait.Kind Result, TimeSpan Waited)
+    {
+        public enum Kind
+        {
+            Settled,
+
+            StillLive,
+
+            Cancelled,
+        }
+    }
+
+    private static string Format(TimeSpan waited) =>
+        waited.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "s";
 
     private static string Canonicalize(string path)
     {

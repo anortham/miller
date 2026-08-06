@@ -136,10 +136,10 @@
 **Approach:** Keep the decision pure: compute wait slices from `seams.UtcNow()` and `ReadSourceHeartbeatUtc` each iteration; the injected `WaitBeforeRetry` makes fast tests instant (a fake clock advances per call). Tests: heartbeat stale on entry (no wait, rebinds — existing behavior); fresh-then-stale within budget (rebinds, waited); fresh past budget (ineligible, reason names the wait); cancelled mid-wait (ineligible, no scan started); heartbeat file absent (no wait — existing behavior).
 
 **Acceptance criteria:**
-- [ ] A heartbeat that goes stale within the budget leads to a completed rebind (test proves the copy ran after the wait).
-- [ ] A heartbeat still fresh after the budget yields `Ineligible` whose reason includes the waited duration.
-- [ ] Cancellation during the wait aborts cleanly with no staging debris.
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] A heartbeat that goes stale within the budget leads to a completed rebind (test proves the copy ran after the wait).
+- [x] A heartbeat still fresh after the budget yields `Ineligible` whose reason includes the waited duration.
+- [x] Cancellation during the wait aborts cleanly with no staging debris.
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 4: Carry the julie-extract exit code on IncompatibleExtractException into W8 records
 

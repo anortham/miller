@@ -19,6 +19,9 @@ public sealed class RebindBootstrapTests : IDisposable
     private int _rebindCalls;
     private int _scanCalls;
     private int _promoteCalls;
+    private int _waitCalls;
+    private TimeSpan _waited;
+    private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
     private string? _rebindRoot;
     private ExtractIndexLevel? _scanLevel;
 
@@ -149,37 +152,79 @@ public sealed class RebindBootstrapTests : IDisposable
     }
 
     [Fact]
-    public void TryRebind_WhenTheSourceHeartbeatIsFresh_IsIneligibleAndNeverCopies()
+    public void TryRebind_WhenTheSourceHeartbeatIsStale_ProceedsToCopyWithoutWaiting()
     {
-        DateTimeOffset now = DateTimeOffset.UnixEpoch.AddDays(1);
-
         RebindBootstrapOutcome outcome = Run(
-            Seams() with
-            {
-                UtcNow = () => now,
-                ReadSourceHeartbeatUtc = _ => now - TimeSpan.FromSeconds(5),
-            });
+            Seams() with { ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromMinutes(10) });
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Equal(1, _copyCalls);
+        Assert.Equal(0, _waitCalls);
+    }
+
+    [Fact]
+    public void TryRebind_WhenTheSourceHasNoHeartbeatFile_ProceedsToCopyWithoutWaiting()
+    {
+        RebindBootstrapOutcome outcome = Run();
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Equal(1, _copyCalls);
+        Assert.Equal(0, _waitCalls);
+    }
+
+    [Fact]
+    public void TryRebind_WhenTheSourceHeartbeatGoesStaleWithinTheBudget_WaitsOutTheWindowThenRebinds()
+    {
+        DateTimeOffset finishedScan = _now - TimeSpan.FromSeconds(5);
+
+        RebindBootstrapOutcome outcome = Run(Seams() with { ReadSourceHeartbeatUtc = _ => finishedScan });
+
+        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
+        Assert.Equal(1, _copyCalls);
+        Assert.Equal(1, _waitCalls);
+        Assert.Equal(RebindBootstrap.SourceScanHeartbeatWindow - TimeSpan.FromSeconds(5), _waited);
+    }
+
+    [Fact]
+    public void TryRebind_WhenTheSourceKeepsScanningPastTheBudget_IsIneligibleAndReportsTheWait()
+    {
+        RebindBootstrapOutcome outcome = Run(
+            Seams() with { ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromSeconds(1) });
 
         Assert.Equal(RebindBootstrapOutcome.Kind.Ineligible, outcome.Result);
         Assert.Contains("scan", outcome.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("60s", outcome.Reason, StringComparison.Ordinal);
+        Assert.Equal(RebindBootstrap.SourceScanWaitBudget, _waited);
         Assert.Equal(0, _copyCalls);
         Assert.Null(_failurePolicy.Read());
     }
 
     [Fact]
-    public void TryRebind_WhenTheSourceHeartbeatIsStale_ProceedsToCopy()
+    public void TryRebind_WhenCancellationEndsTheWait_IsIneligibleAndStartsNoScan()
     {
-        DateTimeOffset now = DateTimeOffset.UnixEpoch.AddDays(1);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
-        RebindBootstrapOutcome outcome = Run(
+        RebindBootstrapOutcome outcome = RebindBootstrap.TryRebind(
+            Request(),
             Seams() with
             {
-                UtcNow = () => now,
-                ReadSourceHeartbeatUtc = _ => now - TimeSpan.FromMinutes(10),
-            });
+                ReadSourceHeartbeatUtc = _ => _now - TimeSpan.FromSeconds(1),
+                WaitBeforeRetry = (_, _) =>
+                {
+                    _waitCalls++;
+                    cts.Cancel();
+                    return false;
+                },
+            },
+            cts.Token);
 
-        Assert.Equal(RebindBootstrapOutcome.Kind.Promoted, outcome.Result);
-        Assert.Equal(1, _copyCalls);
+        Assert.Equal(RebindBootstrapOutcome.Kind.Ineligible, outcome.Result);
+        Assert.Equal(1, _waitCalls);
+        Assert.Equal(0, _copyCalls);
+        Assert.Equal(0, _scanCalls);
+        Assert.False(File.Exists(_stagingDb));
+        Assert.False(File.Exists(_targetDb));
+        Assert.Null(_failurePolicy.Read());
     }
 
     [Fact]
@@ -512,7 +557,14 @@ public sealed class RebindBootstrapTests : IDisposable
         ReadArtifactBinaryVersion = _ => MillerExtractContract.PinnedJulieExtractVersion,
         ReadEnvironmentVariable = _ => null,
         ReadSourceHeartbeatUtc = _ => null,
-        UtcNow = () => DateTimeOffset.UnixEpoch,
+        UtcNow = () => _now,
+        WaitBeforeRetry = (delay, ct) =>
+        {
+            _waitCalls++;
+            _waited += delay;
+            _now += delay;
+            return !ct.IsCancellationRequested;
+        },
         CopySnapshot = (_, destination, _) =>
         {
             _copyCalls++;
