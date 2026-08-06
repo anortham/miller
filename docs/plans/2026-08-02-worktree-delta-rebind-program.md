@@ -164,8 +164,10 @@ blake3 `files.content_hash`.
   rewrite, delta detection via content hashes, and interrupted-rebind recovery.
 - Ship a release; bump `scripts/julie-pins.json` in Miller (user approval required).
 - Acceptance:
-  - [ ] Rebound artifact is indistinguishable from a fresh scan of the same tree (row-level
-        equivalence on a multi-language fixture).
+  - [x] Rebound artifact is indistinguishable from a fresh scan of the same tree (row-level
+        equivalence on a multi-language fixture). (Shipped in v2.27.0 as
+        `tests/rebind_equivalence.rs`; exclusions recorded in
+        `2026-08-05-rebind-contract-design.md` §9.)
 
 ### P3 — Miller wiring. ~1.5–2 agent sessions.
 
@@ -182,9 +184,16 @@ blake3 `files.content_hash`.
 - Sidecars (search/content/vectors) converge from the rebound artifact through the existing
   revision-keyed paths; no sidecar copying in v1.
 - Acceptance:
-  - [ ] Fresh linked-worktree open with an eligible sibling artifact runs rebind, not full scan.
-  - [ ] Rebind failure leaves the workspace on the W8 backoff path with the source artifact intact.
-  - [ ] Provenance visible in `workspace status --json`.
+  - [x] Fresh linked-worktree open with an eligible sibling artifact runs rebind, not full scan.
+        (`RebindBootstrapScaleTests` live end-to-end: real `git worktree add` checkout bootstraps by
+        rebind + `no_change` delta, provenance keys present — 2026-08-05, branch
+        `rebind-p3-miller-wiring`.)
+  - [x] Rebind failure leaves the workspace on the W8 backoff path with the source artifact intact.
+        (`RebindBootstrapTests` W8 recording paths + Scale source fingerprint over `symbols.db` AND
+        `-wal` byte-identical across the whole sequence.)
+  - [x] Provenance visible in `workspace status --json`. (`rebound_from` conditional object in
+        status/health JSON, compact line, dashboard row — `WorkspaceRenderTests`,
+        `docs/contracts/cli-eros-v1.md`.)
 
 ### P4 — Scale validation. ~1 agent session.
 

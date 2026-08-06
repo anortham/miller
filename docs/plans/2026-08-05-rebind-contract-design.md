@@ -354,7 +354,7 @@ defers on the timer. So rebind's "one-shot" discipline is carried by the RECORD,
 ## 9. Acceptance criteria (feeding P2/P3)
 
 P2 (julie-extractors) — **implemented 2026-08-05** (branch `rebind-verb` merged to main at
-`13182d9`; release + pin bump pending approval). One addition beyond this spec, from the Codex
+`13182d9`; released as v2.27.0 and pinned in Miller at `b0d96b75`). One addition beyond this spec, from the Codex
 pre-merge review: the write transaction re-verifies the validated `root_path`/`artifact_id` and
 refuses with a new `artifact_changed` code (exit 1, recoverable), and the write connection opens
 without `SQLITE_OPEN_CREATE` — defense-in-depth for direct CLI callers; Miller's staging protocol
@@ -375,18 +375,26 @@ is unchanged.
       artifact.
 - [x] Contract docs updated (`docs/contracts/cli.md`, `docs/contracts/reports.md`).
 
-P3 (Miller):
-- [ ] Eligibility (§6) as pure, fast-suite-testable decisions; snapshot validation proven against
-      a crash-shell fixture (no committed revision ⇒ ineligible).
-- [ ] Copy under one governor admission with a live-writer source (backup API), budget-exhaustion
-      fallback proven by test.
-- [ ] Orchestration (§7.1) including recorded-level scan invocation (no `--level` conflict under
+P3 (Miller) — **implemented 2026-08-05** (branch `rebind-p3-miller-wiring`; branch gate green at
+`3a467108` after the Codex pre-merge review fixed the fallback OOM-clamp reuse and the
+partial-scan warning carry):
+- [x] Eligibility (§6) as pure, fast-suite-testable decisions; snapshot validation proven against
+      a crash-shell fixture (no committed revision ⇒ ineligible). (`RebindEligibilityTests`, 33
+      tests.)
+- [x] Copy under one governor admission with a live-writer source (backup API), budget-exhaustion
+      fallback proven by test. (`SqliteOnlineBackupTests`, 15 tests, mutation-checked;
+      `RebindBootstrapTests` governor/ordering paths.)
+- [x] Orchestration (§7.1) including recorded-level scan invocation (no `--level` conflict under
       progressive policy) and the forbidden-path guards (no `Scan(force: true)`, no
-      `ScanIntent.RootRebind`).
-- [ ] Failure fallback recorded under W8 with the source artifact byte-identical afterward;
-      staging debris absent after a killed rebind followed by a plain bootstrap.
-- [ ] Lineage columns + replacement consumption rule (§5); provenance in
-      `workspace status --json`.
+      `ScanIntent.RootRebind`). (`RebindBootstrapTests`; `RebindBootstrapScaleTests` live
+      end-to-end with a real `git worktree add` checkout.)
+- [x] Failure fallback recorded under W8 with the source artifact byte-identical afterward;
+      staging debris absent after a killed rebind followed by a plain bootstrap. (W8 recording +
+      `FallbackAttemptAfterRebind` re-evaluation tests; Scale source fingerprint covers
+      `symbols.db` AND `-wal`.)
+- [x] Lineage columns + replacement consumption rule (§5); provenance in
+      `workspace status --json`. (`WorkspaceRegistryTests`, `BootstrapReplacedRootTests`,
+      `WorkspaceRenderTests`; `docs/contracts/cli-eros-v1.md` `rebound_from` section.)
 
 ## 10. Deferred (with triggers)
 

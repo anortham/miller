@@ -1,77 +1,188 @@
-# Task 7 report — shared semantic broker client
+# Task 7 report — Provenance surfacing + contract docs
 
-## State
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/rebind-p3-miller-wiring`
+**Branch:** `rebind-p3-miller-wiring`
+**HEAD at start:** `0d8fb3e7`
+**Commit SHA:** none - parallel-lead-commit
 
-- Worktree: `/Users/murphy/source/miller/.worktrees/shared-semantic-broker-plan`
-- Branch: `codex/shared-semantic-broker-plan`
-- Baseline/HEAD: `2befa4b48a5a3c7acf45a64c2ede6ec937ad9565`
-- Sidecar dependency: `741850a`
-- Commit/push: none
-- Task brief updated from its stale prior-plan contents to the current shared-broker Task 7 contract.
+## What I implemented
 
-## RED evidence
+A rebound workspace now says so, on every surface that renders `scan_failure`, plus the dashboard
+detail and the Eros-facing contract doc.
 
-- Endpoint test first failed with CS0246/CS0103 because `SemanticBrokerEndpoint` did not exist.
-- Factory tests first failed with CS0246 because `SharedSemanticBrokerConnectionFactory` and `WindowsBrokerJobAttachment` did not exist.
-- The first real-process factory run failed 3/3 with a 10-second broker-connect timeout. Boundary diagnostics proved the test child wrote its load counter but stalled before socket bind because it performed async work from a module initializer. Replacing that harness with a normal console test host retained the real OS process/service-lock race.
-- Host/CLI wiring tests then failed with CS1729 because `CliSemanticSession` did not yet accept `millerHome`; Off/On factory registration was also absent.
+1. **Read path.** `RebindProvenanceReader` (new, `src/Miller.Indexing/RebindProvenance.cs`) reads the
+   three additive optional artifact-metadata keys — `rebound_from_root`,
+   `rebound_from_artifact_id`, `rebound_at` — and answers `RebindProvenanceMetadata?`. It mirrors
+   `ExtractIndexLevelReader`'s tolerance exactly: absent key, absent table, absent file, corrupt DB,
+   or any read failure all answer **null**, the never-rebound state. `rebound_from_root` is the
+   identity of the record: blank or absent ⇒ null, so an empty object can never reach the JSON.
+2. **Fact.** `RebindProvenanceFacts(SourceRoot, SourceWorkspace, SourceArtifactId, ReboundAt)` in
+   `WorkspaceRender.cs`, beside `IndexLevelFacts`; `WorkspaceFacts` gains a trailing optional
+   `RebindProvenance` param (additive, defaults null).
+3. **Gather + registry lookup.** `WorkspaceFactsAssembler.RebindProvenanceFactsFor(dbPath, registry)`
+   maps the metadata to the fact and resolves `SourceWorkspace` by ROOT —
+   `registry.Get(WorkspaceId.FromCanonicalRoot(sourceRoot))?.DisplayId`. Unregistered or
+   unresolvable source root ⇒ null display id, raw root still rendered. Wired into
+   `FromRegisteredRow` (CLI + MCP status/health for a registered workspace),
+   `FromUnregisteredLocal` (no registry ⇒ null display id), and `WorkspaceTool.AssembleFacts` (the
+   in-server MCP status path for the current workspace).
+4. **Render (4 sites, exactly where `scan_failure` renders).**
+   - status compact: `rebound_from: <display id> (<root>) at <rebound_at>`
+   - status JSON: top-level `rebound_from` object
+   - health compact: same line, through `HealthCompactValue`
+   - health JSON: the byte-identical object (asserted by a parity test)
+   `json-summary` health is untouched — the object never appears there.
+   `rebound_at` is written verbatim as stored; nothing reparses or reformats it.
+5. **Dashboard.** `DashboardWorkspaceFacts` gains four additive optional flat fields
+   (`rebound_from_root`, `rebound_from_workspace`, `rebound_from_artifact_id`, `rebound_at`).
+   `DashboardData.WithRebindProvenance` enriches the SELECTED workspace's facts (the detail view)
+   from the artifact, resolving the display id against the registry rows the snapshot already read —
+   no extra registry open, no index hydration. `BuildWorkspaceFacts` carries the same fact into the
+   `WorkspaceFacts` the health panel is built from. `WorkspaceDetailPanel.razor` renders a
+   conditional "Rebound from" row (display id or raw root, relative timestamp, source artifact chip).
+6. **Contract doc.** New `### rebound_from (additive, conditional)` section in
+   `docs/contracts/cli-eros-v1.md`, written in the `scan_failure` section's exact style: what it is,
+   when it is **omitted entirely**, that its absence is never an error, that it is not in
+   `json-summary`, a field table with types and null semantics, and the read-it-as guidance (it is
+   lineage/history, not a pending or degraded state — a rebound artifact is a NEW generation, so
+   `index.artifact_id` never equals `rebound_from.source_artifact_id`). Placed immediately before
+   `index_level`, after `scan_failure`.
 
-## Implementation
+## Verification
 
-- Added deterministic endpoint identity, Unix socket/Windows pipe paths, service/accelerator locks, and exact broker argv.
-- Added connect-first shared IPC with a 250 ms direct probe, instance spawn gate, retry, broker spawn, 120-second cold-start polling, owner/non-owner lifetime, reconnect/re-election, and a handshake-populated immutable snapshot.
-- Added Windows kill-on-close Job Object attachment through NativeAOT-safe `LibraryImport`; attachment failure is visible while retained stdin remains authoritative.
-- Server DI registers one lazy shared factory singleton only for enabled production semantics. Off and evaluation graphs do not register it.
-- CLI creates one invocation-scoped factory only when a semantic arm can run and derives `millerHome` from the registry parent at that point.
-- Production MCP/CLI no longer call `ProcessSemanticSidecarLauncher.ForServe`; stdio remains available for evaluation, package-smoke, conformance, and tests.
-- Added a cross-platform real-process broker test host for cold-load concurrency, ownership, reconnect, Unix sockets, and Windows named pipes.
+| Check | Command | Result |
+|---|---|---|
+| Red first | `dotnet test --filter "FullyQualifiedName~WorkspaceRenderTests"` before implementation | FAILED — `CS0246: RebindProvenanceFacts could not be found` |
+| Render tests | `dotnet test --filter "FullyQualifiedName~WorkspaceRenderTests"` | PASS — 95/95 (12 new) |
+| Reader + render | `dotnet test --filter "…RebindProvenanceReaderTests\|…WorkspaceRenderTests"` | PASS — 103/103 (20 new) |
+| src build, warnings-as-errors | `dotnet build Miller.slnx -c Debug`; `dotnet build src/Miller.Server -c Release`; `dotnet build src/Miller.Dashboard -c Release` | Build succeeded, 0 warnings |
+| Worker ceiling | `scripts/test.sh` | PASS — 6112 passed, 0 failed, 2 skipped (env-gated), 24s |
 
-## GREEN evidence
+**One self-inflicted red on the way:** `RebindProvenanceReader.Read(null)` in my new test was
+ambiguous between the `string?` and `SqliteConnection` overloads (`CS0121`). The connection overload
+had no caller outside the type, so I made it private rather than casting at the call site — the
+public surface is now the single `Read(string?)`.
 
-- Endpoint/factory/DI/CLI focused gate: 8/8 passed.
-- Broader semantic, host, CLI, and search-arm gate: 258/258 passed.
-- Clean-helper focused factory rerun: 3/3 passed.
-- `scripts/test.sh`: 5234 passed, 2 pre-existing skips, 0 failed; 26 seconds.
-- `dotnet build Miller.slnx -c Release --no-restore`: 0 warnings, 0 errors.
-- `git diff --check`: clean.
-- Miller final impact completed for all production and test paths; the full fast suite covered the reported broad CLI/search/convergence blast radius.
+**A note on suite timing:** for roughly 25 minutes the shared test assembly could not compile because
+Task 6 was mid red-green in its own files — first `CS0246` for the not-yet-created `RebindBootstrap*`
+types, then `xUnit1051` in `RebindBootstrapTests.cs`, then `CS0103` for `TryRebindFromMainCheckout`
+in `IndexBootstrapService.cs`. Every one of those was in Task 6's files. The suite run recorded above
+was taken after they cleared.
 
-## Acceptance
+## Files changed
 
-- PASS: production server has one process-local client factory and no per-session production model child.
-- PASS: server factory is lazy singleton; CLI factory is invocation-scoped; no static global.
-- PASS: eight independent factories converge on one model-loading broker and all handshake through a cold start.
-- PASS: non-owner disposal leaves the broker running; owner disposal stops it; a survivor reconnects and re-elects.
-- PASS: Job attachment is attempted before broker use; failure is surfaced and stdin EOF stops the owner.
-- PASS: connection/spawn/handshake failures remain stated semantic failures consumed as lexical fallback, not host failures.
-- PASS: semantic Off registers no factory and performs no broker/session/path/directory work.
+| File | Change |
+|---|---|
+| `src/Miller.Indexing/RebindProvenance.cs` | NEW — `RebindProvenanceMetadata` + tolerant `RebindProvenanceReader` |
+| `src/Miller.Server/Tools/WorkspaceRender.cs` | `RebindProvenanceFacts` record, `WorkspaceFacts.RebindProvenance`, `RebindProvenanceLabel`, `WriteRebindProvenanceJson`, 4 render sites |
+| `src/Miller.Server/Tools/WorkspaceFactsAssembler.cs` | `RebindProvenanceFactsFor` + `SourceDisplayId`; wired into `FromRegisteredRow` and `FromUnregisteredLocal` |
+| `src/Miller.Server/Tools/WorkspaceTool.cs` | one line in `AssembleFacts` so the in-server MCP status path carries the fact |
+| `src/Miller.Dashboard/DashboardData.cs` | four additive fields on `DashboardWorkspaceFacts`; `WithRebindProvenance`; `BuildWorkspaceFacts` carries the fact |
+| `src/Miller.Dashboard/Components/WorkspaceDetailPanel.razor` | conditional "Rebound from" fact row |
+| `docs/contracts/cli-eros-v1.md` | new `rebound_from` section |
+| `tests/Miller.Tests/Server/WorkspaceRenderTests.cs` | 12 new render tests |
+| `tests/Miller.Tests/Indexing/RebindProvenanceReaderTests.cs` | NEW — 8 read-boundary tests |
 
-## Remaining platform boundary
+## Miller calls and what each confirmed
 
-- Native Windows Job Object and named-pipe runtime execution was not available on this macOS host. The Windows P/Invoke compiled with warnings-as-errors, the injected attach-order/degradation seam passed, and the test host implements the Windows named-pipe protocol. A Windows CI/runtime pass must still prove real Job assignment and kill-on-close behavior.
-- The broker-aware semantic Scale gate was not run because this worktree has no restored semantic runtime and its checked-in pin is still rc.4, which predates the broker contract. Task 9 owns the rc.5 restore/pin boundary.
+The worktree index predates this branch's commits, so several answers came from HEAD reads after
+the Miller attempt; each is marked.
 
-## Post-Grok lifecycle review
+| Call | Confirmed |
+|---|---|
+| `inspect(target='src/Miller.Server/Tools/WorkspaceRender.cs', depth=summary)` | The file's fact records (`IndexLevelFacts`, `SemanticBrokerFacts`, `WorkspaceFacts`, `WorkspaceListFacts`) and that `WorkspaceFacts` is a positional record struct with trailing optional params — the additive seam. Symbol listing paged (586 more), so the render-site line numbers came from a HEAD read. |
+| `search(query='scan_failure', mode='source')` | Found the precedent's test fixtures and the policy/journal types, but the *render* sites were not in the indexed hits — this is the stale-index case. Fell back to a HEAD `grep` for `scan_failure` / `ScanFailure`, which located `WorkspaceRender.cs:401` (status compact), `:741` (status JSON), `:1087` (health compact), `:1267` (health JSON) — the exact four-site set `rebound_from` had to match. |
+| HEAD read `WorkspaceRender.cs:360-560, 640-780, 1040-1340` | The conditional-object pattern verbatim: `XLabel(fact) is { } label` for compact (null ⇒ no line at all) and `facts.X is { } x` + `WritePropertyName` for JSON; `HealthSummaryJson` is a separate writer, which is why `json-summary` stays clean without extra work. |
+| HEAD read `WorkspaceFactsAssembler.cs` | The metadata read path that serves status facts: `IndexLevelFactsFor(indexDbPath, registryPolicy)` and `ScanFailureFacts(indexDbPath)` are the shape to mirror, and `FromRegisteredRow` already takes the `WorkspaceRegistry` I needed for the display-id lookup. |
+| HEAD grep `new WorkspaceFacts(` | The six construction sites: 4 in `WorkspaceFactsAssembler`, 1 in `WorkspaceTool.AssembleFacts`, 1 in `DashboardData.BuildWorkspaceFacts` — i.e. render-only would have surfaced nothing in production. |
+| HEAD read `WorkspaceRegistry.cs` (`Get`, `List`, `FindMainCheckoutByCommonDir`, DDL) + `WorkspaceId.cs` | The registry root-lookup API. `Get(workspaceId)` is the exact-and-cheap path because `WorkspaceId.FromCanonicalRoot` already strips the Windows verbatim prefix and case-folds on Windows/macOS — the same normalization `ArtifactRootIdentity.Matches` performs. No `List()` scan needed. |
+| HEAD read `IndexLevels.cs:199-250` | `ExtractIndexLevelReader`'s tolerance contract — the template `RebindProvenanceReader` copies (parameterized scalar read, `SqliteException`/`IOException`/`InvalidOperationException`/`UnauthorizedAccessException` all degrade). |
+| HEAD read `DashboardData.cs:120-142, 940-960, 1101-1250` + `WorkspaceDetailPanel.razor` | The dashboard detail seam: `DashboardWorkspaceFacts` is the detail DTO, `selectedFacts` is where the detail view's copy is produced, `workspaces` is already in scope for the display-id resolution, and the panel renders a `fact-list` of `<dt>/<dd>` rows. |
+| HEAD read `docs/contracts/cli-eros-v1.md:173-260` | The `scan_failure` documentation style: heading form, "omitted entirely" sentence, "never as an error", "NOT part of json-summary", field table, then read-it-as prose. |
+| HEAD read `tests/.../WorkspaceRenderTests.cs` | Fixture style: static `Facts()` + `with { … }`, `Json(string)` helper, byte-identical-baseline assertions for every conditional object. |
 
-Four Important lifecycle findings were validated and fixed:
+## API-shape evidence
 
-1. A cold-load lock holder could die while every waiter only polled until timeout. RED: all eight handshakes were null after the 10-second test budget. The factory now performs bounded one-second re-election attempts inside the existing initialization budget. GREEN: the first holder exits during model load, one replacement loads, and all eight factories handshake in about one second.
-2. An exited owner could be overwritten without retiring its process/stdin/Job handles. RED: the lifecycle test could not observe any retirement and initially failed to compile against the missing fact. `EnsureOwnerCandidateAsync` now clears and disposes an exited owner before replacement and snapshots `RetiredOwnerCount`. GREEN: the replacement has a new PID and exactly one retired owner.
-3. Disposal did not serialize with active/waiting connects and disposed their semaphore underneath them. RED: owner-aware teardown returned in 228 ms while both connect tasks were still incomplete. Connects now hold an active-operation lease linked to factory lifetime; disposal marks/cancels, waits for all connects to drain, then cleans owned resources. The spawn semaphore is never disposed. GREEN: disposal waits for both tasks, both receive factory-scoped `ObjectDisposedException`, and the test completes in about 225 ms.
-4. The old Windows assertion checked Unix socket absence and was vacuous. The test now captures the owner PID, proves that process exits, and then performs a platform-specific named-pipe or Unix-socket connection probe proving the endpoint is unavailable.
+- **Metadata key spellings** — `rebound_from_root`, `rebound_from_artifact_id`, `rebound_at`,
+  verified at HEAD in `tests/Miller.Tests/Indexing/RebindVerbScaleTests.cs:49-50,86` (Task 5's
+  fixtures assert the verb writes exactly these) and in the design doc
+  `docs/plans/2026-08-05-rebind-contract-design.md:100-101`. Not invented.
+- **Status/health JSON composition sites** — `WorkspaceRender.StatusJson` (the `scan_governor` →
+  `scan_failure` → `index_level` conditional block before `"index"`) and `WorkspaceRender.HealthJson`
+  (the same block before `"index"`). `HealthSummaryJson` is a distinct writer and was left alone.
+- **Metadata read path** — `WorkspaceFactsAssembler.IndexLevelFactsFor` /
+  `ScanFailureFacts` / `TryReadArtifactId`, all `(string? indexDbPath) → fact?` statics called from
+  the `new WorkspaceFacts(...)` argument lists.
+- **Registry root lookup** — `WorkspaceRegistry.Get(string workspaceId) → WorkspaceRegistryRow?`
+  with `WorkspaceRegistryRow.DisplayId`, keyed by `WorkspaceId.FromCanonicalRoot(root)`.
+- **Dashboard detail seam** — `DashboardData.ReadSnapshot`'s `selectedFacts` →
+  `DashboardSnapshot.SelectedWorkspaceFacts` → `WorkspaceDetailStack.razor` →
+  `WorkspaceDetailPanel.razor`'s `Facts` parameter.
 
-Post-review gates:
+## Self-review
 
-- Factory lifecycle suite: 6/6 passed.
-- Broader semantic/host/CLI/search gate: 261/261 passed.
-- One full-suite run exposed an unrelated parallel-order failure in `SearchToolRescueTests`; its isolated three-case rerun passed. The immediate full rerun passed 5234 with 2 pre-existing skips and 0 failures.
-- Release build: 0 warnings, 0 errors.
+- **Never an empty object.** Two independent guards: the reader answers null unless
+  `rebound_from_root` is present and non-blank (`RebindProvenanceReaderTests`), and the render sites
+  are `is { } x` conditionals (`Status_*_IsByteIdenticalWhenTheArtifactWasNeverRebound`, which also
+  assert the string `rebound_from` does not appear at all).
+- **Byte-identical default output.** Four tests compare the baseline render against an explicit
+  `RebindProvenance = null` render, for status compact/JSON and health compact/JSON.
+- **Health/status JSON parity** is asserted structurally (`GetRawText()` equality), not by
+  duplicated field assertions, so a future field added to one writer and not the other fails.
+- **`rebound_at` verbatim.** The fixture uses `2026-08-05T09:14:22.123456789Z` — nanosecond
+  precision that a `DateTimeOffset` round-trip would not reproduce — and the test asserts the exact
+  string. The code path is `string` end to end; no parse.
+- **Render stays pure.** The registry lookup happens at fact-gather time in the assembler;
+  `WorkspaceRender` does no I/O and takes no registry.
+- **No schema changes, no new services, no caching.** One tolerant static reader; one `with`
+  enrichment on an already-cached dashboard record.
+- **Additive everywhere.** `WorkspaceFacts` and `DashboardWorkspaceFacts` gained trailing optional
+  params, so every existing positional construction site (including the dashboard tests) still
+  compiles.
 
-## Architecture quality
+## Judgment calls
 
-- Affected module: `SharedSemanticBrokerConnectionFactory` and its real-process test host.
-- Caller-facing interface: unchanged (`ConnectAsync`, `DisposeAsync`, immutable `Snapshot`).
-- Locality: election, owner retirement, and connect/dispose serialization remain inside the factory.
-- Test surface: public connect/dispose behavior plus broker PID/endpoint and immutable snapshot facts.
-- Rejected shortcut: respawning on every 20 ms poll; bounded one-second election avoids a tight loser-spawn loop during healthy cold loads.
-- Risk: medium because lifecycle concurrency changed; deterministic process tests and the full fast suite cover the seam.
+1. **Reader placed in `Miller.Indexing`, not `WorkspaceRender.cs`.** The brief offered
+   `WorkspaceRender.cs` as the fallback home for a metadata-read helper. I created
+   `src/Miller.Indexing/RebindProvenance.cs` instead, because both Miller.Server AND Miller.Dashboard
+   need the read, and the brief's fallback would have forced the SQL to be duplicated into
+   `DashboardData.cs`. The new file sits beside `ExtractIndexLevelReader` and copies its contract; it
+   is a new file, so it cannot collide with any parallel task. `WorkspaceRender.cs` still owns the
+   FACT record (`RebindProvenanceFacts`), matching where `IndexLevelFacts` lives.
+2. **Wired the fact into the gather sites, which are outside the declared modify list.**
+   `WorkspaceFactsAssembler.cs` (2 sites) and `WorkspaceTool.cs` (1 line). Render-only would have
+   made the acceptance criterion "`workspace status --json` includes `rebound_from` when the artifact
+   carries the keys" false in production and true only in unit tests — a stub. Neither file is owned
+   by Task 6 (`RebindBootstrap.cs` / `IndexBootstrapService.cs` / its own tests), so there is no
+   parallel-edit conflict. The two never-readable arms (`MissingIndexFacts`, `UnreadableIndexFacts`)
+   were deliberately left alone: the artifact is missing or unreadable there, so the reader would
+   answer null anyway.
+3. **Dashboard razor edit.** `WorkspaceDetailPanel.razor` was not in the modify list, but
+   `DashboardWorkspaceFacts` is a DTO — without the panel row, "the dashboard workspace detail shows
+   the same facts" would not hold. One conditional `<div>` in the existing `fact-list`.
+4. **Second test file.** `RebindProvenanceReaderTests.cs` — the brief scoped tests to
+   `WorkspaceRenderTests.cs`, but that file is documented as the PURE, no-I/O renderer suite, and the
+   "keys absent ⇒ no object" rule actually lives at the read boundary. Putting a temp-file SQLite
+   fixture into the pure suite would have broken its stated contract, so the read-boundary tests got
+   their own fast-suite file next to `ExtractIndexLevelReaderTests`.
+5. **Compact line shape.** The brief's phrasing is "rebound from `<display id>` at `<rebound_at>`".
+   I render `rebound_from: <display id> (<source root>) at <rebound_at>` so the line matches the
+   house `key: value` compact style, and keeps the raw root visible in BOTH the registered and
+   unregistered cases (the unregistered case drops the display id and its parentheses). The ` at …`
+   clause is dropped when the artifact records no instant. Documented in the contract doc.
+6. **Object gated on `rebound_from_root` alone.** The verb writes all three keys in one
+   transaction, so a partial set should be impossible; gating on the root and rendering the other
+   two as explicit nulls degrades field-by-field instead of suppressing the whole fact, and keeps the
+   JSON object's field set fixed for Eros.
+
+## Concerns
+
+- **The fast suite passed against Task 6's tree as it stood at that moment.** Task 6 is still
+  in flight; if it changes `IndexBootstrapService` further, the suite is worth one more run at the
+  branch gate.
+- **No end-to-end assertion that a really-rebound artifact renders `rebound_from`.** That needs a
+  real `julie-extract rebind` run, which lives in Task 6's Scale test (`RebindBootstrapScaleTests`)
+  and at the branch gate. My coverage stops at the read boundary (a hand-built artifact carrying the
+  keys) and the render.
+- **The `WorkspaceTool.AssembleFacts` path still omits `index_level`** — a pre-existing gap I did not
+  widen or close (out of scope). `rebound_from` is wired there.
