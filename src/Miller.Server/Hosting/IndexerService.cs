@@ -85,7 +85,10 @@ public sealed class IndexerService : BackgroundService
     private readonly IndexerSidecarConverger _sidecarConverger;
     private readonly WorkspaceRegistryScanPublisher _registryPublisher;
 
-    // Machine-wide (per-user) admission over whole-repo scans and the sidecar convergence that follows them.
+    // Machine-wide (per-user) admission over whole-repo scans. Released the moment the extract subprocess returns
+    // — the sidecar convergence that follows stays under _opsGate but OUTSIDE admission, because holding the
+    // machine-wide lease across ~200s of per-workspace SQLite work serialized a worktree fleet on it
+    // (2026-08-06 P4 scale validation §3).
     // Acquired BEFORE _opsGate at every governed site so the per-file write-through path this design exempts
     // (TryReindexAsLeader) can never be blocked behind an admission wait. That order makes it possible to own the
     // machine-wide lease while an EXEMPT holder still owns _opsGate, so a site reachable from a live MCP call
@@ -542,7 +545,8 @@ public sealed class IndexerService : BackgroundService
             {
                 try
                 {
-                    rescanned = ScanAsLeaderUnderGate(ScanIntent.ExtractorUpgrade, source: "extractor-upgrade")
+                    rescanned = ScanAsLeaderUnderGate(
+                            ScanIntent.ExtractorUpgrade, source: "extractor-upgrade", admission)
                         .Result == ScanOutcome.Kind.Scanned;
                 }
                 finally
@@ -632,10 +636,23 @@ public sealed class IndexerService : BackgroundService
 
         try
         {
-            bool processed = _core!.DrainAndProcess(
-                headChanged,
-                wholeRepoScanAdmitted: admission is not null,
-                out bool usedWholeRepoScan);
+            bool processed;
+            bool usedWholeRepoScan;
+            try
+            {
+                processed = _core!.DrainAndProcess(
+                    headChanged,
+                    wholeRepoScanAdmitted: admission is not null,
+                    out usedWholeRepoScan);
+            }
+            finally
+            {
+                // The governor bounds concurrent EXTRACTORS; the sidecar build is per-workspace SQLite work
+                // already serialized by _opsGate, so it must not sit on the machine-wide lease every sibling
+                // worktree queues behind (2026-08-06 P4 scale validation §3).
+                admission?.Dispose();
+            }
+
             if (processed)
                 TryConvergeSidecarToLatest(workspace.CanonicalExtractDbPath, fullRebuild: usedWholeRepoScan);
             if (usedWholeRepoScan)
@@ -830,7 +847,18 @@ public sealed class IndexerService : BackgroundService
             {
                 IExtractOps ops = _ops
                     ?? throw new InvalidOperationException("Indexer leader startup scan requested before ops were published.");
-                report = ops.Scan(ScanIntent.IncrementalReconcile, decision.Jobs);
+                try
+                {
+                    report = ops.Scan(ScanIntent.IncrementalReconcile, decision.Jobs);
+                }
+                finally
+                {
+                    // The governor bounds concurrent EXTRACTORS; the sidecar build is per-workspace SQLite work
+                    // already serialized by _opsGate, so it must not sit on the machine-wide lease every sibling
+                    // worktree queues behind (2026-08-06 P4 scale validation §3).
+                    admission.Dispose();
+                }
+
                 // Converge search.db under _opsGate — the same lock that serializes extract subprocesses — so the
                 // symbols.db read never races a concurrent extract that could replace the file. Revision-gated
                 // inside the sidecar; a no-op when the feature is off.
@@ -968,7 +996,7 @@ public sealed class IndexerService : BackgroundService
 
         try
         {
-            return ScanAsLeaderUnderGate(intent, "On-demand", decision);
+            return ScanAsLeaderUnderGate(intent, "On-demand", admission, decision);
         }
         finally
         {
@@ -1020,8 +1048,9 @@ public sealed class IndexerService : BackgroundService
     // the bounded entry below unreachable, because the unbounded wait happened first.
     private bool HoldsLeaderOps() => Volatile.Read(ref _ops) is not null;
 
-    // Machine-wide admission for ONE whole-repo scan plus the sidecar convergence that follows it. Always called
-    // OUTSIDE _opsGate. Returns null on refusal or on shutdown; the caller must degrade, never scan ungoverned.
+    // Machine-wide admission for ONE whole-repo scan. Always called OUTSIDE _opsGate. Returns null on refusal or
+    // on shutdown; the caller must degrade, never scan ungoverned. Every caller releases it as soon as the
+    // extract subprocess returns, before it converges sidecars.
     private ScanGovernorAdmission? TryAcquireScanAdmission(string reason)
     {
         // Publish under the SAME key status/health read (CanonicalRoot, falling back to the unresolved root):
@@ -1101,7 +1130,7 @@ public sealed class IndexerService : BackgroundService
         try
         {
             ScanOutcome outcome = ScanAsLeaderUnderGate(
-                ScanIntent.UserFullRebuild, source: "Leader-requested", decision);
+                ScanIntent.UserFullRebuild, source: "Leader-requested", admission, decision);
             // A downgraded run re-armed the rebuild inside the gate, where the decision not to discharge it was
             // made; re-arming it again here would only bump the arming generation a second time.
             if (outcome.Result is not (ScanOutcome.Kind.Scanned or ScanOutcome.Kind.Downgraded))
@@ -1115,12 +1144,15 @@ public sealed class IndexerService : BackgroundService
     }
 
     // Callers MUST already hold machine-wide scan admission (TryAcquireScanAdmission), acquired outside
-    // _opsGate, and must hold it across the sidecar convergence below — scan+sidecar storms must not overlap
-    // across workspaces. `decision` is the scan-failure policy's verdict for this attempt, evaluated by the
-    // caller BEFORE it took admission; null means "evaluate here" (the upgrade-rescan path, which has no earlier
-    // decision point).
+    // _opsGate, and MUST hand it in as `admission`: it is released here the moment the extract subprocess
+    // returns, before the sidecar convergence below. `decision` is the scan-failure policy's verdict for this
+    // attempt, evaluated by the caller BEFORE it took admission; null means "evaluate here" (the upgrade-rescan
+    // path, which has no earlier decision point).
     private ScanOutcome ScanAsLeaderUnderGate(
-        ScanIntent intent, string source, ScanAttemptDecision? decision = null)
+        ScanIntent intent,
+        string source,
+        ScanGovernorAdmission? admission,
+        ScanAttemptDecision? decision = null)
     {
         if (_ops is not { } ops)
             return ScanOutcome.NotLeader; // not the leader — must not write (M3 single-writer guard)
@@ -1149,6 +1181,13 @@ public sealed class IndexerService : BackgroundService
                 "{Source} {Kind} scan failed; keeping the prior index (the next scan/poll reconciles).",
                 source, DescribeScanKind(attempt));
             return ScanOutcome.Failed;
+        }
+        finally
+        {
+            // The governor bounds concurrent EXTRACTORS; the sidecar build is per-workspace SQLite work already
+            // serialized by _opsGate, so it must not sit on the machine-wide lease every sibling worktree queues
+            // behind (2026-08-06 P4 scale validation §3).
+            admission?.Dispose();
         }
 
         if (ExtractReportLog.DescribeWarning(report) is { } warning)
@@ -1242,6 +1281,7 @@ public sealed class IndexerService : BackgroundService
         if (symbolsDbPath is null || revision <= 0)
             return; // no symbols.db path or no revision cursor to stamp; the next revision-bearing op builds it
 
+        BeforeSidecarConvergeForTest?.Invoke();
         string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
         string? workspaceId = _bootstrap.Workspace.WorkspaceId;
         _sidecarConverger.Converge(symbolsDbPath, workspaceRoot, workspaceId, revision, fullRebuild);
@@ -1361,6 +1401,13 @@ public sealed class IndexerService : BackgroundService
     /// an ungoverned scan. Not used in production.
     /// </summary>
     internal Action? BetweenScanPeekAndDrainForTest { get; set; }
+
+    /// <summary>
+    /// Test seam: invoked at the start of every current-workspace sidecar convergence, so a test can read the
+    /// machine-wide scan-admission position at the exact moment the sidecar build begins and prove the governed
+    /// scan released admission first. Not used in production.
+    /// </summary>
+    internal Action? BeforeSidecarConvergeForTest { get; set; }
 
     /// <summary>
     /// Test seam: run the leadership-acquisition delta scan exactly as the production claim path does. Not used

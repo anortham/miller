@@ -239,9 +239,10 @@ public sealed class CrossWorkspaceRefreshService
         if (!attempt.Attempt)
             return DeferredByScanBackoff(row, attempt, total);
 
-        // Machine-wide scan admission, inside the workspace writer lock (SingleWriterLock -> ScanGovernor) and
-        // spanning the scan AND the sidecar convergence below, so scan+sidecar storms cannot overlap across
-        // workspaces.
+        // Machine-wide scan admission, inside the workspace writer lock (SingleWriterLock -> ScanGovernor),
+        // spanning the extract subprocess ONLY. The sidecar convergence below stays protected by the writer lock
+        // this method holds, so it does not need the machine-wide lease — and holding the lease across ~200s of
+        // per-workspace SQLite work serialized a worktree fleet on it (2026-08-06 P4 scale validation §3).
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission(
             row.CanonicalRoot,
             force ? scanAdmission?.Wait ?? _governorForceWait : _lockBusyWait,
@@ -253,18 +254,27 @@ public sealed class CrossWorkspaceRefreshService
         var scanClock = Stopwatch.StartNew();
         try
         {
-            ExtractReport report = _scan(
-                row.CanonicalRoot,
-                row.IndexDbPath,
-                ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
-                attempt.Jobs,
-                // A refresh that CREATES the artifact (an opened-but-never-primed workspace) carries the
-                // policy's first-build level; deltas inherit and a `workspace full` force runs at the level
-                // the policy assigns that intent.
-                IndexLevels.LevelForScan(
-                    attempt.EffectiveIntent, !File.Exists(row.IndexDbPath),
-                    IndexLevels.Resolve(row.LevelPolicy)));
-            scanClock.Stop();
+            ExtractReport report;
+            try
+            {
+                report = _scan(
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
+                    attempt.Jobs,
+                    // A refresh that CREATES the artifact (an opened-but-never-primed workspace) carries the
+                    // policy's first-build level; deltas inherit and a `workspace full` force runs at the level
+                    // the policy assigns that intent.
+                    IndexLevels.LevelForScan(
+                        attempt.EffectiveIntent, !File.Exists(row.IndexDbPath),
+                        IndexLevels.Resolve(row.LevelPolicy)));
+                scanClock.Stop();
+            }
+            finally
+            {
+                admission.Dispose();
+            }
+
             if (attempt.Downgraded)
                 failurePolicy.RecordDowngradedServe();
             else

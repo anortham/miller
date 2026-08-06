@@ -981,12 +981,12 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"waited {stopwatch.Elapsed}");
     }
 
-    // The artifact-id probe only fires AFTER TryConvergeSidecar when the report carries no artifact block: the
-    // success path reads `report.Artifact?.ArtifactId ?? TryReadArtifactId(row)`, so a report WITH one
-    // short-circuits the fallback and leaves only the pre-scan read to assert on — a probe that cannot observe
-    // convergence and therefore cannot fail if the lease is released early.
+    // Two probes bracket the sidecar convergence. A report with no revision routes through readLatestRevision,
+    // which the success path calls after the scan and BEFORE TryConvergeSidecar; a report with no artifact block
+    // routes through readArtifactId, which it calls AFTER convergence. The workspace writer lock this method
+    // holds is what keeps convergence safe once the machine-wide lease is gone.
     [Fact]
-    public void Refresh_HoldsMachineScanAdmission_AcrossTheScanAndTheSidecarConvergence()
+    public void Refresh_ReleasesMachineScanAdmission_AsSoonAsTheScanReturns_NotAfterTheSidecarConverges()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("governed-held");
@@ -996,6 +996,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         string home = NewMillerHome();
         var probe = ScanGovernor.ForMillerHome(home);
         bool freeDuringScan = true;
+        bool freeBeforeConvergence = false;
         var freeAtArtifactIdReads = new List<bool>();
 
         bool AdmissionIsFree()
@@ -1010,9 +1011,18 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             scan: (_, _, _, _, _) =>
             {
                 freeDuringScan = AdmissionIsFree();
-                return Report(root, dbPath, "target-ws", revision: 5) with { Artifact = null };
+                return Report(root, dbPath, "target-ws", revision: 5) with
+                {
+                    Artifact = null,
+                    RevisionBlock = null,
+                };
             },
             acquireLock: _ => new NoopLease(),
+            readLatestRevision: _ =>
+            {
+                freeBeforeConvergence = AdmissionIsFree();
+                return 5;
+            },
             readArtifactId: _ =>
             {
                 freeAtArtifactIdReads.Add(AdmissionIsFree());
@@ -1024,10 +1034,11 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         WorkspaceRefreshResult result = service.Refresh("target-ws", force: true);
 
         Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
-        Assert.False(freeDuringScan);
+        Assert.False(freeDuringScan); // the extract subprocess is still fully inside the admission
+        Assert.True(freeBeforeConvergence); // released the moment the scan returned, before the sidecar build
         Assert.Equal(2, freeAtArtifactIdReads.Count); // one before the scan, one after sidecar convergence
-        Assert.All(freeAtArtifactIdReads, free => Assert.False(free));
-        Assert.True(AdmissionIsFree()); // and it is released once Refresh returns
+        Assert.Equal(new[] { false, true }, freeAtArtifactIdReads);
+        Assert.True(AdmissionIsFree());
     }
 
     [Fact]

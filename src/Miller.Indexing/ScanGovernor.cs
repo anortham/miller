@@ -62,8 +62,11 @@ public sealed class ScanGovernorLease : IDisposable
 }
 
 /// <summary>
-/// A capacity-1 admission lease over whole-repo <c>julie-extract</c> scans and the synchronous sidecar
-/// convergence that follows them. <see cref="SingleWriterLock"/> is strictly per-workspace, so N git worktrees
+/// A capacity-1 admission lease over whole-repo <c>julie-extract</c> scans. It covers the extract subprocess
+/// only: every governed caller releases it as soon as the scan returns, because the per-workspace sidecar
+/// convergence that follows is already serialized by its own workspace lock and holding the machine-wide lease
+/// across it serialized a worktree fleet on one queue (2026-08-06 P4 scale validation §3).
+/// <see cref="SingleWriterLock"/> is strictly per-workspace, so N git worktrees
 /// meant N independent leaders each spawning an extractor at once — the fleet behaviour that drove a reporter's
 /// machine into the OOM killer (2026-08-01 multi-worktree field report). This lease sits ABOVE those locks so at
 /// most one governed scan runs at a time.

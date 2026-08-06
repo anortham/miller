@@ -78,10 +78,10 @@
 **Approach:** Verify Dispose idempotency first (read `ScanGovernorAdmission`). Then per site: insert `admission?.Dispose();` after the scan/drain call, with the one comment stating the constraint ("the governor bounds extractors; the sidecar build is per-workspace work under _opsGate"). Test seam: `IndexerService` already exposes `DrainForTest` (`:1329`) and `BetweenScanPeekAndDrainForTest` (`:620`); add a narrow internal test hook only if the existing seams cannot observe admission state at convergence time — prefer asserting through `ScanGovernorState.Shared`'s owner record (the advisory owner file names holder + reason) captured by a fake convergence callback. Do not weaken the one-extractor invariant: the scan itself stays fully inside the admission.
 
 **Acceptance criteria:**
-- [ ] On the drain path, a whole-repo scan still runs only under admission, and `TryConvergeSidecarToLatest` runs after the admission is released (test observes governor state from within a convergence hook).
-- [ ] Same ordering on leader-startup, leader-ondemand, leader-requested-full, leader-upgrade, and (if applicable) cross-workspace refresh.
-- [ ] `ScanGovernorAdmission.Dispose` is provably idempotent (test).
-- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
+- [x] On the drain path, a whole-repo scan still runs only under admission, and `TryConvergeSidecarToLatest` runs after the admission is released (test observes governor state from within a convergence hook).
+- [x] Same ordering on leader-startup, leader-ondemand, leader-requested-full, leader-upgrade, and (if applicable) cross-workspace refresh.
+- [x] `ScanGovernorAdmission.Dispose` is provably idempotent (test).
+- [x] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
 ### Task 2: Bootstrap self-retry after an admission-wait timeout + ineligible-rebind logging
 

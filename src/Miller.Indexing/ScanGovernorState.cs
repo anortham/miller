@@ -225,7 +225,11 @@ public sealed class ScanGovernorAdmission : IDisposable
         return new ScanGovernorAdmission(lease, state, admissionId, request.WorkspaceRoot);
     }
 
-    /// <summary>Release the lease, then drop this process's recorded position. Idempotent.</summary>
+    /// <summary>
+    /// Release the lease, then drop this process's recorded position. Idempotent, which is what lets a governed
+    /// site release admission explicitly the moment its scan returns and still keep a <c>using</c> as the
+    /// exception-safety net — the epilogue is then a no-op.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed)
