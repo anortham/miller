@@ -1,10 +1,12 @@
-# 2026-08-06 — Rebind P4: scale validation on the 74k-file fixture
+# 2026-08-06 — Rebind P4: scale validation on the 74k-file fixture and dotnet/runtime
 
 **Verdict: the copy-and-rebind mechanics PASS every P4 criterion they own — 15.3× vs the program's
 W10 baseline for a fresh worktree open, source untouched under SIGKILL, per-language parity exact.
-The 8-worktree fleet run exposed one real product gap that is NOT in the rebind path: leaders hold
-the machine-wide scan admission through sidecar convergence, which serializes a fleet bring-up and
-starved the 8th bootstrap past its 10-minute admission timeout.**
+On the real repo (§8, dotnet/runtime, 21.9 GB artifact) a fresh worktree open is 457 s vs the
+1,730 s full-scan bootstrap: 3.8× end-to-end, 28× on the extraction phase, with non-vacuous
+relationship parity. The 8-worktree fleet run exposed one real product gap that is NOT in the
+rebind path: leaders hold the machine-wide scan admission through sidecar convergence, which
+serializes a fleet bring-up and starved the 8th bootstrap past its 10-minute admission timeout.**
 
 Setup: the W10 fixture regenerated from its spec (74,000 files, 234 MB, TS/C#/Py/JS/Go/Rust/Java +
 docs, seeded generator — not byte-identical to the 2026-08-02 original, same shape); julie-extract
@@ -118,6 +120,40 @@ sidecars converge per the revision-keyed paths.
 | 8-worktree fleet converges in minutes, not hours | **PARTIAL** — 7/8 in ≤29.6 min on a governor-serialized ladder; the 8th starved at the 10-min bootstrap admission cap and needed a restart (§3) |
 | SIGKILL mid-rebind leaves recoverable state | **PASS** — source intact to the byte, debris cleaned, no spool leak |
 | Language parity on a real multi-language artifact | **PASS** — exact per-language counts (relationships vacuous, noted) |
+
+## 8. Real-repo validation — dotnet/runtime @ `a2f953fe266`
+
+The fixture is synthetic (regenerated from the W10 spec), so the baseline, worktree-open, and
+parity phases were re-run on the real repo the earlier scale baselines used: `dotnet/runtime` at
+the exact recorded commit (shallow fetch; 58,499 files, 913 MB working tree). Same harness, same
+isolated-HOME/semantic-off setup.
+
+**Baseline (server bootstrap, full scan):** 1,730 s (28.8 min) fully converged — scan 1,345 s
+(22.4 min; the 2.23.1 number for this repo was 76.3 min scan-only), bootstrap ready 1,476 s,
+content 1,526 s, search sidecar 1,727 s. Artifact 21.9 GB, 2,575,994 symbols, peak WAL 25 KB. The
+8 known non-UTF-8 files produced a PARTIAL report, and the bootstrap logged the operator warning —
+the pre-merge finding-3 fix observed in production on the full-scan path.
+
+**Fresh worktree open via rebind:**
+
+| Phase (from server start) | t | vs full scan |
+|---|---|---|
+| Rebind complete: 21.9 GB copy + `rebind` + delta over 58k files | **48.4 s** | 1,345 s → **27.8×** |
+| Bootstrap ready (symbol tools usable) | 192 s | 1,476 s → 7.7× |
+| Fully converged (search + content current) | **457 s** | 1,730 s → **3.8×** |
+
+The delta scan re-attempted the 8 unreadable files, returned PARTIAL, and the rebind carried the
+warning through the Promoted arm — the finding-3 fix observed in production on the rebind path
+too. `rebound_from` provenance present; source and worktree artifact ids differ.
+
+**Parity:** `files` by language (18 rows), `symbols` by language+kind (139 rows), `identifiers`
+by language (14 rows), and `relationships` by kind (**6 rows — non-vacuous on the real repo**)
+all MATCH exactly between the rebound artifact and the source full scan.
+
+The real repo also sharpens the §2 structural read: on a repo whose full scan still costs 22
+minutes, the rebind's end-to-end win is 3.8× (not the fixture's 1.37×), and the absolute open time
+of 7.6 min is dominated by the ~200 s search-sidecar build plus the ~140 s bootstrap hydration —
+the copy itself is 48 s of a 457 s open, so the §10 `clonefile` trigger stays unfired.
 
 Harness and scripts: session scratchpad `p4/` (`gen_fixture.py`, `harness.sh`, `baseline.sh`,
 `wt-open.sh`, `fleet.sh`, `sigkill.sh`, `parity.sh`); one-off measurement rig, not committed, per

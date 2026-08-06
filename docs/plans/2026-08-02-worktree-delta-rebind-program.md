@@ -199,10 +199,12 @@ blake3 `files.content_hash`.
 
 **Validated 2026-08-06 — see
 [`docs/findings/2026-08-06-rebind-p4-scale-validation.md`](../findings/2026-08-06-rebind-p4-scale-validation.md).**
-Worktree open 240 s vs the 3,677 s W10 baseline (15.3×, PASS); SIGKILL recovery PASS; language
-parity PASS; fleet PARTIAL — 7/8 in ≤29.6 min, the 8th starved at the 10-minute bootstrap
-admission cap because leaders hold the machine-wide governor through sidecar convergence
-(pre-existing governor-policy gap, follow-up decision owed).
+Worktree open 240 s vs the 3,677 s W10 baseline (15.3×, PASS); on real dotnet/runtime (21.9 GB
+artifact) 457 s vs the 1,730 s full-scan bootstrap — 3.8× end-to-end, 28× extraction phase, rebind
+itself 48 s; SIGKILL recovery PASS; language parity PASS (non-vacuous on the real repo); fleet
+PARTIAL — 7/8 in ≤29.6 min, the 8th starved at the 10-minute bootstrap admission cap because
+leaders hold the machine-wide governor through sidecar convergence (pre-existing governor-policy
+gap, follow-up decision owed).
 
 - On the W10 74k-file fixture: fresh worktree open completes in seconds-to-low-minutes (target:
   ≥10× faster than the full-scan baseline measured in W10).
