@@ -470,10 +470,14 @@ public sealed class JulieExtractRunner
                 {
                     code = string.IsNullOrWhiteSpace(stderr) ? "(unparseable report)" : stderr;
                 }
+                // The exit code rides along so the scan-failure journal records 3 for a rebind refusal
+                // (fingerprint_mismatch / no_committed_revision) instead of a null forensics hole; the read-path
+                // gates that throw this same type without a subprocess keep leaving it null.
                 throw new IncompatibleExtractException(
                     $"julie-extract reported an incompatible artifact (exit 3): {code}. " +
                     "Re-run restore + `julie-extract scan` with the pinned julie-extract " +
-                    $"(v{MillerExtractContract.PinnedJulieExtractVersion}).");
+                    $"(v{MillerExtractContract.PinnedJulieExtractVersion}).",
+                    exitCode: 3);
 
             default:
                 // The exit code rides along because 137 (SIGKILL) is the OOM killer's signature, and the

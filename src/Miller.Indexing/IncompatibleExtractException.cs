@@ -8,6 +8,14 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class IncompatibleExtractException : Exception
 {
+    /// <summary>
+    /// The julie-extract exit code when this refusal came from a subprocess that actually exited, else null.
+    /// Null is the honest answer for the read-path gates (schema gate, version cross-check): no process ran, so
+    /// no exit code means anything there. <see cref="JulieExtractException.ExitCodeOf"/> reads this so the
+    /// scan-failure journal records <c>3</c> for a <c>rebind</c> refusal instead of a null forensics hole.
+    /// </summary>
+    public int? ExitCode { get; }
+
     public IncompatibleExtractException(string message) : base(message)
     {
     }
@@ -15,5 +23,10 @@ public sealed class IncompatibleExtractException : Exception
     public IncompatibleExtractException(string message, Exception innerException)
         : base(message, innerException)
     {
+    }
+
+    public IncompatibleExtractException(string message, int? exitCode) : base(message)
+    {
+        ExitCode = exitCode;
     }
 }

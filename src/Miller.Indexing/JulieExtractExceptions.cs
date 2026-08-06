@@ -35,8 +35,16 @@ public class JulieExtractException : Exception
     /// <summary>
     /// The exit code <paramref name="error"/> observed, or null when it is not a julie failure carrying one. The
     /// one place callers map an arbitrary caught exception onto the failure record.
+    /// <see cref="IncompatibleExtractException"/> is read too: it does not derive from this type, yet an exit-3
+    /// refusal (schema/contract/root, and <c>rebind</c>'s two artifact-identity refusals) is a real subprocess
+    /// exit whose code the scan-failure journal should record.
     /// </summary>
-    public static int? ExitCodeOf(Exception? error) => (error as JulieExtractException)?.ExitCode;
+    public static int? ExitCodeOf(Exception? error) => error switch
+    {
+        JulieExtractException julie => julie.ExitCode,
+        IncompatibleExtractException incompatible => incompatible.ExitCode,
+        _ => null,
+    };
 }
 
 /// <summary>
