@@ -296,12 +296,12 @@ exhaustion via an injected clock that jumps past the budget after the first step
 waiting. Verify the source file's bytes/mtime are untouched after a copy.
 
 **Acceptance criteria:**
-- [ ] Copy of a populated DB passes `PRAGMA integrity_check` and row-count equality.
-- [ ] Budget exhaustion (injected clock) returns `BudgetExhausted`, deletes the partial
+- [x] Copy of a populated DB passes `PRAGMA integrity_check` and row-count equality.
+- [x] Budget exhaustion (injected clock) returns `BudgetExhausted`, deletes the partial
       destination trio, and leaves the source byte-identical.
-- [ ] Source opened read-only: a copy of a write-locked/live source succeeds without writing to it.
-- [ ] `ResolveBudget` parses seconds and `TimeSpan` spellings and defaults sanely.
-- [ ] Worker-scope verification passes and the change is handed to the lead per
+- [x] Source opened read-only: a copy of a write-locked/live source succeeds without writing to it.
+- [x] `ResolveBudget` parses seconds and `TimeSpan` spellings and defaults sanely.
+- [x] Worker-scope verification passes and the change is handed to the lead per
       parallel-lead-commit.
 
 ### Task 5: JulieExtractRunner rebind verb seams
