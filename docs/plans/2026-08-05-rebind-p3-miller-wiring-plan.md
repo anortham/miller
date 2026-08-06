@@ -248,12 +248,12 @@ missing committed revision. If `LeadershipEligibility`'s triple parser is privat
 shared internal helper (do not change its public behavior).
 
 **Acceptance criteria:**
-- [ ] Each §6 condition flips the decision independently (table-driven tests, both stages).
-- [ ] Crash-shell (no committed revision) is ineligible at snapshot validation even though
+- [x] Each §6 condition flips the decision independently (table-driven tests, both stages).
+- [x] Crash-shell (no committed revision) is ineligible at snapshot validation even though
       `ServableFor`-style facts pass.
-- [ ] Version comparison uses the numeric triple, proven by a case raw string equality would get
+- [x] Version comparison uses the numeric triple, proven by a case raw string equality would get
       wrong (e.g. `2.27.0` vs `v2.27.0` spelling divergence).
-- [ ] Worker-scope verification passes and the change is handed to the lead per
+- [x] Worker-scope verification passes and the change is handed to the lead per
       parallel-lead-commit.
 
 ### Task 4: SqliteOnlineBackup page-stepped copier
