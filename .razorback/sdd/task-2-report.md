@@ -1,188 +1,183 @@
-### Task 2 report: Bootstrap lineage capture + replacement consumption rule
+# Task 2 report — bootstrap self-retry after an admission-wait timeout + ineligible-rebind logging
 
-**Status:** DONE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/rebind-p3-miller-wiring`
-**Branch:** `rebind-p3-miller-wiring`
-**HEAD at start:** `504b1a2f` — **HEAD after commit:** `0d8fb3e7`
+**Status:** complete. Implementation, tests, and worker-scope verification are done. Not committed
+(commit mode `parallel-lead-commit`).
 
-## What I implemented
+## Worktree state
 
-1. **The pure fold (Task 6 calls this):**
-   `internal static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current)`
-   (`src/Miller.Server/Hosting/IndexBootstrapService.cs:977`). True only when the row exists AND
-   `WorkspaceRootIdentity.IsReplacement(new WorkspaceRootIdentity(stored.GitDir, stored.GitDirCreatedAtUtc), current)`.
-   No known-ness logic of its own: `IsReplacement` already answers false when either side is unknown, so the null
-   row is the only case the fold adds.
+- Path: `/Users/murphy/source/miller/.claude/worktrees/p4-findings-fixes`
+- Branch: `p4-findings-fixes`
+- Base HEAD at start: `bc808b26` (matches the main checkout, so Miller reads against
+  `miller-b275269b2d7c` describe the same code)
+- All work done in this worktree. No `git add` / `git commit` run.
 
-2. **One lineage capture per bootstrap run:**
-   `internal static WorkspaceLineage? CaptureLineage(string canonicalRoot)` (`:995`) resolves
-   `GitWorktreeLayout.Resolve` once, captures `WorkspaceRootIdentity.Capture` once, and returns
-   `WorkspaceLineage(layout.CommonDir, layout.IsLinkedWorktree, identity.GitDir, identity.GitDirCreatedAtUtc)`.
-   Null for a non-git root, which `UpsertSeen` reads as "leave the stored lineage alone".
-   `internal static WorkspaceRootIdentity IdentityOf(WorkspaceLineage? lineage)` (`:1008`) projects the
-   generation half so the run needs no second sample.
+## Files changed (only my owned set)
 
-3. **Consumption rule wired into the EXISTING escalation** (`RunBootstrap`, `:454-464` and `:491-496`):
-   the capture and the stored-row read happen right after `Directory.CreateDirectory(millerDir)`, before any
-   registry write; `ReadDecision` now folds `rootReplaced || persistedRootReplaced` into the same
-   `EscalateForReplacedRoot` call. No second escalation path, no new service. A detected persisted replacement
-   also logs one warning naming the root.
+| File | Change |
+|---|---|
+| `src/Miller.Server/Hosting/ScanAdmissionTimeoutException.cs` | NEW — `sealed class ScanAdmissionTimeoutException : InvalidOperationException`, namespace `Miller.Server.Hosting` (the dominant namespace in that directory: 31 files vs 3). |
+| `src/Miller.Server/Hosting/IndexBootstrapService.cs` | Typed throw site, retry scheduling, rebind-fallback logging (details below). |
+| `tests/Miller.Tests/Server/BootstrapAdmissionRetryTests.cs` | NEW — 11 fast, pure tests (no `julie-extract`, so no `Category=Scale` trait needed). |
 
-4. **Lineage persisted after the decision:** `BootstrapRunResult` carries `WorkspaceLineage? Lineage`;
-   `PublishBoundWorkspace` passes it to both arms (`MarkRegistryScanned` / `RegisterBootstrapWorkspace`), so the
-   stored generation post-open is the current one.
+Nothing else was touched. `src/Miller.Indexing/RebindBootstrap.cs`,
+`src/Miller.Server/Hosting/IndexerService.cs`, and
+`src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs` show as modified in `git status`;
+those are the sibling tasks' edits, not mine.
+
+## What I built
+
+### (a) Typed the admission-timeout failure — `IndexBootstrapService.cs:576`
+
+`throw new InvalidOperationException(...)` became `throw new ScanAdmissionTimeoutException(...)`. The
+message string is byte-identical to before. `ScanAdmissionTimeoutException` derives from
+`InvalidOperationException`, so any caller that catches the base type still catches it.
+
+The second admission site (`bootstrap-auto-rebuild`, `:687`) was deliberately left alone: it returns
+`null` and logs a warning rather than throwing, so it never reaches `MarkBootstrapFailed`.
+
+### (b) Delayed self-retry — `MarkBootstrapFailed` `:890`, `ScheduleAdmissionRetry` `:941`
+
+- `MarkBootstrapFailed` now takes the run's `WorkspaceBindingResolver.WorkspaceSource` (threaded from
+  `RunBootstrapInBackground` `:432`) so the retry re-runs with the ORIGINAL binding source instead of a
+  hardcoded one. `source` is not read inside `RunBootstrap` today, but passing it verbatim keeps the
+  retry a faithful re-run rather than a lookalike.
+- After the registry-error marking, `if (error is ScanAdmissionTimeoutException)
+  ScheduleAdmissionRetry(canonicalRoot, source, runGeneration);` (`:930`). Every other failure returns
+  exactly as before — terminal.
+- `ScheduleAdmissionRetry` captures `_shutdown.Token`, logs one Information line naming the delay, then
+  `Task.Run(async () => { await Task.Delay(delay, shutdown); ... })`. After the delay it takes `_gate`
+  and re-checks three things — shutdown not requested, `_phase == Failed`, `_runGeneration ==
+  failedGeneration` — before calling `StartRunLocked(canonicalRoot)` and then
+  `RunBootstrapInBackground(canonicalRoot, source, runGeneration)` with `rootReplaced` left at its
+  default `false`, exactly the `:355-370` replaced-root shape.
+- No new hosted service, no second timer system, no persisted state. `Task.Delay` + the existing
+  shutdown CTS only.
+- Unbounded by design: each failed retry re-enters `MarkBootstrapFailed` and re-schedules. One cycle is
+  one bounded admission wait with no scan.
+
+**`rootReplaced: false` is safe on a retry.** A `RootRebind` bootstrap that timed out still escalates on
+the retried run, because the replacement fact is re-derived from the PERSISTED registry lineage inside
+`RunBootstrap` (`persistedRootReplaced`, `:457-458`), not from the in-flight `rootReplaced` flag alone.
+
+### (c) Jitter — `JitterAdmissionRetryDelay` `:997`
+
+`baseDelay + baseDelay * (0.25 * Math.Clamp(sample, 0, 1))`, called with `Random.Shared.NextDouble()`.
+Production base is `DefaultAdmissionRetryDelay = 60s` (`:1007`); `TestAdmissionRetryDelay` (`:1013`) is
+the internal nullable override, matching the `TestBootstrapScanAdmissionWait` precedent (`:265`) exactly
+(`TestAdmissionRetryDelay ?? DefaultAdmissionRetryDelay`).
+
+### (d) Ineligible-rebind logging — `LogRebindFallback` `:809`, called at `:608`
+
+The fallback arm's inline `Failed` warning moved into `internal static void LogRebindFallback(ILogger,
+string canonicalRoot, RebindBootstrapOutcome)`. The `Failed` warning text and placeholders are
+unchanged. The `Ineligible` case now logs one Information line:
+
+```
+"Worktree rebind not eligible for {Root} ({Reason}); scanning it in full."
+```
+
+`Promoted` never reaches this arm (it is the `if` branch), so promoted logging is untouched. Extracting
+the helper is what makes both log shapes pinnable by a pure fast test — the arm itself only runs inside
+a real extract-backed bootstrap.
+
+## W8 confirmation (the nuance the brief demanded)
+
+I read the code rather than assuming. **No plan mismatch.** A retry cycle cannot force-scan around a
+standing W8 record without recording:
+
+1. The retried run re-enters `RunBootstrap` and re-hits the pre-existing
+   `failurePolicy.Evaluate(scanDecision.Intent, bypassBackoff: true)` at `:583`. That bypass is
+   unchanged by this task.
+2. Every scan that run can launch goes through `RunRecordedScan` (`:632` fallback scan, `:698`
+   auto-rebuild). Its body: `RecordSuccess(attempt.EffectiveIntent)` on success;
+   `RecordFailure(attempt.EffectiveIntent, JulieExtractException.ExitCodeOf(ex), attempt.Jobs ?? ...)`
+   then `throw` on failure. So a retried run's scan records into the persisted journal exactly like the
+   first run's.
+3. A rethrown scan failure is not a `ScanAdmissionTimeoutException`, so `MarkBootstrapFailed` marks it
+   terminal and schedules NOTHING. The cycle stops at the first run that actually reaches a scan.
+4. Therefore the only failure that repeats is the one where admission was refused BEFORE
+   `TestScanObserver`/the scan — no extractor spawned, no journal write, no `--jobs` consumed.
+
+`bypassBackoff: true` is not passed at any new call site; `ScheduleAdmissionRetry` adds no
+`bypassBackoff` argument at all.
+
+## Miller calls used + API-shape evidence
+
+Orientation was done with Miller MCP tools against `workspace_id=miller-b275269b2d7c`, then confirmed by
+reading exact lines in the worktree before every edit.
+
+| Call | What it gave me |
+|---|---|
+| `inspect target=IndexBootstrapService depth=overview` | Class doc, the `_gate`/`_shutdown`/`_runGeneration`/`_phase` field set, `IHostedService, IDisposable` implements, 86 dependents, test locations (`BootstrapReplacedRootTests`, `HostStartupRegistrationTests`). |
+| `search query=AcquireBootstrapScanAdmission` | Definition at `:1108` plus BOTH call sites (`:572` `"bootstrap"`, `:685` `"bootstrap-auto-rebuild"`) and the `TestBootstrapScanAdmissionWait` property at `:265` — which is how I found the precedent the plan names, and how I knew the auto-rebuild site returns null rather than throwing. |
+| `inspect target=RunRecordedScan depth=full` | Full body + callees resolved to `ScanFailurePolicyStore.RecordSuccess` / `RecordFailure` and `JulieExtractException.ExitCodeOf` — the direct evidence for the W8 confirmation above, without reading the file. |
+
+API-shape evidence: `inspect depth=full` returned the method body AND a resolved `callees` list with
+`source=identifier_direct confidence=1.00` pointing at `src/Miller.Indexing/ScanFailurePolicyStore.cs:36`
+and `:47`. That resolved-callee list is what let me confirm the journal write in one call instead of a
+grep chain. `search` returned a `Definition found:` block plus `Other matches:` grouped by file with the
+declaring line text, which distinguished the two admission call sites by their `reason` string argument.
 
 ## Verification
 
-| Field | Value |
-| --- | --- |
-| Scope label | worker-red-green |
-| Command (class) | `dotnet test Miller.slnx -c Release --no-build --filter "FullyQualifiedName~BootstrapReplacedRootTests"` |
-| Result | **Passed — 19 passed, 0 failed, 74 ms** |
-| Command (worker ceiling) | `scripts/test.sh` (fast suite, `Category!=Scale`) |
-| Result | **Passed — 6069 passed, 0 failed, 2 skipped, 27 s (30 s wall)** |
-| Build | `dotnet build Miller.slnx -c Release` — 0 warnings, 0 errors |
-| Timestamp | 2026-08-05 |
+Invariant under test: **an admission-timeout bootstrap failure self-heals; every other bootstrap failure
+stays terminal; a retry can never clobber a newer run.**
 
-Sibling Task 4 (`SqliteOnlineBackupTests`) was already committed by the time I ran the ceiling suite; it compiles
-and passes. No red-only-in-Task-4 noise to report.
-
-**Red state:** the new tests could not compile at HEAD `504b1a2f` —
-`git show HEAD:src/Miller.Server/Hosting/IndexBootstrapService.cs | grep -c "DisqualifiesRebind\|CaptureLineage\|IdentityOf"`
-returns `0`. Implementation followed.
-
-### Invariant each new test proves
-
-- `APersistedGenerationDifferentFromTheCurrentOneDisqualifiesRebind` — a different creation timestamp at the same
-  admin path is a replacement.
-- `APersistedAdminPathDifferentFromTheCurrentOneDisqualifiesRebind` — a different admin path is a replacement
-  (worktree re-added under another name).
-- `ThePersistedGenerationOfTheSameCheckoutDoesNotDisqualifyRebind` — an unchanged generation is not.
-- `AnUnregisteredWorkspaceDoesNotDisqualifyRebind` — a null row is missing evidence, never a replacement.
-- `ARowMissingEitherHalfOfTheIdentityDoesNotDisqualifyRebind` (3 cases) — a pre-lineage row (either half null) is
-  missing evidence.
-- `AnUnreadableCurrentLayoutDoesNotDisqualifyRebind` — unknown CURRENT identity, both as
-  `WorkspaceRootIdentity.Unknown` and as `IdentityOf(null)`, never escalates.
-- `APersistedReplacementEscalatesAReuseDecisionWithNoLiveMonitor` — the persisted path alone turns a reuse
-  decision into `ShouldScan` + `ScanIntent.RootRebind`; no `WorkspaceRootPresenceMonitor` involved.
-- `AnUnchangedPersistedGenerationLeavesTheReuseDecisionAlone` — the reuse decision survives untouched
-  (`LoadedExisting`), so the rule costs nothing in the normal case.
-- `CaptureLineageReadsTheCommonDirAndGenerationOfANormalCheckout` — capture yields common dir, `IsLinkedWorktree`
-  false, and a KNOWN identity.
-- `CaptureLineageOfANonGitRootIsNull` — non-git root captures nothing and reads as unknown.
-- `BootstrapRegistrationPersistsTheCapturedLineage` — bootstrap registration writes all four columns
-  (common dir canonicalized), and the round-tripped row does not disqualify against its own generation.
-- `AScanRefreshesThePersistedLineageToTheCurrentGeneration` — the pre-open row disqualifies, the post-scan row
-  does not: the stored generation post-open is the current one.
-- `ARegistrationWithoutLineageLeavesTheStoredGenerationUntouched` — the error path's lineage-free `UpsertSeen`
-  keeps the stored generation, so a failed bootstrap still owes the rebuild next open.
-- The four pre-existing escalation tests are unchanged and still pass.
-
-## Files changed
-
-- `src/Miller.Server/Hosting/IndexBootstrapService.cs` (+96 / −18)
-- `tests/Miller.Tests/Server/BootstrapReplacedRootTests.cs` (+236 / −18)
-
-Nothing else. Commit `0d8fb3e7` staged exactly those two paths.
-
-## Miller calls used and what each confirmed
-
-| Call | Confirmed |
-| --- | --- |
-| `inspect target='src/Miller.Server/Hosting/IndexBootstrapService.cs' limit=10` | file symbol list with line numbers; `BootstrapScanDecision :180`, `BootstrapRunResult :90` |
-| `inspect target='WorkspaceRootIdentity' depth=full` | full body of `IsKnown`, `Capture`, `IsReplacement` — both-sides-known rule verified in source, not inferred |
-| `search`/`trace` fallback | the worktree index is a pre-Task-1 generation: it has no `WorkspaceLineage`, no lineage row members, and no `FindMainCheckoutByCommonDir`. `trace target='EscalateForReplacedRoot'` and symbol lookups for the new API returned nothing usable, so I read the committed code at HEAD instead (`git show HEAD:src/Miller.Indexing/WorkspaceRegistry.cs`, direct `Read` of the working tree). Reported per the brief's stale-index note. |
-
-## API-shape evidence
-
-- **`UpsertSeen` lineage parameter** — `src/Miller.Indexing/WorkspaceRegistry.cs:107-114` (working tree at HEAD):
-  trailing `WorkspaceLineage? lineage = null`; `$has_lineage` CASE arms at `:144-151` prove null leaves all four
-  stored values untouched; `:164` proves `GitCommonDir` is canonicalized at write time.
-- **Row members** — `src/Miller.Indexing/WorkspaceRegistryRow.cs:26-30`: `GitCommonDir`, `GitIsLinked` (`bool?`),
-  `GitDir`, `GitDirCreatedAtUtc`, all trailing optional.
-- **`IsReplacement` semantics** — `WorkspaceRootIdentity.cs:69-79` via `inspect depth=full`: `if (!before.IsKnown || !after.IsKnown) return false;`
-  then admin-path comparison (OS-aware) OR timestamp inequality. Both sides covered — the fold adds no
-  known-ness logic.
-- **Decision fold** — `IndexBootstrapService.cs:907-926` (`DecideBootstrapScan`) and `:938-946`
-  (`EscalateForReplacedRoot`, `ScanIntentPolicy.Strongest` with `RootRebind`).
-- **Existing capture sites** — `WorkspaceRootIdentity.Capture` is called only from
-  `src/Miller.Indexing/WorkspaceRootPresenceMonitor.cs:41,50,79`, constructed at
-  `src/Miller.Server/Hosting/IndexerService.cs:425`. See the plan mismatch below.
-- **`WorkspaceLineage`** — `WorkspaceRegistry.cs:588-611`, plus `CanonicalizeCommonDir` at `:604`.
-- **Registry read** — `WorkspaceRegistry.Get(string workspaceId)` at `:335` returns `WorkspaceRegistryRow?`.
-
-## Plan mismatch (reported per brief)
-
-The brief and the task text say `GitWorktreeLayout.Resolve` + `WorkspaceRootIdentity.Capture` are "already
-resolved nearby for the presence monitor — reuse, don't re-probe". They are **not** resolved anywhere in
-`IndexBootstrapService`. The only capture site is `WorkspaceRootPresenceMonitor`, constructed in
-`IndexerService.cs:425` — a different file, not mine, and a service that starts AFTER bootstrap binds. Threading
-its sample into bootstrap would have meant editing `IndexerService` and inverting the startup order.
-
-Smallest plan-consistent path taken: capture ONCE per bootstrap run inside `RunBootstrap` (`CaptureLineage`), and
-reuse that single sample for the comparison, the escalation, and both publish-time `UpsertSeen` calls. The
-"capture once per bootstrap" intent is honored; the "reuse an existing capture" premise did not exist.
-
-## Judgment calls
-
-1. **`MarkRegistryScanned` gained an overload, not an optional parameter.**
-   `WorkspaceRegistryScanPublisher.cs:14` binds it as a `Func<WorkspaceContext, string, long?, WorkspaceRegistryRow>`
-   method group, which an optional parameter cannot satisfy (CS1503). Since that file is not mine, I kept the
-   3-parameter shape as a thin overload delegating to the 4-parameter one (`:1486-1495`). `RegisterBootstrapWorkspace`
-   has no method-group caller, so it took a plain trailing optional parameter.
-2. **The error and missing paths do NOT refresh lineage.** `MarkRegistryError` / `MarkRegistryMissing` keep their
-   signatures. This is deliberate, not an omission: if bootstrap FAILS on a replaced root, no artifact was rebuilt,
-   so the rebuild is still owed and the stale stored generation must keep escalating the next open. Refreshing
-   there would silently discharge the replacement. Pinned by
-   `ARegistrationWithoutLineageLeavesTheStoredGenerationUntouched`.
-3. **The stored-row read is not wrapped in a catch.** A registry that cannot be opened already fails the same run
-   at publish time (`RegisterBootstrapWorkspace` opens it unconditionally), so a defensive catch would only move
-   the failure, not prevent it.
-4. **`GitWorktreeLayout.Resolve` runs twice per capture** — once in `CaptureLineage`, once inside
-   `WorkspaceRootIdentity.Capture`. Removing the second would need a `Capture(GitWorktreeLayout)` overload in
-   `WorkspaceRootIdentity.cs`, a file this task does not own. Cost is two lexical path probes on one directory,
-   once per bootstrap.
-5. **One warning log on detection**, matching `RebootstrapForReplacedRoot`'s existing warning, so the rebuild has
-   a stated cause in the log rather than appearing as an unexplained force scan.
-
-## Self-review findings
-
-- The live-monitor path (`rootReplaced: true`) and the persisted path can both be true in the same run — the
-  monitor detects the replacement, and the registry row still holds the old generation until publish. The OR
-  applies `EscalateForReplacedRoot` exactly once, so there is no double escalation and no intent drift.
-- After a replaced-root bootstrap, publish refreshes lineage, so the NEXT open does not re-escalate. Verified by
-  `AScanRefreshesThePersistedLineageToTheCurrentGeneration`.
-- Workspaces registered before Task 1 have NULL `git_dir`; they never escalate. Correct per the missing-evidence
-  rule, and they gain lineage on their first successful open after this change.
-- `DateTimeOffset` round-trips exactly through the registry ("O" format, `RoundtripKind` parse), so a stored
-  generation compares equal to the one just captured — otherwise every open would read as a replacement. Pinned by
-  the persist and refresh tests.
-- Zero comments in tests; the two production comments state why (the pre-write ordering, the method-group overload),
-  never what.
-
-## Concerns
-
-- `DisqualifiesRebind` currently has ONE production consumer (the escalation). Task 6 must call the same fold for
-  the rebind prefilter (§6 item 1) rather than re-deriving the condition — two derivations would drift.
-- The fold is named for Task 6's use, so at the escalation call site it reads slightly indirect. The local is named
-  `persistedRootReplaced` to keep the bootstrap line readable.
-- Filesystems with no birth time degrade `GitDirCreatedAtUtc` to a change/modify time (documented on
-  `WorkspaceRootIdentity`). On such a filesystem an ordinary metadata touch of the admin dir could read as a
-  replacement and cost one rebuild. Pre-existing behavior, not introduced here — but persisting the sample means it
-  can now fire across restarts too.
-
-## Exact signature for Task 6
-
-```csharp
-internal static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current)
+```
+dotnet test --filter "FullyQualifiedName~BootstrapAdmissionRetryTests"
+  → Passed! Failed: 0, Passed: 11, Skipped: 0, Total: 11, Duration: 1 s
 ```
 
-Supporting seams in the same class:
+The 11: retry-until-bound (also asserts the phase observed inside the retried run is `Running`),
+deterministic-failure-is-terminal, stale-generation-retry-is-a-no-op, 5 jitter-band theory cases, the
+exact jitter endpoints, ineligible logs Information with the reason, failed keeps its Warning.
 
-```csharp
-internal static WorkspaceLineage? CaptureLineage(string canonicalRoot)          // null when no git layout
-internal static WorkspaceRootIdentity IdentityOf(WorkspaceLineage? lineage)     // Unknown when lineage is null
+**Mutation checks** — I wrote the implementation before first running the suite, so instead of relying on
+red-first ordering I broke each guard in turn and confirmed the tests catch it:
+
+| Mutation | Result |
+|---|---|
+| `error is ScanAdmissionTimeoutException` → `error is InvalidOperationException` (retry any failure) | 2 failed: `ADeterministicBootstrapFailureStaysTerminal`, `ARetryWhoseGenerationAdvancedDoesNotStartASecondRun` |
+| Drop `_runGeneration != failedGeneration` from the retry guard | 1 failed: `ARetryWhoseGenerationAdvancedDoesNotStartASecondRun` |
+| Remove the `ScheduleAdmissionRetry` call entirely | 1 failed: `AnAdmissionTimeoutFailureRetriesUntilTheBootstrapBinds` |
+
+File restored from a scratchpad backup after each; final green re-confirmed.
+
+Build:
+
+```
+dotnet build Miller.slnx -c Release   → Build succeeded. 0 Warning(s), 0 Error(s)
 ```
 
-All three are `internal static` on `Miller.Server.IndexBootstrapService`, pure except `CaptureLineage`'s two
-filesystem probes, and covered by the fast suite.
+Worker ceiling:
+
+```
+scripts/test.sh   → Failed: 1, Passed: 6138, Skipped: 2, Total: 6141, Duration: 1m 6s
+```
+
+The single failure is
+`CrossWorkspaceRefreshServiceTests.Refresh_HoldsMachineScanAdmission_AcrossTheScanAndTheSidecarConvergence`
+(`tests/Miller.Tests/Server/CrossWorkspaceRefreshServiceTests.cs:1029`). That test and its subject
+(`src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs`) are Task 1's owned files and both show
+as modified in `git status` — this is a sibling's in-flight edit, not a regression from my change. My
+change touches neither file, and no `IndexBootstrapService` test regressed.
+
+Scale/all were not run (worker ceiling respected).
+
+## Concerns for the lead
+
+1. **Build guard needs an escape hatch in this worktree.** `.tools/julie-extract` is not restored here, so
+   a bare `dotnet build` fails the `VerifyPinnedJulieExtractVersion` guard. Every build/test command above
+   ran with `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 MILLER_ALLOW_MISSING_SEMANTIC=1`, the documented
+   offline overrides. The lead should run restore before any scale/pre-merge verification.
+2. **My test file references `RebindBootstrapOutcome.Ineligible(...)`, `RebindBootstrapOutcome.Failed(...)`,
+   and `RebindStage.Copy`** from `RebindBootstrap.cs`, which Task 3 owns. Those compile green right now;
+   if that sibling changes the factory signatures, `BootstrapAdmissionRetryTests` needs the matching
+   update.
+3. **`MarkBootstrapFailed` gained a parameter** (`WorkspaceBindingResolver.WorkspaceSource source`, second
+   position). It is private with one call site, so nothing outside the file is affected.
+4. **Retry log volume.** Each admission-timeout cycle writes one Information line plus the existing
+   `LogError` from `MarkBootstrapFailed` and one registry error row. At a 60s base delay that is roughly
+   one triple per minute while contention lasts. Acceptable for a state that used to be a dead server,
+   but if the lead wants it quieter, downgrading the repeated `LogError` after the first cycle is the
+   place to change it.

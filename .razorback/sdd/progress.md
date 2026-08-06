@@ -1,27 +1,53 @@
-# SDD progress — Rebind P3 Miller wiring
+# SDD progress — P4 findings fixes
 
-Plan: docs/plans/2026-08-05-rebind-p3-miller-wiring-plan.md
-Branch: rebind-p3-miller-wiring (worktree, base b0d96b75)
+Plan: docs/plans/2026-08-06-p4-findings-fixes-plan.md
+Branch: p4-findings-fixes (worktree, base bc808b26)
 Reviewer choice: codex (pre-merge)
 
-Batch order: Batch A (1, 3, 4, 5 parallel, parallel-lead-commit) → Task 2 (serial-worker-commit) → Batch C (6, 7 parallel, parallel-lead-commit).
+Batch order: Batch A (Tasks 1, 2, 3, 4 parallel, parallel-lead-commit).
 
 ## Task completion
 
-Task 5: complete (parallel-lead-commit, Lead inline review clean, lead commit 4d15f108)
-Task 3: complete (parallel-lead-commit, Lead inline review clean, lead commit db6c9d7b)
-Task 1: complete (parallel-lead-commit, Lead inline review clean, lead commit 504b1a2f — includes WorkspaceRegistryRow.cs beyond declared ownership, reconciled)
-Task 4: complete (parallel-lead-commit, Lead inline review clean, lead commit 030f6a77)
-Task 2: complete (serial-worker-commit, worker commit 0d8fb3e7, Lead inline review clean — plan mismatch on capture reuse handled and reported)
-Task 7: complete (parallel-lead-commit, Lead inline review clean, lead commit c10e0254 — gather-site + reader + razor files beyond declared ownership, reconciled; no overlap with Task 6)
-Task 6: complete (parallel-lead-commit, Lead inline review clean, lead commit ad6c1f88)
+Task 4: complete (parallel-lead-commit, Lead inline review clean — shared exit-3 Interpret site judgment call accepted, lead commit 94162908)
+Task 2: complete (parallel-lead-commit, Lead inline review clean — source param + LogRebindFallback extraction accepted, lead commit 98028d72)
+Task 3: complete (parallel-lead-commit, Lead inline review clean — slice-accumulation budget accepted; standing note: RebindBootstrapScaleTests relies on its backdated heartbeat to stay on the no-wait path, lead commit aa2b66ae)
+Task 1: complete (parallel-lead-commit, Lead inline review clean — ScanAsLeaderUnderGate admission threading + CrossWorkspaceRefreshServiceTests inversion beyond declared ownership, both reconciled, lead commit 512ccdb0)
 
-All 7 plan tasks complete. Standing notes for pre-merge review: exit-3 refusals record null exit code in W8 (no Code property on IncompatibleExtractException); 30s heartbeat window also suppresses rebind ~30s after a source scan FINISHES; SQLITE_BUSY copy branch untested; failed rebind consumes the W8 slot (design bias).
+All 4 plan tasks complete. Tools restored (.tools 2.27.0 + sidecar) after worker phase.
+
+Standing notes: fast-suite wall-clock tripwire fired under 4-worker load (73s; MetricSnapshotAggregatesTests.ReadConvergeMetrics_MarkerCountsAreExactAboveSearchLimit 44.5s + MarkerSearchTests.FindMarkers_AppliesMarkerFilterBeforeLimit 43.3s, both pre-existing from 4b3ff371) — re-judge on the quiet-machine branch gate. RebindBootstrapScaleTests relies on its backdated heartbeat to stay on the no-wait path (T3 note).
+
+Gate follow-up: the first branch gate at 512ccdb0 failed one Scale test
+(`KilledHolder_FreesScanAdmission_WithoutManualCleanup`) — it pinned the pre-T1 hold-through-convergence
+lease. Reparked inside the new lease scope (lead inline, commit 328c2401): 4,000-file `SeedLargeWorktree`
+makes the extract the seconds-wide admission window; `RequireLiveHolder` replaces the content-lock park.
+6/6 repeat runs green. The 73s fast-suite tripwire breach was 4-worker load: quiet machine = 28s, passes.
+
+## Pre-merge review (codex, single pass)
+
+Diff bc808b26..328c2401. Verdict: needs-attention, 2 findings, both verified with Miller + worktree reads:
+- Finding 1 (high): stale admission retry re-enters the bootstrap without re-validating the root.
+  Classified real-improvement (widens a pre-existing bind-time-validation gap). FIXED — fix-f1 worker
+  (restarted once after an API connection drop), lead commit 76393b44.
+- Finding 2 (medium): shutdown-cancelled heartbeat wait mapped to Ineligible → uncancellable fallback
+  extraction. Classified real-bug. FIXED — fix-f2 worker, lead commit 8407a7bf.
+Zero dismissed, zero flagged. Codex does not report token costs.
+
+## Expensive-specialist gates (lead-run)
+
+- Heartbeat smoke (mini fixture): PASS — worktree opened seconds after the source scan waited ~27s
+  then rebound + delta-reconciled (was: silent full scan). First attempt surfaced the new
+  ineligible-rebind Information log on a stale registry row (T2 fix observed live).
+- 74k 8-worktree fleet: PASS — 8/8 rebound, 8/8 fully converged in 1,210s (ladder 1,082–1,210s),
+  zero admission-timeout lines in 9 logs. First attempt invalidated by scratch-disk exhaustion
+  (TM snapshots pinned ~100GB; sidecar failed visibly with SQLITE_FULL, artifact kept serving) —
+  environment, not product. Binary at 328c2401; the two review-fix commits touch only the
+  cancelled-wait and stale-retry arms, which this harness does not exercise.
 
 ## Verification ledger
 | Scope | Invariant | Command | Commit | Result | Time |
 |-------|-----------|---------|--------|--------|------|
-| branch-gate (build) | Release build clean, warnings-as-errors | dotnet build Miller.slnx -c Release | ad6c1f88 | PASS 0W/0E | 2026-08-06 ~00:45Z |
-| branch-gate (all) | Fast + Scale suites green, incl. 6 new rebind Scale tests; fast tripwire clear on quiet machine | scripts/test.sh all | ad6c1f88 | PASS (fast 6112+/0; scale 129/0/5 skipped) exit 0 | 2026-08-06 ~00:46Z |
-| branch-gate (build) | Release build clean after pre-merge fixes | dotnet build Miller.slnx -c Release | 3a467108 | PASS 0W/0E | 2026-08-06 ~01:15Z |
-| branch-gate (all) | Fast + Scale suites green after pre-merge fixes (OOM-clamp fallback, partial-scan warning, -wal fingerprint) | scripts/test.sh all | 3a467108 | PASS (fast incl. +8 rebind tests; scale 129/0/5 skipped) exit 0 | 2026-08-06 ~01:16Z |
+| branch-gate | Full fast+scale suites green with all 4 fixes + test repark | `dotnet build Miller.slnx -c Release` + `scripts/test.sh all` + `scripts/test.sh` | 328c2401 | PASS — build 0W/0E; fast 6145/0 (28s, tripwire OK); scale 129/0, 5 env skips | 2026-08-06 |
+| expensive-specialist | Post-scan worktree open waits out the heartbeat window then rebinds | `smoke.sh` (scratchpad p4 harness, rebuilt binary) | 328c2401 | PASS — ~27s wait, rebind + delta reconcile, no full scan | 2026-08-06 |
+| expensive-specialist | 8-worktree fleet: 8/8 rebound+converged, no admission timeouts | `fleet2.sh 8` (scratchpad p4 harness) | 328c2401 | PASS — 1,210s all-converged, 0 timeout lines | 2026-08-06 |
+| branch-gate | Suites green with both codex review fixes | `dotnet build Miller.slnx -c Release` + `scripts/test.sh all` | 76393b44 | PASS — build 0W/0E; fast 6148/0 (28s, tripwire OK); scale 129/0 | 2026-08-06 |

@@ -1,167 +1,118 @@
-# Task 3 report — RebindEligibility pure decisions
+# Task 3 report — Wait out the source-scan heartbeat window instead of falling back to a full scan
 
-**Status:** DONE
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/rebind-p3-miller-wiring`
-**Branch:** `rebind-p3-miller-wiring`
-**HEAD:** `b0d96b75` at task start (verified), `4d15f108` at report time — the lead committed another task's work mid-run. My three files were never committed by me.
-**Commit SHA:** none — parallel-lead-commit
+**Status:** complete. Implementation + tests landed, uncommitted (commit mode `parallel-lead-commit`).
 
-## What I implemented
+## Worktree state
 
-`src/Miller.Indexing/RebindEligibility.cs` holds every rebind go/no-go decision as I/O-free statics in the
-`LeadershipEligibility` style. Six types, one file:
+| Fact | Value |
+| --- | --- |
+| Path | `/Users/murphy/source/miller/.claude/worktrees/p4-findings-fixes` |
+| Branch | `p4-findings-fixes` |
+| Base HEAD at start | `bc808b26` |
+| HEAD at handoff | `94162908` — the lead committed a sibling task mid-run; I made no commits |
+| My dirty files | `src/Miller.Indexing/RebindBootstrap.cs`, `tests/Miller.Tests/Indexing/RebindBootstrapTests.cs` |
 
-| Type | Role |
-|---|---|
-| `RebindDecision(bool Eligible, string Reason)` | The verdict record. `Allow`/`Refuse` internal factories. Every refusal names the condition that decided it. |
-| `RebindPrefilterInputs` | Registry-level facts (design §6.1-5). `required` init properties. |
-| `RebindPrefilter.Evaluate` | Stage one — cheap, provisional, runs BEFORE the backup copy. |
-| `RebindSnapshotInputs` | Snapshot facts (design §6.6-8). `required` init properties. |
-| `RebindSnapshotValidation.Evaluate` | Stage two — authoritative, runs against the copied `.rebuild`. |
-| `RebindExtractorVersion` (internal) | The numeric-triple version equality both stages share. |
+`git worktree list` shows two trees: `/Users/murphy/source/miller` (`bc808b26 [main]`) and this one. Other dirty
+paths in `git status` belong to the sibling tasks (IndexerService/CrossWorkspaceRefreshService, IndexBootstrapService,
+ScanGovernor, the julie-extract exception work). I touched none of them.
 
-**Prefilter conditions, in evaluation order:** kill switch (`RebindDisabled`) → linked worktree →
-`!TargetArtifactExists` → `!RootReplacementDetected` → registered main-checkout sibling →
-sibling `symbols.db` exists → numeric-triple version equality with the pin → no standing scan-failure
-record → `MILLER_FULL_REBUILD_INPLACE` unset.
+## What changed
 
-**Snapshot conditions, in evaluation order:** schema/contract compatible (carries the gate's own detail into
-the reason) → `hash_algorithm = blake3` → `ArtifactRootIdentity.Matches(RecordedRootPath, SourceRoot)` →
-`HasCommittedRevision` → numeric-triple version equality re-check → level policy
-(`IndexLevels.IsSymbolsLevel(level) && policy == Full` ⇒ refuse; everything else satisfies).
+### `src/Miller.Indexing/RebindBootstrap.cs`
 
-No I/O anywhere in the file. Environment variables and filesystem probes arrive as booleans; the caller
-(Task 6) gathers every fact. No registry or DB types cross the boundary — only bools, strings, and
-`IndexLevelPolicy`.
+1. **New seam** `RebindBootstrapSeams.WaitBeforeRetry` —
+   `public Func<TimeSpan, CancellationToken, bool> WaitBeforeRetry { get; init; } = DefaultWaitBeforeRetry;`
+   Production default is `!ct.WaitHandle.WaitOne(delay)`: it blocks for the span and returns `false` the moment
+   cancellation ends the wait early. Defaulted (not `required`) per the plan's seam rule — an absent injection must
+   still wait correctly in production. `CancellationToken.WaitHandle` is safe for a default/none token
+   (`CancellationTokenSource` serves a never-canceled source), and the maximum slice is 60 s, well inside
+   `WaitOne`'s range.
+
+2. **New constant** `internal static readonly TimeSpan SourceScanWaitBudget = TimeSpan.FromSeconds(60)` — twice the
+   30 s window so a heartbeat stamped one tick before the read still resolves. Its doc comment records the
+   non-obvious reason waiting is correct: every Miller scan runs under the machine-wide governor admission and
+   `TryRebind` already holds the target's, so a fresh heartbeat under a held admission almost always means a
+   just-finished scan, and the fallback the old refusal chose is a 110–1,345 s full extraction under that same
+   admission (P4 scale validation §6). `SourceScanHeartbeatWindow` itself is unchanged; its doc paragraph that
+   described paying a full extraction inside the window was now false and was rewritten.
+
+3. **`SourceScanLooksLive` → `SourceScanFreshnessRemainder`** — same read (`ReadSourceHeartbeatUtc` + `UtcNow`, both
+   unchanged seams), but it returns how much of the window is left instead of a bool, so the wait can size its slice.
+
+4. **New `WaitOutSourceScan`** — loops while the heartbeat is fresh, waiting the reported remainder each pass
+   (clamped to the remaining budget), re-reading the heartbeat every iteration. Returns a private
+   `SourceScanWait` record struct: `Settled` / `StillLive` / `Cancelled` plus the accumulated wait. The budget
+   accumulates the **requested** slices rather than clock deltas, which keeps it monotonic so an injected clock that
+   does not advance still terminates the loop (commented in place).
+
+5. **Call site (was `:435`)** — `Settled` falls through to the unchanged rebind sequence. `StillLive` returns
+   `Ineligible` with the original reason text plus `(waited 60s for its heartbeat to go stale)`. `Cancelled` returns
+   `Ineligible` naming the cancellation and the wait. Nothing has been staged at this point, so neither refusal can
+   leave debris and neither writes the failure journal — unchanged from before.
+
+Durations render through a small `Format` helper (`0.#` + `s`, invariant culture) so the reason text is
+culture-stable.
+
+### `tests/Miller.Tests/Indexing/RebindBootstrapTests.cs`
+
+The shared `Seams()` factory now carries a fake clock (`_now`, starting at `UnixEpoch` — the value the old fixed
+`UtcNow` used, so every unrelated test is byte-equivalent) and an instant `WaitBeforeRetry` that records the call,
+accumulates `_waited`, and advances `_now`. **No test sleeps.**
+
+Five cases cover the decision, per the plan:
+
+| Test | Proves |
+| --- | --- |
+| `TryRebind_WhenTheSourceHeartbeatIsStale_ProceedsToCopyWithoutWaiting` | stale on entry ⟹ rebind, `_waitCalls == 0` |
+| `TryRebind_WhenTheSourceHasNoHeartbeatFile_ProceedsToCopyWithoutWaiting` | absent heartbeat ⟹ rebind, no wait |
+| `TryRebind_WhenTheSourceHeartbeatGoesStaleWithinTheBudget_WaitsOutTheWindowThenRebinds` | a 5 s-old heartbeat waits exactly the 25 s remainder in ONE slice, then copies and promotes |
+| `TryRebind_WhenTheSourceKeepsScanningPastTheBudget_IsIneligibleAndReportsTheWait` | a heartbeat that keeps restamping ⟹ `Ineligible`, `_waited == SourceScanWaitBudget`, reason contains `60s`, zero copies, no failure record |
+| `TryRebind_WhenCancellationEndsTheWait_IsIneligibleAndStartsNoScan` | a `WaitBeforeRetry` that cancels ⟹ `Ineligible`, one wait call, zero copies, zero scans, no staging or live file, no failure record |
+
+The two former heartbeat tests were replaced: the old `..._WhenTheSourceHeartbeatIsFresh_IsIneligibleAndNeverCopies`
+asserted exactly the behavior this task removes, and its successor is the past-budget case.
 
 ## Verification
 
-| Field | Value |
-|---|---|
-| Scope label | worker-red-green (worker ceiling: fast suite) |
-| Invariant proved | Each of the eight §6 conditions flips its stage's decision independently from an otherwise-eligible baseline; extractor versions compare as numeric triples, not raw strings; a metadata-only crash shell is refused at snapshot validation despite passing every `ServableFor`-style fact. |
-| TDD red | `dotnet build tests/Miller.Tests/Miller.Tests.csproj` → 2 errors, `CS0246: RebindPrefilterInputs / RebindSnapshotInputs could not be found`. |
-| Command (targeted) | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~RebindEligibilityTests"` |
-| Result | **Passed — 33/33, 0 failed, 33 ms**. 2026-08-05 19:01:03 CDT |
-| Command (ceiling) | `scripts/test.sh` (fast suite, `Category!=Scale`) |
-| Result | **Passed — 6054 passed, 0 failed, 2 skipped**, Release build 0 warnings / 0 errors. 2026-08-05 19:03:30 CDT. `LeadershipEligibilityTests` green and untouched. |
-| Build | `dotnet build src/Miller.Indexing/Miller.Indexing.csproj` → Build succeeded, 0 warnings. |
+- Red first: `dotnet test --filter "FullyQualifiedName~RebindBootstrapTests"` failed to compile on
+  `RebindBootstrap.SourceScanWaitBudget` and `RebindBootstrapSeams.WaitBeforeRetry` (CS0117 ×3) before the
+  implementation existed.
+- Green, worker scope: **32 passed / 0 failed, 94 ms**; re-run against the current tree after the lead's sibling
+  commit (`94162908`): **32 passed / 0 failed.**
+- Worker ceiling `scripts/test.sh` (fast suite): **6145 passed / 0 failed / 2 skipped, 52 s** — inside the 30 s
+  budget tripwire's own reporting and well under the split's intent.
+- `dotnet build src/Miller.Indexing/Miller.Indexing.csproj -c Release`: **0 warnings / 0 errors.**
+- Builds and test runs used `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 MILLER_ALLOW_MISSING_SEMANTIC=1`; this worktree has
+  no restored `.tools`, and those are the documented offline escape hatches. No Scale or `all` run — per the worker
+  ceiling.
 
-### Note on the fast-suite wall-clock tripwire
+**Invariant verified:** a recently-finished source scan delays a rebind by at most the window remainder instead of
+costing a full extraction, and a genuinely live scan still refuses inside the budget.
 
-`scripts/test.sh` reported all tests green but tripped its own budget guard: `fast suite wall time: 137s
-(ceiling 30s)`. **This is not caused by this task.** Evidence, from a TRX run of the same suite:
+Transient sibling noise, attributed and not mine: earlier runs failed to compile on `JulieExtractExceptionExitCodeTests`
+(Task 4), `BootstrapAdmissionRetryTests` / `IndexBootstrapService` (Task 2), and `IndexerService` (Task 1); an
+intermediate fast-suite run failed `CrossWorkspaceRefreshServiceTests` and `BootstrapAdmissionRetryTests`. All cleared
+on retry once the siblings settled. My own filter-scoped run was green throughout.
 
-- `RebindEligibilityTests`: 33 tests, **0.003 s** total, all Passed.
-- Suite test-time sum 1809.5 s across 6056 tests; the fifteen slowest are all pre-existing
-  (`MetricSnapshotAggregatesTests.ReadConvergeMetrics_MarkerCountsAreExactAboveSearchLimit` 31.2 s,
-  `CanaryGateReportTests.SuccessRate_SeparatedArmsWithEnoughUnitsPass` 18.4 s,
-  `SearchGoldenParityTests` 17.2 s, `MarkerSearchTests` 17.0 s, …). None belong to any P3 task.
-- A second run of the identical binary took 91 s wall against 137 s — a 1.5x swing with no code change,
-  which is machine contention from the four parallel P3 workers building and testing at once.
+## Miller MCP calls used
 
-Flagged for the lead: re-check the tripwire on a quiet machine after the batch merges. If it still fires,
-the slow tests above need Scale traits, and that is out of this task's file ownership.
+- `inspect RebindBootstrap depth=overview` — children list gave `SourceScanHeartbeatWindow:342`, `TryRebind:397`,
+  confirming the plan's line anchors.
+- `inspect RebindBootstrapSeams depth=full` — full seam record body with production defaults; showed the
+  `required` vs defaulted split the new seam had to match, and paged a continuation token for the remaining body.
+- `inspect TryRebind depth=full scope=src/Miller.Indexing/RebindBootstrap.cs` — exact prefilter/heartbeat call-site
+  body plus resolved callees (`SourceScanLooksLive` at `:576`, confidence 1.00) and the three callers
+  (`IndexBootstrapService:1508`, unit test `:488`, scale test `:50`), which is how I knew the scale test also
+  constructs the seams.
 
-### Parallel-batch interference encountered
+API-shape evidence: every line anchor in the plan (`:342`, `:435`, `:576-579`) matched what `inspect` reported, and I
+confirmed each with a file read in the worktree before editing. `inspect`'s caller list is what surfaced
+`RebindBootstrapScaleTests` as a second seam construction site — I then verified it backdates its heartbeat by an
+hour (`RebindBootstrapScaleTests.cs:204`), so it uses the production `WaitBeforeRetry` default and never waits.
 
-The shared `Miller.Tests` project did not compile for roughly 20 minutes while Task 1's worker was mid-write
-on `WorkspaceRegistry.cs` / `WorkspaceRegistryRow.cs` (its tests referenced `WorkspaceLineage`,
-`FindMainCheckoutByCommonDir`, and `GitCommonDir`/`GitIsLinked`/`GitDir`/`GitDirCreatedAtUtc` before the
-production side existed). I did not touch those files. I proved my own tests green in the meantime with an
-isolated scratchpad project referencing only `Miller.Indexing` plus my test file (33/33 passed, 29 ms), then
-polled until the shared project compiled and re-ran everything there. Both results agree.
+## Concerns
 
-## Files changed
-
-| File | Change |
-|---|---|
-| `src/Miller.Indexing/RebindEligibility.cs` | **Created.** 6 types, ~215 lines. |
-| `tests/Miller.Tests/Indexing/RebindEligibilityTests.cs` | **Created.** 33 tests (13 facts, 20 theory cases). |
-| `src/Miller.Indexing/LeadershipEligibility.cs:119` | **One word** — `private` → `internal` on `TryParseTriple`. The sanctioned narrow exception. Public behavior unchanged; its existing tests untouched and green. |
-
-## Miller calls used
-
-| Call | What it confirmed |
-|---|---|
-| `inspect(target='LeadershipEligibility', depth=full)` | The full pattern: `public sealed record LeadershipVerdict(bool Eligible, …, string Reason)` + `public static class` with an `Evaluate` returning it. Showed `TryParseTriple` is **private** at `LeadershipEligibility.cs:119`, `CompareVersions` is public but **throws** on an unparseable token (so it is unusable for a tolerant gate), and the `Semver` regex `(\d+)\.(\d+)\.(\d+)` first-match-wins normalization that makes `v2.27.0` and `julie-extract 2.27.0` equal. |
-| `inspect(target='IndexLevels', depth=overview)` then `depth=full` | `ResolveForWorkspace(string? registryDbPath, string? workspaceId)` reads the environment and the registry, so it is **not** pure — confirming the input record must carry an already-resolved `IndexLevelPolicy`, not re-derive one. Also gave `IsSymbolsLevel(string?)` (ordinal compare against `"symbols"`, tolerant reader defaults everything else to `"full"`) and `UpgradeOwed(level, policy) = policy != SymbolsOnly && IsSymbolsLevel(level)` — the exact §6.8 satisfaction rule. |
-| `inspect(target='IndexLevelPolicy', depth=full)` | The three members are `Progressive`, `Full`, `SymbolsOnly` (`IndexLevels.cs:8-21`). |
-| `inspect(target='ArtifactRootIdentity', depth=overview)` | `Matches(string? recordedRootPath, string canonicalRoot)` — pure: strips the Windows verbatim prefix and compares with `ComparisonFor(isWindows, isMacOS)` (case-insensitive on Windows/macOS). Empty/null recorded path returns false. Safe to call from a pure evaluator. |
-| `inspect(target='MillerExtractContract', depth=overview)` | `public const string PinnedJulieExtractVersion = "2.27.0"` and `public const string ExpectedHashAlgorithm = "blake3"`; the type is `internal`, so it is usable from `Miller.Indexing` but not from tests. |
-| `inspect(target='JulieSchemaGate', depth=overview)` | `Verify(SqliteConnection)` **throws** `IncompatibleExtractException` rather than returning a verdict — so the pure input must be a caller-folded `bool` plus the gate's message, which is why `RebindSnapshotInputs` carries `SchemaCompatible` + `SchemaIncompatibilityDetail`. |
-| `grep GitWorktreeLayout.cs` (fallback) | `IsLinkedWorktree` is a computed property at line 38. Miller's `inspect` on the record surfaced the type doc but not the member list, so I confirmed the member name directly before putting it in a `<see cref>`. That is the one place Miller could not prove the shape. |
-
-## API-shape evidence summary
-
-Every shape I relied on was proven by a Miller call above, with one exception noted in the table
-(`GitWorktreeLayout.IsLinkedWorktree`, confirmed by a one-line grep after `inspect` returned the record's
-doc but not its computed members).
-
-## Judgment calls
-
-- **`src/Miller.Indexing/LeadershipEligibility.cs:119` — widened `TryParseTriple` to `internal` rather than
-  lifting it into a new shared type.** The brief sanctioned "extract to a shared internal helper"; a
-  one-word visibility change *is* that helper, with a strictly smaller diff than moving the method (which
-  would also have to move the `Semver` regex and `Compare`, touching four members instead of one). Public
-  behavior, ordering, and messages are byte-identical. Rejected alternative: wrapping the public
-  `CompareVersions` in a `try/catch (ArgumentException)` — control flow by exception for a routine
-  "version is unreadable" case.
-- **`src/Miller.Indexing/RebindEligibility.cs:105` — the kill switch is evaluated first, ahead of §6.1.**
-  Design §6 does not order the kill switch (the brief lists it last). An explicit operator "off" should
-  produce the clearest possible reason, and it must not be masked by an incidental refusal such as "not a
-  linked worktree". No condition's outcome changes; only which reason a multiply-ineligible target reports.
-- **`RebindPrefilterInputs`/`RebindSnapshotInputs` use `required` init properties, not positional records.**
-  Ten same-typed booleans and strings in a positional constructor is a silent-wrong-answer trap for Task 6:
-  transposing two `bool`s compiles and inverts a safety gate. `required` forces every fact to be named at
-  every construction site, and `with` expressions still give the tests their one-condition-at-a-time table
-  shape. Still plain records — no I/O types, no behavior.
-- **An unreadable version on either side refuses (`RebindExtractorVersion.Reject`), it does not pass.**
-  `LeadershipEligibility` deliberately stays *eligible* on an unparseable artifact version because it
-  cannot prove a downgrade. Rebind is the opposite posture: it must prove an extractor match before
-  copying an artifact, so "cannot prove" means "do not rebind — take the plain bootstrap scan", which is
-  always correct, just slower.
-- **`RebindDecision.Allow`/`Refuse` are `internal`.** Task 6 lives in `Miller.Server` and cannot call them,
-  but the record's public primary constructor covers any decision it needs to synthesize. Widening later
-  is non-breaking; I kept the surface minimal.
-- **The two `Evaluate` methods reject a null `inputs` with `ArgumentNullException.ThrowIfNull`** rather
-  than returning an ineligible decision. A null input record is a caller bug, not a rebind condition, and
-  silently reporting "ineligible" would hide it.
-
-## Self-review findings
-
-- **Reason strings are assertable, not decorative.** Every ineligible test asserts on a substring of the
-  reason, so a future edit that keeps the boolean but breaks the explanation fails the suite. Task 7 will
-  surface these in provenance, so they are contract-ish.
-- **Version rendering is invariant-culture.** First draft used a bare interpolated string for the numeric
-  triple; changed to `string.Create(CultureInfo.InvariantCulture, …)` to match `LeadershipEligibility`
-  and to stay safe under CA1305 (warnings are errors in this repo).
-- **Level check reads `IsSymbolsLevel`, never a raw `== "full"`.** `ExtractIndexLevelReader` reports
-  `"full"` for absent keys, absent tables, and read failures, so "not symbols" is the only sound spelling
-  of "full-level". A raw equality would refuse a legitimate pre-levels artifact.
-- **`hash_algorithm` compares ordinally against `MillerExtractContract.ExpectedHashAlgorithm`,** not a
-  local `"blake3"` literal, so a future contract bump moves both together.
-- **Root-mismatch path handles the null case explicitly.** `ArtifactRootIdentity.Matches` returns false for
-  a null recorded root, which would otherwise render as `records root path '', not …`; the reason now says
-  "records no root path".
-- Coverage check against the acceptance criteria: all eight §6 conditions have an independent flip test
-  (10 for the prefilter, 6 for snapshot validation); the crash shell is `Snapshot_CrashShellWithNoCommitted
-  Revision_IsIneligible`; the string-equality trap is covered five ways
-  (`v2.27.0` vs `2.27.0`, `2.27.0` vs `julie-extract 2.27.0`, `2.27.0+build.9` vs `v2.27.0`) — all of which
-  a raw `string.Equals` would refuse.
-
-## Concerns for the lead
-
-1. **The `scripts/test.sh` 30 s tripwire fires on this branch** (137 s, then 91 s on a re-run). Not from
-   this task — my 33 tests total 3 ms — and the fifteen slowest tests are all pre-existing. Most likely
-   four-worker machine contention plus genuinely slow pre-existing tests. Worth one quiet-machine run after
-   the batch merges; if it persists, those tests need Scale traits, which is outside every P3 task's file
-   ownership.
-2. **Task 6 must pass `MILLER_WORKTREE_REBIND` as "is it `off`", not "is it set".** The input is named
-   `RebindDisabled` to make that explicit; rebind is default-on and only the literal `off` disables it,
-   unlike `MILLER_FULL_REBUILD_INPLACE`, which is a set/unset hatch (`InPlaceRebuildEnabled`).
-3. **Task 6 must resolve the level policy before calling stage two.** `IndexLevels.ResolveForWorkspace`
-   reads the environment and the registry, so it cannot run inside the pure evaluator; the input record
-   takes an already-resolved `IndexLevelPolicy`.
-4. **`ScanFailureRecorded` is deliberately "any record"** per §7.4, not "the backoff timer has not
-   elapsed". If Task 6 folds the journal to "is a retry currently throttled", the conservative rule is lost.
+- **None blocking.** One note for the lead: `RebindBootstrapScaleTests` builds `RebindBootstrapSeams` without
+  `WaitBeforeRetry`, so it exercises the real sleep-based default. Its fixture backdates the source heartbeat one
+  hour, so it stays on the no-wait path; if that fixture ever stops backdating, that Scale test could sleep up to
+  60 s. Left untouched — the file is outside my ownership and needs no change today.

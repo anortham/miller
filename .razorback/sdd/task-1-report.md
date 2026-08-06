@@ -1,223 +1,213 @@
-# Task 1 report — Registry lineage columns + sibling lookup
+# Task 1 — Release the machine-wide admission before sidecar convergence
 
-**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/rebind-p3-miller-wiring`
-**Branch:** `rebind-p3-miller-wiring`
-**HEAD at start:** `b0d96b75`
-**Commit SHA:** none — `parallel-lead-commit`
+**Status:** DONE
+**Worktree:** `/Users/murphy/source/miller/.claude/worktrees/p4-findings-fixes`
+**Branch:** `p4-findings-fixes` · **Base HEAD:** `bc808b26` · **Commit mode:** parallel-lead-commit (nothing staged or committed)
 
-## What I implemented
+---
 
-### Schema (`src/Miller.Indexing/WorkspaceRegistry.cs`)
+## 1. What changed, per file
 
-Four additive nullable columns on `workspaces`, in the `CREATE TABLE` head for fresh registries and in a
-migration for existing ones:
+### `src/Miller.Server/Hosting/IndexerService.cs`
 
-- `git_common_dir TEXT` — the repository's shared git directory, canonicalized before storage.
-- `git_is_linked INTEGER` — `0` for a main checkout, `1` for a linked worktree.
-- `git_dir TEXT` — the `WorkspaceRootIdentity.GitDir` half of the checkout generation.
-- `git_dir_created_at TEXT` — the `WorkspaceRootIdentity.GitDirCreatedAtUtc` half, ISO-8601 `"O"` round-trip,
-  the same format the existing `*_at` columns use.
+Five governed sites. Three of them (`leader-upgrade`, `leader-ondemand`, `leader-requested-full`) do NOT
+converge at the call site — they converge **inside** `ScanAsLeaderUnderGate` (`:1171-1172`). So the release
+point for those three is inside that helper, not at the `using`.
 
-### Migration
-
-`EnsureLevelPolicyColumn` / `AddLevelPolicyColumnToleratingConcurrentAdder` became
-`EnsureAdditiveColumns` / `AddColumnToleratingConcurrentAdder(connection, column, type)`, driven by a static
-`AdditiveColumns` array of `(Name, Type)` pairs that now lists `level_policy` plus the four lineage columns.
-Each column keeps the original two-step shape: a `pragma_table_info` fast-path probe, then a
-duplicate-column-tolerant `ALTER TABLE ... ADD COLUMN`. The old test
-`AddLevelPolicyColumn_ToleratesAConcurrentAdderWinningTheRace` became
-`AddAdditiveColumn_ToleratesAConcurrentAdderWinningTheRace` and exercises both a text and a lineage column.
-
-### Row
-
-`WorkspaceRegistryRow` gained four trailing optional members — `GitCommonDir`, `GitIsLinked` (`bool?`),
-`GitDir`, `GitDirCreatedAtUtc` — after `LevelPolicy`, so every existing positional construction still compiles.
-
-The three `SELECT` sites (`List`, `GetUnderLock`, the new lookup) now share one `RowColumns` constant, because
-their column order has to agree with `ReadRow`'s ordinals and three hand-maintained copies would drift.
-
-### `UpsertSeen`
-
-A trailing optional `WorkspaceLineage? lineage = null` parameter, after `seenAtUtc`. Semantics:
-
-- `null` leaves all four stored values untouched. Implemented with a `$has_lineage` flag and a
-  `CASE WHEN $has_lineage = 1 THEN excluded.x ELSE workspaces.x END` per column in the `ON CONFLICT` update.
-- A non-null lineage replaces all four values together. I deliberately did **not** use per-column
-  `COALESCE(excluded.x, workspaces.x)`: `GitDirCreatedAtUtc` is legitimately null on a filesystem with no
-  birth time, and `COALESCE` would then let a previous generation's timestamp survive beside a new `git_dir` —
-  a hybrid identity that never existed.
-- `GitCommonDir` is canonicalized at write time through `WorkspaceLineage.CanonicalizeCommonDir`, so a caller
-  cannot store a raw `GitWorktreeLayout` path. Documented in the parameter's XML doc.
-
-### `WorkspaceLineage`
-
-A record in `WorkspaceRegistry.cs`: `(string GitCommonDir, bool IsLinkedWorktree, string? GitDir,
-DateTimeOffset? GitDirCreatedAtUtc)`, plus one static `CanonicalizeCommonDir(string)` that both the write path
-and the lookup caller use, so the two sides cannot disagree on spelling.
-
-`CanonicalizeCommonDir` uses `PathCanonicalizer.CanonicalizeFile(absolute, absolute)` rather than
-`CanonicalizeRoot`. Both resolve every existing symlink component identically for a directory that exists, but
-`CanonicalizeRoot` throws `DirectoryNotFoundException` when the directory is gone, and registering a workspace
-must not fail because a git directory disappeared between layout resolution and the upsert. Named arguments
-make it explicit that the base-directory argument is inert (the path is already absolute).
-
-### `FindMainCheckoutByCommonDir`
-
-`public WorkspaceRegistryRow? FindMainCheckoutByCommonDir(string canonicalCommonDir)`. SQL narrows to
-`git_common_dir IS NOT NULL AND git_is_linked = 0` with a deterministic `ORDER BY workspace_id`, then the
-path comparison runs in C# via `ArtifactRootIdentity.Matches` — the exact function the design doc §5 names,
-so the platform rule (`OrdinalIgnoreCase` on Windows/macOS, `Ordinal` on Linux) and the Windows
-verbatim-prefix strip come from one place instead of being restated. Returns the first matching row, or null.
-
-## Verification
-
-| | |
+| Site | Where the release now happens |
 |---|---|
-| Scope label | `worker-red-green` |
-| TDD command | `dotnet test tests/Miller.Tests/Miller.Tests.csproj --filter "FullyQualifiedName~WorkspaceRegistryTests"` |
-| Result | **Passed — 34 passed, 0 failed, 0 skipped, 367 ms** |
-| Ceiling command | `scripts/test.sh` (full fast suite) |
-| Result | **Passed — 6054 passed, 0 failed, 2 skipped, 6056 total.** The script's wall-clock tripwire fired (103s vs a 30s ceiling) — see "Fast-suite result". |
-| Timestamp | 2026-08-05 |
+| `RunDrainTick` (`leader-drain-rescan`) | `finally` around `_core.DrainAndProcess(...)`, before `TryConvergeSidecarToLatest` |
+| `RunStartupDeltaScan` (`leader-startup`) | `finally` around `ops.Scan(...)`, before `TryConvergeSidecar` |
+| `RunExtractorUpgradeRescan` (`leader-upgrade`) | inside `ScanAsLeaderUnderGate` |
+| `TryScanAsLeader` (`leader-ondemand`) | inside `ScanAsLeaderUnderGate` |
+| `TryProcessLeaderFullScanRequests` (`leader-requested-full`) | inside `ScanAsLeaderUnderGate` |
 
-Red-first was observed: before implementation the filtered run failed to compile with `CS0117` /`CS1061`
-/`CS0246` on `AddColumnToleratingConcurrentAdder`, `WorkspaceRegistryRow.GitCommonDir`, `GitIsLinked`,
-`GitDir`, `GitDirCreatedAtUtc`, and `WorkspaceLineage` — the right reason (API absent), not an assertion typo.
+- `ScanAsLeaderUnderGate` gained a `ScanGovernorAdmission? admission` parameter (positional, third, before the
+  optional `decision`) so no caller can forget it. It disposes the admission in a `finally` around
+  `ops.Scan(...)` — so a **throwing** scan also releases early, before the failure-recording path.
+- Every `using` declaration/statement stayed in place as the exception-safety net. Because `Dispose` is
+  idempotent, the epilogue is a no-op.
+- New narrow test seam `internal Action? BeforeSidecarConvergeForTest`, invoked at the top of
+  `TryConvergeSidecar(string?, long, bool)` — the single funnel every current-workspace convergence passes
+  through. Justification in §4.
+- Comment corrections: the `_governor` field comment and the `TryAcquireScanAdmission` comment both claimed
+  admission covered "the sidecar convergence that follows"; both now state the new boundary and cite the finding.
 
-### Invariants the new tests prove
+### `src/Miller.Server/Workspaces/CrossWorkspaceRefreshService.cs`
 
-| Test | Invariant |
-|---|---|
-| `Open_CreatesSchemaAndConfiguresWalNormalSyncAndBusyTimeout` (extended) | A fresh registry carries all four lineage columns with the declared SQLite types, all nullable. |
-| `Open_APreLineageRegistryGainsTheLineageColumns_AndReadsNullLineage` | A pre-levels registry DB opens cleanly, reads null lineage, and accepts a lineage write afterwards — the migration is not a fresh-DB-only path. |
-| `UpsertSeen_RoundTripsLineageIncludingTheGitDirCreationTimestamp` | All four values survive a write and a re-read, including sub-second creation-timestamp ticks — `WorkspaceRootIdentity.IsReplacement` compares that timestamp for equality, so a lossy round-trip would read as a replaced checkout on every restart. |
-| `UpsertSeen_StoresAMainCheckoutLineageWithoutACreationTimestamp` | A half-known identity (`GitDirCreatedAtUtc` null) stores as null rather than as a default value. |
-| `UpsertSeen_CanonicalizesTheStoredCommonDirThroughASymlinkedAncestor` | The stored common dir is symlink-resolved, so a `/var`→`/private/var`-style layout still matches a symlink-canonicalized registry root. |
-| `UpsertSeen_WithoutLineage_LeavesPreviouslyStoredLineageIntact` | A lineage-free upsert does not erase identity another process persisted. |
-| `FindMainCheckoutByCommonDir_ReturnsTheMainCheckoutAndIgnoresLinkedWorktreesAndOtherRepos` | The lookup picks the non-linked row of the right repo among a linked sibling, another repo's main checkout, and a lineage-free row. |
-| `FindMainCheckoutByCommonDir_ReturnsNull_WhenOnlyLinkedWorktreesShareTheCommonDir` | No worktree-to-worktree sourcing. |
-| `FindMainCheckoutByCommonDir_OnAnEmptyRegistry_ReturnsNull` | The empty-registry path returns null rather than throwing. |
-| `FindMainCheckoutByCommonDir_AppliesPlatformPathComparisonSemantics` | Path case follows `ArtifactRootIdentity.ComparisonFor` — a match on Windows/macOS, a miss on Linux. |
-| `FindMainCheckoutByCommonDir_OnADisposedRegistry_Throws` | The new read honours the same disposal guard as every other public method. |
+Verified the plan's open question: **yes**, `TryConvergeSidecar` (`:290`) sat inside the admission scope.
+Same ordering applied — `admission.Dispose()` in a `finally` around `_scan(...)`. `scanClock.Stop()` stays
+inside the inner `try` so the reported scan duration still measures only the extract.
 
-### Fast-suite result
+Safety after release: this method holds the workspace `SingleWriterLock` (`:209`) for its whole body, so
+convergence keeps its per-workspace exclusion once the machine-wide lease is gone. Comment updated to say so.
 
-The full fast suite could not be built for a stretch of this task because sibling P3 workers were mid-red-phase
-in the SAME assemblies: `JulieExtractRunnerRebindTests.cs` / `RebindVerbScaleTests.cs` referenced
-`JulieExtractRunner.BuildRebindArgs`, `ParseRebindReport`, `Rebind`, and `RebindReport` before Task 5 wrote
-them, `JulieExtractRunner.cs` referenced `RebindReport` before it existed, and Task 4's
-`SqliteOnlineBackup.cs:149` failed the Release build with `CS0162 Unreachable code detected`. None of these are
-in my owned files. I polled the build until it cleared, then ran the suite three times:
+### `src/Miller.Indexing/ScanGovernor.cs`, `ScanGovernorState.cs`
 
-1. **6053 passed, 1 failed** — the failure was
-   `SqliteOnlineBackupTests.Copy_BudgetElapsedBetweenSteps_ReportsExhaustedAndDeletesThePartialDestination`
-   (Task 4, timing-sensitive, not mine).
-2. **6054 passed, 0 failed, 2 skipped** — that test passed on the next run.
-3. **6054 passed, 0 failed, 2 skipped** — confirmed.
+**No behaviour change.** `ScanGovernorAdmission.Dispose` was ALREADY idempotent (`_disposed` guard,
+`ScanGovernorState.cs:229-236`), and so is `ScanGovernorLease.Dispose` (`ScanGovernor.cs:50-61`). Only the two
+doc comments that asserted the lease "covers the synchronous sidecar convergence that follows" were corrected —
+leaving them would have made a load-bearing class doc actively wrong about the invariant it documents.
 
-**The wall-clock tripwire fired on the clean runs: 103s against a 30s ceiling.** This is machine contention
-from the parallel batch, not a slow test I introduced:
+### `tests/Miller.Tests/Server/IndexerSidecarAdmissionTests.cs` (new)
 
-- Load average was 18.5 with 15 concurrent `dotnet` processes while the suite ran.
-- The FIRST full run in this same session, on the same code, reported `Duration: 30 s` for the same 6056 tests.
-- The slowest individual tests are all pre-existing (`CanarySearchTests` 951 ms,
-  `MillerExtractContractTests` 928 ms, `WorkspaceIndexProviderTests` 925 ms); no rebind-program test appears
-  near the top.
-- `WorkspaceRegistryTests` alone — all 34, including my 10 — runs in **367 ms**.
+Six tests: the five leader sites plus `Dispose` idempotency. Fast suite, no `julie-extract`, no `[Trait Scale]`
+needed (fake `IExtractOps`, no subprocess). Each site test asserts, via one shared assertion:
 
-The lead should re-run `scripts/test.sh` on a quiet machine once every worker has reported, to confirm the
-tripwire is clear.
+1. during the scan — governor position is `holding` **and** a second `ScanGovernor` over the same temp miller
+   home is refused the OS lease (the one-extractor invariant is intact);
+2. convergence actually ran (`ConvergeObserved`, so a silently-skipped converge cannot pass);
+3. during convergence — the published position is gone **and** the OS lease is free.
 
-## Miller calls used
+Both facts are checked, not just the bookkeeping: the lease probe is the ground truth, the
+`ScanGovernorState.Shared` snapshot is what `workspace status`/`health` render.
+
+### `tests/Miller.Tests/Server/CrossWorkspaceRefreshServiceTests.cs` — **scope note, please read**
+
+`Refresh_HoldsMachineScanAdmission_AcrossTheScanAndTheSidecarConvergence` (`:989`) **pinned the exact behaviour
+this task removes**. It could not survive the change. I rewrote it in place as
+`Refresh_ReleasesMachineScanAdmission_AsSoonAsTheScanReturns_NotAfterTheSidecarConverges`, inverting the
+assertions and adding a `readLatestRevision` probe (the service calls it after the scan and before
+`TryConvergeSidecar`, so it observes the exact gap). This file was **not** in my declared ownership list, but
+leaving it would have left the fast suite red, and it is not owned by any sibling worker (they hold
+`IndexBootstrapService`, `RebindBootstrap`, and the exception/runner files). Flagging rather than hiding it.
+
+---
+
+## 2. Judgment calls
+
+1. **Release inside `ScanAsLeaderUnderGate`, not at the three call sites.** The task text says "insert
+   `admission?.Dispose();` after the scan/drain call". For three of the five sites the scan call is not at the
+   call site — the convergence is inside the helper. Disposing at the call site would have released *after*
+   convergence and changed nothing. This is the same approved shape (explicit idempotent `Dispose()` between
+   "extract returned" and "converge"), applied at the place where those two things actually adjoin. No new
+   abstraction, no governor API change.
+2. **`finally`, not a straight-line call.** A throwing scan should release the machine-wide lease too; the
+   failure paths (`RecordScanFailure`, registry error write) are not extraction work.
+3. **Kept every `using`.** Belt and braces, free because `Dispose` is idempotent — and the idempotency test now
+   pins that this is safe.
+4. **Did not touch `WorkspaceTool.Open` or `IndexBootstrapService`.** Miller `trace` surfaced them as admission
+   holders; I checked both and **neither builds a sidecar inside the admission scope**, so there is no leak to
+   fix there. Details in §3.
+5. **Cross-workspace observed via `readLatestRevision`, not a new hook.** That existing injected seam sits
+   strictly between the scan and convergence, so no production surface was added to that file.
+
+---
+
+## 3. Miller evidence
+
+The worktree itself was mid-first-index for the early orientation, so the first two calls were refused; I
+re-ran the structural queries against the main checkout once it converged. Calls used:
 
 | Call | What it confirmed |
 |---|---|
-| `inspect target='src/Miller.Indexing/WorkspaceRegistry.cs'` | The class's method inventory and line ranges: `Open :32-75`, `UpsertSeen :77-123`, `SetLevelPolicy :247-265`, and that no lineage surface existed. |
-| `inspect target='WorkspaceRegistryRow' depth=full` | The record is a `sealed record` at `src/Miller.Indexing/WorkspaceRegistryRow.cs:16` — **not** in `WorkspaceRegistry.cs` — with 10 members ending in `LevelPolicy`, and 141 references across the codebase. |
-| `trace target='UpsertSeen' mode=refs` | 17 exact call sites, all positional, in `CliDispatch.cs:3348`, `WorkspaceTool.cs:1297`, and 15 test sites. This is why lineage is a trailing optional parameter rather than an inserted one. |
-| `inspect target='PathCanonicalizer' depth=overview` | `CanonicalizeRoot` (throws on a missing directory), `CanonicalizeFile(canonicalRoot, path)` (tolerates a non-existent tail), `StripWindowsVerbatimPrefix`. |
-| `inspect target='ArtifactRootIdentity' depth=overview` | `Matches(string? recordedRootPath, string canonicalRoot)` and `ComparisonFor(bool, bool)` — the exact comparison the design doc names, and a shape that takes a nullable recorded value, so the stored column feeds it directly. |
+| `context query="scan governor admission acquire and sidecar convergence in IndexerService" workspace_id=miller-b275269b2d7c` | refused — worktree bootstrap in progress (reported honestly, not silently skipped) |
+| `inspect target=ScanGovernorAdmission depth=full` | same refusal; re-derived by reading `ScanGovernorState.cs` in the worktree |
+| `trace target=ScanGovernorAdmission mode=refs limit=20 workspace_id=miller-b275269b2d7c` | **17 exact references, 0 fallback.** Enumerated EVERY admission site in the repo: `IndexerService` `:538/:617/:813/:959/:1025/:1036/:1091`, `CrossWorkspaceRefreshService` `:245/:442`, plus `IndexBootstrapService` `:572/:685/:1108` and `WorkspaceTool` `:1245` — the two the plan did not name. That is how I found the extra holders and checked them. |
+| `impact target=ScanAsLeaderUnderGate workspace_id=miller-b275269b2d7c` | 8 impacted symbols (the three call sites at `:947/:1061/:530`, plus `RunDrainTick`, `RunLeadershipSessionAsync`, and the two `*ForTest` seams) and 22 likely tests — which is how I knew to run `IndexerServiceScanTests` and `IndexerServiceLeadershipTests` alongside the new class. |
 
-## API-shape evidence
+Follow-up on the two extra holders (read-only checks in the worktree):
 
-- **`UpsertSeen` signature** — proven by `inspect` (`public WorkspaceRegistryRow UpsertSeen(string workspaceId,
-  string displayId, string canonicalRoot, string indexDbPath, WorkspaceRegistryState state = Ready,
-  DateTimeOffset? seenAtUtc = null)`) and by `trace mode=refs` showing every call site passes positionally up to
-  `seenAtUtc`. A trailing optional parameter breaks none of them; the build confirms it.
-- **Row record shape** — `inspect target='WorkspaceRegistryRow' depth=full`, plus a direct read of
-  `WorkspaceRegistryRow.cs` for the trailing `string? LevelPolicy = null` that establishes the
-  optional-trailing-member convention.
-- **Migration pattern** — read directly at `WorkspaceRegistry.cs:337-370` (`pragma_table_info` probe +
-  duplicate-column-tolerant `ALTER`); Miller listed the symbols, the exact text came from the file.
-- **`PathCanonicalizer` entry point** — `inspect depth=overview` listed `CanonicalizeRoot` and
-  `CanonicalizeFile`; the throwing/tolerant distinction came from their XML docs in the file.
-- **`GitWorktreeLayout` / `WorkspaceRootIdentity`** — read directly (small pure files); their member names
-  (`CommonDir`, `IsLinkedWorktree`, `GitDir`, `GitDirCreatedAtUtc`) are what `WorkspaceLineage` mirrors.
+- `WorkspaceTool.Open` (`workspace-open-prime`, `:1245`): holds admission through `_registry.MarkScanned` only;
+  no `EnsureBuilt`/`Converge` inside the scope. **No leak.**
+- `IndexBootstrapService` (`bootstrap`, `bootstrap-auto-rebuild`, `:572/:685/:1108`): no sidecar convergence
+  inside the admission blocks. **No leak.** (That file is Task 2's; untouched either way.)
 
-## Judgment calls
+Exact line content was confirmed by reading each region in the worktree before editing, per the brief.
 
-- **`src/Miller.Indexing/WorkspaceRegistryRow.cs` — edited, though the brief listed only
-  `WorkspaceRegistry.cs`.** The brief requires four nullable members on `WorkspaceRegistryRow`, and Miller
-  proved that record lives in its own file, not in `WorkspaceRegistry.cs` as the file list assumed. The edit is
-  four trailing optional parameters and nothing else. Flagging it because a sibling task may touch the same
-  file.
-- **`WorkspaceRegistry.cs:~500 — `CanonicalizeCommonDir` uses `CanonicalizeFile` over `CanonicalizeRoot`.**
-  Identical resolution for an existing directory; `CanonicalizeRoot` additionally throws when the directory is
-  gone, which would turn a vanished git dir into a failed workspace registration. One code path, no exception
-  control flow.
-- **`WorkspaceRegistry.cs` `UpsertSeen` — canonicalization at write time, not required of the caller.** The
-  brief allowed either; write-time enforcement means no caller can store a raw path. The lookup keeps the
-  brief's `canonicalCommonDir` parameter name and the caller (Task 6) is directed to
-  `WorkspaceLineage.CanonicalizeCommonDir` by the XML doc, so both sides run the same function.
-- **`FindMainCheckoutByCommonDir` — C# comparison via `ArtifactRootIdentity.Matches`, not SQL `COLLATE
-  NOCASE`.** `PruneDuplicatePathRowsUnderLock` does compare paths in SQL, so the brief permitted either.
-  SQLite's `NOCASE` is ASCII-only while `ComparisonFor` yields full-Unicode `OrdinalIgnoreCase`, and `Matches`
-  also strips the Windows verbatim prefix — reusing it means zero drift from the semantics §5 names. The
-  registry holds tens of rows, so the scan cost is irrelevant.
-- **`WorkspaceLineage` has no `RootIdentity` convenience property.** I wrote one, then removed it: Task 2's
-  consumption rule rebuilds `WorkspaceRootIdentity` from the ROW, not from this record, so it was dead surface.
-- **`RowColumns` shared constant.** Three `SELECT`s must agree with `ReadRow`'s ordinals; adding a fourth
-  hand-maintained copy for the lookup invited exactly the drift bug that reads a column into the wrong member.
-- **`ORDER BY workspace_id` in the lookup.** One repo should have one main checkout, but an unordered scan
-  would pick nondeterministically if it ever had two.
+---
 
-## Self-review
+## 4. API-shape evidence
 
-- **Acceptance criteria** — all four met. Migration on an existing DB with null reads: covered. Exact
-  round-trip including the creation timestamp: covered. Main checkout among mixed rows, ignoring linked rows,
-  other repos, and platform comparison: covered. Null-lineage preservation: covered.
-- **Quality** — no narration comments added; the one existing block comment above the migration was updated
-  because the lines were already being changed. Test bodies carry zero comments. The single pre-existing
-  comment inside `SetLevelPolicy_StoresClearsAndSurvivesUpsertSeen` was left alone (not a line I changed).
-- **YAGNI** — the delivered surface is exactly: four columns, four row members, one `WorkspaceLineage` record
-  with one static, one lookup method. No generic lineage framework, no query-by-repo helper, no
-  `SetLineage` mutator.
-- **Tests assert meaningful values** — the round-trip test asserts against a timestamp carrying odd ticks and
-  checks both the returned row and a re-read row; the canonicalization test asserts equality with an
-  independently canonicalized real path AND inequality with the symlinked input, so it cannot pass by storing
-  the input verbatim; the platform test asserts a null on Linux rather than skipping.
-- **Duplication removed** — `Open_APreLevelsRegistryGainsTheLevelPolicyColumn` now shares the
-  `WriteLegacyPreLevelsSchema()` helper with the new migration test instead of carrying its own inline DDL.
+- **The type in the plan does not exist under that name in `ScanGovernor.cs`.** `ScanGovernor.cs` defines
+  `ScanGovernor`, `ScanGovernorRequest`, `ScanGovernorOwner`, `ScanGovernorLease`. `ScanGovernorAdmission` lives
+  in `src/Miller.Indexing/ScanGovernorState.cs:155`. No plan mismatch in substance — just where to look.
+- **`ScanGovernorAdmission.Dispose` (`ScanGovernorState.cs:229-236`)** — `if (_disposed) return; _disposed = true;
+  _lease.Dispose(); _state?.Exit(...)`. Already idempotent; **no code change was required** by acceptance
+  criterion 3, and the new test proves it rather than assuming it.
+- **`ScanGovernorLease.Dispose` (`ScanGovernor.cs:50-61`)** — same `_disposed` guard, so the inner release is
+  idempotent too.
+- **`ScanGovernorAdmission.TryAcquire(ScanGovernor, ScanGovernorState?, ScanGovernorRequest, TimeSpan,
+  CancellationToken)`** returns `ScanGovernorAdmission?`; a null `state` or a disabled governor takes the lease
+  without publishing a position. The test therefore injects an **enabled** `ScanGovernor.ForMillerHome(tempHome)`
+  — a disabled one would publish nothing and the position assertions would pass vacuously.
+- **`ScanGovernorState.Shared.Snapshot(workspaceRoot)`** returns `null` when idle; the key is
+  `ScanGovernorKey.For(workspace)` = `CanonicalRoot` (`ScanGovernorKey.cs:16-23`). The test keys on
+  `workspace.CanonicalRoot`, matching the writer.
+- **Re-entrancy**: `ScanGovernor.TryAcquire` throws `InvalidOperationException` when the calling thread already
+  holds admission **for that instance** (`_threadHeld.Contains(this)`, `:309`). The probe constructs a *fresh*
+  `ScanGovernor` instance, so only the OS `FileShare.None` handle can refuse it — which is exactly the fact
+  under test.
+- **All governed scan paths are synchronous** (`ops.Scan`, `_scan`, `DrainAndProcess`; `ScanOutcome.Result` is a
+  property, not `Task.Result`), so the early `Dispose` runs on the acquiring thread — the thread-static
+  `LeaveThread()` bookkeeping stays correct.
+- `ExtractReport.Revision => RevisionBlock?.LatestRevisionId` (`ExtractReport.cs:27`) — used to drive the
+  cross-workspace test down the `readLatestRevision` branch via `RevisionBlock = null`.
 
-## Concerns
+---
 
-1. **Shared-assembly collisions during the parallel batch.** Tasks 4 and 5 were mid-red-phase in
-   `Miller.Indexing` and `Miller.Tests` while I verified, so the suite was uncompilable for stretches through
-   no fault of any single task. The lead should re-run `scripts/test.sh` once all workers report.
-2. **`WorkspaceRegistryRow.cs` is outside my declared ownership** but had to change (see judgment calls). If
-   Task 2 also edits it, the lead should reconcile.
-3. **The lookup's contract depends on the caller canonicalizing.** A raw path passed to
-   `FindMainCheckoutByCommonDir` fails silently — it returns null, so a rebind degrades to a plain bootstrap
-   scan rather than doing anything wrong, but Task 6 must call `WorkspaceLineage.CanonicalizeCommonDir` first.
-   The XML doc says so; the type system does not enforce it.
-4. **No test covers two non-linked rows sharing one `git_common_dir`.** It should not happen (one main checkout
-   per repository), and the `ORDER BY` makes the pick deterministic if it ever does.
+## 5. Gate invariants held
 
-## Files changed
+- **One extractor machine-wide:** unchanged. Every scan still runs fully inside the admission; the drain path's
+  `wholeRepoScanAdmitted: admission is not null` argument is still evaluated before the release. Each site test
+  asserts `LeaseFreeDuringScan == false`.
+- **No concurrent extract per workspace:** unchanged. Convergence stays inside `_opsGate` (leader) / the
+  `SingleWriterLock` (cross-workspace). No lock was moved, added, or reordered.
+- **Lock order** `SingleWriterLock -> ScanGovernor -> _opsGate` unchanged; releasing a lease early cannot
+  introduce a cycle.
+- **Fast suite purity:** the new class spawns nothing, uses a per-test temp miller home, and never touches the
+  real user-global `~/.miller/scan`. No `Category=Scale` needed and none added.
+- **Build:** `dotnet build Miller.slnx -c Release` → **0 warnings / 0 errors** (with
+  `MILLER_ALLOW_MISSING_JULIE_EXTRACT=1 MILLER_ALLOW_MISSING_SEMANTIC=1`, the documented offline hatch — this
+  worktree has no restored `.tools`; without them the pin guard fails before compilation, and compilation itself
+  was clean either way).
 
-- `src/Miller.Indexing/WorkspaceRegistry.cs` — schema head, `RowColumns`, `AdditiveColumns`, generalized
-  migration, `UpsertSeen` lineage parameter and SQL, `FindMainCheckoutByCommonDir`, `ReadRow` ordinals,
-  `WorkspaceLineage` record.
-- `src/Miller.Indexing/WorkspaceRegistryRow.cs` — four trailing optional record members.
-- `tests/Miller.Tests/Indexing/WorkspaceRegistryTests.cs` — extended schema assertion, renamed concurrent-adder
-  test, 10 new tests, two shared helpers (`MakeDirectory`, `WriteLegacyPreLevelsSchema`), `SkipIfNoSymlinks`.
+---
+
+## 6. Test results
+
+**Red first (proof, not assertion).** After the implementation I temporarily neutralised the four
+`admission[?].Dispose();` lines and re-ran:
+
+```
+Failed!  - Failed: 6, Passed: 1, Skipped: 0, Total: 7
+```
+
+All five leader-site tests and the cross-workspace test failed with, e.g.
+`Assert.Null() Failure … ScanGovernorSnapshot { State = holding, Reason = leader-drain-rescan }`. The one pass
+was the `Dispose` idempotency test, which is behaviour-independent by design. The production files were then
+restored byte-for-byte from copies (verified: no `RED-PROBE` markers remain, all four `Dispose` calls present).
+
+**Green — the required command:**
+
+```
+dotnet test --filter "FullyQualifiedName~IndexerSidecarAdmissionTests"
+Passed! - Failed: 0, Passed: 6, Skipped: 0, Total: 6, Duration: 349 ms
+```
+
+**Invariant it proves:** sidecar convergence never runs while this process holds machine-wide scan admission —
+neither the OS lease nor the published `ScanGovernorState` position — while the extract itself always does.
+
+**Neighbouring suites** (`IndexerSidecarAdmissionTests`, `IndexerServiceScanTests`,
+`CrossWorkspaceRefreshServiceTests`): `Passed! - Failed: 0, Passed: 111`.
+
+**Worker ceiling — full fast suite** (`scripts/test.sh`): `Passed! - Failed: 0, Passed: 6145, Skipped: 2`.
+Scale/all NOT run, per the brief.
+
+---
+
+## 7. Concerns
+
+1. **`scripts/test.sh` wall-clock tripwire fired once at 75s (ceiling 30s) — machine contention, not this
+   change.** Load average was 25 with three sibling workers building and testing concurrently. A re-run at load
+   14 gave **28s, under the ceiling**. The new class contributes 349ms. Worth re-checking on a quiet box before
+   the lead's final gate.
+2. **`CrossWorkspaceRefreshServiceTests.cs` was edited outside my declared file ownership** (§1). One test,
+   inverted in place because it pinned the removed behaviour. Please confirm no sibling touched that file.
+3. **One new production member:** `IndexerService.BeforeSidecarConvergeForTest`. Existing seams could observe
+   *during the scan* (`RecordingScanOps.WhileScanning`) but nothing could observe *at convergence time*, which
+   acceptance criterion 1 explicitly requires ("test observes governor state from within a convergence hook").
+   It is `internal`, null in production, and a single `?.Invoke()`.
+4. **Scale coverage not exercised.** The real 8-worktree fleet effect (the ~235s ladder in the finding) is not
+   measurable from the fast suite. A Scale/real-repo re-run of the P4 validation is the honest confirmation that
+   the ladder actually collapses; that is above my ceiling and is the lead's call.

@@ -1,48 +1,37 @@
-### Task 4: SqliteOnlineBackup page-stepped copier
+### Task 4: Carry the julie-extract exit code on IncompatibleExtractException into W8 records
 
 **Files:**
-- Create: `src/Miller.Indexing/SqliteOnlineBackup.cs`
-- Test: `tests/Miller.Tests/Indexing/SqliteOnlineBackupTests.cs`
+- Modify: `src/Miller.Indexing/IncompatibleExtractException.cs` (add `public int? ExitCode { get; }` + constructor overload; existing constructors unchanged)
+- Modify: `src/Miller.Indexing/JulieExtractExceptions.cs` (`ExitCodeOf` `:39` also reads `IncompatibleExtractException.ExitCode`)
+- Modify: `src/Miller.Indexing/JulieExtractRunner.cs` (only the rebind exit-3 refusal throw sites: pass exit code 3)
+- Test: `tests/Miller.Tests/Indexing/JulieExtractExceptionExitCodeTests.cs` (new)
 
 **Interfaces:**
-- Consumes: `SQLitePCL.raw` (`sqlite3_backup_init`, `sqlite3_backup_step`, `sqlite3_backup_finish`,
-  `sqlite3_backup_remaining`/`pagecount`) via the already-referenced
-  `SQLitePCLRaw.bundle_e_sqlite3`; `SqliteReadOnlyAccess` conventions for the source open
-  (read-only, `Pooling=false`).
-- Produces: `SqliteOnlineBackup.Copy(string sourceDb, string destinationDb, TimeSpan budget, Func<DateTimeOffset> clock, CancellationToken ct) → BackupOutcome`
-  where `BackupOutcome` is `Completed | BudgetExhausted | Failed(reason)`. A public
-  `static TimeSpan ResolveBudget()` reading `MILLER_REBIND_COPY_BUDGET` (seconds or `TimeSpan`
-  format, default 3 minutes — same parsing shape as `MILLER_PROMOTE_RETRY_TIMEOUT`).
+- Consumes: `JulieExtractException.ExitCodeOf(Exception?)` (`JulieExtractExceptions.cs:39`), the rebind refusal mapping in `JulieExtractRunner.Rebind` (exit 3 = `fingerprint_mismatch`/`no_committed_revision` → `IncompatibleExtractException`).
+- Produces: `IncompatibleExtractException.ExitCode` (nullable, additive — every existing construction site compiles unchanged); `ExitCodeOf` returns 3 for rebind refusals, so `ScanFailureJournal` records `exit_code: 3` instead of null.
 
-**Contract inputs:** contract design §4: page-stepped loop (NOT `Microsoft.Data.Sqlite`'s
-`BackupDatabase` — one uncancellable `step(-1)` makes the budget unenforceable); budget checked
-between steps; a source write restarting the backup is expected behavior the budget bounds;
-zero writes to the source (read-only open, no checkpoint). Destination is the caller-supplied
-`.rebuild` path; on `BudgetExhausted`/`Failed` the helper deletes its partial destination trio
-before returning.
+**Contract inputs:** P3 standing note (progress ledger + P3 morning report): "exit-3 refusals record null exit code in W8 (no Code property on IncompatibleExtractException)". `RebindBootstrap.cs:516` already calls `JulieExtractException.ExitCodeOf(ex)` on the failure path — no change there.
 
-**File ownership:** Create `src/Miller.Indexing/SqliteOnlineBackup.cs`; Test `tests/Miller.Tests/Indexing/SqliteOnlineBackupTests.cs`
+**File ownership:** Modify: `src/Miller.Indexing/IncompatibleExtractException.cs`, `src/Miller.Indexing/JulieExtractExceptions.cs`, `src/Miller.Indexing/JulieExtractRunner.cs` (rebind exit-3 throw sites only). Test: `tests/Miller.Tests/Indexing/JulieExtractExceptionExitCodeTests.cs` (new)
 
 **Serialization required:** No
 
 **Dependency reason:** None - safe parallel batch.
 
-**What to build:** The bounded, cancellable artifact snapshot: a raw SQLite backup loop stepping N
-pages (start at 1024; constant, not configurable) with the wall-clock budget and cancellation
-token checked between steps.
+**What to build:** An additive nullable `ExitCode` on `IncompatibleExtractException`, populated at the rebind exit-3 throw sites in `JulieExtractRunner`, surfaced through `ExitCodeOf` so the W8 journal's `exit_code` field carries 3 for rebind refusals. Do NOT touch other `IncompatibleExtractException` construction sites (schema gate, version gate) — they stay null, which is honest (no subprocess exit is involved there).
 
-**Approach:** Fast tests use small real SQLite files in temp dirs (registry tests already do this
-in the fast suite). Prove: a live-writer copy is consistent (write to the source between steps via
-a hook seam or small page count, destination still passes `PRAGMA integrity_check`), and budget
-exhaustion via an injected clock that jumps past the budget after the first step — no real
-waiting. Verify the source file's bytes/mtime are untouched after a copy.
+**Approach:** Follow the existing exception style in the file. Tests: `ExitCodeOf` returns the code for an `IncompatibleExtractException` built with one, null for one built without, and still works for `JulieExtractException`; plus one test on the runner's rebind refusal mapping if it is reachable without a subprocess (the parse/mapping helpers are internal — use them; if the mapping is only reachable via the real binary, the mapping test is already covered by `JulieExtractRunnerRebindTests` at Scale and the unit tests stop at `ExitCodeOf`).
 
 **Acceptance criteria:**
-- [ ] Copy of a populated DB passes `PRAGMA integrity_check` and row-count equality.
-- [ ] Budget exhaustion (injected clock) returns `BudgetExhausted`, deletes the partial
-      destination trio, and leaves the source byte-identical.
-- [ ] Source opened read-only: a copy of a write-locked/live source succeeds without writing to it.
-- [ ] `ResolveBudget` parses seconds and `TimeSpan` spellings and defaults sanely.
-- [ ] Worker-scope verification passes and the change is handed to the lead per
-      parallel-lead-commit.
+- [ ] `ExitCodeOf` returns 3 for a rebind-refusal `IncompatibleExtractException` and null for legacy construction sites.
+- [ ] No existing construction site changed behavior (build clean, fast suite green).
+- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
 
+---
+
+## Out of scope (recorded, not planned)
+
+- **Sidecar copy/rebind for worktree opens** (the ~200 s search-sidecar build dominating the 457 s open) — a feature with its own design questions (revision-keyed identity across artifact ids), not a finding fix. Needs its own plan if pursued.
+- **Failed rebind consumes the W8 slot** — intentional design bias (design doc §7.4).
+- **SQLITE_BUSY copy branch untested** — unreachable via the production path by design.
+- **`DefaultBootstrapScanLockWait` tuning** — with Task 1 the admission holds shrink to scan length; the 10-minute budget becomes generous rather than starvable. Revisit only if the fleet re-validation still shows waits near the cap.

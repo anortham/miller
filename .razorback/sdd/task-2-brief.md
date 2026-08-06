@@ -1,48 +1,30 @@
-### Task 2: Bootstrap lineage capture + replacement consumption rule
+### Task 2: Bootstrap self-retry after an admission-wait timeout + ineligible-rebind logging
 
 **Files:**
-- Modify: `src/Miller.Server/Hosting/IndexBootstrapService.cs` (`UpsertSeen` call sites; the
-  decision fold around `DecideBootstrapScan` :907-926 / `EscalateForReplacedRoot` :938-946)
-- Test: `tests/Miller.Tests/Server/BootstrapReplacedRootTests.cs`
+- Create: `src/Miller.Server/Hosting/ScanAdmissionTimeoutException.cs`
+- Modify: `src/Miller.Server/Hosting/IndexBootstrapService.cs` (throw site `:574-579`; failure marking `:872-910`; re-run entry `:355-384`; rebind fallback arm `:606-644`)
+- Test: `tests/Miller.Tests/Server/BootstrapAdmissionRetryTests.cs` (new)
 
 **Interfaces:**
-- Consumes: Task 1's `WorkspaceLineage` record + extended `UpsertSeen` + row fields;
-  `WorkspaceRootIdentity.Capture`/`IsReplacement`
-  (`src/Miller.Indexing/WorkspaceRootIdentity.cs:40,69-79`); the existing in-memory replacement
-  escalation path.
-- Produces: a pure fold `static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current)`
-  (name at implementer's discretion, but pure and fast-suite-tested) that Task 6 calls: true when
-  the stored persisted identity is known and `IsReplacement(stored, current)`; the bootstrap
-  escalates to `EscalateForReplacedRoot` in exactly that case, BEFORE any rebind attempt.
+- Consumes: `StartRunLocked`/`RunBootstrapInBackground` (the existing replaced-root re-run path), `BootstrapPhase`, `_runGeneration` guards, `RebindBootstrapOutcome` (`Kind.Ineligible`, `Reason`).
+- Produces: `ScanAdmissionTimeoutException : InvalidOperationException` (message unchanged from today's text); an automatic delayed re-run after an admission-timeout bootstrap failure; one `LogInformation` line naming `rebind.Reason` whenever a rebind attempt is `Ineligible`.
 
-**Contract inputs:** contract design §5 consumption rule (load-bearing): a replaced root both
-escalates the scan decision to `ScanIntent.RootRebind` AND disqualifies rebind for that open —
-the on-disk artifact and registry row describe a different checkout generation. Columns refresh
-via the normal `UpsertSeen` afterward. Missing/unknown stored identity NEVER counts as a
-replacement (missing evidence must not cost a rebuild).
+**Contract inputs:** P4 finding §3: wt7 threw at exactly `DefaultBootstrapScanLockWait` (`:1134`, 10 min) and never retried for 50 minutes. P4 finding §6: `Ineligible` logs nothing. The existing replaced-root re-run (`:355-370`) is the pattern to reuse: phase-guarded `StartRunLocked` + `Task.Run(RunBootstrapInBackground)`.
 
-**File ownership:** Modify `src/Miller.Server/Hosting/IndexBootstrapService.cs`; Test `tests/Miller.Tests/Server/BootstrapReplacedRootTests.cs`
+**File ownership:** Create: `src/Miller.Server/Hosting/ScanAdmissionTimeoutException.cs`. Modify: `src/Miller.Server/Hosting/IndexBootstrapService.cs`. Test: `tests/Miller.Tests/Server/BootstrapAdmissionRetryTests.cs` (new)
 
-**Serialization required:** Yes
+**Serialization required:** No
 
-**Dependency reason:** Consumes Task 1's row fields and `UpsertSeen` shape.
+**Dependency reason:** None - safe parallel batch.
 
-**What to build:** Persist lineage at every bootstrap `UpsertSeen`, and make the persisted
-identity feed the existing replacement escalation so `git worktree remove`+`add` while no Miller
-runs is detected on the next open (today the identity sample is in-memory only).
+**What to build:** (a) Type the admission-timeout failure: the `InvalidOperationException` thrown when `AcquireBootstrapScanAdmission` returns null becomes `ScanAdmissionTimeoutException`. (b) In `MarkBootstrapFailed`, when the error is that type, schedule ONE delayed background re-run (fixed 60 s delay + up-to-25% jitter): after the delay, if the phase is still `Failed` and the generation unchanged, start a new run via the same `StartRunLocked` + `RunBootstrapInBackground(rootReplaced: false)` shape the replaced-root path uses. Each failed retry re-schedules — unbounded, because every cycle is one bounded admission wait, no scan runs, and the alternative is a permanently dead server. A shutdown token cancels the pending delay. Deterministic (non-timeout) failures stay terminal exactly as today. (c) In the rebind fallback arm (`:606-614`), add an `LogInformation` line for the `Ineligible` outcome carrying `rebind.Reason` — fresh-workspace bootstraps are rare, so one line per bootstrap is acceptable volume; `Failed` keeps its existing warning.
 
-**Approach:** Capture `GitWorktreeLayout.Resolve` + `WorkspaceRootIdentity.Capture` once per
-bootstrap (they are already resolved nearby for the presence monitor — reuse, don't re-probe).
-Compare stored-vs-current BEFORE the first `UpsertSeen` refreshes the row. Extend the existing
-`BootstrapReplacedRootTests` scenario style: persisted-identity replacement (no live monitor
-involvement) escalates and would-disqualify.
+**Approach:** The retry timer is `Task.Delay` with the shutdown token — no new hosted service, no persisted state (the admission timeout is process-local contention, unlike W8's cross-process scan failures). Use the deterministic-clock seam pattern only if a real `Task.Delay(60s)` cannot be short-circuited in tests — prefer an internal `TimeSpan` override field (`TestAdmissionRetryDelay`) defaulting to the production value, matching the existing `TestBootstrapScanAdmissionWait` precedent (`:1114`). Assert: a timeout failure schedules a re-run and flips phase back to Running; a deterministic failure does not; the generation guard prevents a stale retry from clobbering a newer run; jitter stays within bounds.
 
 **Acceptance criteria:**
-- [ ] A registry row carrying a different known persisted identity escalates the bootstrap
-      decision to `RootRebind` (via `EscalateForReplacedRoot`) with no live
-      `WorkspaceRootPresenceMonitor` involvement.
-- [ ] Unknown stored identity or unknown current identity never escalates and never disqualifies.
-- [ ] Lineage is persisted on bootstrap and refreshed after the decision (stored generation is
-      the CURRENT one post-open).
-- [ ] Worker-scope verification passes and the worker commits per serial-worker-commit.
+- [ ] An admission-timeout bootstrap failure re-runs the bootstrap after the (test-shortened) delay; success on the retry binds the workspace.
+- [ ] A non-timeout bootstrap failure remains terminal (no retry scheduled).
+- [ ] A stale retry (generation advanced by a replaced-root re-run) is a no-op.
+- [ ] An `Ineligible` rebind logs one Information line with the reason; `Promoted`/`Failed` logging is unchanged.
+- [ ] Worker-scope verification passes and the change is handed to the lead per commit mode.
 

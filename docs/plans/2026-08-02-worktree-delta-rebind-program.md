@@ -205,6 +205,11 @@ itself 48 s; SIGKILL recovery PASS; language parity PASS (non-vacuous on the rea
 PARTIAL — 7/8 in ≤29.6 min, the 8th starved at the 10-minute bootstrap admission cap because
 leaders hold the machine-wide governor through sidecar convergence (pre-existing governor-policy
 gap, follow-up decision owed).
+**Findings fixed 2026-08-06** (`docs/plans/2026-08-06-p4-findings-fixes-plan.md`, findings doc §9):
+admission released before sidecar convergence, bootstrap self-retry after an admission timeout,
+heartbeat-window wait before the rebind fallback, exit-3 codes into the W8 journal. Fleet re-run:
+8/8 rebound AND fully converged in 1,210 s with zero admission timeouts — the starvation gap is
+closed.
 
 - On the W10 74k-file fixture: fresh worktree open completes in seconds-to-low-minutes (target:
   ≥10× faster than the full-scan baseline measured in W10).

@@ -158,3 +158,34 @@ the copy itself is 48 s of a 457 s open, so the §10 `clonefile` trigger stays u
 Harness and scripts: session scratchpad `p4/` (`gen_fixture.py`, `harness.sh`, `baseline.sh`,
 `wt-open.sh`, `fleet.sh`, `sigkill.sh`, `parity.sh`); one-off measurement rig, not committed, per
 the W10 precedent.
+
+## 9. Fix validation (branch `p4-findings-fixes`, 2026-08-06)
+
+The four product findings above were fixed on branch `p4-findings-fixes`
+(plan: `docs/plans/2026-08-06-p4-findings-fixes-plan.md`) and re-validated against a rebuilt
+Release binary with the same harness and a regenerated 74k fixture.
+
+**Heartbeat window (§6 fix).** A mini-fixture worktree opened seconds after the source scan now
+WAITS out the heartbeat-window remainder and rebinds: bootstrap start 08:15:14.6 → rebind complete
+08:15:42.1 (~27 s wait, then a ~1 s rebind + delta reconcile). Pre-fix this path silently
+full-scanned. The first smoke attempt also exercised the new ineligible-rebind logging (§5 fix):
+a stale registry row for a recreated worktree path produced one Information line naming the
+reason instead of a silent full scan.
+
+**Fleet serialization + starvation (§3 fix).** 8 worktrees opened at once against the seeded 74k
+main artifact (baseline seed: 301 s, 3,261,351 documents, 4.58 GB):
+
+- 8/8 rebound (`rebound_from` present on every worktree).
+- 8/8 fully converged — search AND content sidecars current — in **1,210 s total**, ready ladder
+  1,082–1,210 s (a ~2-minute spread; the sidecar builds now run concurrently outside admission).
+- **Zero** `Timed out waiting for machine-wide scan admission` lines across all 9 logs. Pre-fix:
+  7/8 on a ~235 s admission ladder with the 8th starving to a 10-minute timeout.
+
+A first fleet attempt was invalidated by environment, not product: the scratch disk filled
+(Time Machine local snapshots pinned ~100 GB of deleted validation data), the search-sidecar
+build failed with SQLITE_FULL, and every worktree kept serving its artifact with the sidecar
+visibly `missing` — the fail-visible design holding under disk exhaustion. Re-run with headroom
+produced the numbers above.
+
+The cancelled-wait and stale-retry hardenings from the branch's codex pre-merge review
+(commits `8407a7bf`, `76393b44`) are covered by unit gates, not this harness.
