@@ -197,6 +197,13 @@ blake3 `files.content_hash`.
 
 ### P4 — Scale validation. ~1 agent session.
 
+**Validated 2026-08-06 — see
+[`docs/findings/2026-08-06-rebind-p4-scale-validation.md`](../findings/2026-08-06-rebind-p4-scale-validation.md).**
+Worktree open 240 s vs the 3,677 s W10 baseline (15.3×, PASS); SIGKILL recovery PASS; language
+parity PASS; fleet PARTIAL — 7/8 in ≤29.6 min, the 8th starved at the 10-minute bootstrap
+admission cap because leaders hold the machine-wide governor through sidecar convergence
+(pre-existing governor-policy gap, follow-up decision owed).
+
 - On the W10 74k-file fixture: fresh worktree open completes in seconds-to-low-minutes (target:
   ≥10× faster than the full-scan baseline measured in W10).
 - 8-worktree fleet from one indexed main checkout converges in minutes, not hours.
