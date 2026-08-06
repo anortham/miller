@@ -29,6 +29,8 @@ public sealed class JulieExtractRunner
     //   [--ignore-file <ABS_PATH>]... [--force]`.
     // update/delete touch one canonical file — `update|delete --root <ABS_ROOT> --db <ABS_DB> --file <ABS_CANON_FILE> --strict-schema --json` (M3);
     //   update additionally takes `[--ignore-file <ABS_PATH>]...`, delete does not accept the flag at all.
+    // rebind retargets an artifact's recorded root — `rebind --root <ABS_ROOT> --db <ABS_DB> --strict-schema --json`
+    //   (julie-extract 2.27.0); metadata only, no --file/--force/--ignore-file, and the one verb with no root gate.
     /// <summary>
     /// The default NO-PROGRESS bound on a single julie-extract invocation: the child is killed only after the
     /// artifact (db/-wal/-shm bytes) and its output have been silent this long. A fixed TOTAL cap cannot tell a
@@ -344,6 +346,21 @@ public sealed class JulieExtractRunner
         return new[] { subcommand, "--root", absRoot, "--db", absDb, "--file", absFile, "--strict-schema", "--json" };
     }
 
+    /// <summary>
+    /// Build the argv for a <c>rebind</c>:
+    /// <c>rebind --root &lt;absRoot&gt; --db &lt;absDb&gt; --strict-schema --json</c> (julie-extract 2.27.0).
+    /// The verb rewrites recorded root and identity metadata only — it extracts nothing, so there is no
+    /// <c>--file</c>, no <c>--force</c>, and no <c>--ignore-file</c> to carry. Paths must already be absolute
+    /// (the caller's responsibility, as for every other builder); julie canonicalizes them at its own boundary
+    /// and records the canonicalized <c>--root</c>.
+    /// </summary>
+    public static IReadOnlyList<string> BuildRebindArgs(string absDb, string absRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absDb);
+        ArgumentException.ThrowIfNullOrWhiteSpace(absRoot);
+        return new[] { "rebind", "--root", absRoot, "--db", absDb, "--strict-schema", "--json" };
+    }
+
     /// <summary>Parse a julie-extract report from stdout JSON.</summary>
     /// <exception cref="JsonException">The text is not a valid <see cref="ExtractReport"/>.</exception>
     public static ExtractReport ParseReport(string json)
@@ -352,6 +369,46 @@ public sealed class JulieExtractRunner
         return JsonSerializer.Deserialize(json, JulieExtractJsonContext.Default.ExtractReport)
             ?? throw new JsonException("julie-extract report deserialized to null.");
     }
+
+    /// <summary>
+    /// Pure parse of the additive top-level <c>rebind</c> section julie-extract publishes on a COMPLETING
+    /// rebind report — both <c>ok</c> (<c>changed: true</c>) and the same-root no-op <c>no_change</c>
+    /// (<c>changed: false</c>). A REFUSED rebind carries its refusal in <c>errors</c> and no section at all, so
+    /// a missing section is a hard parse failure rather than a null result: <see cref="Interpret"/>'s exit-code
+    /// routing is what surfaces a refusal, and reaching here without a section means the report contradicts the
+    /// contract. Read through <see cref="JsonDocument"/> rather than the source-generated
+    /// <see cref="ExtractReport"/> model because the section is rebind-only, so the shared report model stays
+    /// the shape every verb emits.
+    /// </summary>
+    /// <exception cref="JsonException">The text is not valid JSON, carries no <c>rebind</c> section, or the
+    /// section is missing one of the five contract fields.</exception>
+    public static RebindReport ParseRebindReport(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Object
+            || !doc.RootElement.TryGetProperty("rebind", out var rebind)
+            || rebind.ValueKind != JsonValueKind.Object)
+            throw new JsonException("julie-extract rebind report carries no `rebind` section.");
+
+        return new RebindReport(
+            RequiredRebindString(rebind, "previous_root"),
+            RequiredRebindString(rebind, "new_root"),
+            RequiredRebindString(rebind, "previous_artifact_id"),
+            RequiredRebindString(rebind, "new_artifact_id"),
+            RequiredRebindFlag(rebind, "changed"));
+    }
+
+    private static string RequiredRebindString(JsonElement section, string name) =>
+        section.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()!
+            : throw new JsonException($"julie-extract rebind section is missing the string field `{name}`.");
+
+    private static bool RequiredRebindFlag(JsonElement section, string name) =>
+        section.TryGetProperty(name, out var value)
+        && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
+            : throw new JsonException($"julie-extract rebind section is missing the boolean field `{name}`.");
 
     /// <summary>
     /// Map a completed process result (exit code + captured stdout/stderr) to a typed outcome. v1's four-code
@@ -398,7 +455,9 @@ public sealed class JulieExtractRunner
 
             case 3:
                 // Incompatible schema/contract/root (schema_incompatible / schema_migration_required /
-                // contract_incompatible / root_mismatch). stdout holds a failed report; surface its code as the
+                // contract_incompatible / root_mismatch), plus rebind's two artifact-identity refusals
+                // (fingerprint_mismatch / no_committed_revision — both fixed by a fresh scan, which is what the
+                // message already tells the operator). stdout holds a failed report; surface its code as the
                 // SAME typed signal the read-path gate throws. Defensive: an unparseable stdout still throws
                 // incompatible (carrying stderr), never a silent pass.
                 string code;
@@ -651,6 +710,38 @@ public sealed class JulieExtractRunner
         return Run(BuildDeleteArgs(canonicalDb, canonicalRoot, canonicalFile));
     }
 
+    /// <summary>
+    /// Run <c>julie-extract rebind</c>: retarget the artifact at <paramref name="dbPath"/> so it records
+    /// <paramref name="newRoot"/>. Metadata only — nothing is copied, extracted, read, or deleted, and the verb
+    /// is the ONE command that does not run the root gate (retargeting is what it exists for). Point it at a
+    /// COPY of an artifact, never at one a leader is serving; the intended flow is copy → rebind → ordinary
+    /// incremental scan of the new root, which the copy now passes because it records that root.
+    ///
+    /// <para>Outcomes follow the shared exit-code contract. A same-root request SUCCEEDS as a no-op
+    /// (<see cref="RebindReport.Changed"/> false, nothing written), so a caller that cannot cheaply tell whether
+    /// its copy needs retargeting may ask unconditionally. The two artifact-identity refusals —
+    /// <c>fingerprint_mismatch</c> (built by a different extractor) and <c>no_committed_revision</c> (a
+    /// metadata-only shell) — exit 3 and surface as <see cref="IncompatibleExtractException"/> naming the code;
+    /// both are fixed by a fresh scan, never by a retry. <c>artifact_changed</c> (something mutated the artifact
+    /// between validation and the write) exits 1 as a recoverable
+    /// <see cref="JulieExtractFailedException"/> carrying the diagnostic: the transaction rolled back, so the
+    /// caller's artifact is byte-identical to what it was and the rebind simply did not happen.</para>
+    ///
+    /// <para>Cancelling kills the child. The retarget's six metadata writes land in ONE SQLite transaction, so
+    /// an interrupted rebind leaves the artifact either fully retargeted or metadata-identical — never
+    /// half-renamed with a stale identity — and the caller may simply ask again.</para>
+    /// </summary>
+    /// <exception cref="IncompatibleExtractException">The artifact cannot be retargeted (exit 3).</exception>
+    /// <exception cref="JulieExtractFailedException">The retarget was refused or failed to write (exit 1).</exception>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was canceled.</exception>
+    public RebindReport Rebind(string dbPath, string newRoot, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newRoot);
+        Run(BuildRebindArgs(Path.GetFullPath(dbPath), Path.GetFullPath(newRoot)), out string stdout, ct);
+        return ParseRebindReport(stdout);
+    }
+
     // The single-file ops (verified-fact 4) take an ALREADY-canonical db. We guard that it is at least an
     // absolute path here — a relative db would be resolved against the ambient CWD by julie, defeating the
     // canonicalization the bootstrap performed. (BuildUpdateArgs/BuildDeleteArgs reject null/blank.)
@@ -663,8 +754,13 @@ public sealed class JulieExtractRunner
                 "canonicalizes it once under the symlink-resolved root — verified-fact 4).", nameof(canonicalDb));
     }
 
-    private ExtractReport Run(IReadOnlyList<string> args)
+    private ExtractReport Run(IReadOnlyList<string> args) => Run(args, out _);
+
+    // The raw stdout overload exists for the verbs whose report carries a section outside the shared
+    // ExtractReport model (rebind's additive `rebind` object); every other caller discards it.
+    private ExtractReport Run(IReadOnlyList<string> args, out string standardOutput, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var psi = new ProcessStartInfo
         {
             FileName = _binaryPath,
@@ -735,8 +831,14 @@ public sealed class JulieExtractRunner
         int pollSlice = (int)Math.Clamp((long)_timeout.TotalMilliseconds, 50, 1000);
         var verdict = ExtractWaitVerdict.Continue;
         bool exited;
+        bool canceled = false;
         while (!(exited = process.WaitForExit(pollSlice)))
         {
+            if (ct.IsCancellationRequested)
+            {
+                canceled = true;
+                break;
+            }
             verdict = policy.Observe(
                 clock.Elapsed, ProgressStamp(dbPath, progressPath, Interlocked.Read(ref outputActivity)));
             if (verdict != ExtractWaitVerdict.Continue)
@@ -748,6 +850,8 @@ public sealed class JulieExtractRunner
             try { process.Kill(entireProcessTree: true); }
             catch (InvalidOperationException) { /* already exited between the wait and the kill */ }
             process.WaitForExit(); // reap the killed child so the handle is released
+            if (canceled)
+                throw new OperationCanceledException(ct);
             string reason = verdict == ExtractWaitVerdict.Stalled
                 ? $"timed out after {_timeout.TotalSeconds:0}s with no extraction progress and was killed " +
                   "(likely hang / wrong binary). Re-run scripts/restore-julie-extract.sh if this persists."
@@ -770,8 +874,9 @@ public sealed class JulieExtractRunner
         // child wrote a complete report. The process has already exited, so this returns promptly.
         process.WaitForExit();
 
+        standardOutput = stdout.ToString().TrimEnd('\n', '\r');
         ExtractReport report = Interpret(
-            process.ExitCode, stdout.ToString().TrimEnd('\n', '\r'), stderr.ToString().TrimEnd('\n', '\r'));
+            process.ExitCode, standardOutput, stderr.ToString().TrimEnd('\n', '\r'));
 
         // Post-extract cross-check: julie-extract only self-rejects a *newer* DB, so an older/drifted schema or
         // contract that it tolerated is Miller's gate to enforce (D5). Surface a typed mismatch at the
@@ -830,3 +935,18 @@ public sealed class JulieExtractRunner
         }
     }
 }
+
+/// <summary>
+/// The additive top-level <c>rebind</c> section of a completing <c>julie-extract rebind</c> report
+/// (julie-extract 2.27.0). <see cref="Changed"/> is the outcome that matters: <c>true</c> for a real retarget,
+/// <c>false</c> for the same-root no-op that wrote nothing — where <see cref="NewRoot"/> equals
+/// <see cref="PreviousRoot"/> and <see cref="NewArtifactId"/> equals <see cref="PreviousArtifactId"/>. A real
+/// retarget mints a fresh random <c>artifact-&lt;32 hex&gt;</c> identity, so a consumer keying cache
+/// invalidation on the artifact id sees the change.
+/// </summary>
+public sealed record RebindReport(
+    string PreviousRoot,
+    string NewRoot,
+    string PreviousArtifactId,
+    string NewArtifactId,
+    bool Changed);
