@@ -97,7 +97,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         int Pruned,
         long ElapsedMilliseconds,
         int DocumentCount,
-        bool UsesExistingLedger);
+        bool UsesExistingLedger,
+        WorkspaceLineage? Lineage);
 
     private BoundWorkspace CurrentBound =>
         Volatile.Read(ref _bound) ?? throw new InvalidOperationException("Holder requested before bootstrap completed.");
@@ -450,6 +451,18 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             string millerDir = Path.GetDirectoryName(canonicalDbPath)!;
             Directory.CreateDirectory(millerDir);
 
+            // One lineage sample per run, read BEFORE any registry write: the comparison below asks what the
+            // stored row says about the PREVIOUS occupant, and the same run refreshes that row on the way out.
+            var lineage = CaptureLineage(canonicalRoot);
+            bool persistedRootReplaced = DisqualifiesRebind(
+                ReadRegistryRow(ctx, stableWorkspaceId), IdentityOf(lineage));
+            if (persistedRootReplaced)
+            {
+                _logger.LogWarning(
+                    "Workspace root {Root} was occupied by a different checkout when it was last registered; " +
+                    "rebuilding its index.", canonicalRoot);
+            }
+
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
             var runner = JulieExtractRunner.Locate(
@@ -478,7 +491,9 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 var probe = ReadBootstrapScanDecision(canonicalDbPath, canonicalRoot);
                 existingRootPath = probe.ExistingRootPath;
-                return rootReplaced ? EscalateForReplacedRoot(probe.Decision) : probe.Decision;
+                return rootReplaced || persistedRootReplaced
+                    ? EscalateForReplacedRoot(probe.Decision)
+                    : probe.Decision;
             }
 
             var winnerArtifact = new WinnerArtifactProbe(canonicalDbPath, canonicalRoot, stableWorkspaceId);
@@ -734,7 +749,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 pruned,
                 (long)elapsed.TotalMilliseconds,
                 index.DocumentCount,
-                usesExistingLedger);
+                usesExistingLedger,
+                lineage);
         }
         catch
         {
@@ -755,13 +771,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 return false;
 
             if (result.DidScan)
-                MarkRegistryScanned(result.Bound.Workspace, result.StableWorkspaceId, result.ScanRevision ?? result.BuiltRevision);
+                MarkRegistryScanned(
+                    result.Bound.Workspace, result.StableWorkspaceId,
+                    result.ScanRevision ?? result.BuiltRevision, result.Lineage);
             else
                 RegisterBootstrapWorkspace(
                     result.Bound.Workspace,
                     result.StableWorkspaceId,
                     result.RegistryStateAfterLoad,
-                    result.BuiltRevision);
+                    result.BuiltRevision,
+                    result.Lineage);
 
             if (result.UsesExistingLedger)
                 result.Bound.Ledger?.RebindWorkspace(result.StableWorkspaceId, result.Bound.Workspace.WorkspaceRoot);
@@ -943,6 +962,54 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             ShouldScan: true,
             ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.RootRebind }),
             WorkspaceRegistryState.Ready);
+    }
+
+    /// <summary>
+    /// Whether the registry row was written by a DIFFERENT checkout generation than the one occupying the root
+    /// now. Such a row and the artifact beside it both describe the previous occupant, so this open must rebuild
+    /// (<see cref="EscalateForReplacedRoot"/>) and must not seed itself from a sibling worktree's index.
+    ///
+    /// <para>The stored identity is the persisted half of the fact
+    /// <see cref="WorkspaceRootPresenceMonitor"/> samples in memory; persisting it is what makes
+    /// <c>git worktree remove</c> followed by <c>git worktree add</c> visible when no Miller was running to watch
+    /// it happen. Missing evidence never counts as a replacement — an unregistered workspace, a row written
+    /// before the lineage columns existed, and an unreadable current layout all answer false, because the verdict
+    /// costs a whole-repo rebuild. <see cref="WorkspaceRootIdentity.IsReplacement"/> enforces that rule for both
+    /// operands; the null row is the only case this method adds.</para>
+    /// </summary>
+    internal static bool DisqualifiesRebind(WorkspaceRegistryRow? stored, WorkspaceRootIdentity current) =>
+        stored is not null
+        && WorkspaceRootIdentity.IsReplacement(
+            new WorkspaceRootIdentity(stored.GitDir, stored.GitDirCreatedAtUtc), current);
+
+    /// <summary>
+    /// The repository lineage of <paramref name="canonicalRoot"/>: the key every worktree of one repository
+    /// shares, plus the generation of the checkout occupying the root right now. Null when the root resolves no
+    /// git layout, which <see cref="WorkspaceRegistry.UpsertSeen"/> reads as "leave the stored lineage alone".
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="canonicalRoot"/> is null or blank.</exception>
+    internal static WorkspaceLineage? CaptureLineage(string canonicalRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(canonicalRoot);
+
+        if (GitWorktreeLayout.Resolve(canonicalRoot) is not { } layout)
+            return null;
+
+        var identity = WorkspaceRootIdentity.Capture(canonicalRoot);
+        return new WorkspaceLineage(
+            layout.CommonDir, layout.IsLinkedWorktree, identity.GitDir, identity.GitDirCreatedAtUtc);
+    }
+
+    /// <summary>The checkout-generation half of a captured lineage, or unknown when no git layout resolved.</summary>
+    internal static WorkspaceRootIdentity IdentityOf(WorkspaceLineage? lineage) =>
+        lineage is null
+            ? WorkspaceRootIdentity.Unknown
+            : new WorkspaceRootIdentity(lineage.GitDir, lineage.GitDirCreatedAtUtc);
+
+    private static WorkspaceRegistryRow? ReadRegistryRow(WorkspaceContext workspace, string stableWorkspaceId)
+    {
+        using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
+        return registry.Get(stableWorkspaceId);
     }
 
     /// <summary>
@@ -1388,7 +1455,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         WorkspaceContext workspace,
         string stableWorkspaceId,
         WorkspaceRegistryState state,
-        long? revision)
+        long? revision,
+        WorkspaceLineage? lineage = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
@@ -1403,7 +1471,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
                 canonicalRoot,
                 canonicalDbPath,
-                state);
+                state,
+                lineage: lineage);
             if (revision is null)
                 return row;
 
@@ -1414,8 +1483,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         }
     }
 
+    /// <summary>
+    /// The lineage-free shape, kept as its own overload because callers bind it as a
+    /// <see cref="Func{T1, T2, T3, TResult}"/> method group, which an optional parameter cannot satisfy.
+    /// </summary>
     internal static WorkspaceRegistryRow MarkRegistryScanned(
-        WorkspaceContext workspace, string stableWorkspaceId, long? revision)
+        WorkspaceContext workspace, string stableWorkspaceId, long? revision) =>
+        MarkRegistryScanned(workspace, stableWorkspaceId, revision, lineage: null);
+
+    internal static WorkspaceRegistryRow MarkRegistryScanned(
+        WorkspaceContext workspace, string stableWorkspaceId, long? revision, WorkspaceLineage? lineage)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(stableWorkspaceId);
@@ -1429,7 +1506,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             WorkspaceId.Display(canonicalRoot, stableWorkspaceId),
             canonicalRoot,
             canonicalDbPath,
-            WorkspaceRegistryState.Ready);
+            WorkspaceRegistryState.Ready,
+            lineage: lineage);
         return revision is { } rev ? registry.MarkScanned(stableWorkspaceId, rev) : row;
     }
 
