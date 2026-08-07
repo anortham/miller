@@ -187,17 +187,68 @@ internal sealed class JulieDbFixture : IDisposable
         command.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Insert an <c>identifier_resolutions</c> row: the resolved/ambiguous outcome for one identifier reference.
-    /// A <c>resolved</c> outcome REQUIRES a non-null <paramref name="targetSymbolId"/> (the CHECK enforces it).
-    /// </summary>
+    private static void InsertLockstepIdentifierResolution(
+        SqliteConnection connection, string identifierId, string targetSymbolId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR REPLACE INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ($id, $target, 1, 1.0, 'exact', 'resolved', 1, 1);
+            """;
+        command.Parameters.AddWithValue("$id", identifierId);
+        command.Parameters.AddWithValue("$target", targetSymbolId);
+        command.ExecuteNonQuery();
+    }
+
+    public void SetIdentifierTarget(string identifierId, string? targetSymbolId)
+    {
+        ExecuteWrite(
+            "UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;",
+            p =>
+            {
+                p.AddWithValue("$id", identifierId);
+                p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value);
+            });
+        ExecuteWrite("""
+            INSERT OR REPLACE INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES (
+                $id, $target,
+                CASE WHEN $target IS NULL THEN NULL ELSE 1 END,
+                CASE WHEN $target IS NULL THEN NULL ELSE 1.0 END,
+                CASE WHEN $target IS NULL THEN NULL ELSE 'exact' END,
+                CASE WHEN $target IS NULL THEN 'missing' ELSE 'resolved' END,
+                1, 1);
+            """, p =>
+        {
+            p.AddWithValue("$id", identifierId);
+            p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value);
+        });
+    }
+
+    public void SetAllIdentifierTargets(string? targetSymbolId)
+    {
+        ExecuteWrite(
+            "UPDATE identifiers SET target_symbol_id = $target;",
+            p => p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value));
+        ExecuteWrite("""
+            UPDATE identifier_resolutions
+            SET target_symbol_id = $target,
+                tier = CASE WHEN $target IS NULL THEN NULL ELSE tier END,
+                confidence = CASE WHEN $target IS NULL THEN NULL ELSE confidence END,
+                method = CASE WHEN $target IS NULL THEN NULL ELSE method END,
+                outcome = CASE WHEN $target IS NULL THEN 'missing' ELSE 'resolved' END;
+            """, p => p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value));
+    }
+
     public void AddIdentifierResolution(
         string identifierId, string? targetSymbolId, string outcome = "resolved",
         int tier = 1, double confidence = 1.0, string method = "exact", int candidates = 1,
         long resolvedAtRevision = 1)
     {
         ExecuteWrite("""
-            INSERT INTO identifier_resolutions
+            INSERT OR REPLACE INTO identifier_resolutions
                 (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
             VALUES ($id, $target, $tier, $conf, $method, $outcome, $cands, $rev);
             """, p =>
@@ -694,6 +745,9 @@ internal sealed class JulieDbFixture : IDisposable
                     cmd.Parameters.AddWithValue("$cid", (object?)ident.ContainingSymbolId ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("$target", (object?)ident.TargetSymbolId ?? DBNull.Value);
                     cmd.ExecuteNonQuery();
+
+                    if (ident.TargetSymbolId is not null)
+                        InsertLockstepIdentifierResolution(conn, ident.Id, ident.TargetSymbolId);
                 }
             }
 

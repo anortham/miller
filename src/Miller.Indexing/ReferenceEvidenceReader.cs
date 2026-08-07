@@ -376,13 +376,6 @@ public static class ReferenceEvidenceReader
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, i.kind, i.confidence, 'identifier_direct' AS source,
-                   NULL AS tier, s.language, s.reference_site_id, s.is_exact, s.provenance
-            FROM identifiers i
-            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
-            WHERE i.target_symbol_id = $target
-            UNION ALL
-            SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
                    s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
                    'identifier_resolution' AS source, ir.tier, s.language,
                    s.reference_site_id, s.is_exact, s.provenance
@@ -390,7 +383,6 @@ public static class ReferenceEvidenceReader
             JOIN identifiers i ON i.identifier_id = ir.identifier_id
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE ir.target_symbol_id = $target
-              AND (i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id)
             UNION ALL
             SELECT s.containing_symbol_id, s.path, s.start_line, s.start_column, s.end_line, s.end_column,
                    s.start_byte, s.end_byte, r.kind, r.confidence, 'relationship' AS source,
@@ -426,7 +418,6 @@ public static class ReferenceEvidenceReader
             FROM identifiers i
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.name = $name
-              AND i.target_symbol_id IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM identifier_resolutions ir
                   WHERE ir.identifier_id = i.identifier_id
@@ -443,16 +434,6 @@ public static class ReferenceEvidenceReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT i.target_symbol_id, target.name, s.path,
-                   s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, i.kind, i.confidence,
-                   'identifier_direct' AS source, NULL AS tier, s.language,
-                   s.reference_site_id, s.is_exact, s.provenance
-            FROM identifiers i
-            JOIN symbols target ON target.symbol_id = i.target_symbol_id
-            JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
-            WHERE i.containing_symbol_id = $containing
-            UNION ALL
             SELECT ir.target_symbol_id, target.name, s.path,
                    s.start_line, s.start_column, s.end_line, s.end_column,
                    s.start_byte, s.end_byte, i.kind, COALESCE(ir.confidence, i.confidence),
@@ -463,7 +444,6 @@ public static class ReferenceEvidenceReader
             JOIN symbols target ON target.symbol_id = ir.target_symbol_id
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.containing_symbol_id = $containing
-              AND (i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id)
             UNION ALL
             SELECT r.to_symbol_id, target.name, s.path,
                    s.start_line, s.start_column, s.end_line, s.end_column,
@@ -505,7 +485,6 @@ public static class ReferenceEvidenceReader
             FROM identifiers i
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             WHERE i.containing_symbol_id = $containing
-              AND i.target_symbol_id IS NULL
               AND NOT EXISTS (
                   SELECT 1 FROM identifier_resolutions ir
                   WHERE ir.identifier_id = i.identifier_id

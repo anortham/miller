@@ -10,8 +10,9 @@ namespace Miller.Indexing;
 /// <item><b>resolved <c>pending_relationships</c></b> (precise, sparse): join each pending row to
 ///   <c>pending_resolutions</c> by <c>pending_relationship_id</c>, then emit its <c>from_symbol_id →
 ///   target_symbol_id</c> by id, carrying the pending row's <c>kind</c>. Unresolved pending rows are omitted.</item>
-/// <item><b><c>identifiers</c></b> (dense): prefer the direct target or
-///   <c>identifier_resolutions</c> overlay. Use name fallback only when the name resolves to exactly one symbol.</item>
+/// <item><b><c>identifiers</c></b> (dense): take the target from the <c>identifier_resolutions</c> row joined by
+///   <c>identifier_id</c> — that table is the sole source of resolution outcomes. Use name fallback only when the
+///   name resolves to exactly one symbol.</item>
 /// </list>
 ///
 /// <para>Rows without a source node, external names, ambiguous fallback names, and self-edges are omitted.
@@ -117,8 +118,8 @@ public static class SymbolGraphReader
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT i.name, i.kind, i.containing_symbol_id, i.target_symbol_id,
-                   ir.target_symbol_id AS overlay_target_symbol_id,
+            SELECT i.name, i.kind, i.containing_symbol_id,
+                   ir.target_symbol_id,
                    i.confidence,
                    ir.confidence AS overlay_confidence
             FROM identifiers i
@@ -130,8 +131,7 @@ public static class SymbolGraphReader
         int oName = reader.GetOrdinal("name");
         int oKind = reader.GetOrdinal("kind");
         int oContaining = reader.GetOrdinal("containing_symbol_id");
-        int oDirectTarget = reader.GetOrdinal("target_symbol_id");
-        int oOverlayTarget = reader.GetOrdinal("overlay_target_symbol_id");
+        int oTarget = reader.GetOrdinal("target_symbol_id");
         int oConfidence = reader.GetOrdinal("confidence");
         int oOverlayConfidence = reader.GetOrdinal("overlay_confidence");
         while (reader.Read())
@@ -139,9 +139,7 @@ public static class SymbolGraphReader
             string name = reader.GetString(oName);
             string kind = reader.GetString(oKind);
             string from = reader.GetString(oContaining);
-            string? directTarget = reader.IsDBNull(oDirectTarget) ? null : reader.GetString(oDirectTarget);
-            string? overlayTarget = reader.IsDBNull(oOverlayTarget) ? null : reader.GetString(oOverlayTarget);
-            string? exactTarget = directTarget ?? overlayTarget;
+            string? exactTarget = reader.IsDBNull(oTarget) ? null : reader.GetString(oTarget);
             IReadOnlyList<string> targets = exactTarget is null
                 ? resolveName(name) ?? Array.Empty<string>()
                 : [exactTarget];
@@ -153,12 +151,8 @@ public static class SymbolGraphReader
                 if (string.Equals(from, to, StringComparison.Ordinal))
                     continue;
 
-                string source = directTarget is not null
-                    ? "identifier_target"
-                    : overlayTarget is not null
-                        ? "identifier_resolution"
-                        : "identifier_name";
-                double confidence = overlayTarget is not null && !reader.IsDBNull(oOverlayConfidence)
+                string source = exactTarget is not null ? "identifier_target" : "identifier_name";
+                double confidence = exactTarget is not null && !reader.IsDBNull(oOverlayConfidence)
                     ? reader.GetDouble(oOverlayConfidence)
                     : reader.GetDouble(oConfidence);
                 if (exactTarget is null)

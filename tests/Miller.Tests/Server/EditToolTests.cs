@@ -2341,11 +2341,7 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_DefaultExactMode_RefusesIncompleteCoverage()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
-        fx.ExecuteWrite("""
-            UPDATE identifiers
-            SET target_symbol_id = NULL
-            WHERE identifier_id = 'd100000000000000000000000000000d';
-            """);
+        fx.SetIdentifierTarget("d100000000000000000000000000000d", null);
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 
@@ -2365,11 +2361,7 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_IncludeFallback_LabelsExactFallbackAndCoverage()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
-        fx.ExecuteWrite("""
-            UPDATE identifiers
-            SET target_symbol_id = NULL
-            WHERE identifier_id = 'd100000000000000000000000000000d';
-            """);
+        fx.SetIdentifierTarget("d100000000000000000000000000000d", null);
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 
@@ -2392,10 +2384,10 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_IncludeFallback_RefusesMalformedFallbackSpan()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
+        fx.SetIdentifierTarget("d100000000000000000000000000000d", null);
         fx.ExecuteWrite("""
             UPDATE identifiers
-            SET target_symbol_id = NULL,
-                end_byte = end_byte + 1
+            SET end_byte = end_byte + 1
             WHERE identifier_id = 'd100000000000000000000000000000d';
             """);
         LayFiles(EditFixtureFiles);
@@ -2419,11 +2411,7 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_ExactMode_ExcludesResolvedHomonymSites()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
-        fx.ExecuteWrite("""
-            UPDATE identifiers
-            SET target_symbol_id = 'ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100'
-            WHERE identifier_id = 'd100000000000000000000000000000c';
-            """);
+        fx.SetIdentifierTarget("d100000000000000000000000000000c", "ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100");
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 
@@ -2443,15 +2431,8 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_IncludeFallback_ExcludesResolvedHomonymSites()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
-        fx.ExecuteWrite("""
-            UPDATE identifiers
-            SET target_symbol_id = 'ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100'
-            WHERE identifier_id = 'd100000000000000000000000000000c';
-
-            UPDATE identifiers
-            SET target_symbol_id = NULL
-            WHERE identifier_id = 'd100000000000000000000000000000d';
-            """);
+        fx.SetIdentifierTarget("d100000000000000000000000000000c", "ab1ab1ab1ab1ab1ab1ab1ab1ab1ab100");
+        fx.SetIdentifierTarget("d100000000000000000000000000000d", null);
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 
@@ -2598,11 +2579,7 @@ public sealed class EditToolTests : IDisposable
     public void Execute_RenameSymbol_Json_SeparatesExactAndFallbackEvidence()
     {
         using var fx = JulieDbFixture.CreateForEdit(resolveReferenceTargets: true);
-        fx.ExecuteWrite("""
-            UPDATE identifiers
-            SET target_symbol_id = NULL
-            WHERE identifier_id = 'd100000000000000000000000000000d';
-            """);
+        fx.SetIdentifierTarget("d100000000000000000000000000000d", null);
         LayFiles(EditFixtureFiles);
         var (svc, _) = Build(fx);
 

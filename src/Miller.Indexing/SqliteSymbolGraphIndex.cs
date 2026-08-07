@@ -277,45 +277,24 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                     UNION ALL
                     SELECT candidates.id,
                            i.containing_symbol_id,
-                           COALESCE(i.target_symbol_id, ir.target_symbol_id),
+                           ir.target_symbol_id,
                            i.kind,
-                           CASE
-                               WHEN ir.target_symbol_id IS NOT NULL AND ir.confidence IS NOT NULL
-                                   THEN ir.confidence
-                               ELSE i.confidence
-                           END,
-                           CASE
-                               WHEN i.target_symbol_id IS NOT NULL THEN 'identifier_target'
-                               ELSE 'identifier_resolution'
-                           END
-                    FROM candidates
-                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
-                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                    JOIN symbols target_symbol
-                      ON target_symbol.symbol_id = COALESCE(i.target_symbol_id, ir.target_symbol_id)
-                    WHERE $forward = 1
-                    UNION ALL
-                    SELECT candidates.id, i.containing_symbol_id, i.target_symbol_id,
-                           i.kind,
-                           CASE
-                               WHEN ir.target_symbol_id IS NOT NULL AND ir.confidence IS NOT NULL
-                                   THEN ir.confidence
-                               ELSE i.confidence
-                           END,
+                           COALESCE(ir.confidence, i.confidence),
                            'identifier_target'
                     FROM candidates
-                    JOIN identifiers i ON i.target_symbol_id = candidates.id
-                    LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
-                    JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
-                    WHERE $reverse = 1
+                    JOIN identifiers i ON i.containing_symbol_id = candidates.id
+                    JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
+                    JOIN symbols target_symbol
+                      ON target_symbol.symbol_id = ir.target_symbol_id
+                    WHERE $forward = 1
                     UNION ALL
                     SELECT candidates.id, i.containing_symbol_id, ir.target_symbol_id,
-                           i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_resolution'
+                           i.kind, COALESCE(ir.confidence, i.confidence), 'identifier_target'
                     FROM candidates
                     JOIN identifier_resolutions ir ON ir.target_symbol_id = candidates.id
                     JOIN identifiers i ON i.identifier_id = ir.identifier_id
                     JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
-                    WHERE $reverse = 1 AND i.target_symbol_id IS NULL
+                    WHERE $reverse = 1
                     UNION ALL
                     SELECT candidates.id, i.containing_symbol_id, target_symbol.symbol_id,
                            i.kind, i.confidence * 0.5, 'identifier_name'
@@ -324,7 +303,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                     LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                     JOIN symbols target_symbol ON target_symbol.name = i.name
                     WHERE $forward = 1
-                      AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      AND ir.target_symbol_id IS NULL
                       AND NOT EXISTS (
                           SELECT 1
                           FROM symbols duplicate
@@ -340,7 +319,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                     LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                     JOIN symbols source_symbol ON source_symbol.symbol_id = i.containing_symbol_id
                     WHERE $reverse = 1
-                      AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      AND ir.target_symbol_id IS NULL
                       AND NOT EXISTS (
                           SELECT 1
                           FROM symbols duplicate
@@ -529,14 +508,14 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
         using (var command = Connection.CreateCommand())
         {
             command.CommandText = """
-                SELECT i.name, COALESCE(i.target_symbol_id, ir.target_symbol_id)
+                SELECT i.name, ir.target_symbol_id
                 FROM identifiers i
                 LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                 LEFT JOIN symbols target
-                  ON target.symbol_id = COALESCE(i.target_symbol_id, ir.target_symbol_id)
+                  ON target.symbol_id = ir.target_symbol_id
                 WHERE i.containing_symbol_id = $id
                   AND (
-                      COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL
+                      ir.target_symbol_id IS NULL
                       OR target.symbol_id IS NOT NULL
                   );
                 """;
@@ -609,7 +588,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 FROM identifiers i
                 LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                 JOIN symbols s ON s.symbol_id = i.containing_symbol_id
-                WHERE COALESCE(i.target_symbol_id, ir.target_symbol_id) = $id;
+                WHERE ir.target_symbol_id = $id;
                 """;
             command.Parameters.AddWithValue("$id", id);
             using var reader = command.ExecuteReader();
@@ -627,7 +606,7 @@ public sealed class SqliteSymbolGraphIndex : ISymbolGraphReachability, IDisposab
                 LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
                 JOIN symbols s ON s.symbol_id = i.containing_symbol_id
                 WHERE i.name = $name
-                  AND COALESCE(i.target_symbol_id, ir.target_symbol_id) IS NULL;
+                  AND ir.target_symbol_id IS NULL;
                 """;
             command.Parameters.AddWithValue("$name", targetName);
             using var reader = command.ExecuteReader();

@@ -93,7 +93,7 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
-    public void Read_DirectOverlayRelationshipAndPendingRowsAtOneSite_AreCanonicalizedAndDeduplicated()
+    public void Read_IdentifierRelationshipAndPendingRowsAtOneSite_AreCanonicalizedAndDeduplicated()
     {
         var identifier = new JulieDbFixture.IdentifierRow(
             "identifier-run",
@@ -148,9 +148,9 @@ public sealed class ReferenceEvidenceReaderTests
 
         var reference = Assert.Single(result.Exact);
         Assert.Equal(ReferenceKind.Call, reference.Kind);
-        Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, reference.Source);
+        Assert.Equal(ReferenceEvidenceSource.IdentifierResolution, reference.Source);
         Assert.Equal("call", reference.SourceKind);
-        Assert.Equal(4, result.Coverage.ExactObserved);
+        Assert.Equal(3, result.Coverage.ExactObserved);
         Assert.Equal(1, result.Coverage.ExactAvailable);
         Assert.False(result.Coverage.ExactTruncated);
     }
@@ -168,7 +168,7 @@ public sealed class ReferenceEvidenceReaderTests
         var reference = Assert.Single(result.Exact);
         Assert.True(reference.IsExact);
         Assert.Equal("target_token", reference.SiteProvenance);
-        Assert.Equal(3, result.Coverage.ExactObserved);
+        Assert.Equal(2, result.Coverage.ExactObserved);
         Assert.Equal(1, result.Coverage.ExactAvailable);
         Assert.False(result.Coverage.ExactTruncated);
     }
@@ -200,7 +200,7 @@ public sealed class ReferenceEvidenceReaderTests
         var reference = Assert.Single(result.Exact);
         Assert.True(reference.IsExact);
         Assert.Equal(FirstTargetId, reference.TargetSymbolId);
-        Assert.Equal(3, result.Coverage.ExactObserved);
+        Assert.Equal(2, result.Coverage.ExactObserved);
         Assert.Equal(1, result.Coverage.ExactAvailable);
     }
 
@@ -363,7 +363,7 @@ public sealed class ReferenceEvidenceReaderTests
     }
 
     [Fact]
-    public void Read_ConflictingDirectAndOverlayTargets_PrefersTheDirectTarget()
+    public void Read_TargetComesFromTheResolutionOverlay_NotTheDenormalizedIdentifierColumn()
     {
         var identifier = new JulieDbFixture.IdentifierRow(
             "identifier-conflict",
@@ -396,8 +396,8 @@ public sealed class ReferenceEvidenceReaderTests
             SecondTargetId,
             new ReferenceEvidenceBounds(ExactLimit: 10, FallbackLimit: 10));
 
-        Assert.Single(first.Exact);
-        Assert.Empty(second.Exact);
+        Assert.Empty(first.Exact);
+        Assert.Single(second.Exact);
     }
 
     [Fact]
@@ -616,7 +616,7 @@ public sealed class ReferenceEvidenceReaderTests
             {
                 Assert.Equal(FirstTargetId, row.TargetSymbolId);
                 Assert.Equal("Run", row.TargetName);
-                Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, row.Source);
+                Assert.Equal(ReferenceEvidenceSource.IdentifierResolution, row.Source);
                 Assert.Equal(ReferenceResolutionStatus.Exact, row.ResolutionStatus);
             },
             row =>

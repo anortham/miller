@@ -1860,10 +1860,10 @@ public sealed class CliDispatchTests : IDisposable
         Assert.Equal("method", call.GetProperty("target_symbol_kind").GetString());
         Assert.False(call.GetProperty("target_symbol_is_test").GetBoolean());
         Assert.Equal("resolved", call.GetProperty("resolution_status").GetString());
-        Assert.Equal(JsonValueKind.Null, call.GetProperty("resolution_tier").ValueKind);
+        Assert.Equal(1, call.GetProperty("resolution_tier").GetInt32());
         Assert.Equal(1d, call.GetProperty("confidence").GetDouble());
         Assert.Equal(
-            new[] { "identifier_direct" },
+            new[] { "identifier_resolution" },
             call.GetProperty("provenance").EnumerateArray()
                 .Select(static value => value.GetString())
                 .ToArray());
@@ -2123,7 +2123,12 @@ public sealed class CliDispatchTests : IDisposable
         }.ToString());
         connection.Open();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;";
+        cmd.CommandText = """
+            UPDATE identifiers SET target_symbol_id = $target WHERE identifier_id = $id;
+            INSERT OR REPLACE INTO identifier_resolutions
+                (identifier_id, target_symbol_id, tier, confidence, method, outcome, candidates, resolved_at_revision)
+            VALUES ($id, $target, 1, 1.0, 'exact', 'resolved', 1, 1);
+            """;
         cmd.Parameters.AddWithValue("$target", targetSymbolId);
         cmd.Parameters.AddWithValue("$id", identifierId);
         cmd.ExecuteNonQuery();

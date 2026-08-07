@@ -138,8 +138,8 @@ public sealed class LiveReferenceResolutionScaleTests
         Assert.Equal(language, call.Language);
         Assert.Equal(ReferenceResolutionStatus.Exact, call.ResolutionStatus);
         Assert.True(call.IsExact);
-        Assert.Equal(ReferenceEvidenceSource.IdentifierDirect, call.Source);
-        Assert.Null(call.ResolutionTier);
+        Assert.Equal(ReferenceEvidenceSource.IdentifierResolution, call.Source);
+        Assert.NotNull(call.ResolutionTier);
         Assert.Equal("target_token", call.SiteProvenance);
         return target.SymbolId;
     }

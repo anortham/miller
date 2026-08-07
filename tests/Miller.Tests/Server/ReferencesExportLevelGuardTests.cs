@@ -111,8 +111,8 @@ public sealed class ReferencesExportLevelGuardTests : IDisposable
         var (_, symbolsOut, _) = Run(["references", "export", "--jsonl"], symbolsDb);
         var (_, fullOut, _) = Run(["references", "export", "--jsonl"], fullDb);
 
-        Assert.DoesNotContain("identifier_direct", symbolsOut, StringComparison.Ordinal);
-        Assert.Contains("identifier_direct", fullOut, StringComparison.Ordinal);
+        Assert.DoesNotContain("identifier_resolution", symbolsOut, StringComparison.Ordinal);
+        Assert.Contains("identifier_resolution", fullOut, StringComparison.Ordinal);
     }
 
     [Fact]

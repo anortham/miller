@@ -128,8 +128,9 @@ Reference row fields:
 - `containing_symbol_id`: enclosing symbol id when the extractor reported one, otherwise `null`.
 - `containing_symbol_name`: resolved enclosing symbol name when available, otherwise `null`.
 - `resolution_status`: `exact` or `fallback`.
-- `source`: evidence provenance such as `identifier_direct`, `identifier_resolution`, `relationship`, or
-  `pending_name`.
+- `source`: evidence provenance such as `identifier_resolution`, `relationship`, or `pending_name`.
+  Identifier targets come only from `identifier_resolutions`; the former `identifier_direct` value named the
+  denormalized `identifiers.target_symbol_id` column that julie-extract schema 6 drops, and is no longer emitted.
 - `resolution_tier`: extractor resolution tier when available.
 - `confidence`: numeric evidence confidence.
 - `reference_site_id`: producer-owned canonical reference-site identity (julie-extract schema 5 and later).

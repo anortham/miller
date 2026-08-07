@@ -54,13 +54,14 @@ public static class ReferenceExportReader
         command.CommandText = """
             SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
                    s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
-                   s.start_byte, s.end_byte, i.kind, i.target_symbol_id, COALESCE(target.name, i.name),
-                   target.kind, target.is_test, NULL AS resolution_tier, i.confidence,
-                   'identifier_direct' AS evidence_source, source.name, source.kind, source.is_test
+                   s.start_byte, s.end_byte, i.kind, NULL AS target_symbol_id, i.name,
+                   NULL AS target_kind, NULL AS target_is_test, NULL AS resolution_tier, i.confidence,
+                   'name_fallback' AS evidence_source, source.name, source.kind, source.is_test
             FROM identifiers i
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
+            LEFT JOIN identifier_resolutions ir ON ir.identifier_id = i.identifier_id
             LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
-            LEFT JOIN symbols target ON target.symbol_id = i.target_symbol_id
+            WHERE ir.target_symbol_id IS NULL
             UNION ALL
             SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
                    s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
@@ -72,7 +73,6 @@ public static class ReferenceExportReader
             JOIN reference_sites s ON s.reference_site_id = i.reference_site_id
             LEFT JOIN symbols source ON source.symbol_id = s.containing_symbol_id
             JOIN symbols target ON target.symbol_id = ir.target_symbol_id
-            WHERE i.target_symbol_id IS NULL OR i.target_symbol_id = ir.target_symbol_id
             UNION ALL
             SELECT s.reference_site_id, s.is_exact, s.provenance, s.path, s.language,
                    s.containing_symbol_id, s.start_line, s.start_column, s.end_line, s.end_column,
