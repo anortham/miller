@@ -1,9 +1,10 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: DRAFT — freeze blocked on** (1) the binding-mechanism proof
-([`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md),
-the Ph0 §9 red-gate discharge) and (2) the cycle-3 cross-model re-attack (codex + grok) recorded
-in §17. Neither has completed. Do not implement against a DRAFT contract.
+**Status: DRAFT — freeze blocked on** the cycle-3 cross-model re-attack (codex + grok, §17).
+The binding-mechanism proof is COMPLETE with verdict GO
+([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)
+— the Ph0 §9 red-gate discharge; G3b marginal, re-proven in Ph2 per its carried condition 1).
+Do not implement against a DRAFT contract.
 
 **Program:** [`2026-08-06-index-store-views-program.md`](2026-08-06-index-store-views-program.md).
 **Gate:** [`../findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md).
@@ -383,19 +384,89 @@ oldest unconsumed cursor minus a safety window; cursor liveness is a GC root (§
 
 ## 14. Resolution bases and view deltas — state machine
 
-**[4b — PENDING the binding-mechanism proof.** This section freezes only after
-`docs/findings/2026-08-07-index-store-binding-proof.md` records a GO. The storage shape is fixed
-by Ph0 (shared base ≈ 11.5% of store bytes + per-view deltas ≈ 1.9%/7 views — gate §5); the
-**producer** of the delta is what the proof must establish: the refuted P1a scoped pass is not
-it (gate §9), and the candidate is serve-base + background fresh-output resolution diffed
-against the base on natural keys. To be specified here on GO: base/delta keys (manifest hash +
-resolver-output epoch), cumulative-delta semantics, precedence + tombstone scope, CAS rebase
-against (manifest generation, delta head) with abort/retry, GC roots, the serve-window honesty
-posture with its measured gap budget, the time-to-exact SLO, and bootstrap (first view of a
-family = base build at the bulk rate). Rebase policy lean, to be confirmed with the proof's
-numbers: v1 uses one cumulative delta per view (no chains); a background rebase folds a view
-into a fresh base when its delta exceeds 10% of base rows; views with identical manifest hashes
-share one base and an empty delta.**]**
+**Producer: the proven serve-base + background-converge mechanism**
+([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)
+— G1/G2/G4/G5 PASS, G3 overhead marginal and re-proven in Ph2 per carried condition 1; the
+refuted P1a scoped pass appears nowhere in this contract). Storage shape per Ph0 §5: shared
+base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
+
+**Objects and identity.**
+
+- **Base** = a complete, consistent resolution set for one manifest, keyed
+  `(manifest_hash, resolver_output_epoch)`. **A base is its own database file**
+  (`bases/base-<key>.db` in the generation dir) — the separate-file shape is the bulk-rate
+  precondition (§16.4): built with `journal_mode=MEMORY` into a scratch path, made **ready by
+  atomic rename**, immutable afterwards, deleted whole by GC (physical reclamation is file
+  deletion — no vacuum needed). A `bases` row in `store.db` records the key, file, byte size,
+  row count (table counts are authoritative — scan-report counters run 3–13 rows high, proof
+  condition 5), and ready state.
+- **Delta** = one **cumulative** per-view row set in `store.db` (no chains in v1), keyed
+  `(view_id, delta_generation)`, rows version-qualified like everything else. Two row forms:
+  - *Replacement:* a full outcome row for a `(version_id, identifier_id)` — used for versions
+    absent from the base's manifest AND for shared versions whose outcome diverges (the
+    cross-file effects; measured 2.4–9.7% of base rows on typical sibling pairs).
+  - *Tombstone:* "no row" for a version-qualified key. `identifier_resolutions` is a total
+    function (one row per identifier), so its delta needs replacements only — but the contract
+    keeps tombstones because `pending_resolutions` is a partial relation whose rows genuinely
+    disappear (purity audit E-3: 4 → 2 rows on an unrelated add). The store equivalence gate
+    verifies the totality assumption rather than assuming it.
+- **Precedence:** delta beats base for the same version-qualified key; visibility (the view
+  manifest) filters both first, so base rows for versions outside the view's manifest need no
+  tombstones at all. Reads resolve `COALESCE(delta, base)` under visibility — the read-path
+  `NOT EXISTS` cost (+8.6–15.1%) is the measured price, with the materialized per-view
+  effective-resolution index as the named fallback if it regresses at scale (read-path §4).
+
+**View resolution states.**
+
+```
+unbound → bound(base_id, delta_gen, exact=false)   # foreground bind: manifest + base pointer
+        → bound(base_id, delta_gen, exact=true)    # delta published atomically
+```
+
+- **Foreground bind is O(manifest):** write manifest rows, point at the nearest ready base
+  (v1 nearest = the family base sharing the most manifest versions at the same resolver
+  epoch). Measured 2.0–3.4 ms for 1,081–1,700 rows, zero identifier work (proof G5).
+- **Background convergence:** fresh-output resolution pass over the view's corpus at the bulk
+  rate (71–85k rows/s measured) into a scratch file → diff vs the base → delta rows. The diff
+  runs as a **streaming merge-join over sorted natural keys or SQL-side** (proof condition 3:
+  a naive in-memory diff is ~10 GB at dotnet/runtime scale). Publishing is one transaction:
+  insert delta rows, flip `(delta_gen, exact=true)`, append the `store_log` entry.
+- **CAS publish/rebase:** the converge job records the `(manifest_generation, delta_gen)` it
+  computed against; the publish transaction compare-and-swaps on both. A manifest that moved
+  mid-converge aborts the publish; the job re-diffs against the new manifest (versions already
+  resolved in the scratch output are reused — the pass is corpus-keyed, not manifest-keyed).
+- **First view of a family** (bootstrap): no base exists — the scratch output *becomes* the
+  base (atomic rename), delta empty, exact immediately. Same pipeline, no diff.
+- **Identical manifests share:** views with equal `(manifest_hash, epoch)` bind the same base
+  with empty deltas (dedup of the resolution layer across same-commit worktrees).
+
+**Serve-window honesty (contract posture, supersedes "binds in seconds"):** during
+convergence a view serves the base's resolution for shared versions; identifiers of
+non-base versions have no resolution rows yet. `trace`/`impact` and `workspace status` report
+`resolution: converging` with the enumerated gap — **rows and files, never "N files changed"**
+(the delta spills past changed files by the nature of the resolution graph; measured worst
+in-band 29.6% of rows / 170 files). Enumeration cost is bounded by the diff itself (G4).
+**SLO:** foreground milliseconds; time-to-exact = corpus resolution at the bulk rate + diff
+(measured 4.1–7.6 s at ~1,400 files under load; ≈ 232 s projected at dotnet/runtime — flagged
+inference, Ph5 measures). Exact-equivalence for resolution-derived reads applies at
+`exact=true`; during the window the program's equivalence bar is explicitly relaxed to
+"base-consistent + honestly reported" (this sentence is the program-text statement the gate's
+§9 amendment required).
+
+**Rebase policy:** a background job folds a view into a fresh base when its delta exceeds
+**10% of base rows** (typical gaps measured 2.4–9.7%; the worst measured pair, 29.6%, would
+rebase — correctly) or when read-path telemetry shows precedence cost regressing. Rebase = the
+same converge pipeline with "scratch becomes a new base" + CAS; the old base is retired when
+its last referent moves (GC root rules below).
+
+**Epoch interaction (§7):** a resolver-output-epoch bump obsoletes base identities; old-epoch
+bases keep serving their views while new-epoch bases build (serve-while-converging); the flip
+is the §7 shadow-generation flip. Bases never mix epochs.
+
+**GC roots for the resolution layer:** ready bases referenced by any view; building bases and
+in-progress rebases (registered as coordinator queue entries — a crash leaves the queue row,
+and successor recovery either resumes or releases it); every live view's delta; bases
+referenced by pinned read sessions. An unreferenced retired base is a file delete.
 
 ## 15. Concurrency: the family coordinator
 
@@ -514,7 +585,7 @@ compatibility — closed by §7); cycle-2 #2 (state machine — §14 on GO), #4 
 |---|---|
 | 1. metadata_json determinism | §2 (requirement + CI gate), §16.1 |
 | 2. Trigram `rank` → `collapsed_len` (+ content.db gap) | §9 (ships early, own gate, content audit included) |
-| 3. Binding mechanism NO-GO | §14 (pending proof — the freeze blocker) |
+| 3. Binding mechanism NO-GO | §14 (replacement proven GO — findings doc; G3b re-proof carried to Ph2) |
 | 4. Retention as the central contract | §6 (defaults + tunables + latency coupling) |
 | 5. Durability contract | §5 (per-chunk + marker + FULL) |
 | 6. Index-direction reconciliation | §4 (`gc-aligned` / `read-aligned` classification per index) |

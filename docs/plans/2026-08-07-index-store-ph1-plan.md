@@ -280,9 +280,9 @@ Ph5). If any criterion failed: the doc records NO-GO, what failed and by how muc
 freeze stays blocked — do not soften.
 
 **Acceptance criteria:**
-- [ ] Verdict per G1–G5 + overall, each citing committed evidence.
-- [ ] The proxy-vs-real-verb gap stated (what Ph2 must reproduce to keep the proof valid).
-- [ ] §9 discharge status stated in the exact red-gate language (discharged / still red).
+- [x] Verdict per G1–G5 + overall, each citing committed evidence.
+- [x] The proxy-vs-real-verb gap stated (what Ph2 must reproduce to keep the proof valid).
+- [x] §9 discharge status stated in the exact red-gate language (discharged / still red).
 
 ## Task 4: v4 store contract doc (lead)
 
@@ -339,12 +339,12 @@ Task 3).
   flipped only in Task 5.
 
 **Acceptance criteria:**
-- [ ] Every gate amendment (price-list 1–7) has a contract section that resolves it, not
+- [x] Every gate amendment (price-list 1–7) has a contract section that resolves it, not
       restates it.
-- [ ] Doubt-pass held-open items addressed in contract terms: cycle-1 #2/#9/#11, cycle-2
+- [x] Doubt-pass held-open items addressed in contract terms: cycle-1 #2/#9/#11, cycle-2
       #2/#4/#7.
-- [ ] The §12-vs-§4 index-direction tension resolved per index with rationale.
-- [ ] 4b exists only with Task 3 GO; otherwise the doc records the block honestly.
+- [x] The §12-vs-§4 index-direction tension resolved per index with rationale.
+- [x] 4b exists only with Task 3 GO; otherwise the doc records the block honestly.
 
 ## Task 5: Cross-model freeze gate (lead orchestrates codex + grok)
 
