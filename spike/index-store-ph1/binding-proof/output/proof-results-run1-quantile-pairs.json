@@ -1,0 +1,1356 @@
+{
+ "julie_extract_version": "julie-extract 2.27.0",
+ "jobs": 4,
+ "refuted_bind_ms": 24390,
+ "repos": {
+  "miller": {
+   "path": "/Users/murphy/source/miller/.claude/worktrees/index-store-ph1",
+   "head": "1eee221c84cc88c0bfaf46b99082c7244dda64c1"
+  },
+  "julie-extractors": {
+   "path": "/Users/murphy/source/julie-extractors",
+   "head": "ab7b16ad8ab3f921665a719b43b8a281ae1942d6"
+  }
+ },
+ "g1_determinism": [
+  {
+   "corpus": "miller",
+   "rev": "09697a7e",
+   "build_a": {
+    "wall_ms": 1694,
+    "total_duration_ms": 1667,
+    "resolution_ms": 460,
+    "extraction_spool_ms": 449,
+    "artifact_write_ms": 1196,
+    "artifact_write_child_rows_ms": 365,
+    "artifact_write_index_build_ms": 187,
+    "artifact_write_commit_ms": 55,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1196,
+     "artifact_write_child_rows": 365,
+     "artifact_write_commit": 55,
+     "artifact_write_file_symbol_insert": 24,
+     "artifact_write_foreign_key_check": 82,
+     "artifact_write_index_build": 187,
+     "artifact_write_plan": 17,
+     "artifact_write_resolution": 460,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 449,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47228,
+    "files_changed": 270,
+    "files_deleted": 0,
+    "artifact_bytes": 84344832,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-g1a",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-g1a.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "build_b": {
+    "wall_ms": 1692,
+    "total_duration_ms": 1667,
+    "resolution_ms": 459,
+    "extraction_spool_ms": 454,
+    "artifact_write_ms": 1192,
+    "artifact_write_child_rows_ms": 357,
+    "artifact_write_index_build_ms": 189,
+    "artifact_write_commit_ms": 55,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1192,
+     "artifact_write_child_rows": 357,
+     "artifact_write_commit": 55,
+     "artifact_write_file_symbol_insert": 23,
+     "artifact_write_foreign_key_check": 82,
+     "artifact_write_index_build": 189,
+     "artifact_write_plan": 17,
+     "artifact_write_resolution": 459,
+     "artifact_write_wal_checkpoint": 5,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 454,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47228,
+    "files_changed": 270,
+    "files_deleted": 0,
+    "artifact_bytes": 84344832,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-g1b",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-g1b.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "resolution_rows_a": 47228,
+   "resolution_rows_b": 47228,
+   "natural_key_collisions": {
+    "a": 0,
+    "b": 0
+   },
+   "differing_rows": 0,
+   "differing_samples": [],
+   "raw_counts_a": {
+    "identifiers": 47228,
+    "symbols": 10910,
+    "files": 270,
+    "resolution_rows_joined": 47228
+   },
+   "raw_counts_b": {
+    "identifiers": 47228,
+    "symbols": 10910,
+    "files": 270,
+    "resolution_rows_joined": 47228
+   },
+   "raw_counts_equal": true,
+   "raw_id_overlap": {
+    "identifiers": {
+     "a": 47228,
+     "b": 47228,
+     "common": 47228,
+     "identical": true
+    },
+    "symbols": {
+     "a": 10910,
+     "b": 10910,
+     "common": 10910,
+     "identical": true
+    }
+   },
+   "schema_evidence": {
+    "files": "CREATE TABLE files (\n  file_id TEXT PRIMARY KEY,\n  path TEXT NOT NULL UNIQUE,\n  language TEXT NOT NULL,\n  content_hash TEXT NOT NULL,\n  content_bytes INTEGER NOT NULL,\n  line_count INTEGER,\n  indexed_at TEXT NOT NULL,\n  last_revision_id INTEGER NOT NULL,\n  status TEXT NOT NULL,\n  metadata_json TEXT,\n  FOREIGN KEY (last_revision_id) REFERENCES extraction_revisions(revision_id)\n)",
+    "symbols": "CREATE TABLE symbols (\n  symbol_id TEXT PRIMARY KEY,\n  file_id TEXT NOT NULL,\n  path TEXT NOT NULL,\n  language TEXT NOT NULL,\n  name TEXT NOT NULL,\n  kind TEXT NOT NULL,\n  signature TEXT,\n  doc_comment TEXT,\n  visibility TEXT,\n  parent_symbol_id TEXT,\n  start_line INTEGER NOT NULL,\n  start_column INTEGER NOT NULL,\n  end_line INTEGER NOT NULL,\n  end_column INTEGER NOT NULL,\n  start_byte INTEGER NOT NULL,\n  end_byte INTEGER NOT NULL,\n  body_start_line INTEGER,\n  body_start_column INTEGER,\n  body_end_line INTEGER,\n  body_end_column INTEGER,\n  body_start_byte INTEGER,\n  body_end_byte INTEGER,\n  body_hash TEXT,\n  semantic_group TEXT,\n  confidence REAL,\n  content_type TEXT,\n  is_test INTEGER NOT NULL DEFAULT 0,\n  test_container INTEGER NOT NULL DEFAULT 0,\n  test_lifecycle INTEGER NOT NULL DEFAULT 0,\n  metadata_json TEXT,\n  FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,\n  FOREIGN KEY (parent_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL\n)",
+    "identifiers": "CREATE TABLE identifiers (\n  identifier_id TEXT PRIMARY KEY,\n  reference_site_id TEXT NOT NULL,\n  file_id TEXT NOT NULL,\n  path TEXT NOT NULL,\n  language TEXT NOT NULL,\n  name TEXT NOT NULL,\n  kind TEXT NOT NULL,\n  containing_symbol_id TEXT,\n  target_symbol_id TEXT,\n  start_line INTEGER NOT NULL,\n  start_column INTEGER NOT NULL,\n  end_line INTEGER NOT NULL,\n  end_column INTEGER NOT NULL,\n  start_byte INTEGER NOT NULL,\n  end_byte INTEGER NOT NULL,\n  confidence REAL NOT NULL,\n  code_context TEXT,\n  metadata_json TEXT,\n  FOREIGN KEY (reference_site_id) REFERENCES reference_sites(reference_site_id) ON DELETE CASCADE,\n  FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,\n  FOREIGN KEY (containing_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,\n  FOREIGN KEY (target_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL\n)",
+    "identifier_resolutions": "CREATE TABLE identifier_resolutions (\n  identifier_id TEXT PRIMARY KEY\n    REFERENCES identifiers(identifier_id) ON DELETE CASCADE,\n  target_symbol_id TEXT\n    REFERENCES symbols(symbol_id) ON DELETE CASCADE,\n  tier INTEGER,\n  confidence REAL,\n  method TEXT,\n  outcome TEXT NOT NULL,\n  candidates INTEGER,\n  resolved_at_revision INTEGER NOT NULL,\n  CHECK ((outcome = 'resolved') = (target_symbol_id IS NOT NULL))\n)"
+   },
+   "pass": true
+  },
+  {
+   "corpus": "julie-extractors",
+   "rev": "300d1d92",
+   "build_a": {
+    "wall_ms": 7668,
+    "total_duration_ms": 7574,
+    "resolution_ms": 2244,
+    "extraction_spool_ms": 1226,
+    "artifact_write_ms": 6291,
+    "artifact_write_child_rows_ms": 2050,
+    "artifact_write_index_build_ms": 917,
+    "artifact_write_commit_ms": 561,
+    "discovery_ms": 16,
+    "phases": {
+     "artifact_write": 6291,
+     "artifact_write_child_rows": 2050,
+     "artifact_write_commit": 561,
+     "artifact_write_file_symbol_insert": 68,
+     "artifact_write_foreign_key_check": 409,
+     "artifact_write_index_build": 917,
+     "artifact_write_plan": 38,
+     "artifact_write_resolution": 2244,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 16,
+     "existing_artifact": 0,
+     "extraction_spool": 1226,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 215165,
+    "files_changed": 992,
+    "files_deleted": 0,
+    "artifact_bytes": 361988096,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-g1a",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-g1a.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "build_b": {
+    "wall_ms": 7688,
+    "total_duration_ms": 7594,
+    "resolution_ms": 2442,
+    "extraction_spool_ms": 1161,
+    "artifact_write_ms": 6375,
+    "artifact_write_child_rows_ms": 2138,
+    "artifact_write_index_build_ms": 945,
+    "artifact_write_commit_ms": 309,
+    "discovery_ms": 16,
+    "phases": {
+     "artifact_write": 6375,
+     "artifact_write_child_rows": 2138,
+     "artifact_write_commit": 309,
+     "artifact_write_file_symbol_insert": 68,
+     "artifact_write_foreign_key_check": 426,
+     "artifact_write_index_build": 945,
+     "artifact_write_plan": 40,
+     "artifact_write_resolution": 2442,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 16,
+     "existing_artifact": 0,
+     "extraction_spool": 1161,
+     "force_metadata": 0,
+     "writer_open": 8
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 215165,
+    "files_changed": 992,
+    "files_deleted": 0,
+    "artifact_bytes": 361988096,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-g1b",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-g1b.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "resolution_rows_a": 215164,
+   "resolution_rows_b": 215164,
+   "natural_key_collisions": {
+    "a": 0,
+    "b": 0
+   },
+   "differing_rows": 0,
+   "differing_samples": [],
+   "raw_counts_a": {
+    "identifiers": 215164,
+    "symbols": 32302,
+    "files": 992,
+    "resolution_rows_joined": 215164
+   },
+   "raw_counts_b": {
+    "identifiers": 215164,
+    "symbols": 32302,
+    "files": 992,
+    "resolution_rows_joined": 215164
+   },
+   "raw_counts_equal": true,
+   "raw_id_overlap": {
+    "identifiers": {
+     "a": 215164,
+     "b": 215164,
+     "common": 215164,
+     "identical": true
+    },
+    "symbols": {
+     "a": 32302,
+     "b": 32302,
+     "common": 32302,
+     "identical": true
+    }
+   },
+   "schema_evidence": {
+    "files": "CREATE TABLE files (\n  file_id TEXT PRIMARY KEY,\n  path TEXT NOT NULL UNIQUE,\n  language TEXT NOT NULL,\n  content_hash TEXT NOT NULL,\n  content_bytes INTEGER NOT NULL,\n  line_count INTEGER,\n  indexed_at TEXT NOT NULL,\n  last_revision_id INTEGER NOT NULL,\n  status TEXT NOT NULL,\n  metadata_json TEXT,\n  FOREIGN KEY (last_revision_id) REFERENCES extraction_revisions(revision_id)\n)",
+    "symbols": "CREATE TABLE symbols (\n  symbol_id TEXT PRIMARY KEY,\n  file_id TEXT NOT NULL,\n  path TEXT NOT NULL,\n  language TEXT NOT NULL,\n  name TEXT NOT NULL,\n  kind TEXT NOT NULL,\n  signature TEXT,\n  doc_comment TEXT,\n  visibility TEXT,\n  parent_symbol_id TEXT,\n  start_line INTEGER NOT NULL,\n  start_column INTEGER NOT NULL,\n  end_line INTEGER NOT NULL,\n  end_column INTEGER NOT NULL,\n  start_byte INTEGER NOT NULL,\n  end_byte INTEGER NOT NULL,\n  body_start_line INTEGER,\n  body_start_column INTEGER,\n  body_end_line INTEGER,\n  body_end_column INTEGER,\n  body_start_byte INTEGER,\n  body_end_byte INTEGER,\n  body_hash TEXT,\n  semantic_group TEXT,\n  confidence REAL,\n  content_type TEXT,\n  is_test INTEGER NOT NULL DEFAULT 0,\n  test_container INTEGER NOT NULL DEFAULT 0,\n  test_lifecycle INTEGER NOT NULL DEFAULT 0,\n  metadata_json TEXT,\n  FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,\n  FOREIGN KEY (parent_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL\n)",
+    "identifiers": "CREATE TABLE identifiers (\n  identifier_id TEXT PRIMARY KEY,\n  reference_site_id TEXT NOT NULL,\n  file_id TEXT NOT NULL,\n  path TEXT NOT NULL,\n  language TEXT NOT NULL,\n  name TEXT NOT NULL,\n  kind TEXT NOT NULL,\n  containing_symbol_id TEXT,\n  target_symbol_id TEXT,\n  start_line INTEGER NOT NULL,\n  start_column INTEGER NOT NULL,\n  end_line INTEGER NOT NULL,\n  end_column INTEGER NOT NULL,\n  start_byte INTEGER NOT NULL,\n  end_byte INTEGER NOT NULL,\n  confidence REAL NOT NULL,\n  code_context TEXT,\n  metadata_json TEXT,\n  FOREIGN KEY (reference_site_id) REFERENCES reference_sites(reference_site_id) ON DELETE CASCADE,\n  FOREIGN KEY (file_id) REFERENCES files(file_id) ON DELETE CASCADE,\n  FOREIGN KEY (containing_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL,\n  FOREIGN KEY (target_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL\n)",
+    "identifier_resolutions": "CREATE TABLE identifier_resolutions (\n  identifier_id TEXT PRIMARY KEY\n    REFERENCES identifiers(identifier_id) ON DELETE CASCADE,\n  target_symbol_id TEXT\n    REFERENCES symbols(symbol_id) ON DELETE CASCADE,\n  tier INTEGER,\n  confidence REAL,\n  method TEXT,\n  outcome TEXT NOT NULL,\n  candidates INTEGER,\n  resolved_at_revision INTEGER NOT NULL,\n  CHECK ((outcome = 'resolved') = (target_symbol_id IS NOT NULL))\n)"
+   },
+   "pass": true
+  }
+ ],
+ "pairs": [
+  {
+   "corpus": "miller",
+   "label": "median",
+   "base_rev": "09697a7e",
+   "tip_rev": "2d06ae9a",
+   "merge": "75a877cb",
+   "changed_indexed_files": 16,
+   "added_paths": 2,
+   "deleted_paths": 0,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 1694,
+    "total_duration_ms": 1667,
+    "resolution_ms": 460,
+    "extraction_spool_ms": 449,
+    "artifact_write_ms": 1196,
+    "artifact_write_child_rows_ms": 365,
+    "artifact_write_index_build_ms": 187,
+    "artifact_write_commit_ms": 55,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1196,
+     "artifact_write_child_rows": 365,
+     "artifact_write_commit": 55,
+     "artifact_write_file_symbol_insert": 24,
+     "artifact_write_foreign_key_check": 82,
+     "artifact_write_index_build": 187,
+     "artifact_write_plan": 17,
+     "artifact_write_resolution": 460,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 449,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47228,
+    "files_changed": 270,
+    "files_deleted": 0,
+    "artifact_bytes": 84344832,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-g1a",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-g1a.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": true,
+   "tip_build": {
+    "wall_ms": 1708,
+    "total_duration_ms": 1680,
+    "resolution_ms": 461,
+    "extraction_spool_ms": 455,
+    "artifact_write_ms": 1204,
+    "artifact_write_child_rows_ms": 360,
+    "artifact_write_index_build_ms": 190,
+    "artifact_write_commit_ms": 64,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1204,
+     "artifact_write_child_rows": 360,
+     "artifact_write_commit": 64,
+     "artifact_write_file_symbol_insert": 25,
+     "artifact_write_foreign_key_check": 84,
+     "artifact_write_index_build": 190,
+     "artifact_write_plan": 17,
+     "artifact_write_resolution": 461,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 455,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47977,
+    "files_changed": 272,
+    "files_deleted": 0,
+    "artifact_bytes": 85508096,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-median-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-median-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 47228,
+    "tip": 47977
+   },
+   "stages_ms": {
+    "load_base_set": 192.4,
+    "load_tip_set": 185.5,
+    "diff": 8.7,
+    "delta_write": 33.6,
+    "apply_delta_for_g2": 1.1,
+    "enumerate_delta_for_g4": 1.2
+   },
+   "diff_cost_ms": {
+    "store_real": 201.1,
+    "conservative": 386.6
+   },
+   "fresh_pass": {
+    "resolution_ms": 461,
+    "resolution_rows_rederived": 47977,
+    "resolution_rows_per_s": 104071.58351409978,
+    "extraction_spool_ms": 455,
+    "extract_share_of_total": 0.2708333333333333,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 1680,
+    "scan_wall_ms": 1708
+   },
+   "delta": {
+    "replacement_rows": 5506,
+    "tombstone_rows": 4723,
+    "total_rows": 10229,
+    "rows_written_to_store": 10229,
+    "share_of_base_rows": 0.21658761751503344,
+    "distinct_files_touched": 20,
+    "distinct_target_symbols_touched": 1043,
+    "delta_store_bytes": 2359296
+   },
+   "background_ms": {
+    "store_real": 695.7,
+    "conservative": 881.2,
+    "measured_total_including_extract": 2128.2
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 1.2,
+    "diff_ms": 8.7,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 0.6177501054480672,
+    "manifest_rows_written": 272,
+    "new_file_version_rows": 16,
+    "identifier_rows_written": 0,
+    "store_bytes": 225280,
+    "ms_per_1000_manifest_rows": 2.2711400935590706
+   }
+  },
+  {
+   "corpus": "miller",
+   "label": "p90",
+   "base_rev": "4f91191c",
+   "tip_rev": "afbca712",
+   "merge": "9a4bb833",
+   "changed_indexed_files": 77,
+   "added_paths": 20,
+   "deleted_paths": 0,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 1510,
+    "total_duration_ms": 1485,
+    "resolution_ms": 403,
+    "extraction_spool_ms": 410,
+    "artifact_write_ms": 1055,
+    "artifact_write_child_rows_ms": 318,
+    "artifact_write_index_build_ms": 167,
+    "artifact_write_commit_ms": 49,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1055,
+     "artifact_write_child_rows": 318,
+     "artifact_write_commit": 49,
+     "artifact_write_file_symbol_insert": 22,
+     "artifact_write_foreign_key_check": 75,
+     "artifact_write_index_build": 167,
+     "artifact_write_plan": 16,
+     "artifact_write_resolution": 403,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 410,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 41767,
+    "files_changed": 252,
+    "files_deleted": 0,
+    "artifact_bytes": 75137024,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-p90-base",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-p90-base.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": false,
+   "tip_build": {
+    "wall_ms": 1798,
+    "total_duration_ms": 1769,
+    "resolution_ms": 498,
+    "extraction_spool_ms": 465,
+    "artifact_write_ms": 1282,
+    "artifact_write_child_rows_ms": 385,
+    "artifact_write_index_build_ms": 200,
+    "artifact_write_commit_ms": 60,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1282,
+     "artifact_write_child_rows": 385,
+     "artifact_write_commit": 60,
+     "artifact_write_file_symbol_insert": 26,
+     "artifact_write_foreign_key_check": 90,
+     "artifact_write_index_build": 200,
+     "artifact_write_plan": 19,
+     "artifact_write_resolution": 498,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 465,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 49697,
+    "files_changed": 272,
+    "files_deleted": 0,
+    "artifact_bytes": 88301568,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-p90-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-p90-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 41767,
+    "tip": 49697
+   },
+   "stages_ms": {
+    "load_base_set": 172.4,
+    "load_tip_set": 209.8,
+    "diff": 10.0,
+    "delta_write": 173.9,
+    "apply_delta_for_g2": 2.5,
+    "enumerate_delta_for_g4": 2.5
+   },
+   "diff_cost_ms": {
+    "store_real": 182.4,
+    "conservative": 392.2
+   },
+   "fresh_pass": {
+    "resolution_ms": 498,
+    "resolution_rows_rederived": 49697,
+    "resolution_rows_per_s": 99793.17269076305,
+    "extraction_spool_ms": 465,
+    "extract_share_of_total": 0.26286037309214244,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 1769,
+    "scan_wall_ms": 1798
+   },
+   "delta": {
+    "replacement_rows": 20465,
+    "tombstone_rows": 12340,
+    "total_rows": 32805,
+    "rows_written_to_store": 32805,
+    "share_of_base_rows": 0.7854286877199703,
+    "distinct_files_touched": 95,
+    "distinct_target_symbols_touched": 3244,
+    "delta_store_bytes": 8130560
+   },
+   "background_ms": {
+    "store_real": 854.4,
+    "conservative": 1064.2,
+    "measured_total_including_extract": 2364.2
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 2.5,
+    "diff_ms": 10.0,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 0.8803750388324261,
+    "manifest_rows_written": 272,
+    "new_file_version_rows": 77,
+    "identifier_rows_written": 0,
+    "store_bytes": 245760,
+    "ms_per_1000_manifest_rows": 3.2366729368839193
+   }
+  },
+  {
+   "corpus": "miller",
+   "label": "deletes",
+   "base_rev": "a26cadfa",
+   "tip_rev": "3a933e0b",
+   "merge": "11247e91",
+   "changed_indexed_files": 106,
+   "added_paths": 39,
+   "deleted_paths": 1,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 16773,
+    "total_duration_ms": 16569,
+    "resolution_ms": 4616,
+    "extraction_spool_ms": 4341,
+    "artifact_write_ms": 12144,
+    "artifact_write_child_rows_ms": 3643,
+    "artifact_write_index_build_ms": 1904,
+    "artifact_write_commit_ms": 628,
+    "discovery_ms": 21,
+    "phases": {
+     "artifact_write": 12144,
+     "artifact_write_child_rows": 3643,
+     "artifact_write_commit": 628,
+     "artifact_write_file_symbol_insert": 279,
+     "artifact_write_foreign_key_check": 935,
+     "artifact_write_index_build": 1904,
+     "artifact_write_plan": 125,
+     "artifact_write_resolution": 4616,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 21,
+     "existing_artifact": 0,
+     "extraction_spool": 4341,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 349477,
+    "files_changed": 1326,
+    "files_deleted": 0,
+    "artifact_bytes": 712695808,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-deletes-base",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-deletes-base.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": false,
+   "tip_build": {
+    "wall_ms": 17951,
+    "total_duration_ms": 17728,
+    "resolution_ms": 5002,
+    "extraction_spool_ms": 4616,
+    "artifact_write_ms": 13023,
+    "artifact_write_child_rows_ms": 3811,
+    "artifact_write_index_build_ms": 2023,
+    "artifact_write_commit_ms": 760,
+    "discovery_ms": 20,
+    "phases": {
+     "artifact_write": 13023,
+     "artifact_write_child_rows": 3811,
+     "artifact_write_commit": 760,
+     "artifact_write_file_symbol_insert": 284,
+     "artifact_write_foreign_key_check": 1004,
+     "artifact_write_index_build": 2023,
+     "artifact_write_plan": 124,
+     "artifact_write_resolution": 5002,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 20,
+     "existing_artifact": 0,
+     "extraction_spool": 4616,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 365963,
+    "files_changed": 1364,
+    "files_deleted": 0,
+    "artifact_bytes": 741273600,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-deletes-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-deletes-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 349474,
+    "tip": 365960
+   },
+   "stages_ms": {
+    "load_base_set": 1712.4,
+    "load_tip_set": 1760.0,
+    "diff": 95.0,
+    "delta_write": 674.4,
+    "apply_delta_for_g2": 21.0,
+    "enumerate_delta_for_g4": 12.9
+   },
+   "diff_cost_ms": {
+    "store_real": 1807.3,
+    "conservative": 3567.3
+   },
+   "fresh_pass": {
+    "resolution_ms": 5002,
+    "resolution_rows_rederived": 365963,
+    "resolution_rows_per_s": 73163.33466613355,
+    "extraction_spool_ms": 4616,
+    "extract_share_of_total": 0.26037906137184114,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 17728,
+    "scan_wall_ms": 17951
+   },
+   "delta": {
+    "replacement_rows": 60377,
+    "tombstone_rows": 43167,
+    "total_rows": 103544,
+    "rows_written_to_store": 103544,
+    "share_of_base_rows": 0.2962852744410171,
+    "distinct_files_touched": 170,
+    "distinct_target_symbols_touched": 7875,
+    "delta_store_bytes": 26779648
+   },
+   "background_ms": {
+    "store_real": 7483.7,
+    "conservative": 9243.7,
+    "measured_total_including_extract": 22192.7
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 12.9,
+    "diff_ms": 95.0,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 3.182791988365352,
+    "manifest_rows_written": 1364,
+    "new_file_version_rows": 105,
+    "identifier_rows_written": 0,
+    "store_bytes": 1069056,
+    "ms_per_1000_manifest_rows": 2.3334252114115484
+   }
+  },
+  {
+   "corpus": "julie-extractors",
+   "label": "median",
+   "base_rev": "300d1d92",
+   "tip_rev": "b4ab3dcc",
+   "merge": "dc5bc515",
+   "changed_indexed_files": 28,
+   "added_paths": 14,
+   "deleted_paths": 0,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 7668,
+    "total_duration_ms": 7574,
+    "resolution_ms": 2244,
+    "extraction_spool_ms": 1226,
+    "artifact_write_ms": 6291,
+    "artifact_write_child_rows_ms": 2050,
+    "artifact_write_index_build_ms": 917,
+    "artifact_write_commit_ms": 561,
+    "discovery_ms": 16,
+    "phases": {
+     "artifact_write": 6291,
+     "artifact_write_child_rows": 2050,
+     "artifact_write_commit": 561,
+     "artifact_write_file_symbol_insert": 68,
+     "artifact_write_foreign_key_check": 409,
+     "artifact_write_index_build": 917,
+     "artifact_write_plan": 38,
+     "artifact_write_resolution": 2244,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 16,
+     "existing_artifact": 0,
+     "extraction_spool": 1226,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 215165,
+    "files_changed": 992,
+    "files_deleted": 0,
+    "artifact_bytes": 361988096,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-g1a",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-g1a.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": true,
+   "tip_build": {
+    "wall_ms": 7439,
+    "total_duration_ms": 7350,
+    "resolution_ms": 2254,
+    "extraction_spool_ms": 1189,
+    "artifact_write_ms": 6108,
+    "artifact_write_child_rows_ms": 2060,
+    "artifact_write_index_build_ms": 961,
+    "artifact_write_commit_ms": 303,
+    "discovery_ms": 15,
+    "phases": {
+     "artifact_write": 6108,
+     "artifact_write_child_rows": 2060,
+     "artifact_write_commit": 303,
+     "artifact_write_file_symbol_insert": 68,
+     "artifact_write_foreign_key_check": 422,
+     "artifact_write_index_build": 961,
+     "artifact_write_plan": 35,
+     "artifact_write_resolution": 2254,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 15,
+     "existing_artifact": 0,
+     "extraction_spool": 1189,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 218212,
+    "files_changed": 1006,
+    "files_deleted": 0,
+    "artifact_bytes": 366702592,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-median-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-median-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 215164,
+    "tip": 218211
+   },
+   "stages_ms": {
+    "load_base_set": 770.2,
+    "load_tip_set": 743.1,
+    "diff": 41.8,
+    "delta_write": 38.0,
+    "apply_delta_for_g2": 3.5,
+    "enumerate_delta_for_g4": 1.4
+   },
+   "diff_cost_ms": {
+    "store_real": 812.0,
+    "conservative": 1555.1
+   },
+   "fresh_pass": {
+    "resolution_ms": 2254,
+    "resolution_rows_rederived": 218212,
+    "resolution_rows_per_s": 96811.00266193434,
+    "extraction_spool_ms": 1189,
+    "extract_share_of_total": 0.16176870748299318,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 7350,
+    "scan_wall_ms": 7439
+   },
+   "delta": {
+    "replacement_rows": 7281,
+    "tombstone_rows": 4072,
+    "total_rows": 11353,
+    "rows_written_to_store": 11353,
+    "share_of_base_rows": 0.0527644029670391,
+    "distinct_files_touched": 81,
+    "distinct_target_symbols_touched": 235,
+    "delta_store_bytes": 2289664
+   },
+   "background_ms": {
+    "store_real": 3104.0,
+    "conservative": 3847.1,
+    "measured_total_including_extract": 9032.1
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 1.4,
+    "diff_ms": 41.8,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 1.98937498498708,
+    "manifest_rows_written": 1006,
+    "new_file_version_rows": 28,
+    "identifier_rows_written": 0,
+    "store_bytes": 765952,
+    "ms_per_1000_manifest_rows": 1.9775099254344732
+   }
+  },
+  {
+   "corpus": "julie-extractors",
+   "label": "p90",
+   "base_rev": "597bffc1",
+   "tip_rev": "a75378c6",
+   "merge": "0fe1ea4e",
+   "changed_indexed_files": 369,
+   "added_paths": 82,
+   "deleted_paths": 0,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 8394,
+    "total_duration_ms": 8295,
+    "resolution_ms": 2682,
+    "extraction_spool_ms": 1336,
+    "artifact_write_ms": 6902,
+    "artifact_write_child_rows_ms": 2276,
+    "artifact_write_index_build_ms": 1018,
+    "artifact_write_commit_ms": 338,
+    "discovery_ms": 16,
+    "phases": {
+     "artifact_write": 6902,
+     "artifact_write_child_rows": 2276,
+     "artifact_write_commit": 338,
+     "artifact_write_file_symbol_insert": 77,
+     "artifact_write_foreign_key_check": 464,
+     "artifact_write_index_build": 1018,
+     "artifact_write_plan": 40,
+     "artifact_write_resolution": 2682,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 16,
+     "existing_artifact": 0,
+     "extraction_spool": 1336,
+     "force_metadata": 0,
+     "writer_open": 7
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 236511,
+    "files_changed": 1100,
+    "files_deleted": 0,
+    "artifact_bytes": 399806464,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-p90-base",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-p90-base.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": false,
+   "tip_build": {
+    "wall_ms": 10243,
+    "total_duration_ms": 10106,
+    "resolution_ms": 3052,
+    "extraction_spool_ms": 1673,
+    "artifact_write_ms": 8367,
+    "artifact_write_child_rows_ms": 2765,
+    "artifact_write_index_build_ms": 1300,
+    "artifact_write_commit_ms": 439,
+    "discovery_ms": 17,
+    "phases": {
+     "artifact_write": 8367,
+     "artifact_write_child_rows": 2765,
+     "artifact_write_commit": 439,
+     "artifact_write_file_symbol_insert": 152,
+     "artifact_write_foreign_key_check": 571,
+     "artifact_write_index_build": 1300,
+     "artifact_write_plan": 78,
+     "artifact_write_resolution": 3052,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 17,
+     "existing_artifact": 0,
+     "extraction_spool": 1673,
+     "force_metadata": 0,
+     "writer_open": 8
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 258414,
+    "files_changed": 1182,
+    "files_deleted": 0,
+    "artifact_bytes": 504209408,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-julie-extractors-p90-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/julie-extractors-p90-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 236510,
+    "tip": 258413
+   },
+   "stages_ms": {
+    "load_base_set": 866.2,
+    "load_tip_set": 923.7,
+    "diff": 56.0,
+    "delta_write": 783.0,
+    "apply_delta_for_g2": 14.2,
+    "enumerate_delta_for_g4": 6.1
+   },
+   "diff_cost_ms": {
+    "store_real": 922.2,
+    "conservative": 1845.9
+   },
+   "fresh_pass": {
+    "resolution_ms": 3052,
+    "resolution_rows_rederived": 258414,
+    "resolution_rows_per_s": 84670.38007863695,
+    "extraction_spool_ms": 1673,
+    "extract_share_of_total": 0.16554522066099348,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 10106,
+    "scan_wall_ms": 10243
+   },
+   "delta": {
+    "replacement_rows": 79696,
+    "tombstone_rows": 57101,
+    "total_rows": 136797,
+    "rows_written_to_store": 136797,
+    "share_of_base_rows": 0.5783983763900047,
+    "distinct_files_touched": 375,
+    "distinct_target_symbols_touched": 1838,
+    "delta_store_bytes": 29757440
+   },
+   "background_ms": {
+    "store_real": 4757.3,
+    "conservative": 5681.0,
+    "measured_total_including_extract": 12872.0
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 6.1,
+    "diff_ms": 56.0,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 3.420624998398125,
+    "manifest_rows_written": 1182,
+    "new_file_version_rows": 369,
+    "identifier_rows_written": 0,
+    "store_bytes": 991232,
+    "ms_per_1000_manifest_rows": 2.893929778678617
+   }
+  }
+ ],
+ "repeat": {
+  "corpus": "miller",
+  "label": "median",
+  "run2": {
+   "corpus": "miller",
+   "label": "median",
+   "base_rev": "09697a7e",
+   "tip_rev": "2d06ae9a",
+   "merge": "75a877cb",
+   "changed_indexed_files": 16,
+   "added_paths": 2,
+   "deleted_paths": 0,
+   "structure_changed": true,
+   "base_build": {
+    "wall_ms": 1733,
+    "total_duration_ms": 1701,
+    "resolution_ms": 479,
+    "extraction_spool_ms": 450,
+    "artifact_write_ms": 1229,
+    "artifact_write_child_rows_ms": 360,
+    "artifact_write_index_build_ms": 195,
+    "artifact_write_commit_ms": 62,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1229,
+     "artifact_write_child_rows": 360,
+     "artifact_write_commit": 62,
+     "artifact_write_file_symbol_insert": 23,
+     "artifact_write_foreign_key_check": 87,
+     "artifact_write_index_build": 195,
+     "artifact_write_plan": 18,
+     "artifact_write_resolution": 479,
+     "artifact_write_wal_checkpoint": 1,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 450,
+     "force_metadata": 0,
+     "writer_open": 8
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47228,
+    "files_changed": 270,
+    "files_deleted": 0,
+    "artifact_bytes": 84344832,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-median-rerun-base",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-median-rerun-base.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "base_build_reused_from_g1": false,
+   "tip_build": {
+    "wall_ms": 1791,
+    "total_duration_ms": 1757,
+    "resolution_ms": 477,
+    "extraction_spool_ms": 470,
+    "artifact_write_ms": 1263,
+    "artifact_write_child_rows_ms": 384,
+    "artifact_write_index_build_ms": 196,
+    "artifact_write_commit_ms": 68,
+    "discovery_ms": 3,
+    "phases": {
+     "artifact_write": 1263,
+     "artifact_write_child_rows": 384,
+     "artifact_write_commit": 68,
+     "artifact_write_file_symbol_insert": 27,
+     "artifact_write_foreign_key_check": 88,
+     "artifact_write_index_build": 196,
+     "artifact_write_plan": 20,
+     "artifact_write_resolution": 477,
+     "artifact_write_wal_checkpoint": 0,
+     "discovery": 3,
+     "existing_artifact": 0,
+     "extraction_spool": 470,
+     "force_metadata": 0,
+     "writer_open": 9
+    },
+    "resolution_pass": "Full",
+    "resolution_rows_rederived": 47977,
+    "files_changed": 272,
+    "files_deleted": 0,
+    "artifact_bytes": 85508096,
+    "argv": [
+     "/Users/murphy/source/miller/.tools/julie-extract",
+     "scan",
+     "--root",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/tree-miller-median-rerun-tip",
+     "--db",
+     "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-binding-proof/miller-median-rerun-tip.db",
+     "--jobs",
+     "4",
+     "--json"
+    ]
+   },
+   "natural_key_collisions": {
+    "base": 0,
+    "tip": 0
+   },
+   "resolution_set_rows": {
+    "base": 47228,
+    "tip": 47977
+   },
+   "stages_ms": {
+    "load_base_set": 200.7,
+    "load_tip_set": 201.7,
+    "diff": 10.2,
+    "delta_write": 35.5,
+    "apply_delta_for_g2": 1.6,
+    "enumerate_delta_for_g4": 1.4
+   },
+   "diff_cost_ms": {
+    "store_real": 210.9,
+    "conservative": 412.6
+   },
+   "fresh_pass": {
+    "resolution_ms": 477,
+    "resolution_rows_rederived": 47977,
+    "resolution_rows_per_s": 100580.71278825996,
+    "extraction_spool_ms": 470,
+    "extract_share_of_total": 0.2675014228799089,
+    "resolution_pass": "Full",
+    "scan_total_duration_ms": 1757,
+    "scan_wall_ms": 1791
+   },
+   "delta": {
+    "replacement_rows": 5506,
+    "tombstone_rows": 4723,
+    "total_rows": 10229,
+    "rows_written_to_store": 10229,
+    "share_of_base_rows": 0.21658761751503344,
+    "distinct_files_touched": 20,
+    "distinct_target_symbols_touched": 1043,
+    "delta_store_bytes": 2359296
+   },
+   "background_ms": {
+    "store_real": 723.4,
+    "conservative": 925.1,
+    "measured_total_including_extract": 2239.1
+   },
+   "g2_mismatches": 0,
+   "g2_mismatch_samples": [],
+   "g4": {
+    "enumeration_ms": 1.4,
+    "diff_ms": 10.2,
+    "enumeration_within_diff_cost": true
+   },
+   "g5_foreground_bind": {
+    "bind_ms": 0.6620840867981315,
+    "manifest_rows_written": 272,
+    "new_file_version_rows": 16,
+    "identifier_rows_written": 0,
+    "store_bytes": 225280,
+    "ms_per_1000_manifest_rows": 2.434132672051954
+   }
+  },
+  "row_counts_identical": true,
+  "background_ms_run1": 695.7,
+  "background_ms_run2": 723.4,
+  "background_variance_pct": 3.981601264913027
+ },
+ "scale_projection": {
+  "basis": "inference, not measured \u2014 no dotnet/runtime clone on this box",
+  "identifiers": 12860000,
+  "indexed_files": 41406,
+  "measured_resolution_rows_per_s": 92342.69695699879,
+  "measured_diff_rows_per_s": 456908.8205002476,
+  "projected_resolution_s": 139.26385544044177,
+  "projected_diff_s": 56.29131863079466,
+  "projected_background_s": 195.55517407123642
+ },
+ "gates": {
+  "G1": {
+   "pass": true,
+   "threshold": "0 differing rows per corpus",
+   "measured": {
+    "miller": 0,
+    "julie-extractors": 0
+   }
+  },
+  "G2": {
+   "pass": true,
+   "threshold": "0 mismatches on every pair",
+   "measured": {
+    "miller/median": 0,
+    "miller/p90": 0,
+    "miller/deletes": 0,
+    "julie-extractors/median": 0,
+    "julie-extractors/p90": 0
+   }
+  },
+  "G3": {
+   "pass": false,
+   "threshold": "miller resolution >= 50k rows/s; diff+delta write <= +50% of the resolution phase; store-real background <= 30,000 ms",
+   "measured": {
+    "resolution_rows_per_s": {
+     "miller/median": 104072,
+     "miller/p90": 99793,
+     "miller/deletes": 73163
+    },
+    "diff_plus_write_over_resolution_store_real": {
+     "miller/median": 0.5091,
+     "miller/p90": 0.7155,
+     "miller/deletes": 0.4961
+    },
+    "diff_plus_write_over_resolution_conservative": {
+     "miller/median": 0.9115,
+     "miller/p90": 1.1367,
+     "miller/deletes": 0.848
+    },
+    "background_ms_store_real": {
+     "miller/median": 696,
+     "miller/p90": 854,
+     "miller/deletes": 7484
+    }
+   }
+  },
+  "G4": {
+   "pass": true,
+   "threshold": "delta enumeration <= the diff's own cost, every pair",
+   "measured": {
+    "miller/median": {
+     "enumeration_ms": 1.2,
+     "diff_ms": 8.7,
+     "delta_rows": 10229,
+     "share_of_base": 0.216588,
+     "files_touched": 20
+    },
+    "miller/p90": {
+     "enumeration_ms": 2.5,
+     "diff_ms": 10.0,
+     "delta_rows": 32805,
+     "share_of_base": 0.785429,
+     "files_touched": 95
+    },
+    "miller/deletes": {
+     "enumeration_ms": 12.9,
+     "diff_ms": 95.0,
+     "delta_rows": 103544,
+     "share_of_base": 0.296285,
+     "files_touched": 170
+    },
+    "julie-extractors/median": {
+     "enumeration_ms": 1.4,
+     "diff_ms": 41.8,
+     "delta_rows": 11353,
+     "share_of_base": 0.052764,
+     "files_touched": 81
+    },
+    "julie-extractors/p90": {
+     "enumeration_ms": 6.1,
+     "diff_ms": 56.0,
+     "delta_rows": 136797,
+     "share_of_base": 0.578398,
+     "files_touched": 375
+    }
+   }
+  },
+  "G5": {
+   "pass": true,
+   "threshold": "store-real background < 24390 ms on the miller corpus; foreground bind writes 0 identifier rows",
+   "measured": {
+    "background_ms_store_real": {
+     "miller/median": 696,
+     "miller/p90": 854,
+     "miller/deletes": 7484
+    },
+    "foreground_bind_ms": {
+     "miller/median": 0.6,
+     "miller/p90": 0.9,
+     "miller/deletes": 3.2,
+     "julie-extractors/median": 2.0,
+     "julie-extractors/p90": 3.4
+    },
+    "foreground_identifier_rows_written": 0
+   }
+  }
+ }
+}

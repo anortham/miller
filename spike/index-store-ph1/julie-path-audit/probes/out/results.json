@@ -1,0 +1,71 @@
+{
+ "base_facts": {
+  "files": 1420,
+  "identifiers": 380720,
+  "last_full_revision": "1",
+  "resolution_status": "partial"
+ },
+ "target": "eval/fusion-arm/Fuser.cs",
+ "julie_version": "julie-extract 2.27.0",
+ "rev": "0ec78eec",
+ "runs": [
+  {
+   "label": "A_scan_1cs",
+   "argv": [
+    "scan",
+    "--root",
+    "--db",
+    "--jobs 4",
+    "--json"
+   ],
+   "wall_ms": 12248,
+   "pass": "Delta",
+   "identifier_resolutions": 283806,
+   "share_of_corpus": 74.5,
+   "resolution_ms": null,
+   "files_changed": 1,
+   "post_facts": {
+    "files": 1420,
+    "identifiers": 380720,
+    "last_full_revision": "2",
+    "resolution_status": "partial"
+   }
+  },
+  {
+   "label": "B_update_1cs",
+   "argv": [
+    "update",
+    "--root",
+    "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/fixture",
+    "--db",
+    "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/work2.db",
+    "--file",
+    "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/fixture/eval/fusion-arm/Fuser.cs",
+    "--strict-schema",
+    "--json"
+   ],
+   "wall_ms": 11687,
+   "pass": "Delta",
+   "identifier_resolutions": 283806,
+   "share_of_corpus": 74.5,
+   "resolution_ms": null,
+   "operation": "update",
+   "mode": "single_file",
+   "post_facts": {
+    "files": 1420,
+    "identifiers": 380720,
+    "last_full_revision": "1",
+    "resolution_status": "partial"
+   }
+  },
+  {
+   "label": "C_update_1md",
+   "target": ".agents/skills/handoff-in/SKILL.md",
+   "wall_ms": 3607,
+   "pass": "Delta",
+   "identifier_resolutions": 8748,
+   "share_of_corpus": 2.3,
+   "resolution_ms": null
+  }
+ ]
+}
