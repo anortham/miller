@@ -97,8 +97,17 @@ Two independent arguments force this (doubt-pass findings 1–2, both verified):
   exists to eliminate.
 
 So v1 semantics are: a new view binds to the nearest existing base (typically the sibling's),
-converges a delta from the manifest diff, and a background job may **rebase** a long-diverged
-view into a fresh base. Views with identical manifest hashes share one base and an empty delta.
+converges a delta, and a background job may **rebase** a long-diverged view into a fresh base.
+Views with identical manifest hashes share one base and an empty delta.
+**Ph0 CORRECTION (2026-08-06, gate §9):** the delta is NOT produced by P1a's scoped resolution
+pass — that mechanism is refuted (symbol-name scope widening re-derives 74.5% of the corpus for
+one changed file; a populated artifact resolves at ~⅓ the bulk rate; a real sibling bind
+measured 32.4% slower than rebuilding, and `structure_changed` forces Full on real branches
+anyway). Binding "in seconds" via the scoped pass is dead at every scale measured. Ph1 owes a
+redesigned binding mechanism WITH ITS OWN PROOF GATE; the candidate is serve-the-base's
+resolution immediately + background convergence to the exact per-view delta, which relaxes
+exact resolution equivalence during the serve window and is so far unmeasured. See
+[`docs/findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md) §9.
 
 Two bounds on this, from doubt-pass cycle 2 (both verified in julie's resolver):
 
@@ -354,10 +363,15 @@ pointer file (store + view id), logs, scan progress, spool, and `history.db` met
   `.miller` db files are marked reclaimable and surfaced in the dashboard, not silently deleted.
 - **One promotion-capacity formula for every generation promotion** (cycle-2 finding 9) — epoch
   upgrades, corruption repair, compaction, and secure purge all build replacement generations,
-  not only `--from-artifact`. Required space = old generation + new generation + sidecars +
-  WAL/temp + generations retained for pinned readers. Every promotion preflights it; failing is
+  not only `--from-artifact`. **Ph0-corrected formula (gate §13): required space is a MAX over
+  phases, not a sum** — phase 1 (retention/purge sweep) peaks at live store + the sweep's own
+  WAL (measured at up to 56% of store size for a 40% purge — a term the original formula
+  omitted); phase 2 (rebuild) peaks at old generation + new generation + sidecars + rebuild
+  WAL/temp + generations retained for pinned readers. The phases never coexist (the sweep's WAL
+  checkpoints away first), so summing over-reserves and omitting the sweep WAL under-reserves.
+  Measured accuracy where terms coexist: −0.03%. Every promotion preflights it; failing is
   `disk-blocked` with the old generation serving read-only; promotions are resumable, and
-  retention cleanup runs before capacity is judged.
+  retention cleanup runs before capacity is judged (validated: −29% peak).
 - **Escape hatches:** a store on/off switch at ship time (`MILLER_SEMANTIC` precedent — honest
   degradation to per-workspace mode). **Rollback honesty:** once views have advanced in store
   mode, pre-existing per-workspace artifacts are stale — switching off triggers a current-view
@@ -464,8 +478,14 @@ Decisive proofs before any contract work; the program does not proceed past a re
   - migration peak-disk model.
 - Store growth model under real churn (retention-window sizing input).
 - Acceptance:
-  - [ ] Every proof above recorded in a findings doc with a go/no-go call per assumption.
-  - [ ] Purity achieved-by-schema (or violations enumerated with the v4 surgery specified).
+  - [x] Every proof above recorded in a findings doc with a go/no-go call per assumption —
+    [`docs/findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md)
+    (13 verdicts; overall GO to Ph1 with §9's binding mechanism a NO-GO-as-designed carrying a
+    redesign obligation; codex audit recorded with all 9 findings dispositioned).
+  - [x] Purity achieved-by-schema — violations enumerated with the v4 surgery specified (gate
+    §1: drop `identifiers.target_symbol_id` with V-1 cross-repo sequencing; `files` mutable
+    columns out of pure rows; V-5 SymbolLookup narrowing; PLUS the metadata_json determinism
+    blocker — BTreeMap fix + byte-stability gate in julie-extractors before dedup is credible).
 
 ### Ph1 — Store contract design doc. ~1–2 sessions.
 
@@ -528,13 +548,19 @@ and the default-on decision at validation time.
 
 ## Open questions (owed to Ph0/Ph1, with current leans)
 
-- Read-path shape: manifest join vs temp visibility table inside the read session (Ph0 measures;
-  no lean).
-- Vector sharing: family-shared with pre-filtered KNN vs per-view vectors + shared embedding
-  cache (Ph0 measures; lean: whichever keeps byte-identical ranking cheap — the compute win
-  survives either way).
-- Retention-window default and growth curve under agent churn (Ph0 models; lean: weeks, tunable,
-  dashboard-visible).
+- ~~Read-path shape~~ **ANSWERED by Ph0 (gate §4): hybrid, routed by key** — path-keyed reads
+  via `view_manifest` PK seek (the only shape flat under retained history); name/candidate-set
+  reads via a per-connection temp visibility table built once per read session (0.23ms; an
+  integer-rowid probe applied first — ~7× cheaper than the manifest join on the word arm).
+- ~~Vector sharing~~ **ANSWERED by Ph0 (gate §7): family-shared** — sqlite-vec pre-applies
+  `rowid IN (SELECT …)` and returns the exact dedicated top-K; post-filtering has no
+  correctness guarantee at any k (engine cap 4,096). Caveats recorded: brute-force KNN scales
+  with total store rows; byte crossover vs private copies ≈ 8× retained multiple.
+- ~~Retention-window default~~ **ANSWERED by Ph0 (gate §10): 7 days with retained non-live
+  versions demoted to L1**, plus a byte ceiling (~1.25× prune trigger) and a per-path version
+  cap; 14 days tunable-up, >4 weeks opt-in. Full-level retention blows the 1.2× budget at any
+  window. Retention is simultaneously the byte lever (§5), the latency lever (§7), and the
+  growth guard (§10) — the central Ph1 contract item.
 - Family-id derivation details across git edge cases (Ph1; lean: common-dir identity via the
   existing lineage adapter, registry-mediated for path reuse).
 - Rebase policy for long-diverged views (when does a delta chain get folded into a fresh base —

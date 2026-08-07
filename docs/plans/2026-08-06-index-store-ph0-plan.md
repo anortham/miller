@@ -376,7 +376,7 @@ the measured evidence and a go / no-go / go-with-amendment call. Codex audit of 
 updated: Ph0 boxes ticked, open questions replaced with answers.
 
 **Acceptance criteria:**
-- [ ] Every Ph0 acceptance item from the program doc has a verdict with evidence.
-- [ ] Codex audit recorded in the findings doc with dispositions.
-- [ ] Program doc Ph0 boxes and open questions updated.
-- [ ] Branch gate green (`scripts/test.sh` + findings complete).
+- [x] Every Ph0 acceptance item from the program doc has a verdict with evidence.
+- [x] Codex audit recorded in the findings doc with dispositions.
+- [x] Program doc Ph0 boxes and open questions updated.
+- [x] Branch gate green (`scripts/test.sh` + findings complete).
