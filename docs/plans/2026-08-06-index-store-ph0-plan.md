@@ -260,11 +260,11 @@ recommend the canonical history (must reconcile fresh-ordinal vs stable-reuse be
 padding for the adversarial multiples. Equivalence = set comparison, not eyeballing.
 
 **Acceptance criteria:**
-- [ ] Equivalence proven (identical recall sets) under the adversarial trigram history.
-- [ ] Overhead at 1×/5×/20× version multiples reported for both arms.
-- [ ] sqlite-vec pre-filter verdict with mechanism named, or per-view fallback recommended.
-- [ ] DocId recommendation with measured per-query cost and 8-view bytes for both options.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Equivalence proven (identical recall sets) under the adversarial trigram history.
+- [x] Overhead at 1×/5×/20× version multiples reported for both arms.
+- [x] sqlite-vec pre-filter verdict with mechanism named, or per-view fallback recommended.
+- [x] DocId recommendation with measured per-query cost and 8-view bytes for both options.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 5: Resolution binding + growth model
 
