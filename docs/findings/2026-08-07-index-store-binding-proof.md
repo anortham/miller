@@ -1,15 +1,20 @@
-# Binding-mechanism proof — measurements final, gate RED on G3b
+# Binding-mechanism proof — gate closed by user acceptance (G3b marginal accepted)
 
-**Status:** Measurements COMPLETE. **Gate verdict: RED on G3b** — one of three runs measured
-the overhead ratio at 0.5069 against the fixed 0.50 ceiling, and the plan's rule is "any
-FAIL → the gate is red… the lead records NO-GO and the contract freeze blocks." G1, G2
-(scoped below), G3a, G3c, G4, and G5 passed. An earlier revision of this document recorded
-the mechanism verdict as GO with G3b "marginal"; **that construction was retracted at the
-cycle-3 cross-model gate** (codex finding C1, grok finding 5 — contract §17): it softened a
-fixed binary criterion after measurement, which the plan forbids. The discharge is BLOCKED
-pending one of two paths: (a) the user explicitly accepts the marginal G3b measurement, or
-(b) a fresh re-proof passes under a policy predeclared before it runs (store-shaped base
-read, all pairs in all runs, ceiling unchanged at 0.50).
+**Status:** Measurements COMPLETE. **Gate CLOSED 2026-08-07: the user explicitly accepted
+the marginal G3b measurement** (path (a) below), which discharges the §9 gate and unblocks
+the contract freeze. The measured record stands unedited: the gate ran RED on G3b — one of
+three runs measured the overhead ratio at 0.5069 against the fixed 0.50 ceiling, and the
+plan's rule is "any FAIL → the gate is red… the lead records NO-GO and the contract freeze
+blocks." G1, G2 (scoped below), G3a, G3c, G4, and G5 passed. An earlier revision of this
+document recorded the mechanism verdict as GO with G3b "marginal"; **that construction was
+retracted at the cycle-3 cross-model gate** (codex finding C1, grok finding 5 — contract
+§17): it softened a fixed binary criterion after measurement, which the plan forbids. The
+decision was then escalated to the user with two unblock paths: (a) the user explicitly
+accepts the marginal G3b measurement, or (b) a fresh re-proof passes under a policy
+predeclared before it runs (store-shaped base read, all pairs in all runs, ceiling unchanged
+at 0.50). **The user chose (a).** The acceptance carries a condition: Ph2 re-measures the
+G3b ratio in the Rust implementation with own-file resolution output as a store equivalence
+gate (carried condition 1 below).
 **Program:** [`../plans/2026-08-06-index-store-views-program.md`](../plans/2026-08-06-index-store-views-program.md)
 **Refuted predecessor:** Ph0 gate §9
 ([`2026-08-06-index-store-ph0-gate.md`](2026-08-06-index-store-ph0-gate.md)) — the P1a scoped
@@ -86,12 +91,13 @@ flagged that as post-measurement softening of a fixed criterion, and it is retra
 
 ## Discharge statement
 
-**The Ph0 §9 red gate is NOT YET DISCHARGED.** The refuted mechanism (P1a scoped pass as
-binder) stays refuted and appears nowhere in the contract. Its replacement passed six of seven
-fixed criteria decisively — including dominance on the exact pair that refuted the original
-(G5) — but G3b failed in one run, and the program's "does not proceed past a red gate" rule
-applies to this gate too. The discharge and the v4 contract's freeze are blocked pending the
-G3b decision above (user acceptance or a passing predeclared re-proof). The scope caveat also
+**The Ph0 §9 red gate is DISCHARGED by user acceptance (2026-08-07).** The refuted mechanism
+(P1a scoped pass as binder) stays refuted and appears nowhere in the contract. Its replacement
+passed six of seven fixed criteria decisively — including dominance on the exact pair that
+refuted the original (G5) — and G3b failed in one of three runs (0.5069 vs the fixed 0.50
+ceiling); the user explicitly accepted that marginal measurement rather than ordering the
+predeclared re-proof, and the acceptance carries condition 1 (Ph2 re-measures the ratio in
+the Rust implementation as a store equivalence gate). The scope caveat also
 stands: G1/G2 covered `identifier_resolutions` only; `pending_resolutions` — whose
 disappearing rows are the reason §14 keeps tombstones — was never diffed (codex C4), and Ph2's
 equivalence gates extend to it (contract §16.7).
@@ -134,10 +140,10 @@ delta-sized save cost. Evidence:
 
 ## Conditions carried to Ph2 (named, gating)
 
-1. **G3b is not a carry — it is the open gate.** If the user chooses the re-proof path, it
-   runs under the predeclared policy above BEFORE Ph2 implementation is accepted; if the user
-   accepts the marginal measurement, Ph2 still re-measures the ratio in the Rust
-   implementation with own-file resolution output as a store equivalence gate.
+1. **G3b re-measurement (the acceptance condition).** The user accepted the marginal
+   measurement (2026-08-07), so the re-proof path was not taken; Ph2 therefore re-measures
+   the ratio in the Rust implementation with own-file resolution output as a store
+   equivalence gate, against the unchanged 0.50 ceiling.
 1b. **`pending_resolutions` equivalence:** Ph2's G1/G2-equivalent gates natural-key, diff,
    apply, and compare `pending_resolutions` alongside `identifier_resolutions`, including
    disappearing shared-version rows (codex C4; contract §16.7).
@@ -176,5 +182,5 @@ delta-sized save cost. Evidence:
 | instrument | `spike/index-store-ph1/binding-proof/` — 3 full runs, 22 sequential `julie-extract scan --jobs 4` each; raw JSON (canonical + both earlier runs incl. the G3b-failing one) committed |
 | worktree | index-store-ph1 @ 1eee221c at measurement (lead commit 51bac3e8) |
 | invariants | G1 0-diff both corpora (identifier_resolutions); G2 0 mismatches 9/9 pairs (identifier_resolutions); G3 rate/absolute pass, ratio FAILED in run 2 (0.5069 > 0.50); G4 enumeration ≤ diff cost (in-band with the diff); G5 dominance on Ph0's exact refutation pair |
-| result | gate RED on G3b per the plan's any-FAIL rule; §9 discharge BLOCKED pending the user's G3b decision; six of seven criteria passed |
-| timestamp | 2026-08-07T12:30Z (lead-recorded from worker reports) |
+| result | gate ran RED on G3b per the plan's any-FAIL rule; six of seven criteria passed; §9 discharge CLOSED by explicit user acceptance of the marginal 0.5069 (2026-08-07), carrying the Ph2 re-measurement condition |
+| timestamp | 2026-08-07T12:30Z (lead-recorded from worker reports); user acceptance recorded 2026-08-07 |

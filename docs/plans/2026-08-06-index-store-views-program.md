@@ -109,14 +109,17 @@ redesigned binding mechanism WITH ITS OWN PROOF GATE; the candidate is serve-the
 resolution immediately + background convergence to the exact per-view delta, which relaxes
 exact resolution equivalence during the serve window. See
 [`docs/findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md) §9.
-**Ph1 RESOLUTION (2026-08-07): the proof gate ran; six of seven criteria passed, and the
-gate is RED on G3b** — foreground bind 2.7 ms with zero identifier work; background
+**Ph1 RESOLUTION (2026-08-07): the proof gate ran; six of seven criteria passed; the gate
+ran RED on G3b and was CLOSED by explicit user acceptance of the marginal measurement** —
+foreground bind 2.7 ms with zero identifier work; background
 time-to-exact 4.1–7.6 s at miller scale, beating the refuted bind 3.4× on the exact pair that
 refuted it; base + delta exactness 0 mismatches on 9/9 real sibling pairs
 (`identifier_resolutions`-scoped). The diff+write overhead ratio FAILED in one of three runs
-(0.5069 vs the fixed 0.50 ceiling), and the plan's any-FAIL rule makes the gate red: the §9
-discharge and the contract freeze are BLOCKED pending the user's G3b decision (accept the
-marginal measurement, or a predeclared store-shaped re-proof). See
+(0.5069 vs the fixed 0.50 ceiling); under the plan's any-FAIL rule the decision escalated to
+the user, who accepted the marginal measurement (2026-08-07) rather than ordering the
+predeclared re-proof. The §9 gate is discharged, the v4 contract is FROZEN, and Ph2 carries
+the condition to re-measure the ratio in the Rust implementation as a store equivalence
+gate. See
 [`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md);
 contract state machine in the v4 contract §14.
 
@@ -524,11 +527,13 @@ Decisive proofs before any contract work; the program does not proceed past a re
   waiving it; the user sees this posture at the Ph0→Ph1 boundary (merge review) and can direct
   otherwise.
 - Acceptance:
-  - [ ] Binding-mechanism proof passed and recorded (six of seven criteria passed; gate RED
-    on G3b per the plan's any-FAIL rule — discharge blocked on the user's G3b decision:
+  - [x] Binding-mechanism proof recorded and gate closed (six of seven criteria passed; the
+    G3b FAIL was escalated per the any-FAIL rule and the user accepted the marginal 0.5069
+    on 2026-08-07, carrying the Ph2 re-measurement condition:
     [`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)).
   - [x] Contract doc in `docs/plans/` with cross-model review recorded (v4 contract §17 —
-    grok + codex cycle-3; all 21 findings folded; freeze itself blocked on the box above).
+    grok + codex cycle-3; all 21 findings folded; contract FROZEN 2026-08-07 on the box
+    above closing).
 
 ### Ph2 — julie-extractors implementation. ~3–4 sessions + release approval.
 

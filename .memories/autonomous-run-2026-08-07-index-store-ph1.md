@@ -103,10 +103,12 @@ evidence JSON (`binding-proof/output/`, `julie-path-audit/probes/out/`).
 
 ## Next steps
 
-1. **You:** the G3b decision (accept marginal / order re-proof) — this gates the freeze and
-   Ph2.
-2. **You:** approve merge of `worktree-index-store-ph1` → main and push (main is also 14
-   ahead of origin from Ph0).
+1. ~~**You:** the G3b decision (accept marginal / order re-proof) — this gates the freeze and
+   Ph2.~~ **DONE 2026-08-07: the user accepted the marginal measurement.** Gate discharged,
+   v4 contract FROZEN, Ph2 carries the re-measurement condition.
+2. **You:** approve merge of `worktree-index-store-ph1` → main and push (main is also ahead
+   of origin from Ph0 + the 2.28.0 pin bump). **Merge approved 2026-08-07; push still
+   pending approval.**
 3. ~~Optional, independent of the store: approve the §16.3 crossover fix as a julie release
    to kill the 16–18 s per-save cost today.~~ **DONE with a measured correction (2026-08-07,
    julie-extract v2.28.0, user-approved):** the save-shape A/B refuted the predicted save

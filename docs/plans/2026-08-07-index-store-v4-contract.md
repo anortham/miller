@@ -1,15 +1,14 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: DRAFT — freeze BLOCKED on the G3b gate decision** (cycle-3 review record in §17).
-The binding-mechanism proof measurements are final
-([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)):
-G1, G2 (scoped to `identifier_resolutions`), G3a, G3c, G4, and G5 passed; **G3b failed in one
-of three runs (0.5069 against the fixed 0.50 ceiling), and the plan's rule is "any FAIL → the
-gate is red; the contract freeze blocks."** The freeze unblocks only by one of two paths:
-(a) the user explicitly accepts the marginal G3b measurement as satisfying the gate, or
-(b) a fresh re-proof passes under a policy predeclared before it runs (store-shaped base read,
-all pairs in all runs under the unchanged 0.50 ceiling). Do not implement against a DRAFT
-contract.
+**Status: FROZEN 2026-08-07** (cycle-3 review record in §17). The freeze was blocked on the
+G3b gate decision and unblocked by path (a): **the user explicitly accepted the marginal G3b
+measurement** (0.5069 against the fixed 0.50 ceiling, one FAIL in three runs under the plan's
+any-FAIL rule — the measured record stands unedited in
+[`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)).
+The acceptance carries a condition: **Ph2 re-measures the G3b ratio in the Rust
+implementation with own-file resolution output as a store equivalence gate** (findings
+carried condition 1). Post-freeze changes require a version bump and a recorded reason, not
+silent edits.
 
 **Program:** [`2026-08-06-index-store-views-program.md`](2026-08-06-index-store-views-program.md).
 **Gate:** [`../findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md).
