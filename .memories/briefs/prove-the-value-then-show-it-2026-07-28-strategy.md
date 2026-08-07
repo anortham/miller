@@ -3,7 +3,7 @@ id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
 status: active
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-08-07T01:58:50.458Z
+updated: 2026-08-07T11:34:13.852Z
 tags:
   - strategy
   - adoption
@@ -46,7 +46,7 @@ benchmark compared Miller to Julie instead of to a bare agent.
   (lease-holder-executes-queued-requests); read swarm unchanged. Standing triggers (central daemon,
   LanceDB, Eros) unchanged.
 
-## Addendum — versioned index store + views (APPROVED 2026-08-06)
+## Addendum — versioned index store + views (APPROVED 2026-08-06; Ph0 COMPLETE — GO to Ph1)
 
 - Program plan: `docs/plans/2026-08-06-index-store-views-program.md`. Replaces copy-per-worktree
   indexing: one content-addressed store per repo family (`~/.miller/stores/<family-id>/`,
@@ -62,29 +62,51 @@ benchmark compared Miller to Julie instead of to a bare agent.
 - The deferred 1.17.0 FTS5 sidecar-copy follow-up is CANCELLED (never started).
 - Doubt pass: two codex cycles run 2026-08-06 (22 findings, all verified in code and
   accepted/folded — see the doc's doubt-pass records); the third cycle is reserved as the Ph1
-  contract-freeze re-attack. Ph0 is a hard go/no-go prototype gate; no contract freeze before it
-  passes.
-- Execution model (working agreement 2026-08-06): razorback phase plans in dedicated worktrees per
-  repo; **Opus implementer subagents** (every dispatch forces cd + pwd/branch verification step 1);
-  **Fable as lead** — writes the Ph1 contract itself, inline spec + architecture-quality review on
-  every task; **codex adversarial reviews at gates** (Ph1 freeze re-attack + grok per repo
-  convention, pre-merge review per phase branch, Ph0/Ph5 findings audits) rather than per task;
-  parallel fan-out for Ph0's independent instruments, serialized lanes for coupled implementation.
-  Estimate ~13–19 agent sessions across miller + julie-extractors.
+  contract-freeze re-attack. Ph0 was a hard go/no-go prototype gate; it has now run.
+- **BLANKET EXECUTION APPROVAL (user, 2026-08-06): "the whole plan is approved, you don't need to
+  wait on me for anything."** Phases proceed without per-phase check-ins — Ph0 → findings → Ph1
+  contract → implementation branches. The ONLY remaining user stops: git push, releases,
+  julie-pin bumps, marketplace/publish actions, and the store default-on decision.
+- **Ph0 COMPLETE (2026-08-07), merged to main** (ff to 62d9c2ee, 12 commits; branch + worktree
+  removed; fast suite 6149/0 on merged main). Gate doc
+  `docs/findings/2026-08-06-index-store-ph0-gate.md`; run report
+  `.memories/autonomous-run-2026-08-07-index-store-ph0.md`. Verdict **GO to Ph1**:
+  - Storage hard gate PASS: 8 worktree views share one store at 1.027× a single index (budget
+    1.2×; today's copies cost 8×). The v4 composite-key shape is itself 11% smaller.
+  - View binding NO-GO as designed — the one red proof. The scoped pass re-derives 74.5% of the
+    resolution corpus for a one-file change; a real sibling bind measured 32% slower than
+    rebuilding. Ph1's FIRST deliverable is a redesigned binding mechanism with its own measured
+    proof — recorded as the Ph1 ENTRY gate and a contract-freeze precondition. (Codex challenged
+    proceeding past a red gate; recorded posture: Ph1 starts, nothing freezes without the binding
+    proof. The user may instead hold Ph0 open — that changes sequencing, not content.)
+  - Trigram search ordering must change (rank → stored collapsed_len): FTS5 rank bakes in
+    whole-table statistics, so a shared store contaminates the current ordering key. Measured
+    faster and matches documented intent, but it is a shipped-contract change needing its own gate.
+  - Retention is the central Ph1 contract: 7-day default, history demoted to L1, a byte ceiling,
+    a per-path cap — the byte lever, latency lever, and growth guard at once.
+  - Also proven: crash-reusable per-chunk import (single-transaction refuted; the completion
+    marker caught a real truncated-version bug), bounded GC reclamation with a new
+    index-direction schema rule, corrected promotion-capacity formula.
+- Queued for julie-extractors: metadata_json BTreeMap fix + determinism gate (blocks equivalence
+  gating, not dedup), symbol-name scope widening, bulk-path eligibility for populated artifacts.
+- Execution model: razorback phase plans in dedicated worktrees per repo; Opus implementer
+  subagents (forced cwd verification); Fable lead (writes contracts itself, inline review); codex
+  adversarial at gates; parallel fan-out for independent instruments. Estimate ~13–19 sessions
+  across miller + julie-extractors.
 - Ownership rules softened by user 2026-08-06: julie/Miller boundary is performance-driven, not
   law (julie writes store.db because the tuned Rust bulk writer lives there; Miller writes
   sidecars; CLAUDE.md language amended when the program is picked up).
 
 ## Pending approvals
 
-- Commit (and later push) the program-plan docs + `.memories` checkpoints currently uncommitted on
-  miller main.
-- Approval to BEGIN Ph0 (prototype gate) — each phase gated individually.
-- julie-extractors release/pin bumps, Miller release, and the store default-on decision are
-  user-approval points inside the program.
+- Git push of miller main (ahead 13: program-plan commit + Ph0 merge) and of phase branches when
+  ready.
+- julie-extractors release/pin bumps, Miller release, store default-on decision.
+- Everything else: pre-approved per the blanket execution approval above.
 
 ## Constraints
 
 - MCP stinginess rule stands; no new Miller MCP tools.
 - Pushes/releases stay approval-gated.
 - Windows/Linux semantic runtime gates remain on their own track.
+
