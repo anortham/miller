@@ -1,0 +1,1363 @@
+{
+ "julie_extract_version": "julie-extract 2.27.0",
+ "jobs": 4,
+ "fixture_repo_head": "0ec78eec2ab22c181b7d1d2a82f301b3a84b742e",
+ "fixture_root": "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+ "total_indexed_files": 1420,
+ "cs_indexed_files": 737,
+ "crossover_ratio": 0.7,
+ "crossover_files": 993.9999999999999,
+ "base_artifact": {
+  "latest_revision": 1,
+  "last_full_revision": 1,
+  "resolution_status": "partial",
+  "resolution_version": "6",
+  "artifact_id": "artifact-1786070944807680000",
+  "files": 1420,
+  "identifiers": 380720,
+  "symbols": 122778,
+  "bytes": 767815680
+ },
+ "base_artifact_table_bytes": {
+  "tables": [
+   [
+    "identifiers",
+    128253952
+   ],
+   [
+    "reference_sites",
+    104157184
+   ],
+   [
+    "symbols",
+    52908032
+   ],
+   [
+    "source_regions",
+    36421632
+   ],
+   [
+    "sqlite_autoindex_reference_sites_1",
+    30982144
+   ],
+   [
+    "pending_relationships",
+    30347264
+   ],
+   [
+    "identifier_resolutions",
+    29245440
+   ],
+   [
+    "structural_facts",
+    22958080
+   ],
+   [
+    "idx_reference_sites_file",
+    22253568
+   ],
+   [
+    "idx_identifiers_reference_site",
+    21393408
+   ],
+   [
+    "idx_source_regions_export_order",
+    21032960
+   ],
+   [
+    "idx_reference_sites_containing_symbol",
+    19738624
+   ],
+   [
+    "idx_identifiers_file",
+    17707008
+   ],
+   [
+    "sqlite_autoindex_identifiers_1",
+    17489920
+   ],
+   [
+    "sqlite_autoindex_identifier_resolutions_1",
+    17207296
+   ],
+   [
+    "idx_identifiers_containing",
+    15695872
+   ],
+   [
+    "idx_identifiers_name_kind",
+    10969088
+   ],
+   [
+    "idx_source_regions_kind_file",
+    10862592
+   ],
+   [
+    "idx_structural_facts_export_order",
+    9064448
+   ],
+   [
+    "idx_source_regions_file_span",
+    8925184
+   ],
+   [
+    "idx_identifiers_target",
+    8495104
+   ],
+   [
+    "idx_identifier_resolutions_target",
+    8482816
+   ],
+   [
+    "idx_symbols_path",
+    8220672
+   ],
+   [
+    "sqlite_autoindex_source_regions_1",
+    7634944
+   ],
+   [
+    "idx_source_regions_symbol",
+    6873088
+   ],
+   [
+    "idx_structural_facts_pattern_language_path",
+    6328320
+   ],
+   [
+    "sqlite_autoindex_pending_relationships_1",
+    6021120
+   ],
+   [
+    "relationships",
+    5705728
+   ],
+   [
+    "idx_symbols_file",
+    5685248
+   ],
+   [
+    "sqlite_autoindex_symbols_1",
+    5615616
+   ],
+   [
+    "idx_pending_reference_site",
+    5615616
+   ],
+   [
+    "type_facts",
+    5312512
+   ],
+   [
+    "idx_symbols_parent",
+    4435968
+   ],
+   [
+    "idx_pending_file",
+    4018176
+   ],
+   [
+    "idx_symbols_name_kind",
+    3723264
+   ],
+   [
+    "idx_pending_from",
+    3571712
+   ],
+   [
+    "idx_pending_caller_scope",
+    3571712
+   ],
+   [
+    "complexity_metrics",
+    3289088
+   ],
+   [
+    "idx_structural_facts_file_span",
+    3170304
+   ],
+   [
+    "sqlite_autoindex_type_facts_1",
+    2826240
+   ],
+   [
+    "sqlite_autoindex_structural_facts_1",
+    2727936
+   ],
+   [
+    "idx_structural_facts_symbol",
+    2297856
+   ],
+   [
+    "idx_type_facts_symbol",
+    2031616
+   ],
+   [
+    "idx_complexity_metrics_export_order",
+    1794048
+   ],
+   [
+    "sqlite_autoindex_relationships_1",
+    1642496
+   ],
+   [
+    "idx_pending_terminal",
+    1589248
+   ],
+   [
+    "type_argument_usages",
+    1404928
+   ],
+   [
+    "pending_resolutions",
+    1290240
+   ],
+   [
+    "type_arguments",
+    1191936
+   ],
+   [
+    "idx_relationships_reference_site",
+    1118208
+   ],
+   [
+    "idx_symbols_test_lifecycle",
+    1077248
+   ],
+   [
+    "idx_symbols_test_container",
+    1077248
+   ],
+   [
+    "idx_symbols_is_test",
+    1077248
+   ],
+   [
+    "idx_complexity_metrics_scope_language",
+    933888
+   ],
+   [
+    "idx_relationships_file",
+    790528
+   ],
+   [
+    "idx_complexity_metrics_file_scope",
+    737280
+   ],
+   [
+    "sqlite_autoindex_pending_resolutions_1",
+    724992
+   ],
+   [
+    "symbol_annotations",
+    704512
+   ],
+   [
+    "idx_relationships_to",
+    696320
+   ],
+   [
+    "idx_relationships_from",
+    696320
+   ],
+   [
+    "sqlite_autoindex_type_arguments_1",
+    589824
+   ],
+   [
+    "idx_type_arguments_usage",
+    585728
+   ],
+   [
+    "sqlite_autoindex_complexity_metrics_1",
+    581632
+   ],
+   [
+    "idx_complexity_metrics_symbol",
+    507904
+   ],
+   [
+    "sqlite_autoindex_type_argument_usages_1",
+    499712
+   ],
+   [
+    "idx_pending_resolutions_target",
+    425984
+   ],
+   [
+    "sqlite_autoindex_symbol_annotations_1",
+    389120
+   ],
+   [
+    "idx_type_argument_usages_file",
+    335872
+   ],
+   [
+    "files",
+    327680
+   ],
+   [
+    "idx_type_argument_usages_identifier",
+    299008
+   ],
+   [
+    "idx_symbol_annotations_symbol",
+    241664
+   ],
+   [
+    "idx_relationships_kind",
+    229376
+   ],
+   [
+    "revision_file_changes",
+    155648
+   ],
+   [
+    "language_capabilities",
+    118784
+   ],
+   [
+    "sqlite_autoindex_files_2",
+    98304
+   ],
+   [
+    "idx_type_arguments_parent",
+    94208
+   ],
+   [
+    "idx_files_path",
+    90112
+   ],
+   [
+    "sqlite_autoindex_revision_file_changes_1",
+    77824
+   ],
+   [
+    "sqlite_autoindex_files_1",
+    77824
+   ],
+   [
+    "language_capability_gaps",
+    69632
+   ],
+   [
+    "sqlite_schema",
+    32768
+   ],
+   [
+    "language_capability_fixtures",
+    32768
+   ],
+   [
+    "idx_files_language",
+    24576
+   ],
+   [
+    "literals",
+    20480
+   ],
+   [
+    "parser_inventory",
+    16384
+   ],
+   [
+    "sqlite_autoindex_language_capability_gaps_1",
+    12288
+   ],
+   [
+    "sqlite_autoindex_language_capability_fixtures_1",
+    12288
+   ],
+   [
+    "sqlite_autoindex_parser_inventory_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_parse_diagnostics_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_literals_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_language_capabilities_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_artifact_metadata_1",
+    4096
+   ],
+   [
+    "parse_diagnostics",
+    4096
+   ],
+   [
+    "idx_literals_file",
+    4096
+   ],
+   [
+    "idx_literals_containing_symbol",
+    4096
+   ],
+   [
+    "idx_language_capability_gaps_language",
+    4096
+   ],
+   [
+    "idx_diagnostics_path",
+    4096
+   ],
+   [
+    "idx_diagnostics_file",
+    4096
+   ],
+   [
+    "extraction_revisions",
+    4096
+   ],
+   [
+    "artifact_metadata",
+    4096
+   ]
+  ],
+  "page_size": 4096,
+  "page_count": 187455
+ },
+ "level_symbols_artifact": {
+  "latest_revision": 1,
+  "last_full_revision": 1,
+  "resolution_status": "partial",
+  "resolution_version": "6",
+  "artifact_id": "artifact-1786071404944052000",
+  "files": 1420,
+  "identifiers": 0,
+  "symbols": 122778,
+  "bytes": 211513344,
+  "total_duration_ms": 5658,
+  "wall_ms": 5804,
+  "argv": [
+   "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+   "scan",
+   "--root",
+   "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+   "--db",
+   "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/l1.db",
+   "--jobs",
+   "4",
+   "--json",
+   "--level",
+   "symbols"
+  ]
+ },
+ "level_symbols_table_bytes": {
+  "tables": [
+   [
+    "symbols",
+    52908032
+   ],
+   [
+    "pending_relationships",
+    30347264
+   ],
+   [
+    "reference_sites",
+    22294528
+   ],
+   [
+    "idx_symbols_path",
+    8220672
+   ],
+   [
+    "sqlite_autoindex_reference_sites_1",
+    7569408
+   ],
+   [
+    "sqlite_autoindex_pending_relationships_1",
+    6021120
+   ],
+   [
+    "relationships",
+    5705728
+   ],
+   [
+    "idx_symbols_file",
+    5685248
+   ],
+   [
+    "sqlite_autoindex_symbols_1",
+    5615616
+   ],
+   [
+    "idx_pending_reference_site",
+    5615616
+   ],
+   [
+    "type_facts",
+    5312512
+   ],
+   [
+    "idx_reference_sites_file",
+    4816896
+   ],
+   [
+    "idx_symbols_parent",
+    4435968
+   ],
+   [
+    "idx_reference_sites_containing_symbol",
+    4280320
+   ],
+   [
+    "idx_pending_file",
+    4018176
+   ],
+   [
+    "idx_symbols_name_kind",
+    3723264
+   ],
+   [
+    "idx_pending_from",
+    3571712
+   ],
+   [
+    "idx_pending_caller_scope",
+    3571712
+   ],
+   [
+    "complexity_metrics",
+    3289088
+   ],
+   [
+    "sqlite_autoindex_type_facts_1",
+    2826240
+   ],
+   [
+    "idx_type_facts_symbol",
+    2031616
+   ],
+   [
+    "idx_complexity_metrics_export_order",
+    1794048
+   ],
+   [
+    "sqlite_autoindex_relationships_1",
+    1642496
+   ],
+   [
+    "idx_pending_terminal",
+    1589248
+   ],
+   [
+    "pending_resolutions",
+    1290240
+   ],
+   [
+    "idx_relationships_reference_site",
+    1118208
+   ],
+   [
+    "idx_symbols_test_lifecycle",
+    1077248
+   ],
+   [
+    "idx_symbols_test_container",
+    1077248
+   ],
+   [
+    "idx_symbols_is_test",
+    1077248
+   ],
+   [
+    "idx_complexity_metrics_scope_language",
+    933888
+   ],
+   [
+    "idx_relationships_file",
+    790528
+   ],
+   [
+    "idx_complexity_metrics_file_scope",
+    737280
+   ],
+   [
+    "sqlite_autoindex_pending_resolutions_1",
+    724992
+   ],
+   [
+    "symbol_annotations",
+    704512
+   ],
+   [
+    "idx_relationships_to",
+    696320
+   ],
+   [
+    "idx_relationships_from",
+    696320
+   ],
+   [
+    "sqlite_autoindex_complexity_metrics_1",
+    581632
+   ],
+   [
+    "idx_complexity_metrics_symbol",
+    507904
+   ],
+   [
+    "idx_pending_resolutions_target",
+    425984
+   ],
+   [
+    "sqlite_autoindex_symbol_annotations_1",
+    389120
+   ],
+   [
+    "files",
+    327680
+   ],
+   [
+    "idx_symbol_annotations_symbol",
+    241664
+   ],
+   [
+    "idx_relationships_kind",
+    229376
+   ],
+   [
+    "revision_file_changes",
+    155648
+   ],
+   [
+    "language_capabilities",
+    118784
+   ],
+   [
+    "sqlite_autoindex_files_2",
+    98304
+   ],
+   [
+    "idx_files_path",
+    90112
+   ],
+   [
+    "sqlite_autoindex_revision_file_changes_1",
+    77824
+   ],
+   [
+    "sqlite_autoindex_files_1",
+    77824
+   ],
+   [
+    "language_capability_gaps",
+    69632
+   ],
+   [
+    "sqlite_schema",
+    32768
+   ],
+   [
+    "language_capability_fixtures",
+    32768
+   ],
+   [
+    "idx_files_language",
+    24576
+   ],
+   [
+    "parser_inventory",
+    16384
+   ],
+   [
+    "sqlite_autoindex_language_capability_gaps_1",
+    12288
+   ],
+   [
+    "sqlite_autoindex_language_capability_fixtures_1",
+    12288
+   ],
+   [
+    "type_arguments",
+    4096
+   ],
+   [
+    "type_argument_usages",
+    4096
+   ],
+   [
+    "structural_facts",
+    4096
+   ],
+   [
+    "sqlite_autoindex_type_arguments_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_type_argument_usages_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_structural_facts_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_source_regions_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_parser_inventory_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_parse_diagnostics_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_literals_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_language_capabilities_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_identifiers_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_identifier_resolutions_1",
+    4096
+   ],
+   [
+    "sqlite_autoindex_artifact_metadata_1",
+    4096
+   ],
+   [
+    "source_regions",
+    4096
+   ],
+   [
+    "parse_diagnostics",
+    4096
+   ],
+   [
+    "literals",
+    4096
+   ],
+   [
+    "idx_type_arguments_usage",
+    4096
+   ],
+   [
+    "idx_type_arguments_parent",
+    4096
+   ],
+   [
+    "idx_type_argument_usages_identifier",
+    4096
+   ],
+   [
+    "idx_type_argument_usages_file",
+    4096
+   ],
+   [
+    "idx_structural_facts_symbol",
+    4096
+   ],
+   [
+    "idx_structural_facts_pattern_language_path",
+    4096
+   ],
+   [
+    "idx_structural_facts_file_span",
+    4096
+   ],
+   [
+    "idx_structural_facts_export_order",
+    4096
+   ],
+   [
+    "idx_source_regions_symbol",
+    4096
+   ],
+   [
+    "idx_source_regions_kind_file",
+    4096
+   ],
+   [
+    "idx_source_regions_file_span",
+    4096
+   ],
+   [
+    "idx_source_regions_export_order",
+    4096
+   ],
+   [
+    "idx_literals_file",
+    4096
+   ],
+   [
+    "idx_literals_containing_symbol",
+    4096
+   ],
+   [
+    "idx_language_capability_gaps_language",
+    4096
+   ],
+   [
+    "idx_identifiers_target",
+    4096
+   ],
+   [
+    "idx_identifiers_reference_site",
+    4096
+   ],
+   [
+    "idx_identifiers_name_kind",
+    4096
+   ],
+   [
+    "idx_identifiers_file",
+    4096
+   ],
+   [
+    "idx_identifiers_containing",
+    4096
+   ],
+   [
+    "idx_identifier_resolutions_target",
+    4096
+   ],
+   [
+    "idx_diagnostics_path",
+    4096
+   ],
+   [
+    "idx_diagnostics_file",
+    4096
+   ],
+   [
+    "identifiers",
+    4096
+   ],
+   [
+    "identifier_resolutions",
+    4096
+   ],
+   [
+    "extraction_revisions",
+    4096
+   ],
+   [
+    "artifact_metadata",
+    4096
+   ]
+  ],
+  "page_size": 4096,
+  "page_count": 51639
+ },
+ "sibling_bind": {
+  "base_rev": "b0d96b75a2b86c22b0fb00ead9edbc275e8b47dc",
+  "tip_rev": "425f995d19142b1da5c8887bc004018ef869ce39",
+  "changed_paths_in_diff": 47,
+  "base_full_build": {
+   "total_duration_ms": 17791,
+   "resolution_ms": 4736,
+   "wall_ms": 18028,
+   "files": 1396,
+   "identifiers": 373900,
+   "bytes": 755609600,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 373903,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling-base.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  "bind_delta": {
+   "total_duration_ms": 24390,
+   "resolution_ms": 12219,
+   "extraction_spool_ms": 558,
+   "wall_ms": 24775,
+   "files_changed": 28,
+   "files_deleted": 0,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 370857,
+   "identifiers": 379312,
+   "bytes": 784285696,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling-work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  "tip_full_build": {
+   "total_duration_ms": 18426,
+   "resolution_ms": 5166,
+   "wall_ms": 18657,
+   "files": 1408,
+   "identifiers": 379312,
+   "bytes": 765149184,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 379315,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/sibling-tip.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  }
+ },
+ "csharp_only_artifact": {
+  "latest_revision": 1,
+  "last_full_revision": 1,
+  "resolution_status": "partial",
+  "resolution_version": "6",
+  "artifact_id": "artifact-1786071372779110000",
+  "files": 737,
+  "identifiers": 350978,
+  "symbols": 66799,
+  "bytes": 599617536,
+  "total_duration_ms": 15108,
+  "argv": [
+   "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+   "scan",
+   "--root",
+   "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture-cs",
+   "--db",
+   "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/cs.db",
+   "--jobs",
+   "4",
+   "--json"
+  ]
+ },
+ "extra_root_artifacts": {
+  "julie-extractors": {
+   "latest_revision": 1,
+   "last_full_revision": 1,
+   "resolution_status": "partial",
+   "resolution_version": "6",
+   "artifact_id": "artifact-1786071387968016000",
+   "files": 1822,
+   "identifiers": 356023,
+   "symbols": 200724,
+   "bytes": 915947520,
+   "root": "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture-julie-extractors",
+   "total_duration_ms": 17552,
+   "wall_ms": 17832,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture-julie-extractors",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/extra-julie-extractors.db",
+    "--jobs",
+    "4",
+    "--json"
+   ],
+   "bytes_per_version": 502715.43358946213
+  }
+ },
+ "bytes_per_version_full": 540715.2676056338,
+ "bytes_per_version_level_symbols": 148953.05915492956,
+ "bytes_per_version_csharp_only": 813592.314789688,
+ "rows": [
+  {
+   "row": "full_from_scratch",
+   "changed_files_requested": 1420,
+   "files_changed_reported": 1420,
+   "wall_ms": 18860,
+   "total_duration_ms": 18646,
+   "resolution_ms": 5324,
+   "extraction_spool_ms": 4822,
+   "artifact_write_ms": 13730,
+   "child_rows_ms": 4036,
+   "index_build_ms": 2163,
+   "commit_ms": 720,
+   "latest_revision": 1,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 380723,
+   "resolution_rows_share": 1.000007879806682,
+   "artifact_bytes": 767815680,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/base.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_0",
+   "changed_files_requested": 0,
+   "files_changed_reported": 0,
+   "wall_ms": 1122,
+   "total_duration_ms": 242,
+   "resolution_ms": 0,
+   "extraction_spool_ms": 49,
+   "artifact_write_ms": 39,
+   "child_rows_ms": 0,
+   "index_build_ms": 0,
+   "commit_ms": 0,
+   "latest_revision": 1,
+   "resolution_pass": "none",
+   "resolution_rows_rederived": 0,
+   "resolution_rows_share": 0.0,
+   "artifact_bytes": 767815680,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_1",
+   "changed_files_requested": 1,
+   "files_changed_reported": 1,
+   "wall_ms": 15889,
+   "total_duration_ms": 15562,
+   "resolution_ms": 14147,
+   "extraction_spool_ms": 44,
+   "artifact_write_ms": 15308,
+   "child_rows_ms": 38,
+   "index_build_ms": 0,
+   "commit_ms": 267,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 283806,
+   "resolution_rows_share": 0.74544547173776,
+   "artifact_bytes": 772657152,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_5",
+   "changed_files_requested": 5,
+   "files_changed_reported": 5,
+   "wall_ms": 20333,
+   "total_duration_ms": 20055,
+   "resolution_ms": 16783,
+   "extraction_spool_ms": 56,
+   "artifact_write_ms": 19793,
+   "child_rows_ms": 119,
+   "index_build_ms": 0,
+   "commit_ms": 661,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 349470,
+   "resolution_rows_share": 0.917918680395041,
+   "artifact_bytes": 773861376,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_25",
+   "changed_files_requested": 25,
+   "files_changed_reported": 25,
+   "wall_ms": 22825,
+   "total_duration_ms": 22473,
+   "resolution_ms": 15051,
+   "extraction_spool_ms": 193,
+   "artifact_write_ms": 22136,
+   "child_rows_ms": 243,
+   "index_build_ms": 0,
+   "commit_ms": 1094,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 353115,
+   "resolution_rows_share": 0.9274926455137634,
+   "artifact_bytes": 775196672,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_120",
+   "changed_files_requested": 120,
+   "files_changed_reported": 120,
+   "wall_ms": 29049,
+   "total_duration_ms": 28663,
+   "resolution_ms": 14863,
+   "extraction_spool_ms": 302,
+   "artifact_write_ms": 28249,
+   "child_rows_ms": 678,
+   "index_build_ms": 0,
+   "commit_ms": 1260,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 357257,
+   "resolution_rows_share": 0.938372031939483,
+   "artifact_bytes": 781529088,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_1_repeat",
+   "changed_files_requested": 1,
+   "files_changed_reported": 1,
+   "wall_ms": 14906,
+   "total_duration_ms": 14588,
+   "resolution_ms": 12990,
+   "extraction_spool_ms": 47,
+   "artifact_write_ms": 14317,
+   "child_rows_ms": 40,
+   "index_build_ms": 0,
+   "commit_ms": 272,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 283806,
+   "resolution_rows_share": 0.74544547173776,
+   "artifact_bytes": 772657152,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_md_1",
+   "changed_files_requested": 1,
+   "files_changed_reported": 1,
+   "wall_ms": 6604,
+   "total_duration_ms": 6320,
+   "resolution_ms": 5873,
+   "extraction_spool_ms": 49,
+   "artifact_write_ms": 6120,
+   "child_rows_ms": 5,
+   "index_build_ms": 0,
+   "commit_ms": 129,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 8748,
+   "resolution_rows_share": 0.02297751628493381,
+   "artifact_bytes": 768507904,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_cs_all_737",
+   "changed_files_requested": 737,
+   "files_changed_reported": 737,
+   "wall_ms": 64959,
+   "total_duration_ms": 64593,
+   "resolution_ms": 26020,
+   "extraction_spool_ms": 3750,
+   "artifact_write_ms": 60748,
+   "child_rows_ms": 7450,
+   "index_build_ms": 0,
+   "commit_ms": 2292,
+   "latest_revision": 2,
+   "resolution_pass": "Delta",
+   "resolution_rows_rederived": 379577,
+   "resolution_rows_share": 0.996997793654129,
+   "artifact_bytes": 800071680,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_mixed_993_below_crossover",
+   "changed_files_requested": 993,
+   "files_changed_reported": 993,
+   "wall_ms": 38469,
+   "total_duration_ms": 38033,
+   "resolution_ms": 11616,
+   "extraction_spool_ms": 1895,
+   "artifact_write_ms": 36076,
+   "child_rows_ms": 3368,
+   "index_build_ms": 0,
+   "commit_ms": 1702,
+   "latest_revision": 2,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 378129,
+   "resolution_rows_share": 0.9931944736289137,
+   "artifact_bytes": 806965248,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "delta_mixed_994_at_crossover",
+   "changed_files_requested": 994,
+   "files_changed_reported": 994,
+   "wall_ms": 39362,
+   "total_duration_ms": 38957,
+   "resolution_ms": 10741,
+   "extraction_spool_ms": 1952,
+   "artifact_write_ms": 36908,
+   "child_rows_ms": 3272,
+   "index_build_ms": 0,
+   "commit_ms": 1585,
+   "latest_revision": 2,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 378141,
+   "resolution_rows_share": 0.993225992855642,
+   "artifact_bytes": 806477824,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  },
+  {
+   "row": "full_force_populated",
+   "changed_files_requested": 1420,
+   "files_changed_reported": 1420,
+   "wall_ms": 72069,
+   "total_duration_ms": 71768,
+   "resolution_ms": 24050,
+   "extraction_spool_ms": 4851,
+   "artifact_write_ms": 66877,
+   "child_rows_ms": 9131,
+   "index_build_ms": 0,
+   "commit_ms": 2428,
+   "latest_revision": 2,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 380723,
+   "resolution_rows_share": 1.000007879806682,
+   "artifact_bytes": 804347904,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json",
+    "--force"
+   ]
+  },
+  {
+   "row": "delta_structure_change_1rewrite_1add",
+   "changed_files_requested": 2,
+   "files_changed_reported": 2,
+   "wall_ms": 18261,
+   "total_duration_ms": 17907,
+   "resolution_ms": 16507,
+   "extraction_spool_ms": 62,
+   "artifact_write_ms": 17638,
+   "child_rows_ms": 32,
+   "index_build_ms": 0,
+   "commit_ms": 306,
+   "latest_revision": 2,
+   "resolution_pass": "Full",
+   "resolution_rows_rederived": 370649,
+   "resolution_rows_share": 0.9735474889682706,
+   "artifact_bytes": 773337088,
+   "argv": [
+    "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0/.tools/julie-extract",
+    "scan",
+    "--root",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/fixture",
+    "--db",
+    "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph0-task5/work.db",
+    "--jobs",
+    "4",
+    "--json"
+   ]
+  }
+ ]
+}

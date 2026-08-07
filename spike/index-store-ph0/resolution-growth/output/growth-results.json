@@ -1,0 +1,631 @@
+{
+ "bytes_per_version_full": 540715.2676056338,
+ "bytes_per_version_level_symbols": 148953.05915492956,
+ "bytes_per_version_csharp_only": 813592.314789688,
+ "bytes_per_version_by_repo": {
+  "julie-extractors": 502715.43358946213
+ },
+ "reference_artifact_files": 1420,
+ "reference_artifact_bytes": 767815680,
+ "indexed_extensions": [
+  ".bash",
+  ".c",
+  ".c++",
+  ".cc",
+  ".cjs",
+  ".cpp",
+  ".cs",
+  ".cshtml",
+  ".css",
+  ".cts",
+  ".cxx",
+  ".dart",
+  ".erl",
+  ".ex",
+  ".exs",
+  ".gd",
+  ".go",
+  ".h",
+  ".h++",
+  ".hh",
+  ".hpp",
+  ".hrl",
+  ".htm",
+  ".html",
+  ".hxx",
+  ".java",
+  ".js",
+  ".json",
+  ".jsonc",
+  ".jsonl",
+  ".jsx",
+  ".kt",
+  ".kts",
+  ".lua",
+  ".markdown",
+  ".md",
+  ".mjs",
+  ".mts",
+  ".php",
+  ".phtml",
+  ".ps1",
+  ".psd1",
+  ".psm1",
+  ".py",
+  ".pyi",
+  ".pyw",
+  ".qml",
+  ".r",
+  ".razor",
+  ".rb",
+  ".rbw",
+  ".regex",
+  ".rs",
+  ".sc",
+  ".scala",
+  ".sh",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".vb",
+  ".vue",
+  ".wsdl",
+  ".xml",
+  ".xsd",
+  ".yaml",
+  ".yml",
+  ".zig"
+ ],
+ "projection_files": 58500,
+ "projection_bytes_per_version": 813592.314789688,
+ "projection_bytes_per_version_basis": "C#-only artifact measured on this repo's .cs subset",
+ "repos": {
+  "miller": {
+   "bytes_per_version_full": 540715.2676056338,
+   "bytes_per_version_l1": 148953.05915492956,
+   "bytes_per_version_basis": "measured on the miller artifact",
+   "path": "/Users/murphy/source/miller/.claude/worktrees/index-store-ph0",
+   "analysed_rev": "0ec78eec2ab22c181b7d1d2a82f301b3a84b742e",
+   "head": "0ec78eec",
+   "head_date": "2026-08-06T21:27:15-05:00",
+   "branch_divergence": {
+    "merges_sampled": 26,
+    "median_changed_indexed_files": 16,
+    "p90_changed_indexed_files": 77,
+    "max_changed_indexed_files": 106,
+    "samples": [
+     {
+      "merge": "759a8d3a",
+      "branch_commits": 10,
+      "changed_indexed_files": 43
+     },
+     {
+      "merge": "11247e91",
+      "branch_commits": 18,
+      "changed_indexed_files": 106
+     },
+     {
+      "merge": "43abbed7",
+      "branch_commits": 17,
+      "changed_indexed_files": 42
+     },
+     {
+      "merge": "d9b65e52",
+      "branch_commits": 1,
+      "changed_indexed_files": 4
+     },
+     {
+      "merge": "a8c499c9",
+      "branch_commits": 25,
+      "changed_indexed_files": 47
+     },
+     {
+      "merge": "40ca89ac",
+      "branch_commits": 32,
+      "changed_indexed_files": 95
+     },
+     {
+      "merge": "60b6a963",
+      "branch_commits": 15,
+      "changed_indexed_files": 18
+     },
+     {
+      "merge": "43b7ab35",
+      "branch_commits": 21,
+      "changed_indexed_files": 54
+     },
+     {
+      "merge": "8362f038",
+      "branch_commits": 4,
+      "changed_indexed_files": 12
+     },
+     {
+      "merge": "8275e53a",
+      "branch_commits": 13,
+      "changed_indexed_files": 43
+     },
+     {
+      "merge": "1dae59f4",
+      "branch_commits": 30,
+      "changed_indexed_files": 50
+     },
+     {
+      "merge": "4be1838c",
+      "branch_commits": 13,
+      "changed_indexed_files": 21
+     },
+     {
+      "merge": "8ea2ec5e",
+      "branch_commits": 1,
+      "changed_indexed_files": 19
+     },
+     {
+      "merge": "6baee1f7",
+      "branch_commits": 1,
+      "changed_indexed_files": 12
+     },
+     {
+      "merge": "2af0dcf9",
+      "branch_commits": 1,
+      "changed_indexed_files": 8
+     },
+     {
+      "merge": "fc57e69f",
+      "branch_commits": 1,
+      "changed_indexed_files": 5
+     },
+     {
+      "merge": "9a4bb833",
+      "branch_commits": 25,
+      "changed_indexed_files": 77
+     },
+     {
+      "merge": "75a877cb",
+      "branch_commits": 1,
+      "changed_indexed_files": 16
+     },
+     {
+      "merge": "4c64bfac",
+      "branch_commits": 1,
+      "changed_indexed_files": 8
+     },
+     {
+      "merge": "65e35c16",
+      "branch_commits": 1,
+      "changed_indexed_files": 7
+     },
+     {
+      "merge": "48691aa5",
+      "branch_commits": 3,
+      "changed_indexed_files": 8
+     },
+     {
+      "merge": "9f5ea88c",
+      "branch_commits": 2,
+      "changed_indexed_files": 6
+     },
+     {
+      "merge": "9b7af0ec",
+      "branch_commits": 1,
+      "changed_indexed_files": 7
+     },
+     {
+      "merge": "004a9bc0",
+      "branch_commits": 1,
+      "changed_indexed_files": 5
+     },
+     {
+      "merge": "695625d4",
+      "branch_commits": 1,
+      "changed_indexed_files": 16
+     },
+     {
+      "merge": "7644e79c",
+      "branch_commits": 7,
+      "changed_indexed_files": 77
+     }
+    ]
+   },
+   "windows": [
+    {
+     "weeks": 1,
+     "since": "2026-07-31T02:27:15+00:00",
+     "baseline_commit": "f32e8b06b7a409c148f63c6e8b1d30ba84b5d2b9",
+     "commits_in_window": 111,
+     "baseline_versions": 1395,
+     "baseline_paths": 1395,
+     "head_indexed_paths": 1420,
+     "new_versions_in_window": 574,
+     "total_versions": 1969,
+     "distinct_paths_touched": 1496,
+     "versions_per_path": 1.3161764705882353,
+     "new_versions_per_week": 574.0,
+     "store_bytes_full": 1064668361.915493,
+     "store_bytes_l1": 293288573.4760563,
+     "single_index_bytes_full": 767815680.0,
+     "overhead_x_full": 1.3866197183098592,
+     "retention_cost_x_all_full": 1.3866197183098592,
+     "retention_cost_x_l1_history": 1.1065037242741074,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 1.3866197183098592,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 30387869059.55141,
+       "store_bytes_l1_history": 24249107266.505596
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 41.19718309859155,
+       "projected_total_versions": 81117.25352112677,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 65996374061.63549,
+       "store_bytes_l1_history": 52664211191.80153
+      }
+     }
+    },
+    {
+     "weeks": 2,
+     "since": "2026-07-24T02:27:15+00:00",
+     "baseline_commit": "b8397138e717805fb4e67a7cc6192302c21bc89d",
+     "commits_in_window": 255,
+     "baseline_versions": 1284,
+     "baseline_paths": 1284,
+     "head_indexed_paths": 1420,
+     "new_versions_in_window": 1570,
+     "total_versions": 2854,
+     "distinct_paths_touched": 1499,
+     "versions_per_path": 1.90393595730487,
+     "new_versions_per_week": 785.0,
+     "store_bytes_full": 1543201373.746479,
+     "store_bytes_l1": 425112030.828169,
+     "single_index_bytes_full": 767815680.0,
+     "overhead_x_full": 2.0098591549295777,
+     "retention_cost_x_all_full": 2.0098591549295777,
+     "retention_cost_x_l1_history": 1.278190055754226,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 2.0098591549295777,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 44046205330.60423,
+       "store_bytes_l1_history": 28011625346.58293
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 41.19718309859155,
+       "projected_total_versions": 117576.76056338029,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 95659548792.23347,
+       "store_bytes_l1_history": 60835647962.83111
+      }
+     }
+    },
+    {
+     "weeks": 4,
+     "since": "2026-07-10T02:27:15+00:00",
+     "baseline_commit": "ef9c28a35b34a01d8623d1246e09bde26cecefb5",
+     "commits_in_window": 601,
+     "baseline_versions": 878,
+     "baseline_paths": 878,
+     "head_indexed_paths": 1420,
+     "new_versions_in_window": 3164,
+     "total_versions": 4042,
+     "distinct_paths_touched": 1501,
+     "versions_per_path": 2.692871419053964,
+     "new_versions_per_week": 791.0,
+     "store_bytes_full": 2185571111.661972,
+     "store_bytes_l1": 602068265.1042253,
+     "single_index_bytes_full": 767815680.0,
+     "overhead_x_full": 2.8464788732394366,
+     "retention_cost_x_all_full": 2.8464788732394366,
+     "retention_cost_x_l1_history": 1.5086571312326225,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 2.8464788732394366,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 62380785545.30563,
+       "store_bytes_l1_history": 33062327582.89013
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 41.19718309859155,
+       "projected_total_versions": 166519.01408450704,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 135478590125.51074,
+       "store_bytes_l1_history": 71804763085.97589
+      }
+     }
+    },
+    {
+     "weeks": 8,
+     "since": "2026-06-12T02:27:15+00:00",
+     "baseline_commit": "4a383c9d70081c852461651cb55ba781a93299db",
+     "commits_in_window": 922,
+     "baseline_versions": 580,
+     "baseline_paths": 580,
+     "head_indexed_paths": 1420,
+     "new_versions_in_window": 4996,
+     "total_versions": 5576,
+     "distinct_paths_touched": 1510,
+     "versions_per_path": 3.6927152317880796,
+     "new_versions_per_week": 624.5,
+     "store_bytes_full": 3015028332.169014,
+     "store_bytes_l1": 830562257.8478872,
+     "single_index_bytes_full": 767815680.0,
+     "overhead_x_full": 3.926760563380282,
+     "retention_cost_x_all_full": 3.926760563380282,
+     "retention_cost_x_l1_history": 1.806246772464828,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 3.926760563380282,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 86055235081.79718,
+       "store_bytes_l1_history": 39584025588.357506
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 41.19718309859155,
+       "projected_total_versions": 229715.4929577465,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 186894759658.54724,
+       "store_bytes_l1_history": 85968586822.42714
+      }
+     }
+    }
+   ],
+   "head_indexed_paths": 1420
+  },
+  "julie-extractors": {
+   "bytes_per_version_full": 502715.43358946213,
+   "bytes_per_version_l1": 138485.08855525983,
+   "bytes_per_version_basis": "measured on this repo",
+   "path": "/Users/murphy/source/julie-extractors",
+   "analysed_rev": "ab7b16ad8ab3f921665a719b43b8a281ae1942d6",
+   "head": "ab7b16a",
+   "head_date": "2026-08-05T18:18:28-05:00",
+   "branch_divergence": {
+    "merges_sampled": 11,
+    "median_changed_indexed_files": 28,
+    "p90_changed_indexed_files": 369,
+    "max_changed_indexed_files": 976,
+    "samples": [
+     {
+      "merge": "c4dd8c8f",
+      "branch_commits": 1,
+      "changed_indexed_files": 23
+     },
+     {
+      "merge": "3992b03b",
+      "branch_commits": 34,
+      "changed_indexed_files": 54
+     },
+     {
+      "merge": "24d1ce5f",
+      "branch_commits": 1,
+      "changed_indexed_files": 3
+     },
+     {
+      "merge": "c63a9ee7",
+      "branch_commits": 1,
+      "changed_indexed_files": 62
+     },
+     {
+      "merge": "0fe1ea4e",
+      "branch_commits": 59,
+      "changed_indexed_files": 369
+     },
+     {
+      "merge": "2bbe6657",
+      "branch_commits": 5,
+      "changed_indexed_files": 2
+     },
+     {
+      "merge": "26fbd036",
+      "branch_commits": 2,
+      "changed_indexed_files": 8
+     },
+     {
+      "merge": "94f16614",
+      "branch_commits": 3,
+      "changed_indexed_files": 30
+     },
+     {
+      "merge": "516a11b0",
+      "branch_commits": 5,
+      "changed_indexed_files": 16
+     },
+     {
+      "merge": "dc5bc515",
+      "branch_commits": 11,
+      "changed_indexed_files": 28
+     },
+     {
+      "merge": "300d1d92",
+      "branch_commits": 24,
+      "changed_indexed_files": 976
+     }
+    ]
+   },
+   "windows": [
+    {
+     "weeks": 1,
+     "since": "2026-07-29T23:18:28+00:00",
+     "baseline_commit": "44e32a9ebf7598b407e70a3986b9a920e68252db",
+     "commits_in_window": 102,
+     "baseline_versions": 1728,
+     "baseline_paths": 1728,
+     "head_indexed_paths": 1822,
+     "new_versions_in_window": 553,
+     "total_versions": 2281,
+     "distinct_paths_touched": 1852,
+     "versions_per_path": 1.2316414686825055,
+     "new_versions_per_week": 553.0,
+     "store_bytes_full": 1146693904.017563,
+     "store_bytes_l1": 315884486.99454767,
+     "single_index_bytes_full": 915947520.0,
+     "overhead_x_full": 1.2519209659714599,
+     "retention_cost_x_all_full": 1.2519209659714599,
+     "retention_cost_x_l1_history": 1.0693977048454306,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 1.2519209659714599,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 27435936388.686607,
+       "store_bytes_l1_history": 23435926230.03931
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 32.107574094401755,
+       "projected_total_versions": 73237.37650933041,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 59585366683.35004,
+       "store_bytes_l1_history": 50898144615.78445
+      }
+     }
+    },
+    {
+     "weeks": 2,
+     "since": "2026-07-22T23:18:28+00:00",
+     "baseline_commit": "ca61aa8367c1a9b559348abfd839a1fc7bfbc68d",
+     "commits_in_window": 145,
+     "baseline_versions": 1675,
+     "baseline_paths": 1675,
+     "head_indexed_paths": 1822,
+     "new_versions_in_window": 1194,
+     "total_versions": 2869,
+     "distinct_paths_touched": 1855,
+     "versions_per_path": 1.5466307277628033,
+     "new_versions_per_week": 597.0,
+     "store_bytes_full": 1442290578.9681668,
+     "store_bytes_l1": 397313719.0650404,
+     "single_index_bytes_full": 915947520.0,
+     "overhead_x_full": 1.5746432491767288,
+     "retention_cost_x_all_full": 1.5746432491767288,
+     "retention_cost_x_l1_history": 1.158299339810819,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 1.5746432491767288,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 34508418018.03677,
+       "store_bytes_l1_history": 25384211839.16157
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 32.107574094401755,
+       "projected_total_versions": 92116.63007683864,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 74945382294.84055,
+       "store_bytes_l1_history": 55129431304.11902
+      }
+     }
+    },
+    {
+     "weeks": 4,
+     "since": "2026-07-08T23:18:28+00:00",
+     "baseline_commit": "db883bfb7e2c03611d61aecdc4b2611699d76e5b",
+     "commits_in_window": 272,
+     "baseline_versions": 1473,
+     "baseline_paths": 1473,
+     "head_indexed_paths": 1822,
+     "new_versions_in_window": 1850,
+     "total_versions": 3323,
+     "distinct_paths_touched": 1863,
+     "versions_per_path": 1.7836822329575952,
+     "new_versions_per_week": 462.5,
+     "store_bytes_full": 1670523385.8177826,
+     "store_bytes_l1": 460185949.2691284,
+     "single_index_bytes_full": 915947520.0,
+     "overhead_x_full": 1.823819978046103,
+     "retention_cost_x_all_full": 1.823819978046103,
+     "retention_cost_x_l1_history": 1.2269410783725305,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 1.823819978046103,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 39969143629.81394,
+       "store_bytes_l1_history": 26888500387.70155
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 32.107574094401755,
+       "projected_total_versions": 106693.46871569703,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 86804986185.34511,
+       "store_bytes_l1_history": 58396445175.72429
+      }
+     }
+    },
+    {
+     "weeks": 8,
+     "since": "2026-06-10T23:18:28+00:00",
+     "baseline_commit": "a76d4c665038e77127bb675ba9aa931ff91659b0",
+     "commits_in_window": 429,
+     "baseline_versions": 1176,
+     "baseline_paths": 1176,
+     "head_indexed_paths": 1822,
+     "new_versions_in_window": 3247,
+     "total_versions": 4423,
+     "distinct_paths_touched": 1866,
+     "versions_per_path": 2.370310825294748,
+     "new_versions_per_week": 405.875,
+     "store_bytes_full": 2223510362.766191,
+     "store_bytes_l1": 612519546.6799142,
+     "single_index_bytes_full": 915947520.0,
+     "overhead_x_full": 2.4275521405049396,
+     "retention_cost_x_all_full": 2.4275521405049396,
+     "retention_cost_x_l1_history": 1.3932536607907742,
+     "projection": {
+      "method": "apply this repo's measured versions-per-indexed-file multiplier to a target repo's single-index bytes",
+      "overhead_x": 2.4275521405049396,
+      "dotnet_runtime_measured": {
+       "indexed_files": 41406,
+       "bytes_per_version": 529272.8258464957,
+       "single_index_bytes": 21915070627,
+       "store_bytes_all_full": 53199976609.89078,
+       "store_bytes_l1_history": 30533252377.556118
+      },
+      "task_spec_file_count_scaling": {
+       "indexed_files": 58500,
+       "bytes_per_version": 813592.314789688,
+       "scale_factor": 32.107574094401755,
+       "projected_total_versions": 142011.80021953897,
+       "single_index_bytes": 47595150415.19675,
+       "store_bytes_all_full": 115539709268.06543,
+       "store_bytes_l1_history": 66312117551.860405
+      }
+     }
+    }
+   ],
+   "head_indexed_paths": 1822
+  }
+ }
+}

@@ -301,10 +301,10 @@ by file-count scaling; recommend a retention default.
 bounded (≤4) and artifact paths inside the task directory; clean up artifacts after measuring.
 
 **Acceptance criteria:**
-- [ ] Binding cost curve at the four delta sizes vs full pass, crossover behavior confirmed.
-- [ ] Growth curves for both repos per retention window, with bytes-per-version stated.
-- [ ] Retention default recommendation with the projection arithmetic shown.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Binding cost curve at the four delta sizes vs full pass, crossover behavior confirmed.
+- [x] Growth curves for both repos per retention window, with bytes-per-version stated.
+- [x] Retention default recommendation with the projection arithmetic shown.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 6: Write-side mechanics instrument (GC, transactions, promotion capacity)
 
