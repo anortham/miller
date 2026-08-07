@@ -541,9 +541,12 @@ Decisive proofs before any contract work; the program does not proceed past a re
   resolution bases/deltas built by the **Ph1-measured binding mechanism** (not the refuted P1a
   scoped pass, gate §9) + level-gated extraction (L1-first import, background L2/L3 deepening
   per version). Also lands here: the metadata_json BTreeMap fix + byte-stability gate, the
-  symbol-name scope-widening fix, and bulk-path eligibility for populated artifacts (gate §1,
-  §9). Crate tests: dedup correctness, interrupted-import recovery, GC + physical reclamation,
-  fingerprint mixing, epoch/floor gates, the equivalence gate on a multi-language fixture.
+  symbol-name scope-widening fix (pulled forward 2026-08-07 by user approval as its own
+  pre-Ph2 julie release — row-level scoping; brief: julie-extractors
+  `docs/plans/2026-08-07-row-level-resolution-scoping-brief.md`), and bulk-path eligibility
+  for populated artifacts (gate §1, §9). Crate tests: dedup correctness, interrupted-import
+  recovery, GC + physical reclamation, fingerprint mixing, epoch/floor gates, the equivalence
+  gate on a multi-language fixture.
 - Acceptance:
   - [ ] Equivalence gate green; release shipped; Miller pin bumped (user approval).
 
