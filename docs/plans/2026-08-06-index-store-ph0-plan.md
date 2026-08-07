@@ -135,11 +135,11 @@ claims — the program doc's 85–88% pure-bytes figure is a hypothesis this tas
 corrects.
 
 **Acceptance criteria:**
-- [ ] Every artifact table appears in the inventory with a classification and evidence.
-- [ ] Every purity violation has a write-site `file:line` and a v4 surgery line.
-- [ ] Corrected pure-vs-global byte split for the real Miller artifact (dbstat arithmetic shown).
-- [ ] P1a status definitive: version, mechanism entry points, equivalence-gate test name + result.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Every artifact table appears in the inventory with a classification and evidence.
+- [x] Every purity violation has a write-site `file:line` and a v4 surgery line.
+- [x] Corrected pure-vs-global byte split for the real Miller artifact (dbstat arithmetic shown).
+- [x] P1a status definitive: version, mechanism entry points, equivalence-gate test name + result.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 2: Level composition inputs
 
