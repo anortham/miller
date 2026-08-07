@@ -229,5 +229,9 @@ public sealed class SqliteOnlineBackupTests : IDisposable
     }
 
     private static string HashOf(string path)
-        => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    {
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
 }

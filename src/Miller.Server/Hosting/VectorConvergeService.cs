@@ -723,7 +723,7 @@ public sealed class VectorConvergeService : BackgroundService
                 DeltaHistoryComplete = snapshot.DeltaHistoryComplete,
                 ArtifactIdChanged = !string.Equals(
                     snapshot.ArtifactId, port.Meta("artifact_id"), StringComparison.Ordinal),
-                FullRebuildSignalled = state.FullRebuildSignalled,
+                FullRebuildSignalled = state.FullRebuildSignalled && !state.Promoted,
                 IdentityAction = MillerSemanticContract.ClassifyChange(
                     port.StoredIdentity, MillerSemanticContract.PinnedIdentity(_sidecar.Encoder)),
                 DeferredPaths = deferredPaths,

@@ -920,6 +920,30 @@ public sealed class VectorConvergeServiceTests
     }
 
     [Fact]
+    public async Task Drain_AfterAFullRebuildSignal_ContinuesIntoTheChunkCursorOnThePromotedArtifactSameWake()
+    {
+        var signal = new VectorConvergeSignal(enabled: true);
+        signal.StampTarget(5, fullRebuild: true);
+        var live = new FakePort();
+        var shadow = new FakePort();
+        shadow.SymbolUnits = [Card("a", "src/A.cs", "card a")];
+        var promoted = new FakePort();
+        promoted.ChunkUnits = [Card("c1", "docs/a.md", "chunk one")];
+        var rebuilder = new FakeShadowRebuilder(shadow);
+
+        await using var session = new SemanticEmbeddingSession(FakeSemanticSidecar.InProcessLauncher());
+        IReadOnlyList<VectorCursorOutcome> outcomes = await NewService(signal)
+            .DrainAsync(live, session, rebuilder, () => promoted, TestContext.Current.CancellationToken);
+
+        Assert.True(rebuilder.Promoted);
+        VectorCursorOutcome chunks = outcomes.Single(o => o.Kind is VectorUnitKind.Chunk);
+        Assert.Equal(1, chunks.Embedded);
+        Assert.Null(chunks.LastError);
+        Assert.Equal("5", promoted.Meta(VectorConvergeService.ChunkCompletedKey));
+        Assert.True(promoted.Disposed);
+    }
+
+    [Fact]
     public void OpenPort_CorruptArtifact_RecoversTheGenerationAndLeavesSymbolsDbUntouched()
     {
         string root = Directory.CreateTempSubdirectory("miller-vec-corrupt-").FullName;
@@ -1771,11 +1795,11 @@ public sealed class VectorConvergeServiceTests
             delay: delay);
     }
 
-    private static VectorConvergeService NewService() =>
+    private static VectorConvergeService NewService(VectorConvergeSignal? signal = null) =>
         new(
             IsolatedBootstrap(),
             new VectorSidecar(SemanticMode.On),
-            new VectorConvergeSignal(enabled: true),
+            signal ?? new VectorConvergeSignal(enabled: true),
             NullLogger.Instance,
             _ => null,
             _ => null,

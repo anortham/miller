@@ -131,7 +131,7 @@ public sealed class PatternsRegionCliGuardTests : IDisposable
 
         Assert.Equal(0, code);
         Assert.Empty(errText);
-        Assert.Equal(CoreRender(dbPath, operation), outText.TrimEnd('\n'));
+        Assert.Equal(CoreRender(dbPath, operation), outText.TrimEnd('\r', '\n'));
         Assert.DoesNotContain("diagnostic_", outText, StringComparison.Ordinal);
     }
 
