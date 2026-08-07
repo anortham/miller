@@ -174,10 +174,10 @@ counts against file sizes from the `files` table. Keep the recommendation table 
 decisive — this feeds a design call, not a report.
 
 **Acceptance criteria:**
-- [ ] Every artifact table has a level assignment with byte share.
-- [ ] The three open questions each get a data-backed recommendation.
-- [ ] Identifier-density distribution reported with the generated-code tail quantified.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Every artifact table has a level assignment with byte share.
+- [x] The three open questions each get a data-backed recommendation.
+- [x] Identifier-density distribution reported with the generated-code tail quantified.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 3: Read-path + bytes instrument
 
