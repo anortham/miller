@@ -66,3 +66,6 @@ TestResults/
 *.db-wal
 *.db-shm
 *.db-journal
+
+# razorback working-tree scratch (reports, progress ledger)
+.razorback/
