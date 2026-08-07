@@ -1,8 +1,11 @@
 # Progressive Indexing Levels — program plan
 
-**Status:** program plan, user-approved to draft 2026-08-03. Implementation gated on the
-scale-fixes release landing (julie-extractors branch `scale-fixes`, proposed v2.23.0) and separate
-user approval to begin. Each phase becomes its own razorback execution plan when picked up.
+**Status:** program plan, user-approved to draft 2026-08-03. **2026-08-06: approved and FOLDED
+INTO the [versioned index store program](2026-08-06-index-store-views-program.md)** — the v4
+store contract is level-aware from day one (per-level completeness stamps, L1-first import,
+serve-while-converging per level). This document remains the levels design source (level
+composition, julie-extract flag shape, degradation matrix); execution rides the combined
+program's phases, and the P0 questions below merge into that program's Ph0/Ph1 gates.
 
 **One-line goal:** first open of any repo builds a small **symbol-core index that serves the
 dominant tools immediately**; the expensive reference layer converges in the background, and tools
