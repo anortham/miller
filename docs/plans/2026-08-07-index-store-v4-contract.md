@@ -28,8 +28,10 @@ store ships; `store export` (§10) preserves the copyable-artifact property afte
     search.db            # Miller writes (sidecar-converger lease)
     vectors.db           # Miller writes
     content.db           # Miller writes
+    bases/               # resolution base files (§14): base-<manifest_hash>-<epoch>.db, immutable, ready-by-rename
   coord.db               # coordinator queue + leases (own WAL; never inside a generation)
   spool/                 # julie-extract spool (supervision policy carries from v3)
+  scratch/               # converge scratch dbs (§14); disposable, reaped like spool
 ```
 
 - A **generation** is the promotion unit for the repair tier only (§12): corruption heal,
@@ -110,18 +112,27 @@ metadata…)`, plus **per-level completeness stamps**: `complete_l1`, `complete_
 - **Level membership** (level-composition decision table; the SPLIT is a row-subset, not a new
   table):
 
-| Level | Tables (per-version rows) | Bytes (measured, miller) |
+| Level | Tables (per-version rows) | v4 bytes (post-resolution-split) |
 |---|---|---|
-| L1 — symbol core | `symbols`, `symbol_annotations`, `relationships`, `pending_relationships`, `type_facts`, `complexity_metrics`, `parse_diagnostics`, `files`-pure columns, and the relationship-evidence subset of `reference_sites` (spanless + relationship-span rows) | 27.5% |
-| L2 — reference layer | `identifiers`, the identifier-walk subset of `reference_sites` (span-present) | 53.8% |
-| L3 — text/facts | `source_regions`, `structural_facts`, `type_argument_usages`, `type_arguments`, `literals` | 18.7% |
+| L1 — symbol core | `symbols`, `symbol_annotations`, `relationships`, `pending_relationships`, `type_facts`, `complexity_metrics`, `parse_diagnostics`, `files`-pure columns, and the relationship-evidence subset of `reference_sites` (spanless + relationship-span rows) | ≈27.2% |
+| L2 — reference layer | `identifiers` (28.7%), the identifier-walk subset of `reference_sites` (18.0%) | ≈46.7% |
+| L3 — text/facts | `source_regions`, `structural_facts`, `type_argument_usages`, `type_arguments`, `literals` | ≈18.7% |
+| (not a level) resolution layer | `identifier_resolutions`, `pending_resolutions` — §14 bases/deltas | ≈10.5% |
+
+Level shares are restated for v4: the level-composition doc's historical groupings (L2 =
+53.8%, "reference layer = 66.9%") counted `identifier_resolutions` (7.2%) and, in L1,
+`pending_resolutions` (0.3%) — v4 moves both out of levels into the resolution layer, which
+is view-scoped state, not per-version content. Freeze-era text cites only the v4 shares;
+the historical figures are labeled as the old doc-grouping wherever quoted.
 
 - `reference_sites` carries a `level` discriminator (1 or 2); the two subsets are disjoint and
   each level's stamp covers exactly its subset. `type_facts` stays L1 but receives **no
   version-qualified index budget** until a consumer exists (zero consumers in Miller `src/`
   today — level-composition §2).
-- Convergence order is **L1 → L2 → L3** (traffic 14.4× favors L2; L2 owns 42% of the deferred
-  write cost). Tool degradation while a view's L2/L3 converge: `trace`/`impact` return
+- Convergence order is **L1 → L2 → L3** (traffic 14.4× favors L2; and the resolution layer —
+  the +42% deferred-write share the level-composition instrument measured as the resolution
+  pass — takes L2's identifier rows as its input, so L2-first also unblocks §14 convergence
+  soonest). Tool degradation while a view's L2/L3 converge: `trace`/`impact` return
   "reference layer converging" with per-level progress; `search regions=doc_comment` (and the
   regions arm generally) reports L3 convergence rather than silently returning empty — the
   degradation matrix line the gate's §3 amendment owed.
@@ -324,7 +335,9 @@ exactly that).
   file byte-identical (the dashboard claim is conditioned on this).
 - **Purge (CLI + dashboard POST per ADR-0002):** deletes the named versions across store and
   sidecars, truncates WALs, runs the page-limited merges and staged vacuum, cleans
-  spool/temp/export partials and superseded generations. Erasure guarantees hold only where both
+  spool/converge-scratch/temp/export partials and superseded generations, and rebuilds (or
+  deletes and re-derives) any resolution base file whose manifest covers a purged version —
+  base files are immutable, so purging content out of one means replacing the file. Erasure guarantees hold only where both
   secure-delete switches were active for the data's lifetime (write-mechanics sentinel matrix:
   either switch alone leaves recoverable copies; neither leaves MORE copies — the FTS tombstone
   segment); where they were not (e.g. content migrated from a v3 artifact), purge **escalates
@@ -358,8 +371,8 @@ atomically. The v3 lesson carries: never point a rebuild at the served files.
 required = max over phases of (
     live generations still addressable        # incl. any pinned by readers (+926.2 MB measured for one)
   + the generation being written
-  + all sidecars of both
-  + WAL/temp live in THAT phase               # a retention sweep's WAL alone measured 56% of store size
+  + all sidecars AND resolution base files of both
+  + WAL/temp/converge-scratch live in THAT phase   # a retention sweep's WAL alone measured 56% of store size
 )
 ```
 
@@ -386,8 +399,12 @@ oldest unconsumed cursor minus a safety window; cursor liveness is a GC root (§
 
 **Producer: the proven serve-base + background-converge mechanism**
 ([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)
-— G1/G2/G4/G5 PASS, G3 overhead marginal and re-proven in Ph2 per carried condition 1; the
-refuted P1a scoped pass appears nowhere in this contract). Storage shape per Ph0 §5: shared
+— G1/G2/G4/G5 PASS; G3's overhead ratio marginal; the refuted P1a scoped pass appears nowhere
+in this contract). **Freeze consequence of the marginal G3b:** this section may be
+implemented against, but Ph2's implementation is **not accepted** until the G3b re-proof
+(diff + delta write ≤ +50% of the resolution phase, measured in the Rust own-file shape)
+passes as a **hard gate**. A Ph2 G3b failure reopens this section; it is carried as a live
+criterion, not discharged. Storage shape per Ph0 §5: shared
 base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
 
 **Objects and identity.**
@@ -419,9 +436,18 @@ base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
 **View resolution states.**
 
 ```
-unbound → bound(base_id, delta_gen, exact=false)   # foreground bind: manifest + base pointer
-        → bound(base_id, delta_gen, exact=true)    # delta published atomically
+unbound → bound(base_id, delta_gen, exact_at=NULL)     # foreground bind: manifest + base pointer
+        → bound(base_id, delta_gen, exact_at=G)        # delta published atomically against manifest generation G
+        → (any content-changing manifest mutation)     # exact_at < current generation ⟹ view is CONVERGING again
 ```
+
+**`exact` is a relation to the manifest generation, never a flag:** a view is exact iff
+`exact_at = current manifest_generation`. Every content-changing manifest mutation —
+`store update`, `store delete`, an import's pointer flip — leaves `exact_at` behind in the
+same transaction that flips the manifest, which re-enters the converging state, re-enumerates
+the gap (the new versions' rows plus any delta rows now stale), and enqueues re-convergence.
+A manifest flip that provably changes no version (an identical-set generation) is the only
+mutation that may carry `exact_at` forward.
 
 - **Foreground bind is O(manifest):** write manifest rows, point at the nearest ready base
   (v1 nearest = the family base sharing the most manifest versions at the same resolver
@@ -432,9 +458,14 @@ unbound → bound(base_id, delta_gen, exact=false)   # foreground bind: manifest
   a naive in-memory diff is ~10 GB at dotnet/runtime scale). Publishing is one transaction:
   insert delta rows, flip `(delta_gen, exact=true)`, append the `store_log` entry.
 - **CAS publish/rebase:** the converge job records the `(manifest_generation, delta_gen)` it
-  computed against; the publish transaction compare-and-swaps on both. A manifest that moved
-  mid-converge aborts the publish; the job re-diffs against the new manifest (versions already
-  resolved in the scratch output are reused — the pass is corpus-keyed, not manifest-keyed).
+  computed against; the publish transaction compare-and-swaps on both and, in the same
+  transaction, deletes the superseded delta generation's rows (live delta generations = the
+  currently bound one plus any pinned by open read sessions; §10's cohort-delete + staged
+  vacuum reclaims the pages). A manifest that moved mid-converge aborts the publish and
+  **invalidates the scratch output entirely** — resolution is a whole-corpus function, so
+  rows computed against the old corpus are not reusable after a content change (the same
+  cross-file trap that killed base+overlay union); the job re-runs the full pass against the
+  new manifest. Only a provably identical-set generation bump may keep the scratch.
 - **First view of a family** (bootstrap): no base exists — the scratch output *becomes* the
   base (atomic rename), delta empty, exact immediately. Same pipeline, no diff.
 - **Identical manifests share:** views with equal `(manifest_hash, epoch)` bind the same base
@@ -485,10 +516,16 @@ acceptable for freshness nudges, not for import/repoint/GC).
   `queued → claimed → committed → acknowledged | failed`.
   - *Claim* is a CAS on `(state='queued')` with owner + heartbeat; a successor coordinator
     **re-claims** requests whose owner heartbeat is stale — it never deletes them.
-  - *Committed* is written in the same transaction as the effect's `store_log` entry;
-    re-execution of a claimed-but-uncommitted request after takeover is safe because every verb
+  - *Committed* is an **ordered two-phase record — no cross-WAL atomicity is assumed** (§9's
+    posture applies to `coord.db` too): phase 1 commits the effect together with its
+    `store_log` entry **carrying the `request_id`** inside `store.db`; phase 2 CASes the
+    queue row to `committed`, recording the log sequence. The `store_log` entry is the
+    idempotency anchor for every torn pair: a claimed request whose `request_id` already
+    appears in `store_log` is committed-in-fact — the successor flips the row without
+    re-executing; one absent from `store_log` re-executes, which is safe because every verb
     is idempotent at the store layer (version identity is input-keyed; manifest flips are
-    generation-CAS; GC stages are re-runnable). The `idempotency_key` dedups requester retries.
+    generation-CAS; GC stages are re-runnable). The `idempotency_key` dedups requester
+    retries.
   - *Result delivery:* requester polls its request row; `requester_deadline` lets the
     coordinator drop acknowledgment obligations for dead requesters (the row is kept for the
     log-pruning window).
@@ -566,8 +603,9 @@ does not exist).
 6. **The store verb set** (§5), store schema (§2–4), `store_log` (§13), coordinator protocol
    (§15 store side), GC/purge (§10), promotion preflight (§12).
 7. **Equivalence gates**: store row-equivalence (incremental-converged ≡ from-scratch, closing
-   the P1a oracle caveat), crash-point matrix, mixed-version/floor matrix — all on a
-   multi-language fixture (language-parity rule).
+   the P1a oracle caveat), crash-point matrix, mixed-version/floor matrix, and **synthetic
+   path-deletion and multi-delete fixtures** (binding-proof carried condition 4 — real history
+   offered n=1 deletion merges) — all on a multi-language fixture (language-parity rule).
 
 ## 17. Review record
 

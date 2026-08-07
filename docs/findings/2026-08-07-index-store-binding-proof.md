@@ -60,6 +60,11 @@ have. The ratio is NOT waived: it carries to Ph2 as an acceptance criterion re-p
 real store shape (Rust, own-file resolution output, streaming or SQL-side diff), where the
 supplementary evidence says it lands near 0.3. If Ph2's real implementation fails the 50%
 ceiling, the mechanism goes back on the table.
+**Freeze consequence (cross-model gate, grok finding 5, accepted):** the GO licenses design
+direction — contract §14 may freeze and be implemented against — but Ph2's implementation is
+NOT ACCEPTED until the G3b re-proof passes as a hard gate in the real shape. G3b is a live
+criterion carried forward, not a discharged one; only G1/G2/G4/G5 and G3a/G3c are discharged
+by this proof.
 
 ## Discharge statement
 
