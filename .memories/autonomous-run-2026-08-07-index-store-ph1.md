@@ -107,8 +107,14 @@ evidence JSON (`binding-proof/output/`, `julie-path-audit/probes/out/`).
    Ph2.
 2. **You:** approve merge of `worktree-index-store-ph1` → main and push (main is also 14
    ahead of origin from Ph0).
-3. Optional, independent of the store: approve the §16.3 crossover fix as a julie release
-   to kill the 16–18 s per-save cost today.
+3. ~~Optional, independent of the store: approve the §16.3 crossover fix as a julie release
+   to kill the 16–18 s per-save cost today.~~ **DONE with a measured correction (2026-08-07,
+   julie-extract v2.28.0, user-approved):** the save-shape A/B refuted the predicted save
+   win — Full ≈ or slower than the widened delta on single-file saves. v2.28.0 ships the
+   identifier-denominated crossover (−13% resolution on the 737-file scan shape), a
+   single-changed-file promotion exemption (saves byte-identical), and the corpus-currency
+   fix. The 16–18 s save cost STANDS; only row-level scoping (audit §2.1 tier 3) or the
+   store's background converge fixes it. Evidence: probes/out/results3.json, results4.json.
 4. After the freeze: Ph2 planning in julie-extractors (razorback plan per the program doc).
 
 Note for the merge: the main checkout's working tree carries the updated strategy brief

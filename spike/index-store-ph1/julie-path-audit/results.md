@@ -258,10 +258,25 @@ median.
    (`resolution.rs:2660-2674`). It does not change which rows are correct — it only picks the
    cheaper of two paths that are already contracted to agree. On the measured distribution it
    flips the median save (87.3% of identifiers) from the 26 s scoped path to the ~11 s Full path.
+   **MEASURED CORRECTION (2026-08-07, shipped as julie-extract v2.28.0):** the "~11 s Full
+   path" prediction transplanted a SCAN-shaped number onto the SAVE shape, and a direct paired
+   A/B refuted it for saves. On the save shape (1 changed file, scope widened to 90–93% of
+   identifiers), Full measured EQUAL OR SLOWER than the widened delta across repeated runs
+   (`probes/out/results3.json`) — both re-derive ~350–371k rows into a populated artifact at
+   ~20k rows/s, and promotion sheds only per-changed-file worklist overhead, of which one file
+   has none. On the scan shape the prediction held in direction: 737 changed .cs files
+   (99.7% of identifiers, 52% of files) measured 25,972 ms scoped vs 22,569 ms Full same-minute
+   (`probes/out/results4.json`; Ph0's 26.0-vs-11.6 gap did not reproduce at full size under
+   session load). **What shipped in v2.28.0:** identifier denomination for multi-file deltas
+   (the scan win) + a single-changed-file exemption (saves keep the status quo path) + the
+   corpus-currency fix (a promoted delta no longer advances `last_full_revision`). **Save
+   latency is UNCHANGED — no crossover variant helps the save shape; only option 3 below
+   (row-level scoping) reaches delta-sized save cost.**
    **Blast radius:** `resolution.rs` only; no schema, no artifact contract, no Miller change.
    Re-measures `DELTA_SCOPE_CROSSOVER` — the perf sweep that sets the constant
    (`crates/julie-extract-cli/tests/resolution_perf.rs:1048`, and `:52` which imports it as
-   `CROSSOVER_THRESHOLD`) must be re-run because its x-axis changes meaning.
+   `CROSSOVER_THRESHOLD`) must be re-run because its x-axis changes meaning (done: uniform
+   fixture crossing ~80% identifier share, shipped 0.7 stands).
 2. **Narrow the seed to cross-file-referenceable names** — exclude `SymbolKind::Variable` (and
    anything else unreachable at tiers 2–4) from the *cross-file* unions while keeping the changed
    file itself in scope via `changed_file_ids` (`resolution.rs:2934`). Sound per the tier analysis

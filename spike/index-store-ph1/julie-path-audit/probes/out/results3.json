@@ -1,0 +1,37 @@
+{
+ "corpus_identifiers": 380720,
+ "runs": [
+  {
+   "binary": "old-2.27.0",
+   "target": "src/Miller.Server/Tools/SearchTool.cs",
+   "wall_ms": 17654,
+   "pass": "Delta",
+   "identifier_resolutions": 353095,
+   "share": 92.7
+  },
+  {
+   "binary": "old-2.27.0",
+   "target": "src/Miller.Indexing/JulieExtractRunner.cs",
+   "wall_ms": 14675,
+   "pass": "Delta",
+   "identifier_resolutions": 343980,
+   "share": 90.3
+  },
+  {
+   "binary": "new-fixed",
+   "target": "src/Miller.Server/Tools/SearchTool.cs",
+   "wall_ms": 18924,
+   "pass": "Delta",
+   "identifier_resolutions": 353095,
+   "share": 92.7
+  },
+  {
+   "binary": "new-fixed",
+   "target": "src/Miller.Indexing/JulieExtractRunner.cs",
+   "wall_ms": 14709,
+   "pass": "Delta",
+   "identifier_resolutions": 343980,
+   "share": 90.3
+  }
+ ]
+}

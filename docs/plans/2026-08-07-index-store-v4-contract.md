@@ -654,9 +654,16 @@ does not exist).
      120 sampled saves it fires **never** (median widened scope = 35.6% of files holding
      **87.3% of identifiers**), parking every save on the path Ph0 measured as slower at high
      coverage. Re-denominate in identifier rows (~5 lines + re-running the
-     `resolution_perf.rs` sweep that sets the constant). This also improves SHIPPED Miller
-     behavior immediately — the watcher's `update --file` pays 16–18 s of near-full resolution
-     per typical save today (measured; `miller edit apply=true` pays it too on the leader).
+     `resolution_perf.rs` sweep that sets the constant).
+     **DONE — shipped as julie-extract v2.28.0 (2026-08-07), with a measured correction:**
+     the save-shape A/B refuted the predicted save win (Full ≈ or slower than the widened
+     delta on a 1-changed-file scope; promotion sheds only per-changed-file worklist
+     overhead). Shipped: identifier denomination for multi-file deltas (−13% resolution on
+     the 737-file scan shape), a single-changed-file promotion exemption (save behavior
+     byte-identical to 2.27.0), and `corpus_current = whole_corpus` only. The watcher's
+     16–18 s save cost therefore STANDS until row-level scoping (tier 3 below) or the
+     store's background converge; evidence in
+     `spike/index-store-ph1/julie-path-audit/probes/out/results3.json` / `results4.json`.
    - Kind-based name filtering (drop `SymbolKind::Variable` from cross-file unions) is sound
      (tier analysis: tier 1 is same-file; tier 4 never admits Variable) but measured **1.1× on
      typical files** — do not budget it as the fix.

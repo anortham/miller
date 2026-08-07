@@ -118,10 +118,19 @@ measurements — 92.7%/18.1 s and 90.3%/16.0 s — are committed
 unverified observation whose sampling script was not committed — the audit report carries the
 correction, and §16.3's `resolution_perf.rs` sweep re-measures it.) `miller edit apply=true` pays the same on the leader.
 julie's 0.7 crossover guard is denominated in files while the cost is in identifier rows —
-**it fired on 0 of 120 sampled saves**, parking every save on the measured-slower path. The
-~5-line re-denomination (contract §16.3) improves shipped Miller immediately and is the
-cheapest real win found in this phase. This is a today-problem worth fixing ahead of Ph2's
-schedule if desired (julie release approval applies).
+**it fired on 0 of 120 sampled saves**, parking every save on the measured-slower path.
+**Measured correction (2026-08-07, shipped as julie-extract v2.28.0):** the re-denomination
+was built and A/B-measured before release, and the predicted save win did NOT hold — on the
+save shape (1 changed file, 90–93% identifier scope) Full measured equal or slower than the
+widened delta, because promotion sheds only per-changed-file worklist overhead and one file
+has none. What shipped: identifier denomination for multi-file deltas (a real −13% resolution
+win on the 737-file scan shape), a single-changed-file exemption (saves keep the status quo
+path, byte-identical), and the corpus-currency fix (a promoted delta no longer advances
+`last_full_revision`). **The 16–18 s save cost is NOT fixed by any crossover variant** — only
+row-level scoping (Task 2 §2.1 tier 3) or the store program's background converge reaches
+delta-sized save cost. Evidence:
+`spike/index-store-ph1/julie-path-audit/probes/out/results3.json` (saves) and
+`results4.json` (scan).
 
 ## Conditions carried to Ph2 (named, gating)
 

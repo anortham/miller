@@ -1,0 +1,18 @@
+[
+ {
+  "binary": "old-2.27.0",
+  "changed_cs_files": 737,
+  "wall_ms": 57409,
+  "pass": "Delta",
+  "identifier_resolutions": 379577,
+  "resolution_ms": 25972
+ },
+ {
+  "binary": "new-fixed",
+  "changed_cs_files": 737,
+  "wall_ms": 53314,
+  "pass": "Full",
+  "identifier_resolutions": 380626,
+  "resolution_ms": 22569
+ }
+]
