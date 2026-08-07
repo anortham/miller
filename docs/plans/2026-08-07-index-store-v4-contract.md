@@ -440,21 +440,63 @@ acceptable for freshness nudges, not for import/repoint/GC).
 
 ## 16. Ph2 work list (julie-extractors)
 
-**[PENDING Task 2's audit for the fix-surface details; the list itself is fixed:]**
+Fix surfaces audited with citations in
+[`spike/index-store-ph1/julie-path-audit/results.md`](../../spike/index-store-ph1/julie-path-audit/results.md)
+(Task 2). Anchor correction it recorded: the writer lives in
+`crates/julie-extract-artifact/src/writer.rs` (Ph0 docs cite a `julie-extract-cli` path that
+does not exist).
 
-1. metadata_json determinism: seven `HashMap` → ordered serialization + the CI byte-stability
-   gate (§2).
-2. V-1 surgery with cross-repo sequencing; V-5 SymbolLookup narrowing; V-2/3/4 column moves
-   (§2).
-3. Symbol-name scope-widening narrowing in `delta_scope_files` (julie's internal incremental
-   machinery — carried as shipped converge, NOT the view binder).
-4. Bulk-path eligibility for resolution work (the binding mechanism's fresh-output pass must run
-   at the bulk rate — §14's proof depends on it).
-5. The store verb set (§5), store schema (§2–4), `store_log` (§13), coordinator protocol (§15
-   store side), GC/purge (§10), promotion preflight (§12).
-6. Equivalence gates: store row-equivalence (incremental-converged ≡ from-scratch, closing the
-   P1a oracle caveat), crash-point matrix, mixed-version/floor matrix — all on a multi-language
-   fixture (language-parity rule).
+1. **metadata_json determinism** (§2): the seven `Option<HashMap>` declarations →
+   `BTreeMap` (plus the `metadata_flag` signature, `extraction.rs:962-968`). The CI gate must
+   run the two scans in **separate processes** (`RandomState` reseeds per process — a
+   same-process double scan passes while the defect is live), assert `(pk, metadata_json)`
+   equality across all six carrying tables, assert **at least one multi-key object** (vacuity
+   guard), on a **multi-language fixture** (C#-only misses ~60k of the ~121k exposed rows).
+   Proven shipping today: 61/118 symbols rows differed across two processes on a 3-file
+   fixture; invisible to `operations_contract.rs:2809`, which compares only overlay tables.
+   Note for release notes: the fix is an artifact-content change (one-time byte churn for
+   byte-wise artifact diffing; Miller freshness is content-hash-keyed and unaffected).
+2. **The purity surgeries** (§2): V-1 with cross-repo sequencing (Miller's `COALESCE` fallback
+   survives one version or lands together); V-5 SymbolLookup narrowing; V-2/3/4 column moves.
+3. **Resolution scope cost — three measured tiers** (Task 2 §2.1; carried as julie's shipped
+   converge machinery, NOT the view binder):
+   - **Crossover re-denomination FIRST**: `delta_scope_crosses_over`
+     (`resolution.rs:2681-2694`) compares scope **file count** vs `files × 0.7`; measured on
+     120 sampled saves it fires **never** (median widened scope = 35.6% of files holding
+     **87.3% of identifiers**), parking every save on the path Ph0 measured as slower at high
+     coverage. Re-denominate in identifier rows (~5 lines + re-running the
+     `resolution_perf.rs` sweep that sets the constant). This also improves SHIPPED Miller
+     behavior immediately — the watcher's `update --file` pays 16–18 s of near-full resolution
+     per typical save today (measured; `miller edit apply=true` pays it too on the leader).
+   - Kind-based name filtering (drop `SymbolKind::Variable` from cross-file unions) is sound
+     (tier analysis: tier 1 is same-file; tier 4 never admits Variable) but measured **1.1× on
+     typical files** — do not budget it as the fix.
+   - **Row-level scoping is the real redesign** (the file arm is the amplifier: 47 names →
+     1.6% of rows but 27% of files holding 80.2% of identifiers); only this reaches
+     delta-sized cost. Gates: `resolution_scope_equivalence.rs` + the four delta-hazard cases
+     + `writer_contract.rs` scope tests.
+4. **Bulk-path eligibility is a write-target property with a structural precondition** (Task 2
+   §2.2): two of the three bulk effects are connection-global
+   (`journal_mode=MEMORY`/`synchronous=OFF`; `drop_secondary_indexes` drops every index in the
+   database), so **the bulk win exists only if the fresh resolution output is written to its
+   own database file** (attached or own-connection; discarded whole on a torn write). The v4
+   contract adopts that shape: §14's base builds write to a separate resolution file per
+   generation — the binding proof's instrument models exactly this (fresh `$TMPDIR` artifact).
+   `verify_foreign_keys` becomes O(output) by scoping the check to the new file.
+5. **A `resolve` verb (resolution-only, no extraction)** (Task 2 §2.3): FEASIBLE —
+   `resolve_workspace(tx, scope)` is already public and extracts nothing; blocked today by
+   writer-coupled entry points, revision bookkeeping, and undefined freshness for
+   `is_full_scan: true, whole_corpus: false`. Contract requirements: explicit caller-stated
+   scope; MUST NOT set `whole_corpus`/`corpus_current` (it hash-checked nothing — the contract
+   names the third freshness state "resolution current at revision N, corpus currency
+   unchanged"); idempotent; output byte-equivalent to a full scan's overlay
+   (`resolution_scope_equivalence.rs:166` promoted to a contract test); bulk output per item 4.
+   It is a composability fix, not a cost fix — cost is item 3.
+6. **The store verb set** (§5), store schema (§2–4), `store_log` (§13), coordinator protocol
+   (§15 store side), GC/purge (§10), promotion preflight (§12).
+7. **Equivalence gates**: store row-equivalence (incremental-converged ≡ from-scratch, closing
+   the P1a oracle caveat), crash-point matrix, mixed-version/floor matrix — all on a
+   multi-language fixture (language-parity rule).
 
 ## 17. Review record
 
