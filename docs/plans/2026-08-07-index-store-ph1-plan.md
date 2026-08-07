@@ -245,11 +245,11 @@ measurement); a small illustrative scan against a scratch DB in `$TMPDIR` is per
 settles section A's verdict, using the standard argv convention.
 
 **Acceptance criteria:**
-- [ ] Section A verdict stated with file:line evidence end to end (Miller argv → julie branch).
-- [ ] Section B covers all three surfaces with smallest-sound-change and blast radius each.
-- [ ] Section C confirms sites + fix + gate shape.
-- [ ] `results.md` ends with the verification ledger (evidence-audit scope).
-- [ ] Diff handed to the lead (parallel-lead-commit).
+- [x] Section A verdict stated with file:line evidence end to end (Miller argv → julie branch).
+- [x] Section B covers all three surfaces with smallest-sound-change and blast radius each.
+- [x] Section C confirms sites + fix + gate shape.
+- [x] `results.md` ends with the verification ledger (evidence-audit scope).
+- [x] Diff handed to the lead (parallel-lead-commit).
 
 ## Task 3: Binding proof verdict + findings doc (lead)
 
