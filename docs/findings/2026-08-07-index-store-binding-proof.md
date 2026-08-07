@@ -77,8 +77,12 @@ flagged that as post-measurement softening of a fixed criterion, and it is retra
    change only the user can make).
 2. A fresh re-proof under a policy predeclared before it runs: store-shaped base read (the
    single-table shape the contract actually specifies), the unchanged 0.50 ceiling, and an
-   explicit aggregation rule — all pairs in all runs pass. A failure there puts the mechanism
-   back on the table.
+   explicit aggregation rule — all pairs in all runs pass. The re-proof instrument must also
+   close two coverage gaps the original left open (pre-merge review, codex): it applies the
+   **persisted** delta (re-read from the written delta database, not the in-memory lists — the
+   original wrote, size-checked, and deleted the file without round-tripping it) and diffs
+   `pending_resolutions` alongside `identifier_resolutions`. A failure there puts the
+   mechanism back on the table.
 
 ## Discharge statement
 
@@ -108,7 +112,11 @@ equivalence gates extend to it (contract §16.7).
 Miller's watcher-driven single-file converge (`update --file`) lands on the same
 `resolve_delta` widened scope the store program refuted: **the median save on this repo
 re-derives 87.3% of the resolution corpus (16–18 s)**; Ph0's 74.5% headline is the 36th
-percentile. 78% of saves exceed 70%. `miller edit apply=true` pays the same on the leader.
+percentile. 78% of saves exceed 70%. (Evidence status: the two named-file end-to-end
+measurements — 92.7%/18.1 s and 90.3%/16.0 s — are committed
+(`spike/index-store-ph1/julie-path-audit/probes/`); the 120-file percentile table is an
+unverified observation whose sampling script was not committed — the audit report carries the
+correction, and §16.3's `resolution_perf.rs` sweep re-measures it.) `miller edit apply=true` pays the same on the leader.
 julie's 0.7 crossover guard is denominated in files while the cost is in identifier rows —
 **it fired on 0 of 120 sampled saves**, parking every save on the measured-slower path. The
 ~5-line re-denomination (contract §16.3) improves shipped Miller immediately and is the
@@ -140,6 +148,11 @@ schedule if desired (julie release approval applies).
 
 ## What this proof did NOT establish
 
+- **Persisted-delta round-trip:** G2 applied the in-memory replacement/tombstone lists; the
+  delta database was written and size-checked but never re-read and applied, so
+  serialization, column-order, and type-roundtrip defects were outside the proof (pre-merge
+  review finding; the re-proof policy above closes it, and Ph2's store equivalence gate
+  exercises the real persisted representation by construction).
 - The real `resolve`-verb implementation (everything proxied via from-scratch scan with the
   resolution phase isolated; the proxy's separate-file shape matches the required store shape).
 - dotnet/runtime scale (projection only; Ph5 owes the measurement).

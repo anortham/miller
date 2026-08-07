@@ -1,0 +1,120 @@
+{
+ "report_schema_version": 3,
+ "status": "ok",
+ "operation": "update",
+ "mode": "single_file",
+ "input": {
+  "db_path": "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/work2.db",
+  "root_path": "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/fixture",
+  "file_path": "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/fixture/eval/fusion-arm/Fuser.cs",
+  "root_relative_path": "eval/fusion-arm/Fuser.cs",
+  "format": null,
+  "output_path": null
+ },
+ "artifact": {
+  "db_path": "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/work2.db",
+  "root_path": "/private/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T/miller-ph1-task2/fixture",
+  "artifact_id": "artifact-1786103464398789000",
+  "schema_version": 5,
+  "extract_contract_version": 4,
+  "sqlite_schema_version": 5,
+  "jsonl_schema_version": 4,
+  "hash_algorithm": "blake3",
+  "parser_inventory_fingerprint": "sha256:b0c37e709ae49526dfed416ee23a52971991da8e4d5f489df37054b1ce84e8d4",
+  "capability_snapshot_fingerprint": "sha256:3459e067b516616c9c3994eda324110ccac5ab6831ed408ed7fcf56a853ca5ae",
+  "index_level": "full"
+ },
+ "tool": {
+  "binary_name": "julie-extract",
+  "binary_version": "2.27.0"
+ },
+ "revision": {
+  "latest_revision_id": 2,
+  "created_revision_id": 2
+ },
+ "counts": {
+  "files_scanned": 1,
+  "files_changed": 1,
+  "files_unchanged": 0,
+  "files_unsupported": 0,
+  "files_deleted": 0,
+  "files_failed": 0,
+  "rows_written": {
+   "artifact_metadata": 0,
+   "parser_inventory": 0,
+   "language_capabilities": 0,
+   "language_capability_fixtures": 0,
+   "language_capability_gaps": 0,
+   "extraction_revisions": 0,
+   "revision_file_changes": 1,
+   "files": 1,
+   "symbols": 55,
+   "symbol_annotations": 0,
+   "reference_sites": 286,
+   "identifiers": 239,
+   "relationships": 8,
+   "pending_relationships": 39,
+   "type_facts": 40,
+   "type_argument_usages": 17,
+   "type_arguments": 17,
+   "literals": 0,
+   "source_regions": 17,
+   "structural_facts": 0,
+   "complexity_metrics": 9,
+   "parse_diagnostics": 0,
+   "pending_resolutions": 0,
+   "identifier_resolutions": 0
+  },
+  "totals": {
+   "artifact_metadata": 15,
+   "parser_inventory": 38,
+   "language_capabilities": 38,
+   "language_capability_fixtures": 211,
+   "language_capability_gaps": 128,
+   "extraction_revisions": 2,
+   "revision_file_changes": 1421,
+   "files": 1420,
+   "symbols": 122778,
+   "symbol_annotations": 5934,
+   "reference_sites": 478283,
+   "identifiers": 380720,
+   "relationships": 17161,
+   "pending_relationships": 86974,
+   "type_facts": 49859,
+   "type_argument_usages": 7319,
+   "type_arguments": 9570,
+   "literals": 50,
+   "source_regions": 168204,
+   "structural_facts": 60234,
+   "complexity_metrics": 13100,
+   "parse_diagnostics": 12,
+   "pending_resolutions": 10395,
+   "identifier_resolutions": 380720
+  },
+  "file_rows_truncated": false,
+  "file_rows": []
+ },
+ "errors": [],
+ "warnings": [],
+ "languages": {
+  "reference_resolution": {
+   "by_language": null,
+   "counts": {
+    "identifier_resolutions": 283806,
+    "pending_resolutions": 36
+   },
+   "failed": null,
+   "gated_languages": [
+    "bash",
+    "csharp",
+    "powershell",
+    "python"
+   ],
+   "last_full_revision": 1,
+   "origin_totals": null,
+   "status": "partial",
+   "totals": null,
+   "version": 6
+  }
+ }
+}

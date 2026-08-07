@@ -17,12 +17,26 @@ JULIE_EXTRACTORS="${JULIE_EXTRACTORS_REPO:-/Users/murphy/source/julie-extractors
 JULIE="${MILLER_JULIE_EXTRACT:-$REPO_ROOT/.tools/julie-extract}"
 [[ -x "$JULIE" ]] || JULIE="/Users/murphy/source/miller/.tools/julie-extract"
 JOBS="${MILLER_EXTRACT_JOBS:-4}"
-SCRATCH="${SCRATCH_DIR:-${TMPDIR:-/tmp}/miller-ph1-binding-proof}"
 OUT="$HERE/output"
+
+# The scratch dir is always freshly created by THIS invocation (mktemp -d), and the
+# cleanup trap deletes only a directory carrying this run's ownership marker. A
+# SCRATCH_DIR override must name a path that does not exist yet — a pre-existing
+# directory is refused rather than adopted, so the trap can never delete data this
+# run did not create. Unique dirs also let concurrent runs coexist.
+if [[ -n "${SCRATCH_DIR:-}" ]]; then
+  [[ -e "$SCRATCH_DIR" ]] && { echo "SCRATCH_DIR=$SCRATCH_DIR already exists; refusing to adopt (and later delete) a pre-existing path" >&2; exit 1; }
+  mkdir -p "$SCRATCH_DIR"
+  SCRATCH="$SCRATCH_DIR"
+else
+  SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/miller-ph1-binding-proof.XXXXXX")"
+fi
+MARKER="$SCRATCH/.miller-ph1-binding-proof-owned"
+touch "$MARKER"
 
 cleanup() {
   if [[ "${KEEP_SCRATCH:-0}" != "1" ]]; then
-    rm -rf "$SCRATCH"
+    [[ -f "$MARKER" ]] && rm -rf "$SCRATCH"
   else
     echo "scratch kept at $SCRATCH"
   fi

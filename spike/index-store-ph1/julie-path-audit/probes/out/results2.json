@@ -1,0 +1,19 @@
+{
+ "corpus_identifiers": 380720,
+ "runs": [
+  {
+   "target": "src/Miller.Server/Tools/SearchTool.cs",
+   "wall_ms": 18113,
+   "pass": "Delta",
+   "identifier_resolutions": 353095,
+   "share": 92.7
+  },
+  {
+   "target": "src/Miller.Indexing/JulieExtractRunner.cs",
+   "wall_ms": 16021,
+   "pass": "Delta",
+   "identifier_resolutions": 343980,
+   "share": 90.3
+  }
+ ]
+}

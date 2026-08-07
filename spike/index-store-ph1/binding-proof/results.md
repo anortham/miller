@@ -1,5 +1,20 @@
 # Ph1 Task 1 — binding-mechanism proof (G1–G5)
 
+> **CORRECTION (2026-08-07, lead, after the cycle-3 cross-model gate):** this report's original
+> "G3 PASS with a marginal middle criterion" framing is superseded. Run 2's worst pair measured
+> the overhead ratio at **0.5069 against the fixed 0.50 ceiling**, and the plan's rule is "any
+> FAIL → the gate is red." The gate verdict of record is **RED on G3b**; the authoritative
+> verdict document is
+> [`docs/findings/2026-08-07-index-store-binding-proof.md`](../../../docs/findings/2026-08-07-index-store-binding-proof.md).
+> Two further evidence caveats recorded there: G1/G2 diffed `identifier_resolutions` only
+> (`pending_resolutions` was never diffed), and G2 applied the **in-memory** delta lists — the
+> persisted delta database was written and size-checked but never re-read and applied, so
+> serialization/round-trip defects were outside the proof. Run 1
+> (`proof-results-run1-quantile-pairs.json`) covered **5 pairs (~14 scans)**, not the full 9;
+> only runs 2 and the canonical run cover all 9 pairs, so cross-run repeatability claims hold
+> for the 5 shared pairs at n=3 and the remaining 4 at n=2. The measured numbers below are
+> unchanged; only the verdict framing and coverage claims are corrected.
+
 **Instrument:** `./run.sh`. Raw evidence in `output/`: `proof-results.json` (canonical run),
 `proof-results-run2.json` and `proof-results-run1-quantile-pairs.json` (two earlier independent
 runs of the same pairs), and julie-extract's own scan reports under `output/reports/`. Every
@@ -16,15 +31,17 @@ report. `proof-results.json` flags it per pair as `base_build_reused_from_g1`.
 |---|---|---|
 | **G1 Determinism** | two from-scratch builds of the same tree → 0 differing natural-key resolution rows, per corpus | **PASS** — 0 / 373,900 (miller), 0 / 325,078 (julie-extractors) |
 | **G2 Exactness** | base + produced delta ≡ tip set, 0 mismatches, every pair | **PASS** — 0 mismatches on all 9 pairs, including all 8 structure-changed ones |
-| **G3 Cost** | ≥50k rows/s resolution; diff+write ≤ +50% of resolution; background ≤ 30 s | **PASS, but the middle criterion is MARGINAL** — 71.1–84.6k rows/s ✓; background 4.1–7.6 s ✓; the ratio is **0.40–0.51 and straddles 0.50 across three runs** on the worst pair |
+| **G3 Cost** | ≥50k rows/s resolution; diff+write ≤ +50% of resolution; background ≤ 30 s | **G3a/G3c PASS, G3b FAIL** — 71.1–84.6k rows/s ✓; background 4.1–7.6 s ✓; the ratio is **0.40–0.51 across three runs and run 2's worst pair FAILED at 0.5069** (see the correction header) |
 | **G4 Serve-window honesty** | delta enumerable at ≤ the diff's own cost | **PASS** — enumeration is 1.7–25.8% of the diff (≤13.8% on every in-band pair) |
 | **G5 Dominance** | store-real background < the refuted bind's 24,390 ms; foreground does no per-identifier work | **PASS** — 7,271 ms vs 24,390 ms on the *same* pair (3.4× faster); foreground bind 2.7 ms, 1,408 manifest rows, **0 identifier rows** |
 
-**Headline:** the mechanism is sound (G1, G2 exact on every pair) and dominant (G5). The one
-number that is not decisively won is G3's diff+write overhead ceiling, and **95% of that cost is
-the instrument re-joining the base resolution set out of a julie artifact on every pass** — not
-the diff. Under the store's own single-table shape the same ratio is **0.22–0.31**. §6 states
-both and does not move the threshold.
+**Headline (corrected):** six of seven criteria passed — exactness on every pair (G1/G2, scoped
+per the correction header) and dominance (G5). **G3b failed** in run 2, which makes the gate RED
+under the plan's any-FAIL rule. The cost decomposition remains informative: **95% of the
+diff+write cost is the instrument re-joining the base resolution set out of a julie artifact on
+every pass** — not the diff. Under the store's own single-table shape the same ratio is
+**0.22–0.31**. §6 states both and does not move the threshold; neither number changes the
+verdict, which belongs to the findings doc.
 
 **Setup**
 
@@ -448,10 +465,10 @@ move at all. Same conclusion as Ph0: **read the row counts as the result and the
 | item | value |
 |---|---|
 | scope | worker-red-green (instrument self-checks only — determinism repeats, equivalence mismatch counts, JSON outputs on disk; no dotnet, no test suites) |
-| commands | `./spike/index-store-ph1/binding-proof/run.sh` — 3 full end-to-end runs (22 sequential `julie-extract scan` invocations each, `--jobs 4`); `$TMPDIR` scratch removed on exit and verified absent |
+| commands | `./spike/index-store-ph1/binding-proof/run.sh` — canonical run + run 2 = full 9-pair runs (22 sequential `julie-extract scan` invocations each, `--jobs 4`); run 1 = 5 pairs (~14 scans; the 4 scale pairs absent); `$TMPDIR` scratch removed on exit and verified absent |
 | worktree | `/Users/murphy/source/miller/.claude/worktrees/index-store-ph1`, branch `worktree-index-store-ph1`, HEAD `1eee221c`, clean apart from this untracked directory |
 | binary | julie-extract 2.27.0 (`/Users/murphy/source/miller/.tools/julie-extract`) |
 | corpora | miller @ `1eee221c`; julie-extractors @ `ab7b16ad` (read-only, `git archive`) |
-| invariants | **G1** 0/373,900 and 0/325,078 differing rows across two from-scratch builds per corpus; **G2** 0 mismatches on 9/9 pairs (8 structure-changed, 1 with a deleted path), both diff directions exercised (2,543–57,101 tombstones per pair); **G3** 71.1–84.6k rows/s ≥ 50k floor, background 4.1–7.6 s ≤ 30 s, overhead ratio 0.406–0.507 across 3 runs vs a ≤0.50 ceiling; **G4** enumeration ≤ 25.8% of the diff on every pair; **G5** 7,271 ms vs the refuted 24,390 ms on the same pair, foreground bind 2.0–3.5 ms with 0 identifier rows written on 9/9 pairs |
-| result | **G1 PASS, G2 PASS, G3 PASS with a marginal middle criterion (run-dependent at the ceiling), G4 PASS, G5 PASS.** Row counts identical across all 3 runs; wall clocks ±15%. Raw evidence: `output/proof-results.json`, `output/proof-results-run2.json`, `output/proof-results-run1-quantile-pairs.json`, `output/reports/*.json` |
+| invariants | **G1** 0/373,900 and 0/325,078 differing rows across two from-scratch builds per corpus (`identifier_resolutions`); **G2** 0 mismatches on 9/9 pairs (8 structure-changed, 1 with a deleted path), both diff directions exercised (2,543–57,101 tombstones per pair; in-memory delta application — see correction header); **G3** 71.1–84.6k rows/s ≥ 50k floor, background 4.1–7.6 s ≤ 30 s, overhead ratio 0.406–0.5069 across 3 runs vs a ≤0.50 ceiling — **run 2 FAILED it**; **G4** enumeration ≤ 25.8% of the diff on every pair; **G5** 7,271 ms vs the refuted 24,390 ms on the same pair, foreground bind 2.0–3.5 ms with 0 identifier rows written on 9/9 pairs |
+| result | **G1 PASS (scoped), G2 PASS (scoped), G3a PASS, G3b FAIL (run 2, 0.5069 > 0.50 — gate RED per the plan's any-FAIL rule), G3c PASS, G4 PASS, G5 PASS.** Row counts identical across runs for the pairs each run covers (9 pairs at n=2, 5 of them at n=3); wall clocks ±15%. Raw evidence: `output/proof-results.json`, `output/proof-results-run2.json`, `output/proof-results-run1-quantile-pairs.json`, `output/reports/*.json` |
 | timestamp | 2026-08-07 (worker run) |

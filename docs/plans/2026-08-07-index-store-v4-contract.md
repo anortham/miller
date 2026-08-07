@@ -218,15 +218,21 @@ growth guard §10 at once). All parameters live in `store_meta` with dashboard/C
   L2/L3 in the background — exactly the L1-first import path, §3. Measured basis: full-level retention
   breaches the 1.2× budget at any window (7d = 1.39×/1.25× on miller/julie-extractors); L1-demoted
   7d = 1.11×/1.07×, leaving 0.09–0.13× for view deltas (growth model §2.3–2.5).
-- **Byte ceiling: prune oldest non-live first when the store exceeds 1.25× the live full-level
-  bytes** (the window is a proxy; a large-file churn burst breaks the proxy). Tunable
-  `retention_byte_ceiling`. **The ceiling is a physical-bytes contract with an escalation
-  path:** after each sweep's staged vacuum, physical file bytes are re-measured; a breach
+- **Byte target and prune trigger are two numbers, and the target owns acceptance** (pre-merge
+  review: a trigger-only contract legally stabilizes at 1.20–1.25× and fails the program's
+  ≤~1.2× Ph5 criterion). The **post-GC target is ≤1.20×** and the **prune trigger is 1.25×** —
+  deliberate hysteresis so GC is not re-triggered by every write — but a sweep does not stop at
+  the trigger: once triggered, it prunes until the target (or runs out of non-live prunable
+  versions, which is an honest dashboard state, not conformance). Both numbers share one
+  denominator: **composed physical bytes** — store.db + all sidecars + resolution base files +
+  deltas — over the same composed bytes of one live full-level index. Tunables
+  `retention_byte_target` / `retention_byte_ceiling`. **The target is a physical-bytes contract
+  with an escalation path:** after each sweep's staged vacuum, physical file bytes are re-measured; a breach
   that pruning plus vacuum cannot clear (read-aligned index pages strand — §4 accepts them
   as unreclaimable-until-rebuild) escalates, after a tunable number of consecutive breached
   sweeps, to the §12 **compaction promotion**, which rebuilds every index. Stranded-index
   bytes are a growth-model line item and the compaction's rebuild capacity is part of the
-  §12 preflight — without the escalation the ceiling is unenforceable under adversarial
+  §12 preflight — without the escalation the target is unenforceable under adversarial
   fragmentation.
 - **Per-path version cap: 24 non-live versions per path** (default; tunable `retention_path_cap`).
   Git history is a lower bound on version production — the watcher indexes uncommitted states

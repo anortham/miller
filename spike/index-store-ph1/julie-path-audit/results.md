@@ -129,7 +129,17 @@ wall clock place the cost in the same phase.
 47 distinct symbol names. Real Miller source files carry many more, and the scope saturates:
 
 Widened-scope share of corpus identifiers, **120 randomly sampled `.cs` files** (seed 7), computed
-from the base artifact by replaying the `delta_scope_files` name-union rule:
+from the base artifact by replaying the `delta_scope_files` name-union rule.
+**Evidence status (pre-merge review correction, 2026-08-07):** the 120-file sampling SQL and its
+per-file output were NOT committed and did not survive their temp paths, so the distribution
+below is an **unverified observation** — directionally supported, but not reproducible from this
+repo. What IS committed (recovered to `probes/`): the update-path timing instruments
+(`probes/probe.py`, `probes/probe2.py`) and their machine-readable outputs (`probes/out/*.json`),
+which independently measure two named files end to end — `SearchTool.cs` 18,113 ms at **92.7%**
+of corpus identifiers, `JulieExtractRunner.cs` 16,021 ms at **90.3%** (`probes/out/results2.json`)
+— plus the A/B/C single-file scan/update baselines. The 16–18 s typical-save claim rests on those
+committed measurements; the exact percentile table rests on the uncommitted sample. The §16.3
+crossover re-denomination work re-measures the distribution with `resolution_perf.rs` regardless.
 
 | min | p10 | p25 | **median** | p75 | p90 | max | mean |
 |---:|---:|---:|---:|---:|---:|---:|---:|
