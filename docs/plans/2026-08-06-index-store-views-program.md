@@ -107,8 +107,15 @@ measured 32.4% slower than rebuilding, and `structure_changed` forces Full on re
 anyway). Binding "in seconds" via the scoped pass is dead at every scale measured. Ph1 owes a
 redesigned binding mechanism WITH ITS OWN PROOF GATE; the candidate is serve-the-base's
 resolution immediately + background convergence to the exact per-view delta, which relaxes
-exact resolution equivalence during the serve window and is so far unmeasured. See
+exact resolution equivalence during the serve window. See
 [`docs/findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md) §9.
+**Ph1 RESOLUTION (2026-08-07): that proof gate ran and the candidate mechanism is GO** —
+foreground bind 2.7 ms with zero identifier work; background time-to-exact 4.1–7.6 s at
+miller scale, beating the refuted bind 3.4× on the exact pair that refuted it; base + delta
+exactness 0 mismatches on 9/9 real sibling pairs. One criterion (diff+write overhead ratio)
+recorded marginal and re-proven in Ph2 under the real store shape. See
+[`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md);
+contract state machine in the v4 contract §14.
 
 Two bounds on this, from doubt-pass cycle 2 (both verified in julie's resolver):
 
@@ -120,8 +127,11 @@ Two bounds on this, from doubt-pass cycle 2 (both verified in julie's resolver):
   one, not at the crossover: the scoped pass re-derives 74.5% of the corpus for a single changed
   C# file, so "base + delta up to the crossover" never describes real cost. The crossover
   (`DELTA_SCOPE_CROSSOVER = 0.7`) remains correct *as a protection* inside julie's resolver.
-  The bootstrap guarantee and any time SLO are **unset pending the Ph1 binding-mechanism proof**
-  (gate §9); do not price new views as base+delta work until that proof passes.
+  The bootstrap guarantee and time SLO are now **set by the Ph1 binding proof**: foreground
+  bind is O(manifest) (milliseconds); time-to-exact = a corpus resolution pass at the bulk
+  rate + a natural-key diff (measured 4.1–7.6 s at ~1,400 files; ≈232 s projected at
+  dotnet/runtime, Ph5 measures). New views are priced as serve-base-now +
+  background-converge, never as scoped-pass base+delta work.
 
 ### What carries forward, what retires
 
@@ -249,8 +259,8 @@ Event costs under the model:
 
 | Event | Cost |
 |---|---|
-| New worktree | hash tree; near-total dedup; extract divergence only; serve sibling base at once, converge exact resolution in background (mechanism = Ph1 proof gate, §9) |
-| File save | append one version + one manifest row; resolution convergence cost is scale-bound, not delta-bound, until the Ph1 mechanism lands (gate §9) |
+| New worktree | hash tree; near-total dedup; extract divergence only; serve sibling base at once (ms), converge exact resolution in background (proven mechanism — binding proof findings; 4.1–7.6 s at miller scale) |
+| File save | append one version + one manifest row; resolution convergence cost is scale-bound, not delta-bound (the proven mechanism's fresh pass; the shipped `update --file` path pays 87.3% median today — Task 2 audit) |
 | Branch switch | manifest repoint for changed paths; retained versions cost zero extraction |
 | Extractor upgrade | serve-while-converging per file; no fleet rescan storm, no outage |
 
@@ -511,7 +521,9 @@ Decisive proofs before any contract work; the program does not proceed past a re
   waiving it; the user sees this posture at the Ph0→Ph1 boundary (merge review) and can direct
   otherwise.
 - Acceptance:
-  - [ ] Binding-mechanism proof passed and recorded (the §9 red gate discharged).
+  - [x] Binding-mechanism proof passed and recorded (the §9 red gate DISCHARGED — GO, G3b
+    marginal carried to Ph2:
+    [`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)).
   - [ ] Contract doc in `docs/plans/` with cross-model review recorded.
 
 ### Ph2 — julie-extractors implementation. ~3–4 sessions + release approval.
@@ -575,10 +587,12 @@ and the default-on decision at validation time.
   cap; 14 days tunable-up, >4 weeks opt-in. Full-level retention blows the 1.2× budget at any
   window. Retention is simultaneously the byte lever (§5), the latency lever (§7), and the
   growth guard (§10) — the central Ph1 contract item.
-- Family-id derivation details across git edge cases (Ph1; lean: common-dir identity via the
-  existing lineage adapter, registry-mediated for path reuse).
-- Rebase policy for long-diverged views (when does a delta chain get folded into a fresh base —
-  Ph1; lean: threshold on delta size vs base size).
+- ~~Family-id derivation details~~ **ANSWERED by the v4 contract §1**: family_id is a minted
+  UUID (never a path hash — path-reuse trap), keyed by canonical common-dir + admin-dir
+  creation identity, registry-mediated; store `views` table is the source of truth.
+- ~~Rebase policy for long-diverged views~~ **ANSWERED by the v4 contract §14**: one
+  cumulative delta per view (no chains); background rebase when the delta exceeds 10% of base
+  rows or precedence read cost regresses; identical manifests share a base.
 - First-release default: store on vs opt-in (decided at Ph5 validation, not now).
 
 ## Non-goals with standing triggers
