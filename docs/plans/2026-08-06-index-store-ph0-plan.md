@@ -260,7 +260,10 @@ recommend the canonical history (must reconcile fresh-ordinal vs stable-reuse be
 padding for the adversarial multiples. Equivalence = set comparison, not eyeballing.
 
 **Acceptance criteria:**
-- [x] Equivalence proven (identical recall sets) under the adversarial trigram history.
+- [x] Equivalence outcome recorded under the adversarial trigram history: word arm + vectors
+      proven identical; the trigram arm's shipped `ORDER BY rank` REFUTED (corpus-contaminated
+      ordering key) with the replacement `collapsed_len` ordering proven identical — a
+      contract-change finding, not a clean pass (gate §7).
 - [x] Overhead at 1×/5×/20× version multiples reported for both arms.
 - [x] sqlite-vec pre-filter verdict with mechanism named, or per-view fallback recommended.
 - [x] DocId recommendation with measured per-query cost and 8-view bytes for both options.

@@ -319,3 +319,13 @@ between a routine import and a capacity event.
   bug: `os.walk` counted one 825.8 MB file under both its old and new path while a rename was in
   flight. The sampler now dedupes by `(st_dev, st_ino)`, and the committed run records the
   file-by-file breakdown at the peak so the number is self-checking.
+
+## Verification ledger
+
+| item | value |
+|---|---|
+| commands | `./run.sh --scale full` per experiment + final `--scale quick` end-to-end (exit 0, work dir empty and removed); 18 SIGKILL trials (6 modes x 3), `quick_check` ok + 0 orphan rows after every kill |
+| worktree | index-store-ph0 @ 982dcfd7 at report (lead commit 7b367a13) |
+| invariants | GC reclamation with negative control; secure-delete sentinel matrix; granularity table with crash-reuse counts; promotion peaks vs formula (-0.03%/-0.02% where terms coexist) |
+| result | complete; one instrument bug (peak-sampler double-count) found, fixed, disclosed; superseded run labelled in out/run-log.txt |
+| timestamp | 2026-08-07T03:34Z (lead-recorded from worker report) |

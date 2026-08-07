@@ -313,3 +313,13 @@ Two guards the window alone cannot provide:
 - The crossover was located by its *rule* (`scope ≥ files × 0.7`) plus two rows either side of
   994 raw changed files; no row isolates the widened-scope count directly, because julie does not
   report it.
+
+## Verification ledger
+
+| item | value |
+|---|---|
+| commands | `./run.sh all` (end-to-end 4x; final run verified clean, $TMPDIR scratch removed); measurements pinned at MILLER_REV=0ec78eec |
+| worktree | index-store-ph0 @ 0ec78eec pinned (lead commit 982dcfd7) |
+| invariants | binding cost curve at 0/1/5/25/120/737 + crossover pair + real sibling bind; growth curves from real merge history with discovery.rs-mirrored file filter (predicted 1,420 = actual 1,420); identifier_resolutions counts load-invariant across runs |
+| result | complete; wall clock +-15% under load, row counts exact |
+| timestamp | 2026-08-07T03:01Z (lead-recorded from worker report) |

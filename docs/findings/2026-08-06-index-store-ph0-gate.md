@@ -56,11 +56,18 @@ extractor fingerprint), so identical file versions dedup to one stored copy.
 
 **Amendments Ph1 must carry:**
 
-1. **metadata_json byte-nondeterminism (NEW BLOCKER).** `Option<HashMap<…>>` on seven extractor
-   structs (julie-extractors `base/types.rs:78,124,178,294,449,487,496`) serializes in random
-   key order per process. 1,397 of 1,417 files (98.6%) carry multi-key metadata rows → real-store
-   dedup reads ~0% until the BTreeMap fix plus a byte-stability gate land in julie-extractors.
-   Small fix (7 declarations), hard prerequisite for any credible dedup measurement.
+1. **metadata_json byte-nondeterminism (determinism/equivalence defect — reclassified).**
+   `Option<HashMap<…>>` on seven extractor structs (julie-extractors
+   `base/types.rs:78,124,178,294,449,487,496`) serializes in random key order per process;
+   1,397 of 1,417 files (98.6%) carry multi-key metadata rows. **Pre-merge review correction
+   (finding 4):** this does NOT block dedup — the store's version identity is the input tuple
+   `(path, content_hash, extractor_fingerprint)` with a completion marker (program §store
+   contract), so an existing complete version is skipped by key before extraction and output
+   bytes never participate in identity. Task 1's evidence file frames it as "dedup ≈ 0%"; that
+   framing predates this identity-contract check and is superseded here. What the defect DOES
+   block: the store's row-level equivalence gate (§2's caveat), byte-identical re-extraction
+   proofs, and output reproducibility generally. The BTreeMap fix + byte-stability gate stay
+   queued for julie-extractors (Ph2), at reduced criticality.
 2. **V-1 sequencing is cross-repo.** Dropping `identifiers.target_symbol_id` breaks Miller's
    `COALESCE` at `SqliteSymbolGraphIndex.cs:295` unless the fallback survives one extractor
    version or both changes land together.
@@ -145,7 +152,14 @@ the live artifact's bytes (symbols, identifiers, reference_sites, files, resolut
 indexes); the unmodeled per-file tables dedup by the same mechanism, sidecars are excluded
 (Task 4 covers `search.db`/`vectors.db` separately), and a divergent file's rows are modeled as
 re-extracted copies under a new version — this is a validated projection, not an end-to-end
-measurement of eight real worktrees; Ph5 owes that measurement. The resolution base is 11.5% of store bytes (program's ≈12% confirmed); the
+measurement of eight real worktrees; Ph5 owes that measurement. **Pre-merge review correction
+(finding 3): the modeled resolution deltas are additionally a lower bound** — the instrument
+emits delta rows only for changed files' own identifiers and rows targeting changed files; it
+cannot represent added/deleted-path deltas, missing-to-resolved flips, or tombstones from
+name collisions. And no composed full-family footprint (store + `search.db` + `content.db` +
+`vectors.db` after GC) exists anywhere in Ph0. The 1.027×→1.2× headroom absorbs substantial
+model error, so the GO stands as a projection, but Ph5's success-criterion measurement must be
+the composed, real-delta number. The resolution base is 11.5% of store bytes (program's ≈12% confirmed); the
 seven view deltas add 1.9% total. A private resolution copy per view would cost ≈1.80× — the
 shared base is what makes the gate pass, confirming **resolution sharing is v1-required**.
 
@@ -343,13 +357,22 @@ dotnet/runtime projections (arithmetic, not measured): promotion peaks ~37.6 GB 
 Crash safety is proven against process death (the realistic Miller failure: OOM, exit 137), not
 power loss; `synchronous=FULL` being free closes most of that gap.
 
-## Overall gate verdict — GO to Ph1, with one mechanism NO-GO and conditional claims
+## Overall gate verdict — GO to Ph1, with the §9 red proof carried as Ph1's entry gate
 
 Thirteen of thirteen assumptions have verdicts. Twelve are GO or GO-WITH-AMENDMENT; **one — the
-view-binding mechanism (§9) — is a NO-GO as designed**, with the storage half of that
-assumption intact and a redesign owed its own proof gate in Ph1. The program proceeds because
-Ph0's purpose was exactly this: find the refuted mechanisms before contract freeze, at
-prototype cost.
+view-binding mechanism (§9) — is a NO-GO as designed** (a red proof), with the storage half of
+that assumption intact.
+
+**Gate posture, stated precisely** (pre-merge review finding 1): the program's rule is "does
+not proceed past a red gate." This verdict honors it as follows — the red proof is **not
+waived**: the binding-mechanism design + measured proof is Ph1's FIRST deliverable and a hard
+**freeze precondition** for the store contract (recorded as a Ph1 entry condition and
+acceptance box in the program doc). Contract sections independent of binding (schema,
+identity, levels, durability, GC, retention, promotion, concurrency) are green-lit by their
+own proofs and may be drafted meanwhile. The alternative posture — holding Ph0 open until a
+binding mechanism passes — is the user's to choose at the merge boundary; this document
+recommends the carried-gate posture because every input to the binding proof (Task 5's
+instrument, the measured full-pass fallback) already exists and blocks nothing else.
 
 **What is proven vs conditional** (audit finding 6 — stated precisely):
 
@@ -423,3 +446,19 @@ Applied in the same commit as this recording: Ph0 acceptance boxes ticked with p
 the open-questions section's Ph0 items replaced with answers (read-path shape → hybrid §4;
 vector sharing → family-shared §7; retention default → §10); the §9 binding-claim rewrite and
 promotion-formula edit (§13) applied to the program text.
+
+## Pre-merge external review (codex) — 5 findings, all verified and folded
+
+Adversarial branch review per the execution agreement (codex, read-only, full-branch diff with
+evidence JSONs on disk; verdict `needs-attention`). Every finding verified before disposition:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | high | Overall GO proceeds past the program's own red-gate rule (§9 is a red proof; its replacement unmeasured) | **Accepted (posture fix + user flag)** — the red proof is now carried explicitly: Ph1 entry condition + contract-freeze precondition recorded in the program doc; the overall verdict restates the posture and names the alternative (hold Ph0 open) as the user's call at the merge boundary |
+| 2 | high | The program doc still mandated the refuted P1a binder in seven normative places (§model, bounds, carries-forward, verbs, event table, success criterion, Ph2 scope) | **Accepted (verified by grep)** — every normative reference rewritten to "Ph1-proven mechanism"; the event-cost table and serve SLO re-scoped |
+| 3 | high | 1.027× is a partial lower-bound model (deltas omit added/deleted paths + tombstones; no composed store+sidecars footprint) | **Accepted** — lower-bound caveat added to §5; Ph5's success measurement defined as the composed real-delta number |
+| 4 | medium | metadata_json nondeterminism wrongly classified a dedup blocker — store identity is input-keyed; imports skip by key | **Accepted (verified against the program's `file_versions` identity)** — §1 reclassified to a determinism/equivalence defect at reduced criticality; correction note appended to the Task 1 evidence file |
+| 5 | medium | Ticked acceptance boxes vs deliverables: five results.md files lacked the plan-mandated verification ledger; Task 4's box read as a clean equivalence pass | **Accepted** — ledgers appended to all five (sourced from worker reports); Task 4's box rewritten to record the rank refutation + replacement pass |
+
+Single-pass rule honored: fixes applied, fast suite re-run, no second review round. Codex does
+not report per-request token counts.

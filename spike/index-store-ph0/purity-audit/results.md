@@ -437,3 +437,18 @@ The binary used for E-1/E-3/E-4 is the debug build produced by the gate run at `
    extractor version, or the two land together.
 3. **The `SymbolLookup` DB-join branch (V-5)** should be narrowed for the extraction tables before a store
    extracts files in isolation, even though it is empirically inert today.
+
+## Verification ledger
+
+| item | value |
+|---|---|
+| commands | writer/schema source walk (rg + reads); read-only SQL on the live artifact (`file:...symbols.db?mode=ro`); 3 fixture scans with shipped v2.27.0 under /tmp/ph0-fix; `cargo test -p julie-extract-cli --test resolution_scope_equivalence` (out-of-tree CARGO_TARGET_DIR) |
+| worktree | index-store-ph0 @ 0b0f8faf at measurement (lead commit 0ec78eec); julie-extractors main @ ab7b16a, untouched |
+| invariants | purity split proven empirically (one-added-file experiment); P1a gate 9/9 pass |
+| result | complete; julie-extractors checkout clean at finish |
+| timestamp | 2026-08-07T02:30Z (lead-recorded from worker report) |
+
+Note (pre-merge correction, gate section 1): this file's "dedup = 0%" framing for the
+metadata_json defect predates the identity-contract check — store identity is input-keyed
+(path, content hash, extractor fingerprint), so the defect blocks row-equivalence gating and
+reproducibility, not dedup. The gate findings doc is authoritative.

@@ -79,10 +79,11 @@ union failed:
   view deltas. Miller's readers change accordingly.
 - The resolution layer is **never unioned across differing content**: a view binds to a
   **resolution base** (a complete, consistent resolution set keyed by manifest hash) plus a
-  **view delta** produced by P1a delta-scoped invalidation — explicit replacements and tombstones
-  with defined precedence. The manifest selects exactly one version per path, and the delta has
-  deletion semantics, so the reproduced union failure (a stale base row surviving beside re-ID'd
-  symbols) cannot occur.
+  **view delta** — explicit replacements and tombstones with defined precedence. (How the delta
+  is *produced* is undecided post-Ph0 — the P1a scoped pass was refuted as the producer, gate
+  §9; the storage shape here is unaffected.) The manifest selects exactly one version per path,
+  and the delta has deletion semantics, so the reproduced union failure (a stale base row
+  surviving beside re-ID'd symbols) cannot occur.
 
 ### Resolution sharing is v1-required, not an optimization
 
@@ -115,18 +116,19 @@ Two bounds on this, from doubt-pass cycle 2 (both verified in julie's resolver):
   `RESOLUTION_VERSION` (currently 6) and bumps it whenever observable resolver output changes. A
   resolver upgrade with an unchanged manifest must not reuse a ready base built under old
   semantics.
-- **The delta path is bounded by divergence.** P1a promotes delta resolution to a full pass at a
-  measured crossover (`DELTA_SCOPE_CROSSOVER = 0.7` today) — correctly, because past that point
-  the full pass is cheaper. The bootstrap guarantee is therefore "base + delta up to the
-  crossover; an honest full **rebase** beyond it," and the time SLO is scoped to typical
-  task-branch divergence, not promised unconditionally.
+- **The delta path is bounded by divergence** — but Ph0 measured that the bound bites at file
+  one, not at the crossover: the scoped pass re-derives 74.5% of the corpus for a single changed
+  C# file, so "base + delta up to the crossover" never describes real cost. The crossover
+  (`DELTA_SCOPE_CROSSOVER = 0.7`) remains correct *as a protection* inside julie's resolver.
+  The bootstrap guarantee and any time SLO are **unset pending the Ph1 binding-mechanism proof**
+  (gate §9); do not price new views as base+delta work until that proof passes.
 
 ### What carries forward, what retires
 
 Carries forward as foundations: fleet-safety (governor, spool supervision, failure journal,
 root-presence monitor, `GitWorktreeLayout`), the registry lineage columns, P1a delta-scoped
-resolution (hard prerequisite — confirm landed status in julie-extractors during Ph0), and the
-rebind equivalence-gate testing pattern.
+resolution (landed in 2.27.0, gate §2 — carried as julie's internal incremental machinery, NOT
+as the view-binding producer, gate §9), and the rebind equivalence-gate testing pattern.
 
 Retires **for routine writes** (store mode): the per-worktree copy choreography, rebind's local
 page-stepped copy (its role passes to `store export`), and the per-poll reader-reopen freshness
@@ -223,8 +225,9 @@ julie-extract grows a small store verb set (the v4 contract; Miller its only cal
   manifest generation and flip the pointer.
 - `store update` / `store delete` — single-file verbs: update appends a version and repoints one
   manifest row; delete removes one manifest row. Neither mutates version rows in place.
-- Resolution converges after import: bind or rebase the view's base, then apply P1a delta
-  invalidation for the manifest diff.
+- Resolution converges after import: bind or rebase the view's base, then converge the view's
+  delta — by the Ph1-designed mechanism, not P1a's scoped pass (refuted as the producer, gate
+  §9; measured fallback is a full resolution pass diffed against the base).
 
 **Family concurrency contract (replaces "the lease generalizes").** Doubt-pass finding 10,
 verified against the current model: today's writer lock is a *lifetime* leadership lease and
@@ -246,8 +249,8 @@ Event costs under the model:
 
 | Event | Cost |
 |---|---|
-| New worktree | hash tree; near-total dedup; extract divergence only; bind sibling resolution base + delta |
-| File save | append one version + one manifest row; delta-invalidate the view's resolution |
+| New worktree | hash tree; near-total dedup; extract divergence only; serve sibling base at once, converge exact resolution in background (mechanism = Ph1 proof gate, §9) |
+| File save | append one version + one manifest row; resolution convergence cost is scale-bound, not delta-bound, until the Ph1 mechanism lands (gate §9) |
 | Branch switch | manifest repoint for changed paths; retained versions cost zero extraction |
 | Extractor upgrade | serve-while-converging per file; no fleet rescan storm, no outage |
 
@@ -430,9 +433,10 @@ pointer file (store + view id), logs, scan progress, spool, and `history.db` met
       (validation target: 8-worktree dotnet/runtime family ≤ ~1.2× a single index at typical
       task-branch divergence, **measured as physical bytes on disk after GC**).
 - [ ] New worktree of an indexed family serves in seconds-to-low-tens-of-seconds — ≥10× faster
-      than the shipped rebind copy path on the same fixture — **including resolution binding**
-      (base + delta at typical task-branch divergence; an honest full rebase beyond the measured
-      crossover).
+      than the shipped rebind copy path on the same fixture. **Serving** may ride the sibling
+      base immediately; **exact resolution convergence** completes in background under the
+      Ph1-proven binding mechanism (gate §9 — the base+delta scoped pass is refuted as the
+      producer; the SLO for time-to-exact is set by that proof, not assumed here).
 - [ ] Branch switch is a manifest repoint; retained versions cost zero extraction.
 - [ ] Per-view query results row-equivalent to a fresh dedicated index of the same checkout
       (equivalence gate, per language), including under adversarial retention histories
@@ -499,16 +503,26 @@ Decisive proofs before any contract work; the program does not proceed past a re
   operations — plus lock order, fairness, deadlock analysis), migration + rollback contract.
 - Cross-model review gate (Codex + Grok) before freeze, per repo convention — this is doubt-pass
   cycle 3's natural home if cycle 2 leaves open items.
+- **Entry condition from the Ph0 gate (§9 red proof):** Ph1's FIRST deliverable is the
+  binding-mechanism design + its measured proof (Task 5's instrument is reusable). Contract
+  sections that do not depend on binding (schema, identity, levels, durability, GC, retention,
+  promotion, concurrency) may be drafted in parallel, but the contract **cannot freeze** until
+  the binding proof passes. This carries the program's red-gate rule forward rather than
+  waiving it; the user sees this posture at the Ph0→Ph1 boundary (merge review) and can direct
+  otherwise.
 - Acceptance:
+  - [ ] Binding-mechanism proof passed and recorded (the §9 red gate discharged).
   - [ ] Contract doc in `docs/plans/` with cross-model review recorded.
 
 ### Ph2 — julie-extractors implementation. ~3–4 sessions + release approval.
 
 - Store schema + `store import/update/delete/gc/export` + `--from-artifact` migration transform +
-  resolution bases/deltas on the P1a machinery + level-gated extraction (L1-first import,
-  background L2/L3 deepening per version). Crate tests: dedup correctness,
-  interrupted-import recovery, GC + physical reclamation, fingerprint mixing, epoch/floor gates,
-  the equivalence gate on a multi-language fixture.
+  resolution bases/deltas built by the **Ph1-proven binding mechanism** (not the refuted P1a
+  scoped pass, gate §9) + level-gated extraction (L1-first import, background L2/L3 deepening
+  per version). Also lands here: the metadata_json BTreeMap fix + byte-stability gate, the
+  symbol-name scope-widening fix, and bulk-path eligibility for populated artifacts (gate §1,
+  §9). Crate tests: dedup correctness, interrupted-import recovery, GC + physical reclamation,
+  fingerprint mixing, epoch/floor gates, the equivalence gate on a multi-language fixture.
 - Acceptance:
   - [ ] Equivalence gate green; release shipped; Miller pin bumped (user approval).
 

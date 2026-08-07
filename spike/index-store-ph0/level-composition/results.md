@@ -456,3 +456,13 @@ artifact has a live `-shm` and reads fine read-only.
 | `complexity_metrics` on the `inspect` path | `src/Miller.Indexing/ExtractReader.cs:79` |
 | `type_facts` has no consumer | no match in `src/`, `spike/`, `scripts/`; absent from `src/Miller.Indexing/JulieSchemaGate.cs:20-27` |
 | Shipped symbols-level row shape assertion | `tests/Miller.Tests/Indexing/IndexLevelContextTests.cs:134` |
+
+## Verification ledger
+
+| item | value |
+|---|---|
+| commands | dbstat/table queries on the live artifact (read-only); real extract pair via pinned 2.27.0 `--level symbols` / full at /tmp/level-comp-53909; telemetry.db traffic counts; julie-extractors source reads for strip_to_symbols_level |
+| worktree | index-store-ph0 @ 0b0f8faf at measurement (lead commit bfacfe76) |
+| invariants | level split grounded in a real extract pair + live traffic; levels-already-shipped claim traced to shipped binary flags and registry schema |
+| result | complete (lead review clean) |
+| timestamp | 2026-08-07T02:35Z (lead-recorded from worker report) |

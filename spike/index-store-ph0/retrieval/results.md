@@ -443,3 +443,13 @@ pointer flip that publishes the manifest. Measured values match the live sidecar
   since the question is whether the window can be starved, not how often it is.
 - Only the symbol arms were measured. `content.db` text search applies its own `ORDER BY rank LIMIT`
   and inherits the same rank-is-corpus-wide finding; it was not instrumented here.
+
+## Verification ledger
+
+| item | value |
+|---|---|
+| commands | `./run.sh` (full clean run, exit 0, `work/` removed, verdicts reproduced exactly); corpus seeded for byte-reproducible equivalence outcomes |
+| worktree | index-store-ph0 @ 0b0f8faf at start, 478e5f9b at hand-off (lead commit b93fa662) |
+| invariants | recall-set equivalence exact-set-compared per arm/multiple/shape; adversarial bars cleared (339,638 hidden trigram matches; 600 hidden-nearer vectors); rank-window FAIL isolated to the ordering key by the mechanism probe |
+| result | complete; timings reported as ratios (10-25% run-to-run), equivalence outcomes exact |
+| timestamp | 2026-08-07T02:53Z (lead-recorded from worker report) |
