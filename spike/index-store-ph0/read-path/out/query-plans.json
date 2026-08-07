@@ -1,0 +1,82 @@
+{
+  "dedicated": {
+    "name_lookup": [
+      "SEARCH symbols USING INDEX idx_symbols_name_kind (name=?)"
+    ],
+    "file_symbols": [
+      "SEARCH symbols USING INDEX idx_symbols_path (path=?)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "refs_by_symbol": [
+      "SEARCH r USING INDEX idx_resolutions_target (target_symbol_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (identifier_id=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (symbol_id=?)"
+    ]
+  },
+  "v4_novis": {
+    "name_lookup": [
+      "SEARCH symbols USING INDEX idx_symbols_name_kind (name=?)"
+    ],
+    "file_symbols": [
+      "SEARCH symbols USING INDEX idx_symbols_path (path=?)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "refs_by_symbol": [
+      "SEARCH b USING INDEX idx_rbe_target (base_id=? AND target_symbol_id=? AND target_version_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (version_id=? AND identifier_id=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (version_id=? AND symbol_id=?)"
+    ]
+  },
+  "manifest_join": {
+    "name_lookup": [
+      "SEARCH s USING INDEX idx_symbols_name_kind (name=?)",
+      "SEARCH m USING COVERING INDEX idx_view_manifest_version (view_id=? AND version_id=?)"
+    ],
+    "file_symbols": [
+      "SEARCH m USING INDEX sqlite_autoindex_view_manifest_1 (view_id=? AND path=?)",
+      "SEARCH s USING INDEX idx_symbols_version (version_id=?)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "refs_by_symbol": [
+      "COMPOUND QUERY",
+      "LEFT-MOST SUBQUERY",
+      "SEARCH b USING INDEX idx_rbe_target (base_id=? AND target_symbol_id=? AND target_version_id=?)",
+      "CORRELATED SCALAR SUBQUERY 1",
+      "SEARCH d USING COVERING INDEX sqlite_autoindex_resolution_deltas_1 (view_id=? AND version_id=? AND identifier_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (version_id=? AND identifier_id=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (version_id=? AND symbol_id=?)",
+      "SEARCH m USING COVERING INDEX idx_view_manifest_version (view_id=? AND version_id=?)",
+      "UNION ALL",
+      "SEARCH d USING INDEX idx_rd_target (view_id=? AND target_symbol_id=? AND target_version_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (version_id=? AND identifier_id=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (version_id=? AND symbol_id=?)",
+      "SEARCH m USING COVERING INDEX idx_view_manifest_version (view_id=? AND version_id=?)"
+    ]
+  },
+  "temp_vis": {
+    "name_lookup": [
+      "SEARCH s USING INDEX idx_symbols_name_kind (name=?)",
+      "SEARCH v USING INTEGER PRIMARY KEY (rowid=?)"
+    ],
+    "file_symbols": [
+      "SEARCH s USING INDEX idx_symbols_path (path=?)",
+      "SEARCH v USING INTEGER PRIMARY KEY (rowid=?)",
+      "USE TEMP B-TREE FOR ORDER BY"
+    ],
+    "refs_by_symbol": [
+      "COMPOUND QUERY",
+      "LEFT-MOST SUBQUERY",
+      "SEARCH b USING INDEX idx_rbe_target (base_id=? AND target_symbol_id=? AND target_version_id=?)",
+      "CORRELATED SCALAR SUBQUERY 1",
+      "SEARCH d USING COVERING INDEX sqlite_autoindex_resolution_deltas_1 (view_id=? AND version_id=? AND identifier_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (version_id=? AND identifier_id=?)",
+      "SEARCH v USING INTEGER PRIMARY KEY (rowid=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (version_id=? AND symbol_id=?)",
+      "UNION ALL",
+      "SEARCH d USING INDEX idx_rd_target (view_id=? AND target_symbol_id=? AND target_version_id=?)",
+      "SEARCH i USING INDEX sqlite_autoindex_identifiers_1 (version_id=? AND identifier_id=?)",
+      "SEARCH v USING INTEGER PRIMARY KEY (rowid=?)",
+      "SEARCH s USING COVERING INDEX sqlite_autoindex_symbols_1 (version_id=? AND symbol_id=?)"
+    ]
+  }
+}

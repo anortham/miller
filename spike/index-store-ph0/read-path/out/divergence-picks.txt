@@ -1,0 +1,2 @@
+sampled divergences (views 2-8): 0.423,0.565,0.847,1.200,3.035,3.317,6.069
+stress divergences (p90 everywhere): 6.069,6.069,6.069,6.069,6.069,6.069,6.069

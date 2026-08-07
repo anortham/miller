@@ -216,10 +216,10 @@ repeat timed queries with warm cache, median of ≥5 runs. State the divergence 
 and why.
 
 **Acceptance criteria:**
-- [ ] Read overhead numbers for both visibility shapes vs baseline, per query class.
-- [ ] Composite-key amplification per table + total, with the schema DDL diff shown.
-- [ ] 8-view bytes vs 1.2× target: explicit PASS/FAIL.
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Read overhead numbers for both visibility shapes vs baseline, per query class.
+- [x] Composite-key amplification per table + total, with the schema DDL diff shown.
+- [x] 8-view bytes vs 1.2× target: explicit PASS/FAIL.
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 4: Filtered-retrieval instrument (FTS, vectors, DocId/BM25)
 

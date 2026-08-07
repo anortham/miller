@@ -1,0 +1,54 @@
+{
+  "base_versions": 1417,
+  "views": [
+    {
+      "view_id": 2,
+      "target_divergence_pct": 6.069,
+      "changed_files": 88,
+      "actual_divergence_pct": 6.21,
+      "resolution_delta_rows": 17346
+    },
+    {
+      "view_id": 3,
+      "target_divergence_pct": 6.069,
+      "changed_files": 88,
+      "actual_divergence_pct": 6.21,
+      "resolution_delta_rows": 25214
+    },
+    {
+      "view_id": 4,
+      "target_divergence_pct": 6.069,
+      "changed_files": 88,
+      "actual_divergence_pct": 6.21,
+      "resolution_delta_rows": 21262
+    },
+    {
+      "view_id": 5,
+      "target_divergence_pct": 6.069,
+      "changed_files": 88,
+      "actual_divergence_pct": 6.21,
+      "resolution_delta_rows": 23002
+    },
+    {
+      "view_id": 6,
+      "target_divergence_pct": 6.069,
+      "changed_files": 88,
+      "actual_divergence_pct": 6.21,
+      "resolution_delta_rows": 25798
+    },
+    {
+      "view_id": 7,
+      "target_divergence_pct": 6.069,
+      "changed_files": 89,
+      "actual_divergence_pct": 6.281,
+      "resolution_delta_rows": 22788
+    },
+    {
+      "view_id": 8,
+      "target_divergence_pct": 6.069,
+      "changed_files": 89,
+      "actual_divergence_pct": 6.281,
+      "resolution_delta_rows": 24401
+    }
+  ]
+}

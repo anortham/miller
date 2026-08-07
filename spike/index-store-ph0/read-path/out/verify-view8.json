@@ -1,0 +1,24 @@
+{
+  "view_id": 8,
+  "classes": {
+    "name_lookup": {
+      "keys": 300,
+      "rows_compared": 43520,
+      "mismatches": 0,
+      "examples": []
+    },
+    "file_symbols": {
+      "keys": 300,
+      "rows_compared": 28685,
+      "mismatches": 0,
+      "examples": []
+    },
+    "refs_by_symbol": {
+      "keys": 300,
+      "rows_compared": 9918,
+      "mismatches": 0,
+      "examples": []
+    }
+  },
+  "verdict": "IDENTICAL"
+}

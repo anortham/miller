@@ -1,0 +1,143 @@
+{
+  "label": "store_stress",
+  "path": "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-readpath/stress.db",
+  "file_bytes": 652767232,
+  "page_size": 4096,
+  "page_count": 159367,
+  "physical_bytes": 652767232,
+  "objects": [
+    {
+      "name": "identifiers",
+      "bytes": 124387328
+    },
+    {
+      "name": "reference_sites",
+      "bytes": 119865344
+    },
+    {
+      "name": "symbols",
+      "bytes": 69369856
+    },
+    {
+      "name": "sqlite_autoindex_reference_sites_1",
+      "bytes": 45518848
+    },
+    {
+      "name": "idx_identifiers_reference_site",
+      "bytes": 35209216
+    },
+    {
+      "name": "idx_reference_sites_containing_symbol",
+      "bytes": 34734080
+    },
+    {
+      "name": "resolution_base_entries",
+      "bytes": 31195136
+    },
+    {
+      "name": "idx_identifiers_containing",
+      "bytes": 27639808
+    },
+    {
+      "name": "sqlite_autoindex_identifiers_1",
+      "bytes": 26353664
+    },
+    {
+      "name": "idx_identifiers_name_kind",
+      "bytes": 19464192
+    },
+    {
+      "name": "sqlite_autoindex_resolution_base_entries_1",
+      "bytes": 19357696
+    },
+    {
+      "name": "idx_symbols_path",
+      "bytes": 14839808
+    },
+    {
+      "name": "resolution_deltas",
+      "bytes": 13901824
+    },
+    {
+      "name": "idx_rbe_target",
+      "bytes": 10813440
+    },
+    {
+      "name": "sqlite_autoindex_symbols_1",
+      "bytes": 9084928
+    },
+    {
+      "name": "idx_reference_sites_version",
+      "bytes": 8355840
+    },
+    {
+      "name": "sqlite_autoindex_resolution_deltas_1",
+      "bytes": 8314880
+    },
+    {
+      "name": "idx_symbols_parent",
+      "bytes": 8060928
+    },
+    {
+      "name": "idx_symbols_name_kind",
+      "bytes": 6959104
+    },
+    {
+      "name": "idx_identifiers_version",
+      "bytes": 6696960
+    },
+    {
+      "name": "idx_rd_target",
+      "bytes": 4952064
+    },
+    {
+      "name": "idx_symbols_is_test",
+      "bytes": 2486272
+    },
+    {
+      "name": "idx_symbols_version",
+      "bytes": 2281472
+    },
+    {
+      "name": "view_manifest",
+      "bytes": 1007616
+    },
+    {
+      "name": "sqlite_autoindex_view_manifest_1",
+      "bytes": 782336
+    },
+    {
+      "name": "file_versions",
+      "bytes": 446464
+    },
+    {
+      "name": "sqlite_autoindex_file_versions_1",
+      "bytes": 376832
+    },
+    {
+      "name": "idx_view_manifest_version",
+      "bytes": 155648
+    },
+    {
+      "name": "idx_file_versions_path",
+      "bytes": 139264
+    },
+    {
+      "name": "sqlite_schema",
+      "bytes": 12288
+    },
+    {
+      "name": "views",
+      "bytes": 4096
+    }
+  ],
+  "row_counts": {
+    "symbols": 181474,
+    "identifiers": 529436,
+    "reference_sites": 663648,
+    "file_versions": 2035,
+    "resolution_base_entries": 380720,
+    "resolution_deltas": 159811,
+    "view_manifest": 11336
+  }
+}

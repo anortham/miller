@@ -1,0 +1,113 @@
+{
+  "label": "keepfile",
+  "path": "/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-readpath/keepfile.db",
+  "file_bytes": 544595968,
+  "page_size": 4096,
+  "page_count": 132958,
+  "physical_bytes": 544595968,
+  "objects": [
+    {
+      "name": "reference_sites",
+      "bytes": 105644032
+    },
+    {
+      "name": "identifiers",
+      "bytes": 105123840
+    },
+    {
+      "name": "symbols",
+      "bytes": 53157888
+    },
+    {
+      "name": "sqlite_autoindex_reference_sites_1",
+      "bytes": 32862208
+    },
+    {
+      "name": "resolution_base_entries",
+      "bytes": 31195136
+    },
+    {
+      "name": "idx_reference_sites_file",
+      "bytes": 26648576
+    },
+    {
+      "name": "idx_identifiers_reference_site",
+      "bytes": 25325568
+    },
+    {
+      "name": "idx_reference_sites_containing_symbol",
+      "bytes": 25092096
+    },
+    {
+      "name": "idx_identifiers_file",
+      "bytes": 21168128
+    },
+    {
+      "name": "idx_identifiers_containing",
+      "bytes": 19931136
+    },
+    {
+      "name": "sqlite_autoindex_resolution_base_entries_1",
+      "bytes": 19357696
+    },
+    {
+      "name": "sqlite_autoindex_identifiers_1",
+      "bytes": 18898944
+    },
+    {
+      "name": "idx_identifiers_name_kind",
+      "bytes": 13963264
+    },
+    {
+      "name": "idx_rbe_target",
+      "bytes": 10813440
+    },
+    {
+      "name": "idx_symbols_path",
+      "bytes": 9760768
+    },
+    {
+      "name": "idx_symbols_file",
+      "bytes": 7008256
+    },
+    {
+      "name": "sqlite_autoindex_symbols_1",
+      "bytes": 6135808
+    },
+    {
+      "name": "idx_symbols_parent",
+      "bytes": 5419008
+    },
+    {
+      "name": "idx_symbols_name_kind",
+      "bytes": 4739072
+    },
+    {
+      "name": "idx_symbols_is_test",
+      "bytes": 1671168
+    },
+    {
+      "name": "file_versions",
+      "bytes": 311296
+    },
+    {
+      "name": "sqlite_autoindex_file_versions_1",
+      "bytes": 258048
+    },
+    {
+      "name": "idx_file_versions_path",
+      "bytes": 98304
+    },
+    {
+      "name": "sqlite_schema",
+      "bytes": 12288
+    }
+  ],
+  "row_counts": {
+    "symbols": 122707,
+    "identifiers": 380720,
+    "reference_sites": 478283,
+    "file_versions": 1417,
+    "resolution_base_entries": 380720
+  }
+}

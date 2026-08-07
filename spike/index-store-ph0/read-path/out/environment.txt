@@ -1,0 +1,8 @@
+date_utc: 2026-08-07T02:32:07Z
+host: Darwin 25.6.0 arm64
+worktree: /Users/murphy/source/miller/.claude/worktrees/index-store-ph0
+commit: 0ec78eec
+branch: worktree-index-store-ph0
+python: 3.14.6 sqlite 3.53.4
+source_db: file:/Users/murphy/source/miller/.miller/symbols.db?mode=ro
+scratch: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-readpath
