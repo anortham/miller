@@ -1808,7 +1808,7 @@ public sealed class ContextToolTests
     public void Context_ReferenceModeUsage_SeparatesWorkspaceFallbackReferencesAndCallees()
     {
         using var fx = JulieDbFixture.CreateForInspect();
-        fx.ExecuteWrite("UPDATE identifiers SET target_symbol_id = NULL;");
+        fx.SetAllIdentifierTargets(null);
         var index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(fx.DbPath));
         var provider = new RecordingWorkspaceIndexProvider(
             ReadToolRoutingTestSupport.ContextFor(index, fx.DbPath, "current-ws", fx.WorkspaceRoot));
