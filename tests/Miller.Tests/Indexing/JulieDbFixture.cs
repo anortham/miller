@@ -187,13 +187,6 @@ internal sealed class JulieDbFixture : IDisposable
         command.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Writes the <c>identifier_resolutions</c> row that julie-extract's resolution pass emits alongside every
-    /// resolved <c>identifiers.target_symbol_id</c>. The two are written in one statement batch, so an artifact
-    /// never carries a direct target without this row; seeding only the denormalized column would model a state
-    /// the producer cannot emit. <c>identifier_resolutions</c> is the sole source of resolution outcomes from
-    /// julie-extract schema 6 on, where the denormalized column no longer exists.
-    /// </summary>
     private static void InsertLockstepIdentifierResolution(
         SqliteConnection connection, string identifierId, string targetSymbolId)
     {
@@ -208,12 +201,6 @@ internal sealed class JulieDbFixture : IDisposable
         command.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Retarget one already-seeded identifier the way julie-extract's resolution pass does: the
-    /// <c>identifier_resolutions</c> row and the denormalized <c>identifiers.target_symbol_id</c> move together.
-    /// A null <paramref name="targetSymbolId"/> models an unresolved reference (<c>outcome='missing'</c>).
-    /// Readers consult the resolution row, so a raw <c>UPDATE identifiers</c> alone would not change what they see.
-    /// </summary>
     public void SetIdentifierTarget(string identifierId, string? targetSymbolId)
     {
         ExecuteWrite(
@@ -240,10 +227,6 @@ internal sealed class JulieDbFixture : IDisposable
         });
     }
 
-    /// <summary>
-    /// Retarget every seeded identifier at once, in lockstep across both tables. See
-    /// <see cref="SetIdentifierTarget"/>.
-    /// </summary>
     public void SetAllIdentifierTargets(string? targetSymbolId)
     {
         ExecuteWrite(
@@ -259,11 +242,6 @@ internal sealed class JulieDbFixture : IDisposable
             """, p => p.AddWithValue("$target", (object?)targetSymbolId ?? DBNull.Value));
     }
 
-    /// <summary>
-    /// Insert an <c>identifier_resolutions</c> row: the resolved/ambiguous outcome for one identifier reference.
-    /// A <c>resolved</c> outcome REQUIRES a non-null <paramref name="targetSymbolId"/> (the CHECK enforces it).
-    /// Replaces the lockstep row seeded for an identifier that carries a direct target.
-    /// </summary>
     public void AddIdentifierResolution(
         string identifierId, string? targetSymbolId, string outcome = "resolved",
         int tier = 1, double confidence = 1.0, string method = "exact", int candidates = 1,
