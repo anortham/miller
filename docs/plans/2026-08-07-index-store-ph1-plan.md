@@ -188,11 +188,11 @@ Any FAIL → the gate is red. Report the numbers honestly; do not tune criteria;
 records NO-GO and the contract freeze blocks.
 
 **Acceptance criteria:**
-- [ ] G1–G5 each measured and recorded with raw JSON evidence committed under `output/`.
-- [ ] ≥2 pairs per corpus measured, ≥1 per corpus with added/deleted paths.
-- [ ] Extract-vs-resolution phase split reported; store-real background number stated.
-- [ ] `results.md` ends with the verification ledger; scratch cleaned from `$TMPDIR`.
-- [ ] Worker-scope verification passes and the diff is handed to the lead (parallel-lead-commit).
+- [x] G1–G5 each measured and recorded with raw JSON evidence committed under `output/`.
+- [x] ≥2 pairs per corpus measured, ≥1 per corpus with added/deleted paths.
+- [x] Extract-vs-resolution phase split reported; store-real background number stated.
+- [x] `results.md` ends with the verification ledger; scratch cleaned from `$TMPDIR`.
+- [x] Worker-scope verification passes and the diff is handed to the lead (parallel-lead-commit).
 
 ## Task 2: Watcher converge path + julie fix surfaces (read-only audit)
 
