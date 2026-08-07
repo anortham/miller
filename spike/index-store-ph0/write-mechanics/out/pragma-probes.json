@@ -1,0 +1,123 @@
+{
+  "compile_options": [
+    "ATOMIC_INTRINSICS=1",
+    "COMPILER=clang-21.0.0",
+    "DEFAULT_AUTOVACUUM",
+    "DEFAULT_CACHE_SIZE=-2000",
+    "DEFAULT_FILE_FORMAT=4",
+    "DEFAULT_JOURNAL_SIZE_LIMIT=-1",
+    "DEFAULT_MMAP_SIZE=0",
+    "DEFAULT_PAGE_SIZE=4096",
+    "DEFAULT_PCACHE_INITSZ=20",
+    "DEFAULT_RECURSIVE_TRIGGERS",
+    "DEFAULT_SECTOR_SIZE=4096",
+    "DEFAULT_SYNCHRONOUS=2",
+    "DEFAULT_WAL_AUTOCHECKPOINT=1000",
+    "DEFAULT_WAL_SYNCHRONOUS=2",
+    "DEFAULT_WORKER_THREADS=0",
+    "DIRECT_OVERFLOW_READ",
+    "ENABLE_API_ARMOR",
+    "ENABLE_COLUMN_METADATA",
+    "ENABLE_DBSTAT_VTAB",
+    "ENABLE_FTS3",
+    "ENABLE_FTS3_PARENTHESIS",
+    "ENABLE_FTS5",
+    "ENABLE_GEOPOLY",
+    "ENABLE_MATH_FUNCTIONS",
+    "ENABLE_MEMORY_MANAGEMENT",
+    "ENABLE_PERCENTILE",
+    "ENABLE_PREUPDATE_HOOK",
+    "ENABLE_RTREE",
+    "ENABLE_SESSION",
+    "ENABLE_STAT4",
+    "ENABLE_UNLOCK_NOTIFY",
+    "MALLOC_SOFT_LIMIT=1024",
+    "MAX_ATTACHED=10",
+    "MAX_COLUMN=2000",
+    "MAX_COMPOUND_SELECT=500",
+    "MAX_DEFAULT_PAGE_SIZE=8192",
+    "MAX_EXPR_DEPTH=1000",
+    "MAX_FUNCTION_ARG=1000",
+    "MAX_LENGTH=1000000000",
+    "MAX_LIKE_PATTERN_LENGTH=50000",
+    "MAX_MMAP_SIZE=0x7fff0000",
+    "MAX_PAGE_COUNT=0xfffffffe",
+    "MAX_PAGE_SIZE=65536",
+    "MAX_SQL_LENGTH=1000000000",
+    "MAX_TRIGGER_DEPTH=1000",
+    "MAX_VARIABLE_NUMBER=250000",
+    "MAX_VDBE_OP=250000000",
+    "MAX_WORKER_THREADS=8",
+    "MUTEX_PTHREADS",
+    "SYSTEM_MALLOC",
+    "TEMP_STORE=1",
+    "THREADSAFE=1",
+    "USE_URI"
+  ],
+  "probes": {
+    "auto_vacuum_ordering": {
+      "after_full_VACUUM_rewrite": 2,
+      "after_setting_INCREMENTAL_post_schema": 0,
+      "auto_vacuum_at_creation_default": 0,
+      "claim": "auto_vacuum=INCREMENTAL must be set before the first table is created",
+      "error_raised_by_late_set": null,
+      "on_reopen_after_vacuum": 2,
+      "set_before_schema_creation": 2,
+      "set_before_schema_on_reopen": 2,
+      "vacuum_rewrite_seconds": 0.024,
+      "verdict": "CONFIRMED, and the late set fails SILENTLY"
+    },
+    "fts5_merge_semantics": {
+      "claim": "page-limited merge is bounded work; total_changes rises by 2 when a merge did work and by 1 when it did not; optimize is unbounded",
+      "final_round_total_changes_delta": 1,
+      "merge_max_round_seconds": 0.0011,
+      "merge_pages_per_round": 16,
+      "merge_rounds": 3,
+      "merge_rounds_that_did_work": 2,
+      "merge_total_seconds": 0.0016,
+      "optimize_over_max_merge_round": 4.8,
+      "optimize_single_call_seconds": 0.0053,
+      "segids_after_optimize": 1,
+      "segids_after_page_limited_merges": 3,
+      "segids_before": 10,
+      "verdict": "CONFIRMED"
+    },
+    "incremental_vacuum_stepping": {
+      "claim": "PRAGMA incremental_vacuum(N) frees up to N pages",
+      "contiguous_delete_freelist_pages": 12530,
+      "freelist_before": 12530,
+      "interleaved_delete_freelist_pages": 0,
+      "note": "Interleaved row deletes leave partly-filled pages that never reach the freelist, so incremental_vacuum cannot reclaim them. Deleting a contiguous key range does free whole pages.",
+      "pages_freed_by_bare_connection_execute": 1,
+      "pages_freed_by_execute_plus_fetchall": 2000,
+      "requested_pages": 2000,
+      "verdict": "CONFIRMED only when the statement is stepped to completion"
+    },
+    "secure_delete_persistence": {
+      "claim": "core secure_delete and the FTS5 secure-delete option are different mechanisms with different lifetimes",
+      "core_secure_delete_after_set": 1,
+      "core_secure_delete_default": 0,
+      "core_secure_delete_on_a_fresh_connection": 0,
+      "fts_config_after_a_secure_delete_write": {
+        "secure-delete": 1,
+        "version": 5
+      },
+      "fts_config_at_table_creation": {
+        "version": 4
+      },
+      "fts_config_immediately_after_enabling": {
+        "secure-delete": 1,
+        "version": 4
+      },
+      "fts_config_on_reopen": {
+        "secure-delete": 1,
+        "version": 5
+      },
+      "note": "Writing a secure delete raises the stored FTS5 structure version from 4 to 5, so every reader of the sidecar must be new enough for it. The version rises on the first secure delete, not on the config INSERT that enables the option.",
+      "system_sqlite3_cli_can_read_the_file_exit": 0,
+      "verdict": "CONFIRMED: core secure_delete is per-connection and is NOT stored in the file; the FTS5 option is stored in the %_config shadow table"
+    }
+  },
+  "sqlite_library_version": "3.53.4",
+  "system_sqlite3_cli": "3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)"
+}

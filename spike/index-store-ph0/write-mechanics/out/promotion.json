@@ -1,0 +1,621 @@
+{
+  "arms": [
+    {
+      "arm": "no_reader",
+      "baseline_family_bytes": 926212096,
+      "delta_bytes": -610304,
+      "delta_percent": -0.03,
+      "family_bytes_after_release": 926212096,
+      "family_bytes_at_promote_moment": 1852424192,
+      "formula_predicted_peak_bytes": 1969399296,
+      "formula_terms": {
+        "new_generation_bytes": 825798656,
+        "old_generation_bytes": 825798656,
+        "reader_retained_bytes": 0,
+        "sidecar_bytes": 200826880,
+        "wal_temp_bytes": 116975104
+      },
+      "measured_over_predicted": 0.9997,
+      "min_free_disk_bytes": 166489124864,
+      "new_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 37.09,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "old_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 37.65,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "peak_at_seconds": 36.88,
+      "peak_family_bytes": 1968788992,
+      "peak_family_bytes_during_rebuild": 1968788992,
+      "peak_file_breakdown": {
+        "search.db": 100413440,
+        "search.db.rebuild": 99540992,
+        "search.db.rebuild-shm": 32768,
+        "search.db.rebuild-wal": 9908632,
+        "store.db": 825798656,
+        "store.db.rebuild": 825798656,
+        "store.db.rebuild-shm": 229376,
+        "store.db.rebuild-wal": 107066472
+      },
+      "peak_wal_bytes": 116975104,
+      "reader_pinned": false,
+      "retained_generation": null,
+      "retained_generation_bytes": 0,
+      "retention_sweep": null,
+      "samples": 658,
+      "superseded_generation_bytes": 926212096,
+      "timeline_time_total_wal": [
+        [
+          1.06,
+          995788296,
+          24864264
+        ],
+        [
+          2.18,
+          1061453088,
+          35020064
+        ],
+        [
+          3.32,
+          1117512632,
+          42341304
+        ],
+        [
+          4.42,
+          1152350472,
+          48195848
+        ],
+        [
+          5.56,
+          1200374120,
+          53490024
+        ],
+        [
+          6.7,
+          1254525120,
+          60844224
+        ],
+        [
+          7.81,
+          1287540736,
+          66084864
+        ],
+        [
+          8.96,
+          1333651176,
+          69904104
+        ],
+        [
+          10.09,
+          1370021584,
+          73064144
+        ],
+        [
+          11.23,
+          1402153400,
+          76356024
+        ],
+        [
+          12.38,
+          1434793408,
+          79697344
+        ],
+        [
+          13.5,
+          1466816232,
+          82560744
+        ],
+        [
+          14.64,
+          1486533016,
+          85139864
+        ],
+        [
+          15.76,
+          1518152120,
+          86903224
+        ],
+        [
+          16.88,
+          1550505568,
+          89568864
+        ],
+        [
+          18.03,
+          1579103936,
+          91694784
+        ],
+        [
+          19.16,
+          1598453616,
+          94537584
+        ],
+        [
+          20.3,
+          1630634720,
+          97149664
+        ],
+        [
+          21.42,
+          1648274872,
+          99032504
+        ],
+        [
+          22.55,
+          1678788720,
+          100206704
+        ],
+        [
+          23.69,
+          1707490304,
+          102472704
+        ],
+        [
+          24.82,
+          1724568840,
+          103572744
+        ],
+        [
+          25.94,
+          1756514760,
+          105187784
+        ],
+        [
+          27.06,
+          1774224728,
+          106399064
+        ],
+        [
+          28.21,
+          1802217672,
+          107956424
+        ],
+        [
+          29.34,
+          1820096008,
+          109241864
+        ],
+        [
+          30.46,
+          1851514384,
+          111001104
+        ],
+        [
+          31.57,
+          1868984576,
+          111833344
+        ],
+        [
+          32.71,
+          1883314744,
+          112941624
+        ],
+        [
+          33.83,
+          1913421000,
+          113757384
+        ],
+        [
+          34.95,
+          1930835648,
+          114898624
+        ],
+        [
+          36.07,
+          1945124568,
+          115957464
+        ]
+      ],
+      "total_seconds": 37.1,
+      "versions": 2500
+    },
+    {
+      "arm": "pinned_reader",
+      "baseline_family_bytes": 1852456960,
+      "delta_bytes": -610304,
+      "delta_percent": -0.02,
+      "family_bytes_after_release": 926212096,
+      "family_bytes_at_promote_moment": 2778669056,
+      "formula_predicted_peak_bytes": 2895644160,
+      "formula_terms": {
+        "new_generation_bytes": 825798656,
+        "old_generation_bytes": 825798656,
+        "reader_retained_bytes": 926244864,
+        "sidecar_bytes": 200826880,
+        "wal_temp_bytes": 116975104
+      },
+      "measured_over_predicted": 0.9998,
+      "min_free_disk_bytes": 165498236928,
+      "new_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 37.09,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "old_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 36.81,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "peak_at_seconds": 36.87,
+      "peak_family_bytes": 2895033856,
+      "peak_family_bytes_during_rebuild": 2895033856,
+      "peak_file_breakdown": {
+        "retained/search.db": 100413440,
+        "retained/store.db": 825798656,
+        "retained/store.db-shm": 32768,
+        "retained/store.db-wal": 0,
+        "search.db": 100413440,
+        "search.db.rebuild": 99540992,
+        "search.db.rebuild-shm": 32768,
+        "search.db.rebuild-wal": 9908632,
+        "store.db": 825798656,
+        "store.db.rebuild": 825798656,
+        "store.db.rebuild-shm": 229376,
+        "store.db.rebuild-wal": 107066472
+      },
+      "peak_wal_bytes": 116975104,
+      "reader_pinned": true,
+      "retained_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 36.66,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "retained_generation_bytes": 926244864,
+      "retention_sweep": null,
+      "samples": 655,
+      "superseded_generation_bytes": 926212096,
+      "timeline_time_total_wal": [
+        [
+          1.07,
+          1922033160,
+          24864264
+        ],
+        [
+          2.24,
+          1991015712,
+          35020064
+        ],
+        [
+          3.36,
+          2043757496,
+          42341304
+        ],
+        [
+          4.5,
+          2092805880,
+          49164024
+        ],
+        [
+          5.65,
+          2141831216,
+          55545904
+        ],
+        [
+          6.78,
+          2180769984,
+          60844224
+        ],
+        [
+          7.9,
+          2226786304,
+          66084864
+        ],
+        [
+          9.03,
+          2263906024,
+          69904104
+        ],
+        [
+          10.15,
+          2296266448,
+          73064144
+        ],
+        [
+          11.3,
+          2328398264,
+          76356024
+        ],
+        [
+          12.42,
+          2361038272,
+          79697344
+        ],
+        [
+          13.58,
+          2393061096,
+          82560744
+        ],
+        [
+          14.72,
+          2426040728,
+          85139864
+        ],
+        [
+          15.85,
+          2444396984,
+          86903224
+        ],
+        [
+          16.99,
+          2476750432,
+          89568864
+        ],
+        [
+          18.13,
+          2509709808,
+          92889584
+        ],
+        [
+          19.25,
+          2538435656,
+          95102024
+        ],
+        [
+          20.38,
+          2556879584,
+          97149664
+        ],
+        [
+          21.5,
+          2587860408,
+          99032504
+        ],
+        [
+          22.63,
+          2606125384,
+          101298504
+        ],
+        [
+          23.76,
+          2636454912,
+          102472704
+        ],
+        [
+          24.87,
+          2651641824,
+          104400864
+        ],
+        [
+          26.02,
+          2682759624,
+          105187784
+        ],
+        [
+          27.17,
+          2700469592,
+          106399064
+        ],
+        [
+          28.29,
+          2728462536,
+          107956424
+        ],
+        [
+          29.43,
+          2746340872,
+          109241864
+        ],
+        [
+          30.57,
+          2777759248,
+          111001104
+        ],
+        [
+          31.71,
+          2795229440,
+          111833344
+        ],
+        [
+          32.85,
+          2822572600,
+          112941624
+        ],
+        [
+          33.99,
+          2839665864,
+          113757384
+        ],
+        [
+          35.11,
+          2857080512,
+          114898624
+        ],
+        [
+          36.25,
+          2872387072,
+          116975104
+        ]
+      ],
+      "total_seconds": 37.12,
+      "versions": 2500
+    },
+    {
+      "arm": "retention_first",
+      "baseline_family_bytes": 926212096,
+      "delta_bytes": -292532224,
+      "delta_percent": -17.35,
+      "family_bytes_after_release": 556756992,
+      "family_bytes_at_promote_moment": 1219661824,
+      "formula_predicted_peak_bytes": 1685687416,
+      "formula_terms": {
+        "new_generation_bytes": 495206400,
+        "old_generation_bytes": 562491392,
+        "reader_retained_bytes": 0,
+        "sidecar_bytes": 161964032,
+        "wal_temp_bytes": 466025592
+      },
+      "measured_over_predicted": 0.8265,
+      "min_free_disk_bytes": 167109206016,
+      "new_generation": {
+        "fts_docs": 130500,
+        "rows": 1041000,
+        "seconds": 17.84,
+        "sidecar_bytes": 61550592,
+        "store_bytes": 495206400,
+        "versions_written": 1500
+      },
+      "old_generation": {
+        "fts_docs": 217500,
+        "rows": 1735000,
+        "seconds": 36.81,
+        "sidecar_bytes": 100413440,
+        "store_bytes": 825798656,
+        "versions_written": 2500
+      },
+      "peak_at_seconds": 3.59,
+      "peak_family_bytes": 1393155192,
+      "peak_family_bytes_during_rebuild": 1393155192,
+      "peak_file_breakdown": {
+        "search.db": 100413440,
+        "store.db": 825798656,
+        "store.db-shm": 917504,
+        "store.db-wal": 466025592
+      },
+      "peak_wal_bytes": 466025592,
+      "reader_pinned": false,
+      "retained_generation": null,
+      "retained_generation_bytes": 0,
+      "retention_sweep": {
+        "checkpoint_result_busy_log_checkpointed": [
+          0,
+          0,
+          0
+        ],
+        "delete_seconds": 4.16,
+        "incremental_vacuum_seconds": 1.2,
+        "store_bytes_after": 562491392,
+        "store_bytes_before": 825798656,
+        "wal_bytes_after": 0
+      },
+      "samples": 411,
+      "superseded_generation_bytes": 662904832,
+      "timeline_time_total_wal": [
+        [
+          1.05,
+          1080088088,
+          153548312
+        ],
+        [
+          2.17,
+          1148087920,
+          221417072
+        ],
+        [
+          3.3,
+          1376379152,
+          449347856
+        ],
+        [
+          4.44,
+          885797728,
+          7877472
+        ],
+        [
+          5.59,
+          663555448,
+          576888
+        ],
+        [
+          6.73,
+          748569576,
+          27583464
+        ],
+        [
+          7.87,
+          817292472,
+          37463224
+        ],
+        [
+          8.99,
+          869763008,
+          44627904
+        ],
+        [
+          10.13,
+          921727024,
+          51327024
+        ],
+        [
+          11.27,
+          956454136,
+          55756024
+        ],
+        [
+          12.42,
+          1007834344,
+          62784744
+        ],
+        [
+          13.51,
+          1041170488,
+          66797624
+        ],
+        [
+          14.65,
+          1074554480,
+          69883504
+        ],
+        [
+          15.76,
+          1106915576,
+          73158904
+        ],
+        [
+          16.88,
+          1139038984,
+          76413704
+        ],
+        [
+          18.01,
+          1171818904,
+          79866264
+        ],
+        [
+          19.13,
+          1203886472,
+          82676104
+        ],
+        [
+          20.27,
+          1236491664,
+          84962704
+        ],
+        [
+          21.4,
+          1269560288,
+          88052704
+        ],
+        [
+          22.54,
+          1288268328,
+          90438184
+        ]
+      ],
+      "total_seconds": 23.22,
+      "versions": 2500
+    }
+  ],
+  "file_versions": 2500,
+  "generations_dropped_by_retention": 2,
+  "generations_per_path": 5,
+  "rows_per_file_version": 694,
+  "sqlite_version": "3.53.4"
+}

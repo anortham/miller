@@ -1,0 +1,53 @@
+# Row shapes sampled from /Users/murphy/source/miller/.miller/symbols.db
+# sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+
+## pragmas
+page_size=4096|page_count=197449|auto_vacuum=0|freelist_count=0
+
+## row counts
+tbl              rows  
+---------------  ------
+files            1417  
+symbols          122707
+reference_sites  478283
+identifiers      380720
+
+## physical bytes per btree (dbstat)
+name                                   bytes      cells 
+-------------------------------------  ---------  ------
+identifiers                            127832064  411842
+reference_sites                        104448000  503707
+symbols                                53501952   135543
+sqlite_autoindex_reference_sites_1     31191040   478283
+idx_identifiers_reference_site         24604672   380720
+idx_reference_sites_containing_symbol  24166400   478283
+idx_reference_sites_file               23121920   478283
+idx_identifiers_containing             19419136   380720
+idx_identifiers_file                   18468864   380720
+sqlite_autoindex_identifiers_1         17448960   380720
+idx_identifiers_name_kind              12967936   380720
+idx_identifiers_target                 10170368   380720
+idx_symbols_path                       8499200    122707
+idx_symbols_file                       6025216    122707
+sqlite_autoindex_symbols_1             5599232    122707
+idx_symbols_parent                     5246976    122707
+idx_symbols_name_kind                  4280320    122707
+idx_symbols_is_test                    1208320    122707
+idx_symbols_test_container             1196032    122707
+idx_symbols_test_lifecycle             1183744    122707
+
+## average text column lengths (NULL counted as 0)
+tbl          c_id  c_rsid  c_fileid  c_path  c_name  c_kind  c_containing  c_target  c_meta
+-----------  ----  ------  --------  ------  ------  ------  ------------  --------  ------
+identifiers  32.0  47.0    37.0      46.9    9.0     9.7     31.9          13.2      7.9   
+tbl              c_rsid  c_fileid  c_path  c_containing  c_prov  exact_fraction
+---------------  ------  --------  ------  ------------  ------  --------------
+reference_sites  48.8    37.0      47.2    31.9          11.2    0.796         
+tbl      c_id  c_path  c_name  c_kind  c_sig  c_doc  c_vis  c_bodyhash  c_meta
+-------  ----  ------  ------  ------  -----  -----  -----  ----------  ------
+symbols  32.0  57.0    12.7    7.6     45.1   48.6   4.0    12.3        54.6  
+
+## rows per file
+identifiers_per_file  ref_sites_per_file  symbols_per_file
+--------------------  ------------------  ----------------
+268.68                337.53              86.6            

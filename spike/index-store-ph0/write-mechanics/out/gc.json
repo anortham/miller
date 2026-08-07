@@ -1,0 +1,642 @@
+{
+  "arms": [
+    {
+      "auto_vacuum": "INCREMENTAL",
+      "build": {
+        "btree_bytes": {
+          "file_versions": 700416,
+          "identifiers": 477401088,
+          "idx_file_versions_cohort": 61440,
+          "idx_file_versions_complete": 364544,
+          "idx_identifiers_containing": 76537856,
+          "idx_identifiers_file": 92094464,
+          "idx_identifiers_name_kind": 51159040,
+          "idx_identifiers_reference_site": 103284736,
+          "idx_identifiers_target": 41021440,
+          "idx_reference_sites_containing": 96387072,
+          "idx_reference_sites_file": 115716096,
+          "idx_symbols_name_kind": 17571840,
+          "idx_symbols_path": 40259584,
+          "reference_sites": 440401920,
+          "sqlite_autoindex_file_versions_1": 765952,
+          "sqlite_autoindex_identifiers_1": 79912960,
+          "sqlite_autoindex_reference_sites_1": 135327744,
+          "sqlite_autoindex_symbols_1": 26796032,
+          "sqlite_schema": 12288,
+          "symbols": 217923584
+        },
+        "build_seconds": 141.25,
+        "bytes_per_row": 476.3,
+        "file_bytes": 2016165888,
+        "rows": 4233400
+      },
+      "delete": {
+        "delete_seconds": 15.74,
+        "file_bytes": 2016165888,
+        "freelist_pages": 156755,
+        "page_count": 492228,
+        "victims": 2440
+      },
+      "delete_pattern": "retention_scatter",
+      "full_vacuum": {
+        "file_bytes_after": 1152929792,
+        "file_bytes_before": 1373310976,
+        "free_disk_bytes_at_start": 165702041600,
+        "seconds": 5.82
+      },
+      "incremental_vacuum": {
+        "btree_bytes": {
+          "file_versions": 696320,
+          "identifiers": 291348480,
+          "idx_file_versions_cohort": 45056,
+          "idx_file_versions_complete": 364544,
+          "idx_identifiers_containing": 71659520,
+          "idx_identifiers_file": 58044416,
+          "idx_identifiers_name_kind": 49651712,
+          "idx_identifiers_reference_site": 98643968,
+          "idx_identifiers_target": 38289408,
+          "idx_reference_sites_containing": 89513984,
+          "idx_reference_sites_file": 73678848,
+          "idx_symbols_name_kind": 17141760,
+          "idx_symbols_path": 26501120,
+          "reference_sites": 268521472,
+          "sqlite_autoindex_file_versions_1": 761856,
+          "sqlite_autoindex_identifiers_1": 50581504,
+          "sqlite_autoindex_reference_sites_1": 85053440,
+          "sqlite_autoindex_symbols_1": 17969152,
+          "sqlite_schema": 12288,
+          "symbols": 133152768
+        },
+        "file_bytes": 1373310976,
+        "freelist_remaining": 0,
+        "max_stage_seconds": 0.1035,
+        "mean_stage_seconds": 0.062,
+        "pages_per_stage": 2000,
+        "stage_trace": [
+          {
+            "file_bytes": 2007961600,
+            "freelist_after": 154755,
+            "freelist_before": 156755,
+            "seconds": 0.0859
+          },
+          {
+            "file_bytes": 1999761408,
+            "freelist_after": 152755,
+            "freelist_before": 154755,
+            "seconds": 0.1001
+          },
+          {
+            "file_bytes": 1991557120,
+            "freelist_after": 150755,
+            "freelist_before": 152755,
+            "seconds": 0.0702
+          },
+          {
+            "file_bytes": 1983356928,
+            "freelist_after": 148755,
+            "freelist_before": 150755,
+            "seconds": 0.0683
+          },
+          {
+            "file_bytes": 1975156736,
+            "freelist_after": 146755,
+            "freelist_before": 148755,
+            "seconds": 0.0739
+          },
+          {
+            "file_bytes": 1966952448,
+            "freelist_after": 144755,
+            "freelist_before": 146755,
+            "seconds": 0.0696
+          },
+          {
+            "file_bytes": 1958752256,
+            "freelist_after": 142755,
+            "freelist_before": 144755,
+            "seconds": 0.0645
+          },
+          {
+            "file_bytes": 1950547968,
+            "freelist_after": 140755,
+            "freelist_before": 142755,
+            "seconds": 0.0706
+          }
+        ],
+        "stages": 79,
+        "total_seconds": 4.902
+      },
+      "label": "inc_retention",
+      "pragmas_on_reopen": {
+        "auto_vacuum": 2,
+        "page_size": 4096
+      },
+      "secure_delete_on_plain_reopen": 0
+    },
+    {
+      "auto_vacuum": "INCREMENTAL",
+      "build": {
+        "btree_bytes": {
+          "file_versions": 700416,
+          "identifiers": 477401088,
+          "idx_file_versions_cohort": 61440,
+          "idx_file_versions_complete": 364544,
+          "idx_identifiers_containing": 76537856,
+          "idx_identifiers_file": 92094464,
+          "idx_identifiers_name_kind": 51159040,
+          "idx_identifiers_reference_site": 103284736,
+          "idx_identifiers_target": 41021440,
+          "idx_reference_sites_containing": 96387072,
+          "idx_reference_sites_file": 115716096,
+          "idx_symbols_name_kind": 17571840,
+          "idx_symbols_path": 40259584,
+          "reference_sites": 440401920,
+          "sqlite_autoindex_file_versions_1": 765952,
+          "sqlite_autoindex_identifiers_1": 79912960,
+          "sqlite_autoindex_reference_sites_1": 135327744,
+          "sqlite_autoindex_symbols_1": 26796032,
+          "sqlite_schema": 12288,
+          "symbols": 217923584
+        },
+        "build_seconds": 150.62,
+        "bytes_per_row": 476.3,
+        "file_bytes": 2016165888,
+        "rows": 4233400
+      },
+      "delete": {
+        "delete_seconds": 17.84,
+        "file_bytes": 2016165888,
+        "freelist_pages": 164586,
+        "page_count": 492228,
+        "victims": 2440
+      },
+      "delete_pattern": "epoch_contiguous",
+      "full_vacuum": {
+        "file_bytes_after": 1153302528,
+        "file_bytes_before": 1341198336,
+        "free_disk_bytes_at_start": 164487393280,
+        "seconds": 7.7
+      },
+      "incremental_vacuum": {
+        "btree_bytes": {
+          "file_versions": 425984,
+          "identifiers": 286502912,
+          "idx_file_versions_cohort": 49152,
+          "idx_file_versions_complete": 217088,
+          "idx_identifiers_containing": 71618560,
+          "idx_identifiers_file": 55312384,
+          "idx_identifiers_name_kind": 49672192,
+          "idx_identifiers_reference_site": 98717696,
+          "idx_identifiers_target": 35778560,
+          "idx_reference_sites_containing": 89419776,
+          "idx_reference_sites_file": 69492736,
+          "idx_symbols_name_kind": 17182720,
+          "idx_symbols_path": 24190976,
+          "reference_sites": 264306688,
+          "sqlite_autoindex_file_versions_1": 466944,
+          "sqlite_autoindex_identifiers_1": 48005120,
+          "sqlite_autoindex_reference_sites_1": 81301504,
+          "sqlite_autoindex_symbols_1": 16121856,
+          "sqlite_schema": 12288,
+          "symbols": 130760704
+        },
+        "file_bytes": 1341198336,
+        "freelist_remaining": 0,
+        "max_stage_seconds": 0.0571,
+        "mean_stage_seconds": 0.047,
+        "pages_per_stage": 2000,
+        "stage_trace": [
+          {
+            "file_bytes": 2007961600,
+            "freelist_after": 162586,
+            "freelist_before": 164586,
+            "seconds": 0.0538
+          },
+          {
+            "file_bytes": 1999761408,
+            "freelist_after": 160586,
+            "freelist_before": 162586,
+            "seconds": 0.0458
+          },
+          {
+            "file_bytes": 1991557120,
+            "freelist_after": 158586,
+            "freelist_before": 160586,
+            "seconds": 0.0417
+          },
+          {
+            "file_bytes": 1983356928,
+            "freelist_after": 156586,
+            "freelist_before": 158586,
+            "seconds": 0.0377
+          },
+          {
+            "file_bytes": 1975156736,
+            "freelist_after": 154586,
+            "freelist_before": 156586,
+            "seconds": 0.0451
+          },
+          {
+            "file_bytes": 1966952448,
+            "freelist_after": 152586,
+            "freelist_before": 154586,
+            "seconds": 0.0454
+          },
+          {
+            "file_bytes": 1958752256,
+            "freelist_after": 150586,
+            "freelist_before": 152586,
+            "seconds": 0.0386
+          },
+          {
+            "file_bytes": 1950547968,
+            "freelist_after": 148586,
+            "freelist_before": 150586,
+            "seconds": 0.0453
+          }
+        ],
+        "stages": 83,
+        "total_seconds": 3.905
+      },
+      "label": "inc_epoch",
+      "pragmas_on_reopen": {
+        "auto_vacuum": 2,
+        "page_size": 4096
+      },
+      "secure_delete_on_plain_reopen": 0
+    },
+    {
+      "auto_vacuum": "NONE",
+      "build": {
+        "btree_bytes": {
+          "file_versions": 700416,
+          "identifiers": 477401088,
+          "idx_file_versions_cohort": 61440,
+          "idx_file_versions_complete": 364544,
+          "idx_identifiers_containing": 76537856,
+          "idx_identifiers_file": 92094464,
+          "idx_identifiers_name_kind": 51159040,
+          "idx_identifiers_reference_site": 103284736,
+          "idx_identifiers_target": 41021440,
+          "idx_reference_sites_containing": 96387072,
+          "idx_reference_sites_file": 115716096,
+          "idx_symbols_name_kind": 17571840,
+          "idx_symbols_path": 40259584,
+          "reference_sites": 440401920,
+          "sqlite_autoindex_file_versions_1": 765952,
+          "sqlite_autoindex_identifiers_1": 79912960,
+          "sqlite_autoindex_reference_sites_1": 135327744,
+          "sqlite_autoindex_symbols_1": 26796032,
+          "sqlite_schema": 12288,
+          "symbols": 217923584
+        },
+        "build_seconds": 138.87,
+        "bytes_per_row": 475.7,
+        "file_bytes": 2013704192,
+        "rows": 4233400
+      },
+      "delete": {
+        "delete_seconds": 14.28,
+        "file_bytes": 2013704192,
+        "freelist_pages": 156755,
+        "page_count": 491627,
+        "victims": 2440
+      },
+      "delete_pattern": "retention_scatter",
+      "full_vacuum": {
+        "file_bytes_after": 1151520768,
+        "file_bytes_before": 2013704192,
+        "free_disk_bytes_at_start": 164698730496,
+        "seconds": 6.77
+      },
+      "incremental_vacuum_attempt": {
+        "file_bytes_after": 2013704192,
+        "file_bytes_before": 2013704192,
+        "freelist_after": 156755,
+        "freelist_before": 156755,
+        "raised": null,
+        "seconds": 0.0
+      },
+      "label": "none_retention",
+      "pragmas_on_reopen": {
+        "auto_vacuum": 0,
+        "page_size": 4096
+      },
+      "secure_delete_on_plain_reopen": 0
+    }
+  ],
+  "distinct_paths": 1220,
+  "file_versions": 6100,
+  "generations_per_path": 5,
+  "python_version": "3.14.6",
+  "rows_per_file_version": 694,
+  "secure_delete_probes": [
+    {
+      "core_secure_delete": false,
+      "fts_config_on_reopen": {
+        "version": 4
+      },
+      "fts_secure_delete": false,
+      "label": "fts0_core0",
+      "merge_rounds": 1,
+      "sentinel_hits_after_delete": {
+        "main": 4,
+        "wal": 0
+      },
+      "sentinel_hits_after_merge": {
+        "main": 4,
+        "wal": 0
+      },
+      "sentinel_hits_after_vacuum": {
+        "main": 4,
+        "wal": 0
+      },
+      "sentinel_hits_before_delete": {
+        "main": 3,
+        "wal": 0
+      },
+      "system_sqlite3_cli_exit": 0
+    },
+    {
+      "core_secure_delete": false,
+      "fts_config_on_reopen": {
+        "secure-delete": 1,
+        "version": 5
+      },
+      "fts_secure_delete": true,
+      "label": "fts1_core0",
+      "merge_rounds": 1,
+      "sentinel_hits_after_delete": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_after_merge": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_after_vacuum": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_before_delete": {
+        "main": 3,
+        "wal": 0
+      },
+      "system_sqlite3_cli_exit": 0
+    },
+    {
+      "core_secure_delete": true,
+      "fts_config_on_reopen": {
+        "version": 4
+      },
+      "fts_secure_delete": false,
+      "label": "fts0_core1",
+      "merge_rounds": 1,
+      "sentinel_hits_after_delete": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_after_merge": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_after_vacuum": {
+        "main": 2,
+        "wal": 0
+      },
+      "sentinel_hits_before_delete": {
+        "main": 2,
+        "wal": 0
+      },
+      "system_sqlite3_cli_exit": 0
+    },
+    {
+      "core_secure_delete": true,
+      "fts_config_on_reopen": {
+        "secure-delete": 1,
+        "version": 5
+      },
+      "fts_secure_delete": true,
+      "label": "fts1_core1",
+      "merge_rounds": 1,
+      "sentinel_hits_after_delete": {
+        "main": 0,
+        "wal": 0
+      },
+      "sentinel_hits_after_merge": {
+        "main": 0,
+        "wal": 0
+      },
+      "sentinel_hits_after_vacuum": {
+        "main": 0,
+        "wal": 0
+      },
+      "sentinel_hits_before_delete": {
+        "main": 2,
+        "wal": 0
+      },
+      "system_sqlite3_cli_exit": 0
+    }
+  ],
+  "sidecar": {
+    "build": {
+      "build_seconds": 4.38,
+      "docs": 176871,
+      "file_bytes": 83103744,
+      "fts_config_after": {
+        "automerge": 0,
+        "secure-delete": 1,
+        "version": 4
+      },
+      "fts_config_before": {
+        "version": 4
+      },
+      "segments": {
+        "symbols_fts": {
+          "data_rows": 2719,
+          "segids": 23
+        },
+        "symbols_trigram": {
+          "data_rows": 3505,
+          "segids": 23
+        }
+      },
+      "versions": 2033
+    },
+    "gc": {
+      "delete_seconds": 58.09,
+      "deleted_docs": 70818,
+      "file_bytes_after_delete": 83103744,
+      "file_bytes_after_merge": 83103744,
+      "file_bytes_after_vacuum": 56328192,
+      "file_bytes_start": 83103744,
+      "freelist_after_delete": 3873,
+      "freelist_after_merge": 6529,
+      "incremental_vacuum": {
+        "btree_bytes": {
+          "idx_search_symbols_doc": 2363392,
+          "search_symbols": 6516736,
+          "sqlite_autoindex_search_symbols_1": 6594560,
+          "sqlite_schema": 4096,
+          "symbols_fts_config": 4096,
+          "symbols_fts_content": 16441344,
+          "symbols_fts_data": 6000640,
+          "symbols_fts_docsize": 1945600,
+          "symbols_fts_idx": 4096,
+          "symbols_trigram_config": 4096,
+          "symbols_trigram_content": 6873088,
+          "symbols_trigram_data": 7528448,
+          "symbols_trigram_docsize": 1945600,
+          "symbols_trigram_idx": 32768
+        },
+        "file_bytes": 56328192,
+        "freelist_remaining": 0,
+        "max_stage_seconds": 0.0273,
+        "mean_stage_seconds": 0.0196,
+        "pages_per_stage": 2000,
+        "stage_trace": [
+          {
+            "file_bytes": 74903552,
+            "freelist_after": 4529,
+            "freelist_before": 6529,
+            "seconds": 0.0237
+          },
+          {
+            "file_bytes": 66699264,
+            "freelist_after": 2529,
+            "freelist_before": 4529,
+            "seconds": 0.0273
+          },
+          {
+            "file_bytes": 58499072,
+            "freelist_after": 529,
+            "freelist_before": 2529,
+            "seconds": 0.025
+          },
+          {
+            "file_bytes": 58499072,
+            "freelist_after": 0,
+            "freelist_before": 529,
+            "seconds": 0.0025
+          }
+        ],
+        "stages": 4,
+        "total_seconds": 0.079
+      },
+      "merge_max_round_seconds": 0.0148,
+      "merge_mean_round_seconds": 0.0043,
+      "merge_pages_per_round": 64,
+      "merge_round_trace": [
+        {
+          "round": 1,
+          "seconds": 0.0037,
+          "table": "symbols_fts",
+          "total_changes_delta": 224
+        },
+        {
+          "round": 2,
+          "seconds": 0.0032,
+          "table": "symbols_fts",
+          "total_changes_delta": 227
+        },
+        {
+          "round": 3,
+          "seconds": 0.0034,
+          "table": "symbols_fts",
+          "total_changes_delta": 541
+        },
+        {
+          "round": 4,
+          "seconds": 0.0033,
+          "table": "symbols_fts",
+          "total_changes_delta": 201
+        },
+        {
+          "round": 5,
+          "seconds": 0.0148,
+          "table": "symbols_fts",
+          "total_changes_delta": 213
+        },
+        {
+          "round": 6,
+          "seconds": 0.0028,
+          "table": "symbols_fts",
+          "total_changes_delta": 198
+        },
+        {
+          "round": 30,
+          "seconds": 0.0097,
+          "table": "symbols_trigram",
+          "total_changes_delta": 262
+        },
+        {
+          "round": 31,
+          "seconds": 0.0032,
+          "table": "symbols_trigram",
+          "total_changes_delta": 264
+        },
+        {
+          "round": 32,
+          "seconds": 0.0023,
+          "table": "symbols_trigram",
+          "total_changes_delta": 3332
+        },
+        {
+          "round": 33,
+          "seconds": 0.0,
+          "table": "symbols_trigram",
+          "total_changes_delta": 1
+        }
+      ],
+      "merge_rounds_total": 58,
+      "merge_rounds_with_work": 56,
+      "merge_seconds_total": 0.251,
+      "optimize_control": {
+        "file_bytes_after_optimize_and_vacuum": 56176640,
+        "incremental_vacuum_seconds": 0.077,
+        "segments_after": {
+          "symbols_fts": {
+            "data_rows": 1489,
+            "segids": 1
+          },
+          "symbols_trigram": {
+            "data_rows": 1805,
+            "segids": 1
+          }
+        },
+        "single_call_seconds": 0.215
+      },
+      "segments_after_delete": {
+        "symbols_fts": {
+          "data_rows": 2719,
+          "segids": 23
+        },
+        "symbols_trigram": {
+          "data_rows": 3505,
+          "segids": 23
+        }
+      },
+      "segments_after_merge": {
+        "symbols_fts": {
+          "data_rows": 1500,
+          "segids": 2
+        },
+        "symbols_trigram": {
+          "data_rows": 1833,
+          "segids": 2
+        }
+      },
+      "segments_start": {
+        "symbols_fts": {
+          "data_rows": 2719,
+          "segids": 23
+        },
+        "symbols_trigram": {
+          "data_rows": 3505,
+          "segids": 23
+        }
+      }
+    }
+  },
+  "sqlite_version": "3.53.4",
+  "vacuum_pages_per_stage": 2000
+}

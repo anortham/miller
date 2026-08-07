@@ -341,10 +341,10 @@ alongside the live one and record actual peak disk vs the formula.
 inside the task directory and clean up.
 
 **Acceptance criteria:**
-- [ ] Physical shrinkage proven with before/after file sizes; merge timings recorded.
-- [ ] Granularity table: throughput, WAL peak, crash-reuse count per mode, ≥3 SIGKILL trials each.
-- [ ] Measured promotion peak within stated tolerance of the formula (or the formula corrected).
-- [ ] Worker-scope verification passes and the diff is handed to the lead.
+- [x] Physical shrinkage proven with before/after file sizes; merge timings recorded.
+- [x] Granularity table: throughput, WAL peak, crash-reuse count per mode, ≥3 SIGKILL trials each.
+- [x] Measured promotion peak within stated tolerance of the formula (or the formula corrected).
+- [x] Worker-scope verification passes and the diff is handed to the lead.
 
 ### Task 7: Go/no-go findings doc (lead)
 

@@ -1,0 +1,142 @@
+# Captured run log for the committed out/*.json
+
+Verbatim stdout of the runs that produced the committed results. out/pragma-probes.json
+was refreshed once more afterwards by `./run.sh --scale full --only probes` to widen the
+secure-delete probe; that invocation is not reproduced here because it only reruns the
+probes stage.
+
+==============================================================================
+Stage 1 of 3 -- probes + GC, full scale. Produced out/gc.json.
+The granularity and promotion stages of this invocation did not run: run.sh was
+edited while bash was still reading it, which is the syntax error at the end.
+They were re-run as stages 2 and 3 below.
+==============================================================================
+[run] scale=full workdir=/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.kwNh2N free=155GB
+[run] sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+[run] python: Python 3.14.6 sqlite lib 3.53.4
+[run] host: Darwin 25.6.0 arm64
+[run] started: 2026-08-07T02:35:34Z
+[run] === gc ===
+[gc] built gc_inc_retention.db auto_vacuum=INCREMENTAL versions=6100 rows=4233400 in 141.2s size=2.016 GB
+[gc] inc_retention: deleting 2440 versions (retention_scatter)
+[gc] inc_retention: staged incremental_vacuum
+[gc] inc_retention: full VACUUM for comparison
+[gc] built gc_inc_epoch.db auto_vacuum=INCREMENTAL versions=6100 rows=4233400 in 150.6s size=2.016 GB
+[gc] inc_epoch: deleting 2440 versions (epoch_contiguous)
+[gc] inc_epoch: staged incremental_vacuum
+[gc] inc_epoch: full VACUUM for comparison
+[gc] built gc_none_retention.db auto_vacuum=NONE versions=6100 rows=4233400 in 138.9s size=2.014 GB
+[gc] none_retention: deleting 2440 versions (retention_scatter)
+[gc] none_retention: incremental_vacuum attempt on a NONE database
+[gc] none_retention: full VACUUM for comparison
+[gc] built sidecar versions=2033 docs=176871 in 4.4s size=83.1 MB segments={'symbols_fts': {'segids': 23, 'data_rows': 2719}, 'symbols_trigram': {'segids': 23, 'data_rows': 3505}}
+[gc] sidecar GC: delete + page-limited merge + incremental_vacuum
+[gc] secure-delete probes
+[gc] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/gc.json
+[run] gc finished in 574s
+./run.sh: line 104: syntax error near unexpected token `then'
+[run] removed work directory: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.kwNh2N
+EXIT=2
+
+==============================================================================
+Stage 2 of 3 -- probes, granularity, promotion, full scale. Produced
+out/pragma-probes.json and out/granularity.json. The promotion arms in this log
+were SUPERSEDED by stage 3: this run's directory sampler double-counted one file
+caught mid-rename by os.walk, inflating the pinned_reader peak by 825.8 MB.
+==============================================================================
+[run] scale=full workdir=/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.QzrFAU free=155GB
+[run] sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+[run] python: Python 3.14.6 sqlite lib 3.53.4
+[run] host: Darwin 25.6.0 arm64
+[run] started: 2026-08-07T02:45:48Z
+[run] === probes ===
+[probes] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/pragma-probes.json
+[run] probes finished in 3s
+[run] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/summary.md
+[run] finished: 2026-08-07T02:45:52Z
+[run] files left in work dir before cleanup: 0
+[run] removed work directory: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.QzrFAU
+[run] scale=full workdir=/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.kuoYS7 free=155GB
+[run] sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+[run] python: Python 3.14.6 sqlite lib 3.53.4
+[run] host: Darwin 25.6.0 arm64
+[run] started: 2026-08-07T02:45:52Z
+[run] === granularity ===
+[granularity] single: clean import of 2000 versions
+[granularity] single: SIGKILL trial 1/3 at 42% (6.51s of a 15.53s import)
+[granularity] single: SIGKILL trial 2/3 at 45% (6.98s of a 15.53s import)
+[granularity] single: SIGKILL trial 3/3 at 22% (3.34s of a 15.53s import)
+[granularity] per_chunk: clean import of 2000 versions
+[granularity] per_chunk: SIGKILL trial 1/3 at 63% (12.85s of a 20.45s import)
+[granularity] per_chunk: SIGKILL trial 2/3 at 74% (15.23s of a 20.45s import)
+[granularity] per_chunk: SIGKILL trial 3/3 at 66% (13.58s of a 20.45s import)
+[granularity] per_version: clean import of 2000 versions
+[granularity] per_version: SIGKILL trial 1/3 at 55% (43.88s of a 79.57s import)
+[granularity] per_version: SIGKILL trial 2/3 at 74% (59.09s of a 79.57s import)
+[granularity] per_version: SIGKILL trial 3/3 at 60% (48.05s of a 79.57s import)
+[granularity] per_version_nomarker: clean import of 2000 versions
+[granularity] per_version_nomarker: SIGKILL trial 1/3 at 72% (54.11s of a 75.59s import)
+[granularity] per_version_nomarker: SIGKILL trial 2/3 at 74% (56.15s of a 75.59s import)
+[granularity] per_version_nomarker: SIGKILL trial 3/3 at 45% (34.30s of a 75.59s import)
+[granularity] per_version_wal_headroom: clean import of 2000 versions
+[granularity] per_version_wal_headroom: SIGKILL trial 1/3 at 52% (24.53s of a 47.42s import)
+[granularity] per_version_wal_headroom: SIGKILL trial 2/3 at 36% (17.06s of a 47.42s import)
+[granularity] per_version_wal_headroom: SIGKILL trial 3/3 at 23% (10.72s of a 47.42s import)
+[granularity] per_version_sync_full: clean import of 2000 versions
+[granularity] per_version_sync_full: SIGKILL trial 1/3 at 40% (28.10s of a 70.56s import)
+[granularity] per_version_sync_full: SIGKILL trial 2/3 at 68% (47.79s of a 70.56s import)
+[granularity] per_version_sync_full: SIGKILL trial 3/3 at 43% (30.01s of a 70.56s import)
+[granularity] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/granularity.json
+[run] granularity finished in 1275s
+[run] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/summary.md
+[run] finished: 2026-08-07T03:07:08Z
+[run] files left in work dir before cleanup: 0
+[run] removed work directory: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.kuoYS7
+[run] scale=full workdir=/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.hIbvov free=156GB
+[run] sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+[run] python: Python 3.14.6 sqlite lib 3.53.4
+[run] host: Darwin 25.6.0 arm64
+[run] started: 2026-08-07T03:07:08Z
+[run] === promotion ===
+[promotion] no_reader: building the live generation
+[promotion] no_reader: rebuilding a generation alongside the live one
+[promotion] pinned_reader: building the older generation a reader will pin
+[promotion] pinned_reader: building the live generation
+[promotion] pinned_reader: rebuilding a generation alongside the live one
+[promotion] retention_first: building the live generation
+[promotion] retention_first: retention sweep before the rebuild
+[promotion] retention_first: rebuilding a generation alongside the live one
+[promotion] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/promotion.json
+[run] promotion finished in 246s
+[run] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/summary.md
+[run] finished: 2026-08-07T03:11:15Z
+[run] files left in work dir before cleanup: 0
+[run] removed work directory: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.hIbvov
+EXIT=0
+
+==============================================================================
+Stage 3 of 3 -- promotion, full scale, with the sampler deduping by inode and
+recording the file-by-file breakdown at the peak. Produced out/promotion.json.
+==============================================================================
+[run] scale=full workdir=/var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.lxYRyi free=156GB
+[run] sqlite3 CLI: 3.51.0 2025-06-12 13:14:41 f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl (64-bit)
+[run] python: Python 3.14.6 sqlite lib 3.53.4
+[run] host: Darwin 25.6.0 arm64
+[run] started: 2026-08-07T03:18:46Z
+[run] === promotion ===
+[promotion] no_reader: building the live generation
+[promotion] no_reader: rebuilding a generation alongside the live one
+[promotion] pinned_reader: building the older generation a reader will pin
+[promotion] pinned_reader: building the live generation
+[promotion] pinned_reader: rebuilding a generation alongside the live one
+[promotion] retention_first: building the live generation
+[promotion] retention_first: retention sweep before the rebuild
+[promotion] retention_first: rebuilding a generation alongside the live one
+[promotion] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/promotion.json
+[run] promotion finished in 246s
+[run] wrote /Users/murphy/source/miller/.claude/worktrees/index-store-ph0/spike/index-store-ph0/write-mechanics/out/summary.md
+[run] finished: 2026-08-07T03:22:53Z
+[run] files left in work dir before cleanup: 0
+[run] removed work directory: /var/folders/8j/d5kr_j396lz27432b_qrx3y80000gn/T//miller-ph0-write-mechanics.lxYRyi
+EXIT=0
+
