@@ -1,7 +1,15 @@
-# Binding-mechanism proof — the Ph0 §9 red-gate discharge
+# Binding-mechanism proof — measurements final, gate RED on G3b
 
-**Status:** COMPLETE — mechanism verdict **GO**, with one criterion recorded marginal (not
-waived, not re-scored) and named conditions carried to Ph2.
+**Status:** Measurements COMPLETE. **Gate verdict: RED on G3b** — one of three runs measured
+the overhead ratio at 0.5069 against the fixed 0.50 ceiling, and the plan's rule is "any
+FAIL → the gate is red… the lead records NO-GO and the contract freeze blocks." G1, G2
+(scoped below), G3a, G3c, G4, and G5 passed. An earlier revision of this document recorded
+the mechanism verdict as GO with G3b "marginal"; **that construction was retracted at the
+cycle-3 cross-model gate** (codex finding C1, grok finding 5 — contract §17): it softened a
+fixed binary criterion after measurement, which the plan forbids. The discharge is BLOCKED
+pending one of two paths: (a) the user explicitly accepts the marginal G3b measurement, or
+(b) a fresh re-proof passes under a policy predeclared before it runs (store-shaped base
+read, all pairs in all runs, ceiling unchanged at 0.50).
 **Program:** [`../plans/2026-08-06-index-store-views-program.md`](../plans/2026-08-06-index-store-views-program.md)
 **Refuted predecessor:** Ph0 gate §9
 ([`2026-08-06-index-store-ph0-gate.md`](2026-08-06-index-store-ph0-gate.md)) — the P1a scoped
@@ -23,8 +31,10 @@ before any measurement ran. None was moved afterwards.
    **0 identifier rows written, 9/9 pairs**.
 2. **Serve window:** the view serves the base's resolution for shared versions; identifiers in
    versions the base does not cover have no resolution yet. `trace`/`impact` report "resolution
-   converging" with the enumerated gap (rows AND files — never "N files changed"; the delta
-   spills well past changed files by design of the resolution graph).
+   converging" with the gap in two honest states (contract §14): a manifest-computable lower
+   bound before the diff runs, then the exact enumeration (rows AND files — never "N files
+   changed"; the delta spills well past changed files by design of the resolution graph). The
+   exact enumeration requires the diff, which completes near the end of convergence.
 3. **Background:** one **fresh-output full resolution pass** over the view's corpus at the bulk
    rate (written to its own scratch/base file — the separate-file precondition from the Task 2
    audit), a **natural-key diff** against the base, and a **delta write** (replacements +
@@ -34,46 +44,53 @@ before any measurement ran. None was moved afterwards.
 
 | Criterion (fixed threshold) | Measured | Verdict |
 |---|---|---|
-| **G1 Determinism** — 0 differing rows across two from-scratch builds, per corpus | 0 / 373,900 (miller), 0 / 325,078 (julie-extractors) | **PASS** |
-| **G2 Exactness** — base + delta ≡ tip, 0 mismatches, every pair incl. structure-changed | 0 mismatches, 9/9 pairs (8 add paths, 1 deletes; tombstones 2,543–57,101/pair exercise removal everywhere) | **PASS** |
+| **G1 Determinism** — 0 differing rows across two from-scratch builds, per corpus | 0 / 373,900 (miller), 0 / 325,078 (julie-extractors) | **PASS** (scoped: `identifier_resolutions` only — see below) |
+| **G2 Exactness** — base + delta ≡ tip, 0 mismatches, every pair incl. structure-changed | 0 mismatches, 9/9 pairs (8 add paths, 1 deletes; tombstones 2,543–57,101/pair exercise removal everywhere) | **PASS** (scoped: `identifier_resolutions` only — see below) |
 | **G3a Rate** — fresh-pass resolution ≥ 50k rows/s | 71.1k / 73.3k / 84.6k rows/s (at-scale miller pairs) | **PASS** (1.4–1.7×; escapes Ph0's 15.8–20.1k populated-artifact rates — the candidate's premise) |
-| **G3b Overhead** — diff + delta write ≤ +50% of the resolution phase | 0.406 / 0.417 / 0.469 in the canonical run; the worst pair across three runs: **0.4961 / 0.5069 / 0.4690 — straddles the ceiling** | **MARGINAL** (see below; the failing run's JSON is committed) |
+| **G3b Overhead** — diff + delta write ≤ +50% of the resolution phase | 0.406 / 0.417 / 0.469 in the canonical run; the worst pair across three runs: **0.4961 / 0.5069 / 0.4690 — run 2 FAILED the fixed ceiling** | **FAIL** (one run of three; no aggregation policy was predeclared, so the plan's any-FAIL rule applies — see below; the failing run's JSON is committed) |
 | **G3c Absolute** — background time-to-exact ≤ 30 s at miller scale | 4.1–7.6 s under load | **PASS** (4–7× under) |
 | **G4 Serve-window honesty** — gap enumerable at ≤ the diff's own cost | enumeration 1.7–13.8% of the diff (in-band); gap 2.4–9.7% of resolution rows / 5–104 files typical, worst in-band 29.6% / 170 files | **PASS** |
 | **G5 Dominance** — beats the refuted bind's 24,390 ms; foreground does no per-identifier work | **7,271 ms vs 24,390 ms on the exact pair Ph0 measured** (3.4× to exact; ~9,000× to first serve); foreground 2.7 ms, 0 identifier rows | **PASS** |
 
 ### G3b, stated honestly
 
-The overhead ratio sits **at the ceiling, ±4%, run-dependent**: one of three runs failed it. The
-criterion is recorded MARGINAL, not PASS — the gate was not re-scored, and the failing
-measurement is committed (`output/proof-results-run2.json`). Decomposition of the cost: **95.1%
-of diff+write is the instrument re-joining the base set out of a julie artifact in CPython**
-(1,836 ms); the diff algorithm itself compares 753,212 rows in 96.5 ms (7.8 M rows/s); the
-delta write is 167 ms. A store-shaped single-table base read costs 905 ms (byte-equal result,
-asserted), putting the ratio at 0.22–0.31 — published as quarantined supplementary evidence
-that the verdict arithmetic never reads.
+The overhead ratio sits **at the ceiling, ±4%, run-dependent**: run 2's worst pair measured
+0.5069 > 0.50, and no multi-run aggregation policy was predeclared. The plan's rule leaves no
+lead discretion — "any FAIL → the gate is red; do not tune criteria; the lead records NO-GO
+and the contract freeze blocks." **The gate is therefore RED on G3b.** The failing measurement
+is committed (`output/proof-results-run2.json`).
 
-**Why the mechanism verdict is GO despite a marginal G3b:** the ceiling's protective intent —
-the diff producer must not balloon time-to-exact — is decisively met by G3c (4.1–7.6 s against
-a 30 s bound), and the marginal term is dominated by a proxy artifact the real store does not
-have. The ratio is NOT waived: it carries to Ph2 as an acceptance criterion re-proven in the
-real store shape (Rust, own-file resolution output, streaming or SQL-side diff), where the
-supplementary evidence says it lands near 0.3. If Ph2's real implementation fails the 50%
-ceiling, the mechanism goes back on the table.
-**Freeze consequence (cross-model gate, grok finding 5, accepted):** the GO licenses design
-direction — contract §14 may freeze and be implemented against — but Ph2's implementation is
-NOT ACCEPTED until the G3b re-proof passes as a hard gate in the real shape. G3b is a live
-criterion carried forward, not a discharged one; only G1/G2/G4/G5 and G3a/G3c are discharged
-by this proof.
+**Analysis (not part of the verdict):** decomposition shows **95.1% of diff+write is the
+instrument re-joining the base set out of a julie artifact in CPython** (1,836 ms); the diff
+algorithm itself compares 753,212 rows in 96.5 ms (7.8 M rows/s); the delta write is 167 ms. A
+store-shaped single-table base read costs 905 ms (byte-equal result, asserted), putting the
+ratio at 0.22–0.31. The ceiling's protective intent — the diff producer must not balloon
+time-to-exact — is met by G3c (4.1–7.6 s against a 30 s bound). This analysis is why the lead
+expects a store-shaped re-proof to pass; **it does not and cannot convert the FAIL into a
+pass**. An earlier revision used it to record "MARGINAL, verdict GO"; both cycle-3 reviewers
+flagged that as post-measurement softening of a fixed criterion, and it is retracted
+(contract §17, codex C1).
+
+**Paths to discharge (exactly two):**
+
+1. The user explicitly accepts the marginal measurement as satisfying the gate (a gate-rule
+   change only the user can make).
+2. A fresh re-proof under a policy predeclared before it runs: store-shaped base read (the
+   single-table shape the contract actually specifies), the unchanged 0.50 ceiling, and an
+   explicit aggregation rule — all pairs in all runs pass. A failure there puts the mechanism
+   back on the table.
 
 ## Discharge statement
 
-**The Ph0 §9 red gate is DISCHARGED.** The program's "does not proceed past a red gate" rule is
-honored as follows: the refuted mechanism (P1a scoped pass as binder) stays refuted and appears
-nowhere in the contract; its replacement passed a fixed-criteria measured proof on the exact
-pair that refuted the original (G5); the one marginal criterion is recorded as marginal with
-its failing run committed, and re-proves in Ph2 under the real store shape. The v4 contract's
-§14 (resolution state machine) may now freeze, subject to the cycle-3 cross-model re-attack.
+**The Ph0 §9 red gate is NOT YET DISCHARGED.** The refuted mechanism (P1a scoped pass as
+binder) stays refuted and appears nowhere in the contract. Its replacement passed six of seven
+fixed criteria decisively — including dominance on the exact pair that refuted the original
+(G5) — but G3b failed in one run, and the program's "does not proceed past a red gate" rule
+applies to this gate too. The discharge and the v4 contract's freeze are blocked pending the
+G3b decision above (user acceptance or a passing predeclared re-proof). The scope caveat also
+stands: G1/G2 covered `identifier_resolutions` only; `pending_resolutions` — whose
+disappearing rows are the reason §14 keeps tombstones — was never diffed (codex C4), and Ph2's
+equivalence gates extend to it (contract §16.7).
 
 ## The SLO the contract may cite
 
@@ -100,9 +117,13 @@ schedule if desired (julie release approval applies).
 
 ## Conditions carried to Ph2 (named, gating)
 
-1. **Re-prove G3b in the real shape:** diff + delta write ≤ +50% of the resolution phase,
-   measured in the Rust implementation with own-file resolution output — a store equivalence
-   gate, not a nice-to-have.
+1. **G3b is not a carry — it is the open gate.** If the user chooses the re-proof path, it
+   runs under the predeclared policy above BEFORE Ph2 implementation is accepted; if the user
+   accepts the marginal measurement, Ph2 still re-measures the ratio in the Rust
+   implementation with own-file resolution output as a store equivalence gate.
+1b. **`pending_resolutions` equivalence:** Ph2's G1/G2-equivalent gates natural-key, diff,
+   apply, and compare `pending_resolutions` alongside `identifier_resolutions`, including
+   disappearing shared-version rows (codex C4; contract §16.7).
 2. **The extractor dependency is real:** a way to emit resolution output **without writing a
    full artifact** (the `resolve` verb + separate-file output, contract §16.4–16.5). Without
    it the store pays the ~46% of scan wall clock that is artifact child-row/index/FK work it
@@ -132,6 +153,6 @@ schedule if desired (julie release approval applies).
 |---|---|
 | instrument | `spike/index-store-ph1/binding-proof/` — 3 full runs, 22 sequential `julie-extract scan --jobs 4` each; raw JSON (canonical + both earlier runs incl. the G3b-failing one) committed |
 | worktree | index-store-ph1 @ 1eee221c at measurement (lead commit 51bac3e8) |
-| invariants | G1 0-diff both corpora; G2 0 mismatches 9/9 pairs both directions; G3 rate/absolute pass, ratio marginal ±4% at ceiling; G4 enumeration ≤ diff cost; G5 dominance on Ph0's exact refutation pair |
-| result | mechanism GO; §9 discharged with carried conditions 1–5 |
+| invariants | G1 0-diff both corpora (identifier_resolutions); G2 0 mismatches 9/9 pairs (identifier_resolutions); G3 rate/absolute pass, ratio FAILED in run 2 (0.5069 > 0.50); G4 enumeration ≤ diff cost (in-band with the diff); G5 dominance on Ph0's exact refutation pair |
+| result | gate RED on G3b per the plan's any-FAIL rule; §9 discharge BLOCKED pending the user's G3b decision; six of seven criteria passed |
 | timestamp | 2026-08-07T12:30Z (lead-recorded from worker reports) |

@@ -1,10 +1,15 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: DRAFT — freeze blocked on** the cycle-3 cross-model re-attack (codex + grok, §17).
-The binding-mechanism proof is COMPLETE with verdict GO
-([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)
-— the Ph0 §9 red-gate discharge; G3b marginal, re-proven in Ph2 per its carried condition 1).
-Do not implement against a DRAFT contract.
+**Status: DRAFT — freeze BLOCKED on the G3b gate decision** (cycle-3 review record in §17).
+The binding-mechanism proof measurements are final
+([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)):
+G1, G2 (scoped to `identifier_resolutions`), G3a, G3c, G4, and G5 passed; **G3b failed in one
+of three runs (0.5069 against the fixed 0.50 ceiling), and the plan's rule is "any FAIL → the
+gate is red; the contract freeze blocks."** The freeze unblocks only by one of two paths:
+(a) the user explicitly accepts the marginal G3b measurement as satisfying the gate, or
+(b) a fresh re-proof passes under a policy predeclared before it runs (store-shaped base read,
+all pairs in all runs under the unchanged 0.50 ceiling). Do not implement against a DRAFT
+contract.
 
 **Program:** [`2026-08-06-index-store-views-program.md`](2026-08-06-index-store-views-program.md).
 **Gate:** [`../findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md).
@@ -206,14 +211,23 @@ growth guard §10 at once). All parameters live in `store_meta` with dashboard/C
 - **Live** = referenced by any view manifest, any resolution base/delta in use, an in-progress
   rebase, or a pinned reader/generation. Live versions are never collected, never demoted.
 - **Default window: 7 days for non-live versions, demoted to L1 at the first sweep after they
-  become non-live.** Demotion = physically deleting the version's L2/L3 rows (its L1 rows and
-  stamps remain; a branch switched back re-serves L1 instantly and re-extracts L2/L3 in the
-  background — exactly the L1-first import path, §3). Measured basis: full-level retention
+  become non-live.** Demotion = physically deleting the version's L2/L3 rows **and clearing
+  `complete_l2`/`complete_l3` in the same transaction** — only `complete_l1` survives, so a
+  stamp can never claim completeness for deleted rows (§3's dedup trusts stamps alone). L1
+  rows and the L1 stamp remain; a branch switched back re-serves L1 instantly and re-extracts
+  L2/L3 in the background — exactly the L1-first import path, §3. Measured basis: full-level retention
   breaches the 1.2× budget at any window (7d = 1.39×/1.25× on miller/julie-extractors); L1-demoted
   7d = 1.11×/1.07×, leaving 0.09–0.13× for view deltas (growth model §2.3–2.5).
 - **Byte ceiling: prune oldest non-live first when the store exceeds 1.25× the live full-level
   bytes** (the window is a proxy; a large-file churn burst breaks the proxy). Tunable
-  `retention_byte_ceiling`.
+  `retention_byte_ceiling`. **The ceiling is a physical-bytes contract with an escalation
+  path:** after each sweep's staged vacuum, physical file bytes are re-measured; a breach
+  that pruning plus vacuum cannot clear (read-aligned index pages strand — §4 accepts them
+  as unreclaimable-until-rebuild) escalates, after a tunable number of consecutive breached
+  sweeps, to the §12 **compaction promotion**, which rebuilds every index. Stranded-index
+  bytes are a growth-model line item and the compaction's rebuild capacity is part of the
+  §12 preflight — without the escalation the ceiling is unenforceable under adversarial
+  fragmentation.
 - **Per-path version cap: 24 non-live versions per path** (default; tunable `retention_path_cap`).
   Git history is a lower bound on version production — the watcher indexes uncommitted states
   and agent fleets churn hot files; window and ceiling are both blind to one hot file churning
@@ -229,8 +243,12 @@ growth guard §10 at once). All parameters live in `store_meta` with dashboard/C
 Two epochs, split per cycle-2 finding 6:
 
 - **Extraction-identity epoch** — part of version identity (§2). A *compatible* extractor change
-  (same epoch, new binary) re-extracts nothing. An extractor upgrade that changes extraction
-  output bumps the epoch; versions of the old epoch **keep serving** views that reference them
+  (same epoch, new binary) re-extracts nothing. **Same-epoch compatibility is a gated claim,
+  never an assumption:** julie's CI runs the previous and current binaries over the
+  multi-language fixture (after §16.1's canonical serialization lands) and requires
+  byte-equivalent per-version output for an unchanged epoch; ANY difference forces an epoch
+  bump plus an explicit compatible/incompatible classification (§16.8). An extractor upgrade
+  that changes extraction output bumps the epoch; versions of the old epoch **keep serving** views that reference them
   while new-epoch extraction converges per file in the background; a view flips per-file as new
   versions land. Epoch mismatch means "re-extract owed," never "absent" — upgrade-day cold
   outage is rejected (doubt-pass finding 11).
@@ -258,6 +276,14 @@ obtain connections; the raw `IndexDbPath` retires from the read contract. A sess
 2. Resolves `CURRENT`, opens the generation read-only, pins `(store_instance_id, view_id,
    manifest_generation, per-level stamps, resolution generation)` — the **freshness token**. A
    token component changing is the only staleness signal; revision counters are gone.
+   **Pins have a lifecycle, because a pin is a GC root** (§10, §12, §14): each pin is a
+   `coord.db` row `(pin_id, view_id, generation, holder_pid, heartbeat_at, expires_at)` with
+   a bounded lifetime; the holder heartbeats long sessions, and an expired or dead-pid pin
+   drops root status at the next sweep — a reader crash can delay reclamation, never prevent
+   it. Platform note: on Unix, GC may unlink files under a live expired reader (the inode
+   survives its open handles); on Windows, deletion defers until handles close, so the §12
+   addressable set counts a promoted-away generation until its pins are gone AND its files
+   are actually deletable.
 3. Builds the **session visibility temp table once** (0.23 ms at 1,417 versions — read-path §4;
    built per session, never per query — Miller's open-per-query readers change accordingly).
 4. Supplies **view-local ranking state**: BM25 `(doc_count, avgdl)` cached per
@@ -383,6 +409,15 @@ Every promotion preflights; failure = `disk-blocked` with the old generation ser
 promotions are resumable at chunk granularity. The preflight also **verifies creation pragmas**
 (`auto_vacuum=INCREMENTAL`, FTS5 secure-delete) by read-back on every file it creates (§5).
 
+**The `CURRENT` flip is the commit point, and it is reconciled, not assumed** (a filesystem
+rename cannot share a transaction with any database row): the promotion runs as a coordinator
+request (§15) whose intent row in `coord.db` — which lives outside generations and survives
+the flip — records the target generation. Recovery reads `CURRENT`: if it names the new
+generation, the promotion committed-in-fact and the request row is flipped without re-running;
+if it still names the old one, the half-built `gen-<n+1>/` is scaffolding — resumed or reaped
+per the request's state. A generation directory named by neither `CURRENT` nor any pinned
+reader nor a live promotion request is always reapable.
+
 ## 13. `store_log` — the append log
 
 One store-global, monotonically-sequenced log of durable events: version level-completions,
@@ -392,19 +427,29 @@ manifest generation flips, resolution generation flips, GC sweeps, purges, promo
 - the freshness substrate (§8 tokens name the sequences they pinned),
 - the coordinator's committed-effect record for idempotency (§15).
 
-Entries are written in the same transaction as the effect they record. The log is pruned to the
-oldest unconsumed cursor minus a safety window; cursor liveness is a GC root (§10).
+Entries are written in the same transaction as the effect they record — for effects that ARE
+database writes. A filesystem effect (base rename, `CURRENT` flip) cannot share a transaction
+with its log entry; those follow the two-phase publish/reconcile rules where they are defined
+(§14 bases, §12 promotion). The log is pruned to the oldest unconsumed cursor minus a safety
+window; cursor liveness is a GC root (§10).
+
+**Sequence continuity across promotion:** the new generation's `store.db` opens its log at the
+predecessor's last sequence + 1, beginning with a `promotion` entry naming the predecessor
+generation and that last sequence. Sidecar cursors therefore survive a promotion unbroken; a
+cursor pointing before the promotion entry replays from the new generation's content (the
+promotion rebuilt it), which the entry makes detectable rather than silent.
 
 ## 14. Resolution bases and view deltas — state machine
 
-**Producer: the proven serve-base + background-converge mechanism**
+**Producer: the serve-base + background-converge mechanism**
 ([`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)
-— G1/G2/G4/G5 PASS; G3's overhead ratio marginal; the refuted P1a scoped pass appears nowhere
-in this contract). **Freeze consequence of the marginal G3b:** this section may be
-implemented against, but Ph2's implementation is **not accepted** until the G3b re-proof
-(diff + delta write ≤ +50% of the resolution phase, measured in the Rust own-file shape)
-passes as a **hard gate**. A Ph2 G3b failure reopens this section; it is carried as a live
-criterion, not discharged. Storage shape per Ph0 §5: shared
+— G1/G2/G3a/G3c/G4/G5 passed; **the gate is RED on G3b** per the plan's any-FAIL rule, so
+this section is design direction, not a frozen contract; the refuted P1a scoped pass appears
+nowhere in this contract). **Gate consequence:** implementation acceptance is blocked until
+the G3b decision resolves (header): user acceptance of the marginal measurement, or a passing
+re-proof under a predeclared policy (diff + delta write ≤ +50% of the resolution phase in the
+store-shaped pipeline, ceiling unchanged, all pairs in all runs). A failure on that re-proof
+puts the mechanism itself back on the table. Storage shape per Ph0 §5: shared
 base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
 
 **Objects and identity.**
@@ -416,7 +461,13 @@ base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
   atomic rename**, immutable afterwards, deleted whole by GC (physical reclamation is file
   deletion — no vacuum needed). A `bases` row in `store.db` records the key, file, byte size,
   row count (table counts are authoritative — scan-report counters run 3–13 rows high, proof
-  condition 5), and ready state.
+  condition 5), and ready state. **Publication is two-phase, because a rename cannot share a
+  transaction with a row** (§9's no-cross-WAL posture extends to the filesystem): the
+  `building` row is written before the build, the rename lands the file, the `ready` flip
+  follows. Recovery reconciles every torn state from the filesystem, which is authoritative
+  for whether the effect happened: a named base file present with a non-ready row is
+  integrity-checked and confirmed ready, or deleted; a ready row whose file is missing is
+  reset to `building` and the base rebuilt; an unnamed file in `bases/` is deleted.
 - **Delta** = one **cumulative** per-view row set in `store.db` (no chains in v1), keyed
   `(view_id, delta_generation)`, rows version-qualified like everything else. Two row forms:
   - *Replacement:* a full outcome row for a `(version_id, identifier_id)` — used for versions
@@ -432,6 +483,13 @@ base ≈ 11.5% of store bytes, per-view deltas ≈ 1.9% for seven siblings.
   tombstones at all. Reads resolve `COALESCE(delta, base)` under visibility — the read-path
   `NOT EXISTS` cost (+8.6–15.1%) is the measured price, with the materialized per-view
   effective-resolution index as the named fallback if it regresses at scale (read-path §4).
+  **A session consults the delta only when the delta's `exact_at` equals the manifest
+  generation the session pinned** (§8 token). A session pinned at the new generation while
+  the delta is still exact-at an older one serves the base alone (base-consistent + honest,
+  the serve-window bar) — never a mix of base rows and a stale delta's cross-file outcomes,
+  which is a third consistency state the contract does not permit. A session still pinned at
+  the older generation keeps its matching delta; that is why a superseded delta generation
+  lives until its last pinned session closes (deleted at the next CAS publish, below).
 
 **View resolution states.**
 
@@ -473,10 +531,20 @@ mutation that may carry `exact_at` forward.
 
 **Serve-window honesty (contract posture, supersedes "binds in seconds"):** during
 convergence a view serves the base's resolution for shared versions; identifiers of
-non-base versions have no resolution rows yet. `trace`/`impact` and `workspace status` report
-`resolution: converging` with the enumerated gap — **rows and files, never "N files changed"**
-(the delta spills past changed files by the nature of the resolution graph; measured worst
-in-band 29.6% of rows / 170 files). Enumeration cost is bounded by the diff itself (G4).
+non-base versions have no resolution rows yet. The gap report has **two honest states,
+because exact row enumeration requires the diff and the diff completes near the end of
+convergence** (G4 measured enumeration in-band with the diff, not at bind time):
+
+1. *Converging (pre-diff):* a manifest-computable **lower bound** — the versions and files
+   the base does not cover, stated as a lower bound ("at least N files' identifiers, plus
+   cross-file effects").
+2. *Converged enumeration (with the diff):* the exact gap — **rows and files, never "N files
+   changed"** (the delta spills past changed files by the nature of the resolution graph;
+   measured worst in-band 29.6% of rows / 170 files). Enumeration cost is bounded by the
+   diff itself (G4).
+
+`trace`/`impact` and `workspace status` report `resolution: converging` with whichever state
+is available and label it.
 **SLO:** foreground milliseconds; time-to-exact = corpus resolution at the bulk rate + diff
 (measured 4.1–7.6 s at ~1,400 files under load; ≈ 232 s projected at dotnet/runtime — flagged
 inference, Ph5 measures). Exact-equivalence for resolution-derived reads applies at
@@ -517,25 +585,32 @@ acceptable for freshness nudges, not for import/repoint/GC).
   - *Claim* is a CAS on `(state='queued')` with owner + heartbeat; a successor coordinator
     **re-claims** requests whose owner heartbeat is stale — it never deletes them.
   - *Committed* is an **ordered two-phase record — no cross-WAL atomicity is assumed** (§9's
-    posture applies to `coord.db` too): phase 1 commits the effect together with its
-    `store_log` entry **carrying the `request_id`** inside `store.db`; phase 2 CASes the
-    queue row to `committed`, recording the log sequence. The `store_log` entry is the
-    idempotency anchor for every torn pair: a claimed request whose `request_id` already
-    appears in `store_log` is committed-in-fact — the successor flips the row without
-    re-executing; one absent from `store_log` re-executes, which is safe because every verb
-    is idempotent at the store layer (version identity is input-keyed; manifest flips are
-    generation-CAS; GC stages are re-runnable). The `idempotency_key` dedups requester
-    retries.
+    posture applies to `coord.db` too): phase 1 commits the request's **final effect together
+    with a unique TERMINAL `store_log` entry carrying the `request_id`** inside `store.db`;
+    phase 2 CASes the queue row to `committed`, recording the log sequence. **A chunked
+    request (§5) commits many transactions before that one:** each chunk's transaction
+    carries a `(request_id, chunk_index)` progress record, and **only the final chunk's
+    transaction writes the terminal entry** — a progress record is never an idempotency
+    anchor. The terminal entry alone means committed-in-fact: a successor finding it flips
+    the queue row without re-executing; a successor finding only progress records resumes
+    from the highest chunk (chunks are idempotent at the store layer: version identity is
+    input-keyed; manifest flips are generation-CAS; GC stages are re-runnable). A partial
+    chunk sequence can therefore never be mistaken for a committed request. The
+    `idempotency_key` dedups requester retries.
   - *Result delivery:* requester polls its request row; `requester_deadline` lets the
     coordinator drop acknowledgment obligations for dead requesters (the row is kept for the
     log-pruning window).
 - **Scheduling:** long operations (imports, rebases, migrations, GC) run **chunked** (§5's chunk
   = the scheduling quantum); between chunks the coordinator services queued single-file and
   repoint requests. Fairness: two classes — interactive (update/delete/repoint/open) and batch
-  (import/GC/rebase/migration) — with interactive always draining first between batch chunks;
-  starvation is bounded by the chunk quantum (measured worst chunk commit ~seconds at default
-  size). Head-of-line blocking of sibling views by one import is thereby structural, not
-  best-effort.
+  (import/GC/rebase/migration) — with a **bounded interactive burst** between batch chunks:
+  the coordinator drains interactive requests up to a burst cap (count or wall-clock,
+  tunable), then runs the next batch chunk unconditionally. Both classes get a stated
+  maximum wait: interactive ≤ one chunk commit + its queue position within the burst
+  (measured worst chunk commit ~seconds at default size); batch ≥ one chunk per burst
+  window — a sustained interactive stream slows batch to the burst cadence but can never
+  starve it. Head-of-line blocking of sibling views by one import is thereby structural and
+  bounded, not best-effort.
 - **Lock order (global, mandatory):** machine governor → store-writer lease →
   sidecar-converger lease. Locks are acquired in order and released in reverse; no process
   waits on an earlier lock while holding a later one. **Deadlock analysis:** all `store.db`
@@ -606,14 +681,63 @@ does not exist).
    the P1a oracle caveat), crash-point matrix, mixed-version/floor matrix, and **synthetic
    path-deletion and multi-delete fixtures** (binding-proof carried condition 4 — real history
    offered n=1 deletion merges) — all on a multi-language fixture (language-parity rule).
+   **The determinism/exactness gates cover the FULL resolution layer:** the binding proof
+   diffed `identifier_resolutions` only, while `pending_resolutions` — a partial relation
+   whose rows genuinely disappear (purity audit E-3), the very reason §14 keeps tombstones —
+   was never diffed. Ph2's G1/G2-equivalent gates natural-key, diff, apply, and compare both
+   tables, including disappearing shared-version rows.
+8. **Extractor compatibility gate** (§7): previous vs current binary over the multi-language
+   fixture, byte-equivalent per-version output required for an unchanged extraction-identity
+   epoch (runs after item 1's canonicalization; two separate processes, same vacuity guard);
+   any difference forces an epoch bump plus a compatible/incompatible classification.
 
-## 17. Review record
+## 17. Review record — cycle-3 cross-model freeze gate (2026-08-07)
 
-**[PENDING Task 5 — codex cycle-3 re-attack + grok review, with per-finding dispositions. The
-held-open doubt items this review must close: cycle-1 #2 (bootstrap cost — closes via §14's
-proof), #9 (GC physical reclamation — closed by §10/write-mechanics), #11 (fingerprint
-compatibility — closed by §7); cycle-2 #2 (state machine — §14 on GO), #4 (durable queue —
-§15), #7 (commit granularity — §5).]**
+Two independent adversarial reviewers ran the same freeze-gate mandate (read-only, schema
+output, full repo access) against this contract, the binding-proof findings doc, and the
+committed evidence. Every accepted finding below was verified against the contract text or
+the instrument before folding; grok folds landed as commit 4abfb1db, codex folds in the
+commit that carries this record.
+
+### grok (grok-4.5) — verdict as returned: needs-attention, 10 findings
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| 1 | critical | §14 had no post-write re-entry: `exact=true` survived store update/delete/import | ACCEPTED — folded: `exact_at` is a relation to the manifest generation, never a flag; every content-changing mutation re-enters converge |
+| 2 | critical | §15 claimed same-transaction committed↔store_log across `coord.db`/`store.db`, which §9 forbids | ACCEPTED — folded: ordered two-phase record; `store_log` terminal entry is the idempotency anchor |
+| 3 | high | Mid-converge scratch reuse was cross-file-unsafe | ACCEPTED — folded: manifest movement invalidates the scratch output entirely |
+| 4 | high | §3's L2 53.8% byte share still counted `identifier_resolutions`, which v4 moves out of levels | ACCEPTED — folded: §3 restated for the v4 shape; historical figures labeled |
+| 5 | high | G3b MARGINAL/GO softens a fixed binary criterion after measurement | ACCEPTED — superseded by codex C1's stronger form: the verdict itself was corrected to gate-RED (below) |
+| 6 | high | §17 falsely closed cycle-2 #2 and #4 | ACCEPTED — this record replaces the placeholder; cycle-2 #2/#4 close only via the folds listed here |
+| 7 | medium | Superseded delta generations had no reclamation rule | ACCEPTED — folded: the CAS publish transaction deletes the superseded delta generation |
+| 8 | medium | Carried condition 4 (synthetic deletion fixtures) never landed in the contract | ACCEPTED — folded: §16.7 |
+| 9 | medium | §1 layout omitted `bases/`; generation inventory incomplete | ACCEPTED — folded: §1 `bases/` + `scratch/`, §12 formula, §10 purge |
+| 10 | low | Gate §3 "66.9% reference layer" vs contract L2 53.8% easy to misread | ACCEPTED — resolved by the §3 restatement |
+
+### codex (cycle-3 re-attack, xhigh) — verdict as returned: needs-attention, freeze REFUTED, 11 findings
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| C1 | critical | The fixed G3b red gate was being waived, not discharged | ACCEPTED — the plan's own rule ("any FAIL → the gate is red… NO-GO and the contract freeze blocks") governs: one of three runs measured 0.5069 > 0.50 with no predeclared aggregation policy. The findings doc's GO verdict is RETRACTED; the gate is recorded RED on G3b; this contract stays DRAFT until the user accepts the marginal measurement or a predeclared re-proof passes (header). Where grok proposed freeze-with-hard-carry and codex proposed no-freeze, the plan's fixed rule decides for codex |
+| C2 | critical | A partial chunk could be mistaken for a fully committed request | ACCEPTED — folded (§15): per-chunk progress records; a unique TERMINAL `store_log` entry written only with the final chunk's transaction is the sole committed-in-fact signal |
+| C3 | high | Manifest mutation re-entered convergence without retiring the stale delta from reads | ACCEPTED — folded (§14): a session consults the delta only when its `exact_at` equals the session's pinned manifest generation; otherwise base-only + honesty |
+| C4 | high | G2 exactness never covered `pending_resolutions` (the instrument diffed `identifier_resolutions` only) | ACCEPTED — verified in `bind.py` (`SCHEMA_EVIDENCE_TABLES` has no `pending_resolutions`); findings doc G1/G2 claims re-scoped; Ph2 gates extended (§16.7) |
+| C5 | high | The enumerated serve-window gap is unavailable until the diff runs, near the end of convergence | ACCEPTED — folded (§14): two-state gap honesty — manifest-computable lower bound pre-diff, exact rows/files post-diff; G4 is not cited as foreground enumeration |
+| C6 | high | L1 demotion left `complete_l2`/`complete_l3` stamps on deleted rows | ACCEPTED — folded (§6): demotion clears both stamps in the deleting transaction |
+| C7 | high | The byte ceiling had no enforceable reclamation path for read-aligned index fragmentation | ACCEPTED — folded (§6): post-vacuum physical re-measure; persistent breach escalates to the §12 compaction promotion; stranded bytes + rebuild capacity in the growth/preflight model |
+| C8 | high | `store_log` cannot atomically record filesystem promotions or base renames | ACCEPTED — folded (§14 two-phase base publication with per-crash-point reconciliation; §12 `CURRENT` as reconciled commit point anchored in `coord.db`; §13 log-sequence continuity across promotion) |
+| C9 | high | Same-epoch extractor compatibility was asserted, not gated | ACCEPTED — folded (§7 gated-claim language; §16.8 previous-vs-current binary CI gate) |
+| C10 | medium | Pinned readers were GC roots without a pin lifecycle | ACCEPTED — folded (§8): pin rows with heartbeat/expiry, dead-pid reclamation, Unix/Windows deletion semantics |
+| C11 | medium | Interactive-first draining did not bound batch starvation | ACCEPTED — folded (§15): bounded interactive burst; stated maximum wait for both classes |
+
+### Held-open doubt items
+
+Cycle-1 #2 (bootstrap cost) closes for new views of an indexed family via the §14 measured
+bind; #9 (GC physical reclamation) closes via §10 + the C7 escalation fold; #11 (fingerprint
+compatibility) closes via §7 + the C9 gate fold. Cycle-2 #2 (state machine) and #4 (durable
+queue) close via the grok-1/2 + C2/C3 folds; #7 (commit granularity) closes via §5 + the C2
+terminal-record fold. **The freeze itself remains blocked on C1's G3b decision — that is the
+one open item, and it is the user's.**
 
 ---
 
@@ -623,7 +747,7 @@ compatibility — closed by §7); cycle-2 #2 (state machine — §14 on GO), #4 
 |---|---|
 | 1. metadata_json determinism | §2 (requirement + CI gate), §16.1 |
 | 2. Trigram `rank` → `collapsed_len` (+ content.db gap) | §9 (ships early, own gate, content audit included) |
-| 3. Binding mechanism NO-GO | §14 (replacement proven GO — findings doc; G3b re-proof carried to Ph2) |
+| 3. Binding mechanism NO-GO | §14 (replacement mechanism measured; gate RED on G3b — freeze blocked pending the header's decision, §17) |
 | 4. Retention as the central contract | §6 (defaults + tunables + latency coupling) |
 | 5. Durability contract | §5 (per-chunk + marker + FULL) |
 | 6. Index-direction reconciliation | §4 (`gc-aligned` / `read-aligned` classification per index) |

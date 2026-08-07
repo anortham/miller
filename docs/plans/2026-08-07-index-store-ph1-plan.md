@@ -374,9 +374,12 @@ Status to FROZEN only if the binding proof is GO and no accepted finding remains
 otherwise record precisely what blocks.
 
 **Acceptance criteria:**
-- [ ] Codex cycle-3 + grok reviews run and recorded with per-finding dispositions.
-- [ ] Held-open doubt-pass items explicitly closed or carried with reasons.
-- [ ] Freeze status flipped (or block recorded) per the rule above.
+- [x] Codex cycle-3 + grok reviews run and recorded with per-finding dispositions (contract
+  §17 — 10 grok + 11 codex findings, all verified against evidence, all folded).
+- [x] Held-open doubt-pass items explicitly closed or carried with reasons (§17 tail).
+- [x] Freeze status flipped (or block recorded) per the rule above — BLOCK recorded: gate RED
+  on G3b per this plan's own any-FAIL rule (codex C1); contract stays DRAFT pending the
+  user's G3b decision.
 
 ## Task 6: Reconciliation, branch gate, pre-merge review, wrap (lead)
 

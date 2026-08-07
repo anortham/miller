@@ -109,11 +109,14 @@ redesigned binding mechanism WITH ITS OWN PROOF GATE; the candidate is serve-the
 resolution immediately + background convergence to the exact per-view delta, which relaxes
 exact resolution equivalence during the serve window. See
 [`docs/findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md) §9.
-**Ph1 RESOLUTION (2026-08-07): that proof gate ran and the candidate mechanism is GO** —
-foreground bind 2.7 ms with zero identifier work; background time-to-exact 4.1–7.6 s at
-miller scale, beating the refuted bind 3.4× on the exact pair that refuted it; base + delta
-exactness 0 mismatches on 9/9 real sibling pairs. One criterion (diff+write overhead ratio)
-recorded marginal and re-proven in Ph2 under the real store shape. See
+**Ph1 RESOLUTION (2026-08-07): the proof gate ran; six of seven criteria passed, and the
+gate is RED on G3b** — foreground bind 2.7 ms with zero identifier work; background
+time-to-exact 4.1–7.6 s at miller scale, beating the refuted bind 3.4× on the exact pair that
+refuted it; base + delta exactness 0 mismatches on 9/9 real sibling pairs
+(`identifier_resolutions`-scoped). The diff+write overhead ratio FAILED in one of three runs
+(0.5069 vs the fixed 0.50 ceiling), and the plan's any-FAIL rule makes the gate red: the §9
+discharge and the contract freeze are BLOCKED pending the user's G3b decision (accept the
+marginal measurement, or a predeclared store-shaped re-proof). See
 [`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md);
 contract state machine in the v4 contract §14.
 
@@ -259,8 +262,8 @@ Event costs under the model:
 
 | Event | Cost |
 |---|---|
-| New worktree | hash tree; near-total dedup; extract divergence only; serve sibling base at once (ms), converge exact resolution in background (proven mechanism — binding proof findings; 4.1–7.6 s at miller scale) |
-| File save | append one version + one manifest row; resolution convergence cost is scale-bound, not delta-bound (the proven mechanism's fresh pass; the shipped `update --file` path pays 87.3% median today — Task 2 audit) |
+| New worktree | hash tree; near-total dedup; extract divergence only; serve sibling base at once (ms), converge exact resolution in background (measured mechanism — binding proof findings, gate red on G3b; 4.1–7.6 s at miller scale) |
+| File save | append one version + one manifest row; resolution convergence cost is scale-bound, not delta-bound (the measured mechanism's fresh pass; the shipped `update --file` path pays 87.3% median today — Task 2 audit) |
 | Branch switch | manifest repoint for changed paths; retained versions cost zero extraction |
 | Extractor upgrade | serve-while-converging per file; no fleet rescan storm, no outage |
 
@@ -445,7 +448,7 @@ pointer file (store + view id), logs, scan progress, spool, and `history.db` met
 - [ ] New worktree of an indexed family serves in seconds-to-low-tens-of-seconds — ≥10× faster
       than the shipped rebind copy path on the same fixture. **Serving** may ride the sibling
       base immediately; **exact resolution convergence** completes in background under the
-      Ph1-proven binding mechanism (gate §9 — the base+delta scoped pass is refuted as the
+      Ph1-measured binding mechanism (gate §9 — the base+delta scoped pass is refuted as the
       producer; the SLO for time-to-exact is set by that proof, not assumed here).
 - [ ] Branch switch is a manifest repoint; retained versions cost zero extraction.
 - [ ] Per-view query results row-equivalent to a fresh dedicated index of the same checkout
@@ -521,15 +524,16 @@ Decisive proofs before any contract work; the program does not proceed past a re
   waiving it; the user sees this posture at the Ph0→Ph1 boundary (merge review) and can direct
   otherwise.
 - Acceptance:
-  - [x] Binding-mechanism proof passed and recorded (the §9 red gate DISCHARGED — GO, G3b
-    marginal carried to Ph2:
+  - [ ] Binding-mechanism proof passed and recorded (six of seven criteria passed; gate RED
+    on G3b per the plan's any-FAIL rule — discharge blocked on the user's G3b decision:
     [`docs/findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)).
-  - [ ] Contract doc in `docs/plans/` with cross-model review recorded.
+  - [x] Contract doc in `docs/plans/` with cross-model review recorded (v4 contract §17 —
+    grok + codex cycle-3; all 21 findings folded; freeze itself blocked on the box above).
 
 ### Ph2 — julie-extractors implementation. ~3–4 sessions + release approval.
 
 - Store schema + `store import/update/delete/gc/export` + `--from-artifact` migration transform +
-  resolution bases/deltas built by the **Ph1-proven binding mechanism** (not the refuted P1a
+  resolution bases/deltas built by the **Ph1-measured binding mechanism** (not the refuted P1a
   scoped pass, gate §9) + level-gated extraction (L1-first import, background L2/L3 deepening
   per version). Also lands here: the metadata_json BTreeMap fix + byte-stability gate, the
   symbol-name scope-widening fix, and bulk-path eligibility for populated artifacts (gate §1,
