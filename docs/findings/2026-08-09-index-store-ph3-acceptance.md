@@ -56,8 +56,6 @@ Final branch evidence:
 
 ## Release dependency
 
-The published 2.31.0 producer does not contain the canonical imported-resolution-base identity fix required
-by migration reuse. The verified producer fix is currently commit `9794fd0` on
-`codex/from-artifact-base-id`. Julie must publish that fix as a new release, then Miller must pin the released
-version and downloaded archive digest before Miller itself can be released. Shipping Miller against the
-currently published 2.31.0 archive would make the migration/reuse claim false.
+Resolved by the stable `julie-extract` 2.31.1 release. Miller pins the four published archive digests and the
+restored binary reports 2.31.1. The producer release contains the canonical imported-resolution-base identity
+fix required by migration reuse, so the migration/restart acceptance claim now matches the shipped binary.

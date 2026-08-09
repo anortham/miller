@@ -18,8 +18,11 @@ public sealed class SemanticSidecarLayoutTests
             "0.1.0",
             pins.RootElement.GetProperty("sidecar").GetProperty("version").GetString());
 
+        using JsonDocument juliePins = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, "scripts", "julie-pins.json")));
+        string julieVersion = juliePins.RootElement.GetProperty("version").GetString()!;
         string notices = File.ReadAllText(Path.Combine(root, "THIRD-PARTY-NOTICES.md"));
-        Assert.Contains("currently pinned at version **2.20.0**", notices, StringComparison.Ordinal);
+        Assert.Contains($"currently pinned at version **{julieVersion}**", notices, StringComparison.Ordinal);
         Assert.Contains("pinned at version **0.1.0**", notices, StringComparison.Ordinal);
         Assert.Contains(".tools/julie-semantic-sidecar-runtime", notices, StringComparison.Ordinal);
         Assert.Contains("THIRD_PARTY-LICENSES.html", notices, StringComparison.Ordinal);

@@ -28,13 +28,13 @@ public sealed class JulieSchemaGateTests
     private static string S(long v) => v.ToString(CultureInfo.InvariantCulture);
 
     [Fact]
-    public void Contract_IsSchemaSixExtractFourAndJulie2310()
+    public void Contract_IsSchemaSixExtractFourAndJulie2311()
     {
         Assert.Equal(6, MillerExtractContract.ExpectedSchemaVersion);
         Assert.Equal(6, MillerExtractContract.ExpectedSqliteSchemaVersion);
         Assert.Equal(4, MillerExtractContract.ExpectedExtractContractVersion);
         Assert.Equal(4, MillerExtractContract.ExpectedJsonlSchemaVersion);
-        Assert.Equal("2.31.0", MillerExtractContract.PinnedJulieExtractVersion);
+        Assert.Equal("2.31.1", MillerExtractContract.PinnedJulieExtractVersion);
     }
 
     private static SqliteConnection OpenReadOnly(string dbPath)

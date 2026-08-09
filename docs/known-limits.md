@@ -42,7 +42,7 @@
   `@using`/`@namespace` directives, or a bounded nearest-single-`.csproj` root/folder heuristic.
   Aliased, static, generic, conditional, imported, property-expanded, conflicting, ambiguous, unsafe,
   oversized, or malformed inputs fail closed. `.cshtml` and `_ViewImports.cshtml` component resolution
-  remains deferred because the pinned julie-extract 2.20.0 emits directives but no component-reference
+  remains deferred because the pinned julie-extract 2.31.1 emits directives but no component-reference
   facts for that surface. See
   [the namespace-resolution evidence](findings/2026-07-14-blazor-namespace-resolution.md).
 - The main `miller` release binary publishes with Native AOT (no .NET SDK required to run it). The
