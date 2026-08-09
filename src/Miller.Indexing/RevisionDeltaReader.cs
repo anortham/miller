@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Reads;
 
@@ -110,6 +111,8 @@ public static class RevisionDeltaReader
         long fromRevision,
         string? fromArtifactId)
     {
+        if (TableExists(conn, "store_meta") && TempTableExists(conn, "_miller_session"))
+            return ReadStore(conn, fromRevision, fromArtifactId);
         if (!TableExists(conn, "extraction_revisions") || !TableExists(conn, "revision_file_changes"))
             return Unavailable(fromRevision, toRevision: 0, artifactId: null, "no_journal");
         long current = ScalarLong(conn, "SELECT MAX(revision_id) FROM extraction_revisions;");
@@ -137,6 +140,130 @@ public static class RevisionDeltaReader
             paths,
             "complete",
             deletedPaths);
+    }
+
+    private static RevisionDeltaResult ReadStore(
+        SqliteConnection connection,
+        long fromRevision,
+        string? fromArtifactId)
+    {
+        long current = ScalarLong(connection, "SELECT COALESCE(MAX(sequence),0) FROM store_log;");
+        string? artifactId = StoreMetadata(connection, "family_id");
+        if (fromRevision < 0)
+            return Unavailable(fromRevision, current, artifactId, "invalid_from_revision");
+        if (string.IsNullOrWhiteSpace(artifactId))
+            return Unavailable(fromRevision, current, artifactId, "no_artifact_id");
+        if (string.IsNullOrWhiteSpace(fromArtifactId))
+            return Unavailable(fromRevision, current, artifactId, "missing_from_artifact_id");
+        if (!string.Equals(fromArtifactId, artifactId, StringComparison.Ordinal))
+            return Unavailable(fromRevision, current, artifactId, "artifact_changed");
+        if (fromRevision > current)
+            return Unavailable(fromRevision, current, artifactId, "from_after_current");
+
+        using SqliteCommand session = connection.CreateCommand();
+        session.CommandText = "SELECT view_id,generation FROM temp._miller_session;";
+        using SqliteDataReader sessionReader = session.ExecuteReader();
+        if (!sessionReader.Read())
+            return Unavailable(fromRevision, current, artifactId, "no_store_snapshot");
+        string viewId = sessionReader.GetString(0);
+        long currentGeneration = sessionReader.GetInt64(1);
+        sessionReader.Close();
+
+        using SqliteCommand baseline = connection.CreateCommand();
+        baseline.CommandText = """
+            SELECT generation
+            FROM store_log
+            WHERE view_id=$view
+              AND event_kind='manifest_flipped'
+              AND sequence <= $sequence
+            ORDER BY sequence DESC
+            LIMIT 1;
+            """;
+        baseline.Parameters.AddWithValue("$view", viewId);
+        baseline.Parameters.AddWithValue("$sequence", fromRevision);
+        object? baselineValue = baseline.ExecuteScalar();
+        long? baselineGeneration = baselineValue is null or DBNull
+            ? null
+            : Convert.ToInt64(baselineValue, CultureInfo.InvariantCulture);
+
+        using SqliteCommand changed = connection.CreateCommand();
+        changed.CommandText = """
+            SELECT current.path
+            FROM manifest_entries AS current
+            LEFT JOIN manifest_entries AS prior
+              ON prior.view_id=current.view_id
+             AND prior.generation=$baseline_generation
+             AND prior.path=current.path
+            WHERE current.view_id=$view
+              AND current.generation=$current_generation
+              AND ($baseline_generation IS NULL
+                   OR prior.path IS NULL
+                   OR prior.language<>current.language
+                   OR prior.status<>current.status
+                   OR prior.version_id IS NOT current.version_id
+                   OR prior.observed_content_hash IS NOT current.observed_content_hash
+                   OR prior.error_class IS NOT current.error_class
+                   OR prior.error_json IS NOT current.error_json)
+            ORDER BY current.path;
+            """;
+        changed.Parameters.AddWithValue("$view", viewId);
+        changed.Parameters.AddWithValue("$current_generation", currentGeneration);
+        changed.Parameters.AddWithValue("$baseline_generation", (object?)baselineGeneration ?? DBNull.Value);
+        var paths = new List<string>();
+        using (SqliteDataReader reader = changed.ExecuteReader())
+        {
+            while (reader.Read())
+                paths.Add(reader.GetString(0));
+        }
+
+        var deletedPaths = new List<string>();
+        if (baselineGeneration is { } priorGeneration)
+        {
+            using SqliteCommand deleted = connection.CreateCommand();
+            deleted.CommandText = """
+                SELECT prior.path
+                FROM manifest_entries AS prior
+                LEFT JOIN manifest_entries AS current
+                  ON current.view_id=prior.view_id
+                 AND current.generation=$current_generation
+                 AND current.path=prior.path
+                WHERE prior.view_id=$view
+                  AND prior.generation=$baseline_generation
+                  AND current.path IS NULL
+                ORDER BY prior.path;
+                """;
+            deleted.Parameters.AddWithValue("$view", viewId);
+            deleted.Parameters.AddWithValue("$current_generation", currentGeneration);
+            deleted.Parameters.AddWithValue("$baseline_generation", priorGeneration);
+            using SqliteDataReader reader = deleted.ExecuteReader();
+            while (reader.Read())
+                deletedPaths.Add(reader.GetString(0));
+        }
+
+        return new RevisionDeltaResult(
+            RevisionDeltaStatus.Complete,
+            fromRevision,
+            current,
+            artifactId,
+            paths,
+            "complete",
+            deletedPaths);
+    }
+
+    private static string? StoreMetadata(SqliteConnection connection, string key)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM store_meta WHERE key=$key;";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteScalar() as string;
+    }
+
+    private static bool TempTableExists(SqliteConnection connection, string tableName)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_temp_master WHERE name=$name LIMIT 1;";
+        command.Parameters.AddWithValue("$name", tableName);
+        return command.ExecuteScalar() is not null;
     }
 
     private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string? artifactId, string reason) =>

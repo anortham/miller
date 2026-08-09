@@ -216,10 +216,8 @@ public sealed class StoreFamilyResolver
     private StoreCatalog? ReadCatalog(string storeRoot)
     {
         string currentPath = Path.Combine(storeRoot, "CURRENT");
-        if (!Directory.Exists(storeRoot) && !File.Exists(currentPath))
-            return null;
         if (!File.Exists(currentPath))
-            throw new StoreBindingMismatchException("The family store is missing its CURRENT pointer.");
+            return null;
         string generationName = File.ReadAllText(currentPath).Trim();
         if (string.IsNullOrWhiteSpace(generationName) ||
             generationName.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 ||

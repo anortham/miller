@@ -4,9 +4,11 @@ using Miller.Indexing.Store;
 
 namespace Miller.Server.Workspaces;
 
+public sealed record StoreRollbackExportResult(bool Exported, string? Warning);
+
 public static class StoreRollbackExporter
 {
-    public static bool ExportIfRequired(
+    public static StoreRollbackExportResult ExportIfRequired(
         string workspaceRoot,
         string legacyDatabasePath,
         IJulieStoreClient client)
@@ -15,9 +17,37 @@ public static class StoreRollbackExporter
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentNullException.ThrowIfNull(client);
 
+        try
+        {
+            return Export(workspaceRoot, legacyDatabasePath, client);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or StoreWorkspaceOperationException
+                or JulieStoreProcessException or InvalidOperationException)
+        {
+            string warning =
+                $"The family-store rollback export could not be used ({ex.Message}). " +
+                "Miller removed the stale store binding and will reconcile the legacy artifact from source.";
+            try
+            {
+                StoreWorkspacePointer.Delete(workspaceRoot);
+            }
+            catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException)
+            {
+                warning += $" The stale pointer could not be removed: {deleteError.Message}";
+            }
+            return new StoreRollbackExportResult(false, warning);
+        }
+    }
+
+    private static StoreRollbackExportResult Export(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        IJulieStoreClient client)
+    {
         StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
         if (pointer is null)
-            return false;
+            return new StoreRollbackExportResult(false, null);
 
         var binding = new StoreFamilyBinding(
             pointer.FamilyId,
@@ -58,7 +88,8 @@ public static class StoreRollbackExporter
                     $"julie-extract store export reported '{exportedPath}' instead of '{outputPath}'.");
             }
             FullRebuildPromotion.Promote(legacyDatabasePath);
-            return true;
+            StoreWorkspacePointer.Delete(workspaceRoot);
+            return new StoreRollbackExportResult(true, null);
         }
         catch
         {

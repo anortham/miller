@@ -37,6 +37,12 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("src/a.cs", request.FilePath.Replace('\\', '/'));
         Assert.Equal(StoreLevel.Full, request.Level);
         Assert.Equal(ExtractJobsPolicy.FromEnvironment(), request.Scan.Jobs);
+        Assert.Equal(
+            Path.Combine(Binding.WorkspaceRoot, ".miller", "spool"),
+            request.Scan.SpoolDirectory);
+        Assert.Equal(
+            Path.Combine(Binding.WorkspaceRoot, ".miller", "scan.progress"),
+            request.Scan.ProgressFile);
         Assert.Equal("request-a", request.Request.RequestId);
         Assert.Equal("request-a", request.Request.IdempotencyKey);
         Assert.Equal(42, report.Revision);
@@ -126,6 +132,37 @@ public sealed class StoreWorkspaceCoordinatorTests
             coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
 
         Assert.Equal("view_root_mismatch", error.FailureClass.Code);
+    }
+
+    [Fact]
+    public void DurableRequestJournalReusesAnInterruptedRequestAndClearsAfterTerminalObservation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-request-journal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            int minted = 0;
+            var first = new StoreRequestJournal(root);
+            string request = first.GetOrCreate("update|family|view|src/a.cs|Full", () => $"request-{++minted}");
+
+            var restarted = new StoreRequestJournal(root);
+            string resumed = restarted.GetOrCreate(
+                "update|family|view|src/a.cs|Full",
+                () => $"request-{++minted}");
+
+            Assert.Equal(request, resumed);
+            Assert.Equal(1, minted);
+            restarted.Complete(resumed);
+
+            var next = new StoreRequestJournal(root);
+            Assert.Equal(
+                "request-2",
+                next.GetOrCreate("update|family|view|src/a.cs|Full", () => $"request-{++minted}"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private sealed class RecordingStoreClient(

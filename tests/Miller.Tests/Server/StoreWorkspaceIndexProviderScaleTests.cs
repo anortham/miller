@@ -62,6 +62,15 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     first.Workspace,
                     first.Workspace.CanonicalRoot!,
                     static () => IndexLevelPolicy.Full).Update(Path.Combine(root, "BootstrapCalculator.cs"));
+                StoreFamilyBinding updatedBinding = StoreWorkspaceCoordinator.ResolveBinding(
+                    first.Workspace,
+                    first.Workspace.CanonicalRoot!);
+                using (FamilyStoreReadSession updated = FamilyStoreReadSession.Open(updatedBinding))
+                {
+                    Assert.Contains(
+                        RepositoryIndexLoader.LoadSession(updated).Search("Multiply", 10),
+                        symbol => symbol.Document.Name == "Multiply");
+                }
                 var freshness = new FreshnessService(
                     first,
                     NullLogger<FreshnessService>.Instance,
@@ -145,6 +154,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     legacy.Index.Search("Add", 10),
                     symbol => symbol.Document.Name == "Add");
             }
+            Assert.Null(StoreWorkspacePointer.Read(root));
         }
         finally
         {
@@ -234,6 +244,54 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 storeContent.Search("Calculator", TextContentKind.WorkspaceSource, 20));
 
             StoreWorkspacePointer.Write(root, binding);
+            Assert.NotNull(new IndexedSourceTextReader().FindLiteralForWorkspace(
+                artifact,
+                root,
+                "Calculator.cs",
+                "Calculator",
+                storeEnabled: true));
+            IndexedEditCandidateResult editCandidates = new IndexedEditCandidateReader().FindCandidatesForWorkspace(
+                artifact,
+                root,
+                "Calculator.cs",
+                family.Snapshot.Freshness.StoreLogSequence!.Value,
+                oldText: null,
+                query: "Calculator",
+                anchor: null,
+                line: null,
+                storeEnabled: true);
+            Assert.Equal(IndexedEditCandidateState.Current, editCandidates.State);
+            string importedPath = Path.Combine(directory, "review.log");
+            File.WriteAllText(importedPath, "StoreContentNeedle is visible through the public content tool.");
+            var toolWorkspace = new WorkspaceContext(
+                root,
+                artifact,
+                Path.Combine(directory, "telemetry.db"),
+                Path.Combine(directory, "workspaces.db"),
+                directory,
+                "workspace-a",
+                PathCanonicalizer.CanonicalizeRoot(root),
+                artifact);
+            var contentTool = new ContentTool(
+                toolWorkspace,
+                new ContentCorpusExternalStore(),
+                storeEnabled: static () => true);
+
+            string imported = contentTool.Content(
+                operation: "import",
+                path: importedPath,
+                display_path: "review.log",
+                format: "json");
+            string found = contentTool.Content(
+                operation: "search",
+                query: "StoreContentNeedle",
+                content_kind: TextContentKind.ExternalFile,
+                format: "json");
+
+            Assert.Contains("review.log", imported, StringComparison.Ordinal);
+            Assert.Contains("StoreContentNeedle", found, StringComparison.Ordinal);
+
+            StoreWorkspacePointer.Write(root, binding);
             string extension = SqliteVecTestSupport.RequireExtension();
             string? priorExtension = Environment.GetEnvironmentVariable(VectorStore.ExtensionPathEnvVar);
             Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
@@ -254,6 +312,17 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 VectorConvergeSnapshot snapshot = port.Snapshot(0);
                 Assert.True(snapshot.FullPass);
                 Assert.Equal(family.Snapshot.Freshness.StoreLogSequence, snapshot.TargetRevision);
+                long manifestRevision = family.Read(connection =>
+                {
+                    using SqliteCommand command = connection.CreateCommand();
+                    command.CommandText =
+                        "SELECT MIN(sequence) FROM store_log WHERE event_kind='manifest_flipped';";
+                    return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+                });
+                VectorConvergeSnapshot resolutionOnly = port.Snapshot(manifestRevision);
+                Assert.True(resolutionOnly.DeltaHistoryComplete);
+                Assert.False(resolutionOnly.FullPass);
+                Assert.Empty(resolutionOnly.ChangedPaths);
                 Assert.Equal(
                     legacyPort.Units(VectorUnitKind.Symbol, paths: null),
                     port.Units(VectorUnitKind.Symbol, paths: null));

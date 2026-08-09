@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
@@ -44,6 +45,65 @@ public sealed class PatternsTool
 
     private readonly IWorkspaceArtifactProvider _workspaceProvider;
     private readonly PatternFactsReader _reader;
+
+    private readonly record struct PatternReadTarget(string? DbPath, IWorkspaceReadSession? Session)
+    {
+        public static PatternReadTarget ForPath(string dbPath) => new(dbPath, null);
+        public static PatternReadTarget ForSession(IWorkspaceReadSession session) => new(null, session);
+
+        public IReadOnlyList<PatternListRow> List(
+            PatternFactsReader reader,
+            string? patternId,
+            string? language,
+            string? path,
+            IReadOnlyList<PatternMetadataFilter>? filters) =>
+            Session is null
+                ? reader.List(DbPath!, patternId, language, path, filters)
+                : reader.List(Session, patternId, language, path, filters);
+
+        public IReadOnlyList<PatternSummaryRow> Summary(
+            PatternFactsReader reader,
+            string? patternId,
+            string? language,
+            string? path,
+            IReadOnlyList<PatternMetadataFilter>? filters,
+            PatternSummaryGroupBy groupBy,
+            string? facet) =>
+            Session is null
+                ? reader.Summary(DbPath!, patternId, language, path, filters, groupBy, facet)
+                : reader.Summary(Session, patternId, language, path, filters, groupBy, facet);
+
+        public PatternExactSearchPageResult SearchExact(
+            PatternFactsReader reader,
+            string patternId,
+            string? language,
+            string? path,
+            IReadOnlyList<PatternMetadataFilter>? filters,
+            int offset,
+            int limit) =>
+            Session is null
+                ? reader.SearchExactPageWithContext(DbPath!, patternId, language, path, filters, offset, limit)
+                : reader.SearchExactPageWithContext(Session, patternId, language, path, filters, offset, limit);
+
+        public PatternQueryMatchPageResult SearchQuery(
+            PatternFactsReader reader,
+            string query,
+            string? language,
+            string? path,
+            IReadOnlyList<PatternMetadataFilter>? filters,
+            int offset,
+            int limit,
+            int maxPatternIds) =>
+            Session is null
+                ? reader.SearchByQueryPageWithCount(
+                    DbPath!, query, language, path, filters, offset, limit, maxPatternIds)
+                : reader.SearchByQueryPageWithCount(
+                    Session, query, language, path, filters, offset, limit, maxPatternIds);
+
+        public string IndexLevel() => Session is null
+            ? ExtractIndexLevelReader.Read(DbPath)
+            : Session.Read(ExtractIndexLevelReader.Read);
+    }
 
     private sealed record PatternNextAction(
         string Tool,
@@ -112,9 +172,7 @@ public sealed class PatternsTool
 
             PatternToolResult result = Run(
                 _reader,
-                context.ReadSession.LegacyArtifactPath
-                    ?? throw new InvalidOperationException(
-                        "Pattern reads have not been migrated to family-store visibility."),
+                PatternReadTarget.ForSession(context.ReadSession),
                 operation,
                 pattern_id,
                 query,
@@ -196,8 +254,45 @@ public sealed class PatternsTool
         string? continuation = null,
         TelemetryScope? telemetry = null)
     {
-        ArgumentNullException.ThrowIfNull(reader);
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        return Run(
+            reader,
+            PatternReadTarget.ForPath(dbPath),
+            operation,
+            patternId,
+            query,
+            language,
+            path,
+            where,
+            groupBy,
+            facet,
+            limit,
+            json,
+            outputByteBudget,
+            workspaceId,
+            continuation,
+            telemetry);
+    }
+
+    private static PatternToolResult Run(
+        PatternFactsReader reader,
+        PatternReadTarget target,
+        string? operation,
+        string? patternId,
+        string? query,
+        string? language,
+        string? path,
+        string? where,
+        string? groupBy,
+        string? facet,
+        int limit,
+        bool json,
+        int? outputByteBudget,
+        string workspaceId,
+        string? continuation,
+        TelemetryScope? telemetry)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
 
         string op = NormalizeOperation(operation);
         ValidateInputLength(patternId, "pattern_id", MaxPatternIdEncodedBytes);
@@ -233,11 +328,11 @@ public sealed class PatternsTool
         PatternToolResult result = op switch
         {
             "list" => List(
-                reader, dbPath, patternId, language, path, metadataFilters, json, outputByteBudget,
+                reader, target, patternId, language, path, metadataFilters, json, outputByteBudget,
                 workspaceId, requestFingerprint, continuation),
             "summary" => Summary(
                 reader,
-                dbPath,
+                target,
                 patternId,
                 language,
                 path,
@@ -251,7 +346,7 @@ public sealed class PatternsTool
                 continuation),
             "search" => SearchDispatch(
                 reader,
-                dbPath,
+                target,
                 patternId,
                 query,
                 language,
@@ -268,7 +363,7 @@ public sealed class PatternsTool
 
         return result with
         {
-            LevelDiagnostic = FactsLevelDiagnostic(ExtractIndexLevelReader.Read(dbPath), telemetry),
+            LevelDiagnostic = FactsLevelDiagnostic(target.IndexLevel(), telemetry),
         };
     }
 
@@ -320,7 +415,7 @@ public sealed class PatternsTool
 
     private static PatternToolResult SearchDispatch(
         PatternFactsReader reader,
-        string dbPath,
+        PatternReadTarget target,
         string? patternId,
         string? query,
         string? language,
@@ -336,7 +431,7 @@ public sealed class PatternsTool
         if (!string.IsNullOrWhiteSpace(patternId))
             return Search(
                 reader,
-                dbPath,
+                target,
                 RequiredPatternId(patternId),
                 language,
                 path,
@@ -351,7 +446,7 @@ public sealed class PatternsTool
         if (!string.IsNullOrWhiteSpace(query))
             return SearchByQuery(
                 reader,
-                dbPath,
+                target,
                 query.Trim(),
                 language,
                 path,
@@ -425,7 +520,7 @@ public sealed class PatternsTool
 
     private static PatternToolResult List(
         PatternFactsReader reader,
-        string dbPath,
+        PatternReadTarget target,
         string? patternId,
         string? language,
         string? path,
@@ -436,8 +531,8 @@ public sealed class PatternsTool
         string requestFingerprint,
         string? continuation)
     {
-        IReadOnlyList<PatternListRow> rows = reader.List(
-            dbPath,
+        IReadOnlyList<PatternListRow> rows = target.List(
+            reader,
             patternId,
             language,
             path,
@@ -485,7 +580,7 @@ public sealed class PatternsTool
 
     private static PatternToolResult Summary(
         PatternFactsReader reader,
-        string dbPath,
+        PatternReadTarget target,
         string? patternId,
         string? language,
         string? path,
@@ -498,8 +593,8 @@ public sealed class PatternsTool
         string requestFingerprint,
         string? continuation)
     {
-        IReadOnlyList<PatternSummaryRow> rows = reader.Summary(
-            dbPath,
+        IReadOnlyList<PatternSummaryRow> rows = target.Summary(
+            reader,
             patternId,
             language,
             path,
@@ -723,7 +818,7 @@ public sealed class PatternsTool
 
     private static PatternToolResult Search(
         PatternFactsReader reader,
-        string dbPath,
+        PatternReadTarget target,
         string patternId,
         string? language,
         string? path,
@@ -739,8 +834,8 @@ public sealed class PatternsTool
         int offset = string.IsNullOrWhiteSpace(continuation)
             ? 0
             : ToolOutputBudget.PeekPopulationCursorPosition(continuation).Offset;
-        PatternExactSearchPageResult searchResult = reader.SearchExactPageWithContext(
-            dbPath,
+        PatternExactSearchPageResult searchResult = target.SearchExact(
+            reader,
             patternId,
             language,
             path,
@@ -800,7 +895,7 @@ public sealed class PatternsTool
 
     private static PatternToolResult SearchByQuery(
         PatternFactsReader reader,
-        string dbPath,
+        PatternReadTarget target,
         string query,
         string? language,
         string? path,
@@ -819,8 +914,8 @@ public sealed class PatternsTool
         bool hasActiveFilters = !string.IsNullOrWhiteSpace(path)
             || !string.IsNullOrWhiteSpace(language)
             || metadataFilters.Count > 0;
-        PatternQueryMatchPageResult queryResult = reader.SearchByQueryPageWithCount(
-            dbPath,
+        PatternQueryMatchPageResult queryResult = target.SearchQuery(
+            reader,
             query,
             language,
             path,

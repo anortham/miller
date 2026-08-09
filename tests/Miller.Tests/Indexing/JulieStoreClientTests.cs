@@ -1,3 +1,4 @@
+using Miller.Indexing;
 using Miller.Indexing.Store;
 using Xunit;
 
@@ -5,6 +6,17 @@ namespace Miller.Tests.Indexing;
 
 public sealed class JulieStoreClientTests
 {
+    [Fact]
+    public void StoreProcessWaitContinuesPastTheStallWindowWhileProgressChanges()
+    {
+        ExtractWaitPolicy policy = JulieStoreClient.CreateWaitPolicy(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.Zero, 10));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromMilliseconds(750), 20));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromMilliseconds(1500), 30));
+        Assert.Equal(ExtractWaitVerdict.Stalled, policy.Observe(TimeSpan.FromMilliseconds(2500), 30));
+    }
+
     [Fact]
     public void ContractPinsPublishedStoreVersions()
     {

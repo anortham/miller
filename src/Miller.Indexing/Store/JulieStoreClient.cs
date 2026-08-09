@@ -43,15 +43,19 @@ public sealed class JulieStoreClient : IJulieStoreClient
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(10);
 
     private readonly string _binaryPath;
-    private readonly TimeSpan _processTimeout;
+    private readonly TimeSpan _stallTimeout;
+    private readonly TimeSpan _hardTimeout;
 
     public JulieStoreClient(string binaryPath, TimeSpan? processTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(binaryPath);
         _binaryPath = binaryPath;
-        _processTimeout = processTimeout ?? DefaultProcessTimeout;
-        if (_processTimeout <= TimeSpan.Zero)
+        _stallTimeout = processTimeout ?? DefaultProcessTimeout;
+        if (_stallTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(processTimeout));
+        _hardTimeout = processTimeout.HasValue
+            ? ExtractWaitPolicy.HardTimeoutFor(_stallTimeout)
+            : ExtractWaitPolicy.HardTimeoutForEnvironment(_stallTimeout, Environment.GetEnvironmentVariable);
     }
 
     public static JulieStoreClient Locate(string toolsRoot, TimeSpan? processTimeout = null)
@@ -113,23 +117,27 @@ public sealed class JulieStoreClient : IJulieStoreClient
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
         var elapsed = Stopwatch.StartNew();
+        var waitPolicy = new ExtractWaitPolicy(_stallTimeout, _hardTimeout);
+        string? progressPath = ProgressPath(request);
+        string coordinatorPath = Path.Combine(request.StoreRoot, "coord.db");
+        int pollSlice = (int)Math.Clamp((long)_stallTimeout.TotalMilliseconds, 50, 1000);
         bool canceled = false;
-        bool timedOut = false;
-        while (!process.WaitForExit(100))
+        var verdict = ExtractWaitVerdict.Continue;
+        while (!process.WaitForExit(pollSlice))
         {
             if (cancellationToken.IsCancellationRequested)
             {
                 canceled = true;
                 break;
             }
-            if (elapsed.Elapsed >= _processTimeout)
-            {
-                timedOut = true;
+            verdict = waitPolicy.Observe(
+                elapsed.Elapsed,
+                JulieExtractRunner.ProgressStamp(coordinatorPath, progressPath, outputActivity: 0));
+            if (verdict != ExtractWaitVerdict.Continue)
                 break;
-            }
         }
 
-        if (canceled || timedOut)
+        if (canceled || verdict != ExtractWaitVerdict.Continue)
         {
             try
             {
@@ -141,9 +149,11 @@ public sealed class JulieStoreClient : IJulieStoreClient
             process.WaitForExit();
             if (canceled)
                 throw new OperationCanceledException(cancellationToken);
+            string reason = verdict == ExtractWaitVerdict.Stalled
+                ? $"made no observable progress for {_stallTimeout.TotalSeconds:0} seconds"
+                : $"remained active past the {_hardTimeout.TotalSeconds:0}-second hard cap";
             throw new JulieStoreProcessException(
-                $"julie-extract store {OperationName(request.Operation)} exceeded the " +
-                $"{_processTimeout.TotalSeconds:0}-second process bound and was killed.",
+                $"julie-extract store {OperationName(request.Operation)} {reason} and was killed.",
                 ReadCompleted(stderrTask));
         }
 
@@ -152,6 +162,16 @@ public sealed class JulieStoreClient : IJulieStoreClient
         string stderr = ReadCompleted(stderrTask).TrimEnd('\r', '\n');
         return Interpret(process.ExitCode, stdout, stderr, request.Operation);
     }
+
+    internal static ExtractWaitPolicy CreateWaitPolicy(TimeSpan stallTimeout) =>
+        new(stallTimeout, ExtractWaitPolicy.HardTimeoutFor(stallTimeout));
+
+    private static string? ProgressPath(StoreRequest request) => request switch
+    {
+        StoreImportRequest import => import.Scan.ProgressFile,
+        StoreUpdateRequest update => update.Scan.ProgressFile,
+        _ => null,
+    };
 
     public static IReadOnlyList<string> BuildArguments(StoreRequest request)
     {

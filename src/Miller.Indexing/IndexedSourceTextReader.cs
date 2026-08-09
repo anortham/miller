@@ -9,6 +9,14 @@ namespace Miller.Indexing;
 public sealed class IndexedSourceTextReader
 {
     public IndexedSourceTextMatch? FindLiteral(string symbolsDbPath, string relativePath, string literal)
+        => FindLiteralForWorkspace(symbolsDbPath, workspaceRoot: null, relativePath, literal);
+
+    public IndexedSourceTextMatch? FindLiteralForWorkspace(
+        string symbolsDbPath,
+        string? workspaceRoot,
+        string relativePath,
+        string literal,
+        bool? storeEnabled = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
@@ -17,11 +25,15 @@ public sealed class IndexedSourceTextReader
         if (literal.Length == 0)
             return null;
 
-        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath);
+        ContentCorpusReadLocation location = ContentCorpusReadLocator.Resolve(
+            symbolsDbPath,
+            workspaceRoot,
+            storeEnabled: storeEnabled);
+        string contentDbPath = location.ContentDbPath;
         // A hit from a superseded generation would claim the indexed source "still contains" text at a line that
         // belongs to a rebuild the workspace has moved past, and the caller turns that claim into a stale-target
         // diagnostic and a converge retry — so an unprovable generation must produce no hit at all.
-        if (!ContentCorpusSidecar.GenerationAgrees(contentDbPath, symbolsDbPath))
+        if (!ContentCorpusReadLocator.IsCurrent(location, symbolsDbPath))
             return null;
 
         try

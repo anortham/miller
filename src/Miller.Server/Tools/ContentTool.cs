@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using ModelContextProtocol.Server;
@@ -22,6 +23,7 @@ public sealed class ContentTool
     public const int MaxSearchLimit = 100;
     private readonly WorkspaceContext _workspace;
     private readonly ContentCorpusExternalStore _store;
+    private readonly Func<bool> _storeEnabled;
 
     private sealed record ContentNextAction(
         string Tool,
@@ -32,7 +34,9 @@ public sealed class ContentTool
         string ContentDbPath,
         string? IndexDbPath,
         string? WorkspaceId,
-        string WorkspaceRoot);
+        string WorkspaceRoot,
+        string? StoreRoot = null,
+        WorkspaceReadSnapshot? Snapshot = null);
 
     private sealed record WorkspaceSearchFailure(
         string WorkspaceId,
@@ -50,12 +54,16 @@ public sealed class ContentTool
 
     private sealed record ContentInventoryRow(string ContentKind, ExternalContentSource Source);
 
-    public ContentTool(WorkspaceContext workspace, ContentCorpusExternalStore store)
+    public ContentTool(
+        WorkspaceContext workspace,
+        ContentCorpusExternalStore store,
+        Func<bool>? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(store);
         _workspace = workspace;
         _store = store;
+        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
     }
 
     [McpServerTool(Name = "content")]
@@ -120,7 +128,8 @@ public sealed class ContentTool
         try
         {
             ValidateInputs(operation, path, query, sourceId, url, displayPath, contentKind, workspaceId, format);
-            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(_workspace.ExtractDbPath);
+            ContentReadLocation currentLocation = CurrentLocation();
+            string contentDbPath = currentLocation.ContentDbPath;
             if (telemetry is not null)
                 telemetry.Op = op;
 
@@ -132,7 +141,7 @@ public sealed class ContentTool
                     AddMarkdown(
                         contentDbPath, path, url, maxBytes, displayPath, json, telemetry, outputByteBudget),
                 "search" => Search(
-                    contentDbPath,
+                    currentLocation,
                     query,
                     SearchContentKindOrDefault(contentKind),
                     limit,
@@ -141,9 +150,9 @@ public sealed class ContentTool
                     telemetry,
                     outputByteBudget),
                 "read" => Read(
-                    contentDbPath, sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
+                    sourceId, workspaceId, line, contextLines, json, telemetry, outputByteBudget),
                 "shape" => Shape(
-                    contentDbPath, sourceId, workspaceId, json, telemetry, outputByteBudget),
+                    sourceId, workspaceId, json, telemetry, outputByteBudget),
                 "list" => List(
                     contentDbPath, OptionalContentKind(contentKind), limit, json, telemetry, outputByteBudget),
                 "remove" or "delete" => Remove(
@@ -228,7 +237,6 @@ public sealed class ContentTool
     }
 
     private string Shape(
-        string contentDbPath,
         string? sourceId,
         string? workspaceId,
         bool json,
@@ -238,11 +246,7 @@ public sealed class ContentTool
         if (string.IsNullOrWhiteSpace(sourceId))
             throw new InvalidOperationException("content shape requires source_id.");
 
-        var currentLocation = new ContentReadLocation(
-            contentDbPath,
-            _workspace.ExtractDbPath,
-            _workspace.WorkspaceId,
-            _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        ContentReadLocation currentLocation = CurrentLocation();
         ContentReadLocation shapeLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(shapeLocation.ContentDbPath, sourceId);
         shapeLocation = ResolveReadLocation(shapeLocation, resolvedSourceId, workspaceId: null);
@@ -323,7 +327,7 @@ public sealed class ContentTool
     }
 
     private string Search(
-        string contentDbPath,
+        ContentReadLocation currentLocation,
         string? query,
         string? contentKind,
         int limit,
@@ -355,8 +359,8 @@ public sealed class ContentTool
         var failures = new List<WorkspaceSearchFailure>();
         int probeLimit = limit == int.MaxValue ? int.MaxValue : limit + 1;
         IReadOnlyList<TextContentSearchHit> candidates = contentKind is null
-            ? SearchCurrentAllContent(contentDbPath, query, probeLimit, failures)
-            : SearchCurrentContent(contentDbPath, query, contentKind, probeLimit);
+            ? SearchCurrentAllContent(currentLocation, query, probeLimit, failures)
+            : SearchCurrentContent(currentLocation, query, contentKind, probeLimit);
         bool moreMayExist = candidates.Count > limit;
         TextContentSearchHit[] hits = candidates.Take(limit).ToArray();
         var coverage = new ContentSearchCoverage(
@@ -399,16 +403,23 @@ public sealed class ContentTool
     }
 
     private IReadOnlyList<TextContentSearchHit> SearchCurrentContent(
-        string contentDbPath,
+        ContentReadLocation location,
         string query,
         string contentKind,
         int limit)
     {
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(contentDbPath, query, contentKind, limit);
+            return _store.Search(location.ContentDbPath, query, contentKind, limit);
 
-        if (!File.Exists(contentDbPath))
+        if (!File.Exists(location.ContentDbPath))
             return [];
+
+        if (location.Snapshot is { } snapshot)
+        {
+            return ContentCorpusSidecar
+                .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
+                .Search(query, contentKind, limit, excludeTests: false);
+        }
 
         if (!File.Exists(_workspace.ExtractDbPath))
             throw new InvalidOperationException("Workspace symbols.db not found; content corpus freshness cannot be verified.");
@@ -417,32 +428,21 @@ public sealed class ContentTool
         using (var freshness = new FreshnessReader(_workspace.ExtractDbPath))
             expectedRevision = freshness.LatestRevision();
         return ContentCorpusSidecar
-            .OpenGenerationChecked(contentDbPath, _workspace.ExtractDbPath, expectedRevision)
+            .OpenGenerationChecked(location.ContentDbPath, _workspace.ExtractDbPath, expectedRevision)
             .Search(query, contentKind, limit, excludeTests: false);
     }
 
     private IReadOnlyList<TextContentSearchHit> SearchCurrentAllContent(
-        string contentDbPath,
+        ContentReadLocation location,
         string query,
         int limit,
         ICollection<WorkspaceSearchFailure> failures)
     {
         var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
         IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
-            contentDbPath,
-            _workspace.ExtractDbPath,
+            location,
             query,
             limit,
-            () =>
-            {
-                if (!File.Exists(_workspace.ExtractDbPath))
-                {
-                    throw new InvalidOperationException(
-                        "Workspace symbols.db not found; content corpus freshness cannot be verified.");
-                }
-                using var freshness = new FreshnessReader(_workspace.ExtractDbPath);
-                return freshness.LatestRevision();
-            },
             kindFailures);
 
         if (kindFailures.Count > 0)
@@ -480,10 +480,10 @@ public sealed class ContentTool
         {
             try
             {
-                string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath);
+                ContentReadLocation location = Location(row);
                 IReadOnlyList<TextContentSearchHit> local = SearchWorkspaceContent(
                     row,
-                    contentDbPath,
+                    location,
                     query,
                     contentKind,
                     probeLimit,
@@ -571,7 +571,7 @@ public sealed class ContentTool
 
     private IReadOnlyList<TextContentSearchHit> SearchWorkspaceContent(
         WorkspaceRegistryRow row,
-        string contentDbPath,
+        ContentReadLocation location,
         string query,
         string? contentKind,
         int limit,
@@ -581,22 +581,27 @@ public sealed class ContentTool
         {
             var kindFailures = new List<(string Kind, string DiagnosticCode, string Message)>();
             IReadOnlyList<TextContentSearchHit> hits = SearchAllContentKinds(
-                contentDbPath,
-                row.IndexDbPath,
+                location,
                 query,
                 limit,
-                () => ExpectedWorkspaceRevision(row),
                 kindFailures);
             if (kindFailures.Count > 0 && failures is not null)
                 AddWorkspaceSearchFailure(failures, row.WorkspaceId, row.DisplayId, kindFailures);
             return hits;
         }
         if (!IsWorkspaceContentKind(contentKind))
-            return _store.Search(contentDbPath, query, contentKind, limit);
+            return _store.Search(location.ContentDbPath, query, contentKind, limit);
+
+        if (location.Snapshot is { } snapshot)
+        {
+            return ContentCorpusSidecar
+                .OpenStoreGenerationChecked(location.StoreRoot!, snapshot)
+                .Search(query, contentKind, limit, excludeTests: false);
+        }
 
         long expectedRevision = ExpectedWorkspaceRevision(row);
         return ContentCorpusSidecar
-            .OpenGenerationChecked(contentDbPath, row.IndexDbPath, expectedRevision)
+            .OpenGenerationChecked(location.ContentDbPath, row.IndexDbPath, expectedRevision)
             .Search(query, contentKind, limit, excludeTests: false);
     }
 
@@ -637,20 +642,34 @@ public sealed class ContentTool
     ];
 
     private static IReadOnlyList<TextContentSearchHit> SearchAllContentKinds(
-        string contentDbPath,
-        string symbolsDbPath,
+        ContentReadLocation location,
         string query,
         int limit,
-        Func<long> expectedRevision,
         List<(string Kind, string DiagnosticCode, string Message)> failures)
     {
-        if (!File.Exists(contentDbPath))
+        if (!File.Exists(location.ContentDbPath))
             return [];
 
         FtsTextContentSearchIndex? index = null;
         try
         {
-            index = ContentCorpusSidecar.OpenGenerationChecked(contentDbPath, symbolsDbPath, expectedRevision());
+            if (location.Snapshot is { } snapshot)
+            {
+                index = ContentCorpusSidecar.OpenStoreGenerationChecked(location.StoreRoot!, snapshot);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(location.IndexDbPath) || !File.Exists(location.IndexDbPath))
+                {
+                    throw new InvalidOperationException(
+                        "Workspace symbols.db not found; content corpus freshness cannot be verified.");
+                }
+                using var freshness = new FreshnessReader(location.IndexDbPath);
+                index = ContentCorpusSidecar.OpenGenerationChecked(
+                    location.ContentDbPath,
+                    location.IndexDbPath,
+                    freshness.LatestRevision());
+            }
         }
         catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
         {
@@ -666,7 +685,7 @@ public sealed class ContentTool
         {
             try
             {
-                index = FtsTextContentSearchIndex.OpenUnversioned(contentDbPath);
+                index = FtsTextContentSearchIndex.OpenUnversioned(location.ContentDbPath);
                 SearchKinds(index, ImportedContentKinds, query, limit, groups, failures);
             }
             catch (Exception ex) when (IsExpectedContentSearchFailure(ex))
@@ -761,7 +780,6 @@ public sealed class ContentTool
     }
 
     private string Read(
-        string contentDbPath,
         string? sourceId,
         string? workspaceId,
         int? line,
@@ -776,11 +794,7 @@ public sealed class ContentTool
             throw new InvalidOperationException("content read requires line.");
 
         int effectiveContextLines = contextLines ?? ContentCorpusExternalStore.DefaultContextLines;
-        var currentLocation = new ContentReadLocation(
-            contentDbPath,
-            _workspace.ExtractDbPath,
-            _workspace.WorkspaceId,
-            _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        ContentReadLocation currentLocation = CurrentLocation();
         ContentReadLocation readLocation = ResolveReadLocation(currentLocation, sourceId, workspaceId);
         string resolvedSourceId = ResolveReadSourceId(readLocation.ContentDbPath, sourceId);
         readLocation = ResolveReadLocation(readLocation, resolvedSourceId, workspaceId: null);
@@ -950,16 +964,62 @@ public sealed class ContentTool
         return Location(row);
     }
 
-    private static ContentReadLocation Location(WorkspaceRegistryRow row) => new(
-        ContentCorpusSidecar.ContentDbPathFor(row.IndexDbPath),
-        row.IndexDbPath,
-        row.WorkspaceId,
-        row.CanonicalRoot);
+    private ContentReadLocation CurrentLocation() => Location(
+        _workspace.ExtractDbPath,
+        _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
+        _workspace.WorkspaceId);
+
+    private ContentReadLocation Location(WorkspaceRegistryRow row) =>
+        Location(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+
+    private ContentReadLocation Location(string indexDbPath, string workspaceRoot, string? workspaceId)
+    {
+        if (!_storeEnabled())
+        {
+            return new ContentReadLocation(
+                ContentCorpusSidecar.ContentDbPathFor(indexDbPath),
+                indexDbPath,
+                workspaceId,
+                workspaceRoot);
+        }
+
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            indexDbPath,
+            workspaceRoot,
+            workspaceId);
+        if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
+        {
+            return new ContentReadLocation(
+                ContentCorpusSidecar.ContentDbPathFor(indexDbPath),
+                indexDbPath,
+                workspaceId,
+                workspaceRoot);
+        }
+
+        string storeRoot = session.FamilyStoreRoot!;
+        return new ContentReadLocation(
+            StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, session.Snapshot.ViewId),
+            indexDbPath,
+            workspaceId,
+            workspaceRoot,
+            storeRoot,
+            session.Snapshot);
+    }
 
     private static void EnsureWorkspaceContentFresh(ContentReadLocation location, string contentKind)
     {
         if (!IsWorkspaceContentKind(contentKind))
             return;
+        if (location.Snapshot is { } snapshot)
+        {
+            StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
+            if (!StoreSidecarCatalog.IsCurrent(location.ContentDbPath, expected))
+            {
+                throw new InvalidOperationException(
+                    "Workspace content corpus is not current for the selected family-store manifest.");
+            }
+            return;
+        }
         if (string.IsNullOrWhiteSpace(location.IndexDbPath) || !File.Exists(location.IndexDbPath))
         {
             throw new InvalidOperationException(

@@ -31,9 +31,9 @@ independently checks the pinned binary's complete language classification.
 
 Final branch evidence:
 
-- `scripts/test.sh all`: the final committed-HEAD run passed 6,203 fast tests, skipped two, and
-  completed in 26 seconds under the 30-second ceiling; 133 Scale tests passed, five skipped, in
-  3 minutes 30 seconds.
+- `scripts/test.sh`: the final review-fix run passed 6,214 fast tests, skipped two, and completed in
+  26 seconds under the 30-second ceiling.
+- `scripts/test.sh scale`: 133 Scale tests passed, five skipped, in 3 minutes 12 seconds.
 - `scripts/test-plugin.sh`: 49/49 passed.
 - `dotnet build Miller.slnx -c Release`: succeeded with zero warnings and zero errors.
 - `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-build --filter

@@ -11,6 +11,7 @@ Use this page to avoid treating old milestone plans as the current product contr
 - [`known-limits.md`](known-limits.md) - current boundaries: semantic retrieval knobs, region search, bridge provider scope, Blazor resolution, AOT packaging, server restart pickup.
 - [`findings/2026-08-09-index-store-ph3-acceptance.md`](findings/2026-08-09-index-store-ph3-acceptance.md) - Ph3 family-store consumer acceptance: view-scoped reads, orchestration, sidecars, migration, rollback export, provenance, and release dependency.
 - [`findings/2026-08-09-julie-extract-2.31.1-adoption.md`](findings/2026-08-09-julie-extract-2.31.1-adoption.md) - public 2.31.1 pin adoption, archive checksums, migration-identity fix, and restored-binary verification.
+- [`findings/2026-08-09-v1.18.0-claude-premerge-review.md`](findings/2026-08-09-v1.18.0-claude-premerge-review.md) - comprehensive Claude review of the full v1.18.0 branch, verified finding dispositions, and the release-blocking fixes applied before publication.
 - [`../CLAUDE.md`](../CLAUDE.md) / [`../AGENTS.md`](../AGENTS.md) - source-of-truth agent working notes and generated mirror.
 - [`migration-from-julie.md`](migration-from-julie.md) - Julie-to-Miller install, tool/workflow mapping, artifact rebuild, semantic opt-out, deliberate differences, verification, and rollback guide.
 - [`agent-guidance.md`](agent-guidance.md) - long-form agent reference: full workflow catalog, subagent-dispatch primer, and per-tool parameter detail relocated from the embedded ≤1,900-char ServerInstructions core.

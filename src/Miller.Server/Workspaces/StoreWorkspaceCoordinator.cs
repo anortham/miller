@@ -3,6 +3,9 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace Miller.Server.Workspaces;
 
@@ -26,6 +29,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<IndexLevelPolicy> _levelPolicy;
     private readonly Func<StoreFamilyBinding, StoreWorkspaceState?> _readState;
     private readonly Func<string> _mintRequestId;
+    private readonly StoreRequestJournal? _requestJournal;
     private readonly string? _fromArtifact;
 
     public StoreWorkspaceCoordinator(
@@ -45,6 +49,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         _levelPolicy = levelPolicy;
         _readState = readState;
         _mintRequestId = mintRequestId ?? (static () => Guid.NewGuid().ToString("N"));
+        _requestJournal = mintRequestId is null
+            ? new StoreRequestJournal(binding.WorkspaceRoot)
+            : null;
         _fromArtifact = fromArtifact;
     }
 
@@ -159,8 +166,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         StoreWorkspaceState before = ReadRequiredState();
         string relativePath = RelativePath(path);
-        string requestId = RequestId();
         StoreLevel level = LevelFor(ScanIntent.IncrementalReconcile, before);
+        StoreRequestControls controls = Controls(
+            $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}");
         var request = new StoreUpdateRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -168,7 +176,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             _binding.WorkspaceRoot,
             relativePath,
             level,
-            Controls(requestId),
+            controls,
             ScanControls(ExtractJobsPolicy.FromEnvironment()));
         return Submit(
             request,
@@ -181,14 +189,16 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     public ExtractReport Delete(string path)
     {
         StoreWorkspaceState before = ReadRequiredState();
-        string requestId = RequestId();
+        string relativePath = RelativePath(path);
+        StoreRequestControls controls = Controls(
+            $"delete|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}");
         var request = new StoreDeleteRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
             _binding.ViewId,
             _binding.WorkspaceRoot,
-            [RelativePath(path)],
-            Controls(requestId));
+            [relativePath],
+            controls);
         return Submit(
             request,
             before,
@@ -200,15 +210,16 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
     {
         StoreWorkspaceState? before = _readState(_binding);
-        string requestId = RequestId();
         StoreLevel level = LevelFor(intent, before);
+        StoreRequestControls controls = Controls(
+            $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}");
         var request = new StoreImportRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
             _binding.ViewId,
             _binding.WorkspaceRoot,
             level,
-            Controls(requestId),
+            controls,
             ScanControls(jobs ?? ExtractJobsPolicy.FromEnvironment()),
             FromArtifact: before is null ? _fromArtifact : null);
         return Submit(
@@ -227,16 +238,15 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         bool resolveAfter)
     {
         StoreRequestResult result = _client.Submit(request);
-        RequireCommitted(request, result);
+        RequireCommittedAndCompleteJournal(request, result);
         if (resolveAfter)
         {
-            string resolveId = RequestId();
             var resolve = new StoreResolveRequest(
                 _binding.StoreRoot,
                 _binding.FamilyId.ToString("D"),
                 _binding.ViewId,
-                Controls(resolveId));
-            RequireCommitted(resolve, _client.Submit(resolve));
+                Controls($"resolve|{_binding.FamilyId:D}|{_binding.ViewId}"));
+            RequireCommittedAndCompleteJournal(resolve, _client.Submit(resolve));
         }
 
         StoreWorkspaceState after = ReadRequiredState();
@@ -262,6 +272,22 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 request.Operation,
                 new StoreFailureClass("request_not_terminal"),
                 $"julie-extract store request '{result.Request.Id}' returned non-terminal state '{result.State}'.");
+        }
+    }
+
+    private void RequireCommittedAndCompleteJournal(StoreRequest request, StoreRequestResult result)
+    {
+        bool terminal = result.State is StoreRequestState.Committed
+            or StoreRequestState.Acknowledged
+            or StoreRequestState.Failed;
+        try
+        {
+            RequireCommitted(request, result);
+        }
+        finally
+        {
+            if (terminal)
+                _requestJournal?.Complete(RequestControls(request).RequestId);
         }
     }
 
@@ -341,7 +367,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private StoreScanControls ScanControls(int jobs)
     {
-        ExtractSupervision supervision = ExtractSupervisionPolicy.For(Path.Combine(_binding.StoreRoot, "store.db"));
+        ExtractSupervision supervision = ExtractSupervisionPolicy.For(
+            Path.Combine(_binding.WorkspaceRoot, ".miller", "symbols.db"));
+        if (_requestJournal is not null && supervision.SpoolDirectory is { } spoolDirectory)
+            Directory.CreateDirectory(spoolDirectory);
         return new StoreScanControls(
             IgnoreFiles: [],
             Jobs: jobs,
@@ -350,8 +379,20 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ParentProcessId: supervision.ParentPid);
     }
 
-    private StoreRequestControls Controls(string requestId) =>
-        new(requestId, requestId, DefaultRequestTimeout);
+    private StoreRequestControls Controls(string fingerprint)
+    {
+        string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId) ?? RequestId();
+        return new StoreRequestControls(requestId, requestId, DefaultRequestTimeout);
+    }
+
+    private static StoreRequestControls RequestControls(StoreRequest request) => request switch
+    {
+        StoreImportRequest import => import.Request,
+        StoreUpdateRequest update => update.Request,
+        StoreDeleteRequest delete => delete.Request,
+        StoreResolveRequest resolve => resolve.Request,
+        _ => throw new InvalidOperationException($"Store operation '{request.Operation}' has no request controls."),
+    };
 
     private StoreWorkspaceState ReadRequiredState() =>
         _readState(_binding) ?? throw new StoreWorkspaceOperationException(
@@ -403,6 +444,107 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return null;
+        }
+    }
+}
+
+internal sealed record StoreRequestJournalEntry(int SchemaVersion, string Fingerprint, string RequestId);
+
+internal sealed class StoreRequestJournal
+{
+    private const int SchemaVersion = 1;
+    private readonly string _directory;
+    private readonly Dictionary<string, string> _pathsByRequestId = new(StringComparer.Ordinal);
+
+    public StoreRequestJournal(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        _directory = Path.Combine(workspaceRoot, ".miller", "store-requests");
+    }
+
+    public string GetOrCreate(string fingerprint, Func<string> mintRequestId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
+        ArgumentNullException.ThrowIfNull(mintRequestId);
+        Directory.CreateDirectory(_directory);
+        using FileStream lease = AcquireLease();
+        string path = Path.Combine(_directory, $"{Hash(fingerprint)}.json");
+        if (File.Exists(path))
+            return Remember(path, Read(path, fingerprint));
+
+        string requestId = mintRequestId();
+        if (string.IsNullOrWhiteSpace(requestId))
+            throw new InvalidOperationException("The store request ID supplier returned an empty value.");
+        var entry = new StoreRequestJournalEntry(SchemaVersion, fingerprint, requestId);
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(entry));
+            try
+            {
+                File.Move(temporary, path, overwrite: false);
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                return Remember(path, Read(path, fingerprint));
+            }
+            return Remember(path, entry);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
+    }
+
+    public void Complete(string requestId)
+    {
+        if (!_pathsByRequestId.Remove(requestId, out string? path))
+            return;
+        Directory.CreateDirectory(_directory);
+        using FileStream lease = AcquireLease();
+        if (File.Exists(path)
+            && string.Equals(Read(path, expectedFingerprint: null).RequestId, requestId, StringComparison.Ordinal))
+            File.Delete(path);
+    }
+
+    private string Remember(string path, StoreRequestJournalEntry entry)
+    {
+        _pathsByRequestId[entry.RequestId] = path;
+        return entry.RequestId;
+    }
+
+    private static StoreRequestJournalEntry Read(string path, string? expectedFingerprint)
+    {
+        StoreRequestJournalEntry entry = JsonSerializer.Deserialize<StoreRequestJournalEntry>(File.ReadAllText(path))
+            ?? throw new InvalidDataException($"Store request journal '{path}' is empty.");
+        if (entry.SchemaVersion != SchemaVersion
+            || (expectedFingerprint is not null
+                && !string.Equals(entry.Fingerprint, expectedFingerprint, StringComparison.Ordinal))
+            || string.IsNullOrWhiteSpace(entry.RequestId))
+        {
+            throw new InvalidDataException($"Store request journal '{path}' is invalid.");
+        }
+        return entry;
+    }
+
+    private static string Hash(string fingerprint) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint))).ToLowerInvariant();
+
+    private FileStream AcquireLease()
+    {
+        string path = Path.Combine(_directory, ".journal.lock");
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                Thread.Sleep(10);
+            }
         }
     }
 }

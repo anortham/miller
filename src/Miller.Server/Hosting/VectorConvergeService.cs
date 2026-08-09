@@ -1580,10 +1580,39 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             WorkspaceReadSnapshot snapshot = _storeSession.Snapshot;
             long storeLatest = snapshot.Freshness.StoreLogSequence
                 ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+            if (completedRevision <= 0)
+            {
+                return new VectorConvergeSnapshot(
+                    StoreArtifactId(snapshot),
+                    storeLatest,
+                    DeltaHistoryComplete: true,
+                    ChangedPaths: [],
+                    FullPass: true);
+            }
+
+            RevisionDeltaResult delta = RevisionDeltaReader.Read(
+                _storeSession,
+                completedRevision,
+                snapshot.ArtifactOrStoreId);
+            if (delta.Status == RevisionDeltaStatus.Complete)
+            {
+                string[] changedPaths = delta.ChangedPaths
+                    .Concat(delta.DeletedPaths ?? [])
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                return new VectorConvergeSnapshot(
+                    StoreArtifactId(snapshot),
+                    storeLatest,
+                    DeltaHistoryComplete: true,
+                    changedPaths,
+                    FullPass: false);
+            }
+
             return new VectorConvergeSnapshot(
                 StoreArtifactId(snapshot),
                 storeLatest,
-                DeltaHistoryComplete: true,
+                DeltaHistoryComplete: false,
                 ChangedPaths: [],
                 FullPass: completedRevision != storeLatest);
         }

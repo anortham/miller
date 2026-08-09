@@ -73,6 +73,13 @@ public static class StoreWorkspacePointer
         }
     }
 
+    public static void Delete(string workspaceRoot)
+    {
+        string path = PointerPath(workspaceRoot);
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
     private static string PointerPath(string workspaceRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);

@@ -35,6 +35,43 @@ public sealed class WorkspaceReadSessionTests
     }
 
     [Fact]
+    public void LegacyPathConversionReadsTheArtifactSnapshotInsteadOfFabricatingRevisionZero()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.CreateForInspect();
+        using LegacyArtifactReadSession expected = LegacyArtifactReadSession.Open(fixture.DbPath);
+        using WorkspaceReadHandle actual = fixture.DbPath;
+
+        Assert.Equal(expected.Snapshot, actual.Snapshot);
+    }
+
+    [Fact]
+    public void FamilyStoreIndexIdentityChangesWhenTheServingManifestChanges()
+    {
+        var freshness = new WorkspaceFreshnessToken(
+            "family-a",
+            7,
+            ManifestHash: "manifest-a",
+            StoreLogSequence: 12);
+        var first = new WorkspaceReadSnapshot(
+            "/workspace",
+            "workspace-a",
+            "family-a",
+            "view-a",
+            freshness,
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 1);
+        WorkspaceReadSnapshot second = first with
+        {
+            Freshness = freshness with { ManifestHash = "manifest-b" },
+            ManifestGeneration = 2,
+        };
+
+        Assert.NotEqual(first.IndexIdentity, second.IndexIdentity);
+    }
+
+    [Fact]
     public void PrimaryReadContextsExposeSessionsInsteadOfRawArtifactPaths()
     {
         Assert.Null(typeof(WorkspaceReadContext).GetProperty("IndexDbPath"));

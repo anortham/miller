@@ -71,7 +71,10 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         {
             string storeRoot = PathCanonicalizer.CanonicalizeRoot(binding.StoreRoot);
             string workspaceRoot = PathCanonicalizer.CanonicalizeRoot(binding.WorkspaceRoot);
-            string currentPath = PathCanonicalizer.CanonicalizeFile(storeRoot, Path.Combine(storeRoot, "CURRENT"));
+            string currentPath = CanonicalizeContained(
+                storeRoot,
+                Path.Combine(storeRoot, "CURRENT"),
+                "The family store CURRENT pointer escapes its root.");
             if (!File.Exists(currentPath))
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.CurrentMissing,
@@ -83,24 +86,27 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                     FamilyStoreReadFailure.CurrentMalformed,
                     $"The family store CURRENT pointer '{generationName}' is malformed.");
 
-            string generationPath = PathCanonicalizer.CanonicalizeFile(
+            string generationPath = CanonicalizeContained(
                 storeRoot,
-                Path.Combine(storeRoot, generationName));
+                Path.Combine(storeRoot, generationName),
+                "The serving family-store generation escapes its root.");
             if (!Directory.Exists(generationPath))
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.GenerationMissing,
                     $"The serving family-store generation '{generationName}' is missing.");
 
-            string storeDatabasePath = PathCanonicalizer.CanonicalizeFile(
-                storeRoot,
-                Path.Combine(generationPath, "store.db"));
+            string storeDatabasePath = CanonicalizeContained(
+                generationPath,
+                Path.Combine(generationPath, "store.db"),
+                "The serving family-store database escapes its generation.");
             if (!File.Exists(storeDatabasePath))
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.StoreMissing,
                     "The serving family-store generation has no store.db.");
-            string coordinatorDatabasePath = PathCanonicalizer.CanonicalizeFile(
+            string coordinatorDatabasePath = CanonicalizeContained(
                 storeRoot,
-                Path.Combine(storeRoot, "coord.db"));
+                Path.Combine(storeRoot, "coord.db"),
+                "The family-store coordinator database escapes its root.");
             if (!File.Exists(coordinatorDatabasePath))
                 throw new FamilyStoreReadException(
                     FamilyStoreReadFailure.CoordinatorMissing,
@@ -597,7 +603,14 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             ?? throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
                 "The family-store generation has no directory.");
-        string basePath = PathCanonicalizer.CanonicalizeFile(generationDirectory, relativePath);
+        if (Path.IsPathRooted(relativePath))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.Corrupt,
+                "The exact resolution base path is absolute.");
+        string basePath = CanonicalizeContained(
+            generationDirectory,
+            Path.Combine(generationDirectory, relativePath),
+            "The exact resolution base file escapes its generation.");
         if (!File.Exists(basePath))
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
@@ -614,6 +627,20 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         attach.ExecuteNonQuery();
         ValidateAttachedBase(connection, baseManifestHash, baseEpoch);
         return true;
+    }
+
+    private static string CanonicalizeContained(string root, string path, string message)
+    {
+        string canonical = PathCanonicalizer.CanonicalizeFile(root, path);
+        string relative = Path.GetRelativePath(root, canonical);
+        if (Path.IsPathRooted(relative) ||
+            relative == ".." ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new FamilyStoreReadException(FamilyStoreReadFailure.Corrupt, message);
+        }
+        return canonical;
     }
 
     private static void ValidateAttachedBase(

@@ -483,10 +483,12 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     startedAt);
             }
 
-            StoreRollbackExporter.ExportIfRequired(
+            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
                 canonicalRoot,
                 canonicalDbPath,
                 JulieStoreClient.Locate(ctx.ToolsRoot));
+            if (rollback.Warning is { } rollbackWarning)
+                _logger.LogWarning("{Warning}", rollbackWarning);
 
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
@@ -922,7 +924,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 pruned = 0;
             }
 
-            var holder = new IndexHolder(index, builtRevision, binding.FamilyId.ToString("D"));
+                var holder = new IndexHolder(index, builtRevision, session.Snapshot.IndexIdentity);
             var resolver = new SmartTargetResolver(holder);
             TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
             return new BootstrapRunResult(

@@ -19,18 +19,45 @@ public sealed class IndexedEditCandidateReader
         string? anchor,
         int? line,
         int limit = MaxCandidates)
+        => FindCandidatesForWorkspace(
+            symbolsDbPath,
+            workspaceRoot: null,
+            relativePath,
+            expectedRevision,
+            oldText,
+            query,
+            anchor,
+            line,
+            limit,
+            storeEnabled: null);
+
+    public IndexedEditCandidateResult FindCandidatesForWorkspace(
+        string symbolsDbPath,
+        string? workspaceRoot,
+        string relativePath,
+        long expectedRevision,
+        string? oldText,
+        string? query,
+        string? anchor,
+        int? line,
+        int limit = MaxCandidates,
+        bool? storeEnabled = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
 
-        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath);
+        ContentCorpusReadLocation location = ContentCorpusReadLocator.Resolve(
+            symbolsDbPath,
+            workspaceRoot,
+            storeEnabled: storeEnabled);
+        string contentDbPath = location.ContentDbPath;
         if (!File.Exists(contentDbPath))
             return IndexedEditCandidateResult.Unavailable("missing content.db at " + contentDbPath);
 
         // Candidates locate the region an edit is planned against, so a corpus from a superseded generation can
         // aim a plan at the wrong part of the current file. Revision cannot see that: a full-rebuild promote
         // restarts the counter onto a colliding number.
-        if (!ContentCorpusSidecar.GenerationAgrees(contentDbPath, symbolsDbPath))
+        if (!ContentCorpusReadLocator.IsCurrent(location, symbolsDbPath))
         {
             return IndexedEditCandidateResult.Unavailable(
                 "content.db was built from a different index generation (the workspace was fully rebuilt); " +

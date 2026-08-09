@@ -316,7 +316,7 @@ public sealed class CrossWorkspaceRefreshService
             // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
             // convergence.
             if (useStore)
-                TryConvergeStoreSidecars(row);
+                warning = JoinNotes(warning, TryConvergeStoreSidecars(row));
             else
                 TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
@@ -542,7 +542,7 @@ public sealed class CrossWorkspaceRefreshService
         return coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs);
     }
 
-    private void TryConvergeStoreSidecars(WorkspaceRegistryRow row)
+    private string? TryConvergeStoreSidecars(WorkspaceRegistryRow row)
     {
         try
         {
@@ -554,11 +554,13 @@ public sealed class CrossWorkspaceRefreshService
             string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
                 "The store read session did not expose its family root.");
             _sidecarConverger.ConvergeStore(storeRoot, session);
+            return null;
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException
                 or UnauthorizedAccessException or ArgumentException)
         {
+            return $"Store sidecar convergence is incomplete: {ex.Message}";
         }
     }
 

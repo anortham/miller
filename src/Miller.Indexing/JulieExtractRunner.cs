@@ -912,7 +912,7 @@ public sealed class JulieExtractRunner
     /// progress file that cannot be written degrades this to exactly the pre-2.22.0 stamp instead of to
     /// nothing.</para>
     /// </summary>
-    private static long ProgressStamp(string? dbPath, string? progressPath, long outputActivity)
+    internal static long ProgressStamp(string? dbPath, string? progressPath, long outputActivity)
     {
         long stamp = outputActivity;
         if (dbPath is not null)

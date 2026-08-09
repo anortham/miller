@@ -62,6 +62,40 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void PatternFactsReaderUsesTheManifestScopedStoreProjection()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        IReadOnlyList<PatternListRow> rows = new PatternFactsReader().List(
+            session,
+            patternId: null,
+            language: null,
+            pathGlob: null,
+            metadataFilters: null);
+
+        PatternListRow row = Assert.Single(rows);
+        Assert.Equal("visible.pattern.v1", row.PatternId);
+        Assert.Equal(1, row.Count);
+    }
+
+    [Fact]
+    public void RevisionDeltaReaderComparesThePriorAndCurrentStoreManifests()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            fromRevision: 1,
+            fromArtifactId: fixture.Binding.FamilyId.ToString("D"));
+
+        Assert.Equal(RevisionDeltaStatus.Complete, delta.Status);
+        Assert.Equal(["same.cs"], delta.ChangedPaths);
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(delta.DeletedPaths));
+    }
+
+    [Fact]
     public void EnabledWorkspaceFactoryUsesTheValidatedPointerInsteadOfTheLegacyArtifact()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -75,6 +109,21 @@ public sealed class FamilyStoreReadSessionTests
 
         Assert.Equal(WorkspaceReadMode.FamilyStore, session.Snapshot.Mode);
         Assert.Equal("view-a", session.Snapshot.ViewId);
+    }
+
+    [Fact]
+    public void ServingGenerationSymlinkOutsideTheFamilyRootIsRejected()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        string generation = Path.Combine(fixture.Binding.StoreRoot, "gen-001");
+        string outside = Path.Combine(fixture.Root, "outside-generation");
+        Directory.Move(generation, outside);
+        Directory.CreateSymbolicLink(generation, outside);
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.Open(fixture.Binding));
+
+        Assert.Equal(FamilyStoreReadFailure.Corrupt, error.Failure);
     }
 
     private sealed class StoreFixture : IDisposable
@@ -228,21 +277,45 @@ public sealed class FamilyStoreReadSessionTests
                   terminal INTEGER NOT NULL,
                   payload_json TEXT NOT NULL,
                   created_at TEXT NOT NULL) STRICT;
+                CREATE TABLE structural_facts (
+                  structural_fact_id INTEGER PRIMARY KEY,
+                  version_id INTEGER NOT NULL,
+                  path TEXT NOT NULL,
+                  language TEXT NOT NULL,
+                  pattern_id TEXT NOT NULL,
+                  capture_name TEXT NOT NULL,
+                  node_kind TEXT NOT NULL,
+                  containing_symbol_id TEXT,
+                  start_line INTEGER NOT NULL,
+                  start_column INTEGER NOT NULL,
+                  end_line INTEGER NOT NULL,
+                  end_column INTEGER NOT NULL,
+                  start_byte INTEGER NOT NULL,
+                  end_byte INTEGER NOT NULL,
+                  confidence REAL,
+                  metadata_json TEXT) STRICT;
                 """;
             command.ExecuteNonQuery();
             command.CommandText =
                 """
                 INSERT INTO views VALUES ('view-a',$root,2,'unbound',NULL,NULL,NULL,'2026-08-09T00:00:00Z','2026-08-09T00:00:00Z');
-                INSERT INTO manifests VALUES ('view-a',2,'manifest-current','request-a','2026-08-09T00:00:00Z');
+                INSERT INTO manifests VALUES
+                  ('view-a',1,'manifest-prior','request-prior','2026-08-08T00:00:00Z'),
+                  ('view-a',2,'manifest-current','request-a','2026-08-09T00:00:00Z');
                 INSERT INTO file_versions VALUES
                   (1,'same.cs','blake3:hidden',1,'csharp',10,1,NULL,1,2,3),
                   (2,'same.cs','blake3:visible',1,'csharp',11,1,NULL,1,2,3);
-                INSERT INTO manifest_entries VALUES ('view-a',2,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:00Z',NULL,NULL);
+                INSERT INTO manifest_entries VALUES
+                  ('view-a',1,'same.cs','csharp',1,'indexed','blake3:hidden','2026-08-08T00:00:00Z',NULL,NULL),
+                  ('view-a',2,'same.cs','csharp',2,'indexed','blake3:visible','2026-08-09T00:00:00Z',NULL,NULL);
                 INSERT INTO symbols VALUES
                   (1,'symbol','same.cs','csharp','Hidden','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL),
                   (2,'symbol','same.cs','csharp','Visible','class',NULL,NULL,NULL,NULL,1,1,1,2,0,1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1.0,NULL,0,0,0,NULL);
+                INSERT INTO structural_facts VALUES
+                  (1,1,'same.cs','csharp','hidden.pattern.v1','node','class',NULL,1,1,1,2,0,1,1.0,NULL),
+                  (2,2,'same.cs','csharp','visible.pattern.v1','node','class',NULL,1,1,1,2,0,1,1.0,NULL);
                 INSERT INTO store_log VALUES
-                  (1,'request-a','manifest_flipped','view-a',2,NULL,NULL,0,'{}','2026-08-09T00:00:00Z'),
+                  (1,'request-prior','manifest_flipped','view-a',1,NULL,NULL,0,'{}','2026-08-08T00:00:00Z'),
                   (2,'request-a','store_import_completed','view-a',2,NULL,NULL,1,'{}','2026-08-09T00:00:01Z');
                 """;
             command.Parameters.AddWithValue("$root", workspace);

@@ -462,8 +462,9 @@ public sealed class EditService
             try
             {
                 long expectedRevision = ExpectedWorkspaceRevision();
-                candidateResult = _indexedEditCandidateReader.FindCandidates(
+                candidateResult = _indexedEditCandidateReader.FindCandidatesForWorkspace(
                     _dbPath,
+                    _workspaceRoot,
                     relativePath,
                     expectedRevision,
                     matchMode == TextMatchMode.Exact ? oldText : null,
@@ -646,8 +647,8 @@ public sealed class EditService
                 IndexedEditCandidateResult converged;
                 try
                 {
-                    converged = _indexedEditCandidateReader.FindCandidates(
-                        _dbPath, relativePath, ExpectedWorkspaceRevision(),
+                    converged = _indexedEditCandidateReader.FindCandidatesForWorkspace(
+                        _dbPath, _workspaceRoot, relativePath, ExpectedWorkspaceRevision(),
                         matchMode == TextMatchMode.Exact ? request.OldText ?? string.Empty : null,
                         request.Query, request.Anchor, request.Line);
                 }
@@ -2280,7 +2281,11 @@ public sealed class EditService
             return error.Message;
         }
 
-        IndexedSourceTextMatch? match = _indexedSourceTextReader.FindLiteral(_dbPath, relativePath, oldText);
+        IndexedSourceTextMatch? match = _indexedSourceTextReader.FindLiteralForWorkspace(
+            _dbPath,
+            _workspaceRoot,
+            relativePath,
+            oldText);
         if (match is null)
             return error.Message;
 

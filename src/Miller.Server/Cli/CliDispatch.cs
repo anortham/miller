@@ -991,9 +991,13 @@ public static class CliDispatch
 
         var store = new ContentCorpusExternalStore();
         var tool = new ContentTool(ctx, store);
+        ContentCorpusReadLocation contentLocation = ContentCorpusReadLocator.Resolve(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
         if (string.Equals(operation, "list", StringComparison.OrdinalIgnoreCase))
         {
-            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+            string contentDbPath = contentLocation.ContentDbPath;
             string? requestedKind = o.Value("kind", o.Value("content-kind"));
             string? contentKind;
             try
@@ -1020,7 +1024,7 @@ public static class CliDispatch
 
         if (string.Equals(operation, "export", StringComparison.OrdinalIgnoreCase))
         {
-            string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+            string contentDbPath = contentLocation.ContentDbPath;
             string? requestedKind = o.Value("kind", o.Value("content-kind"));
             if (!string.IsNullOrWhiteSpace(requestedKind))
             {
@@ -1042,7 +1046,7 @@ public static class CliDispatch
             // exportable regardless.
             if (ExportCoversWorkspaceKinds(requestedKind)
                 && File.Exists(contentDbPath)
-                && !ContentCorpusSidecar.GenerationAgrees(contentDbPath, ctx.ExtractDbPath))
+                && !ContentCorpusReadLocator.IsCurrent(contentLocation, ctx.ExtractDbPath))
             {
                 err.WriteLine(ContentTool.RenderFailure(
                     "export",
@@ -2134,12 +2138,10 @@ public static class CliDispatch
                         new ReferenceEvidenceBounds(
                             ContextTool.ReferenceRowsPerSymbol,
                             ContextTool.ReferenceRowsPerSymbol)),
-                readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
-                    ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath),
-                    ctx.ExtractDbPath,
+                readContentChunks: (symbols, excludeTests) => ReadContextContentChunks(
+                    ctx,
                     symbols,
-                    excludeTests,
-                    ContextTool.ContentChunksPerSymbol),
+                    excludeTests),
                 out selectedCount, out candidatesExamined);
         }
         else if (string.Equals(referenceMode, "off", StringComparison.OrdinalIgnoreCase))
@@ -2199,17 +2201,28 @@ public static class CliDispatch
         string query,
         bool excludeTests)
     {
-        string contentDbPath = ContentCorpusSidecar.ContentDbPathFor(ctx.ExtractDbPath);
+        ContentCorpusReadLocation location = ContentCorpusReadLocator.Resolve(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
+        string contentDbPath = location.ContentDbPath;
         if (!File.Exists(contentDbPath))
             return ContextTool.LoadSourceRescueSeeds(index, contentIndex: null, query, excludeTests);
 
         try
         {
-            using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-            long revision = freshness.LatestRevision();
-            FtsTextContentSearchIndex contentIndex = new ContentCorpusSidecar().OpenRequired(
-                ctx.ExtractDbPath,
-                revision);
+            FtsTextContentSearchIndex contentIndex;
+            if (location.StoreSnapshot is { } snapshot)
+            {
+                contentIndex = ContentCorpusSidecar.OpenStoreGenerationChecked(location.StoreRoot!, snapshot);
+            }
+            else
+            {
+                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
+                contentIndex = new ContentCorpusSidecar().OpenRequired(
+                    ctx.ExtractDbPath,
+                    freshness.LatestRevision());
+            }
             return ContextTool.LoadSourceRescueSeeds(index, contentIndex, query, excludeTests);
         }
         catch (Exception ex) when (
@@ -2219,6 +2232,30 @@ public static class CliDispatch
         {
             return [];
         }
+    }
+
+    private static IReadOnlyList<TextContentSearchHit> ReadContextContentChunks(
+        WorkspaceContext context,
+        IReadOnlyList<IndexedSymbol> symbols,
+        bool excludeTests)
+    {
+        ContentCorpusReadLocation location = ContentCorpusReadLocator.Resolve(
+            context.ExtractDbPath,
+            context.CanonicalRoot ?? context.WorkspaceRoot,
+            context.WorkspaceId);
+        return location.StoreSnapshot is { } snapshot
+            ? ContentCorpusContextReader.ReadContainingSymbolChunks(
+                location.StoreRoot!,
+                snapshot,
+                symbols,
+                excludeTests,
+                ContextTool.ContentChunksPerSymbol)
+            : ContentCorpusContextReader.ReadContainingSymbolChunks(
+                location.ContentDbPath,
+                context.ExtractDbPath,
+                symbols,
+                excludeTests,
+                ContextTool.ContentChunksPerSymbol);
     }
 
     private static string[]? OptionValues(string? value) =>

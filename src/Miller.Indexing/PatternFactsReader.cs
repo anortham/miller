@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -38,7 +39,29 @@ public sealed class PatternFactsReader
         ValidateFilters(metadataFilters);
 
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        return List(connection, patternId, language, pathGlob, metadataFilters);
+    }
+
+    public IReadOnlyList<PatternListRow> List(
+        IWorkspaceReadSession session,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ValidateFilters(metadataFilters);
+        return session.Read(connection => List(connection, patternId, language, pathGlob, metadataFilters));
+    }
+
+    private IReadOnlyList<PatternListRow> List(
+        SqliteConnection connection,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters)
+    {
+        using SqliteTransaction transaction = connection.BeginTransaction(deferred: true);
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         List<string> where = AddSearchFilters(
@@ -107,6 +130,21 @@ public sealed class PatternFactsReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ValidateFilters(metadataFilters);
         return ReadSummary(dbPath, patternId, language, pathGlob, metadataFilters, groupBy, facetKey);
+    }
+
+    public IReadOnlyList<PatternSummaryRow> Summary(
+        IWorkspaceReadSession session,
+        string? patternId,
+        string? language,
+        string? pathGlob = null,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters = null,
+        PatternSummaryGroupBy groupBy = PatternSummaryGroupBy.LanguagePatternCapture,
+        string? facetKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ValidateFilters(metadataFilters);
+        return session.Read(connection =>
+            ReadSummary(connection, patternId, language, pathGlob, metadataFilters, groupBy, facetKey));
     }
 
     public IReadOnlyList<PatternMatchRow> Search(
@@ -207,9 +245,40 @@ public sealed class PatternFactsReader
         if (offset < 0)
             throw new ArgumentOutOfRangeException(nameof(offset));
 
-        int boundedLimit = Math.Clamp(limit, 1, 500);
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        return SearchExactPageWithContext(
+            connection, patternId, language, pathGlob, metadataFilters, offset, limit);
+    }
+
+    public PatternExactSearchPageResult SearchExactPageWithContext(
+        IWorkspaceReadSession session,
+        string patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(patternId);
+        ValidateFilters(metadataFilters);
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+        return session.Read(connection => SearchExactPageWithContext(
+            connection, patternId, language, pathGlob, metadataFilters, offset, limit));
+    }
+
+    private static PatternExactSearchPageResult SearchExactPageWithContext(
+        SqliteConnection connection,
+        string patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit)
+    {
+        int boundedLimit = Math.Clamp(limit, 1, 500);
+        using SqliteTransaction transaction = connection.BeginTransaction(deferred: true);
         PatternMatchPage page = ReadMatchPage(
             connection,
             transaction,
@@ -269,7 +338,7 @@ public sealed class PatternFactsReader
 
         int boundedLimit = Math.Clamp(limit, 1, 500);
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        using SqliteTransaction transaction = connection.BeginTransaction(deferred: true);
         using SqliteCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         int paramIndex = 0;
@@ -354,7 +423,42 @@ public sealed class PatternFactsReader
             throw new ArgumentOutOfRangeException(nameof(maxPatternIds));
 
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        return SearchByQueryPageWithCount(
+            connection, query, language, pathGlob, metadataFilters, offset, limit, maxPatternIds);
+    }
+
+    public PatternQueryMatchPageResult SearchByQueryPageWithCount(
+        IWorkspaceReadSession session,
+        string query,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit,
+        int maxPatternIds)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        ValidateFilters(metadataFilters);
+        if (offset < 0)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+        if (maxPatternIds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxPatternIds));
+        return session.Read(connection => SearchByQueryPageWithCount(
+            connection, query, language, pathGlob, metadataFilters, offset, limit, maxPatternIds));
+    }
+
+    private static PatternQueryMatchPageResult SearchByQueryPageWithCount(
+        SqliteConnection connection,
+        string query,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        int offset,
+        int limit,
+        int maxPatternIds)
+    {
+        using SqliteTransaction transaction = connection.BeginTransaction(deferred: true);
         using SqliteCommand observedCommand = connection.CreateCommand();
         observedCommand.Transaction = transaction;
         observedCommand.CommandText = """
@@ -953,6 +1057,18 @@ public sealed class PatternFactsReader
         string? facetKey)
     {
         using SqliteConnection connection = OpenStructuralFacts(dbPath);
+        return ReadSummary(connection, patternId, language, pathGlob, metadataFilters, groupBy, facetKey);
+    }
+
+    private static IReadOnlyList<PatternSummaryRow> ReadSummary(
+        SqliteConnection connection,
+        string? patternId,
+        string? language,
+        string? pathGlob,
+        IReadOnlyList<PatternMetadataFilter>? metadataFilters,
+        PatternSummaryGroupBy groupBy,
+        string? facetKey)
+    {
         using SqliteCommand command = connection.CreateCommand();
         List<string> where = AddSearchFilters(
             command,

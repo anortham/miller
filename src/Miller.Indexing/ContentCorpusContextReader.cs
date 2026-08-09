@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -29,6 +30,36 @@ public static class ContentCorpusContextReader
             return Array.Empty<TextContentSearchHit>();
         if (!ContentCorpusSidecar.IsCurrentFor(contentDbPath, symbolsDbPath))
             return Array.Empty<TextContentSearchHit>();
+
+        return ReadCurrentContentDb(contentDbPath, symbols, excludeTests, limitPerSymbol);
+    }
+
+    public static IReadOnlyList<TextContentSearchHit> ReadContainingSymbolChunks(
+        string storeRoot,
+        WorkspaceReadSnapshot snapshot,
+        IReadOnlyList<IndexedSymbol> symbols,
+        bool excludeTests,
+        int limitPerSymbol)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(symbols);
+        if (symbols.Count == 0 || limitPerSymbol <= 0)
+            return Array.Empty<TextContentSearchHit>();
+        string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
+        if (!StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
+            return Array.Empty<TextContentSearchHit>();
+
+        return ReadCurrentContentDb(contentDbPath, symbols, excludeTests, limitPerSymbol);
+    }
+
+    private static IReadOnlyList<TextContentSearchHit> ReadCurrentContentDb(
+        string contentDbPath,
+        IReadOnlyList<IndexedSymbol> symbols,
+        bool excludeTests,
+        int limitPerSymbol)
+    {
 
         // Pooling=false: content.db is a rebuildable derived artifact whose file can be replaced wholesale;
         // a pooled handle would pin the unlinked old inode (same hazard as SqliteReadOnlyAccess).

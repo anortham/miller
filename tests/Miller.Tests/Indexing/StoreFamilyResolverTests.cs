@@ -189,6 +189,27 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void EmptyPlannedStoreDirectoryRemainsRecoverableAfterAFailedFirstImport()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        Directory.CreateDirectory(planned.StoreRoot);
+
+        StoreFamilyBinding recovered = resolver.ResolveOrCreate(facts);
+
+        Assert.Equal(planned, recovered);
+        Assert.Equal(StoreBindingState.Planned, recovered.State);
+    }
+
+    [Fact]
     public void ServingGenerationSymlinkEscapeRefusesWithoutRegistryMutation()
     {
         if (OperatingSystem.IsWindows())

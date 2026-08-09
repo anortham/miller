@@ -9,6 +9,7 @@ using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -175,12 +176,10 @@ public sealed partial class ContextTool
                             context.ReadSession,
                             symbol.SymbolId,
                             new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                        readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
-                            ContentCorpusSidecar.ContentDbPathFor(RequiredLegacyArtifactPath(context.ReadSession)),
-                            RequiredLegacyArtifactPath(context.ReadSession),
+                        readContentChunks: (symbols, excludeTests) => ReadContentChunks(
+                            context.ReadSession,
                             symbols,
-                            excludeTests,
-                            ContentChunksPerSymbol),
+                            excludeTests),
                         out selectedCount, out candidatesExamined);
                     break;
                 default:
@@ -253,6 +252,23 @@ public sealed partial class ContextTool
                 json);
         }
     }
+
+    private static IReadOnlyList<TextContentSearchHit> ReadContentChunks(
+        WorkspaceReadHandle readSession,
+        IReadOnlyList<IndexedSymbol> symbols,
+        bool excludeTests) => readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
+        ? ContentCorpusContextReader.ReadContainingSymbolChunks(
+            readSession.FamilyStoreRoot!,
+            readSession.Snapshot,
+            symbols,
+            excludeTests,
+            ContentChunksPerSymbol)
+        : ContentCorpusContextReader.ReadContainingSymbolChunks(
+            ContentCorpusSidecar.ContentDbPathFor(RequiredLegacyArtifactPath(readSession)),
+            RequiredLegacyArtifactPath(readSession),
+            symbols,
+            excludeTests,
+            ContentChunksPerSymbol);
 
     internal static ToolDiagnostic EmptyDiagnostic(
         string query,

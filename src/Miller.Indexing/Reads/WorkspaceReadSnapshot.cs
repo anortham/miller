@@ -29,4 +29,19 @@ public sealed record WorkspaceReadSnapshot(
     string? ResolutionState = null,
     string? ResolutionBaseId = null,
     long? ResolutionDeltaGeneration = null,
-    long? ResolutionExactAt = null);
+    long? ResolutionExactAt = null)
+{
+    public string IndexIdentity => Mode == WorkspaceReadMode.FamilyStore
+        ? string.Join(
+            ':',
+            "store",
+            ArtifactOrStoreId,
+            ViewId,
+            GenerationName,
+            ManifestGeneration,
+            Freshness.ManifestHash,
+            ResolutionBaseId,
+            ResolutionDeltaGeneration,
+            ResolutionExactAt)
+        : ArtifactOrStoreId;
+}

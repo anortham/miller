@@ -202,7 +202,7 @@ public sealed class FreshnessService : BackgroundService
                    storeEnabled))
         {
             latest = reader.Snapshot.Freshness.StoreLogSequence ?? reader.Snapshot.Freshness.Revision;
-            artifactId = reader.Snapshot.ArtifactOrStoreId;
+            artifactId = reader.Snapshot.IndexIdentity;
         }
         Interlocked.Exchange(ref _lastObservedRevision, latest);
 

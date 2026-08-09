@@ -25,7 +25,9 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     public void Dispose() => _session.Dispose();
 
     public static implicit operator WorkspaceReadHandle(string databasePath) =>
-        new(LegacyArtifactReadSession.CreateDeferred(databasePath));
+        new(File.Exists(databasePath)
+            ? LegacyArtifactReadSession.Open(databasePath)
+            : LegacyArtifactReadSession.CreateDeferred(databasePath));
 
     public static implicit operator WorkspaceReadHandle(LegacyArtifactReadSession session) => new(session);
 }

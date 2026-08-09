@@ -1,5 +1,7 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -152,6 +154,51 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
             limitPerSymbol: 4);
 
         Assert.Empty(hits);
+    }
+
+    [Fact]
+    public void ReadContainingSymbolChunks_UsesThePinnedFamilyStoreContentSidecar()
+    {
+        InsertChunk(
+            chunkId: "chunk-store",
+            path: "src/OrderService.cs",
+            rawText: "public void StoreOrder() { }",
+            containingSymbolId: "service-id",
+            containingSymbolName: "OrderService");
+        string storeRoot = Path.Combine(_dir, "family-store");
+        Directory.CreateDirectory(storeRoot);
+        var snapshot = new WorkspaceReadSnapshot(
+            _dir,
+            "workspace-a",
+            "11111111-1111-4111-8111-111111111111",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "11111111-1111-4111-8111-111111111111",
+                7,
+                ManifestHash: "manifest-a",
+                StoreLogSequence: 9),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore);
+        string storeContentPath = StoreSidecarCatalog.PathFor(
+            storeRoot,
+            StoreSidecarKind.Content,
+            snapshot.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(storeContentPath)!);
+        File.Copy(_contentDbPath, storeContentPath);
+        StoreSidecarCatalog.Stamp(
+            storeContentPath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot));
+        var symbol = new IndexedSymbol(0, "service-id", "OrderService", "class OrderService", "class", "csharp",
+            "src/OrderService.cs", 1, 40, null, false);
+
+        IReadOnlyList<TextContentSearchHit> hits = ContentCorpusContextReader.ReadContainingSymbolChunks(
+            storeRoot,
+            snapshot,
+            [symbol],
+            excludeTests: false,
+            limitPerSymbol: 4);
+
+        Assert.Equal("chunk-store", Assert.Single(hits).ChunkId);
     }
 
     [Fact]

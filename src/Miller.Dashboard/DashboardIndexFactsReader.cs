@@ -148,6 +148,22 @@ public static class DashboardIndexFactsReader
                 Store = StoreWorkspaceFacts.Unavailable(ex),
             };
         }
+        catch (Exception ex) when (
+            ex is IOException or SqliteException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null) with
+            {
+                Store = StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", ex.Message),
+            };
+        }
     }
 
     private static DashboardWorkspaceFacts ReadLegacy(DashboardWorkspaceRow workspace)

@@ -59,6 +59,31 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("binding_not_ready", facts.Store?.Failure);
     }
 
+    [Fact]
+    public void StoreModeDashboardContainsMalformedPointerFailures()
+    {
+        string root = Path.Combine(_dir, "malformed-store-workspace");
+        string miller = Path.Combine(root, ".miller");
+        Directory.CreateDirectory(miller);
+        File.WriteAllText(Path.Combine(miller, "store.json"), "not-json");
+        var workspace = new DashboardWorkspaceRow(
+            "workspace-id",
+            "malformed-store-workspace",
+            root,
+            Path.Combine(miller, "symbols.db"),
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: true);
+
+        Assert.Equal("unreadable", facts.Status);
+        Assert.Equal("failed", facts.Store?.State);
+        Assert.Equal("pointer_unreadable", facts.Store?.Failure);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
