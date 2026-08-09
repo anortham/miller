@@ -1,12 +1,17 @@
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Semantic;
 using Miller.Indexing.Store;
 using Microsoft.Data.Sqlite;
+using Miller.Server;
+using Miller.Server.Hosting;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
 [Trait("Category", "Scale")]
+[Collection(Miller.Tests.Indexing.SqliteVecEnvironment.Name)]
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
     [Fact]
@@ -37,13 +42,14 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 binary,
                 "store", "resolve", "--store", store, "--view", "view-a", "--json");
 
-            using LegacyArtifactReadSession legacy = LegacyArtifactReadSession.Open(artifact);
-            using FamilyStoreReadSession family = FamilyStoreReadSession.Open(new StoreFamilyBinding(
+            var binding = new StoreFamilyBinding(
                 Guid.Parse("11111111-1111-4111-8111-111111111111"),
                 store,
                 "view-a",
                 PathCanonicalizer.CanonicalizeRoot(root),
-                StoreBindingState.Ready));
+                StoreBindingState.Ready);
+            using LegacyArtifactReadSession legacy = LegacyArtifactReadSession.Open(artifact);
+            using FamilyStoreReadSession family = FamilyStoreReadSession.Open(binding);
 
             Assert.Equal(
                 SqliteSymbolReader.ReadSession(legacy),
@@ -87,6 +93,52 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             Assert.Equal(
                 legacyContent.Search("Calculator", TextContentKind.WorkspaceSource, 20),
                 storeContent.Search("Calculator", TextContentKind.WorkspaceSource, 20));
+
+            StoreWorkspacePointer.Write(root, binding);
+            string extension = SqliteVecTestSupport.RequireExtension();
+            string? priorExtension = Environment.GetEnvironmentVariable(VectorStore.ExtensionPathEnvVar);
+            Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+            try
+            {
+                WorkspaceContext workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, directory) with
+                {
+                    WorkspaceId = "workspace-a",
+                    CanonicalRoot = PathCanonicalizer.CanonicalizeRoot(root),
+                    CanonicalExtractDbPath = artifact,
+                };
+                using IVectorConvergePort port = Assert.IsAssignableFrom<IVectorConvergePort>(
+                    SqliteVectorConvergePort.TryOpenStore(workspace));
+                using IVectorConvergePort legacyPort = Assert.IsAssignableFrom<IVectorConvergePort>(
+                    SqliteVectorConvergePort.TryOpenAt(
+                        workspace,
+                        Path.Combine(directory, "legacy-vectors.db")));
+                VectorConvergeSnapshot snapshot = port.Snapshot(0);
+                Assert.True(snapshot.FullPass);
+                Assert.Equal(family.Snapshot.Freshness.StoreLogSequence, snapshot.TargetRevision);
+                Assert.Equal(
+                    legacyPort.Units(VectorUnitKind.Symbol, paths: null),
+                    port.Units(VectorUnitKind.Symbol, paths: null));
+                Assert.NotEmpty(port.Units(VectorUnitKind.Symbol, paths: null));
+
+                string cursor = snapshot.TargetRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                port.SetMeta(VectorConvergeService.SymbolCompletedKey, cursor);
+                port.SetMeta(VectorConvergeService.SymbolTargetKey, cursor);
+                port.SetMeta(VectorConvergeService.ChunkCompletedKey, cursor);
+                port.SetMeta(VectorConvergeService.ChunkTargetKey, cursor);
+                port.SetMeta("build_state", "ready");
+                port.PublishCompleteness();
+
+                StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
+                    StoreSidecarKind.Vector,
+                    family.Snapshot);
+                string vectorPath = VectorSidecar.PathForStore(store, family.Snapshot.ViewId);
+                Assert.True(StoreSidecarCatalog.IsCurrent(vectorPath, expected));
+                Assert.Equal("ready", new VectorSidecar(SemanticMode.On).InspectStore(store, family.Snapshot).State);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, priorExtension);
+            }
         }
         finally
         {

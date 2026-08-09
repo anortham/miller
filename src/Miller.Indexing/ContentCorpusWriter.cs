@@ -78,6 +78,7 @@ public static partial class ContentCorpusWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
         ArgumentNullException.ThrowIfNull(session);
         StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, session.Snapshot);
+        long storeCursor = stamp.StoreLogSequence;
         IReadOnlyList<SourceRow> sourceRows = session.Read(ReadSourceRows);
         IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> symbolsByPath =
             session.Read(ReadSymbolSpans);
@@ -97,7 +98,7 @@ public static partial class ContentCorpusWriter
                 symbolsDbPath: null,
                 session.Snapshot.WorkspaceRoot,
                 session.Snapshot.WorkspaceId,
-                session.Snapshot.Freshness.Revision,
+                storeCursor,
                 sourceRows,
                 symbolsByPath,
                 artifactId: null,
@@ -113,7 +114,7 @@ public static partial class ContentCorpusWriter
                 }
                 ClearPreservationFailure(fullPath);
                 if (preserved > 0)
-                    facts = ReadFacts(fullPath, session.Snapshot.Freshness.Revision);
+                    facts = ReadFacts(fullPath, storeCursor);
             }
         }
         finally

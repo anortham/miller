@@ -260,7 +260,7 @@ public sealed class ContentCorpusSidecar
                 $"Content sidecar for view '{snapshot.ViewId}' is missing or stale. " +
                 "Run `miller workspace refresh` to converge it.");
         }
-        return FtsTextContentSearchIndex.Open(contentDbPath, snapshot.Freshness.Revision);
+        return FtsTextContentSearchIndex.Open(contentDbPath, expected.StoreLogSequence);
     }
 
     /// <summary>

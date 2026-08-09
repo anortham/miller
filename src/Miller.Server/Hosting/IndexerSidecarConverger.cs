@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Hosting;
 
@@ -21,6 +22,8 @@ internal sealed class IndexerSidecarConverger
     private readonly Func<Exception, string, Action, bool> _tryRecover;
     private readonly ILogger _logger;
     private readonly VectorConvergeSignal _vectorSignal;
+    private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreContent;
+    private readonly Func<string, IWorkspaceReadSession, bool>? _ensureStoreSearch;
 
     public IndexerSidecarConverger(
         SymbolSearchSidecar searchSidecar,
@@ -39,7 +42,9 @@ internal sealed class IndexerSidecarConverger
             (ex, sidecarPath, rebuild) =>
                 SidecarCorruptionRecovery.TryRebuildCorruptSidecar(ex, sidecarPath, rebuild, logger),
             logger,
-            vectorSignal)
+            vectorSignal,
+            contentSidecar.EnsureStoreCurrent,
+            searchSidecar.EnsureStoreCurrent)
     {
     }
 
@@ -52,7 +57,9 @@ internal sealed class IndexerSidecarConverger
         Func<string, string> searchDbPathFor,
         Func<Exception, string, Action, bool> tryRecover,
         ILogger logger,
-        VectorConvergeSignal? vectorSignal = null)
+        VectorConvergeSignal? vectorSignal = null,
+        Func<string, IWorkspaceReadSession, bool>? ensureStoreContent = null,
+        Func<string, IWorkspaceReadSession, bool>? ensureStoreSearch = null)
     {
         ArgumentNullException.ThrowIfNull(ensureContentBuilt);
         ArgumentNullException.ThrowIfNull(ensureSearchBuilt);
@@ -71,6 +78,8 @@ internal sealed class IndexerSidecarConverger
         _tryRecover = tryRecover;
         _logger = logger;
         _vectorSignal = vectorSignal ?? VectorConvergeSignal.Shared;
+        _ensureStoreContent = ensureStoreContent;
+        _ensureStoreSearch = ensureStoreSearch;
     }
 
     public void Converge(
@@ -97,6 +106,22 @@ internal sealed class IndexerSidecarConverger
         // Vector convergence is asynchronous by design (vectors-v1 §Cursors): stamp the desired target and wake
         // the drain loop, never embed here. Inert — a single bool check — when semantic retrieval is off.
         _vectorSignal.StampTarget(revision, fullRebuild);
+    }
+
+    public void ConvergeStore(string storeRoot, IWorkspaceReadSession session)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
+        ArgumentNullException.ThrowIfNull(session);
+        if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
+            throw new ArgumentException("Store sidecar convergence requires a family-store read session.", nameof(session));
+
+        _ensureStoreContent?.Invoke(storeRoot, session);
+        if (_searchEnabled)
+            _ensureStoreSearch?.Invoke(storeRoot, session);
+
+        long target = session.Snapshot.Freshness.StoreLogSequence
+            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+        _vectorSignal.StampTarget(target, fullRebuild: false);
     }
 
     // Metric-history cheap arm: append one source='converge' snapshot AFTER the sidecar converge steps, independent

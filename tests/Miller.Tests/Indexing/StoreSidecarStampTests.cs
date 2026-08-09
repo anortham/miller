@@ -54,6 +54,37 @@ public sealed class StoreSidecarStampTests : IDisposable
         Assert.False(StoreSidecarCatalog.IsCurrent(databasePath, expected));
     }
 
+    [Fact]
+    public void VectorSidecarRefusesEveryNonExactFamilyViewCursor()
+    {
+        Directory.CreateDirectory(_root);
+        WorkspaceReadSnapshot snapshot = Snapshot("manifest-a", sequence: 17);
+        string databasePath = VectorSidecar.PathForStore(_root, snapshot.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        {
+            connection.Open();
+        }
+
+        StoreSidecarStamp exact = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
+        StoreSidecarCatalog.Stamp(databasePath, exact);
+
+        Assert.Equal(StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Vector, snapshot.ViewId), databasePath);
+        Assert.True(StoreSidecarCatalog.IsCurrent(databasePath, exact));
+        Assert.False(StoreSidecarCatalog.IsCurrent(
+            databasePath,
+            exact with { ViewId = "view-b" }));
+        Assert.False(StoreSidecarCatalog.IsCurrent(
+            databasePath,
+            exact with { ManifestHash = "manifest-b" }));
+        Assert.False(StoreSidecarCatalog.IsCurrent(
+            databasePath,
+            exact with { StoreLogSequence = 18 }));
+        Assert.False(StoreSidecarCatalog.IsCurrent(
+            databasePath,
+            exact with { ResolutionStamp = "resolution-b" }));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

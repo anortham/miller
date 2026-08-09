@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 
 namespace Miller.Server.Hosting;
@@ -128,6 +129,10 @@ internal interface IVectorConvergePort : IDisposable
         string completedRevisionKey,
         long advanceTo,
         long revision);
+
+    void PublishCompleteness()
+    {
+    }
 }
 
 /// <summary>
@@ -404,7 +409,7 @@ public sealed class VectorConvergeService : BackgroundService
     /// </summary>
     private static DiskGate ProductionDiskGate(WorkspaceContext workspace, IVectorConvergePort port)
     {
-        string vectorsPath = VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+        string vectorsPath = VectorArtifactPathFor(workspace);
         string millerDir = Path.GetDirectoryName(vectorsPath) ?? vectorsPath;
         long artifactBytes = FileSizeOrZero(vectorsPath);
         int storedUnits = port.TotalStored(VectorUnitKind.Symbol);
@@ -493,6 +498,9 @@ public sealed class VectorConvergeService : BackgroundService
     /// </remarks>
     private static bool UnfinishedPromoteAwaitsRecovery(WorkspaceContext workspace)
     {
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return false;
+
         try
         {
             var generations = new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
@@ -519,7 +527,7 @@ public sealed class VectorConvergeService : BackgroundService
         }
         catch (Exception ex) when (IsConvergeException(ex))
         {
-            string artifact = VectorSidecar.PathFor(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+            string artifact = VectorArtifactPathFor(workspace);
             if (!_recoverCorrupt(ex, artifact, () => _openPort(workspace)?.Dispose()))
                 throw;
         }
@@ -528,6 +536,23 @@ public sealed class VectorConvergeService : BackgroundService
         // this drain must continue into the rebuilt artifact or it sits empty until an unrelated source change.
         // A second corruption-shaped failure propagates rather than recovering in a loop.
         return _openPort(workspace);
+    }
+
+    private static string VectorArtifactPathFor(WorkspaceContext workspace)
+    {
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return VectorSidecar.PathFor(workspaceRoot);
+
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        return VectorSidecar.PathForStore(
+            session.FamilyStoreRoot
+                ?? throw new InvalidOperationException("The family-store read session has no store root."),
+            session.Snapshot.ViewId);
     }
 
     /// <summary>Drains both cursors once. Each cursor is independent: one failing never blocks the other.</summary>
@@ -602,6 +627,7 @@ public sealed class VectorConvergeService : BackgroundService
                     reopened, embedding, state, cancellationToken).ConfigureAwait(false);
                 ResolvePause(reopened, embedding, state);
                 CollectGarbage(reopened);
+                reopened.PublishCompleteness();
                 return [symbols, promotedChunks];
             }
         }
@@ -611,6 +637,7 @@ public sealed class VectorConvergeService : BackgroundService
 
         ResolvePause(port, embedding, state);
         CollectGarbage(port);
+        port.PublishCompleteness();
         return [symbols, chunks];
     }
 
@@ -1362,14 +1389,31 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         [TextContentKind.WorkspaceDocs, TextContentKind.WorkspaceConfig];
 
     private readonly VectorStore _vectors;
-    private readonly string _symbolsDbPath;
+    private readonly string? _symbolsDbPath;
     private readonly string _contentDbPath;
+    private readonly WorkspaceReadHandle? _storeSession;
+    private readonly StoreSidecarStamp? _storeStamp;
+    private readonly string? _storeVectorPath;
 
     private SqliteVectorConvergePort(VectorStore vectors, string symbolsDbPath, string contentDbPath)
     {
         _vectors = vectors;
         _symbolsDbPath = symbolsDbPath;
         _contentDbPath = contentDbPath;
+    }
+
+    private SqliteVectorConvergePort(
+        VectorStore vectors,
+        WorkspaceReadHandle storeSession,
+        string contentDbPath,
+        string vectorsPath,
+        StoreSidecarStamp storeStamp)
+    {
+        _vectors = vectors;
+        _storeSession = storeSession;
+        _contentDbPath = contentDbPath;
+        _storeVectorPath = vectorsPath;
+        _storeStamp = storeStamp;
     }
 
     public SemanticGenerationIdentity StoredIdentity => _vectors.Identity;
@@ -1386,6 +1430,9 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         SemanticEncoderPin? encoder = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return TryOpenStore(workspace, encoder);
 
         // Recover BEFORE the open. TryOpenAt CREATES an empty artifact when the active path is missing, which is
         // exactly the state an interrupted promote leaves behind — and once an active file exists,
@@ -1409,6 +1456,74 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         }
 
         return TryOpenAt(workspace, activePath, encoder);
+    }
+
+    internal static IVectorConvergePort? TryOpenStore(
+        WorkspaceContext workspace,
+        SemanticEncoderPin? encoder = null)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (VectorStore.ResolveExtensionPath() is not { } extension)
+            return null;
+
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        var session = WorkspaceReadSessionFactory.Open(
+            workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        try
+        {
+            string storeRoot = session.FamilyStoreRoot
+                ?? throw new InvalidOperationException("The family-store read session has no store root.");
+            StoreSidecarStamp contentStamp = StoreSidecarStamp.FromSnapshot(
+                StoreSidecarKind.Content,
+                session.Snapshot);
+            string contentPath = StoreSidecarCatalog.PathFor(
+                storeRoot,
+                StoreSidecarKind.Content,
+                session.Snapshot.ViewId);
+            if (!StoreSidecarCatalog.IsCurrent(contentPath, contentStamp))
+            {
+                session.Dispose();
+                return null;
+            }
+
+            string vectorsPath = VectorSidecar.PathForStore(storeRoot, session.Snapshot.ViewId);
+            Directory.CreateDirectory(Path.GetDirectoryName(vectorsPath)!);
+            string artifactId = StoreArtifactId(session.Snapshot);
+            if (!File.Exists(vectorsPath))
+            {
+                using VectorStore created = VectorStore.Create(
+                    vectorsPath,
+                    MillerSemanticContract.PinnedIdentity(
+                        encoder ?? SemanticEncoderSelection.Active,
+                        MillerVersion.Current),
+                    artifactId,
+                    extension);
+            }
+
+            VectorStore store = VectorStore.Open(vectorsPath, extension);
+            try
+            {
+                return new SqliteVectorConvergePort(
+                    store,
+                    session,
+                    contentPath,
+                    vectorsPath,
+                    StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, session.Snapshot));
+            }
+            catch
+            {
+                store.Dispose();
+                throw;
+            }
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Opens (creating on first run) a generation at an explicit path — the active artifact, or the
@@ -1460,7 +1575,20 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
     public VectorConvergeSnapshot Snapshot(long completedRevision)
     {
-        using var freshness = new FreshnessReader(_symbolsDbPath);
+        if (_storeSession is not null)
+        {
+            WorkspaceReadSnapshot snapshot = _storeSession.Snapshot;
+            long storeLatest = snapshot.Freshness.StoreLogSequence
+                ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+            return new VectorConvergeSnapshot(
+                StoreArtifactId(snapshot),
+                storeLatest,
+                DeltaHistoryComplete: true,
+                ChangedPaths: [],
+                FullPass: completedRevision != storeLatest);
+        }
+
+        using var freshness = new FreshnessReader(_symbolsDbPath!);
         long latest = freshness.LatestRevision();
         string artifactId = freshness.ArtifactId() ?? string.Empty;
 
@@ -1491,7 +1619,9 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
     public ChunkCursorFacts ChunkFacts(long targetRevision)
     {
-        string symbolsArtifactId = TryReadArtifactId(_symbolsDbPath) ?? string.Empty;
+        string symbolsArtifactId = _storeSession is null
+            ? TryReadArtifactId(_symbolsDbPath!) ?? string.Empty
+            : StoreArtifactId(_storeSession.Snapshot);
         int schemaVersion = 0;
         long contentRevision = 0;
         string chunker = string.Empty;
@@ -1587,6 +1717,26 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             revision);
     }
 
+    public void PublishCompleteness()
+    {
+        if (_storeStamp is null || _storeVectorPath is null)
+            return;
+
+        long expected = _storeStamp.StoreLogSequence;
+        if (MetaRevision(VectorConvergeService.SymbolCompletedKey) != expected ||
+            MetaRevision(VectorConvergeService.ChunkCompletedKey) != expected)
+        {
+            return;
+        }
+
+        StoreSidecarCatalog.Stamp(_storeVectorPath, _storeStamp);
+    }
+
+    private long MetaRevision(string key) =>
+        long.TryParse(Meta(key), NumberStyles.None, CultureInfo.InvariantCulture, out long revision)
+            ? revision
+            : 0;
+
     // A converged generation becomes queryable here: build_state is the reader's gate, and the commit that
     // catches the symbol cursor up with its target is the moment the artifact starts serving.
     private IReadOnlyDictionary<string, string> BuildStateUpdates(VectorUnitKind kind, long advanceTo)
@@ -1610,12 +1760,35 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     private long Number(string key) =>
         long.TryParse(Meta(key), NumberStyles.None, CultureInfo.InvariantCulture, out long value) ? value : 0;
 
-    public void Dispose() => _vectors.Dispose();
+    public void Dispose()
+    {
+        try
+        {
+            _vectors.Dispose();
+        }
+        finally
+        {
+            _storeSession?.Dispose();
+        }
+    }
+
+    private static string StoreArtifactId(WorkspaceReadSnapshot snapshot) =>
+        $"{snapshot.ArtifactOrStoreId}:{snapshot.ViewId}";
 
     private IReadOnlyList<VectorCorpusUnit> SymbolUnits(IReadOnlyCollection<string>? paths)
     {
+        if (_storeSession is not null)
+            return _storeSession.Read(connection => ReadSymbolUnits(connection, paths));
+
+        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath!);
+        return ReadSymbolUnits(symbols, paths);
+    }
+
+    private static IReadOnlyList<VectorCorpusUnit> ReadSymbolUnits(
+        SqliteConnection symbols,
+        IReadOnlyCollection<string>? paths)
+    {
         var units = new List<VectorCorpusUnit>();
-        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath);
 
         foreach (IReadOnlyList<string>? batch in Batched(paths))
         {
@@ -1688,11 +1861,21 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
 
     private IReadOnlyDictionary<string, string> ReadFileHashes(IReadOnlyList<string> paths)
     {
+        if (_storeSession is not null)
+            return _storeSession.Read(connection => ReadFileHashes(connection, paths));
+
+        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath!);
+        return ReadFileHashes(symbols, paths);
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadFileHashes(
+        SqliteConnection symbols,
+        IReadOnlyList<string> paths)
+    {
         var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
         if (paths.Count == 0)
             return hashes;
 
-        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath);
         foreach (IReadOnlyList<string>? batch in Batched(paths))
         {
             using SqliteCommand command = symbols.CreateCommand();
@@ -1716,7 +1899,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         if (latestRevision <= completedRevision)
             return true;
 
-        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath);
+        using SqliteConnection symbols = OpenReadOnly(_symbolsDbPath!);
         using SqliteCommand command = symbols.CreateCommand();
         command.CommandText = "SELECT MIN(revision_id) FROM revision_file_changes";
         object? minimum = command.ExecuteScalar();

@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -58,6 +59,21 @@ public sealed class VectorSidecarTests : IDisposable
     }
 
     [Fact]
+    public void InspectStore_RefusesAnUnstampedVectorArtifact()
+    {
+        WorkspaceReadSnapshot snapshot = StoreSnapshot();
+        string path = VectorSidecar.PathForStore(_root, snapshot.ViewId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "not a complete vector store");
+
+        VectorSidecarFacts facts = new VectorSidecar(SemanticMode.On).InspectStore(_root, snapshot);
+
+        Assert.Equal("unavailable", facts.State);
+        Assert.Equal(path, facts.Path);
+        Assert.Contains("stamp", facts.Reason!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TryOpen_Off_ReturnsNoStoreWithDisabledReasonAndNeverThrows()
     {
         Assert.Null(VectorSidecar.Disabled.TryOpen(_root, out string? reason));
@@ -114,4 +130,14 @@ public sealed class VectorSidecarTests : IDisposable
         if (Directory.Exists(_root))
             Directory.Delete(_root, recursive: true);
     }
+
+    private WorkspaceReadSnapshot StoreSnapshot() =>
+        new(
+            _root,
+            "workspace-a",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken("family-a", 3, "manifest-a", 17, "resolution-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore);
 }

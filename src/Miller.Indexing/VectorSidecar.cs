@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 
 namespace Miller.Indexing;
@@ -251,6 +252,9 @@ public sealed class VectorSidecar
         return Path.Combine(MillerDirFor(workspaceRoot), "vectors.db");
     }
 
+    public static string PathForStore(string storeRoot, string viewId) =>
+        StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Vector, viewId);
+
     /// <summary>Cheap status facts for the workspace status/health surfaces. Under
     /// <see cref="SemanticMode.Off"/> the <c>disabled</c> state is derived without any filesystem access.</summary>
     public VectorSidecarFacts Inspect(string workspaceRoot)
@@ -258,7 +262,46 @@ public sealed class VectorSidecar
         if (!Enabled)
             return new VectorSidecarFacts("disabled", PathFor(workspaceRoot), null);
 
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+        {
+            try
+            {
+                using WorkspaceReadHandle session = OpenStoreReadSession(workspaceRoot);
+                return InspectStore(
+                    session.FamilyStoreRoot
+                        ?? throw new InvalidOperationException("The family-store read session has no store root."),
+                    session.Snapshot);
+            }
+            catch (Exception ex) when (ex is FamilyStoreReadException or IOException or InvalidOperationException)
+            {
+                return Unavailable(PathFor(workspaceRoot), $"Family-store vectors are unavailable: {ex.Message}");
+            }
+        }
+
         return Classify(workspaceRoot);
+    }
+
+    public VectorSidecarFacts InspectStore(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        string path = PathForStore(storeRoot, snapshot.ViewId);
+        if (!Enabled)
+            return new VectorSidecarFacts("disabled", path, null);
+
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, snapshot);
+        if (!StoreSidecarCatalog.IsCurrent(path, expected))
+        {
+            return Unavailable(
+                path,
+                $"Vector artifact at '{path}' has no completeness stamp for family '{expected.FamilyId}', " +
+                $"view '{expected.ViewId}', manifest '{expected.ManifestHash}', and store_log sequence " +
+                $"{expected.StoreLogSequence}. Run `miller workspace refresh` to converge it.");
+        }
+
+        return _probe.FileExists(path)
+            ? ClassifyGeneration(path, ActiveRole)
+            : Unavailable(path, $"Semantic retrieval is enabled but no vector artifact exists at '{path}'. " +
+                "Run `miller workspace refresh` to build it.");
     }
 
     /// <summary>
@@ -285,7 +328,45 @@ public sealed class VectorSidecar
             return new VectorOpenResult(VectorOpenKind.Disabled, null, disabled);
         }
 
-        VectorSidecarFacts facts = Classify(workspaceRoot);
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+        {
+            try
+            {
+                using WorkspaceReadHandle session = OpenStoreReadSession(workspaceRoot);
+                return OpenStore(
+                    session.FamilyStoreRoot
+                        ?? throw new InvalidOperationException("The family-store read session has no store root."),
+                    session.Snapshot);
+            }
+            catch (Exception ex) when (ex is FamilyStoreReadException or IOException or InvalidOperationException)
+            {
+                VectorSidecarFacts unavailable = Unavailable(
+                    PathFor(workspaceRoot),
+                    $"Family-store vectors are unavailable: {ex.Message}");
+                return new VectorOpenResult(VectorOpenKind.Unavailable, null, unavailable);
+            }
+        }
+
+        return OpenClassified(Classify(workspaceRoot));
+    }
+
+    public VectorOpenResult OpenStore(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!Enabled)
+        {
+            var disabled = new VectorSidecarFacts(
+                "disabled",
+                PathForStore(storeRoot, snapshot.ViewId),
+                $"Semantic retrieval is disabled ({EnvVar}=off).");
+            return new VectorOpenResult(VectorOpenKind.Disabled, null, disabled);
+        }
+
+        return OpenClassified(InspectStore(storeRoot, snapshot));
+    }
+
+    private VectorOpenResult OpenClassified(VectorSidecarFacts facts)
+    {
         if (facts.State != ReadyState)
             return new VectorOpenResult(OpenKind(facts), null, facts);
 
@@ -550,6 +631,13 @@ public sealed class VectorSidecar
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         return Path.Combine(workspaceRoot, ".miller");
     }
+
+    private static WorkspaceReadHandle OpenStoreReadSession(string workspaceRoot) =>
+        WorkspaceReadSessionFactory.Open(
+            Path.Combine(workspaceRoot, ".miller", "symbols.db"),
+            workspaceRoot,
+            workspaceId: null,
+            storeEnabled: true);
 }
 
 /// <summary>
