@@ -47,7 +47,13 @@ internal readonly record struct EvidenceProjection(
     private static bool TableExists(SqliteConnection connection, string table)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name;";
+        command.CommandText =
+            """
+            SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name
+            UNION ALL
+            SELECT 1 FROM sqlite_temp_master WHERE type IN ('table','view') AND name = $name
+            LIMIT 1;
+            """;
         command.Parameters.AddWithValue("$name", table);
         return command.ExecuteScalar() is not null;
     }

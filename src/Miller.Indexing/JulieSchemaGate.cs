@@ -133,7 +133,12 @@ internal static class JulieSchemaGate
             """
             SELECT 1
             FROM sqlite_master
-            WHERE type = 'table' AND name = $table_name;
+            WHERE type = 'table' AND name = $table_name
+            UNION ALL
+            SELECT 1
+            FROM sqlite_temp_master
+            WHERE type IN ('table','view') AND name = $table_name
+            LIMIT 1;
             """;
         command.Parameters.AddWithValue("$table_name", tableName);
         if (command.ExecuteScalar() is null)
