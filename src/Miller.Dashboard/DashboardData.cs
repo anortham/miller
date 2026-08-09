@@ -143,7 +143,10 @@ public sealed record DashboardWorkspaceFacts(
     [property: JsonPropertyName("rebound_from_root")] string? ReboundFromRoot = null,
     [property: JsonPropertyName("rebound_from_workspace")] string? ReboundFromWorkspace = null,
     [property: JsonPropertyName("rebound_from_artifact_id")] string? ReboundFromArtifactId = null,
-    [property: JsonPropertyName("rebound_at")] string? ReboundAt = null);
+    [property: JsonPropertyName("rebound_at")] string? ReboundAt = null,
+    [property: JsonPropertyName("store")] StoreWorkspaceFacts? Store = null,
+    [property: JsonIgnore] SearchSidecarFacts? SearchFacts = null,
+    [property: JsonIgnore] ContentCorpusFacts? ContentFacts = null);
 
 public sealed record DashboardHealthWarning(
     [property: JsonPropertyName("code")] string Code,
@@ -1233,17 +1236,15 @@ public static class DashboardData
         };
     }
 
-    private static WorkspaceFacts BuildWorkspaceFacts(
+    internal static WorkspaceFacts BuildWorkspaceFacts(
         DashboardWorkspaceRow workspace,
         DashboardWorkspaceFacts dashboardFacts)
     {
         long expectedRevision = dashboardFacts.IndexRevision ?? dashboardFacts.LastRevision ?? 0L;
-        SearchSidecarFacts searchSidecar = SymbolSearchSidecar.FromEnvironment().Inspect(
-            workspace.IndexDbPath,
-            expectedRevision);
-        ContentCorpusFacts contentCorpus = new ContentCorpusSidecar().Inspect(
-            workspace.IndexDbPath,
-            expectedRevision);
+        SearchSidecarFacts searchSidecar = dashboardFacts.SearchFacts
+            ?? SymbolSearchSidecar.FromEnvironment().Inspect(workspace.IndexDbPath, expectedRevision);
+        ContentCorpusFacts contentCorpus = dashboardFacts.ContentFacts
+            ?? new ContentCorpusSidecar().Inspect(workspace.IndexDbPath, expectedRevision);
         string freshnessStatus = dashboardFacts.Status switch
         {
             "missing" => "missing_index",
@@ -1274,7 +1275,8 @@ public static class DashboardData
                     dashboardFacts.ReboundFromWorkspace,
                     dashboardFacts.ReboundFromArtifactId,
                     dashboardFacts.ReboundAt)
-                : null);
+                : null,
+            Store: dashboardFacts.Store);
     }
 
     private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(

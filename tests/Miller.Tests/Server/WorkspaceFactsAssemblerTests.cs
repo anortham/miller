@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -12,6 +13,65 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     private readonly string _temp = Path.Combine(Path.GetTempPath(), "miller-workspace-facts-" + Guid.NewGuid());
 
     public WorkspaceFactsAssemblerTests() => Directory.CreateDirectory(_temp);
+
+    [Fact]
+    public void StoreFactsUseThePinnedSessionGenerationAndTruthfulRollbackState()
+    {
+        var snapshot = new WorkspaceReadSnapshot(
+            WorkspaceRoot: "/repo/worktree",
+            WorkspaceId: "workspace-id",
+            ArtifactOrStoreId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-worktree",
+            Freshness: new WorkspaceFreshnessToken(
+                "11111111-1111-4111-8111-111111111111",
+                7,
+                "blake3:manifest",
+                91,
+                "base-1:delta-3:91"),
+            IndexLevel: "full",
+            Mode: WorkspaceReadMode.FamilyStore,
+            GenerationName: "GEN-00000000000000000007",
+            ManifestGeneration: 7,
+            ResolutionState: "exact",
+            ResolutionBaseId: "base-1",
+            ResolutionDeltaGeneration: 3,
+            ResolutionExactAt: 91);
+
+        StoreWorkspaceFacts facts = WorkspaceFactsAssembler.StoreFactsFor(snapshot, legacyArtifactPresent: true);
+
+        Assert.Equal("GEN-00000000000000000007", facts.GenerationName);
+        Assert.Equal(7, facts.ManifestGeneration);
+        Assert.Equal("exact", facts.ResolutionState);
+        Assert.Equal("legacy_preserved", facts.MigrationState);
+        Assert.Equal("available", facts.RollbackState);
+    }
+
+    [Fact]
+    public void StoreModeReportsBindingFailureInsteadOfFallingBackToTheLegacyArtifact()
+    {
+        using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "store-failure.db"));
+        string root = Path.Combine(_temp, "store-workspace");
+        Directory.CreateDirectory(root);
+        WorkspaceRegistryRow row = registry.UpsertSeen(
+            "ws-store-failure",
+            "store-failure",
+            root,
+            Path.Combine(root, ".miller", "symbols.db"),
+            WorkspaceRegistryState.Ready);
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            registry,
+            row,
+            WorkspaceRegisteredFactsProfile.CliStatus,
+            new SymbolSearchSidecar(enabled: true),
+            new ContentCorpusSidecar(),
+            vectors: new VectorSidecar(SemanticMode.Off),
+            storeEnabled: true);
+
+        Assert.Equal("failed", facts.Store?.State);
+        Assert.Equal("binding_not_ready", facts.Store?.Failure);
+        Assert.Equal("store_failed", facts.FreshnessStatus);
+    }
 
     [Fact]
     public void RegisteredStatusFacts_CliProfileDoesNotMarkMissingIndex()

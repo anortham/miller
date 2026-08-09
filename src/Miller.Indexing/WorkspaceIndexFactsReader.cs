@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -13,11 +14,13 @@ public static class WorkspaceIndexFactsReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
-        JulieSchemaGate.Verify(connection);
+        return ReadConnection(connection);
+    }
 
-        long documentCount = ReadDocumentCount(connection);
-        int knownExtensionsCount = ReadKnownExtensionsCount(connection);
-        return new WorkspaceIndexFacts(documentCount, knownExtensionsCount);
+    public static WorkspaceIndexFacts ReadSession(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadConnection);
     }
 
     /// <summary>Bounded scalar counts for report/status surfaces; does not hydrate symbols.</summary>
@@ -43,6 +46,14 @@ public static class WorkspaceIndexFactsReader
         command.CommandText = "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL;";
         object? result = command.ExecuteScalar();
         return result is null or DBNull ? 0L : Convert.ToInt64(result);
+    }
+
+    private static WorkspaceIndexFacts ReadConnection(SqliteConnection connection)
+    {
+        JulieSchemaGate.Verify(connection);
+        return new WorkspaceIndexFacts(
+            ReadDocumentCount(connection),
+            ReadKnownExtensionsCount(connection));
     }
 
     private static int ReadKnownExtensionsCount(SqliteConnection connection)

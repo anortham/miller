@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -36,6 +37,20 @@ public sealed class WorkspaceIndexFactsReaderTests
 
         Assert.Equal(3, facts.DocumentCount);
         Assert.Equal(2, facts.KnownExtensionsCount); // {.cs, .ts}
+    }
+
+    [Fact]
+    public void ReadSessionUsesTheVisibilityScopedProjection()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(
+            fx.DbPath,
+            Path.GetDirectoryName(fx.DbPath)!);
+
+        WorkspaceIndexFacts facts = WorkspaceIndexFactsReader.ReadSession(session);
+
+        Assert.Equal(JulieDbFixture.DefaultRows.Count, facts.DocumentCount);
+        Assert.True(facts.KnownExtensionsCount > 0);
     }
 
     [Fact]

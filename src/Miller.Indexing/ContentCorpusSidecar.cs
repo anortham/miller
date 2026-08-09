@@ -152,7 +152,10 @@ public sealed class ContentCorpusSidecar
         {
             try
             {
-                return ReadFacts(contentDbPath, symbolsDbPath, expectedRevision);
+                return ReadFacts(
+                    contentDbPath,
+                    expectedRevision,
+                    () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
             }
             catch (Exception ex) when (
                 ex is SqliteException or InvalidOperationException or IOException
@@ -174,7 +177,10 @@ public sealed class ContentCorpusSidecar
 
         try
         {
-            return ReadFacts(contentDbPath, symbolsDbPath, expectedRevision);
+            return ReadFacts(
+                contentDbPath,
+                expectedRevision,
+                () => ReadGateArtifactAgrees(contentDbPath, symbolsDbPath));
         }
         catch (Exception ex) when (
             ex is SqliteException or InvalidOperationException or IOException
@@ -190,6 +196,33 @@ public sealed class ContentCorpusSidecar
                 IndexedSourceBytes: 0,
                 StoredRawBytes: 0,
                 Error: ex.Message);
+        }
+    }
+
+    public ContentCorpusFacts InspectStore(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
+        string path = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
+        if (!File.Exists(path))
+        {
+            return new ContentCorpusFacts(
+                "missing", path, null, expected.StoreLogSequence, 0, 0, 0, 0);
+        }
+
+        try
+        {
+            return ReadFacts(
+                path,
+                expected.StoreLogSequence,
+                () => StoreSidecarCatalog.IsCurrent(path, expected));
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new ContentCorpusFacts(
+                "unreadable", path, null, expected.StoreLogSequence, 0, 0, 0, 0, Error: ex.Message);
         }
     }
 
@@ -377,7 +410,9 @@ public sealed class ContentCorpusSidecar
     }
 
     private static ContentCorpusFacts ReadFacts(
-        string contentDbPath, string symbolsDbPath, long expectedRevision)
+        string contentDbPath,
+        long expectedRevision,
+        Func<bool> currentGate)
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -421,7 +456,7 @@ public sealed class ContentCorpusSidecar
             ? "imports_only"
             : schemaVersion == ContentCorpusSchema.SchemaVersion
               && workspaceRevision == expectedRevision
-              && ReadGateArtifactAgrees(contentDbPath, symbolsDbPath)
+              && currentGate()
                 ? "current"
                 : "stale";
         return new ContentCorpusFacts(

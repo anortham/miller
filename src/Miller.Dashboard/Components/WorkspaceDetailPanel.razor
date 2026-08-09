@@ -120,6 +120,24 @@
                     }
                 </dd>
             </div>
+            @if (Facts.Store is { } store)
+            {
+                <div>
+                    <dt>Family store</dt>
+                    <dd>
+                        @if (store.State == "ready")
+                        {
+                            <span>@store.FamilyId / @store.ViewId</span>
+                            <span class="muted">Generation @store.ManifestGeneration · @store.IndexLevel · @store.ResolutionState</span>
+                        }
+                        else
+                        {
+                            <span class="workspace-state error">@store.State</span>
+                            <span class="muted">@store.Failure</span>
+                        }
+                    </dd>
+                </div>
+            }
             @if (!string.IsNullOrWhiteSpace(Facts.ReboundFromRoot))
             {
                 <div>

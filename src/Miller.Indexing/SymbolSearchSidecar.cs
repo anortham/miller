@@ -148,6 +148,38 @@ public sealed class SymbolSearchSidecar
         }
     }
 
+    public SearchSidecarFacts InspectStore(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
+        string path = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
+        long expectedRevision = expected.StoreLogSequence;
+        if (!Enabled)
+            return new SearchSidecarFacts("disabled", path, null, expectedRevision, null, null);
+        if (!File.Exists(path))
+            return new SearchSidecarFacts("missing", path, null, expectedRevision, null, null);
+        if (!StoreSidecarCatalog.IsCurrent(path, expected))
+            return new SearchSidecarFacts("stale", path, null, expectedRevision, null, null);
+
+        try
+        {
+            FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(path);
+            return new SearchSidecarFacts(
+                index.Revision == snapshot.Freshness.Revision ? "current" : "stale",
+                path,
+                index.Revision,
+                expectedRevision,
+                index.DocumentCount,
+                null);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or InvalidOperationException or IOException
+                or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new SearchSidecarFacts("unreadable", path, null, expectedRevision, null, ex.Message);
+        }
+    }
+
     private static int ParsePositiveInt(string? raw, int fallback)
     {
         if (string.IsNullOrWhiteSpace(raw))

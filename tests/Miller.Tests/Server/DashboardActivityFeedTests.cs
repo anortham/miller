@@ -8,6 +8,7 @@ using Miller.Dashboard;
 using Miller.Dashboard.Components;
 using Miller.Indexing;
 using Miller.Server.Telemetry;
+using Miller.Server.Tools;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -684,6 +685,41 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("title=\"artifact-0123456789-tail\"", html);            // full value in title
         Assert.Contains("id=\"copy-artifact-id\"", html);                       // hidden full-value copy source
         Assert.Contains("data-copy-target=\"copy-artifact-id\"", html);         // reuses the copy-button pattern
+    }
+
+    [Fact]
+    public async Task WorkspaceDetailPanel_RendersFamilyStoreProvenance()
+    {
+        var store = new StoreWorkspaceFacts(
+            "11111111-1111-4111-8111-111111111111",
+            "view-worktree",
+            "GEN-00000000000000000007",
+            7,
+            "blake3:manifest",
+            91,
+            "full",
+            "exact",
+            "base-1",
+            3,
+            91,
+            true,
+            "legacy_preserved",
+            "available");
+        var facts = new DashboardWorkspaceFacts(
+            "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
+            "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "current",
+            Array.Empty<DashboardLanguageStat>(), Array.Empty<DashboardSymbolKindStat>(),
+            Store: store);
+
+        string html = await RenderComponentAsync<WorkspaceDetailPanel>(new Dictionary<string, object?>
+        {
+            ["Facts"] = facts,
+        });
+
+        Assert.Contains("Family store", html);
+        Assert.Contains("view-worktree", html);
+        Assert.Contains("Generation 7", html);
+        Assert.Contains("exact", html);
     }
 
     [Fact]

@@ -23,4 +23,10 @@ public sealed record WorkspaceReadSnapshot(
     string ViewId,
     WorkspaceFreshnessToken Freshness,
     string IndexLevel,
-    WorkspaceReadMode Mode);
+    WorkspaceReadMode Mode,
+    string? GenerationName = null,
+    long? ManifestGeneration = null,
+    string? ResolutionState = null,
+    string? ResolutionBaseId = null,
+    long? ResolutionDeltaGeneration = null,
+    long? ResolutionExactAt = null);

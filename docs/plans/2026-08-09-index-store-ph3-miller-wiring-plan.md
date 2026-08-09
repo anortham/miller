@@ -238,9 +238,9 @@ public sealed record WorkspaceReadSnapshot(
 5. Run all fast tests and commit.
 
 **Acceptance criteria:**
-- [ ] Legacy mode produces byte-identical MCP/CLI output and retains current cache/freshness behavior.
-- [ ] Production extraction readers do not accept or open a raw path outside the two session adapters.
-- [ ] Fast suite stays below its 30-second ceiling.
+- [x] Legacy mode produces byte-identical MCP/CLI output and retains current cache/freshness behavior.
+- [x] Production extraction readers do not accept or open a raw path outside the two session adapters.
+- [x] Fast suite stays below its 30-second ceiling.
 
 ### Task 5: Implement manifest-scoped family-store reads
 
@@ -267,9 +267,9 @@ public sealed record WorkspaceReadSnapshot(
 6. Commit after zero row/output mismatches.
 
 **Acceptance criteria:**
-- [ ] Dedicated artifact and store view return row-equivalent results across all read families.
-- [ ] Lexical output is byte-identical and cache invalidation keys only from the freshness token.
-- [ ] Sessions release pins on success, error, and disposal; expired/dead pins never become permanent GC roots.
+- [x] Dedicated artifact and store view return row-equivalent results across all read families.
+- [x] Lexical output is byte-identical and cache invalidation keys only from the freshness token.
+- [x] Sessions release pins on success, error, and disposal; expired/dead pins never become permanent GC roots.
 
 ### Task 6: Re-key and converge Miller sidecars from store_log
 
@@ -296,9 +296,9 @@ public sealed record WorkspaceReadSnapshot(
 5. Prove kill/replay exactly once for every sidecar and commit.
 
 **Acceptance criteria:**
-- [ ] A crash can replay work but cannot duplicate or skip visible sidecar rows.
-- [ ] The read session refuses stale stamps instead of silently using a stale sidecar.
-- [ ] `MILLER_SEMANTIC=off` remains a zero-work guarantee.
+- [x] A crash can replay work but cannot duplicate or skip visible sidecar rows.
+- [x] The read session refuses stale stamps instead of silently using a stale sidecar.
+- [x] `MILLER_SEMANTIC=off` remains a zero-work guarantee.
 
 ### Task 7: Wire bootstrap, refresh, migration, and rollback
 
@@ -327,9 +327,9 @@ public sealed record WorkspaceReadSnapshot(
 7. Run process-kill/takeover, mixed-version, root disappearance/reuse, and concurrent-worktree Scale tests; commit.
 
 **Acceptance criteria:**
-- [ ] A fresh linked worktree serves L1 from the family store without copying a standalone artifact.
-- [ ] Interactive updates remain bounded behind batch chunks and no lock-order cycle exists.
-- [ ] Migration and rollback never make a stale artifact look current.
+- [x] A fresh linked worktree serves L1 from the family store without copying a standalone artifact.
+- [x] Interactive updates remain bounded behind batch chunks and no lock-order cycle exists.
+- [x] Migration and rollback never make a stale artifact look current.
 
 ### Task 8: Surface provenance, synchronize guidance, and close Ph3 acceptance
 
@@ -339,7 +339,7 @@ public sealed record WorkspaceReadSnapshot(
 - Modify: `src/Miller.Server/Tools/WorkspaceRender.cs`
 - Modify: `src/Miller.Server/Cli/CliDispatch.cs`
 - Modify: `src/Miller.Dashboard/DashboardData.cs`
-- Modify: `src/Miller.Dashboard/Components/Pages/WorkspaceDetail.razor`
+- Modify: `src/Miller.Dashboard/Components/WorkspaceDetailPanel.razor`
 - Modify: corresponding CLI/MCP/dashboard contract tests
 - Create: `docs/findings/2026-08-09-index-store-ph3-acceptance.md`
 - Modify: `docs/README.md`
@@ -361,6 +361,6 @@ public sealed record WorkspaceReadSnapshot(
 6. Run affected-change, branch, plugin, and security scopes; complete the Ph2/Ph3 program checkboxes only from evidence; commit.
 
 **Acceptance criteria:**
-- [ ] Fresh worktree serving, existing contract compatibility, fast-suite budget, and honest off-switch boxes are checked with evidence.
-- [ ] Existing nine MCP tools and public read-command contracts remain unchanged except additive workspace provenance.
-- [ ] No uncommitted or untracked task work remains; final worktree state is clean and ready for review.
+- [x] Fresh worktree serving, existing contract compatibility, fast-suite budget, and honest off-switch boxes are checked with evidence.
+- [x] Existing nine MCP tools and public read-command contracts remain unchanged except additive workspace provenance.
+- [x] No uncommitted or untracked task work remains; final worktree state is clean and ready for review.

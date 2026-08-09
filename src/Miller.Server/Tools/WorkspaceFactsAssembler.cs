@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
 using Miller.Server.Workspaces;
 using Microsoft.Data.Sqlite;
@@ -16,6 +17,40 @@ internal enum WorkspaceRegisteredFactsProfile
 
 internal static class WorkspaceFactsAssembler
 {
+    public static StoreWorkspaceFacts StoreFactsFor(
+        WorkspaceReadSnapshot snapshot,
+        bool legacyArtifactPresent)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Mode != WorkspaceReadMode.FamilyStore ||
+            string.IsNullOrWhiteSpace(snapshot.GenerationName) ||
+            snapshot.ManifestGeneration is null ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.ManifestHash) ||
+            snapshot.Freshness.StoreLogSequence is null ||
+            string.IsNullOrWhiteSpace(snapshot.ResolutionState))
+        {
+            throw new ArgumentException(
+                "A complete family-store read snapshot is required for workspace provenance.",
+                nameof(snapshot));
+        }
+
+        return new StoreWorkspaceFacts(
+            snapshot.ArtifactOrStoreId,
+            snapshot.ViewId,
+            snapshot.GenerationName,
+            snapshot.ManifestGeneration.Value,
+            snapshot.Freshness.ManifestHash,
+            snapshot.Freshness.StoreLogSequence.Value,
+            snapshot.IndexLevel,
+            snapshot.ResolutionState,
+            snapshot.ResolutionBaseId,
+            snapshot.ResolutionDeltaGeneration,
+            snapshot.ResolutionExactAt,
+            legacyArtifactPresent,
+            legacyArtifactPresent ? "legacy_preserved" : "native",
+            legacyArtifactPresent ? "available" : "export_required");
+    }
+
     /// <summary>
     /// This process's scan-admission position for <paramref name="workspaceRoot"/>, falling back to the
     /// advisory owner record when this process is idle. CLI status/health and the dashboard run one-shot, so the
@@ -141,7 +176,8 @@ internal static class WorkspaceFactsAssembler
         ContentCorpusSidecar contentSidecar,
         VectorSidecar? vectors = null,
         SemanticBrokerFacts? semanticBroker = null,
-        ScanGovernor? scanGovernor = null)
+        ScanGovernor? scanGovernor = null,
+        bool? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(row);
@@ -152,7 +188,46 @@ internal static class WorkspaceFactsAssembler
         long revision = row.LastRevision ?? 0;
         try
         {
-            WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(row.IndexDbPath);
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                row.IndexDbPath,
+                row.CanonicalRoot,
+                row.WorkspaceId,
+                storeEnabled);
+            WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(session);
+            if (session.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
+            {
+                string storeRoot = session.FamilyStoreRoot
+                    ?? throw new InvalidOperationException("The family-store read session has no store root.");
+                long storeRevision = session.Snapshot.Freshness.StoreLogSequence
+                    ?? session.Snapshot.Freshness.Revision;
+                return new WorkspaceFacts(
+                    Root: row.CanonicalRoot,
+                    WorkspaceId: row.WorkspaceId,
+                    DbPath: row.IndexDbPath,
+                    IsLeader: false,
+                    DocumentCount: indexFacts.DocumentCount,
+                    KnownExtensionsCount: indexFacts.KnownExtensionsCount,
+                    BuiltRevision: storeRevision,
+                    LatestObservedRevision: storeRevision,
+                    IndexFresh: true,
+                    QueueEmpty: true,
+                    ArtifactId: session.Snapshot.ArtifactOrStoreId,
+                    FreshnessStatus: "current",
+                    WarningText: null,
+                    DisplayId: row.DisplayId,
+                    ServerVersion: MillerVersion.Current,
+                    ServerProcessId: Environment.ProcessId,
+                    SearchSidecar: sidecar.InspectStore(storeRoot, session.Snapshot),
+                    ContentCorpus: contentSidecar.InspectStore(storeRoot, session.Snapshot),
+                    Vectors: resolvedVectors.InspectStore(storeRoot, session.Snapshot),
+                    SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
+                    ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
+                    ScanFailure: null,
+                    IndexLevel: null,
+                    RebindProvenance: null,
+                    Store: StoreFactsFor(session.Snapshot, File.Exists(row.IndexDbPath)));
+            }
+
             return new WorkspaceFacts(
                 Root: row.CanonicalRoot,
                 WorkspaceId: row.WorkspaceId,
@@ -179,6 +254,10 @@ internal static class WorkspaceFactsAssembler
                 IndexLevel: IndexLevelFactsFor(row.IndexDbPath, row.LevelPolicy),
                 RebindProvenance: RebindProvenanceFactsFor(row.IndexDbPath, registry));
         }
+        catch (FamilyStoreReadException ex)
+        {
+            return StoreFailureFacts(registry, row, profile, resolvedVectors, revision, ex, semanticBroker, scanGovernor);
+        }
         catch (FileNotFoundException)
         {
             return MissingIndexFacts(
@@ -191,6 +270,46 @@ internal static class WorkspaceFactsAssembler
                 registry, row, profile, sidecar, contentSidecar, resolvedVectors, revision, ex, semanticBroker,
                 scanGovernor);
         }
+    }
+
+    private static WorkspaceFacts StoreFailureFacts(
+        WorkspaceRegistry registry,
+        WorkspaceRegistryRow row,
+        WorkspaceRegisteredFactsProfile profile,
+        VectorSidecar vectors,
+        long revision,
+        FamilyStoreReadException exception,
+        SemanticBrokerFacts? semanticBroker,
+        ScanGovernor? scanGovernor)
+    {
+        StoreWorkspaceFacts store = StoreWorkspaceFacts.Unavailable(exception);
+        string warning = $"could not open family store for workspace '{row.CanonicalRoot}': {exception.Message}";
+        if (profile == WorkspaceRegisteredFactsProfile.McpHealth)
+            registry.MarkError(row.WorkspaceId, warning);
+
+        return new WorkspaceFacts(
+            Root: row.CanonicalRoot,
+            WorkspaceId: row.WorkspaceId,
+            DbPath: row.IndexDbPath,
+            IsLeader: false,
+            DocumentCount: 0,
+            KnownExtensionsCount: 0,
+            BuiltRevision: revision,
+            LatestObservedRevision: revision,
+            IndexFresh: false,
+            QueueEmpty: true,
+            FreshnessStatus: store.State == "incompatible" ? "store_incompatible" : "store_failed",
+            WarningText: warning,
+            DisplayId: row.DisplayId,
+            ServerVersion: MillerVersion.Current,
+            ServerProcessId: Environment.ProcessId,
+            SearchSidecar: null,
+            ContentCorpus: null,
+            Vectors: vectors.Inspect(row.CanonicalRoot),
+            SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(vectors.Mode, null),
+            ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
+            ScanFailure: null,
+            Store: store);
     }
 
     public static WorkspaceFacts FromUnregisteredLocal(

@@ -560,9 +560,9 @@ Decisive proofs before any contract work; the program does not proceed past a re
   off-switch with export-on-rollback; status/health/dashboard provenance; CLAUDE.md
   ownership-language amendment + AGENTS.md sync.
 - Acceptance:
-  - [ ] Fresh worktree of an indexed family serves via the store (no copy path).
-  - [ ] Existing contract suite green; fast-suite budget intact.
-  - [ ] Off-switch degrades honestly (export or not-ready; never a stale artifact).
+  - [x] Fresh worktree of an indexed family serves via the store (no copy path). Evidence: Ph3 acceptance finding.
+  - [x] Existing contract suite green; fast-suite budget intact. Evidence: Ph3 acceptance finding.
+  - [x] Off-switch degrades honestly (export or not-ready; never a stale artifact). Evidence: Ph3 acceptance finding.
 
 ### Ph4 — Dashboard family-store panel. ~1 session.
 

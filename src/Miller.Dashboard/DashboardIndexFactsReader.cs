@@ -1,6 +1,8 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Server.Tools;
 
 namespace Miller.Dashboard;
 
@@ -116,7 +118,39 @@ public static class DashboardIndexFactsReader
         return facts;
     }
 
-    public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace)
+    public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace, bool? storeEnabled = null)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        bool enabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        if (!enabled)
+            return ReadLegacy(workspace);
+
+        try
+        {
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                workspace.IndexDbPath,
+                workspace.CanonicalRoot,
+                workspace.WorkspaceId,
+                storeEnabled: true);
+            return ReadStore(workspace, session);
+        }
+        catch (FamilyStoreReadException ex)
+        {
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null) with
+            {
+                Store = StoreWorkspaceFacts.Unavailable(ex),
+            };
+        }
+    }
+
+    private static DashboardWorkspaceFacts ReadLegacy(DashboardWorkspaceRow workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         if (!File.Exists(workspace.IndexDbPath))
@@ -210,6 +244,77 @@ public static class DashboardIndexFactsReader
                 indexRevision: null,
                 artifactId: null);
         }
+    }
+
+    private static DashboardWorkspaceFacts ReadStore(
+        DashboardWorkspaceRow workspace,
+        WorkspaceReadHandle session)
+    {
+        string storeRoot = session.FamilyStoreRoot
+            ?? throw new InvalidOperationException("The family-store read session has no store root.");
+        WorkspaceReadSnapshot snapshot = session.Snapshot;
+        SearchSidecarFacts search = SymbolSearchSidecar.FromEnvironment().InspectStore(storeRoot, snapshot);
+        ContentCorpusFacts content = ContentSidecar.InspectStore(storeRoot, snapshot);
+        long revision = snapshot.Freshness.StoreLogSequence ?? snapshot.Freshness.Revision;
+
+        return session.Read(connection =>
+        {
+            FileFacts fileFacts = ReadFileFacts(connection);
+            Dictionary<string, long> symbolCountsByLanguage = ReadSymbolCountsByLanguage(connection);
+            (IReadOnlyList<DashboardSymbolKindStat> symbolKinds, int symbolKindCount) = ReadSymbolKinds(connection);
+            int languageCount = CountLanguages(fileFacts.Languages, symbolCountsByLanguage);
+            IReadOnlyList<DashboardLanguageStat> languages = BuildLanguageStats(
+                fileFacts.Languages,
+                symbolCountsByLanguage);
+            bool current = string.Equals(search.State, "current", StringComparison.Ordinal)
+                && string.Equals(content.State, "current", StringComparison.Ordinal);
+            var store = new StoreWorkspaceFacts(
+                snapshot.ArtifactOrStoreId,
+                snapshot.ViewId,
+                snapshot.GenerationName
+                    ?? throw new InvalidOperationException("The family-store snapshot has no generation name."),
+                snapshot.ManifestGeneration
+                    ?? throw new InvalidOperationException("The family-store snapshot has no manifest generation."),
+                snapshot.Freshness.ManifestHash
+                    ?? throw new InvalidOperationException("The family-store snapshot has no manifest hash."),
+                revision,
+                snapshot.IndexLevel,
+                snapshot.ResolutionState
+                    ?? throw new InvalidOperationException("The family-store snapshot has no resolution state."),
+                snapshot.ResolutionBaseId,
+                snapshot.ResolutionDeltaGeneration,
+                snapshot.ResolutionExactAt,
+                File.Exists(workspace.IndexDbPath),
+                File.Exists(workspace.IndexDbPath) ? "legacy_preserved" : "native",
+                File.Exists(workspace.IndexDbPath) ? "available" : "export_required");
+
+            return new DashboardWorkspaceFacts(
+                workspace.WorkspaceId,
+                workspace.DisplayId,
+                workspace.CanonicalRoot,
+                workspace.IndexDbPath,
+                workspace.State,
+                null,
+                fileFacts.FileCount,
+                symbolCountsByLanguage.Values.Sum(),
+                languageCount,
+                fileFacts.ContentBytes,
+                revision,
+                workspace.LastScanAt,
+                search.State,
+                languages,
+                symbolKinds,
+                content.State,
+                symbolKindCount,
+                workspace.LastError,
+                ExtractBinaryVersionReader.TryRead(connection),
+                snapshot.ArtifactOrStoreId,
+                revision,
+                current ? "current" : "degraded",
+                Store: store,
+                SearchFacts: search,
+                ContentFacts: content);
+        });
     }
 
     private static DashboardWorkspaceFacts Empty(

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Dashboard.Components;
 using Miller.Dashboard;
 using Miller.Indexing;
+using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
@@ -33,6 +34,29 @@ public sealed class DashboardRegistryReadTests : IDisposable
     public void MapContentSidecarStatus_ImportsOnly_IsActionablyStale()
     {
         Assert.Equal("imports_only", DashboardIndexFactsReader.MapContentSidecarStatus("imports_only"));
+    }
+
+    [Fact]
+    public void StoreModeDashboardReportsBindingFailureInsteadOfReadingTheLegacyPath()
+    {
+        string root = Path.Combine(_dir, "store-workspace");
+        Directory.CreateDirectory(root);
+        var workspace = new DashboardWorkspaceRow(
+            "workspace-id",
+            "store-workspace",
+            root,
+            Path.Combine(root, ".miller", "symbols.db"),
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: true);
+
+        Assert.Equal("unreadable", facts.Status);
+        Assert.Equal("failed", facts.Store?.State);
+        Assert.Equal("binding_not_ready", facts.Store?.Failure);
     }
 
     public void Dispose()
@@ -691,6 +715,79 @@ public sealed class DashboardRegistryReadTests : IDisposable
         DashboardIndexFactsCache.Clear();
         DashboardWorkspaceFacts third = DashboardIndexFactsCache.Read(workspace);
         Assert.NotSame(first, third);
+    }
+
+    [Fact]
+    public void DashboardIndexFactsCache_DoesNotUseLegacyFileFreshnessForStoreReads()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            rows: []);
+        var workspace = new DashboardWorkspaceRow(
+            "ws-store-cache",
+            "store-cache-abcd1234",
+            fixture.WorkspaceRoot,
+            fixture.DbPath,
+            "2026-05-31T10:00:00Z",
+            "2026-05-31T10:01:00Z",
+            3,
+            "ready",
+            null);
+
+        DashboardIndexFactsCache.Clear();
+        DashboardWorkspaceFacts first = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+        DashboardWorkspaceFacts second = DashboardIndexFactsCache.Read(workspace, storeEnabled: true);
+
+        Assert.NotSame(first, second);
+        Assert.Equal("binding_not_ready", first.Store?.Failure);
+        Assert.Equal(first.Store, second.Store);
+    }
+
+    [Fact]
+    public void DashboardHealthUsesTheStoreSidecarFactsCapturedByTheReadSession()
+    {
+        var workspace = new DashboardWorkspaceRow(
+            "ws-store-health",
+            "store-health-abcd1234",
+            "/repo/store-health",
+            "/repo/store-health/.miller/symbols.db",
+            "2026-08-09T00:00:00Z",
+            "2026-08-09T00:01:00Z",
+            9,
+            "ready",
+            null);
+        var search = new SearchSidecarFacts("current", "/family/search.db", 2, 9, 3, null);
+        var content = new ContentCorpusFacts("current", "/family/content.db", 1, 9, 2, 4, 100, 100);
+        var store = new StoreWorkspaceFacts(
+            "family", "view", "gen-000001", 2, "manifest", 9, "full", "exact", "base", 1, 9,
+            true, "legacy_preserved", "available");
+        var facts = new DashboardWorkspaceFacts(
+            workspace.WorkspaceId,
+            workspace.DisplayId,
+            workspace.CanonicalRoot,
+            workspace.IndexDbPath,
+            "ready",
+            null,
+            1,
+            3,
+            1,
+            100,
+            9,
+            workspace.LastScanAt,
+            "current",
+            [],
+            [],
+            "current",
+            Store: store,
+            SearchFacts: search,
+            ContentFacts: content);
+
+        WorkspaceFacts actual = DashboardData.BuildWorkspaceFacts(workspace, facts);
+
+        Assert.Same(search, actual.SearchSidecar);
+        Assert.Same(content, actual.ContentCorpus);
+        Assert.Same(store, actual.Store);
     }
 
     [Fact]

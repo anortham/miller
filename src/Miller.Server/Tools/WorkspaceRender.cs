@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server;
 using Miller.Server.Telemetry;
@@ -47,6 +48,73 @@ namespace Miller.Server.Tools;
 /// state — renders nowhere, so default status output stays byte-identical.</param>
 /// <param name="RebindProvenance">Where this artifact was rebound from, when it was rebound at all. Null — the
 /// normal state — renders nowhere, so default status output stays byte-identical.</param>
+public sealed record StoreWorkspaceFacts(
+    string FamilyId,
+    string ViewId,
+    string GenerationName,
+    long ManifestGeneration,
+    string ManifestHash,
+    long StoreLogSequence,
+    string IndexLevel,
+    string ResolutionState,
+    string? ResolutionBaseId,
+    long? ResolutionDeltaGeneration,
+    long? ResolutionExactAt,
+    bool LegacyArtifactPresent,
+    string MigrationState,
+    string RollbackState,
+    string State = "ready",
+    string? Failure = null,
+    string? Error = null)
+{
+    public static StoreWorkspaceFacts Unavailable(string state, string failure, string error) =>
+        new(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            0,
+            string.Empty,
+            0,
+            string.Empty,
+            string.Empty,
+            null,
+            null,
+            null,
+            false,
+            "unknown",
+            "unavailable",
+            state,
+            failure,
+            error);
+
+    public static StoreWorkspaceFacts Unavailable(FamilyStoreReadException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string failure = exception.Failure switch
+        {
+            FamilyStoreReadFailure.BindingNotReady => "binding_not_ready",
+            FamilyStoreReadFailure.CurrentMissing => "current_missing",
+            FamilyStoreReadFailure.CurrentMalformed => "current_malformed",
+            FamilyStoreReadFailure.GenerationMissing => "generation_missing",
+            FamilyStoreReadFailure.StoreMissing => "store_missing",
+            FamilyStoreReadFailure.CoordinatorMissing => "coordinator_missing",
+            FamilyStoreReadFailure.SchemaIncompatible => "schema_incompatible",
+            FamilyStoreReadFailure.ReaderFloorIncompatible => "reader_floor_incompatible",
+            FamilyStoreReadFailure.FamilyMismatch => "family_mismatch",
+            FamilyStoreReadFailure.ViewNotFound => "view_not_found",
+            FamilyStoreReadFailure.ViewRootMismatch => "view_root_mismatch",
+            FamilyStoreReadFailure.ManifestMissing => "manifest_missing",
+            FamilyStoreReadFailure.Corrupt => "corrupt",
+            _ => "unknown",
+        };
+        string state = exception.Failure is
+            FamilyStoreReadFailure.SchemaIncompatible or FamilyStoreReadFailure.ReaderFloorIncompatible
+                ? "incompatible"
+                : "failed";
+        return Unavailable(state, failure, exception.Message);
+    }
+}
+
 public readonly record struct WorkspaceFacts(
     string Root,
     string? WorkspaceId,
@@ -71,7 +139,8 @@ public readonly record struct WorkspaceFacts(
     ScanGovernorSnapshot? ScanGovernor = null,
     ScanFailureRecord? ScanFailure = null,
     IndexLevelFacts? IndexLevel = null,
-    RebindProvenanceFacts? RebindProvenance = null);
+    RebindProvenanceFacts? RebindProvenance = null,
+    StoreWorkspaceFacts? Store = null);
 
 /// <summary>
 /// Where a rebound artifact came from (P3 provenance surfacing): the source root recorded in the artifact's
@@ -425,6 +494,8 @@ public static class WorkspaceRender
             sb.Append("index_level: ").Append(indexLevelLabel).Append('\n');
         if (RebindProvenanceLabel(facts.RebindProvenance) is { } rebindLabel)
             sb.Append("rebound_from: ").Append(rebindLabel).Append('\n');
+        if (facts.Store is { } store)
+            sb.Append("store: ").Append(StoreProvenanceLabel(store)).Append('\n');
         if (!string.IsNullOrEmpty(facts.WarningText))
             sb.Append("warning: ").Append(facts.WarningText).Append('\n');
         if (bootstrap is { Phase: BootstrapPhase.Running, CanonicalRoot.Length: > 0 })
@@ -584,6 +655,46 @@ public static class WorkspaceRender
         else w.WriteString("source_artifact_id", facts.SourceArtifactId);
         if (facts.ReboundAt is null) w.WriteNull("rebound_at");
         else w.WriteString("rebound_at", facts.ReboundAt);
+        w.WriteEndObject();
+    }
+
+    private static string StoreProvenanceLabel(StoreWorkspaceFacts facts) =>
+        string.Equals(facts.State, "ready", StringComparison.Ordinal)
+            ? $"family={facts.FamilyId}  view={facts.ViewId}  generation={facts.ManifestGeneration}  " +
+              $"manifest={facts.ManifestHash}  sequence={facts.StoreLogSequence}  level={facts.IndexLevel}  " +
+              $"resolution={facts.ResolutionState}  migration={facts.MigrationState}  rollback={facts.RollbackState}"
+            : $"state={facts.State}  failure={facts.Failure}";
+
+    private static void WriteStoreProvenanceJson(Utf8JsonWriter w, StoreWorkspaceFacts facts)
+    {
+        w.WriteStartObject();
+        w.WriteString("state", facts.State);
+        if (!string.Equals(facts.State, "ready", StringComparison.Ordinal))
+        {
+            if (facts.Failure is null) w.WriteNull("failure");
+            else w.WriteString("failure", facts.Failure);
+            if (facts.Error is null) w.WriteNull("error");
+            else w.WriteString("error", facts.Error);
+            w.WriteEndObject();
+            return;
+        }
+        w.WriteString("family_id", facts.FamilyId);
+        w.WriteString("view_id", facts.ViewId);
+        w.WriteString("generation_name", facts.GenerationName);
+        w.WriteNumber("manifest_generation", facts.ManifestGeneration);
+        w.WriteString("manifest_hash", facts.ManifestHash);
+        w.WriteNumber("store_log_sequence", facts.StoreLogSequence);
+        w.WriteString("index_level", facts.IndexLevel);
+        w.WriteString("resolution_state", facts.ResolutionState);
+        if (facts.ResolutionBaseId is null) w.WriteNull("resolution_base_id");
+        else w.WriteString("resolution_base_id", facts.ResolutionBaseId);
+        if (facts.ResolutionDeltaGeneration is { } delta) w.WriteNumber("resolution_delta_generation", delta);
+        else w.WriteNull("resolution_delta_generation");
+        if (facts.ResolutionExactAt is { } exactAt) w.WriteNumber("resolution_exact_at", exactAt);
+        else w.WriteNull("resolution_exact_at");
+        w.WriteBoolean("legacy_artifact_present", facts.LegacyArtifactPresent);
+        w.WriteString("migration_state", facts.MigrationState);
+        w.WriteString("rollback_state", facts.RollbackState);
         w.WriteEndObject();
     }
 
@@ -806,6 +917,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("rebound_from");
                 WriteRebindProvenanceJson(w, rebindProvenance);
+            }
+
+            if (facts.Store is { } store)
+            {
+                w.WritePropertyName("store");
+                WriteStoreProvenanceJson(w, store);
             }
 
             w.WritePropertyName("index");
@@ -1147,6 +1264,8 @@ public static class WorkspaceRender
             sb.Append("scan_failure: ").Append(HealthCompactValue(scanFailureLabel)).Append('\n');
         if (RebindProvenanceLabel(status.RebindProvenance) is { } rebindLabel)
             sb.Append("rebound_from: ").Append(HealthCompactValue(rebindLabel)).Append('\n');
+        if (status.Store is { } store)
+            sb.Append("store: ").Append(HealthCompactValue(StoreProvenanceLabel(store))).Append('\n');
         if (facts.History is { } history)
             sb.Append("history_db: ").Append(HealthCompactValue(HistorySidecarLabel(history))).Append('\n');
         sb.Append("quality: ")
@@ -1340,6 +1459,12 @@ public static class WorkspaceRender
             {
                 w.WritePropertyName("rebound_from");
                 WriteRebindProvenanceJson(w, healthRebindProvenance);
+            }
+
+            if (status.Store is { } store)
+            {
+                w.WritePropertyName("store");
+                WriteStoreProvenanceJson(w, store);
             }
 
             w.WritePropertyName("index");

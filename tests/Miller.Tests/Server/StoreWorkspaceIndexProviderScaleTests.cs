@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Tools;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
@@ -85,6 +86,21 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     WorkspaceRefreshResult result = crossRefresh.Refresh(first.Workspace.WorkspaceId!);
                     Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
                     Assert.Equal(pointer.FamilyId.ToString("D"), result.ArtifactId);
+
+                    WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(
+                        registry.Get(first.Workspace.WorkspaceId!));
+                    WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+                        registry,
+                        row,
+                        WorkspaceRegisteredFactsProfile.CliStatus,
+                        SymbolSearchSidecar.Disabled,
+                        new ContentCorpusSidecar(),
+                        new VectorSidecar(SemanticMode.Off),
+                        storeEnabled: true);
+                    Assert.Equal("ready", facts.Store?.State);
+                    Assert.Equal(pointer.FamilyId.ToString("D"), facts.Store?.FamilyId);
+                    Assert.Equal(pointer.ViewId, facts.Store?.ViewId);
+                    Assert.Equal("legacy_preserved", facts.Store?.MigrationState);
                 }
                 Assert.True(freshness.PollNow().Swapped);
                 Assert.Contains(

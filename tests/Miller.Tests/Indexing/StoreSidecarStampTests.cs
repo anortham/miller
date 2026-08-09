@@ -55,6 +55,21 @@ public sealed class StoreSidecarStampTests : IDisposable
     }
 
     [Fact]
+    public void StoreStatusFactsReportMissingSidecarsAgainstThePinnedCursor()
+    {
+        Directory.CreateDirectory(_root);
+        WorkspaceReadSnapshot snapshot = Snapshot("manifest-a", sequence: 4);
+
+        SearchSidecarFacts search = new SymbolSearchSidecar(enabled: true).InspectStore(_root, snapshot);
+        ContentCorpusFacts content = new ContentCorpusSidecar().InspectStore(_root, snapshot);
+
+        Assert.Equal("missing", search.State);
+        Assert.Equal(4, search.ExpectedRevision);
+        Assert.Equal("missing", content.State);
+        Assert.Equal(4, content.WorkspaceRevision);
+    }
+
+    [Fact]
     public void VectorSidecarRefusesEveryNonExactFamilyViewCursor()
     {
         Directory.CreateDirectory(_root);

@@ -135,7 +135,13 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                     visibility.ViewId,
                     freshness,
                     visibility.IndexLevel,
-                    WorkspaceReadMode.FamilyStore);
+                    WorkspaceReadMode.FamilyStore,
+                    visibility.GenerationName,
+                    visibility.ManifestGeneration,
+                    visibility.ResolutionState,
+                    visibility.ResolutionBaseId,
+                    visibility.ResolutionDeltaGeneration,
+                    visibility.ResolutionExactAt);
                 return new FamilyStoreReadSession(connection, visibility, snapshot);
             }
             catch

@@ -198,6 +198,63 @@ public sealed class WorkspaceRenderTests
         Assert.DoesNotContain(@"\\.\pipe\", text);
     }
 
+    [Fact]
+    public void Status_AndHealth_SurfaceFamilyStoreProvenanceWithoutChangingLegacyOutput()
+    {
+        var store = new StoreWorkspaceFacts(
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-worktree",
+            GenerationName: "GEN-00000000000000000007",
+            ManifestGeneration: 7,
+            ManifestHash: "blake3:manifest",
+            StoreLogSequence: 91,
+            IndexLevel: "full",
+            ResolutionState: "exact",
+            ResolutionBaseId: "base-blake3:manifest-1",
+            ResolutionDeltaGeneration: 3,
+            ResolutionExactAt: 91,
+            LegacyArtifactPresent: true,
+            MigrationState: "legacy_preserved",
+            RollbackState: "available");
+        WorkspaceFacts facts = Facts() with { Store = store };
+
+        string compact = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+        string healthCompact = WorkspaceRender.Health(HealthFacts(facts), json: false);
+        JsonElement statusJson = Json(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+        JsonElement healthJson = Json(WorkspaceRender.Health(HealthFacts(facts), json: true));
+
+        const string expected =
+            "store: family=11111111-1111-4111-8111-111111111111  view=view-worktree  " +
+            "generation=7  manifest=blake3:manifest  sequence=91  level=full  resolution=exact  " +
+            "migration=legacy_preserved  rollback=available";
+        Assert.Contains(expected, compact);
+        Assert.Contains(expected, healthCompact);
+        Assert.Equal("view-worktree", statusJson.GetProperty("store").GetProperty("view_id").GetString());
+        Assert.Equal(7, statusJson.GetProperty("store").GetProperty("manifest_generation").GetInt64());
+        Assert.Equal("exact", statusJson.GetProperty("store").GetProperty("resolution_state").GetString());
+        Assert.Equal("available", healthJson.GetProperty("store").GetProperty("rollback_state").GetString());
+        Assert.DoesNotContain("\"store\"", WorkspaceRender.Status(Facts(), TelemetrySummary.Empty, json: true));
+    }
+
+    [Fact]
+    public void Status_SurfacesStoreIncompatibilityWithoutInventingManifestFacts()
+    {
+        WorkspaceFacts facts = Facts() with
+        {
+            Store = StoreWorkspaceFacts.Unavailable(
+                "incompatible",
+                "schema_incompatible",
+                "store schema 3 is newer than supported schema 2"),
+        };
+
+        string compact = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
+        JsonElement json = Json(WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: true));
+
+        Assert.Contains("store: state=incompatible  failure=schema_incompatible", compact);
+        Assert.Equal("incompatible", json.GetProperty("store").GetProperty("state").GetString());
+        Assert.False(json.GetProperty("store").TryGetProperty("manifest_generation", out _));
+    }
+
     // ---- W3 machine-wide scan governor (additive, must stay invisible when idle/disabled/absent) ----
 
     private static ScanGovernorSnapshot WaitingGovernor() => new(

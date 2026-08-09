@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using Miller.Indexing.Reads;
 
 namespace Miller.Dashboard;
 
@@ -17,18 +18,21 @@ public static class DashboardIndexFactsCache
             ? seconds
             : 30);
 
-    public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace)
+    public static DashboardWorkspaceFacts Read(DashboardWorkspaceRow workspace, bool? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+        if (storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return DashboardIndexFactsReader.Read(workspace, storeEnabled: true);
+
         if (DefaultTtl <= TimeSpan.Zero)
-            return DashboardIndexFactsReader.Read(workspace);
+            return DashboardIndexFactsReader.Read(workspace, storeEnabled: false);
 
         string key = BuildKey(workspace);
         long writeTicks = TryGetIndexWriteTicks(workspace.IndexDbPath);
         if (Entries.TryGetValue(key, out CacheEntry? cached) && cached.IsFresh(writeTicks, DefaultTtl))
             return cached.Facts;
 
-        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace);
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: false);
         Entries[key] = new CacheEntry(facts, writeTicks, DateTime.UtcNow);
         return facts;
     }
