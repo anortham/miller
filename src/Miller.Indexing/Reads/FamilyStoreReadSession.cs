@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing.Store;
@@ -133,7 +134,15 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                     visibility.ManifestGeneration,
                     visibility.ManifestHash,
                     visibility.StoreLogSequence,
-                    ResolutionStamp(visibility));
+                    ResolutionStamp(visibility),
+                    StoreInstanceId: visibility.StoreInstanceId,
+                    ViewId: visibility.ViewId,
+                    GenerationName: visibility.GenerationName,
+                    ManifestGeneration: visibility.ManifestGeneration,
+                    IndexLevel: visibility.IndexLevel,
+                    LevelStampL1: visibility.LevelStampL1,
+                    LevelStampL2: visibility.LevelStampL2,
+                    LevelStampL3: visibility.LevelStampL3);
                 var snapshot = new WorkspaceReadSnapshot(
                     visibility.WorkspaceRoot,
                     workspaceId,
@@ -302,6 +311,10 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
 
         string indexLevel = ReadIndexLevel(connection, binding.ViewId, manifestGeneration);
         long sequence = ReadStoreLogSequence(connection, binding.ViewId, manifestGeneration);
+        (string LevelStampL1, string LevelStampL2, string LevelStampL3) levelStamps = ReadLevelStamps(
+            connection,
+            binding.ViewId,
+            manifestGeneration);
         return new StoreVisibility(
             binding.FamilyId.ToString("D", CultureInfo.InvariantCulture),
             storeRoot,
@@ -317,7 +330,11 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             deltaGeneration,
             exactAt,
             sequence,
-            indexLevel);
+            indexLevel,
+            StoreInstanceId(binding.FamilyId, generationName),
+            levelStamps.LevelStampL1,
+            levelStamps.LevelStampL2,
+            levelStamps.LevelStampL3);
     }
 
     private static string ReadIndexLevel(
@@ -371,6 +388,59 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         command.Parameters.AddWithValue("$generation", manifestGeneration);
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
+
+    private static (string LevelStampL1, string LevelStampL2, string LevelStampL3) ReadLevelStamps(
+        SqliteConnection connection,
+        string viewId,
+        long manifestGeneration)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT e.version_id,v.complete_l1,v.complete_l2,v.complete_l3
+            FROM manifest_entries AS e
+            LEFT JOIN file_versions AS v ON v.version_id=e.version_id
+            WHERE e.view_id=$view_id AND e.generation=$generation
+            ORDER BY e.version_id,e.path
+            """;
+        command.Parameters.AddWithValue("$view_id", viewId);
+        command.Parameters.AddWithValue("$generation", manifestGeneration);
+        using SqliteDataReader reader = command.ExecuteReader();
+        var l1 = new StringBuilder();
+        var l2 = new StringBuilder();
+        var l3 = new StringBuilder();
+        while (reader.Read())
+        {
+            string versionId = reader.IsDBNull(0)
+                ? "null"
+                : reader.GetInt64(0).ToString(CultureInfo.InvariantCulture);
+            AppendLevelStamp(l1, versionId, reader, 1);
+            AppendLevelStamp(l2, versionId, reader, 2);
+            AppendLevelStamp(l3, versionId, reader, 3);
+        }
+
+        return (HashText(l1), HashText(l2), HashText(l3));
+    }
+
+    private static void AppendLevelStamp(
+        StringBuilder builder,
+        string versionId,
+        SqliteDataReader reader,
+        int ordinal)
+    {
+        builder.Append(versionId).Append('=');
+        if (reader.IsDBNull(ordinal))
+            builder.Append("null");
+        else
+            builder.Append(reader.GetInt64(ordinal).ToString(CultureInfo.InvariantCulture));
+        builder.Append('\n');
+    }
+
+    private static string HashText(StringBuilder value) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value.ToString())));
+
+    private static string StoreInstanceId(Guid familyId, string generationName) =>
+        familyId.ToString("D", CultureInfo.InvariantCulture) + ":" + generationName;
 
     private static void CreateCompatibilityProjection(
         SqliteConnection connection,

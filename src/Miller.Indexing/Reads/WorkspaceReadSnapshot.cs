@@ -14,7 +14,15 @@ public sealed record WorkspaceFreshnessToken(
     string? ResolutionStamp = null,
     string? SearchStamp = null,
     string? ContentStamp = null,
-    string? VectorStamp = null);
+    string? VectorStamp = null,
+    string? StoreInstanceId = null,
+    string? ViewId = null,
+    string? GenerationName = null,
+    long? ManifestGeneration = null,
+    string? IndexLevel = null,
+    string? LevelStampL1 = null,
+    string? LevelStampL2 = null,
+    string? LevelStampL3 = null);
 
 public sealed record WorkspaceReadSnapshot(
     string WorkspaceRoot,
@@ -35,11 +43,17 @@ public sealed record WorkspaceReadSnapshot(
         ? string.Join(
             ':',
             "store",
-            ArtifactOrStoreId,
-            ViewId,
-            GenerationName,
-            ManifestGeneration,
+            Freshness.StoreInstanceId ?? ArtifactOrStoreId,
+            Freshness.ViewId ?? ViewId,
+            Freshness.GenerationName ?? GenerationName,
+            Freshness.ManifestGeneration ?? ManifestGeneration,
             Freshness.ManifestHash,
+            Freshness.StoreLogSequence,
+            Freshness.IndexLevel ?? IndexLevel,
+            Freshness.LevelStampL1,
+            Freshness.LevelStampL2,
+            Freshness.LevelStampL3,
+            Freshness.ResolutionStamp,
             ResolutionBaseId,
             ResolutionDeltaGeneration,
             ResolutionExactAt)

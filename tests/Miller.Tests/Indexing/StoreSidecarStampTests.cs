@@ -31,6 +31,10 @@ public sealed class StoreSidecarStampTests : IDisposable
         StoreSidecarCatalog.Stamp(databasePath, expected);
 
         Assert.Equal(expected, StoreSidecarCatalog.TryRead(databasePath));
+        Assert.Equal("family-a:gen-001", expected.StoreInstanceId);
+        Assert.Equal("gen-001", expected.GenerationName);
+        Assert.Equal(3, expected.ManifestGeneration);
+        Assert.Equal(IndexLevels.FullMetadataValue, expected.IndexLevel);
         Assert.True(StoreSidecarCatalog.IsCurrent(databasePath, expected));
         Assert.False(StoreSidecarCatalog.IsCurrent(
             databasePath,
@@ -39,6 +43,40 @@ public sealed class StoreSidecarStampTests : IDisposable
             Path.Combine(PathCanonicalizer.CanonicalizeRoot(_root), "sidecars"),
             databasePath,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StampUpgradesAnOlderCompletenessSchemaBeforePublishingTheNewToken()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Vector, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE store_sidecar_stamp(
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    kind TEXT NOT NULL,
+                    family_id TEXT NOT NULL,
+                    view_id TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL,
+                    store_log_sequence INTEGER NOT NULL,
+                    resolution_stamp TEXT);
+                INSERT INTO store_sidecar_stamp VALUES (1,'vector','family-a','view-a','old',1,'old');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
+            StoreSidecarKind.Vector,
+            Snapshot("manifest-new", sequence: 19));
+
+        StoreSidecarCatalog.Stamp(databasePath, expected);
+
+        Assert.Equal(expected, StoreSidecarCatalog.TryRead(databasePath));
     }
 
     [Fact]
@@ -112,7 +150,22 @@ public sealed class StoreSidecarStampTests : IDisposable
             "workspace-a",
             "family-a",
             "view-a",
-            new WorkspaceFreshnessToken("family-a", 3, manifestHash, sequence, "resolution-a"),
+            new WorkspaceFreshnessToken(
+                "family-a",
+                3,
+                manifestHash,
+                sequence,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
             IndexLevels.FullMetadataValue,
-            WorkspaceReadMode.FamilyStore);
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 3);
 }

@@ -15,4 +15,8 @@ public sealed record StoreVisibility(
     long? ResolutionDeltaGeneration,
     long? ResolutionExactAt,
     long StoreLogSequence,
-    string IndexLevel);
+    string IndexLevel,
+    string StoreInstanceId,
+    string LevelStampL1,
+    string LevelStampL2,
+    string LevelStampL3);

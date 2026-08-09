@@ -176,9 +176,19 @@ public sealed class ContentCorpusContextReaderTests : IDisposable
                 "11111111-1111-4111-8111-111111111111",
                 7,
                 ManifestHash: "manifest-a",
-                StoreLogSequence: 9),
+                StoreLogSequence: 9,
+                StoreInstanceId: "11111111-1111-4111-8111-111111111111:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 7,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
             IndexLevels.FullMetadataValue,
-            WorkspaceReadMode.FamilyStore);
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 7);
         string storeContentPath = StoreSidecarCatalog.PathFor(
             storeRoot,
             StoreSidecarKind.Content,

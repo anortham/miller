@@ -61,6 +61,7 @@ public sealed class IndexerService : BackgroundService
     private readonly ILogger<IndexerService> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly Func<WorkspaceContext, string, string, IExtractOps> _createOps;
+    private readonly Func<WorkspaceContext, string?> _readIndexLevel;
     private readonly Func<string, FullScanDrainResult> _drainFullScanRequests;
     private readonly Func<string, FileConvergeDrainResult> _drainFileConvergeRequests;
 
@@ -205,7 +206,8 @@ public sealed class IndexerService : BackgroundService
         Func<WorkspaceContext, IReadOnlySet<string>?>? fetchSupportedExtensions = null,
         ScanGovernor? scanGovernor = null,
         TimeSpan? scanGovernorWait = null,
-        TimeSpan? opsGateWait = null)
+        TimeSpan? opsGateWait = null,
+        Func<WorkspaceContext, string?>? readIndexLevel = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
@@ -220,6 +222,7 @@ public sealed class IndexerService : BackgroundService
         _logger = logger;
         _loggerFactory = loggerFactory;
         _createOps = createOps;
+        _readIndexLevel = readIndexLevel ?? ReadIndexLevel;
         _drainFullScanRequests = drainFullScanRequests ?? LeaderScanRequestQueue.DrainFullScanRequests;
         _drainFileConvergeRequests = drainFileConvergeRequests ?? LeaderScanRequestQueue.DrainFileConvergeRequests;
         _leaderRetryInterval = leaderRetryInterval;
@@ -575,15 +578,41 @@ public sealed class IndexerService : BackgroundService
     // latch is a set, and a completed full-level force reads back as nothing owed.
     private void RequestLevelUpgradeIfOwed(WorkspaceContext workspace)
     {
-        if (workspace.CanonicalExtractDbPath is not { } canonicalDbPath)
-            return;
         IndexLevelPolicy policy = IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId);
-        if (!IndexLevels.UpgradeOwed(ExtractIndexLevelReader.Read(canonicalDbPath), policy))
+        string? recordedLevel;
+        try
+        {
+            recordedLevel = _readIndexLevel(workspace);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning("Could not read the served index level while checking for a store upgrade: {Error}", ex.Message);
+            return;
+        }
+        if (!IndexLevels.UpgradeOwed(recordedLevel, policy))
             return;
         _logger.LogInformation(
             "Index artifact is a symbols-level index and policy wants full; scheduling the background " +
             "level-upgrade rebuild.");
         _core?.RequestWholeRepoScan(ScanIntent.LevelUpgrade);
+    }
+
+    internal void RequestLevelUpgradeIfOwedForTest(WorkspaceContext workspace) =>
+        RequestLevelUpgradeIfOwed(workspace);
+
+    private static string? ReadIndexLevel(WorkspaceContext workspace)
+    {
+        string databasePath = workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath;
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return ExtractIndexLevelReader.Read(databasePath);
+
+        string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            databasePath,
+            root,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        return session.Snapshot.IndexLevel;
     }
 
     /// <summary>

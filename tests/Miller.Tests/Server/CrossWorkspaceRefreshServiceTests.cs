@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Cli;
 using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
@@ -251,6 +252,35 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.True(result.Scanned);
         Assert.Equal(9, result.Revision);
         Assert.Equal(9, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_MalformedStorePointer_ForcesSourceReconciliationBeforeServingLegacyArtifact()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("malformed-store-pointer");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        bool? observedForce = null;
+        var service = NewService(
+            registry,
+            scan: (_, _, force, _, _) =>
+            {
+                observedForce = force;
+                return Report(root, dbPath, "target-ws", revision: 2);
+            },
+            acquireLock: _ => new NoopLease(),
+            storeClient: new UnexpectedStoreClient());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.True(observedForce);
+        Assert.Contains("family-store rollback export could not be used", result.WarningText, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(root, ".miller", "store.json")));
     }
 
     [Fact]
@@ -1182,7 +1212,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Func<string, string?>? readArtifactId = null,
         ScanGovernor? governor = null,
         TimeSpan? governorForceWait = null,
-        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null)
+        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
+        IJulieStoreClient? storeClient = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -1200,7 +1231,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             readArtifactId: readArtifactId ?? (_ => null),
             governor: governor,
             governorForceWait: governorForceWait,
-            failurePolicyFor: failurePolicyFor);
+            failurePolicyFor: failurePolicyFor,
+            storeClient: storeClient);
     }
 
     [Fact]
@@ -1409,6 +1441,12 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         public void Dispose()
         {
         }
+    }
+
+    private sealed class UnexpectedStoreClient : IJulieStoreClient
+    {
+        public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The malformed pointer must be rejected before invoking julie-extract.");
     }
 
     private sealed class FakeClock

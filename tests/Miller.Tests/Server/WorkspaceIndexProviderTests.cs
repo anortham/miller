@@ -119,13 +119,17 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         using WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
         snapshot = StoreSnapshot(root, "manifest-b");
         using WorkspaceReadContext afterManifestChange = provider.Resolve("target-ws", ensureFresh: false);
+        snapshot = StoreSnapshot(root, "manifest-b", IndexLevels.SymbolsMetadataValue);
+        using WorkspaceReadContext afterLevelChange = provider.Resolve("target-ws", ensureFresh: false);
 
         Assert.Equal(WorkspaceReadMode.FamilyStore, first.Snapshot.Mode);
         Assert.Equal("manifest-a", first.Snapshot.Freshness.ManifestHash);
         Assert.Same(first.Index, second.Index);
         Assert.NotSame(first.Index, afterManifestChange.Index);
+        Assert.NotSame(afterManifestChange.Index, afterLevelChange.Index);
         Assert.Equal("manifest-b", afterManifestChange.Snapshot.Freshness.ManifestHash);
-        Assert.Equal(2, loadCount);
+        Assert.Equal(IndexLevels.SymbolsMetadataValue, afterLevelChange.Snapshot.IndexLevel);
+        Assert.Equal(3, loadCount);
     }
 
     [Fact]
@@ -1624,15 +1628,33 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadSessionIndex,
             loadSessionSymbolSearch);
 
-    private static WorkspaceReadSnapshot StoreSnapshot(string root, string manifestHash) =>
+    private static WorkspaceReadSnapshot StoreSnapshot(
+        string root,
+        string manifestHash,
+        string indexLevel = IndexLevels.FullMetadataValue) =>
         new(
             root,
             "target-ws",
             "family-a",
             "view-a",
-            new WorkspaceFreshnessToken("family-a", 7, manifestHash, 12, "resolution-a"),
-            IndexLevels.FullMetadataValue,
-            WorkspaceReadMode.FamilyStore);
+            new WorkspaceFreshnessToken(
+                "family-a",
+                7,
+                manifestHash,
+                12,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 7,
+                IndexLevel: indexLevel,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: indexLevel == IndexLevels.FullMetadataValue ? "l3-a" : null),
+            indexLevel,
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 7);
 
     private sealed class StubReadSession(WorkspaceReadSnapshot snapshot) : IWorkspaceReadSession
     {

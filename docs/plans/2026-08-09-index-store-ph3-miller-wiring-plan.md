@@ -2,11 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Goal:** Pin Miller to the published `julie-extract 2.31.0` release and make Miller create, refresh, and read family stores through the frozen v4 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
+**Status:** A1-A7 cleanup complete 2026-08-09. This wiring plan is retained as the implementation
+record; the lock-order/freshness amendment is shipped, while Ph4 dashboard work and Ph5 physical
+validation/default-on decisions remain.
+
+**Goal:** Pin Miller to the published `julie-extract 2.31.1` release and make Miller create, refresh, and read family stores through the amended v4.1 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
 
 **Architecture:** Introduce one deep `IWorkspaceReadSession` seam in `Miller.Indexing`. A legacy adapter preserves current standalone-artifact behavior and a family-store adapter owns pointer/registry validation, generation pins, the session visibility table, attached resolution/sidecar files, and the freshness token. A separate `JulieStoreClient` owns the public `julie-extract store ... --json` protocol; `StoreWorkspaceCoordinator` composes that client with Miller's registry, governor, bootstrap, and refresh paths without reimplementing Rust store semantics.
 
-**Tech Stack:** .NET 10, C# 13, Microsoft.Data.Sqlite, SQLite WAL/FTS5, xUnit, the published `julie-extract 2.31.0` CLI and store schema v2.
+**Tech Stack:** .NET 10, C# 13, Microsoft.Data.Sqlite, SQLite WAL/FTS5, xUnit, the published `julie-extract 2.31.1` CLI and store schema v2.
 
 **Architecture Quality:**
 
@@ -20,7 +24,7 @@
 
 ## Global Constraints
 
-- The published producer is `julie-extract 2.31.0`; legacy SQLite schema `6`, extraction contract `4`, report schema `3`, and JSONL schema `4` remain unchanged.
+- The published producer is `julie-extract 2.31.1`; legacy SQLite schema `6`, extraction contract `4`, report schema `3`, and JSONL schema `4` remain unchanged.
 - The family store contract is store contract `1`, store SQLite schema `2`, format epoch `1`, and request/maintenance report schema `1`.
 - A family is one git common-dir lineage; a non-git workspace is a family of one.
 - `family_id` is a UUID minted at family creation and stored in store metadata, the registry family row, and each member workspace pointer file. It is never a path hash.
@@ -42,7 +46,7 @@
 
 ## Verification Strategy
 
-**Project source of truth:** `AGENTS.md` testing/build rules, `docs/plans/2026-08-07-index-store-v4-contract.md`, `docs/plans/2026-08-06-index-store-views-program.md`, and the published `julie-extract 2.31.0` release contracts.
+**Project source of truth:** `AGENTS.md` testing/build rules, `docs/plans/2026-08-07-index-store-v4-contract.md`, `docs/plans/2026-08-06-index-store-views-program.md`, and the published `julie-extract 2.31.1` release contracts.
 
 **Worker red/green scope:** the smallest named xUnit class or method through `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~<test>`; store subprocess tests also include `Category=Scale`.
 
@@ -52,7 +56,7 @@
 
 **Lead affected-change scope:** `dotnet build Miller.slnx -c Release`, `scripts/test.sh`, and focused Scale classes for store protocol, read equivalence, coordinator takeover, migration, and rollback.
 
-**Branch gate:** `scripts/test.sh all`, `scripts/test-plugin.sh`, release build with the restored `2.31.0` binary, and the Ph3 end-to-end acceptance harness.
+**Branch gate:** `scripts/test.sh all`, `scripts/test-plugin.sh`, release build with the restored `2.31.1` binary, and the reopened Ph3 end-to-end acceptance harness.
 
 **Security scope:** none declared; this plan adds no dependency, credential, network listener, or write surface outside existing local CLI/SQLite paths.
 
@@ -68,7 +72,7 @@
 
 | Task | Parallel batch | File ownership | Serialization required | Dependency reason |
 |---|---|---|---|---|
-| Task 1: Adopt 2.31.0 | Batch A | `scripts/julie-pins.json`; `src/Miller.Indexing/MillerExtractContract.cs`; pinned-version assertions; adoption tests/doc | No | Mechanical pin/contract work is independent of new store modules. |
+| Task 1: Adopt 2.31.1 | Batch A | `scripts/julie-pins.json`; `src/Miller.Indexing/MillerExtractContract.cs`; pinned-version assertions; adoption tests/doc | No | Mechanical pin/contract work is independent of new store modules. |
 | Task 2: Store process contract | Batch A | new `src/Miller.Indexing/Store/JulieStoreContract.cs`, `JulieStoreClient.cs`, `StoreReports.cs`; store-client tests | No | Uses only the published CLI contract and does not touch provider/registry code. |
 | Task 3: Registry family/view identity | Batch A | `WorkspaceRegistry.cs`, `WorkspaceRegistryModels.cs`, new family resolver/pointer files, registry tests | No | New schema columns and resolution logic are independent until orchestration consumes them. |
 | Task 4: Read-session seam and legacy adapter | None - serial | new read-session files; `SqliteReadOnlyAccess.cs`; extraction readers; `WorkspaceReadContext.cs`; provider/read tests | Yes | Must establish byte-identical legacy behavior before the store adapter and sidecars use the seam. |
@@ -79,7 +83,7 @@
 
 All tasks use `serial-worker-commit` in a no-delegation run. If delegation becomes available, Batch A uses `parallel-lead-commit`; all later tasks remain serial.
 
-### Task 1: Adopt the published julie-extract 2.31.0 release
+### Task 1: Adopt the published julie-extract 2.31.1 release
 
 **Files:**
 - Modify: `scripts/julie-pins.json`
@@ -87,24 +91,24 @@ All tasks use `serial-worker-commit` in a no-delegation run. If delegation becom
 - Modify: `tests/Miller.Tests/Indexing/JulieSchemaGateTests.cs`
 - Modify: `tests/Miller.Tests/Indexing/MillerExtractContractTests.cs`
 - Modify: `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
-- Create: `docs/findings/2026-08-09-julie-extract-2.31.0-adoption.md`
+- Create: `docs/findings/2026-08-09-julie-extract-2.31.1-adoption.md`
 
 **Interfaces:**
-- Consumes: live release `v2.31.0`, four public archive names/digests, legacy contract versions, store contract versions.
+- Consumes: live release `v2.31.1`, four public archive names/digests, legacy contract versions, store contract versions.
 - Produces: one restored `.tools/julie-extract` whose version and archive digest match the pin; checked-in producer contract constants for later tasks.
 
 **Contract inputs:** archive SHA-256: Apple ARM `2265be55ec682b9079995aff34841d29b82a9be3a5d8161629bf79353e00ec4f`; Apple x64 `552521d19d65e42362c72f55cbe9dbe2a04648632854af4e36d03de72c10f58f`; Linux x64 `ba9f5f151546aec2f33c5bdc244d1c897793f9158ec4f3e40e6cfc7c7c0f6334`; Windows x64 `9e978620f578830cd53a778e5e5780b9a3daef4a0debca4a3b26c567783bcf8d`.
 
 **Steps:**
 
-1. Change only test expectations to `2.31.0`; run the focused pin tests and capture the expected `2.30.0` failure.
+1. Change only test expectations to `2.31.1`; run the focused pin tests and capture the expected `2.30.0` failure.
 2. Update all four digests and `PinnedJulieExtractVersion`; keep legacy schema/contract constants unchanged and add store constants `1/2/1/1` in `JulieStoreContract` when Task 2 lands.
 3. Replace the worktree's setup-only `.tools` symlink with a local ignored directory, run `scripts/restore-julie-extract.sh`, and verify `.tools/julie-extract --version` plus the restored archive digest.
 4. Run focused pin tests, release build, and record live/downloaded asset evidence.
-5. Commit `chore: adopt julie-extract 2.31.0` after the Goldfish checkpoint.
+5. Commit `chore: adopt julie-extract 2.31.1` after the Goldfish checkpoint.
 
 **Acceptance criteria:**
-- [x] Pin JSON, contract constant, direct assertions, restored binary, and downloaded release agree on `2.31.0`.
+- [x] Pin JSON, contract constant, direct assertions, restored binary, and downloaded release agree on `2.31.1`.
 - [x] Legacy compatibility numbers remain `6/4/3/4`; store numbers are asserted separately.
 - [x] Restore, focused tests, and Release build pass.
 
@@ -327,9 +331,11 @@ public sealed record WorkspaceReadSnapshot(
 7. Run process-kill/takeover, mixed-version, root disappearance/reuse, and concurrent-worktree Scale tests; commit.
 
 **Acceptance criteria:**
-- [x] A fresh linked worktree serves L1 from the family store without copying a standalone artifact.
-- [x] Interactive updates remain bounded behind batch chunks and no lock-order cycle exists.
-- [x] Migration and rollback never make a stale artifact look current.
+- [x] A fresh linked worktree serves L1 from the family store without copying a standalone artifact; current level-up and rollback paths are covered by focused Scale and lifecycle tests.
+- [x] Interactive updates remain bounded behind batch chunks and no lock-order cycle exists; machine
+  admission ends before sidecar convergence, and the family sidecar lease serializes all Miller-owned
+  family sidecar writers and vector lifecycle mutations.
+- [x] Migration and rollback never make a stale artifact look current; malformed-pointer and cross-workspace refresh cases force source reconciliation.
 
 ### Task 8: Surface provenance, synchronize guidance, and close Ph3 acceptance
 
@@ -361,6 +367,6 @@ public sealed record WorkspaceReadSnapshot(
 6. Run affected-change, branch, plugin, and security scopes; complete the Ph2/Ph3 program checkboxes only from evidence; commit.
 
 **Acceptance criteria:**
-- [x] Fresh worktree serving, existing contract compatibility, fast-suite budget, and honest off-switch boxes are checked with evidence.
+- [x] Fresh worktree serving, existing contract compatibility, fast-suite budget, and honest off-switch boxes are checked with current v4.1 evidence.
 - [x] Existing nine MCP tools and public read-command contracts remain unchanged except additive workspace provenance.
-- [x] No uncommitted or untracked task work remains; final worktree state is clean and ready for review.
+- [ ] No uncommitted or untracked task work remains; this remains a final handoff criterion, not a historical claim.

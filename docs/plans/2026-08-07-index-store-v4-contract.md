@@ -1,14 +1,10 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: FROZEN 2026-08-07** (cycle-3 review record in §17). The freeze was blocked on the
-G3b gate decision and unblocked by path (a): **the user explicitly accepted the marginal G3b
-measurement** (0.5069 against the fixed 0.50 ceiling, one FAIL in three runs under the plan's
-any-FAIL rule — the measured record stands unedited in
-[`../findings/2026-08-07-index-store-binding-proof.md`](../findings/2026-08-07-index-store-binding-proof.md)).
-The acceptance carries a condition: **Ph2 re-measures the G3b ratio in the Rust
-implementation with own-file resolution output as a store equivalence gate** (findings
-carried condition 1). Post-freeze changes require a version bump and a recorded reason, not
-silent edits.
+**Status: AMENDED v4.1 2026-08-09** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. This v4.1 amendment records
+execution-contract corrections discovered after the first producer/Miller implementation review;
+the corrections are normative and must not be represented as completed until the named gates pass.
+Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
 
 **Program:** [`2026-08-06-index-store-views-program.md`](2026-08-06-index-store-views-program.md).
 **Gate:** [`../findings/2026-08-06-index-store-ph0-gate.md`](../findings/2026-08-06-index-store-ph0-gate.md).
@@ -19,6 +15,23 @@ and carry the instrument that produced them.
 This document is the inter-repo seam. julie-extractors implements the write side (Ph2); Miller
 implements the read side and sidecars (Ph3). The v3 artifact contract remains in force until the
 store ships; `store export` (§10) preserves the copyable-artifact property afterwards.
+
+## 0. v4.1 post-freeze amendment register
+
+The following amendments are deliberately marked because the shipped code did not yet satisfy
+the corresponding v4 text. A1-A7 now have implementation and focused evidence; the remaining
+physical-byte aggregate and default-on decision stay in Ph5. These are normative amendments, not
+retrospective acceptance claims.
+
+| Amendment | Normative correction | State on 2026-08-09 |
+|---|---|---|
+| A1 — physical GC | `incremental_vacuum` is stepped to completion or an explicit bounded continuation; GC reports physical bytes after the final truncate checkpoint and proves shrinkage in a contract test. | Implemented and verified in producer maintenance contracts |
+| A2 — physical retention/C7 | Logical bytes select candidates, while producer-owned physical store/base/delta/scratch bytes are remeasured after GC. A persistent physical-target breach records and triggers the §12 compaction escalation; the physical ceiling remains a separate pressure guard, and Miller-owned sidecars are a separate Ph5 aggregate. | Implemented and verified; end-to-end sidecar aggregate remains Ph5 |
+| A3 — capacity preflight | Store import, update, and artifact migration preflight the documented peak capacity before allocating mutation state and return the typed capacity refusal without partial mutation. | Implemented and verified in import/update/migration contracts |
+| A4 — language parity | Equivalence, crash, mixed-version, and resolution comparisons run the complete 38-language fixture matrix and assert the observed language set. | Implemented and verified against the producer catalog |
+| A5 — rollback safety | Invalid pointer metadata may be discarded only with a forced source reconciliation before legacy serving. A valid pointer whose store cannot open is preserved and remains not-ready. Cross-workspace refresh follows the same rule. | Implemented and verified in bootstrap/refresh tests |
+| A6 — store deepening | Store level-upgrade decisions read the family-store session's committed level, not the legacy artifact. Progressive L1 stores must schedule and complete the Full upgrade. | Implemented and verified in Miller Scale coverage |
+| A7 — lock/freshness contract | The coordinator enforces machine governor → store-writer → sidecar-converger acquisition order, and the freshness token includes the pinned store instance/view/generation and per-level state required by §8. | Implemented and verified in Miller read/session, cache, sidecar, shadow, creation/recovery, GC, admission, and serialization coverage |
 
 ---
 

@@ -1219,7 +1219,7 @@ public sealed class WorkspaceIndexProvider
             ? snapshot.WorkspaceId ?? snapshot.WorkspaceRoot
             : workspaceId;
         string sourceIdentity = snapshot.Mode == WorkspaceReadMode.FamilyStore
-            ? $"store:{snapshot.ArtifactOrStoreId}:{snapshot.ViewId}:{freshness.ManifestHash}:{freshness.StoreLogSequence}:{freshness.ResolutionStamp}:{freshness.SearchStamp}:{freshness.ContentStamp}:{freshness.VectorStamp}"
+            ? $"store:{freshness.StoreInstanceId ?? snapshot.ArtifactOrStoreId}:{freshness.ViewId ?? snapshot.ViewId}:{freshness.GenerationName ?? snapshot.GenerationName}:{freshness.ManifestGeneration ?? snapshot.ManifestGeneration}:{freshness.ManifestHash}:{freshness.StoreLogSequence}:{freshness.IndexLevel ?? snapshot.IndexLevel}:{freshness.LevelStampL1}:{freshness.LevelStampL2}:{freshness.LevelStampL3}:{freshness.ResolutionStamp}:{freshness.SearchStamp}:{freshness.ContentStamp}:{freshness.VectorStamp}"
             : snapshot.ArtifactOrStoreId;
         return new CacheKey(
             resolvedWorkspaceId,
@@ -1227,7 +1227,7 @@ public sealed class WorkspaceIndexProvider
             freshness.Revision,
             freshness.StoreLogSequence ?? 0,
             0,
-            freshness.ArtifactOrStoreId,
+            freshness.StoreInstanceId ?? freshness.ArtifactOrStoreId,
             ArtifactStampState.Present);
     }
 

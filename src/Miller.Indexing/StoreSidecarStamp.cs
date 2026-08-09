@@ -18,7 +18,14 @@ public sealed record StoreSidecarStamp(
     string ViewId,
     string ManifestHash,
     long StoreLogSequence,
-    string? ResolutionStamp)
+    string? ResolutionStamp,
+    string StoreInstanceId,
+    string GenerationName,
+    long ManifestGeneration,
+    string IndexLevel,
+    string LevelStampL1,
+    string LevelStampL2,
+    string LevelStampL3)
 {
     public static StoreSidecarStamp FromSnapshot(StoreSidecarKind kind, WorkspaceReadSnapshot snapshot)
     {
@@ -26,18 +33,33 @@ public sealed record StoreSidecarStamp(
         if (snapshot.Mode != WorkspaceReadMode.FamilyStore)
             throw new ArgumentException("A family-store sidecar stamp requires a family-store snapshot.", nameof(snapshot));
         if (string.IsNullOrWhiteSpace(snapshot.Freshness.ManifestHash) ||
-            snapshot.Freshness.StoreLogSequence is null)
+            snapshot.Freshness.StoreLogSequence is null ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.StoreInstanceId) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.ViewId) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.GenerationName) ||
+            snapshot.Freshness.ManifestGeneration is null ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.IndexLevel) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.LevelStampL1) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.LevelStampL2) ||
+            string.IsNullOrWhiteSpace(snapshot.Freshness.LevelStampL3))
         {
-            throw new ArgumentException("The family-store snapshot has no complete manifest/log freshness token.", nameof(snapshot));
+            throw new ArgumentException("The family-store snapshot has no complete freshness token.", nameof(snapshot));
         }
 
         return new StoreSidecarStamp(
             kind,
             snapshot.ArtifactOrStoreId,
-            snapshot.ViewId,
+            snapshot.Freshness.ViewId,
             snapshot.Freshness.ManifestHash,
             snapshot.Freshness.StoreLogSequence.Value,
-            snapshot.Freshness.ResolutionStamp);
+            snapshot.Freshness.ResolutionStamp,
+            snapshot.Freshness.StoreInstanceId,
+            snapshot.Freshness.GenerationName,
+            snapshot.Freshness.ManifestGeneration.Value,
+            snapshot.Freshness.IndexLevel,
+            snapshot.Freshness.LevelStampL1,
+            snapshot.Freshness.LevelStampL2,
+            snapshot.Freshness.LevelStampL3);
     }
 }
 
@@ -51,7 +73,14 @@ public static class StoreSidecarCatalog
             view_id TEXT NOT NULL,
             manifest_hash TEXT NOT NULL,
             store_log_sequence INTEGER NOT NULL CHECK(store_log_sequence>=0),
-            resolution_stamp TEXT
+            resolution_stamp TEXT,
+            store_instance_id TEXT NOT NULL,
+            generation_name TEXT NOT NULL,
+            manifest_generation INTEGER NOT NULL,
+            index_level TEXT NOT NULL,
+            level_stamp_l1 TEXT NOT NULL,
+            level_stamp_l2 TEXT NOT NULL,
+            level_stamp_l3 TEXT NOT NULL
         ) STRICT;
         """;
 
@@ -93,19 +122,31 @@ public static class StoreSidecarCatalog
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
         ArgumentNullException.ThrowIfNull(stamp);
+        EnsureStampSchema(connection, transaction);
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = StampSchema + """
+        command.CommandText = """
             INSERT INTO store_sidecar_stamp(
-                singleton,kind,family_id,view_id,manifest_hash,store_log_sequence,resolution_stamp)
-            VALUES (1,$kind,$family,$view,$manifest,$sequence,$resolution)
+                singleton,kind,family_id,view_id,manifest_hash,store_log_sequence,resolution_stamp,
+                store_instance_id,generation_name,manifest_generation,index_level,
+                level_stamp_l1,level_stamp_l2,level_stamp_l3)
+            VALUES (
+                1,$kind,$family,$view,$manifest,$sequence,$resolution,
+                $instance,$generation,$generation_number,$level,$level_l1,$level_l2,$level_l3)
             ON CONFLICT(singleton) DO UPDATE SET
                 kind=excluded.kind,
                 family_id=excluded.family_id,
                 view_id=excluded.view_id,
                 manifest_hash=excluded.manifest_hash,
                 store_log_sequence=excluded.store_log_sequence,
-                resolution_stamp=excluded.resolution_stamp;
+                resolution_stamp=excluded.resolution_stamp,
+                store_instance_id=excluded.store_instance_id,
+                generation_name=excluded.generation_name,
+                manifest_generation=excluded.manifest_generation,
+                index_level=excluded.index_level,
+                level_stamp_l1=excluded.level_stamp_l1,
+                level_stamp_l2=excluded.level_stamp_l2,
+                level_stamp_l3=excluded.level_stamp_l3;
             """;
         command.Parameters.AddWithValue("$kind", KindName(stamp.Kind));
         command.Parameters.AddWithValue("$family", stamp.FamilyId);
@@ -113,6 +154,13 @@ public static class StoreSidecarCatalog
         command.Parameters.AddWithValue("$manifest", stamp.ManifestHash);
         command.Parameters.AddWithValue("$sequence", stamp.StoreLogSequence);
         command.Parameters.AddWithValue("$resolution", (object?)stamp.ResolutionStamp ?? DBNull.Value);
+        command.Parameters.AddWithValue("$instance", stamp.StoreInstanceId);
+        command.Parameters.AddWithValue("$generation", stamp.GenerationName);
+        command.Parameters.AddWithValue("$generation_number", stamp.ManifestGeneration);
+        command.Parameters.AddWithValue("$level", stamp.IndexLevel);
+        command.Parameters.AddWithValue("$level_l1", stamp.LevelStampL1);
+        command.Parameters.AddWithValue("$level_l2", stamp.LevelStampL2);
+        command.Parameters.AddWithValue("$level_l3", stamp.LevelStampL3);
         command.ExecuteNonQuery();
     }
 
@@ -134,7 +182,9 @@ public static class StoreSidecarCatalog
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT kind,family_id,view_id,manifest_hash,store_log_sequence,resolution_stamp
+                SELECT kind,family_id,view_id,manifest_hash,store_log_sequence,resolution_stamp,
+                       store_instance_id,generation_name,manifest_generation,index_level,
+                       level_stamp_l1,level_stamp_l2,level_stamp_l3
                 FROM store_sidecar_stamp WHERE singleton=1;
                 """;
             using SqliteDataReader reader = command.ExecuteReader();
@@ -146,7 +196,14 @@ public static class StoreSidecarCatalog
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.GetInt64(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5));
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetInt64(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetString(11),
+                reader.GetString(12));
         }
         catch (SqliteException)
         {
@@ -156,6 +213,50 @@ public static class StoreSidecarCatalog
 
     public static bool IsCurrent(string databasePath, StoreSidecarStamp expected) =>
         TryRead(databasePath) == expected;
+
+    private static void EnsureStampSchema(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = StampSchema;
+            create.ExecuteNonQuery();
+        }
+
+        var columns = new HashSet<string>(StringComparer.Ordinal);
+        using (var columnsCommand = connection.CreateCommand())
+        {
+            columnsCommand.Transaction = transaction;
+            columnsCommand.CommandText = "PRAGMA table_info(store_sidecar_stamp);";
+            using SqliteDataReader reader = columnsCommand.ExecuteReader();
+            while (reader.Read())
+                columns.Add(reader.GetString(1));
+        }
+
+        AddColumn(connection, transaction, columns, "store_instance_id", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, transaction, columns, "generation_name", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, transaction, columns, "manifest_generation", "INTEGER NOT NULL DEFAULT 0");
+        AddColumn(connection, transaction, columns, "index_level", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, transaction, columns, "level_stamp_l1", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, transaction, columns, "level_stamp_l2", "TEXT NOT NULL DEFAULT ''");
+        AddColumn(connection, transaction, columns, "level_stamp_l3", "TEXT NOT NULL DEFAULT ''");
+    }
+
+    private static void AddColumn(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ISet<string> columns,
+        string name,
+        string definition)
+    {
+        if (!columns.Add(name))
+            return;
+
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"ALTER TABLE store_sidecar_stamp ADD COLUMN {name} {definition};";
+        command.ExecuteNonQuery();
+    }
 
     private static string KindName(StoreSidecarKind kind) => kind switch
     {

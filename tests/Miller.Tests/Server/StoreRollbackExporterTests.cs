@@ -23,6 +23,7 @@ public sealed class StoreRollbackExporterTests : IDisposable
             new UnexpectedStoreClient());
 
         Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
         Assert.NotNull(result.Warning);
         Assert.False(File.Exists(Path.Combine(miller, "store.json")));
     }

@@ -31,6 +31,21 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal("manifest-current", session.Snapshot.Freshness.ManifestHash);
         Assert.Equal(2, session.Snapshot.Freshness.StoreLogSequence);
         Assert.Equal(IndexLevels.FullMetadataValue, session.Snapshot.IndexLevel);
+        Assert.Equal("11111111-1111-4111-8111-111111111111:gen-001", session.Snapshot.Freshness.StoreInstanceId);
+        Assert.Equal("view-a", session.Snapshot.Freshness.ViewId);
+        Assert.Equal("gen-001", session.Snapshot.Freshness.GenerationName);
+        Assert.Equal(2, session.Snapshot.Freshness.ManifestGeneration);
+        Assert.Equal(IndexLevels.FullMetadataValue, session.Snapshot.Freshness.IndexLevel);
+        Assert.NotNull(session.Snapshot.Freshness.LevelStampL1);
+        Assert.NotNull(session.Snapshot.Freshness.LevelStampL2);
+        Assert.NotNull(session.Snapshot.Freshness.LevelStampL3);
+        Assert.NotEqual(
+            session.Snapshot.IndexIdentity,
+            (session.Snapshot with
+            {
+                Freshness = session.Snapshot.Freshness with { IndexLevel = IndexLevels.SymbolsMetadataValue },
+                IndexLevel = IndexLevels.SymbolsMetadataValue,
+            }).IndexIdentity);
     }
 
     [Fact]

@@ -487,6 +487,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 canonicalRoot,
                 canonicalDbPath,
                 JulieStoreClient.Locate(ctx.ToolsRoot));
+            bool rollbackRequiresSourceRebuild = rollback.RequiresSourceRebuild;
             if (rollback.Warning is { } rollbackWarning)
                 _logger.LogWarning("{Warning}", rollbackWarning);
 
@@ -518,8 +519,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             {
                 var probe = ReadBootstrapScanDecision(canonicalDbPath, canonicalRoot);
                 existingRootPath = probe.ExistingRootPath;
-                return rootReplaced || persistedRootReplaced
-                    ? EscalateForReplacedRoot(probe.Decision)
+                if (rootReplaced || persistedRootReplaced)
+                    return EscalateForReplacedRoot(probe.Decision);
+                return rollbackRequiresSourceRebuild
+                    ? EscalateForStoreRollback(probe.Decision)
                     : probe.Decision;
             }
 
@@ -1301,6 +1304,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         return new BootstrapScanDecision(
             ShouldScan: true,
             ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.RootRebind }),
+            WorkspaceRegistryState.Ready);
+    }
+
+    internal static BootstrapScanDecision EscalateForStoreRollback(BootstrapScanDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+
+        return new BootstrapScanDecision(
+            ShouldScan: true,
+            ScanIntentPolicy.Strongest(new[] { decision.Intent, ScanIntent.CorruptionHeal }),
             WorkspaceRegistryState.Ready);
     }
 

@@ -137,7 +137,22 @@ public sealed class VectorSidecarTests : IDisposable
             "workspace-a",
             "family-a",
             "view-a",
-            new WorkspaceFreshnessToken("family-a", 3, "manifest-a", 17, "resolution-a"),
+            new WorkspaceFreshnessToken(
+                "family-a",
+                3,
+                "manifest-a",
+                17,
+                "resolution-a",
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 3,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1-a",
+                LevelStampL2: "l2-a",
+                LevelStampL3: "l3-a"),
             IndexLevels.FullMetadataValue,
-            WorkspaceReadMode.FamilyStore);
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "gen-001",
+            ManifestGeneration: 3);
 }

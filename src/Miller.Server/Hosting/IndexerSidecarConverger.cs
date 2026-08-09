@@ -115,9 +115,12 @@ internal sealed class IndexerSidecarConverger
         if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
             throw new ArgumentException("Store sidecar convergence requires a family-store read session.", nameof(session));
 
-        _ensureStoreContent?.Invoke(storeRoot, session);
-        if (_searchEnabled)
-            _ensureStoreSearch?.Invoke(storeRoot, session);
+        using (FamilyStoreSidecarWriteLease.AcquireFor(storeRoot))
+        {
+            _ensureStoreContent?.Invoke(storeRoot, session);
+            if (_searchEnabled)
+                _ensureStoreSearch?.Invoke(storeRoot, session);
+        }
 
         long target = session.Snapshot.Freshness.StoreLogSequence
             ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");

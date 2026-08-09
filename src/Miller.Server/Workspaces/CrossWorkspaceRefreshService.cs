@@ -229,6 +229,19 @@ public sealed class CrossWorkspaceRefreshService
         if (lease is null)
             return WaitForExternalRevision(row, force, millerDir, total, useStore);
 
+        string? rollbackWarning = null;
+        bool sourceRebuildRequired = false;
+        if (!useStore && _storeClient is { } storeClient)
+        {
+            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
+                row.CanonicalRoot,
+                row.IndexDbPath,
+                storeClient);
+            rollbackWarning = rollback.Warning;
+            sourceRebuildRequired = rollback.RequiresSourceRebuild;
+        }
+        bool effectiveForce = force || sourceRebuildRequired;
+
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
         // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
         // A refusal is not a workspace error — the index stays valid, so the registry row is left untouched.
@@ -253,7 +266,9 @@ public sealed class CrossWorkspaceRefreshService
         // Evaluated BEFORE machine-wide admission is taken: an attempt the backoff will not allow must not first
         // queue for (or hold) the one lease every other workspace's scan is waiting on.
         IScanFailurePolicy failurePolicy = _failurePolicyFor(row.IndexDbPath, row.CanonicalRoot);
-        ScanIntent intent = force ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile;
+        ScanIntent intent = sourceRebuildRequired
+            ? ScanIntent.CorruptionHeal
+            : effectiveForce ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile;
         ScanAttemptDecision attempt = failurePolicy.Evaluate(intent, bypassBackoff);
         if (!attempt.Attempt)
             return DeferredByScanBackoff(row, attempt, total, useStore);
@@ -264,10 +279,10 @@ public sealed class CrossWorkspaceRefreshService
         // per-workspace SQLite work serialized a worktree fleet on it (2026-08-06 P4 scale validation §3).
         using ScanGovernorAdmission? admission = TryAcquireScanAdmission(
             row.CanonicalRoot,
-            force ? scanAdmission?.Wait ?? _governorForceWait : _lockBusyWait,
-            force ? scanAdmission?.CancellationToken ?? CancellationToken.None : CancellationToken.None);
+            effectiveForce ? scanAdmission?.Wait ?? _governorForceWait : _lockBusyWait,
+            effectiveForce ? scanAdmission?.CancellationToken ?? CancellationToken.None : CancellationToken.None);
         if (admission is null)
-            return RefusedScanAdmission(row, force, millerDir, total, useStore);
+            return RefusedScanAdmission(row, effectiveForce, millerDir, total, useStore);
 
         string? artifactIdBeforeScan = TryReadArtifactId(row, useStore);
         var scanClock = Stopwatch.StartNew();
@@ -307,7 +322,7 @@ public sealed class CrossWorkspaceRefreshService
             // the next caller that drops the bypass would ship it silently.
             string? warning = JoinNotes(
                 attempt.Downgraded ? ScanFailurePolicy.DescribeDowngrade(intent, attempt) : null,
-                ExtractReportLog.DescribeWarning(report));
+                JoinNotes(rollbackWarning, ExtractReportLog.DescribeWarning(report)));
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
             // This is the one safe writer for an external workspace's search.db — it holds the workspace

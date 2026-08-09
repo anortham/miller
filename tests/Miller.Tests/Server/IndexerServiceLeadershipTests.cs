@@ -192,7 +192,8 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
         Func<string, IDisposable?> tryAcquireLeadership,
         IExtractOps ops,
         string? ownVersion,
-        string? artifactVersion)
+        string? artifactVersion,
+        Func<WorkspaceContext, string?>? readIndexLevel = null)
     {
         string tempHome = Path.GetDirectoryName(Path.GetDirectoryName(workspace.RegistryDbPath))!;
         var bootstrap = new IndexBootstrapService(NullLogger<IndexBootstrapService>.Instance);
@@ -215,7 +216,8 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             drainLeaderHandoffRequests: _ => LeaderHandoffDrainResult.Empty,
             ownExtractorVersion: () => ownVersion,
             allowExtractorDowngrade: false,
-            readArtifactExtractorVersion: _ => artifactVersion);
+            readArtifactExtractorVersion: _ => artifactVersion,
+            readIndexLevel: readIndexLevel);
     }
 
     // ---- D2: the claim gate -------------------------------------------------------------------------------
@@ -351,6 +353,44 @@ public sealed class IndexerServiceLeadershipTests : IDisposable
             await service.StopAsync(CancellationToken.None);
 
             Assert.Equal(new[] { false }, ops.ScanForce); // equal versions: no upgrade rescan (D7 swarm calm)
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_StoreL1UnderProgressivePolicy_SchedulesFullLevelUpgrade()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "miller-store-level-upgrade-" + Guid.NewGuid().ToString("N"));
+        var lease = new TestLease();
+        var ops = new RecordingOps { SignalAtScanCount = 2, Revision = 11 };
+        try
+        {
+            WorkspaceContext workspace = CreateWorkspace(dir);
+            var service = NewStartedService(
+                workspace,
+                _ => lease,
+                ops,
+                ownVersion: "3.0.0",
+                artifactVersion: "3.0.0",
+                readIndexLevel: _ => IndexLevels.SymbolsMetadataValue);
+            using (var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath))
+            {
+                registry.UpsertSeen(
+                    workspace.WorkspaceId!,
+                    WorkspaceId.Display(workspace.CanonicalRoot!, workspace.WorkspaceId!),
+                    workspace.CanonicalRoot!,
+                    workspace.CanonicalExtractDbPath!);
+                registry.SetLevelPolicy(workspace.WorkspaceId!, "progressive");
+            }
+
+            await service.StartAsync(CancellationToken.None);
+            Assert.True(ops.ScansReached.Wait(ScanSignalTimeoutMs, CancellationToken.None));
+            await service.StopAsync(CancellationToken.None);
+
+            Assert.Equal(new[] { false, true }, ops.ScanForce);
         }
         finally
         {

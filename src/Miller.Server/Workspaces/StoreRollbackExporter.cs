@@ -4,7 +4,10 @@ using Miller.Indexing.Store;
 
 namespace Miller.Server.Workspaces;
 
-public sealed record StoreRollbackExportResult(bool Exported, string? Warning);
+public sealed record StoreRollbackExportResult(
+    bool Exported,
+    string? Warning,
+    bool RequiresSourceRebuild = false);
 
 public static class StoreRollbackExporter
 {
@@ -35,7 +38,7 @@ public static class StoreRollbackExporter
             {
                 warning += $" The stale pointer could not be removed: {deleteError.Message}";
             }
-            return new StoreRollbackExportResult(false, warning);
+            return new StoreRollbackExportResult(false, warning, RequiresSourceRebuild: true);
         }
 
         if (pointer is null)

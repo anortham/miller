@@ -60,6 +60,23 @@ public sealed class BootstrapReplacedRootTests
     }
 
     [Fact]
+    public void InvalidStoreRollbackMetadataEscalatesToAnUndowngradableSourceRepair()
+    {
+        var decision = IndexBootstrapService.DecideBootstrapScan(
+            dbExists: true,
+            existingRootPath: "/repo",
+            canonicalRoot: "/repo",
+            hasCommittedRevision: true);
+
+        var escalated = IndexBootstrapService.EscalateForStoreRollback(decision);
+
+        Assert.True(escalated.ShouldScan);
+        Assert.Equal(ScanIntent.CorruptionHeal, escalated.Intent);
+        Assert.True(escalated.Force);
+        Assert.Equal(WorkspaceRegistryState.Ready, escalated.RegistryStateAfterLoad);
+    }
+
+    [Fact]
     public void AnEscalatedRebindIsNeverDowngradable()
     {
         var escalated = IndexBootstrapService.EscalateForReplacedRoot(

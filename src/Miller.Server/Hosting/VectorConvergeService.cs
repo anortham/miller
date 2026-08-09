@@ -538,6 +538,22 @@ public sealed class VectorConvergeService : BackgroundService
     internal static VectorGenerationManager VectorGenerationManagerFor(WorkspaceContext workspace) =>
         VectorGenerationManager.ForActivePath(VectorArtifactPathFor(workspace));
 
+    internal static string? FamilyStoreRootFor(WorkspaceContext workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return null;
+
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        return session.FamilyStoreRoot
+            ?? throw new InvalidOperationException("The family-store read session has no store root.");
+    }
+
     private static string VectorArtifactPathFor(WorkspaceContext workspace)
     {
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
@@ -1267,7 +1283,8 @@ public sealed class VectorConvergeService : BackgroundService
 internal sealed class SqliteVectorShadowRebuilder(
     WorkspaceContext workspace,
     VectorGenerationManager manager,
-    SemanticEncoderPin encoder)
+    SemanticEncoderPin encoder,
+    string? storeRoot)
     : IVectorShadowRebuilder
 {
     public static IVectorShadowRebuilder? TryOpen(
@@ -1281,13 +1298,17 @@ internal sealed class SqliteVectorShadowRebuilder(
             : new SqliteVectorShadowRebuilder(
                 workspace,
                 VectorConvergeService.VectorGenerationManagerFor(workspace),
-                encoder ?? SemanticEncoderSelection.Active);
+                encoder ?? SemanticEncoderSelection.Active,
+                VectorConvergeService.FamilyStoreRootFor(workspace));
     }
 
     public IVectorConvergePort? OpenShadow(IVectorConvergePort live)
     {
         ArgumentNullException.ThrowIfNull(live);
 
+        using FamilyStoreSidecarWriteLease? lease = storeRoot is null
+            ? null
+            : FamilyStoreSidecarWriteLease.AcquireFor(storeRoot);
         manager.PrepareShadow();
         SemanticGenerationIdentity target =
             MillerSemanticContract.PinnedIdentity(encoder, MillerVersion.Current);
@@ -1303,7 +1324,11 @@ internal sealed class SqliteVectorShadowRebuilder(
         if (seed)
             ((SqliteVectorConvergePort)live).BackupTo(manager.ShadowPath);
 
-        IVectorConvergePort? shadow = SqliteVectorConvergePort.TryOpenAt(workspace, manager.ShadowPath, encoder);
+        IVectorConvergePort? shadow = SqliteVectorConvergePort.TryOpenAt(
+            workspace,
+            manager.ShadowPath,
+            encoder,
+            sidecarLeaseHeld: storeRoot is not null);
         if (seed && shadow is not null)
         {
             shadow.SetMeta("writer_version", target.WriterVersion);
@@ -1318,10 +1343,15 @@ internal sealed class SqliteVectorShadowRebuilder(
         return shadow;
     }
 
-    public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built) =>
+    public void Promote(SemanticGenerationIdentity live, SemanticGenerationIdentity built)
+    {
+        using FamilyStoreSidecarWriteLease? lease = storeRoot is null
+            ? null
+            : FamilyStoreSidecarWriteLease.AcquireFor(storeRoot);
         manager.Promote(
             MillerSemanticContract.GenerationTag(built),
             MillerSemanticContract.GenerationTag(live));
+    }
 }
 
 /// <summary>
@@ -1330,13 +1360,18 @@ internal sealed class SqliteVectorShadowRebuilder(
 /// own — one log line per deletion, and a held-handle failure logged and retried on the next wake rather than
 /// aborting the pass or crashing the drain.
 /// </summary>
-internal sealed class VectorGenerationGc(VectorGenerationManager manager, ILogger logger) : IVectorGenerationGc
+internal sealed class VectorGenerationGc(
+    VectorGenerationManager manager,
+    ILogger logger,
+    string? storeRoot = null) : IVectorGenerationGc
 {
     public static IVectorGenerationGc Create(WorkspaceContext workspace, ILogger logger)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         return new VectorGenerationGc(
-            VectorConvergeService.VectorGenerationManagerFor(workspace), logger);
+            VectorConvergeService.VectorGenerationManagerFor(workspace),
+            logger,
+            VectorConvergeService.FamilyStoreRootFor(workspace));
     }
 
     public void Collect(bool activeIsReady, DateTimeOffset now, IReadOnlySet<string> tagsWithLiveReaders)
@@ -1346,6 +1381,10 @@ internal sealed class VectorGenerationGc(VectorGenerationManager manager, ILogge
         IReadOnlyList<RetainedGeneration> retained = manager.Retained();
         if (retained.Count == 0)
             return;
+
+        using FamilyStoreSidecarWriteLease? lease = storeRoot is null
+            ? null
+            : FamilyStoreSidecarWriteLease.AcquireFor(storeRoot);
 
         VectorGcPlan plan = VectorGenerationManager.PlanGarbageCollection(new VectorGcInputs
         {
@@ -1394,6 +1433,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     private readonly WorkspaceReadHandle? _storeSession;
     private readonly StoreSidecarStamp? _storeStamp;
     private readonly string? _storeVectorPath;
+    private readonly string? _storeRoot;
 
     private SqliteVectorConvergePort(VectorStore vectors, string symbolsDbPath, string contentDbPath)
     {
@@ -1407,13 +1447,15 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         WorkspaceReadHandle storeSession,
         string contentDbPath,
         string vectorsPath,
-        StoreSidecarStamp storeStamp)
+        StoreSidecarStamp storeStamp,
+        string storeRoot)
     {
         _vectors = vectors;
         _storeSession = storeSession;
         _contentDbPath = contentDbPath;
         _storeVectorPath = vectorsPath;
         _storeStamp = storeStamp;
+        _storeRoot = storeRoot;
     }
 
     public SemanticGenerationIdentity StoredIdentity => _vectors.Identity;
@@ -1464,6 +1506,21 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         WorkspaceContext workspace,
         SemanticEncoderPin? encoder = null)
     {
+        return TryOpenStoreAt(
+            workspace,
+            vectorsPath: null,
+            encoder,
+            sidecarLeaseHeld: false,
+            recoverInterruptedPromote: true);
+    }
+
+    private static IVectorConvergePort? TryOpenStoreAt(
+        WorkspaceContext workspace,
+        string? vectorsPath,
+        SemanticEncoderPin? encoder,
+        bool sidecarLeaseHeld,
+        bool recoverInterruptedPromote)
+    {
         ArgumentNullException.ThrowIfNull(workspace);
         if (VectorStore.ResolveExtensionPath() is not { } extension)
             return null;
@@ -1491,15 +1548,18 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
                 return null;
             }
 
-            string vectorsPath = VectorSidecar.PathForStore(storeRoot, session.Snapshot.ViewId);
-            var generations = VectorGenerationManager.ForActivePath(vectorsPath);
-            if (!RecoverInterruptedPromoteBeforeCreate(generations))
+            vectorsPath ??= VectorSidecar.PathForStore(storeRoot, session.Snapshot.ViewId);
+            using FamilyStoreSidecarWriteLease? lease = sidecarLeaseHeld
+                ? null
+                : FamilyStoreSidecarWriteLease.AcquireFor(storeRoot);
+            if (recoverInterruptedPromote &&
+                !RecoverInterruptedPromoteBeforeCreate(VectorGenerationManager.ForActivePath(vectorsPath)))
             {
                 session.Dispose();
                 return null;
             }
+
             Directory.CreateDirectory(Path.GetDirectoryName(vectorsPath)!);
-            string artifactId = StoreArtifactId(session.Snapshot);
             if (!File.Exists(vectorsPath))
             {
                 using VectorStore created = VectorStore.Create(
@@ -1507,7 +1567,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
                     MillerSemanticContract.PinnedIdentity(
                         encoder ?? SemanticEncoderSelection.Active,
                         MillerVersion.Current),
-                    artifactId,
+                    StoreArtifactId(session.Snapshot),
                     extension);
             }
 
@@ -1519,7 +1579,8 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
                     session,
                     contentPath,
                     vectorsPath,
-                    StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, session.Snapshot));
+                    StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Vector, session.Snapshot),
+                    storeRoot);
             }
             catch
             {
@@ -1539,10 +1600,21 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     public static IVectorConvergePort? TryOpenAt(
         WorkspaceContext workspace,
         string vectorsPath,
-        SemanticEncoderPin? encoder = null)
+        SemanticEncoderPin? encoder = null,
+        bool sidecarLeaseHeld = false)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(vectorsPath);
+
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+        {
+            return TryOpenStoreAt(
+                workspace,
+                vectorsPath,
+                encoder,
+                sidecarLeaseHeld,
+                recoverInterruptedPromote: false);
+        }
 
         if (VectorStore.ResolveExtensionPath() is not { } extension)
             return null;
@@ -1738,20 +1810,23 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         foreach ((string key, string value) in BuildStateUpdates(kind, advanceTo))
             metaUpdates[key] = value;
 
-        _vectors.CommitBatch(
-            kind,
-            [
-                .. vectors.Select(static commit => new VectorBatchEntry(
-                    commit.Unit.UnitId,
-                    commit.Unit.Path,
-                    commit.Unit.SymbolKind,
-                    commit.Unit.IsTest,
-                    commit.Embedding,
-                    commit.Unit.EmbedTextHash)),
-            ],
-            delete,
-            metaUpdates,
-            revision);
+        using (AcquireStoreSidecarLease())
+        {
+            _vectors.CommitBatch(
+                kind,
+                [
+                    .. vectors.Select(static commit => new VectorBatchEntry(
+                        commit.Unit.UnitId,
+                        commit.Unit.Path,
+                        commit.Unit.SymbolKind,
+                        commit.Unit.IsTest,
+                        commit.Embedding,
+                        commit.Unit.EmbedTextHash)),
+                ],
+                delete,
+                metaUpdates,
+                revision);
+        }
     }
 
     public void PublishCompleteness()
@@ -1766,8 +1841,12 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             return;
         }
 
-        StoreSidecarCatalog.Stamp(_storeVectorPath, _storeStamp);
+        using (AcquireStoreSidecarLease())
+            StoreSidecarCatalog.Stamp(_storeVectorPath, _storeStamp);
     }
+
+    private FamilyStoreSidecarWriteLease? AcquireStoreSidecarLease() =>
+        _storeRoot is null ? null : FamilyStoreSidecarWriteLease.AcquireFor(_storeRoot);
 
     private long MetaRevision(string key) =>
         long.TryParse(Meta(key), NumberStyles.None, CultureInfo.InvariantCulture, out long revision)
