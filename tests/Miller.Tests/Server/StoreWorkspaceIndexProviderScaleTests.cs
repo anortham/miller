@@ -110,6 +110,25 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     second.Index.Search("BootstrapCalculator", 10),
                     symbol => symbol.Document.Name == "BootstrapCalculator");
             }
+
+            using (var legacy = new IndexBootstrapService(
+                       NullLogger<IndexBootstrapService>.Instance,
+                       storeEnabled: static () => false))
+            {
+                legacy.TestHomeDirectoryOverride = home;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    legacy.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                int generation = legacy.Snapshot.RunGeneration;
+                await legacy.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
+                Assert.True(legacy.IsBound, legacy.Snapshot.FailureMessage);
+                Assert.Contains(
+                    legacy.Index.Search("Divide", 10),
+                    symbol => symbol.Document.Name == "Divide");
+                Assert.DoesNotContain(
+                    legacy.Index.Search("Add", 10),
+                    symbol => symbol.Document.Name == "Add");
+            }
         }
         finally
         {

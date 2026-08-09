@@ -44,6 +44,7 @@ public sealed class StoreWorkspaceCoordinatorTests
         Assert.Equal("completed", report.Status);
         Assert.Equal((ulong)1, report.FilesUpdated);
         Assert.Equal(Binding.FamilyId.ToString("D"), report.Artifact?.ArtifactId);
+        Assert.IsType<StoreResolveRequest>(client.Requests[1]);
     }
 
     [Fact]
@@ -135,12 +136,17 @@ public sealed class StoreWorkspaceCoordinatorTests
     {
         private readonly List<StoreRequest> _requests = [];
 
-        public StoreRequest SingleRequest => Assert.Single(_requests);
+        public IReadOnlyList<StoreRequest> Requests => _requests;
+        public StoreRequest SingleRequest => Assert.Single(
+            _requests,
+            request => request.Operation != StoreOperation.Resolve);
 
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal(expectedOperation, request.Operation);
+            Assert.True(
+                request.Operation == expectedOperation || request.Operation == StoreOperation.Resolve,
+                $"Expected {expectedOperation} or Resolve, got {request.Operation}.");
             _requests.Add(request);
             StoreLevel level = request switch
             {
@@ -168,7 +174,9 @@ public sealed class StoreWorkspaceCoordinatorTests
                 new StoreLevelCompletion(true, level == StoreLevel.Full, level == StoreLevel.Full),
                 new StoreManifestResult(1, "manifest-hash", manifestDisposition),
                 new StoreRowCounts(1, 1, level == StoreLevel.Full ? 1 : 0, level == StoreLevel.Full ? 1 : 0),
-                new StoreResolutionResult(StoreResolutionState.Unbound, false, null, null, null, null, null, null),
+                request.Operation == StoreOperation.Resolve
+                    ? new StoreResolutionResult(StoreResolutionState.Exact, true, "base", 1, 1, 0, 0, 0)
+                    : new StoreResolutionResult(StoreResolutionState.Unbound, false, null, null, null, null, null, null),
                 null,
                 exitCode == 0 ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
                 new StoreFailure(new StoreFailureClass(failureClass), exitCode == 0 ? null : "failed"),

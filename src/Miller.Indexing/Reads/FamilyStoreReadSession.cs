@@ -580,8 +580,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         string deltaManifestHash = reader.GetString(6);
         long deltaEpoch = reader.GetInt64(7);
         reader.Close();
-        if (state != "ready" || baseManifestHash != visibility.ManifestHash ||
-            deltaManifestHash != visibility.ManifestHash || baseEpoch != deltaEpoch)
+        if (state != "ready" || deltaManifestHash != visibility.ManifestHash || baseEpoch != deltaEpoch)
         {
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
@@ -607,13 +606,13 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         attach.CommandText = "ATTACH DATABASE $base_path AS resolution_base";
         attach.Parameters.AddWithValue("$base_path", basePath);
         attach.ExecuteNonQuery();
-        ValidateAttachedBase(connection, visibility, baseEpoch);
+        ValidateAttachedBase(connection, baseManifestHash, baseEpoch);
         return true;
     }
 
     private static void ValidateAttachedBase(
         SqliteConnection connection,
-        StoreVisibility visibility,
+        string baseManifestHash,
         long resolverOutputEpoch)
     {
         using SqliteCommand command = connection.CreateCommand();
@@ -627,7 +626,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         using SqliteDataReader reader = command.ExecuteReader();
         AssertRow(reader);
         if (reader.IsDBNull(0) || reader.GetString(0) != "1" ||
-            reader.IsDBNull(1) || reader.GetString(1) != visibility.ManifestHash ||
+            reader.IsDBNull(1) || reader.GetString(1) != baseManifestHash ||
             reader.IsDBNull(2) || reader.GetString(2) != resolverOutputEpoch.ToString(CultureInfo.InvariantCulture))
         {
             throw new FamilyStoreReadException(

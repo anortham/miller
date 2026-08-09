@@ -483,6 +483,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     startedAt);
             }
 
+            StoreRollbackExporter.ExportIfRequired(
+                canonicalRoot,
+                canonicalDbPath,
+                JulieStoreClient.Locate(ctx.ToolsRoot));
+
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
             var runner = JulieExtractRunner.Locate(

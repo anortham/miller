@@ -170,7 +170,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             level,
             Controls(requestId),
             ScanControls(ExtractJobsPolicy.FromEnvironment()));
-        return Submit(request, before, changedFiles: 1, deletedFiles: 0);
+        return Submit(
+            request,
+            before,
+            changedFiles: 1,
+            deletedFiles: 0,
+            resolveAfter: level == StoreLevel.Full);
     }
 
     public ExtractReport Delete(string path)
@@ -184,7 +189,12 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             _binding.WorkspaceRoot,
             [RelativePath(path)],
             Controls(requestId));
-        return Submit(request, before, changedFiles: 0, deletedFiles: 1);
+        return Submit(
+            request,
+            before,
+            changedFiles: 0,
+            deletedFiles: 1,
+            resolveAfter: string.Equals(before.IndexLevel, "full", StringComparison.Ordinal));
     }
 
     public ExtractReport Scan(ScanIntent intent = ScanIntent.IncrementalReconcile, int? jobs = null)
@@ -201,16 +211,43 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             Controls(requestId),
             ScanControls(jobs ?? ExtractJobsPolicy.FromEnvironment()),
             FromArtifact: before is null ? _fromArtifact : null);
-        return Submit(request, before, changedFiles: 0, deletedFiles: 0);
+        return Submit(
+            request,
+            before,
+            changedFiles: 0,
+            deletedFiles: 0,
+            resolveAfter: level == StoreLevel.Full && request.FromArtifact is null);
     }
 
     private ExtractReport Submit(
         StoreRequest request,
         StoreWorkspaceState? before,
         long changedFiles,
-        long deletedFiles)
+        long deletedFiles,
+        bool resolveAfter)
     {
         StoreRequestResult result = _client.Submit(request);
+        RequireCommitted(request, result);
+        if (resolveAfter)
+        {
+            string resolveId = RequestId();
+            var resolve = new StoreResolveRequest(
+                _binding.StoreRoot,
+                _binding.FamilyId.ToString("D"),
+                _binding.ViewId,
+                Controls(resolveId));
+            RequireCommitted(resolve, _client.Submit(resolve));
+        }
+
+        StoreWorkspaceState after = ReadRequiredState();
+        bool changed = result.Manifest.Disposition == StoreManifestDisposition.Created
+            || before is null
+            || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
+        return Report(result, after, changed, changedFiles, deletedFiles);
+    }
+
+    private static void RequireCommitted(StoreRequest request, StoreRequestResult result)
+    {
         if (result.ExitCode != 0 || result.State is StoreRequestState.Failed)
         {
             throw new StoreWorkspaceOperationException(
@@ -226,12 +263,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 new StoreFailureClass("request_not_terminal"),
                 $"julie-extract store request '{result.Request.Id}' returned non-terminal state '{result.State}'.");
         }
-
-        StoreWorkspaceState after = ReadRequiredState();
-        bool changed = result.Manifest.Disposition == StoreManifestDisposition.Created
-            || before is null
-            || !string.Equals(before.IndexLevel, after.IndexLevel, StringComparison.Ordinal);
-        return Report(result, after, changed, changedFiles, deletedFiles);
     }
 
     private ExtractReport Report(
