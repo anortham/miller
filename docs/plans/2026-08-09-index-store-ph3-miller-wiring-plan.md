@@ -188,9 +188,9 @@ internal sealed record StoreFamilyBinding(
 5. Run registry/provider tests and commit.
 
 **Acceptance criteria:**
-- [ ] The same live git lineage shares one family; unrelated or replaced lineages do not.
-- [ ] Store view state wins over stale registry/pointer caches and repairs them idempotently.
-- [ ] No registry mutation occurs for malformed or mismatched stores.
+- [x] The same live git lineage shares one family; unrelated or replaced lineages do not.
+- [x] Store view state wins over stale registry/pointer caches and repairs them idempotently.
+- [x] No registry mutation occurs for malformed or mismatched stores.
 
 ### Task 4: Introduce the read-session seam without changing legacy output
 

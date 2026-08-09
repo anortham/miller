@@ -650,6 +650,32 @@ public sealed class WorkspaceRegistryTests : IDisposable
         Assert.Throws<ObjectDisposedException>(() => registry.FindMainCheckoutByCommonDir("/work/repo/.git"));
     }
 
+    [Fact]
+    public void Open_AddsStoreFamilyAndMemberTablesToALegacyRegistry()
+    {
+        WriteLegacyPreLevelsSchema();
+
+        using var registry = WorkspaceRegistry.Open(_dbPath);
+        using var connection = new SqliteConnection(ReadOnlyUnpooled(_dbPath));
+        connection.Open();
+
+        Assert.Equal(
+            ["family_id", "lineage_key", "canonical_common_dir", "common_dir_created_at", "store_root", "created_at", "updated_at"],
+            ReadColumnNames(connection, "store_families"));
+        Assert.Equal(
+            ["workspace_id", "family_id", "view_id", "workspace_root", "root_git_dir", "root_git_dir_created_at", "updated_at"],
+            ReadColumnNames(connection, "store_members"));
+
+        using SqliteCommand indexes = connection.CreateCommand();
+        indexes.CommandText = """
+            SELECT COUNT(*)
+            FROM pragma_index_list('store_members') AS list
+            JOIN pragma_index_info(list.name) AS info
+            WHERE list.[unique] = 1 AND info.name IN ('family_id', 'view_id')
+            """;
+        Assert.Equal(2L, Convert.ToInt64(indexes.ExecuteScalar()));
+    }
+
     private string MakeDirectory(params string[] segments)
     {
         string path = Path.Combine(new[] { _dir }.Concat(segments).ToArray());
@@ -707,6 +733,17 @@ public sealed class WorkspaceRegistryTests : IDisposable
         var columns = new List<(string name, string type, bool notNull)>();
         while (reader.Read())
             columns.Add((reader.GetString(1), reader.GetString(2), reader.GetInt32(3) == 1));
+        return columns.ToArray();
+    }
+
+    private static string[] ReadColumnNames(SqliteConnection connection, string table)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table});";
+        using SqliteDataReader reader = command.ExecuteReader();
+        var columns = new List<string>();
+        while (reader.Read())
+            columns.Add(reader.GetString(1));
         return columns.ToArray();
     }
 }

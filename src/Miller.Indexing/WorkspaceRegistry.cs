@@ -29,6 +29,32 @@ public sealed class WorkspaceRegistry : IDisposable
         "last_revision, state, last_error, level_policy, git_common_dir, git_is_linked, git_dir, " +
         "git_dir_created_at";
 
+    private const string CreateStoreTablesDdl = """
+        CREATE TABLE IF NOT EXISTS store_families (
+            family_id TEXT NOT NULL PRIMARY KEY,
+            lineage_key TEXT NOT NULL UNIQUE,
+            canonical_common_dir TEXT,
+            common_dir_created_at TEXT,
+            store_root TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS store_members (
+            workspace_id TEXT NOT NULL PRIMARY KEY,
+            family_id TEXT NOT NULL,
+            view_id TEXT NOT NULL,
+            workspace_root TEXT NOT NULL,
+            root_git_dir TEXT,
+            root_git_dir_created_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(family_id, view_id),
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+            FOREIGN KEY (family_id) REFERENCES store_families(family_id)
+                ON UPDATE CASCADE ON DELETE CASCADE
+        ) STRICT;
+        """;
+
     private static readonly (string Name, string Type)[] AdditiveColumns =
     [
         ("level_policy", "TEXT"),
@@ -71,7 +97,8 @@ public sealed class WorkspaceRegistry : IDisposable
             using (var pragma = connection.CreateCommand())
             {
                 pragma.CommandText =
-                    "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;";
+                    "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000; " +
+                    "PRAGMA foreign_keys=ON;";
                 pragma.ExecuteNonQuery();
             }
 
@@ -82,6 +109,12 @@ public sealed class WorkspaceRegistry : IDisposable
             }
 
             EnsureAdditiveColumns(connection);
+
+            using (var storeDdl = connection.CreateCommand())
+            {
+                storeDdl.CommandText = CreateStoreTablesDdl;
+                storeDdl.ExecuteNonQuery();
+            }
 
             return new WorkspaceRegistry(connection);
         }
@@ -318,6 +351,277 @@ public sealed class WorkspaceRegistry : IDisposable
         }
     }
 
+    public StoreFamilyRegistryRow GetOrCreateStoreFamily(
+        string lineageKey,
+        string? canonicalCommonDir,
+        DateTimeOffset? commonDirCreatedAtUtc,
+        string storesRoot,
+        Func<Guid>? mintFamilyId = null,
+        DateTimeOffset? nowUtc = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(lineageKey, nameof(lineageKey));
+        ValidateRequired(storesRoot, nameof(storesRoot));
+        DateTimeOffset now = NormalizeUtc(nowUtc ?? DateTimeOffset.UtcNow);
+
+        lock (_gate)
+        {
+            StoreFamilyRegistryRow? existing = GetStoreFamilyByLineageUnderLock(lineageKey);
+            if (existing is not null)
+                return existing;
+
+            Guid familyId = (mintFamilyId ?? Guid.NewGuid)();
+            if (familyId == Guid.Empty)
+                throw new InvalidOperationException("The store family id factory returned an empty UUID.");
+            string storeRoot = Path.Combine(Path.GetFullPath(storesRoot), familyId.ToString("D"));
+            using var command = _connection.CreateCommand();
+            command.CommandText = """
+                INSERT OR IGNORE INTO store_families(
+                    family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                    store_root, created_at, updated_at)
+                VALUES(
+                    $family_id, $lineage_key, $canonical_common_dir, $common_dir_created_at,
+                    $store_root, $created_at, $updated_at)
+                """;
+            command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+            command.Parameters.AddWithValue("$lineage_key", lineageKey);
+            command.Parameters.AddWithValue("$canonical_common_dir", (object?)canonicalCommonDir ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$common_dir_created_at",
+                commonDirCreatedAtUtc is { } created ? FormatTimestamp(created) : DBNull.Value);
+            command.Parameters.AddWithValue("$store_root", storeRoot);
+            command.Parameters.AddWithValue("$created_at", FormatTimestamp(now));
+            command.Parameters.AddWithValue("$updated_at", FormatTimestamp(now));
+            command.ExecuteNonQuery();
+            return GetStoreFamilyByLineageUnderLock(lineageKey) ?? throw new InvalidOperationException(
+                $"Store family lineage '{lineageKey}' was not persisted.");
+        }
+    }
+
+    public StoreFamilyRegistryRow? GetStoreFamily(Guid familyId)
+    {
+        ThrowIfDisposed();
+        lock (_gate)
+            return GetStoreFamilyUnderLock(familyId);
+    }
+
+    public StoreFamilyRegistryRow? GetStoreFamilyByLineage(string lineageKey)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(lineageKey, nameof(lineageKey));
+        lock (_gate)
+            return GetStoreFamilyByLineageUnderLock(lineageKey);
+    }
+
+    public StoreFamilyRegistryRow? FindStoreFamilyByCommonDir(string canonicalCommonDir)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(canonicalCommonDir, nameof(canonicalCommonDir));
+        lock (_gate)
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                       store_root, created_at, updated_at
+                FROM store_families
+                WHERE canonical_common_dir IS NOT NULL
+                ORDER BY CASE WHEN common_dir_created_at IS NULL THEN 0 ELSE 1 END,
+                         family_id
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                StoreFamilyRegistryRow row = ReadStoreFamily(reader);
+                if (ArtifactRootIdentity.Matches(row.CanonicalCommonDir, canonicalCommonDir))
+                    return row;
+            }
+            return null;
+        }
+    }
+
+    public StoreFamilyRegistryRow PromoteStoreFamilyLineage(
+        Guid familyId,
+        string lineageKey,
+        string canonicalCommonDir,
+        DateTimeOffset commonDirCreatedAtUtc,
+        DateTimeOffset? nowUtc = null)
+    {
+        ThrowIfDisposed();
+        if (familyId == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(familyId));
+        ValidateRequired(lineageKey, nameof(lineageKey));
+        ValidateRequired(canonicalCommonDir, nameof(canonicalCommonDir));
+        DateTimeOffset now = NormalizeUtc(nowUtc ?? DateTimeOffset.UtcNow);
+        lock (_gate)
+        {
+            StoreFamilyRegistryRow current = GetStoreFamilyUnderLock(familyId) ??
+                throw new KeyNotFoundException($"Store family '{familyId:D}' was not found.");
+            if (current.CommonDirCreatedAtUtc is not null ||
+                !ArtifactRootIdentity.Matches(current.CanonicalCommonDir, canonicalCommonDir))
+            {
+                throw new InvalidOperationException("Only an unknown matching lineage can be promoted.");
+            }
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                UPDATE store_families
+                SET lineage_key = $lineage_key,
+                    canonical_common_dir = $canonical_common_dir,
+                    common_dir_created_at = $common_dir_created_at,
+                    updated_at = $updated_at
+                WHERE family_id = $family_id
+                """;
+            command.Parameters.AddWithValue("$lineage_key", lineageKey);
+            command.Parameters.AddWithValue("$canonical_common_dir", canonicalCommonDir);
+            command.Parameters.AddWithValue("$common_dir_created_at", FormatTimestamp(commonDirCreatedAtUtc));
+            command.Parameters.AddWithValue("$updated_at", FormatTimestamp(now));
+            command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("Store family lineage promotion lost its registry row.");
+            return GetStoreFamilyUnderLock(familyId) ?? throw new InvalidOperationException(
+                "Store family lineage promotion did not persist.");
+        }
+    }
+
+    public IReadOnlyList<StoreFamilyRegistryRow> ListStoreFamilies()
+    {
+        ThrowIfDisposed();
+        lock (_gate)
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                       store_root, created_at, updated_at
+                FROM store_families
+                ORDER BY family_id
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            var rows = new List<StoreFamilyRegistryRow>();
+            while (reader.Read())
+                rows.Add(ReadStoreFamily(reader));
+            return rows;
+        }
+    }
+
+    public StoreMemberRegistryRow UpsertStoreMember(
+        string workspaceId,
+        Guid familyId,
+        string viewId,
+        string workspaceRoot,
+        WorkspaceRootIdentity rootIdentity,
+        DateTimeOffset? nowUtc = null)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        ValidateRequired(viewId, nameof(viewId));
+        ValidateRequired(workspaceRoot, nameof(workspaceRoot));
+        if (familyId == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(familyId));
+        DateTimeOffset now = NormalizeUtc(nowUtc ?? DateTimeOffset.UtcNow);
+
+        lock (_gate)
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO store_members(
+                    workspace_id, family_id, view_id, workspace_root,
+                    root_git_dir, root_git_dir_created_at, updated_at)
+                VALUES(
+                    $workspace_id, $family_id, $view_id, $workspace_root,
+                    $root_git_dir, $root_git_dir_created_at, $updated_at)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    family_id = excluded.family_id,
+                    view_id = excluded.view_id,
+                    workspace_root = excluded.workspace_root,
+                    root_git_dir = excluded.root_git_dir,
+                    root_git_dir_created_at = excluded.root_git_dir_created_at,
+                    updated_at = excluded.updated_at
+                """;
+            command.Parameters.AddWithValue("$workspace_id", workspaceId);
+            command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+            command.Parameters.AddWithValue("$view_id", viewId);
+            command.Parameters.AddWithValue("$workspace_root", workspaceRoot);
+            command.Parameters.AddWithValue("$root_git_dir", (object?)rootIdentity.GitDir ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$root_git_dir_created_at",
+                rootIdentity.GitDirCreatedAtUtc is { } created ? FormatTimestamp(created) : DBNull.Value);
+            command.Parameters.AddWithValue("$updated_at", FormatTimestamp(now));
+            command.ExecuteNonQuery();
+            return GetStoreMemberUnderLock(workspaceId) ?? throw new InvalidOperationException(
+                $"Store member '{workspaceId}' was not persisted.");
+        }
+    }
+
+    public StoreMemberRegistryRow? GetStoreMember(string workspaceId)
+    {
+        ThrowIfDisposed();
+        ValidateRequired(workspaceId, nameof(workspaceId));
+        lock (_gate)
+            return GetStoreMemberUnderLock(workspaceId);
+    }
+
+    public IReadOnlyList<StoreMemberRegistryRow> ListStoreMembers()
+    {
+        ThrowIfDisposed();
+        lock (_gate)
+        {
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                SELECT workspace_id, family_id, view_id, workspace_root,
+                       root_git_dir, root_git_dir_created_at, updated_at
+                FROM store_members
+                ORDER BY workspace_id
+                """;
+            using SqliteDataReader reader = command.ExecuteReader();
+            var rows = new List<StoreMemberRegistryRow>();
+            while (reader.Read())
+                rows.Add(ReadStoreMember(reader));
+            return rows;
+        }
+    }
+
+    public StoreFamilyRegistryRow ReplaceStoreFamilyIdentity(
+        Guid currentFamilyId,
+        Guid catalogFamilyId,
+        string storeRoot,
+        DateTimeOffset? nowUtc = null)
+    {
+        ThrowIfDisposed();
+        if (currentFamilyId == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(currentFamilyId));
+        if (catalogFamilyId == Guid.Empty)
+            throw new ArgumentOutOfRangeException(nameof(catalogFamilyId));
+        ValidateRequired(storeRoot, nameof(storeRoot));
+        DateTimeOffset now = NormalizeUtc(nowUtc ?? DateTimeOffset.UtcNow);
+
+        lock (_gate)
+        {
+            StoreFamilyRegistryRow current = GetStoreFamilyUnderLock(currentFamilyId) ??
+                throw new KeyNotFoundException($"Store family '{currentFamilyId:D}' was not found.");
+            if (!ArtifactRootIdentity.Matches(current.StoreRoot, storeRoot))
+                throw new InvalidOperationException("Store family root changed during catalog reconciliation.");
+            if (currentFamilyId == catalogFamilyId)
+                return current;
+            if (GetStoreFamilyUnderLock(catalogFamilyId) is not null)
+                throw new InvalidOperationException($"Store family '{catalogFamilyId:D}' is already registered.");
+
+            using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = """
+                UPDATE store_families
+                SET family_id = $catalog_family_id,
+                    updated_at = $updated_at
+                WHERE family_id = $current_family_id AND store_root = $store_root
+                """;
+            command.Parameters.AddWithValue("$catalog_family_id", catalogFamilyId.ToString("D"));
+            command.Parameters.AddWithValue("$updated_at", FormatTimestamp(now));
+            command.Parameters.AddWithValue("$current_family_id", currentFamilyId.ToString("D"));
+            command.Parameters.AddWithValue("$store_root", current.StoreRoot);
+            if (command.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("Store family catalog reconciliation lost its registry row.");
+            return GetStoreFamilyUnderLock(catalogFamilyId) ?? throw new InvalidOperationException(
+                "Store family catalog reconciliation did not persist the catalog identity.");
+        }
+    }
+
     public bool Remove(string workspaceId)
     {
         ThrowIfDisposed();
@@ -485,6 +789,48 @@ public sealed class WorkspaceRegistry : IDisposable
         return reader.Read() ? ReadRow(reader) : null;
     }
 
+    private StoreFamilyRegistryRow? GetStoreFamilyByLineageUnderLock(string lineageKey)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                   store_root, created_at, updated_at
+            FROM store_families
+            WHERE lineage_key = $lineage_key
+            """;
+        command.Parameters.AddWithValue("$lineage_key", lineageKey);
+        using SqliteDataReader reader = command.ExecuteReader();
+        return reader.Read() ? ReadStoreFamily(reader) : null;
+    }
+
+    private StoreFamilyRegistryRow? GetStoreFamilyUnderLock(Guid familyId)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT family_id, lineage_key, canonical_common_dir, common_dir_created_at,
+                   store_root, created_at, updated_at
+            FROM store_families
+            WHERE family_id = $family_id
+            """;
+        command.Parameters.AddWithValue("$family_id", familyId.ToString("D"));
+        using SqliteDataReader reader = command.ExecuteReader();
+        return reader.Read() ? ReadStoreFamily(reader) : null;
+    }
+
+    private StoreMemberRegistryRow? GetStoreMemberUnderLock(string workspaceId)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = """
+            SELECT workspace_id, family_id, view_id, workspace_root,
+                   root_git_dir, root_git_dir_created_at, updated_at
+            FROM store_members
+            WHERE workspace_id = $workspace_id
+            """;
+        command.Parameters.AddWithValue("$workspace_id", workspaceId);
+        using SqliteDataReader reader = command.ExecuteReader();
+        return reader.Read() ? ReadStoreMember(reader) : null;
+    }
+
     private void PruneDuplicatePathRowsUnderLock(
         SqliteTransaction transaction,
         string workspaceId,
@@ -529,6 +875,26 @@ public sealed class WorkspaceRegistry : IDisposable
             reader.IsDBNull(11) ? null : reader.GetInt64(11) != 0,
             reader.IsDBNull(12) ? null : reader.GetString(12),
             reader.IsDBNull(13) ? null : ParseTimestamp(reader.GetString(13)));
+
+    private static StoreFamilyRegistryRow ReadStoreFamily(SqliteDataReader reader) =>
+        new(
+            Guid.ParseExact(reader.GetString(0), "D"),
+            reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : ParseTimestamp(reader.GetString(3)),
+            reader.GetString(4),
+            ParseTimestamp(reader.GetString(5)),
+            ParseTimestamp(reader.GetString(6)));
+
+    private static StoreMemberRegistryRow ReadStoreMember(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            Guid.ParseExact(reader.GetString(1), "D"),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : ParseTimestamp(reader.GetString(5)),
+            ParseTimestamp(reader.GetString(6)));
 
     private static void ExecuteExistingRowUpdate(SqliteCommand cmd, string workspaceId)
     {
