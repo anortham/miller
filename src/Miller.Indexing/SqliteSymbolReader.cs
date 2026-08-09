@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -45,12 +46,19 @@ public static class SqliteSymbolReader
     public static IReadOnlyList<IndexedSymbol> Read(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(dbPath);
+        return ReadSession(session);
+    }
 
-        // Shared D4 read discipline (file-exists + writable-dir probe + Mode=ReadOnly + SQLITE_READONLY map).
-        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+    public static IReadOnlyList<IndexedSymbol> ReadSession(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(Read);
+    }
 
+    private static IReadOnlyList<IndexedSymbol> Read(SqliteConnection connection)
+    {
         JulieSchemaGate.Verify(connection);
-
         EvidenceProjection evidence = EvidenceProjection.From(connection);
 
         using var command = connection.CreateCommand();

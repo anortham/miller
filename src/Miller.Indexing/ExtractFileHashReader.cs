@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -8,11 +9,23 @@ namespace Miller.Indexing;
 /// </summary>
 public static class ExtractFileHashReader
 {
+    public static string? ReadFileHash(IWorkspaceReadSession session, string filePath)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        return session.Read(connection => ReadFileHash(connection, filePath));
+    }
+
     public static string? ReadFileHash(string dbPath, string filePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
         using var connection = Open(dbPath);
+        return ReadFileHash(connection, filePath);
+    }
+
+    private static string? ReadFileHash(SqliteConnection connection, string filePath)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT content_hash FROM files WHERE path = $path;";
         command.Parameters.AddWithValue("$path", filePath);

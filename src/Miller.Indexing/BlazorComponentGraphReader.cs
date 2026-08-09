@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -18,18 +19,26 @@ public static class BlazorComponentGraphReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(facts);
-
-        if (!facts.Any(fact => string.Equals(
-                fact.PatternId,
-                BridgeStructuralPatterns.BlazorComponentReference,
-                StringComparison.Ordinal)))
-        {
+        if (!ContainsComponentReference(facts))
             return [];
-        }
 
-        var evidence = ReadEvidence(dbPath);
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(dbPath);
+        return ReadSession(session, facts);
+    }
+
+    public static IReadOnlyList<GraphEdge> ReadSession(
+        IWorkspaceReadSession session,
+        IReadOnlyList<StructuralFactRecord> facts)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(facts);
+
+        if (!ContainsComponentReference(facts))
+            return [];
+
+        var evidence = session.Read(ReadEvidence);
         var namespaces = BlazorNamespaceCatalog.Build(
-            ExtractReader.ReadRootPath(dbPath),
+            session.Snapshot.WorkspaceRoot,
             evidence.Components,
             evidence.Directives);
         var byName = evidence.Components
@@ -71,9 +80,14 @@ public static class BlazorComponentGraphReader
         return edges;
     }
 
-    private static BlazorEvidence ReadEvidence(string dbPath)
+    private static bool ContainsComponentReference(IReadOnlyList<StructuralFactRecord> facts) =>
+        facts.Any(fact => string.Equals(
+            fact.PatternId,
+            BridgeStructuralPatterns.BlazorComponentReference,
+            StringComparison.Ordinal));
+
+    private static BlazorEvidence ReadEvidence(Microsoft.Data.Sqlite.SqliteConnection connection)
     {
-        using var connection = SqliteReadOnlyAccess.Open(dbPath);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT symbol_id, path, name, kind, metadata_json

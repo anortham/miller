@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Editing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -21,6 +22,13 @@ namespace Miller.Indexing;
 /// </summary>
 public sealed class ExtractReader
 {
+    public static SymbolDetail? ReadDetail(IWorkspaceReadSession session, string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        return session.Read(connection => ReadDetail(connection, symbolId));
+    }
+
     /// <summary>
     /// Read one symbol's detail by opaque id, or null if no such symbol exists.
     /// </summary>
@@ -30,6 +38,11 @@ public sealed class ExtractReader
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
         using var connection = Open(dbPath);
 
+        return ReadDetail(connection, symbolId);
+    }
+
+    private static SymbolDetail? ReadDetail(SqliteConnection connection, string symbolId)
+    {
         using var command = connection.CreateCommand();
         // v1: keyed by symbol_id (was id). code_context is GONE from v1 symbols (it lives only on identifiers),
         // so it is no longer selected (reconciliation #11). By-name reads (D6) decouple value from SELECT order.
@@ -296,6 +309,46 @@ public sealed class ExtractReader
         return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
     }
 
+    public static BodyReadResult ReadBody(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        string filePath,
+        int? startByte,
+        int? endByte,
+        int? startLine,
+        int? endLine)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        bool hasByteSpan = startByte is not null && endByte is not null;
+        bool hasLineSpan = startLine is not null && endLine is not null;
+        if (!hasByteSpan && !hasLineSpan)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.NoSpanRecorded);
+
+        FileContentResult verified = ReadVerifiedFileContent(session, workspaceRoot, filePath);
+        if (verified.UnavailableReason is { } unavailableReason)
+            return BodyReadResult.Unavailable(unavailableReason);
+        if (verified.Text is null)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
+        string content = verified.Text;
+        if (content.Length == 0)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.EmptyFile);
+        if (hasByteSpan)
+        {
+            string? sliced = SliceByBytes(content, startByte!.Value, endByte!.Value);
+            if (sliced is not null)
+                return BodyReadResult.Available(sliced);
+        }
+        if (hasLineSpan)
+        {
+            string? sliced = SliceByLines(content, startLine!.Value, endLine!.Value);
+            if (sliced is not null)
+                return BodyReadResult.Available(sliced);
+        }
+        return BodyReadResult.Unavailable(BodyUnavailableReason.InvalidSpan);
+    }
+
     /// <summary>Read an indexed symbol body through the same freshness-guarded line span used by inspect.</summary>
     public static BodyReadResult ReadBody(
         string dbPath,
@@ -308,6 +361,26 @@ public sealed class ExtractReader
             return BodyReadResult.Unavailable(BodyUnavailableReason.NoSpanRecorded);
         return ReadBody(
             dbPath,
+            workspaceRoot,
+            symbol.FilePath,
+            detail.BodyStartByte,
+            detail.BodyEndByte,
+            detail.BodyStartLine,
+            detail.BodyEndLine);
+    }
+
+    public static BodyReadResult ReadBody(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        IndexedSymbol symbol)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(symbol);
+        SymbolDetail? detail = ReadDetail(session, symbol.SymbolId);
+        if (detail is null)
+            return BodyReadResult.Unavailable(BodyUnavailableReason.NoSpanRecorded);
+        return ReadBody(
+            session,
             workspaceRoot,
             symbol.FilePath,
             detail.BodyStartByte,
@@ -399,6 +472,28 @@ public sealed class ExtractReader
         if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
             return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.StaleFile);
 
+        return SourceTextDecoder.TryDecode(bytes, out string text)
+            ? new FileContentResult(Text: text, UnavailableReason: null)
+            : new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.InvalidEncoding);
+    }
+
+    private static FileContentResult ReadVerifiedFileContent(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        string relPath)
+    {
+        string? storedHash = ExtractFileHashReader.ReadFileHash(session, relPath);
+        if (string.IsNullOrWhiteSpace(storedHash))
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.FileHashUnavailable);
+        string? abs = WorkspaceRelativePath.ResolveUnderRoot(workspaceRoot, relPath);
+        if (abs is null)
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.UnsafePath);
+        if (!File.Exists(abs))
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.MissingFile);
+        byte[] bytes = File.ReadAllBytes(abs);
+        string diskHash = ContentHasher.Blake3Hex(bytes);
+        if (!StringComparer.OrdinalIgnoreCase.Equals(diskHash, ContentHasher.NormalizeHash(storedHash)))
+            return new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.StaleFile);
         return SourceTextDecoder.TryDecode(bytes, out string text)
             ? new FileContentResult(Text: text, UnavailableReason: null)
             : new FileContentResult(Text: null, UnavailableReason: BodyUnavailableReason.InvalidEncoding);

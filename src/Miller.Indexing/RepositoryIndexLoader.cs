@@ -1,4 +1,5 @@
 using Miller.Core.Graph;
+using Miller.Indexing.Reads;
 
 // Miller.Indexing also defines its own inspect-detail record `SymbolDetail` (SymbolDetail.cs), so the Core bridge
 // contract must be aliased to disambiguate — an unqualified `SymbolDetail` here binds to the Indexing one.
@@ -46,8 +47,21 @@ public static class RepositoryIndexLoader
     public static MillerRepositoryIndex Load(string dbPath, Action<TimeSpan>? onBridgeGraphBuilt = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(dbPath);
+        return LoadSession(
+            session,
+            onBridgeGraphBuilt,
+            BridgeProviderSelection.ProvidersForDatabase(dbPath));
+    }
 
-        var symbols = SqliteSymbolReader.Read(dbPath);
+    public static MillerRepositoryIndex LoadSession(
+        IWorkspaceReadSession session,
+        Action<TimeSpan>? onBridgeGraphBuilt = null,
+        IReadOnlyList<IBridgeProvider>? bridgeProviders = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        var symbols = SqliteSymbolReader.ReadSession(session);
 
         // Fallback name resolution is safe only when exactly one symbol in this artifact has the name.
         var nameToIds = new Dictionary<string, List<string>>(StringComparer.Ordinal);
@@ -58,17 +72,17 @@ public static class RepositoryIndexLoader
             ids.Add(symbol.SymbolId);
         }
 
-        var bridgeData = SqliteBridgeReader.Read(dbPath);
+        var bridgeData = SqliteBridgeReader.ReadSession(session);
 
-        var edges = new List<GraphEdge>(SymbolGraphReader.Read(
-            dbPath,
+        var edges = new List<GraphEdge>(SymbolGraphReader.ReadSession(
+            session,
             name => nameToIds.TryGetValue(name, out var ids)
                 ? ids
                 : (IReadOnlyList<string>)Array.Empty<string>()));
-        edges.AddRange(BlazorComponentGraphReader.Read(dbPath, bridgeData.StructuralFacts));
+        edges.AddRange(BlazorComponentGraphReader.ReadSession(session, bridgeData.StructuralFacts));
 
         var symbolDetails = ProjectToSymbolDetails(symbols);
-        var bridgeProviders = BridgeProviderSelection.ProvidersForDatabase(dbPath);
+        bridgeProviders ??= BridgeProviderSelection.ProvidersForWorkspaceRoot(session.Snapshot.WorkspaceRoot);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var bridgeGraph = BridgeGraphBuilder.Build(
@@ -83,7 +97,7 @@ public static class RepositoryIndexLoader
         stopwatch.Stop();
         onBridgeGraphBuilt?.Invoke(stopwatch.Elapsed);
 
-        return MillerRepositoryIndex.Build(symbols, edges, bridgeGraph, ExtractIndexLevelReader.ReadStrict(dbPath));
+        return MillerRepositoryIndex.Build(symbols, edges, bridgeGraph, session.Snapshot.IndexLevel);
     }
 
     /// <summary>

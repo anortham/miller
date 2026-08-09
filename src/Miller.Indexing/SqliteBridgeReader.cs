@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using System.Text.Json;
@@ -48,10 +49,19 @@ public static class SqliteBridgeReader
     public static BridgeData Read(string dbPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(dbPath);
+        return ReadSession(session);
+    }
 
-        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+    public static BridgeData ReadSession(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(Read);
+    }
+
+    private static BridgeData Read(SqliteConnection connection)
+    {
         JulieSchemaGate.Verify(connection);
-
         var typeArguments = ReadTypeArguments(connection);
         var (literals, literalSites) = ReadLiterals(connection);
         var annotations = ReadAnnotations(connection);

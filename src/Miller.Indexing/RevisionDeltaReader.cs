@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -53,6 +54,22 @@ public sealed record RevisionDeltaResult(
 /// </summary>
 public static class RevisionDeltaReader
 {
+    public static RevisionDeltaResult Read(
+        IWorkspaceReadSession session,
+        long fromRevision,
+        string? fromArtifactId = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        try
+        {
+            return session.Read(connection => Read(connection, fromRevision, fromArtifactId));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
+        {
+            return Unavailable(fromRevision, toRevision: 0, artifactId: null, "read_error");
+        }
+    }
+
     /// <summary>
     /// Read the delta for <paramref name="fromRevision"/> (exclusive) to the current index revision (inclusive)
     /// from the extract DB at <paramref name="extractDbPath"/>. Never throws for an expected condition (missing
@@ -78,45 +95,7 @@ public static class RevisionDeltaReader
         try
         {
             using SqliteConnection conn = SqliteReadOnlyAccess.Open(abs);
-
-            // An extract predating the change journal (older julie-extract) cannot serve deltas → unavailable, so
-            // Eros negotiates via the capability and never interprets a legacy-shaped response as "complete".
-            if (!TableExists(conn, "extraction_revisions") || !TableExists(conn, "revision_file_changes"))
-                return Unavailable(fromRevision, toRevision: 0, artifactId: null, "no_journal");
-
-            long current = ScalarLong(conn, "SELECT MAX(revision_id) FROM extraction_revisions;");
-            long? floor = ScalarNullableLong(conn, "SELECT MIN(revision_id) FROM extraction_revisions;");
-            string? artifactId = ReadArtifactId(conn);
-
-            // --- R3 span validation (never a guessed-empty delta) ---
-            if (fromRevision < 0)
-                return Unavailable(fromRevision, current, artifactId, "invalid_from_revision");
-            if (string.IsNullOrWhiteSpace(artifactId))
-                return Unavailable(fromRevision, current, artifactId, "no_artifact_id");
-            if (string.IsNullOrWhiteSpace(fromArtifactId))
-                return Unavailable(fromRevision, current, artifactId, "missing_from_artifact_id");
-            if (!string.Equals(fromArtifactId, artifactId, StringComparison.Ordinal))
-                return Unavailable(fromRevision, current, artifactId, "artifact_changed");
-            if (fromRevision > current)
-                // The requested base is ahead of the current revision: the counter went backward (a full rebuild
-                // restarted julie's revision counter) or the base is bogus. We cannot reconstruct this span.
-                return Unavailable(fromRevision, current, artifactId, "from_after_current");
-            if (floor is long retainedFloor && fromRevision < retainedFloor - 1)
-                // History below the base was pruned/rebuilt: revisions between the base and the retained floor are
-                // unrecorded, so the span is unreconstructable.
-                return Unavailable(fromRevision, current, artifactId, "pruned_history");
-
-            // The half-open span (from, current] is fully journaled; report every path it touched.
-            (IReadOnlyList<string> paths, IReadOnlyList<string> deletedPaths) =
-                ReadChangedPaths(conn, fromRevision, current);
-            return new RevisionDeltaResult(
-                RevisionDeltaStatus.Complete,
-                fromRevision,
-                current,
-                artifactId,
-                paths,
-                "complete",
-                deletedPaths);
+            return Read(conn, fromRevision, fromArtifactId);
         }
         catch (Exception ex) when (ex is InvalidOperationException or SqliteException or IOException)
         {
@@ -124,6 +103,40 @@ public static class RevisionDeltaReader
             // not a thrown exception the CLI would surface as an error.
             return Unavailable(fromRevision, toRevision: 0, artifactId: null, "read_error");
         }
+    }
+
+    private static RevisionDeltaResult Read(
+        SqliteConnection conn,
+        long fromRevision,
+        string? fromArtifactId)
+    {
+        if (!TableExists(conn, "extraction_revisions") || !TableExists(conn, "revision_file_changes"))
+            return Unavailable(fromRevision, toRevision: 0, artifactId: null, "no_journal");
+        long current = ScalarLong(conn, "SELECT MAX(revision_id) FROM extraction_revisions;");
+        long? floor = ScalarNullableLong(conn, "SELECT MIN(revision_id) FROM extraction_revisions;");
+        string? artifactId = ReadArtifactId(conn);
+        if (fromRevision < 0)
+            return Unavailable(fromRevision, current, artifactId, "invalid_from_revision");
+        if (string.IsNullOrWhiteSpace(artifactId))
+            return Unavailable(fromRevision, current, artifactId, "no_artifact_id");
+        if (string.IsNullOrWhiteSpace(fromArtifactId))
+            return Unavailable(fromRevision, current, artifactId, "missing_from_artifact_id");
+        if (!string.Equals(fromArtifactId, artifactId, StringComparison.Ordinal))
+            return Unavailable(fromRevision, current, artifactId, "artifact_changed");
+        if (fromRevision > current)
+            return Unavailable(fromRevision, current, artifactId, "from_after_current");
+        if (floor is long retainedFloor && fromRevision < retainedFloor - 1)
+            return Unavailable(fromRevision, current, artifactId, "pruned_history");
+        (IReadOnlyList<string> paths, IReadOnlyList<string> deletedPaths) =
+            ReadChangedPaths(conn, fromRevision, current);
+        return new RevisionDeltaResult(
+            RevisionDeltaStatus.Complete,
+            fromRevision,
+            current,
+            artifactId,
+            paths,
+            "complete",
+            deletedPaths);
     }
 
     private static RevisionDeltaResult Unavailable(long fromRevision, long toRevision, string? artifactId, string reason) =>

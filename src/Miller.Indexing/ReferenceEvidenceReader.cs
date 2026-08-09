@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.References;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -15,6 +16,32 @@ public static class ReferenceEvidenceReader
 {
     private static readonly string[] RequiredResolutionTables =
         ["reference_sites", "identifier_resolutions", "pending_resolutions", "pending_relationships"];
+
+    public static ReferenceEvidenceBundle ReadForSymbol(
+        IWorkspaceReadSession session,
+        string symbolId,
+        ReferenceEvidenceQuery inboundQuery,
+        ReferenceEvidenceQuery outgoingQuery,
+        ReferenceEvidenceBounds kindBounds,
+        IReadOnlyList<ReferenceKind> kinds)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        inboundQuery.Validate();
+        outgoingQuery.Validate();
+        kindBounds.Validate();
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Count == 0)
+            throw new ArgumentException("At least one reference kind is required.", nameof(kinds));
+
+        return session.Read(connection => ReadForSymbol(
+            connection,
+            symbolId,
+            inboundQuery,
+            outgoingQuery,
+            kindBounds,
+            kinds));
+    }
 
     /// <summary>Read inbound, outgoing, and selected relationship kinds for one symbol from one snapshot.</summary>
     public static ReferenceEvidenceBundle ReadForSymbol(
@@ -107,6 +134,23 @@ public static class ReferenceEvidenceReader
             query,
             sameNameDefinitionCount,
             ReadSnapshot(connection));
+    }
+
+    public static ReferenceEvidenceSet Read(
+        IWorkspaceReadSession session,
+        string targetSymbolId,
+        ReferenceEvidenceBounds bounds) =>
+        Read(session, targetSymbolId, new ReferenceEvidenceQuery(bounds));
+
+    public static ReferenceEvidenceSet Read(
+        IWorkspaceReadSession session,
+        string targetSymbolId,
+        ReferenceEvidenceQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetSymbolId);
+        query.Validate();
+        return session.Read(connection => ReadInbound(connection, targetSymbolId, query));
     }
 
     /// <summary>Read several independently bounded inbound relationship kinds from one artifact snapshot.</summary>
@@ -231,6 +275,23 @@ public static class ReferenceEvidenceReader
             ReadSnapshot(connection));
     }
 
+    public static OutgoingReferenceEvidenceSet ReadOutgoing(
+        IWorkspaceReadSession session,
+        string containingSymbolId,
+        ReferenceEvidenceBounds bounds) =>
+        ReadOutgoing(session, containingSymbolId, new ReferenceEvidenceQuery(bounds));
+
+    public static OutgoingReferenceEvidenceSet ReadOutgoing(
+        IWorkspaceReadSession session,
+        string containingSymbolId,
+        ReferenceEvidenceQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(containingSymbolId);
+        query.Validate();
+        return session.Read(connection => ReadOutgoing(connection, containingSymbolId, query));
+    }
+
     /// <summary>Read several independently bounded outgoing relationship kinds from one artifact snapshot.</summary>
     public static IReadOnlyDictionary<ReferenceKind, OutgoingReferenceEvidenceSet> ReadOutgoingKinds(
         string dbPath,
@@ -303,6 +364,88 @@ public static class ReferenceEvidenceReader
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
         return ReadSnapshot(connection);
+    }
+
+    public static ReferenceEvidenceSnapshot ReadSnapshot(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(connection =>
+        {
+            JulieSchemaGate.Verify(connection);
+            return ReadSnapshot(connection);
+        });
+    }
+
+    private static ReferenceEvidenceBundle ReadForSymbol(
+        SqliteConnection connection,
+        string symbolId,
+        ReferenceEvidenceQuery inboundQuery,
+        ReferenceEvidenceQuery outgoingQuery,
+        ReferenceEvidenceBounds kindBounds,
+        IReadOnlyList<ReferenceKind> kinds)
+    {
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+        string targetName = ReadTargetName(connection, symbolId);
+        List<ReferenceEvidence> inboundExactRows = ReadExact(connection, symbolId);
+        List<ReferenceEvidence> inboundFallbackRows = ReadFallback(connection, symbolId, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, symbolId, targetName);
+        List<OutgoingReferenceEvidence> outgoingExactRows = ReadOutgoingExact(connection, symbolId);
+        List<OutgoingReferenceEvidence> outgoingFallbackRows = ReadOutgoingFallback(connection, symbolId);
+        ReferenceEvidenceSnapshot snapshot = ReadSnapshot(connection);
+        ReferenceKind[] distinctKinds = kinds.Distinct().ToArray();
+        return new ReferenceEvidenceBundle(
+            BuildInboundSet(inboundExactRows, inboundFallbackRows, inboundQuery, sameNameDefinitionCount, snapshot),
+            BuildOutgoingSet(outgoingExactRows, outgoingFallbackRows, outgoingQuery, snapshot),
+            distinctKinds.ToDictionary(
+                static kind => kind,
+                kind => BuildInboundSet(
+                    inboundExactRows,
+                    inboundFallbackRows,
+                    new ReferenceEvidenceQuery(kindBounds, kind),
+                    sameNameDefinitionCount,
+                    snapshot)),
+            distinctKinds.ToDictionary(
+                static kind => kind,
+                kind => BuildOutgoingSet(
+                    outgoingExactRows,
+                    outgoingFallbackRows,
+                    new ReferenceEvidenceQuery(kindBounds, kind),
+                    snapshot)));
+    }
+
+    private static ReferenceEvidenceSet ReadInbound(
+        SqliteConnection connection,
+        string targetSymbolId,
+        ReferenceEvidenceQuery query)
+    {
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+        string targetName = ReadTargetName(connection, targetSymbolId);
+        List<ReferenceEvidence> exactRows = ReadExact(connection, targetSymbolId);
+        List<ReferenceEvidence> fallbackRows = ReadFallback(connection, targetSymbolId, targetName);
+        int sameNameDefinitionCount = CountDefinitions(connection, targetSymbolId, targetName);
+        return BuildInboundSet(
+            exactRows,
+            fallbackRows,
+            query,
+            sameNameDefinitionCount,
+            ReadSnapshot(connection));
+    }
+
+    private static OutgoingReferenceEvidenceSet ReadOutgoing(
+        SqliteConnection connection,
+        string containingSymbolId,
+        ReferenceEvidenceQuery query)
+    {
+        JulieSchemaGate.Verify(connection);
+        RequireResolutionTables(connection);
+        RequireSymbol(connection, containingSymbolId);
+        return BuildOutgoingSet(
+            ReadOutgoingExact(connection, containingSymbolId),
+            ReadOutgoingFallback(connection, containingSymbolId),
+            query,
+            ReadSnapshot(connection));
     }
 
     private static ReferenceEvidenceSnapshot ReadSnapshot(SqliteConnection connection)

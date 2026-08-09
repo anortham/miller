@@ -1,4 +1,5 @@
 using Miller.Core.Graph;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -41,10 +42,23 @@ public static class SymbolGraphReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentNullException.ThrowIfNull(resolveName);
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(dbPath);
+        return ReadSession(session, resolveName);
+    }
 
-        // Shared D4 read discipline (file-exists + writable-dir probe + Mode=ReadOnly + SQLITE_READONLY map).
-        using var connection = SqliteReadOnlyAccess.Open(dbPath);
+    public static IReadOnlyList<GraphEdge> ReadSession(
+        IWorkspaceReadSession session,
+        Func<string, IReadOnlyList<string>> resolveName)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(resolveName);
+        return session.Read(connection => Read(connection, resolveName));
+    }
 
+    private static IReadOnlyList<GraphEdge> Read(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Func<string, IReadOnlyList<string>> resolveName)
+    {
         var edges = new List<GraphEdge>();
         ReadRelationships(connection, edges);
         ReadResolvedPendingRelationships(connection, edges);

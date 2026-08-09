@@ -23,6 +23,17 @@ internal static class BridgeProviderSelection
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         string? configPath = ConfigPathForDatabase(dbPath);
+        return ProvidersForConfig(configPath);
+    }
+
+    public static IReadOnlyList<IBridgeProvider> ProvidersForWorkspaceRoot(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        return ProvidersForConfig(Path.Combine(Path.GetFullPath(workspaceRoot), "miller.json"));
+    }
+
+    private static IReadOnlyList<IBridgeProvider> ProvidersForConfig(string? configPath)
+    {
         if (configPath is null || !File.Exists(configPath))
             return DefaultProviders;
 
