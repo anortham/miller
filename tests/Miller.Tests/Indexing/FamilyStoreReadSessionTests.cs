@@ -61,6 +61,22 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal(8, error.SqliteErrorCode);
     }
 
+    [Fact]
+    public void EnabledWorkspaceFactoryUsesTheValidatedPointerInsteadOfTheLegacyArtifact()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            Path.Combine(fixture.Root, "missing-legacy.db"),
+            fixture.Binding.WorkspaceRoot,
+            "workspace-a",
+            storeEnabled: true);
+
+        Assert.Equal(WorkspaceReadMode.FamilyStore, session.Snapshot.Mode);
+        Assert.Equal("view-a", session.Snapshot.ViewId);
+    }
+
     private sealed class StoreFixture : IDisposable
     {
         private StoreFixture(string root, StoreFamilyBinding binding)

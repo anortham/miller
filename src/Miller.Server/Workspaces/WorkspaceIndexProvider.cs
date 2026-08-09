@@ -20,6 +20,9 @@ public sealed class WorkspaceIndexProvider
     private readonly Func<string, long, ITextContentSearchIndex> _loadTextContentSearch;
     private readonly Func<string, long, IRegionSearchIndex> _loadRegionSearch;
     private readonly Func<long, bool?> _currentIndexFresh;
+    private readonly Func<string, string, string?, WorkspaceReadHandle> _openReadSession;
+    private readonly Func<IWorkspaceReadSession, MillerRepositoryIndex> _loadSessionIndex;
+    private readonly Func<IWorkspaceReadSession, SymbolSearchProjection> _loadSessionSymbolSearch;
     private readonly SymbolSearchSidecar _sidecar;
     private readonly object _cacheGate = new();
     private readonly Dictionary<CacheKey, Lazy<CachedIndex>> _cache = new();
@@ -50,7 +53,9 @@ public sealed class WorkspaceIndexProvider
                 revision,
                 SymbolsArtifactIdentity.TryRead(dbPath)),
             currentIndexFresh: _ => null,
-            sidecar)
+            sidecar,
+            openReadSession: (databasePath, root, workspaceId) =>
+                WorkspaceReadSessionFactory.Open(databasePath, root, workspaceId))
     {
     }
 
@@ -65,7 +70,10 @@ public sealed class WorkspaceIndexProvider
         Func<string, long, ITextContentSearchIndex> loadTextContentSearch,
         Func<string, long, IRegionSearchIndex> loadRegionSearch,
         Func<long, bool?> currentIndexFresh,
-        SymbolSearchSidecar sidecar)
+        SymbolSearchSidecar sidecar,
+        Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
+        Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
+        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null)
     {
         ArgumentNullException.ThrowIfNull(holder);
         ArgumentNullException.ThrowIfNull(currentWorkspace);
@@ -89,6 +97,10 @@ public sealed class WorkspaceIndexProvider
         _loadRegionSearch = loadRegionSearch;
         _currentIndexFresh = currentIndexFresh;
         _sidecar = sidecar;
+        _openReadSession = openReadSession ?? ((databasePath, root, workspaceId) =>
+            new WorkspaceReadHandle(LegacyArtifactReadSession.Open(databasePath, root, workspaceId)));
+        _loadSessionIndex = loadSessionIndex ?? (session => RepositoryIndexLoader.LoadSession(session));
+        _loadSessionSymbolSearch = loadSessionSymbolSearch ?? SymbolSearchProjectionLoader.LoadSession;
     }
 
     public WorkspaceReadContext Resolve(string? workspaceId, bool ensureFresh)
@@ -185,43 +197,61 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceReadContext ResolveCurrent()
     {
-        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
-        var resolver = new SmartTargetResolver(index);
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        return new WorkspaceReadContext(
-            index,
-            resolver,
-            LegacyArtifactReadSession.Open(
-                dbPath,
+        (MillerRepositoryIndex holderIndex, long holderRevision) = _holder.Snapshot();
+        WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        try
+        {
+            long revision = readSession.Snapshot.Freshness.Revision;
+            CachedIndex? cached = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
+                ? GetOrLoad(
+                    KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
+                    () => _loadSessionIndex(readSession))
+                : null;
+            MillerRepositoryIndex index = cached?.Index ?? holderIndex;
+            SmartTargetResolver resolver = cached?.Resolver ?? new SmartTargetResolver(index);
+            return new WorkspaceReadContext(
+                index,
+                resolver,
+                readSession,
+                _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-                _currentWorkspace.WorkspaceId),
-            _currentWorkspace.WorkspaceId,
-            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-            revision,
-            _currentIndexFresh(revision),
-            "current",
-            WarningText: null,
-            DisplayId: CurrentDisplayId(),
-            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
+                revision,
+                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                "current",
+                WarningText: null,
+                DisplayId: CurrentDisplayId(),
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     private WorkspaceArtifactContext ResolveCurrentArtifact()
     {
-        (_, long revision) = _holder.Snapshot();
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        return new WorkspaceArtifactContext(
-            LegacyArtifactReadSession.Open(
-                dbPath,
+        (_, long holderRevision) = _holder.Snapshot();
+        WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        try
+        {
+            long revision = readSession.Snapshot.Freshness.Revision;
+            return new WorkspaceArtifactContext(
+                readSession,
+                _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-                _currentWorkspace.WorkspaceId),
-            _currentWorkspace.WorkspaceId,
-            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-            revision,
-            _currentIndexFresh(revision),
-            "current",
-            WarningText: null,
-            DisplayId: CurrentDisplayId(),
-            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
+                revision,
+                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                "current",
+                WarningText: null,
+                DisplayId: CurrentDisplayId(),
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -231,23 +261,29 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceSymbolSearchContext ResolveCurrentSymbolSearch()
     {
-        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
-        ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, revision);
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        return new WorkspaceSymbolSearchContext(
-            searchIndex,
-            LegacyArtifactReadSession.Open(
-                dbPath,
+        (MillerRepositoryIndex index, long holderRevision) = _holder.Snapshot();
+        WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        try
+        {
+            long revision = readSession.Snapshot.Freshness.Revision;
+            ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, holderRevision, readSession);
+            return new WorkspaceSymbolSearchContext(
+                searchIndex,
+                readSession,
+                _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-                _currentWorkspace.WorkspaceId),
-            _currentWorkspace.WorkspaceId,
-            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-            revision,
-            _currentIndexFresh(revision),
-            "current",
-            WarningText: null,
-            DisplayId: CurrentDisplayId(),
-            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
+                revision,
+                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                "current",
+                WarningText: null,
+                DisplayId: CurrentDisplayId(),
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -256,30 +292,52 @@ public sealed class WorkspaceIndexProvider
     /// </summary>
     private WorkspaceSymbolReadContext ResolveCurrentSymbolRead()
     {
-        (MillerRepositoryIndex index, long revision) = _holder.Snapshot();
-        string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
-        return new WorkspaceSymbolReadContext(
-            index,
-            LegacyArtifactReadSession.Open(
-                dbPath,
+        (MillerRepositoryIndex holderIndex, long holderRevision) = _holder.Snapshot();
+        WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        try
+        {
+            long revision = readSession.Snapshot.Freshness.Revision;
+            ISymbolLookupIndex index = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
+                ? GetOrAddSymbolReadCache(
+                    KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
+                    () => new CachedSymbolRead(_loadSessionSymbolSearch(readSession))).Index
+                : holderIndex;
+            return new WorkspaceSymbolReadContext(
+                index,
+                readSession,
+                _currentWorkspace.WorkspaceId,
                 _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-                _currentWorkspace.WorkspaceId),
-            _currentWorkspace.WorkspaceId,
-            _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-            revision,
-            _currentIndexFresh(revision),
-            "current",
-            WarningText: null,
-            DisplayId: CurrentDisplayId(),
-            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
+                revision,
+                readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore ? null : _currentIndexFresh(holderRevision),
+                "current",
+                WarningText: null,
+                DisplayId: CurrentDisplayId(),
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     // Current workspace symbol routing. Explicit sidecar opt-out: the holder's already-built full index serves
     // search. Sidecar enabled: require a revision-fresh on-disk sidecar so stale/missing artifacts are visible
     // instead of hidden behind a memory fallback. The chosen backend is cached keyed on (workspace, dbPath,
     // revision) so a freshness Swap (revision bump) rebuilds it and the sidecar is not re-opened per query.
-    private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(MillerRepositoryIndex holderIndex, long revision)
+    private ISymbolLookupIndex ResolveCurrentSymbolSearchIndex(
+        MillerRepositoryIndex holderIndex,
+        long revision,
+        WorkspaceReadHandle readSession)
     {
+        if (readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
+        {
+            CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot);
+            return GetOrAddSymbolSearchCache(
+                storeKey,
+                () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false)).Index;
+        }
+
         if (!_sidecar.Enabled)
             return holderIndex;
 
@@ -295,20 +353,39 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        CachedIndex cached = GetOrLoad(row, revision);
-        return new WorkspaceReadContext(
-            cached.Index,
-            cached.Resolver,
-            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId,
-            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
+        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            CacheKey key = familyStore
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+            CachedIndex cached = GetOrLoad(
+                key,
+                () => familyStore
+                    ? _loadSessionIndex(readSession)
+                    : _loadIndex(row.IndexDbPath));
+            return new WorkspaceReadContext(
+                cached.Index,
+                cached.Resolver,
+                readSession,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                revision,
+                familyStore
+                    ? null
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                row.DisplayId,
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     private WorkspaceSymbolSearchContext ResolveRegisteredSymbolSearch(string workspaceId, bool ensureFresh)
@@ -317,21 +394,39 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
-        CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
-        return new WorkspaceSymbolSearchContext(
-            cached.Index,
-            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId,
-            IsCurrent: false,
-            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
+        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            CacheKey key = familyStore
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+            CachedSymbolSearch cached = familyStore
+                ? GetOrAddSymbolSearchCache(
+                    key,
+                    () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false))
+                : GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
+            return new WorkspaceSymbolSearchContext(
+                cached.Index,
+                readSession,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                revision,
+                familyStore
+                    ? null
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                row.DisplayId,
+                IsCurrent: false,
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     private WorkspaceSymbolReadContext ResolveRegisteredSymbolRead(string workspaceId, bool ensureFresh)
@@ -340,23 +435,39 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
-        CachedSymbolRead cached = GetOrAddSymbolReadCache(
-            key,
-            () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath)));
-        return new WorkspaceSymbolReadContext(
-            cached.Index,
-            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId,
-            IsCurrent: false,
-            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
+        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            CacheKey key = familyStore
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+            CachedSymbolRead cached = GetOrAddSymbolReadCache(
+                key,
+                () => new CachedSymbolRead(familyStore
+                    ? _loadSessionSymbolSearch(readSession)
+                    : _loadSymbolSearch(row.IndexDbPath)));
+            return new WorkspaceSymbolReadContext(
+                cached.Index,
+                readSession,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                revision,
+                familyStore
+                    ? null
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                row.DisplayId,
+                IsCurrent: false,
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     private WorkspaceArtifactContext ResolveRegisteredArtifact(string workspaceId, bool ensureFresh)
@@ -365,17 +476,20 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
+        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
         return new WorkspaceArtifactContext(
-            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
+            readSession,
             row.WorkspaceId,
             row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0,
+            familyStore
+                ? null
+                : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId,
-            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
+            IndexLevel: readSession.Snapshot.IndexLevel);
     }
 
     // WorkspaceContentSearchContext and WorkspaceTextContentSearchContext deliberately carry NO IndexLevel,
@@ -590,7 +704,12 @@ public sealed class WorkspaceIndexProvider
 
     private CachedIndex GetOrLoad(WorkspaceRegistryRow row, long revision)
     {
-        var key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+        CacheKey key = KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+        return GetOrLoad(key, () => _loadIndex(row.IndexDbPath));
+    }
+
+    private CachedIndex GetOrLoad(CacheKey key, Func<MillerRepositoryIndex> load)
+    {
         Lazy<CachedIndex> lazy;
         lock (_cacheGate)
         {
@@ -599,7 +718,7 @@ public sealed class WorkspaceIndexProvider
                 lazy = new Lazy<CachedIndex>(
                     () =>
                     {
-                        MillerRepositoryIndex index = _loadIndex(row.IndexDbPath);
+                        MillerRepositoryIndex index = load();
                         return new CachedIndex(index, new SmartTargetResolver(index));
                     },
                     LazyThreadSafetyMode.ExecutionAndPublication);
@@ -946,6 +1065,13 @@ public sealed class WorkspaceIndexProvider
             row.CanonicalRoot,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot);
 
+    private WorkspaceReadHandle OpenCurrentReadSession()
+    {
+        string databasePath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
+        string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
+        return _openReadSession(databasePath, root, _currentWorkspace.WorkspaceId);
+    }
+
     private readonly record struct CacheKey(
         string WorkspaceId,
         string IndexDbPath,
@@ -977,6 +1103,25 @@ public sealed class WorkspaceIndexProvider
                 workspaceId, dbPath, revision, info.LastWriteTimeUtc.Ticks, info.Length,
                 identity.ArtifactId, identity.StampState)
             : new CacheKey(workspaceId, dbPath, revision, 0, 0, identity.ArtifactId, identity.StampState);
+    }
+
+    private static CacheKey KeyFor(string? workspaceId, WorkspaceReadSnapshot snapshot)
+    {
+        WorkspaceFreshnessToken freshness = snapshot.Freshness;
+        string resolvedWorkspaceId = string.IsNullOrWhiteSpace(workspaceId)
+            ? snapshot.WorkspaceId ?? snapshot.WorkspaceRoot
+            : workspaceId;
+        string sourceIdentity = snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ? $"store:{snapshot.ArtifactOrStoreId}:{snapshot.ViewId}:{freshness.ManifestHash}:{freshness.StoreLogSequence}:{freshness.ResolutionStamp}:{freshness.SearchStamp}:{freshness.ContentStamp}:{freshness.VectorStamp}"
+            : snapshot.ArtifactOrStoreId;
+        return new CacheKey(
+            resolvedWorkspaceId,
+            sourceIdentity,
+            freshness.Revision,
+            freshness.StoreLogSequence ?? 0,
+            0,
+            freshness.ArtifactOrStoreId,
+            ArtifactStampState.Present);
     }
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);

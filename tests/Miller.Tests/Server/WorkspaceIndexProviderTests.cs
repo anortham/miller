@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -87,6 +88,43 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Same(first.Resolver, second.Resolver);
         Assert.Equal(2, afterRevisionChange.Revision);
         Assert.NotSame(first.Index, afterRevisionChange.Index);
+        Assert.Equal(2, loadCount);
+    }
+
+    [Fact]
+    public void Resolve_RegisteredFamilyStoreCachesByManifestAndNeverLoadsTheLegacyArtifact()
+    {
+        using var current = DbWithSymbol("current-ws", revision: 1, "CurrentType");
+        using var target = DbWithSymbol("target-ws", revision: 1, "TargetType");
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("target-store-cache");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, target.DbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(root, "manifest-a");
+        int loadCount = 0;
+        var provider = NewProvider(
+            new IndexHolder(RepositoryIndexLoader.Load(current.DbPath), builtRevision: 1),
+            CurrentWorkspace(current.DbPath, "current-ws"),
+            registry,
+            loadIndex: _ => throw new InvalidOperationException("legacy artifact load was not expected"),
+            openReadSession: (_, _, _) => new WorkspaceReadHandle(new StubReadSession(snapshot)),
+            loadSessionIndex: _ =>
+            {
+                loadCount++;
+                return RepositoryIndexLoader.Load(target.DbPath);
+            });
+
+        using WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
+        using WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        snapshot = StoreSnapshot(root, "manifest-b");
+        using WorkspaceReadContext afterManifestChange = provider.Resolve("target-ws", ensureFresh: false);
+
+        Assert.Equal(WorkspaceReadMode.FamilyStore, first.Snapshot.Mode);
+        Assert.Equal("manifest-a", first.Snapshot.Freshness.ManifestHash);
+        Assert.Same(first.Index, second.Index);
+        Assert.NotSame(first.Index, afterManifestChange.Index);
+        Assert.Equal("manifest-b", afterManifestChange.Snapshot.Freshness.ManifestHash);
         Assert.Equal(2, loadCount);
     }
 
@@ -1564,7 +1602,10 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Func<string, long, ITextContentSearchIndex>? loadTextContentSearch = null,
         Func<string, long, IRegionSearchIndex>? loadRegionSearch = null,
         Func<long, bool?>? currentIndexFresh = null,
-        SymbolSearchSidecar? sidecar = null) =>
+        SymbolSearchSidecar? sidecar = null,
+        Func<string, string, string?, WorkspaceReadHandle>? openReadSession = null,
+        Func<IWorkspaceReadSession, MillerRepositoryIndex>? loadSessionIndex = null,
+        Func<IWorkspaceReadSession, SymbolSearchProjection>? loadSessionSymbolSearch = null) =>
         new(
             holder,
             workspace,
@@ -1578,7 +1619,32 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
             loadRegionSearch ?? ((dbPath, revision) => FtsRegionSearchIndex.Open(
                 SymbolSearchSidecar.SearchDbPathFor(dbPath), revision, SymbolsArtifactIdentity.TryRead(dbPath))),
             currentIndexFresh ?? (_ => true),
-            sidecar ?? SymbolSearchSidecar.Disabled);
+            sidecar ?? SymbolSearchSidecar.Disabled,
+            openReadSession,
+            loadSessionIndex,
+            loadSessionSymbolSearch);
+
+    private static WorkspaceReadSnapshot StoreSnapshot(string root, string manifestHash) =>
+        new(
+            root,
+            "target-ws",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken("family-a", 7, manifestHash, 12, "resolution-a"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore);
+
+    private sealed class StubReadSession(WorkspaceReadSnapshot snapshot) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) =>
+            throw new InvalidOperationException("direct session reads were not expected");
+
+        public void Dispose()
+        {
+        }
+    }
 
     private static Task<T> RunBlockingResolve<T>(Func<T> resolve) =>
         Task.Factory.StartNew(
