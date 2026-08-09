@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -35,6 +36,18 @@ public sealed class ContentCorpusSidecar
         }
 
         ContentCorpusWriter.Write(contentDbPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
+        return true;
+    }
+
+    public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, session.Snapshot);
+        string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, session.Snapshot.ViewId);
+        if (StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
+            return false;
+
+        ContentCorpusWriter.WriteStoreView(contentDbPath, session);
         return true;
     }
 
@@ -233,6 +246,21 @@ public sealed class ContentCorpusSidecar
         }
 
         return index;
+    }
+
+    public static FtsTextContentSearchIndex OpenStoreGenerationChecked(
+        string storeRoot,
+        WorkspaceReadSnapshot snapshot)
+    {
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, snapshot);
+        string contentDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Content, snapshot.ViewId);
+        if (!StoreSidecarCatalog.IsCurrent(contentDbPath, expected))
+        {
+            throw new InvalidOperationException(
+                $"Content sidecar for view '{snapshot.ViewId}' is missing or stale. " +
+                "Run `miller workspace refresh` to converge it.");
+        }
+        return FtsTextContentSearchIndex.Open(contentDbPath, snapshot.Freshness.Revision);
     }
 
     /// <summary>

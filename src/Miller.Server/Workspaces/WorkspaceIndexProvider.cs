@@ -333,6 +333,16 @@ public sealed class WorkspaceIndexProvider
         if (readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
         {
             CacheKey storeKey = KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot);
+            if (_sidecar.Enabled)
+            {
+                string storeRoot = readSession.FamilyStoreRoot
+                    ?? throw new InvalidOperationException("The family-store read session has no store root.");
+                return GetOrAddSymbolSearchCache(
+                    storeKey,
+                    () => new CachedSymbolSearch(
+                        _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot),
+                        IsSidecar: true)).Index;
+            }
             return GetOrAddSymbolSearchCache(
                 storeKey,
                 () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false)).Index;
@@ -402,11 +412,27 @@ public sealed class WorkspaceIndexProvider
             CacheKey key = familyStore
                 ? KeyFor(row.WorkspaceId, readSession.Snapshot)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
-            CachedSymbolSearch cached = familyStore
-                ? GetOrAddSymbolSearchCache(
+            CachedSymbolSearch cached;
+            if (familyStore && _sidecar.Enabled)
+            {
+                string storeRoot = readSession.FamilyStoreRoot
+                    ?? throw new InvalidOperationException("The family-store read session has no store root.");
+                cached = GetOrAddSymbolSearchCache(
                     key,
-                    () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false))
-                : GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
+                    () => new CachedSymbolSearch(
+                        _sidecar.OpenStoreRequired(storeRoot, readSession.Snapshot),
+                        IsSidecar: true));
+            }
+            else if (familyStore)
+            {
+                cached = GetOrAddSymbolSearchCache(
+                    key,
+                    () => new CachedSymbolSearch(_loadSessionSymbolSearch(readSession), IsSidecar: false));
+            }
+            else
+            {
+                cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
+            }
             return new WorkspaceSymbolSearchContext(
                 cached.Index,
                 readSession,
@@ -502,18 +528,25 @@ public sealed class WorkspaceIndexProvider
         // No content index lives in the holder (the bootstrap seeds only the full repository index), so the
         // current workspace builds its content projection lazily on first content query and caches it keyed on
         // the holder's built revision — a freshness Swap (reindex) bumps the revision and rebuilds.
-        (_, long revision) = _holder.Snapshot();
+        (_, long holderRevision) = _holder.Snapshot();
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        CachedContentSearch cached = GetOrLoadContentSearch(workspaceKey, dbPath, root, revision);
+        using WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+        CachedContentSearch cached = familyStore
+            ? GetOrLoadContentSearch(
+                KeyFor(workspaceKey, readSession.Snapshot),
+                () => ContentSearchProjectionLoader.Load(readSession))
+            : GetOrLoadContentSearch(workspaceKey, dbPath, root, revision);
         return new WorkspaceContentSearchContext(
             cached.Index,
-            dbPath,
+            familyStore ? readSession.FamilyStoreRoot! : dbPath,
             _currentWorkspace.WorkspaceId,
             root,
             revision,
-            _currentIndexFresh(revision),
+            familyStore ? null : _currentIndexFresh(revision),
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId());
@@ -525,15 +558,21 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        CachedContentSearch cached = GetOrLoadContentSearch(row.WorkspaceId, row.IndexDbPath, row.CanonicalRoot, revision);
+        using WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+        CachedContentSearch cached = familyStore
+            ? GetOrLoadContentSearch(
+                KeyFor(row.WorkspaceId, readSession.Snapshot),
+                () => ContentSearchProjectionLoader.Load(readSession))
+            : GetOrLoadContentSearch(row.WorkspaceId, row.IndexDbPath, row.CanonicalRoot, revision);
         return new WorkspaceContentSearchContext(
             cached.Index,
-            row.IndexDbPath,
+            familyStore ? readSession.FamilyStoreRoot! : row.IndexDbPath,
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId);
@@ -541,18 +580,28 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceTextContentSearchContext ResolveCurrentTextContentSearch()
     {
-        (_, long revision) = _holder.Snapshot();
+        (_, long holderRevision) = _holder.Snapshot();
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        CachedTextContentSearch cached = GetOrLoadTextContentSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
+        using WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+        string sourcePath = familyStore
+            ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
+            : dbPath;
+        CachedTextContentSearch cached = familyStore
+            ? GetOrLoadTextContentSearch(
+                KeyFor(workspaceKey, readSession.Snapshot),
+                () => ContentCorpusSidecar.OpenStoreGenerationChecked(readSession.FamilyStoreRoot!, readSession.Snapshot))
+            : GetOrLoadTextContentSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
-            dbPath,
+            sourcePath,
             _currentWorkspace.WorkspaceId,
             root,
             revision,
-            _currentIndexFresh(revision),
+            familyStore ? null : _currentIndexFresh(revision),
             "current",
             WarningText: null,
             DisplayId: CurrentDisplayId());
@@ -564,15 +613,24 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        CachedTextContentSearch cached = GetOrLoadTextContentSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
+        using WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+        string sourcePath = familyStore
+            ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
+            : row.IndexDbPath;
+        CachedTextContentSearch cached = familyStore
+            ? GetOrLoadTextContentSearch(
+                KeyFor(row.WorkspaceId, readSession.Snapshot),
+                () => ContentCorpusSidecar.OpenStoreGenerationChecked(readSession.FamilyStoreRoot!, readSession.Snapshot))
+            : GetOrLoadTextContentSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
         return new WorkspaceTextContentSearchContext(
             cached.Index,
-            row.IndexDbPath,
+            sourcePath,
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+            familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
             WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
             WorkspaceFreshnessView.WarningTextFor(refreshResult),
             row.DisplayId,
@@ -581,25 +639,40 @@ public sealed class WorkspaceIndexProvider
 
     private WorkspaceRegionSearchContext ResolveCurrentRegionSearch()
     {
-        (_, long revision) = _holder.Snapshot();
+        (_, long holderRevision) = _holder.Snapshot();
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         string root = _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot;
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
-        CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
-        return new WorkspaceRegionSearchContext(
-            cached.Index,
-            LegacyArtifactReadSession.Open(
-                dbPath,
-                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
-                _currentWorkspace.WorkspaceId),
-            _currentWorkspace.WorkspaceId,
-            root,
-            revision,
-            _currentIndexFresh(revision),
-            "current",
-            WarningText: null,
-            DisplayId: CurrentDisplayId(),
-            IndexLevel: ExtractIndexLevelReader.Read(dbPath));
+        WorkspaceReadHandle readSession = OpenCurrentReadSession();
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+            CacheKey key = familyStore
+                ? KeyFor(workspaceKey, readSession.Snapshot)
+                : KeyFor(workspaceKey, dbPath, revision);
+            CachedRegionSearch cached = familyStore
+                ? GetOrLoadRegionSearch(
+                    key,
+                    () => FtsRegionSearchIndex.OpenStore(readSession.FamilyStoreRoot!, readSession.Snapshot))
+                : GetOrLoadRegionSearch(key, dbPath);
+            return new WorkspaceRegionSearchContext(
+                cached.Index,
+                readSession,
+                _currentWorkspace.WorkspaceId,
+                root,
+                revision,
+                familyStore ? null : _currentIndexFresh(revision),
+                "current",
+                WarningText: null,
+                DisplayId: CurrentDisplayId(),
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     private WorkspaceRegionSearchContext ResolveRegisteredRegionSearch(string workspaceId, bool ensureFresh)
@@ -608,19 +681,36 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRegistryRow row = state.Row;
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
-        long revision = row.LastRevision ?? 0;
-        CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
-        return new WorkspaceRegionSearchContext(
-            cached.Index,
-            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            revision,
-            WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId,
-            IndexLevel: ExtractIndexLevelReader.Read(row.IndexDbPath));
+        WorkspaceReadHandle readSession = _openReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            CacheKey key = familyStore
+                ? KeyFor(row.WorkspaceId, readSession.Snapshot)
+                : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
+            CachedRegionSearch cached = familyStore
+                ? GetOrLoadRegionSearch(
+                    key,
+                    () => FtsRegionSearchIndex.OpenStore(readSession.FamilyStoreRoot!, readSession.Snapshot))
+                : GetOrLoadRegionSearch(key, row.IndexDbPath);
+            return new WorkspaceRegionSearchContext(
+                cached.Index,
+                readSession,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                revision,
+                familyStore ? null : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                row.DisplayId,
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -856,14 +946,19 @@ public sealed class WorkspaceIndexProvider
 
     private CachedContentSearch GetOrLoadContentSearch(string workspaceId, string dbPath, string root, long revision)
     {
-        var key = KeyFor(workspaceId, dbPath, revision);
+        CacheKey key = KeyFor(workspaceId, dbPath, revision);
+        return GetOrLoadContentSearch(key, () => _loadContentSearch(dbPath, root));
+    }
+
+    private CachedContentSearch GetOrLoadContentSearch(CacheKey key, Func<ContentSearchProjection> load)
+    {
         Lazy<CachedContentSearch> lazy;
         lock (_cacheGate)
         {
             if (!_contentSearchCache.TryGetValue(key, out lazy!))
             {
                 lazy = new Lazy<CachedContentSearch>(
-                    () => new CachedContentSearch(_loadContentSearch(dbPath, root)),
+                    () => new CachedContentSearch(load()),
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _contentSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_contentSearchCache, key);
@@ -890,6 +985,11 @@ public sealed class WorkspaceIndexProvider
 
     private CachedRegionSearch GetOrLoadRegionSearch(CacheKey key, string dbPath)
     {
+        return GetOrLoadRegionSearch(key, () => OpenRegionSearch(dbPath, key.Revision));
+    }
+
+    private CachedRegionSearch GetOrLoadRegionSearch(CacheKey key, Func<IRegionSearchIndex> load)
+    {
         EnsureRegionSearchEnabled();
 
         Lazy<CachedRegionSearch> lazy;
@@ -898,7 +998,7 @@ public sealed class WorkspaceIndexProvider
             if (!_regionSearchCache.TryGetValue(key, out lazy!))
             {
                 lazy = new Lazy<CachedRegionSearch>(
-                    () => new CachedRegionSearch(OpenRegionSearch(dbPath, key.Revision)),
+                    () => new CachedRegionSearch(load()),
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _regionSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_regionSearchCache, key);
@@ -925,13 +1025,20 @@ public sealed class WorkspaceIndexProvider
 
     private CachedTextContentSearch GetOrLoadTextContentSearch(CacheKey key, string dbPath)
     {
+        return GetOrLoadTextContentSearch(key, () => _loadTextContentSearch(dbPath, key.Revision));
+    }
+
+    private CachedTextContentSearch GetOrLoadTextContentSearch(
+        CacheKey key,
+        Func<ITextContentSearchIndex> load)
+    {
         Lazy<CachedTextContentSearch> lazy;
         lock (_cacheGate)
         {
             if (!_textContentSearchCache.TryGetValue(key, out lazy!))
             {
                 lazy = new Lazy<CachedTextContentSearch>(
-                    () => new CachedTextContentSearch(_loadTextContentSearch(dbPath, key.Revision)),
+                    () => new CachedTextContentSearch(load()),
                     LazyThreadSafetyMode.ExecutionAndPublication);
                 _textContentSearchCache[key] = lazy;
                 EvictOtherEntriesForWorkspaceUnderLock(_textContentSearchCache, key);

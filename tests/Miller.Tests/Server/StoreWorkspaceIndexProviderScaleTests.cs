@@ -56,6 +56,37 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             Assert.Equal(legacyBridge.DbSetProperties, familyBridge.DbSetProperties);
             Assert.Equal(legacyBridge.StructuralFacts, familyBridge.StructuralFacts);
             Assert.Equal(ReadResolutionRows(legacy), ReadResolutionRows(family));
+
+            var searchSidecar = new SymbolSearchSidecar(true, RegionIndexOptions.Disabled);
+            Assert.True(searchSidecar.EnsureStoreCurrent(store, family));
+            Assert.False(searchSidecar.EnsureStoreCurrent(store, family));
+            Assert.True(searchSidecar.EnsureBuilt(artifact, legacy.Snapshot.Freshness.Revision));
+            ISymbolLookupIndex legacyDiskSearch = searchSidecar.OpenRequired(
+                artifact,
+                legacy.Snapshot.Freshness.Revision);
+            ISymbolLookupIndex storeDiskSearch = searchSidecar.OpenStoreRequired(store, family.Snapshot);
+            Assert.Equal(
+                legacyDiskSearch.Search("Calculator Add", 20),
+                storeDiskSearch.Search("Calculator Add", 20));
+
+            var contentSidecar = new ContentCorpusSidecar();
+            Assert.True(contentSidecar.EnsureStoreCurrent(store, family));
+            Assert.False(contentSidecar.EnsureStoreCurrent(store, family));
+            Assert.True(contentSidecar.EnsureBuilt(
+                artifact,
+                root,
+                legacy.Snapshot.WorkspaceId,
+                legacy.Snapshot.Freshness.Revision));
+            ITextContentSearchIndex legacyContent = ContentCorpusSidecar.OpenGenerationChecked(
+                ContentCorpusSidecar.ContentDbPathFor(artifact),
+                artifact,
+                legacy.Snapshot.Freshness.Revision);
+            ITextContentSearchIndex storeContent = ContentCorpusSidecar.OpenStoreGenerationChecked(
+                store,
+                family.Snapshot);
+            Assert.Equal(
+                legacyContent.Search("Calculator", TextContentKind.WorkspaceSource, 20),
+                storeContent.Search("Calculator", TextContentKind.WorkspaceSource, 20));
         }
         finally
         {

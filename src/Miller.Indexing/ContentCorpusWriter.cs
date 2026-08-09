@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -33,7 +34,16 @@ public static partial class ContentCorpusWriter
         ContentCorpusFacts facts;
         try
         {
-            facts = BuildInto(tempPath, symbolsDbPath, workspaceRoot, workspaceId, revision);
+            facts = BuildInto(
+                tempPath,
+                symbolsDbPath,
+                workspaceRoot,
+                workspaceId,
+                revision,
+                sourceRows: null,
+                symbolsByPath: null,
+                artifactId: TryReadArtifactId(symbolsDbPath),
+                storeStamp: null);
             using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
             {
                 int preserved = PreserveExternalSources(tempPath, fullPath);
@@ -46,6 +56,64 @@ public static partial class ContentCorpusWriter
                 ClearPreservationFailure(fullPath);
                 if (preserved > 0)
                     facts = ReadFacts(fullPath, revision);
+            }
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                SqliteConnection.ClearAllPools();
+                try { File.Delete(tempPath); } catch (IOException) { }
+            }
+        }
+
+        return facts with { Path = fullPath };
+    }
+
+    public static ContentCorpusFacts WriteStoreView(
+        string contentDbPath,
+        IWorkspaceReadSession session,
+        TimeSpan? writeLockTimeout = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentDbPath);
+        ArgumentNullException.ThrowIfNull(session);
+        StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Content, session.Snapshot);
+        IReadOnlyList<SourceRow> sourceRows = session.Read(ReadSourceRows);
+        IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> symbolsByPath =
+            session.Read(ReadSymbolSpans);
+
+        string fullPath = Path.GetFullPath(contentDbPath);
+        string dir = Path.GetDirectoryName(fullPath)
+            ?? throw new ArgumentException($"Path has no directory: {contentDbPath}", nameof(contentDbPath));
+        Directory.CreateDirectory(dir);
+        string tempPath = Path.Combine(dir, ".content-build-" + Guid.NewGuid().ToString("N") + ".db");
+        SidecarStagingReaper.ReapStale(dir, ".content-build-", SidecarStagingReaper.DefaultStaleAge, tempPath);
+
+        ContentCorpusFacts facts;
+        try
+        {
+            facts = BuildInto(
+                tempPath,
+                symbolsDbPath: null,
+                session.Snapshot.WorkspaceRoot,
+                session.Snapshot.WorkspaceId,
+                session.Snapshot.Freshness.Revision,
+                sourceRows,
+                symbolsByPath,
+                artifactId: null,
+                stamp);
+            using (ContentCorpusWriteLock.AcquireFor(fullPath, writeLockTimeout))
+            {
+                int preserved = PreserveExternalSources(tempPath, fullPath);
+                SqliteConnection.ClearAllPools();
+                for (int attempt = 1; ; attempt++)
+                {
+                    try { File.Move(tempPath, fullPath, overwrite: true); break; }
+                    catch (IOException) when (attempt < 5) { Thread.Sleep(20 * attempt); }
+                }
+                ClearPreservationFailure(fullPath);
+                if (preserved > 0)
+                    facts = ReadFacts(fullPath, session.Snapshot.Freshness.Revision);
             }
         }
         finally
@@ -361,13 +429,18 @@ public static partial class ContentCorpusWriter
 
     private static ContentCorpusFacts BuildInto(
         string tempPath,
-        string symbolsDbPath,
+        string? symbolsDbPath,
         string workspaceRoot,
         string? workspaceId,
-        long revision)
+        long revision,
+        IReadOnlyList<SourceRow>? sourceRows,
+        IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>>? symbolsByPath,
+        string? artifactId,
+        StoreSidecarStamp? storeStamp)
     {
-        var sourceRows = ReadSourceRows(symbolsDbPath);
-        var symbolsByPath = ReadSymbolSpans(symbolsDbPath);
+        sourceRows ??= ReadSourceRows(symbolsDbPath
+            ?? throw new ArgumentException("A legacy content build requires the source artifact path."));
+        symbolsByPath ??= ReadSymbolSpans(symbolsDbPath!);
         var accepted = new List<SourceBuildInput>();
         int skippedStatus = 0;
         int skippedScope = 0;
@@ -511,9 +584,11 @@ public static partial class ContentCorpusWriter
             meta.Parameters.AddWithValue("$hash", skippedHash);
             meta.Parameters.AddWithValue("$utf8", skippedUtf8);
             meta.Parameters.AddWithValue("$io", skippedIo);
-            meta.Parameters.AddWithValue("$artifact", (object?)TryReadArtifactId(symbolsDbPath) ?? DBNull.Value);
+            meta.Parameters.AddWithValue("$artifact", (object?)artifactId ?? DBNull.Value);
             meta.ExecuteNonQuery();
         }
+        if (storeStamp is not null)
+            StoreSidecarCatalog.Stamp(connection, tx, storeStamp);
         tx.Commit();
 
         return new ContentCorpusFacts(
@@ -666,6 +741,11 @@ public static partial class ContentCorpusWriter
     {
         using var connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
         JulieSchemaGate.Verify(connection);
+        return ReadSourceRows(connection);
+    }
+
+    private static IReadOnlyList<SourceRow> ReadSourceRows(SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT path, language, content_hash, content_bytes, status FROM files ORDER BY path;";
         using var reader = command.ExecuteReader();
@@ -686,6 +766,12 @@ public static partial class ContentCorpusWriter
     private static IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> ReadSymbolSpans(string symbolsDbPath)
     {
         using var connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        return ReadSymbolSpans(connection);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<ContentCorpusSymbolSpan>> ReadSymbolSpans(
+        SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT symbol_id, name, path, start_line, end_line

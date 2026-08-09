@@ -17,6 +17,9 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
     public string? LegacyArtifactPath =>
         (_session as LegacyArtifactReadSession)?.DatabasePath;
 
+    public string? FamilyStoreRoot =>
+        (_session as FamilyStoreReadSession)?.Visibility.StoreRoot;
+
     public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => _session.Read(query);
 
     public void Dispose() => _session.Dispose();

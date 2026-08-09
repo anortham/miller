@@ -19,7 +19,17 @@ public static class SqliteSourceRegionReader
 
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
         JulieSchemaGate.Verify(connection);
+        return ReadIndexedRegions(connection);
+    }
 
+    public static IReadOnlyList<SourceRegionRow> ReadIndexedRegions(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadIndexedRegions);
+    }
+
+    private static IReadOnlyList<SourceRegionRow> ReadIndexedRegions(SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT sr.source_region_id, sr.file_id, sr.path, sr.language, sr.kind,

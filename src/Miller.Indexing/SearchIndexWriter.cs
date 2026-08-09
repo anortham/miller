@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Tokenization;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -113,9 +114,58 @@ public static class SearchIndexWriter
             ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         }
 
+        WriteAtomic(
+            searchDbPath,
+            symbols,
+            revision,
+            symbolsDbPath,
+            workspaceRoot,
+            regionOptions,
+            regionRows: null,
+            TryReadArtifactId(symbolsDbPath),
+            storeStamp: null);
+    }
+
+    public static void WriteStoreView(
+        string searchDbPath,
+        IWorkspaceReadSession session,
+        RegionIndexOptions regionOptions)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(regionOptions);
+        StoreSidecarStamp stamp = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, session.Snapshot);
+        IReadOnlyList<IndexedSymbol> symbols = SqliteSymbolReader.ReadSession(session);
+        IReadOnlyList<SourceRegionRow>? regions = regionOptions.Enabled
+            ? SqliteSourceRegionReader.ReadIndexedRegions(session)
+            : null;
+        WriteAtomic(
+            searchDbPath,
+            symbols,
+            session.Snapshot.Freshness.Revision,
+            symbolsDbPath: null,
+            session.Snapshot.WorkspaceRoot,
+            regionOptions,
+            regions,
+            artifactId: null,
+            stamp);
+    }
+
+    private static void WriteAtomic(
+        string searchDbPath,
+        IReadOnlyList<IndexedSymbol> symbols,
+        long revision,
+        string? symbolsDbPath,
+        string? workspaceRoot,
+        RegionIndexOptions regionOptions,
+        IReadOnlyList<SourceRegionRow>? regionRows,
+        string? artifactId,
+        StoreSidecarStamp? storeStamp)
+    {
         string fullPath = Path.GetFullPath(searchDbPath);
         string dir = Path.GetDirectoryName(fullPath)
             ?? throw new ArgumentException($"Path has no directory: {searchDbPath}", nameof(searchDbPath));
+        Directory.CreateDirectory(dir);
         string tempPath = Path.Combine(dir, $".search-build-{Guid.NewGuid():N}.db");
         SidecarStagingReaper.ReapStale(dir, ".search-build-", SidecarStagingReaper.DefaultStaleAge, tempPath);
 
@@ -123,7 +173,7 @@ public static class SearchIndexWriter
         {
             BuildInto(
                 tempPath, symbols, revision, symbolsDbPath, workspaceRoot, regionOptions,
-                TryReadArtifactId(symbolsDbPath));
+                regionRows, artifactId, storeStamp);
             // Release the build connection's file handle from the pool before the move (Windows can't
             // replace/rename a file with an open handle).
             SqliteConnection.ClearAllPools();
@@ -216,7 +266,9 @@ public static class SearchIndexWriter
         string? symbolsDbPath,
         string? workspaceRoot,
         RegionIndexOptions regionOptions,
-        string? artifactId)
+        IReadOnlyList<SourceRegionRow>? regionRows,
+        string? artifactId,
+        StoreSidecarStamp? storeStamp)
     {
         var connectionString = new SqliteConnectionStringBuilder
         {
@@ -247,7 +299,7 @@ public static class SearchIndexWriter
         long totalLen = InsertSymbols(connection, symbols, symbolsById);
 
         (int regionCount, double regionAvgdl) = regionOptions.Enabled
-            ? InsertRegions(connection, symbols, symbolsDbPath!, workspaceRoot!, regionOptions)
+            ? InsertRegions(connection, symbols, symbolsDbPath, workspaceRoot!, regionOptions, regionRows: regionRows)
             : (0, 0.0);
 
         double avgdl = symbols.Count == 0 ? 0.0 : (double)totalLen / symbols.Count;
@@ -269,6 +321,9 @@ public static class SearchIndexWriter
             metaCmd.Parameters.AddWithValue("$artifact", (object?)artifactId ?? DBNull.Value);
             metaCmd.ExecuteNonQuery();
         }
+
+        if (storeStamp is not null)
+            StoreSidecarCatalog.Stamp(connection, tx, storeStamp);
 
         tx.Commit();
     }
@@ -645,12 +700,15 @@ public static class SearchIndexWriter
     private static (int RegionCount, double RegionAvgdl) InsertRegions(
         SqliteConnection connection,
         IReadOnlyList<IndexedSymbol> symbols,
-        string symbolsDbPath,
+        string? symbolsDbPath,
         string workspaceRoot,
         RegionIndexOptions options,
-        IReadOnlySet<string>? pathFilter = null)
+        IReadOnlySet<string>? pathFilter = null,
+        IReadOnlyList<SourceRegionRow>? regionRows = null)
     {
-        IReadOnlyList<SourceRegionRow> regions = SqliteSourceRegionReader.ReadIndexedRegions(symbolsDbPath);
+        IReadOnlyList<SourceRegionRow> regions = regionRows ??
+            SqliteSourceRegionReader.ReadIndexedRegions(symbolsDbPath
+                ?? throw new ArgumentException("A legacy region build requires the source artifact path."));
         if (regions.Count == 0)
             return (0, 0.0);
 

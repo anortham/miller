@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -42,6 +43,25 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
     /// </summary>
     public static FtsRegionSearchIndex Open(
         string searchDbPath, long expectedRevision, SymbolsArtifactIdentity identity)
+        => Open(searchDbPath, expectedRevision, connection => identity.MatchesArtifact(TryReadArtifactId(connection)));
+
+    public static FtsRegionSearchIndex OpenStore(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
+        string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
+        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+        {
+            throw new InvalidOperationException(
+                $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
+                "Run `miller workspace refresh` to converge it.");
+        }
+        return Open(searchDbPath, snapshot.Freshness.Revision, _ => true);
+    }
+
+    private static FtsRegionSearchIndex Open(
+        string searchDbPath,
+        long expectedRevision,
+        Func<SqliteConnection, bool> generationMatches)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(searchDbPath);
 
@@ -72,7 +92,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
                 $"search.db at '{absPath}' is stale: revision {meta.Revision}, expected {expectedRevision}. " +
                 "Refresh or rebuild the search index.");
         }
-        if (!identity.MatchesArtifact(TryReadArtifactId(connection)))
+        if (!generationMatches(connection))
         {
             throw new InvalidOperationException(
                 $"search.db at '{absPath}' was built from a different index generation (the workspace was " +

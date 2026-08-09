@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -247,6 +248,43 @@ public sealed class SymbolSearchSidecar
                 $"Search sidecar at '{searchDbPath}' could not be opened. Run `miller workspace refresh` to rebuild it.",
                 ex);
         }
+    }
+
+    public FtsSymbolSearchIndex OpenStoreRequired(string storeRoot, WorkspaceReadSnapshot snapshot)
+    {
+        if (!Enabled)
+            throw new InvalidOperationException("Search sidecar is disabled.");
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot);
+        string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, snapshot.ViewId);
+        if (!StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+        {
+            throw new InvalidOperationException(
+                $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
+                "Run `miller workspace refresh` to converge it.");
+        }
+
+        FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
+        if (index.Revision != snapshot.Freshness.Revision)
+        {
+            throw new InvalidOperationException(
+                $"Search sidecar for view '{snapshot.ViewId}' has generation {index.Revision}, " +
+                $"expected {snapshot.Freshness.Revision}.");
+        }
+        return index;
+    }
+
+    public bool EnsureStoreCurrent(string storeRoot, IWorkspaceReadSession session)
+    {
+        if (!Enabled)
+            return false;
+        ArgumentNullException.ThrowIfNull(session);
+        StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, session.Snapshot);
+        string searchDbPath = StoreSidecarCatalog.PathFor(storeRoot, StoreSidecarKind.Search, session.Snapshot.ViewId);
+        if (StoreSidecarCatalog.IsCurrent(searchDbPath, expected))
+            return false;
+
+        SearchIndexWriter.WriteStoreView(searchDbPath, session, RegionOptions);
+        return true;
     }
 
     /// <summary>

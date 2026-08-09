@@ -1,4 +1,6 @@
+using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -25,13 +27,25 @@ public static class ContentSearchProjectionLoader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
-        var documents = new List<ContentDocument>();
-
         using (var connection = SqliteReadOnlyAccess.Open(dbPath))
-        using (var command = connection.CreateCommand())
         {
             JulieSchemaGate.Verify(connection);
+            return Load(connection, workspaceRoot);
+        }
+    }
 
+    public static ContentSearchProjection Load(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(connection => Load(connection, session.Snapshot.WorkspaceRoot));
+    }
+
+    private static ContentSearchProjection Load(SqliteConnection connection, string workspaceRoot)
+    {
+        var documents = new List<ContentDocument>();
+
+        using (var command = connection.CreateCommand())
+        {
             command.CommandText =
                 "SELECT path, language, content_hash, content_bytes, status FROM files ORDER BY path;";
             using var reader = command.ExecuteReader();
