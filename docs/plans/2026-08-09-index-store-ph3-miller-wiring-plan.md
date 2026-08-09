@@ -150,9 +150,9 @@ internal interface IJulieStoreClient
 4. Run the named unit and Scale classes and commit.
 
 **Acceptance criteria:**
-- [ ] Every store command is represented by typed inputs/results; raw JSON does not escape the adapter.
-- [ ] Miller never opens either store database writable.
-- [ ] Repeated idempotency keys observe the original request and result.
+- [x] Every store command is represented by typed inputs/results; raw JSON does not escape the adapter.
+- [x] Miller never opens either store database writable.
+- [x] Repeated idempotency keys observe the original request and result.
 
 ### Task 3: Persist and reconcile family/view identity
 
