@@ -109,6 +109,34 @@ public sealed class ExtractReader
             ParameterCount: reader.IsDBNull(5) ? null : reader.GetInt64(5));
     }
 
+    public static SymbolComplexity? ReadSymbolComplexity(IWorkspaceReadSession session, string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        return session.Read(connection =>
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT algorithm_id, covered_lines, decision_count, loop_count, max_nesting_depth, parameter_count
+                FROM complexity_metrics
+                WHERE symbol_id = $id AND scope = 'symbol'
+                ORDER BY algorithm_id
+                LIMIT 1;
+                """;
+            command.Parameters.AddWithValue("$id", symbolId);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+            return new SymbolComplexity(
+                AlgorithmId: reader.GetString(0),
+                CoveredLines: reader.GetInt64(1),
+                DecisionCount: reader.GetInt64(2),
+                LoopCount: reader.GetInt64(3),
+                MaxNestingDepth: reader.GetInt64(4),
+                ParameterCount: reader.IsDBNull(5) ? null : reader.GetInt64(5));
+        });
+    }
+
     /// <summary>
     /// Read the byte-span facts an M6 edit operation needs about one symbol, or null if no such symbol exists.
     /// Returns the WHOLE-symbol span (<c>[start_byte, end_byte)</c>) plus the BODY span

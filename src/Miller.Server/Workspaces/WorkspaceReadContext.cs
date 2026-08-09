@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
 
 namespace Miller.Server.Workspaces;
@@ -8,7 +9,7 @@ namespace Miller.Server.Workspaces;
 /// <see cref="MillerRepositoryIndex"/> so a concurrent holder swap cannot split resolution across two revisions.
 /// </summary>
 /// <param name="IndexLevel">
-/// The artifact's <c>artifact_metadata.index_level</c>, read from <paramref name="IndexDbPath"/> when the context
+/// The artifact's <c>artifact_metadata.index_level</c>, read through <paramref name="ReadSession"/> when the context
 /// is built. Which layers exist is a property of the ARTIFACT, not of the index implementation serving the read,
 /// so tools decide from this rather than from the runtime type of <paramref name="Index"/>. Defaults to
 /// <see cref="IndexLevels.FullMetadataValue"/> — the level of every pre-levels artifact, and the value under which
@@ -17,7 +18,7 @@ namespace Miller.Server.Workspaces;
 public sealed record WorkspaceReadContext(
     MillerRepositoryIndex Index,
     SmartTargetResolver Resolver,
-    string IndexDbPath,
+    WorkspaceReadHandle ReadSession,
     string? WorkspaceId,
     string WorkspaceRoot,
     long Revision,
@@ -25,4 +26,13 @@ public sealed record WorkspaceReadContext(
     string FreshnessStatus,
     string? WarningText,
     string? DisplayId = null,
-    string IndexLevel = IndexLevels.FullMetadataValue);
+    string IndexLevel = IndexLevels.FullMetadataValue) : IDisposable
+{
+    public WorkspaceReadSnapshot Snapshot => ReadSession.Snapshot;
+
+    public void Dispose()
+    {
+        if (Snapshot.Mode == WorkspaceReadMode.FamilyStore)
+            ReadSession.Dispose();
+    }
+}

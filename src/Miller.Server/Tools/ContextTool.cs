@@ -99,7 +99,7 @@ public sealed partial class ContextTool
 
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
             int effectiveTokenBudget = Math.Min(token_budget, ToolOutputBudget.ContextMcpMaxTokens);
-            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int bundleTokenBudget = Math.Max(
                 0,
@@ -138,11 +138,11 @@ public sealed partial class ContextTool
                         semanticSeeds,
                         sourceSeeds,
                         readBody: symbol => ReadPivotBody(
-                            context.IndexDbPath,
+                            context.ReadSession,
                             context.WorkspaceRoot,
                             symbol),
                         readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
-                            context.IndexDbPath,
+                            context.ReadSession,
                             symbolId,
                             new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         json,
@@ -163,21 +163,21 @@ public sealed partial class ContextTool
                         semanticSeeds,
                         sourceSeeds,
                         readBody: symbol => ReadPivotBody(
-                            context.IndexDbPath,
+                            context.ReadSession,
                             context.WorkspaceRoot,
                             symbol),
                         reference_depth, exclude_tests, json,
                         readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
-                            context.IndexDbPath,
+                            context.ReadSession,
                             symbol.SymbolId,
                             new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
-                            context.IndexDbPath,
+                            context.ReadSession,
                             symbol.SymbolId,
                             new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
                         readContentChunks: (symbols, excludeTests) => ContentCorpusContextReader.ReadContainingSymbolChunks(
-                            ContentCorpusSidecar.ContentDbPathFor(context.IndexDbPath),
-                            context.IndexDbPath,
+                            ContentCorpusSidecar.ContentDbPathFor(RequiredLegacyArtifactPath(context.ReadSession)),
+                            RequiredLegacyArtifactPath(context.ReadSession),
                             symbols,
                             excludeTests,
                             ContentChunksPerSymbol),
@@ -1863,13 +1863,13 @@ public sealed partial class ContextTool
     }
 
     internal static ExtractReader.BodyReadResult ReadPivotBody(
-        string indexDbPath,
+        Miller.Indexing.Reads.WorkspaceReadHandle readSession,
         string workspaceRoot,
         IndexedSymbol symbol)
     {
         try
         {
-            return ExtractReader.ReadBody(indexDbPath, workspaceRoot, symbol);
+            return ExtractReader.ReadBody(readSession, workspaceRoot, symbol);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
@@ -1878,6 +1878,10 @@ public sealed partial class ContextTool
                 ExtractReader.BodyUnavailableReason.FileHashUnavailable);
         }
     }
+
+    private static string RequiredLegacyArtifactPath(Miller.Indexing.Reads.WorkspaceReadHandle readSession) =>
+        readSession.LegacyArtifactPath
+        ?? throw new InvalidOperationException("The content sidecar has not been migrated to family-store reads.");
 
     /// <summary>
     /// Ranks a hop&gt;0 neighbour by affinity to the anchor so relevance — not arbitrary symbol id — breaks ties

@@ -196,7 +196,7 @@ internal static class ReadToolRoutingTestSupport
     public static WorkspaceSymbolSearchContext SearchContextFor(WorkspaceReadContext context) =>
         new(
             context.Index,
-            context.IndexDbPath,
+            context.ReadSession.LegacyArtifactPath!,
             context.WorkspaceId,
             context.WorkspaceRoot,
             context.Revision,
@@ -208,7 +208,7 @@ internal static class ReadToolRoutingTestSupport
     public static WorkspaceSymbolReadContext SymbolReadContextFor(WorkspaceReadContext context) =>
         new(
             context.Index,
-            context.IndexDbPath,
+            context.ReadSession.LegacyArtifactPath!,
             context.WorkspaceId,
             context.WorkspaceRoot,
             context.Revision,

@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using Miller.Core.References;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -75,12 +76,12 @@ public sealed class InspectTool
             InspectDepth parsedDepth = ParseDepth(depth);
             int effectiveLimit = Math.Min(limit, ToolOutputBudget.McpRowLimit);
 
-            WorkspaceSymbolReadContext context =
+            using WorkspaceSymbolReadContext context =
                 _workspaceSymbolReadProvider.ResolveSymbolRead(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string output = RunLookupWithDiagnostics(
                 context.Index,
-                context.IndexDbPath,
+                context.ReadSession,
                 context.WorkspaceRoot,
                 context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot),
                 target,
@@ -239,7 +240,7 @@ public sealed class InspectTool
     /// primary collection rendered (file symbols, candidates, or 1 for a resolved symbol; 0 for not-found).
     /// </summary>
     public static string Run(
-        MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
+        MillerRepositoryIndex index, SmartTargetResolver resolver, WorkspaceReadHandle dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
         string? compactBanner = null)
@@ -261,7 +262,7 @@ public sealed class InspectTool
     /// file) wins, and the converging-level notice only fills in where there is none.
     /// </summary>
     public static string RunLookup(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot,
+        ISymbolLookupIndex index, WorkspaceReadHandle dbPath, string workspaceRoot,
         string target, string depth, string? kind, string? scope, int limit, bool json,
         out int resultCount,
         out ToolDiagnostic? diagnostic,
@@ -277,7 +278,7 @@ public sealed class InspectTool
 
     /// <inheritdoc cref="RunLookup"/>
     public static string RunSummary(
-        ISymbolLookupIndex index, string dbPath, string workspaceRoot,
+        ISymbolLookupIndex index, WorkspaceReadHandle dbPath, string workspaceRoot,
         string target, string? kind, string? scope, int limit, bool json,
         out int resultCount,
         out ToolDiagnostic? diagnostic,
@@ -289,7 +290,7 @@ public sealed class InspectTool
 
     private static string RunCore(
         ISymbolLookupIndex index, SmartTargetResolver resolver,
-        string dbPath, string workspaceRoot, string target, InspectDepth depth,
+        WorkspaceReadHandle dbPath, string workspaceRoot, string target, InspectDepth depth,
         string? kind, string? scope, int limit, bool json,
         out int resultCount,
         out ToolDiagnostic? diagnostic,
@@ -384,7 +385,7 @@ public sealed class InspectTool
 
     private static string RunLookupWithDiagnostics(
         ISymbolLookupIndex index,
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         string workspaceRoot,
         string workspaceId,
         string target,
@@ -431,7 +432,7 @@ public sealed class InspectTool
     /// render an empty listing, so without the distinction a typo'd path reads as a real, symbol-free file and
     /// the agent moves on instead of checking the path.
     /// </summary>
-    private static ToolDiagnostic FileEmptyDiagnostic(ISymbolLookupIndex index, string dbPath, string path)
+    private static ToolDiagnostic FileEmptyDiagnostic(ISymbolLookupIndex index, WorkspaceReadHandle dbPath, string path)
     {
         if (IsIndexedFile(index, dbPath, path))
         {
@@ -454,7 +455,7 @@ public sealed class InspectTool
     /// indexed. Unreadable evidence keeps the pre-existing answer — inspect must not report a path as missing on
     /// the strength of an artifact it could not open.
     /// </summary>
-    private static bool IsIndexedFile(ISymbolLookupIndex index, string dbPath, string path)
+    private static bool IsIndexedFile(ISymbolLookupIndex index, WorkspaceReadHandle dbPath, string path)
     {
         if (index.IsIndexedFilePath(path))
             return true;
@@ -751,7 +752,7 @@ public sealed class InspectTool
 
     private static string RenderSymbolCompact(
         ISymbolLookupIndex index,
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         string workspaceRoot,
         string workspaceId,
         IndexedSymbol sym,
@@ -1118,7 +1119,7 @@ public sealed class InspectTool
 
     private static string RenderSymbolJson(
         ISymbolLookupIndex index,
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         string workspaceRoot,
         string workspaceId,
         IndexedSymbol sym,

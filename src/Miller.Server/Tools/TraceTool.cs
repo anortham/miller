@@ -106,7 +106,7 @@ public sealed class TraceTool
             }
             bool full = string.Equals(format, "full", StringComparison.OrdinalIgnoreCase);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             string normalizedMode = NormalizeMode(mode);
             if (normalizedMode is not (ModeRefs or ModePath or ModeBridge))
@@ -152,10 +152,10 @@ public sealed class TraceTool
                 : Run(context.Index, context.Resolver,
                     target, scope, mode, to, depth, limit, full,
                     json, reference_kind, include_definition,
-                    (symbol, query) => ReferenceEvidenceReader.Read(context.IndexDbPath, symbol.SymbolId, query),
+                    (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
                     context.WorkspaceId ?? "current",
                     normalizedMode == ModeRefs
-                        ? ReferenceEvidenceReader.ReadSnapshot(context.IndexDbPath)
+                        ? ReferenceEvidenceReader.ReadSnapshot(context.ReadSession)
                         : null,
                     continuation,
                     out emitted, out nodesVisited);
@@ -2375,11 +2375,11 @@ public sealed class TraceTool
             fields.Add(reference.Source.ToString());
             fields.Add(reference.ResolutionTier?.ToString(CultureInfo.InvariantCulture));
             fields.Add(reference.Confidence.ToString("R", CultureInfo.InvariantCulture));
-                fields.Add(reference.ResolutionStatus.ToString());
-                fields.Add(reference.Language);
-                fields.Add(reference.ReferenceSiteId);
-                fields.Add(reference.IsExact ? "1" : "0");
-                fields.Add(reference.SiteProvenance);
+            fields.Add(reference.ResolutionStatus.ToString());
+            fields.Add(reference.Language);
+            fields.Add(reference.ReferenceSiteId);
+            fields.Add(reference.IsExact ? "1" : "0");
+            fields.Add(reference.SiteProvenance);
         }
         return FingerprintFields(fields.ToArray());
     }

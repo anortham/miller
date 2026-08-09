@@ -120,7 +120,7 @@ public sealed class ImpactTool
             max_depth = NormalizeDepth(max_depth);
             limit = NormalizeLimit(limit);
             bool ensureFresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
+            using WorkspaceReadContext context = _workspaceProvider.Resolve(workspace_id, ensureFresh);
             continuationWorkspaceId =
                 context.WorkspaceId ?? WorkspaceId.FromCanonicalRoot(context.WorkspaceRoot);
             string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
@@ -207,7 +207,7 @@ public sealed class ImpactTool
                 ImpactRevisionDeltaSnapshot snapshot = PrepareIndexRevisionDelta(
                     workspace_id ?? context.WorkspaceId ?? context.WorkspaceRoot,
                     context.WorkspaceRoot,
-                    context.IndexDbPath,
+                    context.ReadSession,
                     from_index_revision!.Value,
                     from_artifact_id);
                 ImpactExecution execution = RunIndexRevisionDeltaExecution(
@@ -667,12 +667,12 @@ public sealed class ImpactTool
     public static ImpactRevisionDeltaSnapshot PrepareIndexRevisionDelta(
         string workspaceId,
         string workspaceRoot,
-        string extractDbPath,
+        Miller.Indexing.Reads.WorkspaceReadHandle readSession,
         long fromRevision,
         string? fromArtifactId)
     {
         RevisionDeltaResult delta = RevisionDeltaReader.Read(
-            extractDbPath, fromRevision, fromArtifactId);
+            readSession, fromRevision, fromArtifactId);
         bool complete = delta.Status == RevisionDeltaStatus.Complete;
         IReadOnlyList<string> changedPaths = complete
             ? FilterWatchedDeltaPaths(workspaceRoot, delta.ChangedPaths)

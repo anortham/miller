@@ -15,6 +15,8 @@ public sealed class LegacyArtifactReadSession : IWorkspaceReadSession
 
     public WorkspaceReadSnapshot Snapshot { get; }
 
+    internal string DatabasePath => _databasePath;
+
     public static LegacyArtifactReadSession Open(
         string databasePath,
         string? workspaceRoot = null,
@@ -41,6 +43,21 @@ public sealed class LegacyArtifactReadSession : IWorkspaceReadSession
             "legacy",
             freshness,
             indexLevel,
+            WorkspaceReadMode.LegacyArtifact);
+        return new LegacyArtifactReadSession(absolutePath, snapshot);
+    }
+
+    internal static LegacyArtifactReadSession CreateDeferred(string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        string absolutePath = Path.GetFullPath(databasePath);
+        var snapshot = new WorkspaceReadSnapshot(
+            string.Empty,
+            WorkspaceId: null,
+            $"legacy:{absolutePath}",
+            "legacy",
+            new WorkspaceFreshnessToken($"legacy:{absolutePath}", Revision: 0),
+            IndexLevels.FullMetadataValue,
             WorkspaceReadMode.LegacyArtifact);
         return new LegacyArtifactReadSession(absolutePath, snapshot);
     }

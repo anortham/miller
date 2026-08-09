@@ -1,5 +1,6 @@
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -31,5 +32,18 @@ public sealed class WorkspaceReadSessionTests
         session.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => session.Read(connection => connection.DataSource));
+    }
+
+    [Fact]
+    public void PrimaryReadContextsExposeSessionsInsteadOfRawArtifactPaths()
+    {
+        Assert.Null(typeof(WorkspaceReadContext).GetProperty("IndexDbPath"));
+        Assert.Null(typeof(WorkspaceSymbolReadContext).GetProperty("IndexDbPath"));
+        Assert.Equal(
+            typeof(WorkspaceReadHandle),
+            typeof(WorkspaceReadContext).GetProperty("ReadSession")!.PropertyType);
+        Assert.Equal(
+            typeof(WorkspaceReadHandle),
+            typeof(WorkspaceSymbolReadContext).GetProperty("ReadSession")!.PropertyType);
     }
 }

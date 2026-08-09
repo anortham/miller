@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
@@ -190,7 +191,10 @@ public sealed class WorkspaceIndexProvider
         return new WorkspaceReadContext(
             index,
             resolver,
-            dbPath,
+            LegacyArtifactReadSession.Open(
+                dbPath,
+                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                _currentWorkspace.WorkspaceId),
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
@@ -250,7 +254,10 @@ public sealed class WorkspaceIndexProvider
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceSymbolReadContext(
             index,
-            dbPath,
+            LegacyArtifactReadSession.Open(
+                dbPath,
+                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                _currentWorkspace.WorkspaceId),
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
@@ -287,7 +294,7 @@ public sealed class WorkspaceIndexProvider
         return new WorkspaceReadContext(
             cached.Index,
             cached.Resolver,
-            row.IndexDbPath,
+            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
@@ -334,7 +341,7 @@ public sealed class WorkspaceIndexProvider
             () => new CachedSymbolRead(_loadSymbolSearch(row.IndexDbPath)));
         return new WorkspaceSymbolReadContext(
             cached.Index,
-            row.IndexDbPath,
+            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
