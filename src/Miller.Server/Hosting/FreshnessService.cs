@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 // IndexBootstrapService lives in the Miller.Server namespace (M2).
 using Miller.Server;
@@ -38,6 +39,7 @@ public sealed class FreshnessService : BackgroundService
 
     private readonly IndexBootstrapService _bootstrap;
     private readonly ILogger<FreshnessService> _logger;
+    private readonly Func<bool> _storeEnabled;
 
     private string? _workspaceId;
 
@@ -51,12 +53,16 @@ public sealed class FreshnessService : BackgroundService
     // probe does not run its own SQLite query on the hot path; refreshed every poll tick. -1 = not yet polled.
     private long _lastObservedRevision = -1;
 
-    public FreshnessService(IndexBootstrapService bootstrap, ILogger<FreshnessService> logger)
+    public FreshnessService(
+        IndexBootstrapService bootstrap,
+        ILogger<FreshnessService> logger,
+        Func<bool>? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(bootstrap);
         ArgumentNullException.ThrowIfNull(logger);
         _bootstrap = bootstrap;
         _logger = logger;
+        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
     }
 
     // The live holder, read LAZILY off the bootstrap. The host constructs this hosted service before
@@ -184,12 +190,19 @@ public sealed class FreshnessService : BackgroundService
     {
         var holder = Holder;
         long built = holder.BuiltRevision;
+        WorkspaceContext workspace = _bootstrap.Workspace;
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        bool storeEnabled = _storeEnabled();
         long latest;
         string? artifactId;
-        using (var reader = new FreshnessReader(dbPath))
+        using (WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
+                   dbPath,
+                   workspaceRoot,
+                   workspace.WorkspaceId,
+                   storeEnabled))
         {
-            latest = reader.LatestRevision();
-            artifactId = reader.ArtifactId();
+            latest = reader.Snapshot.Freshness.StoreLogSequence ?? reader.Snapshot.Freshness.Revision;
+            artifactId = reader.Snapshot.ArtifactOrStoreId;
         }
         Interlocked.Exchange(ref _lastObservedRevision, latest);
 
@@ -199,7 +212,15 @@ public sealed class FreshnessService : BackgroundService
             "Freshness poll: observed revision {Observed} (artifact {Artifact}) vs built revision {Built}.",
             latest, artifactId, built);
 
-        bool swapped = FreshnessPoller.PollOnce(holder, latest, artifactId, new IndexRebuilder(dbPath).Rebuild);
+        bool swapped = FreshnessPoller.PollOnce(holder, latest, artifactId, () =>
+        {
+            using WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
+                dbPath,
+                workspaceRoot,
+                workspace.WorkspaceId,
+                storeEnabled);
+            return RepositoryIndexLoader.LoadSession(reader);
+        });
         if (swapped)
             _logger.LogInformation("Freshness: rebuilt + swapped index to revision {Revision}.", latest);
         return new PollResult(swapped, latest);

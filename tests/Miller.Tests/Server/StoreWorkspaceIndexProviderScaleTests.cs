@@ -3,8 +3,10 @@ using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Indexing.Store;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Workspaces;
 using Miller.Tests.Indexing;
 using Xunit;
 
@@ -14,6 +16,108 @@ namespace Miller.Tests.Server;
 [Collection(Miller.Tests.Indexing.SqliteVecEnvironment.Name)]
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
+    [Fact]
+    public async Task BootstrapMigratesLegacyIntoTheFamilyStoreAndTheNextProcessReusesIt()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-bootstrap-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        string artifact = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+        File.WriteAllText(
+            Path.Combine(root, "BootstrapCalculator.cs"),
+            "namespace Example; public static class BootstrapCalculator { public static int Add(int a, int b) => a + b; }");
+        try
+        {
+            ScaleTestSupport.RunJulie(
+                binary,
+                "scan", "--root", root, "--db", artifact, "--level", "full", "--jobs", "1", "--json");
+
+            using (var first = new IndexBootstrapService(
+                       NullLogger<IndexBootstrapService>.Instance,
+                       storeEnabled: static () => true))
+            {
+                first.TestHomeDirectoryOverride = home;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    first.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                int generation = first.Snapshot.RunGeneration;
+                await first.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
+                Assert.True(first.IsBound, first.Snapshot.FailureMessage);
+                Assert.Contains(
+                    first.Index.Search("BootstrapCalculator", 10),
+                    symbol => symbol.Document.Name == "BootstrapCalculator");
+                Assert.True(File.Exists(artifact));
+                StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+                    StoreWorkspacePointer.Read(root));
+                Assert.True(File.Exists(Path.Combine(pointer.StoreRoot, "CURRENT")));
+
+                File.WriteAllText(
+                    Path.Combine(root, "BootstrapCalculator.cs"),
+                    "namespace Example; public static class BootstrapCalculator { public static int Multiply(int a, int b) => a * b; }");
+                StoreWorkspaceCoordinator.Create(
+                    first.Workspace,
+                    first.Workspace.CanonicalRoot!,
+                    static () => IndexLevelPolicy.Full).Update(Path.Combine(root, "BootstrapCalculator.cs"));
+                var freshness = new FreshnessService(
+                    first,
+                    NullLogger<FreshnessService>.Instance,
+                    storeEnabled: static () => true);
+                PollResult poll = freshness.PollNow();
+                Assert.True(poll.Swapped);
+                Assert.Contains(
+                    first.Index.Search("Multiply", 10),
+                    symbol => symbol.Document.Name == "Multiply");
+
+                File.WriteAllText(
+                    Path.Combine(root, "BootstrapCalculator.cs"),
+                    "namespace Example; public static class BootstrapCalculator { public static int Divide(int a, int b) => a / b; }");
+                using (var registry = WorkspaceRegistry.Open(first.Workspace.RegistryDbPath))
+                {
+                    var crossRefresh = new CrossWorkspaceRefreshService(
+                        registry,
+                        new JulieExtractRunner(binary),
+                        SymbolSearchSidecar.Disabled,
+                        ScanGovernor.Disabled(),
+                        storeEnabled: static () => true);
+                    WorkspaceRefreshResult result = crossRefresh.Refresh(first.Workspace.WorkspaceId!);
+                    Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+                    Assert.Equal(pointer.FamilyId.ToString("D"), result.ArtifactId);
+                }
+                Assert.True(freshness.PollNow().Swapped);
+                Assert.Contains(
+                    first.Index.Search("Divide", 10),
+                    symbol => symbol.Document.Name == "Divide");
+            }
+
+            int scans = 0;
+            using (var second = new IndexBootstrapService(
+                       NullLogger<IndexBootstrapService>.Instance,
+                       storeEnabled: static () => true))
+            {
+                second.TestHomeDirectoryOverride = home;
+                second.TestScanObserver = () => scans++;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    second.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                int generation = second.Snapshot.RunGeneration;
+                await second.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
+                Assert.True(second.IsBound, second.Snapshot.FailureMessage);
+                Assert.Equal(0, scans);
+                Assert.Contains(
+                    second.Index.Search("BootstrapCalculator", 10),
+                    symbol => symbol.Document.Name == "BootstrapCalculator");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void ReleasedStoreAndLegacyArtifactProduceEqualPrimaryReadRows()
     {

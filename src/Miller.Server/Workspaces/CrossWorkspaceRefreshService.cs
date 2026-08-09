@@ -1,7 +1,11 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
+using Miller.Server.Hosting;
 using Miller.Server.Logging;
 using Miller.Server.Tools;
 
@@ -42,6 +46,9 @@ public sealed class CrossWorkspaceRefreshService
     private readonly ScanGovernor _governor;
     private readonly TimeSpan _governorForceWait;
     private readonly Func<string, string, IScanFailurePolicy> _failurePolicyFor;
+    private readonly Func<bool> _storeEnabled;
+    private readonly IJulieStoreClient? _storeClient;
+    private readonly IndexerSidecarConverger _sidecarConverger;
 
     // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
     // restore/upgrade, and the env hatch exists only for INTENTIONAL downgrades — never as a routine unblock.
@@ -55,7 +62,8 @@ public sealed class CrossWorkspaceRefreshService
         JulieExtractRunner runner,
         SymbolSearchSidecar sidecar,
         ScanGovernor governor,
-        ContentCorpusSidecar? contentSidecar = null)
+        ContentCorpusSidecar? contentSidecar = null,
+        Func<bool>? storeEnabled = null)
         : this(
             registry,
             (root, db, force, jobs, level) => runner.Scan(root, db, force, jobs, level),
@@ -78,7 +86,9 @@ public sealed class CrossWorkspaceRefreshService
                 ExtractBinaryVersionReader.TryRead(dbPath),
                 Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
             ReadArtifactId,
-            governor)
+            governor,
+            storeClient: new JulieStoreClient(runner.BinaryPath),
+            storeEnabled: storeEnabled)
     {
     }
 
@@ -99,7 +109,9 @@ public sealed class CrossWorkspaceRefreshService
         Func<string, string?>? readArtifactId = null,
         ScanGovernor? governor = null,
         TimeSpan? governorForceWait = null,
-        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null)
+        Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
+        IJulieStoreClient? storeClient = null,
+        Func<bool>? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -136,6 +148,12 @@ public sealed class CrossWorkspaceRefreshService
         _governorForceWait = governorForceWait ?? ScanGovernor.WaitFromEnvironment();
         _failurePolicyFor = failurePolicyFor
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
+        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
+        _storeClient = storeClient;
+        _sidecarConverger = new IndexerSidecarConverger(
+            _sidecar,
+            _contentSidecar,
+            NullLogger.Instance);
     }
 
     /// <summary>
@@ -166,6 +184,7 @@ public sealed class CrossWorkspaceRefreshService
                 nameof(scanAdmission), requested, "Wait must be non-negative.");
         WorkspaceRegistryRow row = GetRequiredRow(workspaceId);
         var total = Stopwatch.StartNew();
+        bool useStore = _storeEnabled();
 
         if (!Directory.Exists(row.CanonicalRoot))
         {
@@ -180,7 +199,7 @@ public sealed class CrossWorkspaceRefreshService
                 Scanned: false,
                 Error: error,
                 TotalDuration: total.Elapsed,
-                ArtifactId: TryReadArtifactId(row));
+                ArtifactId: TryReadArtifactId(row, useStore));
         }
 
         try
@@ -199,7 +218,7 @@ public sealed class CrossWorkspaceRefreshService
                 Scanned: false,
                 Error: ex.Message,
                 TotalDuration: total.Elapsed,
-                ArtifactId: TryReadArtifactId(row));
+                ArtifactId: TryReadArtifactId(row, useStore));
         }
 
         string millerDir = Path.GetDirectoryName(row.IndexDbPath)
@@ -208,12 +227,12 @@ public sealed class CrossWorkspaceRefreshService
 
         using IDisposable? lease = _acquireLock(millerDir);
         if (lease is null)
-            return WaitForExternalRevision(row, force, millerDir, total);
+            return WaitForExternalRevision(row, force, millerDir, total, useStore);
 
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
         // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
         // A refusal is not a workspace error — the index stays valid, so the registry row is left untouched.
-        if (_eligibilityGate is { } gate)
+        if (!useStore && _eligibilityGate is { } gate)
         {
             LeadershipVerdict verdict = gate(row.IndexDbPath);
             if (!verdict.Eligible)
@@ -227,7 +246,7 @@ public sealed class CrossWorkspaceRefreshService
                     Scanned: false,
                     Error: verdict.Reason + IneligibleRemedy,
                     TotalDuration: total.Elapsed,
-                    ArtifactId: TryReadArtifactId(row));
+                    ArtifactId: TryReadArtifactId(row, useStore));
             }
         }
 
@@ -237,7 +256,7 @@ public sealed class CrossWorkspaceRefreshService
         ScanIntent intent = force ? ScanIntent.UserFullRebuild : ScanIntent.IncrementalReconcile;
         ScanAttemptDecision attempt = failurePolicy.Evaluate(intent, bypassBackoff);
         if (!attempt.Attempt)
-            return DeferredByScanBackoff(row, attempt, total);
+            return DeferredByScanBackoff(row, attempt, total, useStore);
 
         // Machine-wide scan admission, inside the workspace writer lock (SingleWriterLock -> ScanGovernor),
         // spanning the extract subprocess ONLY. The sidecar convergence below stays protected by the writer lock
@@ -248,26 +267,25 @@ public sealed class CrossWorkspaceRefreshService
             force ? scanAdmission?.Wait ?? _governorForceWait : _lockBusyWait,
             force ? scanAdmission?.CancellationToken ?? CancellationToken.None : CancellationToken.None);
         if (admission is null)
-            return RefusedScanAdmission(row, force, millerDir, total);
+            return RefusedScanAdmission(row, force, millerDir, total, useStore);
 
-        string? artifactIdBeforeScan = TryReadArtifactId(row);
+        string? artifactIdBeforeScan = TryReadArtifactId(row, useStore);
         var scanClock = Stopwatch.StartNew();
         try
         {
             ExtractReport report;
             try
             {
-                report = _scan(
-                    row.CanonicalRoot,
-                    row.IndexDbPath,
-                    ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
-                    attempt.Jobs,
-                    // A refresh that CREATES the artifact (an opened-but-never-primed workspace) carries the
-                    // policy's first-build level; deltas inherit and a `workspace full` force runs at the level
-                    // the policy assigns that intent.
-                    IndexLevels.LevelForScan(
-                        attempt.EffectiveIntent, !File.Exists(row.IndexDbPath),
-                        IndexLevels.Resolve(row.LevelPolicy)));
+                report = useStore
+                    ? RunStoreScan(row, attempt)
+                    : _scan(
+                        row.CanonicalRoot,
+                        row.IndexDbPath,
+                        ScanIntentPolicy.RequiresForce(attempt.EffectiveIntent),
+                        attempt.Jobs,
+                        IndexLevels.LevelForScan(
+                            attempt.EffectiveIntent, !File.Exists(row.IndexDbPath),
+                            IndexLevels.Resolve(row.LevelPolicy)));
                 scanClock.Stop();
             }
             finally
@@ -282,7 +300,7 @@ public sealed class CrossWorkspaceRefreshService
 
             // No workspace_id echo to cross-check in v1: julie-extract self-rejects a DB built for a different
             // root (exit 3 RootMismatch, design §4.1), so a wrong-DB scan throws and is handled by the catch below.
-            long revision = report.Revision ?? _readLatestRevision(row.IndexDbPath);
+            long revision = report.Revision ?? ReadLatestRevision(row, useStore);
             // A downgraded serve carries its own warning even though no caller can reach one today (every
             // force caller passes bypassBackoff). Without it, the result below is indistinguishable from the
             // rebuild that was asked for — the same lie the leader path's third outcome exists to prevent, and
@@ -297,7 +315,10 @@ public sealed class CrossWorkspaceRefreshService
             // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
             // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
             // convergence.
-            TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
+            if (useStore)
+                TryConvergeStoreSidecars(row);
+            else
+                TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
             // Refreshed-vs-unchanged comes from the REPORT, not a revision comparison: a force rebuild of an
             // incompatible artifact deletes and recreates the DB, restarting its revision counter (often on
@@ -306,7 +327,9 @@ public sealed class CrossWorkspaceRefreshService
             WorkspaceRefreshStatus status = report.IsNoChange
                 ? WorkspaceRefreshStatus.Unchanged
                 : WorkspaceRefreshStatus.Refreshed;
-            string? artifactId = report.Artifact?.ArtifactId ?? TryReadArtifactId(row) ?? artifactIdBeforeScan;
+            string? artifactId = report.Artifact?.ArtifactId
+                ?? TryReadArtifactId(row, useStore)
+                ?? artifactIdBeforeScan;
             return new WorkspaceRefreshResult(
                 status,
                 row.WorkspaceId,
@@ -339,7 +362,7 @@ public sealed class CrossWorkspaceRefreshService
                 Error: ex.Message,
                 ScanDuration: scanClock.Elapsed,
                 TotalDuration: total.Elapsed,
-                ArtifactId: TryReadArtifactId(row));
+                ArtifactId: TryReadArtifactId(row, useStore));
         }
     }
 
@@ -359,12 +382,12 @@ public sealed class CrossWorkspaceRefreshService
     /// advertise a workspace with no <c>symbols.db</c>.
     /// </summary>
     private WorkspaceRefreshResult DeferredByScanBackoff(
-        WorkspaceRegistryRow row, ScanAttemptDecision attempt, Stopwatch total)
+        WorkspaceRegistryRow row, ScanAttemptDecision attempt, Stopwatch total, bool useStore)
     {
         string reason = $"The previous whole-repo scan of this workspace failed {attempt.ConsecutiveFailures} " +
             $"time(s) in a row; the next automatic attempt is not before {attempt.RetryAtUtc:O}.";
 
-        if (!File.Exists(row.IndexDbPath))
+        if (!HasReadableIndex(row, useStore))
         {
             string error = $"{reason} No index exists yet at {row.IndexDbPath}.";
             _registry.MarkMissing(row.WorkspaceId, error, _utcNow());
@@ -389,7 +412,7 @@ public sealed class CrossWorkspaceRefreshService
             Scanned: false,
             WarningText: $"{reason} Served the latest readable DB without scanning.",
             TotalDuration: total.Elapsed,
-            ArtifactId: TryReadArtifactId(row));
+            ArtifactId: TryReadArtifactId(row, useStore));
     }
 
     /// <summary>
@@ -401,7 +424,7 @@ public sealed class CrossWorkspaceRefreshService
     /// scheduled. When a readable index DOES exist it is genuinely being served, so the row is left untouched.
     /// </summary>
     private WorkspaceRefreshResult RefusedScanAdmission(
-        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total)
+        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total, bool useStore)
     {
         string? requestWarning = null;
         if (force)
@@ -417,7 +440,7 @@ public sealed class CrossWorkspaceRefreshService
             }
         }
 
-        if (!File.Exists(row.IndexDbPath))
+        if (!HasReadableIndex(row, useStore))
         {
             string error = "Machine-wide scan admission is busy and no index exists yet at " +
                 $"{row.IndexDbPath}. " + _governor.DescribeHolder();
@@ -444,7 +467,7 @@ public sealed class CrossWorkspaceRefreshService
             WarningText: "Machine-wide scan admission is busy; served the latest readable DB without scanning. " +
                 requestWarning + _governor.DescribeHolder(),
             TotalDuration: total.Elapsed,
-            ArtifactId: TryReadArtifactId(row));
+            ArtifactId: TryReadArtifactId(row, useStore));
     }
 
     // Machine-wide admission for one governed refresh. A cancelled wait degrades to a refusal rather than
@@ -502,14 +525,51 @@ public sealed class CrossWorkspaceRefreshService
             symbolsDbPath, workspaceId, revision, MillerVersion.Current);
     }
 
+    private ExtractReport RunStoreScan(WorkspaceRegistryRow row, ScanAttemptDecision attempt)
+    {
+        IJulieStoreClient client = _storeClient ?? throw new InvalidOperationException(
+            "Store refresh is enabled but no julie-extract store client is configured.");
+        StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
+            _registry,
+            row.WorkspaceId,
+            row.CanonicalRoot);
+        StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+            binding,
+            row.WorkspaceId,
+            client,
+            () => IndexLevels.Resolve(row.LevelPolicy),
+            File.Exists(row.IndexDbPath) ? row.IndexDbPath : null);
+        return coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs);
+    }
+
+    private void TryConvergeStoreSidecars(WorkspaceRegistryRow row)
+    {
+        try
+        {
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                row.IndexDbPath,
+                row.CanonicalRoot,
+                row.WorkspaceId,
+                storeEnabled: true);
+            string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
+                "The store read session did not expose its family root.");
+            _sidecarConverger.ConvergeStore(storeRoot, session);
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or InvalidOperationException
+                or UnauthorizedAccessException or ArgumentException)
+        {
+        }
+    }
+
     private WorkspaceRefreshResult WaitForExternalRevision(
-        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total)
+        WorkspaceRegistryRow row, bool force, string millerDir, Stopwatch total, bool useStore)
     {
         long baseline = row.LastRevision ?? 0;
         // The artifact identity BEFORE the leader acts: a full rebuild PROMOTES a fresh file whose revision
         // counter restarts, so `latest > baseline` alone can never confirm it — a CHANGED artifact_id does
         // (2026-06-11 Eros field report #2). Null (an unreadable/legacy artifact) degrades to revision-only.
-        string? baselineArtifactId = TryReadArtifactId(row);
+        string? baselineArtifactId = TryReadFreshnessIdentity(row, useStore);
         long? lastReadableRevision = row.LastRevision;
         string? requestWarning = null;
 
@@ -533,11 +593,11 @@ public sealed class CrossWorkspaceRefreshService
         bool unconfirmedForceAdvance = false;
         while (_utcNow() < deadline)
         {
-            if (TryReadLatestRevision(row, out long latest))
+            if (TryReadLatestRevision(row, useStore, out long latest))
             {
                 lastReadableRevision = latest;
                 bool artifactReplaced = baselineArtifactId is not null
-                    && TryReadArtifactId(row) is { } currentArtifactId
+                    && TryReadFreshnessIdentity(row, useStore) is { } currentArtifactId
                     && !string.Equals(currentArtifactId, baselineArtifactId, StringComparison.Ordinal);
                 // A force wait with a readable baseline id accepts ONLY a replaced artifact: the leader may
                 // legally service the request as a downgraded delta (it evaluates without bypassBackoff), and
@@ -558,14 +618,14 @@ public sealed class CrossWorkspaceRefreshService
                         latest,
                         Scanned: false,
                         TotalDuration: total.Elapsed,
-                        ArtifactId: TryReadArtifactId(row));
+                        ArtifactId: TryReadArtifactId(row, useStore));
                 }
             }
 
             _sleep(_lockBusyPollInterval);
         }
 
-        if (!File.Exists(row.IndexDbPath))
+        if (!HasReadableIndex(row, useStore))
         {
             string error = $"Workspace index DB not found: {row.IndexDbPath}";
             _registry.MarkMissing(row.WorkspaceId, error, _utcNow());
@@ -578,7 +638,7 @@ public sealed class CrossWorkspaceRefreshService
                 Scanned: false,
                 Error: error,
                 TotalDuration: total.Elapsed,
-                ArtifactId: TryReadArtifactId(row));
+                ArtifactId: TryReadArtifactId(row, useStore));
         }
 
         string warning = (requestWarning ??
@@ -601,7 +661,7 @@ public sealed class CrossWorkspaceRefreshService
             Scanned: false,
             WarningText: warning,
             TotalDuration: total.Elapsed,
-            ArtifactId: TryReadArtifactId(row));
+            ArtifactId: TryReadArtifactId(row, useStore));
     }
 
     /// <summary>
@@ -634,11 +694,11 @@ public sealed class CrossWorkspaceRefreshService
               "crash-looping instance).";
     }
 
-    private bool TryReadLatestRevision(WorkspaceRegistryRow row, out long revision)
+    private bool TryReadLatestRevision(WorkspaceRegistryRow row, bool useStore, out long revision)
     {
         try
         {
-            revision = _readLatestRevision(row.IndexDbPath);
+            revision = ReadLatestRevision(row, useStore);
             return true;
         }
         catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
@@ -651,8 +711,10 @@ public sealed class CrossWorkspaceRefreshService
 
     // Best-effort identity probe for the rebuild-confirmation arm: null = unknown (a missing/locked/legacy
     // artifact), which degrades the wait to the historical revision-only comparison, never to a false confirm.
-    private string? TryReadArtifactId(WorkspaceRegistryRow row)
+    private string? TryReadArtifactId(WorkspaceRegistryRow row, bool useStore)
     {
+        if (useStore)
+            return TryReadStoreSnapshot(row)?.ArtifactOrStoreId;
         try
         {
             return _readArtifactId(row.IndexDbPath);
@@ -663,6 +725,49 @@ public sealed class CrossWorkspaceRefreshService
             return null;
         }
     }
+
+    private string? TryReadFreshnessIdentity(WorkspaceRegistryRow row, bool useStore)
+    {
+        if (!useStore)
+            return TryReadArtifactId(row, useStore: false);
+        WorkspaceReadSnapshot? snapshot = TryReadStoreSnapshot(row);
+        return snapshot is null
+            ? null
+            : snapshot.ArtifactOrStoreId + "|" + snapshot.Freshness.ManifestHash;
+    }
+
+    private long ReadLatestRevision(WorkspaceRegistryRow row, bool useStore)
+    {
+        if (!useStore)
+            return _readLatestRevision(row.IndexDbPath);
+        WorkspaceReadSnapshot snapshot = TryReadStoreSnapshot(row) ?? throw new FileNotFoundException(
+            $"Family-store binding for workspace '{row.WorkspaceId}' is not readable.");
+        return snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
+            "The family-store snapshot has no store_log sequence.");
+    }
+
+    private WorkspaceReadSnapshot? TryReadStoreSnapshot(WorkspaceRegistryRow row)
+    {
+        try
+        {
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                row.IndexDbPath,
+                row.CanonicalRoot,
+                row.WorkspaceId,
+                storeEnabled: true);
+            return session.Snapshot;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+                or InvalidOperationException or SqliteException or UnauthorizedAccessException
+                or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private bool HasReadableIndex(WorkspaceRegistryRow row, bool useStore) =>
+        useStore ? TryReadStoreSnapshot(row) is not null : File.Exists(row.IndexDbPath);
 
     private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(

@@ -170,10 +170,13 @@ public sealed class JulieStoreClient : IJulieStoreClient
             case StoreImportRequest import:
                 Add(arguments, "--root", RequireText(import.WorkspaceRoot, nameof(import.WorkspaceRoot)));
                 Add(arguments, "--view", import.ViewId);
-                Add(arguments, "--level", LevelName(RequireWriteLevel(import.Level)));
                 if (import.FromArtifact is not null)
                     Add(arguments, "--from-artifact", RequireText(import.FromArtifact, nameof(import.FromArtifact)));
-                AddScanControls(arguments, import.Scan);
+                else
+                {
+                    Add(arguments, "--level", LevelName(RequireWriteLevel(import.Level)));
+                    AddScanControls(arguments, import.Scan);
+                }
                 AddRequestControls(arguments, import.Request);
                 break;
             case StoreUpdateRequest update:
@@ -395,7 +398,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
 
     private static StoreOperation ParseOperation(string? value) => value switch
     {
-        "import" => StoreOperation.Import,
+        "import" or "from_artifact" => StoreOperation.Import,
         "update" => StoreOperation.Update,
         "delete" => StoreOperation.Delete,
         "resolve" => StoreOperation.Resolve,

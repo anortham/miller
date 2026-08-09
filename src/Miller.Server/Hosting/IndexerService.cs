@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Logging;
 using Miller.Server.Workspaces;
 
@@ -147,6 +148,13 @@ public sealed class IndexerService : BackgroundService
             static millerDir => SingleWriterLock.TryAcquire(millerDir),
             (workspace, canonicalRoot, canonicalDbPath) =>
             {
+                if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+                {
+                    return StoreWorkspaceCoordinator.Create(
+                        workspace,
+                        canonicalRoot,
+                        () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, workspace.WorkspaceId));
+                }
                 var runner = JulieExtractRunner.Locate(
                     workspace.ToolsRoot,
                     reason => logger.LogWarning(
@@ -1256,6 +1264,11 @@ public sealed class IndexerService : BackgroundService
 
         try
         {
+            if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            {
+                TryConvergeStoreSidecars();
+                return;
+            }
             using var freshness = new FreshnessReader(symbolsDbPath);
             TryConvergeSidecar(symbolsDbPath, freshness.LatestRevision(), fullRebuild);
         }
@@ -1281,11 +1294,34 @@ public sealed class IndexerService : BackgroundService
         if (symbolsDbPath is null || revision <= 0)
             return; // no symbols.db path or no revision cursor to stamp; the next revision-bearing op builds it
 
+        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+        {
+            TryConvergeStoreSidecars();
+            return;
+        }
         BeforeSidecarConvergeForTest?.Invoke();
         string workspaceRoot = _bootstrap.Workspace.CanonicalRoot ?? _bootstrap.Workspace.WorkspaceRoot;
         string? workspaceId = _bootstrap.Workspace.WorkspaceId;
         _sidecarConverger.Converge(symbolsDbPath, workspaceRoot, workspaceId, revision, fullRebuild);
         _registryPublisher.TryMarkScanned(_bootstrap.Workspace, workspaceId, revision);
+    }
+
+    private void TryConvergeStoreSidecars()
+    {
+        BeforeSidecarConvergeForTest?.Invoke();
+        WorkspaceContext workspace = _bootstrap.Workspace;
+        string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            workspace.CanonicalExtractDbPath ?? workspace.ExtractDbPath,
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled: true);
+        string storeRoot = session.FamilyStoreRoot ?? throw new InvalidOperationException(
+            "The store read session did not expose its family root.");
+        _sidecarConverger.ConvergeStore(storeRoot, session);
+        long sequence = session.Snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
+            "The store read session did not expose its store_log sequence.");
+        _registryPublisher.TryMarkScanned(workspace, workspace.WorkspaceId, sequence);
     }
 
     /// <summary>

@@ -68,10 +68,13 @@ public sealed class WorkspaceRegistry : IDisposable
     private readonly SqliteConnection _connection;
     private bool _disposed;
 
-    private WorkspaceRegistry(SqliteConnection connection)
+    private WorkspaceRegistry(SqliteConnection connection, string databasePath)
     {
         _connection = connection;
+        DatabasePath = databasePath;
     }
+
+    public string DatabasePath { get; }
 
     public static WorkspaceRegistry Open(string dbPath)
     {
@@ -116,7 +119,7 @@ public sealed class WorkspaceRegistry : IDisposable
                 storeDdl.ExecuteNonQuery();
             }
 
-            return new WorkspaceRegistry(connection);
+            return new WorkspaceRegistry(connection, absDbPath);
         }
         catch
         {

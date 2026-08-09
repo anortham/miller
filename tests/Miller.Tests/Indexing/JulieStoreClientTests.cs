@@ -15,7 +15,7 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
-    public void ImportArgumentsCarryIdentityLevelScanAndRequestControls()
+    public void ImportFromArtifactArgumentsExcludeScanControls()
     {
         var request = new StoreImportRequest(
             StoreRoot: "/family",
@@ -39,8 +39,40 @@ public sealed class JulieStoreClientTests
             "--family", "11111111-1111-4111-8111-111111111111",
             "--root", "/workspace",
             "--view", "view-a",
-            "--level", "l1",
             "--from-artifact", "/workspace/legacy.db",
+            "--request-id", "request-a",
+            "--idempotency-key", "key-a",
+            "--request-timeout-seconds", "30",
+            "--json",
+        ], JulieStoreClient.BuildArguments(request));
+    }
+
+    [Fact]
+    public void ImportArgumentsCarryIdentityLevelScanAndRequestControls()
+    {
+        var request = new StoreImportRequest(
+            StoreRoot: "/family",
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-a",
+            WorkspaceRoot: "/workspace",
+            Level: StoreLevel.L1,
+            Request: Controls(),
+            Scan: new StoreScanControls(
+                IgnoreFiles: ["/workspace/.extraignore", "/workspace/.secondignore"],
+                Jobs: 3,
+                SpoolDirectory: "/family/spool",
+                ProgressFile: "/family/progress.jsonl",
+                ParentProcessId: 42),
+            FromArtifact: null);
+
+        Assert.Equal(
+        [
+            "store", "import",
+            "--store", "/family",
+            "--family", "11111111-1111-4111-8111-111111111111",
+            "--root", "/workspace",
+            "--view", "view-a",
+            "--level", "l1",
             "--ignore-file", "/workspace/.extraignore",
             "--ignore-file", "/workspace/.secondignore",
             "--jobs", "3",

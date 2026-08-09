@@ -1,0 +1,178 @@
+using Miller.Core.Freshness;
+using Miller.Indexing;
+using Miller.Indexing.Store;
+using Miller.Server.Workspaces;
+using Xunit;
+
+namespace Miller.Tests.Server;
+
+public sealed class StoreWorkspaceCoordinatorTests
+{
+    private static readonly StoreFamilyBinding Binding = new(
+        Guid.Parse("11111111-1111-4111-8111-111111111111"),
+        Path.GetFullPath("/family"),
+        "view-a",
+        Path.GetFullPath("/workspace"),
+        StoreBindingState.Ready);
+
+    [Fact]
+    public void UpdateUsesTheCurrentFullLevelAndReturnsACompatibleFreshnessReport()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Update);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(41, "full"),
+            new(42, "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-a");
+
+        ExtractReport report = coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs"));
+
+        StoreUpdateRequest request = Assert.IsType<StoreUpdateRequest>(client.SingleRequest);
+        Assert.Equal("src/a.cs", request.FilePath.Replace('\\', '/'));
+        Assert.Equal(StoreLevel.Full, request.Level);
+        Assert.Equal(ExtractJobsPolicy.FromEnvironment(), request.Scan.Jobs);
+        Assert.Equal("request-a", request.Request.RequestId);
+        Assert.Equal("request-a", request.Request.IdempotencyKey);
+        Assert.Equal(42, report.Revision);
+        Assert.Equal(42, report.CreatedRevision);
+        Assert.Equal("completed", report.Status);
+        Assert.Equal((ulong)1, report.FilesUpdated);
+        Assert.Equal(Binding.FamilyId.ToString("D"), report.Artifact?.ArtifactId);
+    }
+
+    [Fact]
+    public void MissingDeleteIsANoChangeAndKeepsTheLatestStoreCursor()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Delete,
+            manifestDisposition: StoreManifestDisposition.Reused);
+        var snapshots = new Queue<StoreWorkspaceState>(
+        [
+            new(75, "l1"),
+            new(76, "l1"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-delete");
+
+        ExtractReport report = coordinator.Delete(Path.Combine(Binding.WorkspaceRoot, "gone.cs"));
+
+        StoreDeleteRequest request = Assert.IsType<StoreDeleteRequest>(client.SingleRequest);
+        Assert.Equal(["gone.cs"], request.FilePaths);
+        Assert.Equal("no_change", report.Status);
+        Assert.Null(report.CreatedRevision);
+        Assert.Equal(76, report.Revision);
+        Assert.Equal((ulong)0, report.FilesDeleted);
+    }
+
+    [Theory]
+    [InlineData(IndexLevelPolicy.Progressive, ScanIntent.IncrementalReconcile, StoreLevel.L1)]
+    [InlineData(IndexLevelPolicy.Progressive, ScanIntent.LevelUpgrade, StoreLevel.Full)]
+    [InlineData(IndexLevelPolicy.SymbolsOnly, ScanIntent.UserFullRebuild, StoreLevel.L1)]
+    [InlineData(IndexLevelPolicy.Full, ScanIntent.IncrementalReconcile, StoreLevel.Full)]
+    public void NewFamilyImportPreservesTheIndexLevelPolicy(
+        IndexLevelPolicy policy,
+        ScanIntent intent,
+        StoreLevel expected)
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState?>(
+        [
+            null,
+            new StoreWorkspaceState(1, expected == StoreLevel.L1 ? "l1" : "full"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding with { State = StoreBindingState.Planned },
+            client,
+            () => policy,
+            _ => snapshots.Dequeue(),
+            () => "request-import",
+            "/workspace/.miller/symbols.db");
+
+        ExtractReport report = coordinator.Scan(intent, jobs: 2);
+
+        StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
+        Assert.Equal(expected, request.Level);
+        Assert.Equal(2, request.Scan.Jobs);
+        Assert.Equal("/workspace/.miller/symbols.db", request.FromArtifact);
+        Assert.Equal("request-import", report.Input?.Format);
+    }
+
+    [Fact]
+    public void TypedStoreFailureDoesNotMasqueradeAsACompletedExtractReport()
+    {
+        var client = new RecordingStoreClient(
+            StoreOperation.Update,
+            exitCode: 1,
+            failureClass: "view_root_mismatch");
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding,
+            client,
+            () => IndexLevelPolicy.Full,
+            _ => new StoreWorkspaceState(1, "full"),
+            () => "request-failed");
+
+        StoreWorkspaceOperationException error = Assert.Throws<StoreWorkspaceOperationException>(() =>
+            coordinator.Update(Path.Combine(Binding.WorkspaceRoot, "src", "a.cs")));
+
+        Assert.Equal("view_root_mismatch", error.FailureClass.Code);
+    }
+
+    private sealed class RecordingStoreClient(
+        StoreOperation expectedOperation,
+        StoreManifestDisposition manifestDisposition = StoreManifestDisposition.Created,
+        int exitCode = 0,
+        string failureClass = "none") : IJulieStoreClient
+    {
+        private readonly List<StoreRequest> _requests = [];
+
+        public StoreRequest SingleRequest => Assert.Single(_requests);
+
+        public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(expectedOperation, request.Operation);
+            _requests.Add(request);
+            StoreLevel level = request switch
+            {
+                StoreImportRequest import => import.Level,
+                StoreUpdateRequest update => update.Level,
+                _ => StoreLevel.NotApplicable,
+            };
+            return new StoreRequestResult(
+                JulieStoreContract.ReportSchemaVersion,
+                request.Operation,
+                new StoreRequestIdentity(
+                    request switch
+                    {
+                        StoreImportRequest import => import.Request.RequestId,
+                        StoreUpdateRequest update => update.Request.RequestId,
+                        StoreDeleteRequest delete => delete.Request.RequestId,
+                        _ => "request",
+                    },
+                    null),
+                Binding.FamilyId.ToString("D"),
+                Binding.ViewId,
+                Binding.WorkspaceRoot,
+                exitCode == 0 ? StoreRequestState.Committed : StoreRequestState.Failed,
+                level,
+                new StoreLevelCompletion(true, level == StoreLevel.Full, level == StoreLevel.Full),
+                new StoreManifestResult(1, "manifest-hash", manifestDisposition),
+                new StoreRowCounts(1, 1, level == StoreLevel.Full ? 1 : 0, level == StoreLevel.Full ? 1 : 0),
+                new StoreResolutionResult(StoreResolutionState.Unbound, false, null, null, null, null, null, null),
+                null,
+                exitCode == 0 ? StoreCoordinatorDisposition.Committed : StoreCoordinatorDisposition.Failed,
+                new StoreFailure(new StoreFailureClass(failureClass), exitCode == 0 ? null : "failed"),
+                exitCode);
+        }
+    }
+}

@@ -4,11 +4,14 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Hosting;
 using Miller.Server.Logging;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
 using Miller.Server.Tools;
+using Miller.Server.Workspaces;
 
 namespace Miller.Server;
 
@@ -41,8 +44,8 @@ internal enum BindOutcome
 /// The startup bootstrap (M2 §7). Registered as an <see cref="IHostedService"/> BEFORE the MCP host so its
 /// <see cref="StartAsync"/> runs to completion — building the in-memory index and opening the telemetry
 /// ledger — before <c>WithStdioServerTransport</c>'s own hosted service starts accepting <c>tools/call</c>.
-    /// It also holds the current workspace state (index, resolver, workspace context, ledger) which the DI container
-    /// resolves through factory delegates. NOTE: the generic host CONSTRUCTS every hosted service before calling
+/// It also holds the current workspace state (index, resolver, workspace context, ledger) which the DI container
+/// resolves through factory delegates. NOTE: the generic host CONSTRUCTS every hosted service before calling
 /// <c>StartAsync</c> on any of them — registration order orders <c>StartAsync</c>, NOT construction. So the
 /// getters below throw if read before this <see cref="StartAsync"/> completes, and no hosted-service constructor
 /// may read them (the M3 services take only this bootstrap and read its getters lazily inside <c>ExecuteAsync</c>).
@@ -63,6 +66,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     // would survive host shutdown holding an OS handle.
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ScanGovernor _governor;
+    private readonly Func<bool> _storeEnabled;
 
     private BoundWorkspace? _bound;
     private BootstrapPhase _phase = BootstrapPhase.Idle;
@@ -73,12 +77,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     private int _runGeneration;
     private TaskCompletionSource _runCompletion = CreateBindingGate();
 
-    public IndexBootstrapService(ILogger<IndexBootstrapService> logger, ScanGovernor? scanGovernor = null)
+    public IndexBootstrapService(
+        ILogger<IndexBootstrapService> logger,
+        ScanGovernor? scanGovernor = null,
+        Func<bool>? storeEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
         // Default = OFF, so no fast test ever opens a lease under the real user-global ~/.miller.
         _governor = scanGovernor ?? ScanGovernor.Disabled();
+        _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
     }
 
     private sealed record BoundWorkspace(
@@ -463,6 +471,18 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     "rebuilding its index.", canonicalRoot);
             }
 
+            if (_storeEnabled())
+            {
+                return RunStoreBootstrap(
+                    ctx,
+                    canonicalRoot,
+                    canonicalDbPath,
+                    stableWorkspaceId,
+                    rootReplaced || persistedRootReplaced,
+                    lineage,
+                    startedAt);
+            }
+
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.
             var runner = JulieExtractRunner.Locate(
@@ -793,6 +813,128 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             // Partial-initialization cleanup: if the ledger was opened but a later step threw, dispose it so
             // the telemetry DB is not left locked / its WAL in an indeterminate state. _ledger was not yet
             // assigned, so Dispose() would otherwise leak it.
+            if (ledger is not null && !usesExistingLedger)
+                ledger.Dispose();
+            throw;
+        }
+    }
+
+    private BootstrapRunResult RunStoreBootstrap(
+        WorkspaceContext context,
+        string canonicalRoot,
+        string canonicalDbPath,
+        string stableWorkspaceId,
+        bool rootReplaced,
+        WorkspaceLineage? lineage,
+        long startedAt)
+    {
+        TelemetryLedger? ledger = null;
+        bool usesExistingLedger = false;
+        try
+        {
+            WorkspaceContext workspace = context with
+            {
+                WorkspaceId = stableWorkspaceId,
+                CanonicalRoot = canonicalRoot,
+                CanonicalExtractDbPath = canonicalDbPath,
+            };
+            RegisterBootstrapWorkspace(
+                workspace,
+                stableWorkspaceId,
+                WorkspaceRegistryState.Ready,
+                revision: null,
+                lineage);
+
+            StoreFamilyBinding binding = StoreWorkspaceCoordinator.ResolveBinding(
+                workspace,
+                canonicalRoot,
+                rootReplaced);
+            long? scanRevision = null;
+            bool didScan = false;
+            if (binding.State == StoreBindingState.Planned)
+            {
+                using ScanGovernorAdmission? admission =
+                    AcquireBootstrapScanAdmission(canonicalRoot, "store-bootstrap");
+                if (admission is null)
+                {
+                    throw new ScanAdmissionTimeoutException(
+                        $"Timed out waiting for machine-wide scan admission to initialize family store " +
+                        $"'{binding.StoreRoot}'. {_governor.DescribeHolder()}");
+                }
+
+                PersistedScanFailurePolicy failurePolicy =
+                    PersistedScanFailurePolicy.For(canonicalDbPath, canonicalRoot);
+                ScanAttemptDecision attempt = failurePolicy.Evaluate(
+                    rootReplaced ? ScanIntent.RootRebind : ScanIntent.IncrementalReconcile,
+                    bypassBackoff: true);
+                StoreWorkspaceCoordinator coordinator = StoreWorkspaceCoordinator.Create(
+                    workspace,
+                    canonicalRoot,
+                    () => IndexLevels.ResolveForWorkspace(workspace.RegistryDbPath, stableWorkspaceId),
+                    rootReplaced);
+                TestScanObserver?.Invoke();
+                ExtractReport report = RunRecordedScan(
+                    failurePolicy,
+                    attempt,
+                    () => coordinator.Scan(attempt.EffectiveIntent, attempt.Jobs));
+                scanRevision = report.Revision;
+                didScan = !report.IsNoChange;
+                binding = StoreWorkspaceCoordinator.ResolveBinding(workspace, canonicalRoot, rootReplaced);
+                if (binding.State != StoreBindingState.Ready)
+                    throw new InvalidOperationException("The family store import completed without a readable view binding.");
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Reusing family store {StoreRoot} view {ViewId} for {Root}.",
+                    binding.StoreRoot,
+                    binding.ViewId,
+                    canonicalRoot);
+            }
+
+            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding, stableWorkspaceId);
+            MillerRepositoryIndex index = RepositoryIndexLoader.LoadSession(session);
+            long builtRevision = session.Snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
+                "The family-store bootstrap snapshot has no store_log sequence.");
+            scanRevision ??= builtRevision;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(workspace.TelemetryDbPath)!);
+            int pruned;
+            TelemetryLedger? existingLedger = Volatile.Read(ref _bound)?.Ledger;
+            if (existingLedger is null)
+            {
+                ledger = OpenAndPrune(
+                    workspace.TelemetryDbPath,
+                    stableWorkspaceId,
+                    workspace.WorkspaceRoot,
+                    retentionDays: 30,
+                    out pruned);
+            }
+            else
+            {
+                ledger = existingLedger;
+                usesExistingLedger = true;
+                pruned = 0;
+            }
+
+            var holder = new IndexHolder(index, builtRevision, binding.FamilyId.ToString("D"));
+            var resolver = new SmartTargetResolver(holder);
+            TimeSpan elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt);
+            return new BootstrapRunResult(
+                new BoundWorkspace(holder, resolver, workspace, ledger),
+                stableWorkspaceId,
+                WorkspaceRegistryState.Ready,
+                didScan,
+                scanRevision,
+                builtRevision,
+                pruned,
+                (long)elapsed.TotalMilliseconds,
+                index.DocumentCount,
+                usesExistingLedger,
+                lineage);
+        }
+        catch
+        {
             if (ledger is not null && !usesExistingLedger)
                 ledger.Dispose();
             throw;
