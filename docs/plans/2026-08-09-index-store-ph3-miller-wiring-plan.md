@@ -84,6 +84,7 @@ All tasks use `serial-worker-commit` in a no-delegation run. If delegation becom
 **Files:**
 - Modify: `scripts/julie-pins.json`
 - Modify: `src/Miller.Indexing/MillerExtractContract.cs`
+- Modify: `tests/Miller.Tests/Indexing/JulieSchemaGateTests.cs`
 - Modify: `tests/Miller.Tests/Indexing/MillerExtractContractTests.cs`
 - Modify: `tests/Miller.Tests/Server/Cli/CliDispatchTests.cs`
 - Create: `docs/findings/2026-08-09-julie-extract-2.31.0-adoption.md`
@@ -103,9 +104,9 @@ All tasks use `serial-worker-commit` in a no-delegation run. If delegation becom
 5. Commit `chore: adopt julie-extract 2.31.0` after the Goldfish checkpoint.
 
 **Acceptance criteria:**
-- [ ] Pin JSON, contract constant, direct assertions, restored binary, and downloaded release agree on `2.31.0`.
-- [ ] Legacy compatibility numbers remain `6/4/3/4`; store numbers are asserted separately.
-- [ ] Restore, focused tests, and Release build pass.
+- [x] Pin JSON, contract constant, direct assertions, restored binary, and downloaded release agree on `2.31.0`.
+- [x] Legacy compatibility numbers remain `6/4/3/4`; store numbers are asserted separately.
+- [x] Restore, focused tests, and Release build pass.
 
 ### Task 2: Add the typed julie store process contract
 
@@ -363,4 +364,3 @@ public sealed record WorkspaceReadSnapshot(
 - [ ] Fresh worktree serving, existing contract compatibility, fast-suite budget, and honest off-switch boxes are checked with evidence.
 - [ ] Existing nine MCP tools and public read-command contracts remain unchanged except additive workspace provenance.
 - [ ] No uncommitted or untracked task work remains; final worktree state is clean and ready for review.
-
