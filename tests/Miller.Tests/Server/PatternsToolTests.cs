@@ -1283,7 +1283,7 @@ public sealed class PatternsToolTests
 
     private static WorkspaceArtifactContext ArtifactFor(JulieDbFixture fixture) =>
         new(
-            IndexDbPath: fixture.DbPath,
+            ReadSession: fixture.DbPath,
             WorkspaceId: "workspace-1",
             WorkspaceRoot: Path.GetDirectoryName(Path.GetDirectoryName(fixture.DbPath))!,
             Revision: 1,

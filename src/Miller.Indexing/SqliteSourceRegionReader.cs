@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -91,6 +92,26 @@ public static class SqliteSourceRegionReader
             return new HashSet<string>(StringComparer.Ordinal);
 
         using var connection = SqliteReadOnlyAccess.Open(dbPath);
+        return ReadHasDocComment(connection, requestedIds);
+    }
+
+    public static IReadOnlySet<string> ReadHasDocComment(
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> symbolIds)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(symbolIds);
+        string[] requestedIds = symbolIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (requestedIds.Length == 0)
+            return new HashSet<string>(StringComparer.Ordinal);
+        return session.Read(connection => ReadHasDocComment(connection, requestedIds));
+    }
+
+    private static IReadOnlySet<string> ReadHasDocComment(SqliteConnection connection, string[] requestedIds)
+    {
         JulieSchemaGate.Verify(connection);
 
         using var command = connection.CreateCommand();

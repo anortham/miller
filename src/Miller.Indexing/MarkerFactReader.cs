@@ -1,11 +1,22 @@
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
 public static class MarkerFactReader
 {
     public const string PatternId = "code.marker.v1";
+
+    public static IReadOnlyList<MarkerFactRow> Read(
+        IWorkspaceReadSession session,
+        bool excludeTests,
+        int limit,
+        Func<MarkerFactRow, bool>? predicate = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(connection => Read(connection, excludeTests, limit, predicate));
+    }
 
     public static IReadOnlyList<MarkerFactRow> Read(
         string dbPath,
@@ -17,6 +28,16 @@ public static class MarkerFactReader
         int boundedLimit = Math.Clamp(limit, 1, 500);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
+        return Read(connection, excludeTests, limit, predicate);
+    }
+
+    private static IReadOnlyList<MarkerFactRow> Read(
+        SqliteConnection connection,
+        bool excludeTests,
+        int limit,
+        Func<MarkerFactRow, bool>? predicate)
+    {
+        int boundedLimit = Math.Clamp(limit, 1, 500);
         JulieSchemaGate.Verify(connection);
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """

@@ -250,7 +250,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         Assert.Equal("target-ws", context.WorkspaceId);
         Assert.Equal("target-111111111111", context.DisplayId);
-        Assert.Equal(target.DbPath, context.IndexDbPath);
+        Assert.Equal(target.DbPath, context.ReadSession.LegacyArtifactPath);
         Assert.Equal(root, context.WorkspaceRoot);
         Assert.Equal(4, context.Revision);
         Assert.Equal(0, fullLoadCount);

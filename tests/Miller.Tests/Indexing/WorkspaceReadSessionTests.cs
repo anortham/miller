@@ -39,11 +39,23 @@ public sealed class WorkspaceReadSessionTests
     {
         Assert.Null(typeof(WorkspaceReadContext).GetProperty("IndexDbPath"));
         Assert.Null(typeof(WorkspaceSymbolReadContext).GetProperty("IndexDbPath"));
+        Assert.Null(typeof(WorkspaceSymbolSearchContext).GetProperty("IndexDbPath"));
+        Assert.Null(typeof(WorkspaceRegionSearchContext).GetProperty("IndexDbPath"));
+        Assert.Null(typeof(WorkspaceArtifactContext).GetProperty("IndexDbPath"));
         Assert.Equal(
             typeof(WorkspaceReadHandle),
             typeof(WorkspaceReadContext).GetProperty("ReadSession")!.PropertyType);
         Assert.Equal(
             typeof(WorkspaceReadHandle),
             typeof(WorkspaceSymbolReadContext).GetProperty("ReadSession")!.PropertyType);
+        Assert.Equal(
+            typeof(WorkspaceReadHandle),
+            typeof(WorkspaceSymbolSearchContext).GetProperty("ReadSession")!.PropertyType);
+        Assert.Equal(
+            typeof(WorkspaceReadHandle),
+            typeof(WorkspaceRegionSearchContext).GetProperty("ReadSession")!.PropertyType);
+        Assert.Equal(
+            typeof(WorkspaceReadHandle),
+            typeof(WorkspaceArtifactContext).GetProperty("ReadSession")!.PropertyType);
     }
 }

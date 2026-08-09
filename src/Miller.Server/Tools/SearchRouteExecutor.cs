@@ -1,5 +1,6 @@
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 
 namespace Miller.Server.Tools;
@@ -231,7 +232,7 @@ internal static class SearchRouteExecutor
     }
 
     public static SearchRouteExecutionResult RunMarkers(
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         SearchRoute route,
         SearchRouteExecutionRequest request)
     {

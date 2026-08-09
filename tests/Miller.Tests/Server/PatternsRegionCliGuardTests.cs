@@ -287,7 +287,7 @@ public sealed class PatternsRegionCliGuardTests : IDisposable
     private static PatternsTool ToolFor(string dbPath, string indexLevel) =>
         new(
             new SingleArtifactProvider(new WorkspaceArtifactContext(
-                IndexDbPath: dbPath,
+                ReadSession: dbPath,
                 WorkspaceId: "ws-patterns",
                 WorkspaceRoot: Path.GetDirectoryName(dbPath)!,
                 Revision: 1,

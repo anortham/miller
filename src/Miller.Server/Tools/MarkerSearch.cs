@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Tools;
 
@@ -14,7 +15,7 @@ internal static class MarkerSearch
     private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX"];
     private static readonly HashSet<string> AllowedMarkers = new(DefaultMarkers, StringComparer.OrdinalIgnoreCase);
     internal static string Run(
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
@@ -36,7 +37,7 @@ internal static class MarkerSearch
             out renderedCount);
 
     internal static string Run(
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
@@ -62,14 +63,14 @@ internal static class MarkerSearch
     }
 
     internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
-        string dbPath,
+        WorkspaceReadHandle dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,
         string? filePattern,
         string? language)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentNullException.ThrowIfNull(dbPath);
         ArgumentNullException.ThrowIfNull(markers);
         if (limit < 1) limit = 1;
 

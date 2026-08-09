@@ -210,7 +210,10 @@ public sealed class WorkspaceIndexProvider
         (_, long revision) = _holder.Snapshot();
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceArtifactContext(
-            dbPath,
+            LegacyArtifactReadSession.Open(
+                dbPath,
+                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                _currentWorkspace.WorkspaceId),
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
@@ -233,7 +236,10 @@ public sealed class WorkspaceIndexProvider
         string dbPath = _currentWorkspace.CanonicalExtractDbPath ?? _currentWorkspace.ExtractDbPath;
         return new WorkspaceSymbolSearchContext(
             searchIndex,
-            dbPath,
+            LegacyArtifactReadSession.Open(
+                dbPath,
+                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                _currentWorkspace.WorkspaceId),
             _currentWorkspace.WorkspaceId,
             _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
             revision,
@@ -316,7 +322,7 @@ public sealed class WorkspaceIndexProvider
         CachedSymbolSearch cached = GetOrLoadSymbolSearch(key, row.IndexDbPath, () => _loadSymbolSearch(row.IndexDbPath));
         return new WorkspaceSymbolSearchContext(
             cached.Index,
-            row.IndexDbPath,
+            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
@@ -361,7 +367,7 @@ public sealed class WorkspaceIndexProvider
 
         long revision = row.LastRevision ?? 0;
         return new WorkspaceArtifactContext(
-            row.IndexDbPath,
+            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,
@@ -468,7 +474,10 @@ public sealed class WorkspaceIndexProvider
         CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(workspaceKey, dbPath, revision), dbPath);
         return new WorkspaceRegionSearchContext(
             cached.Index,
-            dbPath,
+            LegacyArtifactReadSession.Open(
+                dbPath,
+                _currentWorkspace.CanonicalRoot ?? _currentWorkspace.WorkspaceRoot,
+                _currentWorkspace.WorkspaceId),
             _currentWorkspace.WorkspaceId,
             root,
             revision,
@@ -489,7 +498,7 @@ public sealed class WorkspaceIndexProvider
         CachedRegionSearch cached = GetOrLoadRegionSearch(KeyFor(row.WorkspaceId, row.IndexDbPath, revision), row.IndexDbPath);
         return new WorkspaceRegionSearchContext(
             cached.Index,
-            row.IndexDbPath,
+            LegacyArtifactReadSession.Open(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId),
             row.WorkspaceId,
             row.CanonicalRoot,
             revision,

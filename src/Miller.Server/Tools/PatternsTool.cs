@@ -103,7 +103,7 @@ public sealed class PatternsTool
                     "patterns format must be compact or json."));
             }
             bool refresh = ReadToolWorkspaceRouting.ResolveEnsureFresh(workspace_id, ensure_fresh);
-            WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
+            using WorkspaceArtifactContext context = _workspaceProvider.ResolveArtifact(workspace_id, refresh);
             string? banner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
             int outputBudget = ToolOutputBudget.PatternsMcpMaxBytes
                 - ToolOutputBudget.PatternsMcpDiagnosticReserveBytes;
@@ -112,7 +112,9 @@ public sealed class PatternsTool
 
             PatternToolResult result = Run(
                 _reader,
-                context.IndexDbPath,
+                context.ReadSession.LegacyArtifactPath
+                    ?? throw new InvalidOperationException(
+                        "Pattern reads have not been migrated to family-store visibility."),
                 operation,
                 pattern_id,
                 query,

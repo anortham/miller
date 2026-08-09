@@ -333,7 +333,7 @@ public sealed class SearchTool
             ToolDiagnostic? markersConverging = null;
             if (route.Kind == SearchRouteKind.Regions)
             {
-                WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
+                using WorkspaceRegionSearchContext region = _regionProvider.ResolveRegionSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 regionsConverging = RegionLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunRegions(
@@ -358,11 +358,11 @@ public sealed class SearchTool
             }
             else if (route.Kind == SearchRouteKind.Markers)
             {
-                WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                using WorkspaceSymbolSearchContext region = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(region, workspace_id, json);
                 markersConverging = MarkerLevelDiagnostic(region.IndexLevel, scope);
                 SearchRouteExecutionResult result = SearchRouteExecutor.RunMarkers(
-                    region.IndexDbPath,
+                    region.ReadSession,
                     route,
                     new SearchRouteExecutionRequest(
                         query,
@@ -464,7 +464,7 @@ public sealed class SearchTool
             }
             else
             {
-                WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
+                using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspace_id, ensureFresh);
                 string? compactBanner = ReadToolWorkspaceRouting.CompactBanner(context, workspace_id, json);
                 var request = new SearchRouteExecutionRequest(
                     query,
@@ -472,7 +472,7 @@ public sealed class SearchTool
                     json,
                     exclude_tests,
                     compactBanner,
-                    HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.IndexDbPath, symbolIds),
+                    HasDocLookup: symbolIds => ReadHasDocCommentBestEffort(context.ReadSession, symbolIds),
                     FilePattern: file_pattern,
                     Language: language,
                     FusionArm: _fusionArm,
@@ -3902,12 +3902,12 @@ public sealed class SearchTool
     }
 
     private static IReadOnlySet<string> ReadHasDocCommentBestEffort(
-        string dbPath,
+        Miller.Indexing.Reads.WorkspaceReadHandle readSession,
         IReadOnlyCollection<string> symbolIds)
     {
         try
         {
-            return SqliteSourceRegionReader.ReadHasDocComment(dbPath, symbolIds);
+            return SqliteSourceRegionReader.ReadHasDocComment(readSession, symbolIds);
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or InvalidOperationException or IOException or UnauthorizedAccessException
