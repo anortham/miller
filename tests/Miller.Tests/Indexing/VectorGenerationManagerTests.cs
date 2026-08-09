@@ -37,6 +37,20 @@ public sealed class VectorGenerationManagerTests
     }
 
     [Fact]
+    public void ExplicitActivePath_KeepsEveryGenerationBesideThatArtifact()
+    {
+        string activePath = Path.Combine("/store", "sidecars", "vector-view.db");
+
+        VectorGenerationManager manager = VectorGenerationManager.ForActivePath(activePath);
+
+        Assert.Equal(activePath, manager.ActivePath);
+        Assert.Equal(activePath + ".rebuild", manager.ShadowPath);
+        Assert.Equal(
+            Path.Combine("/store", "sidecars", $"vector-view.gen-{ActiveTag}.db"),
+            manager.RetainedPathFor(ActiveTag));
+    }
+
+    [Fact]
     public void TagFromRetainedPath_RoundTripsTheRetainedFileName()
     {
         (VectorGenerationManager manager, _) = Manager();
@@ -44,6 +58,22 @@ public sealed class VectorGenerationManagerTests
         Assert.Equal(ActiveTag, VectorGenerationManager.TagFromRetainedPath(manager.RetainedPathFor(ActiveTag)));
         Assert.Null(VectorGenerationManager.TagFromRetainedPath(manager.ActivePath));
         Assert.Null(VectorGenerationManager.TagFromRetainedPath(manager.ShadowPath));
+    }
+
+    [Fact]
+    public void StoreArtifactNamesClassifyAsActiveShadowAndRetained()
+    {
+        string active = "vector-" + new string('a', 64) + ".db";
+        string retained = "vector-" + new string('a', 64) + $".gen-{ActiveTag}.db";
+
+        Assert.Equal(VectorArtifactRole.Active, VectorGenerationManager.ClassifyArtifact(active));
+        Assert.Equal(VectorArtifactRole.Shadow, VectorGenerationManager.ClassifyArtifact(active + ".rebuild"));
+        Assert.Equal(VectorArtifactRole.Retained, VectorGenerationManager.ClassifyArtifact(retained));
+        Assert.Equal(ActiveTag, VectorGenerationManager.TagFromRetainedPath(retained));
+        Assert.Equal(VectorArtifactRole.Unknown, VectorGenerationManager.ClassifyArtifact("search.db"));
+        string lookalike = "notvec-" + new string('a', 64) + $".gen-{ActiveTag}.db";
+        Assert.Null(VectorGenerationManager.TagFromRetainedPath(lookalike));
+        Assert.Equal(VectorArtifactRole.Unknown, VectorGenerationManager.ClassifyArtifact(lookalike));
     }
 
     [Fact]

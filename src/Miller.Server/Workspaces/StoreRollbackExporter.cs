@@ -17,13 +17,12 @@ public static class StoreRollbackExporter
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentNullException.ThrowIfNull(client);
 
+        StoreWorkspacePointerDocument? pointer;
         try
         {
-            return Export(workspaceRoot, legacyDatabasePath, client);
+            pointer = StoreWorkspacePointer.Read(workspaceRoot);
         }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or StoreWorkspaceOperationException
-                or JulieStoreProcessException or InvalidOperationException)
+        catch (StorePointerFormatException ex)
         {
             string warning =
                 $"The family-store rollback export could not be used ({ex.Message}). " +
@@ -38,17 +37,19 @@ public static class StoreRollbackExporter
             }
             return new StoreRollbackExportResult(false, warning);
         }
+
+        if (pointer is null)
+            return new StoreRollbackExportResult(false, null);
+
+        return Export(workspaceRoot, legacyDatabasePath, client, pointer);
     }
 
     private static StoreRollbackExportResult Export(
         string workspaceRoot,
         string legacyDatabasePath,
-        IJulieStoreClient client)
+        IJulieStoreClient client,
+        StoreWorkspacePointerDocument pointer)
     {
-        StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
-        if (pointer is null)
-            return new StoreRollbackExportResult(false, null);
-
         var binding = new StoreFamilyBinding(
             pointer.FamilyId,
             pointer.StoreRoot,

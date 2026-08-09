@@ -141,12 +141,15 @@ public sealed class VectorGenerationManager
     /// it is reported rather than enforced by deleting a protected file.</summary>
     public const int DefaultRetentionCap = 2;
 
-    private const string RetainedPrefix = "vectors.gen-";
+    private const string LegacyRetainedPrefix = "vectors.gen-";
+    private const string StoreVectorPrefix = "vector-";
+    private const int StoreViewKeyLength = 64;
     private const string RetainedSuffix = ".db";
     private const string ReadyState = "ready";
     private const string BuildingState = "building";
 
     private readonly IVectorGenerationFiles _files;
+    private readonly string _retainedPrefix;
 
     public VectorGenerationManager(string workspaceRoot)
         : this(workspaceRoot, SystemVectorGenerationFiles.Instance)
@@ -154,14 +157,30 @@ public sealed class VectorGenerationManager
     }
 
     internal VectorGenerationManager(string workspaceRoot, IVectorGenerationFiles files)
+        : this(files, LegacyActivePath(workspaceRoot))
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+    }
+
+    private VectorGenerationManager(IVectorGenerationFiles files, string activePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(activePath);
         ArgumentNullException.ThrowIfNull(files);
 
         _files = files;
-        MillerDir = Path.Combine(workspaceRoot, ".miller");
-        ActivePath = Path.Combine(MillerDir, "vectors.db");
+        ActivePath = activePath;
+        MillerDir = Path.GetDirectoryName(activePath)
+            ?? throw new ArgumentException("The vector artifact path has no parent directory.", nameof(activePath));
         ShadowPath = ActivePath + ".rebuild";
+        _retainedPrefix = Path.GetFileNameWithoutExtension(ActivePath) + ".gen-";
+    }
+
+    public static VectorGenerationManager ForActivePath(string activePath) =>
+        new(SystemVectorGenerationFiles.Instance, activePath);
+
+    private static string LegacyActivePath(string workspaceRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        return Path.Combine(workspaceRoot, ".miller", "vectors.db");
     }
 
     public string MillerDir { get; }
@@ -176,21 +195,32 @@ public sealed class VectorGenerationManager
     public string RetainedPathFor(string tag)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tag);
-        return Path.Combine(MillerDir, RetainedPrefix + tag + RetainedSuffix);
+        return Path.Combine(MillerDir, _retainedPrefix + tag + RetainedSuffix);
     }
 
     /// <summary>The generation tag a retained file names, or null when the path is not a retained generation.</summary>
     public static string? TagFromRetainedPath(string path)
     {
         string name = Path.GetFileName(path ?? string.Empty);
-        if (!name.StartsWith(RetainedPrefix, StringComparison.Ordinal)
+        if (name.StartsWith(LegacyRetainedPrefix, StringComparison.Ordinal)
+            && name.EndsWith(RetainedSuffix, StringComparison.Ordinal))
+        {
+            string legacyTag = name[LegacyRetainedPrefix.Length..^RetainedSuffix.Length];
+            return legacyTag.Length == 0 ? null : legacyTag;
+        }
+
+        int markerStart = StoreVectorPrefix.Length + StoreViewKeyLength;
+        const string marker = ".gen-";
+        if (name.Length <= markerStart + marker.Length + RetainedSuffix.Length
+            || !name.StartsWith(StoreVectorPrefix, StringComparison.Ordinal)
+            || !IsStoreViewKey(name.AsSpan(StoreVectorPrefix.Length, StoreViewKeyLength))
+            || !name.AsSpan(markerStart).StartsWith(marker, StringComparison.Ordinal)
             || !name.EndsWith(RetainedSuffix, StringComparison.Ordinal))
         {
             return null;
         }
 
-        string tag = name[RetainedPrefix.Length..^RetainedSuffix.Length];
-        return tag.Length == 0 ? null : tag;
+        return name[(markerStart + marker.Length)..^RetainedSuffix.Length];
     }
 
     /// <summary>
@@ -204,9 +234,34 @@ public sealed class VectorGenerationManager
             return VectorArtifactRole.Retained;
         if (string.Equals(name, "vectors.db", StringComparison.Ordinal))
             return VectorArtifactRole.Active;
-        return string.Equals(name, "vectors.db.rebuild", StringComparison.Ordinal)
-            ? VectorArtifactRole.Shadow
-            : VectorArtifactRole.Unknown;
+        if (string.Equals(name, "vectors.db.rebuild", StringComparison.Ordinal))
+            return VectorArtifactRole.Shadow;
+        if (IsStoreActiveName(name))
+            return VectorArtifactRole.Active;
+        return name.EndsWith(".rebuild", StringComparison.Ordinal)
+            && IsStoreActiveName(name[..^".rebuild".Length])
+                ? VectorArtifactRole.Shadow
+                : VectorArtifactRole.Unknown;
+    }
+
+    private static bool IsStoreActiveName(string name) =>
+        name.Length == StoreVectorPrefix.Length + StoreViewKeyLength + RetainedSuffix.Length
+        && name.StartsWith(StoreVectorPrefix, StringComparison.Ordinal)
+        && name.EndsWith(RetainedSuffix, StringComparison.Ordinal)
+        && IsStoreViewKey(name.AsSpan(StoreVectorPrefix.Length, StoreViewKeyLength));
+
+    private static bool IsStoreViewKey(ReadOnlySpan<char> value)
+    {
+        if (value.Length != StoreViewKeyLength)
+            return false;
+
+        foreach (char character in value)
+        {
+            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>A promote is incompatible exactly when the tag changes — the two identity fields that gate
@@ -309,12 +364,25 @@ public sealed class VectorGenerationManager
     public IReadOnlyList<RetainedGeneration> Retained() =>
     [
         .. _files.EnumerateRetained(MillerDir)
-            .Select(path => (Tag: TagFromRetainedPath(path), Path: path))
+            .Select(path => (Tag: TagFromManagedRetainedPath(path), Path: path))
             .Where(static candidate => candidate.Tag is not null)
             .Select(candidate => new RetainedGeneration(
                 candidate.Tag!, candidate.Path, _files.LastWriteTime(candidate.Path)))
             .OrderByDescending(static generation => generation.RetainedAt),
     ];
+
+    private string? TagFromManagedRetainedPath(string path)
+    {
+        string name = Path.GetFileName(path ?? string.Empty);
+        if (!name.StartsWith(_retainedPrefix, StringComparison.Ordinal)
+            || !name.EndsWith(RetainedSuffix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        string tag = name[_retainedPrefix.Length..^RetainedSuffix.Length];
+        return tag.Length == 0 ? null : tag;
+    }
 
     /// <summary>
     /// The GC verdict for every retained generation. The three keep outcomes are absolute: a protected
@@ -432,8 +500,19 @@ internal sealed class SystemVectorGenerationFiles : IVectorGenerationFiles
 
     public DateTimeOffset LastWriteTime(string path) => File.GetLastWriteTimeUtc(path);
 
-    public IReadOnlyList<string> EnumerateRetained(string millerDir) =>
-        SystemVectorFileProbe.Instance.EnumerateRetainedGenerations(millerDir);
+    public IReadOnlyList<string> EnumerateRetained(string millerDir)
+    {
+        try
+        {
+            return Directory.Exists(millerDir)
+                ? Directory.GetFiles(millerDir, "*.gen-*.db")
+                : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
 
     public string? ReadBuildState(string path)
     {
@@ -482,7 +561,7 @@ internal sealed class SystemVectorGenerationFiles : IVectorGenerationFiles
         var stopwatch = Stopwatch.StartNew();
         TimeSpan delay = options.InitialDelay;
 
-        for (;;)
+        for (; ; )
         {
             try
             {

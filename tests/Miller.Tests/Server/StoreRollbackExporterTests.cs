@@ -1,3 +1,4 @@
+using Miller.Indexing;
 using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
 using Xunit;
@@ -24,6 +25,33 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.False(result.Exported);
         Assert.NotNull(result.Warning);
         Assert.False(File.Exists(Path.Combine(miller, "store.json")));
+    }
+
+    [Fact]
+    public void ValidPointerOpenFailurePropagatesAndPreservesStoreBinding()
+    {
+        Directory.CreateDirectory(_root);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(_root);
+        string missingStore = Path.Combine(_root, "missing-store");
+        var binding = new StoreFamilyBinding(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            missingStore,
+            "view-a",
+            canonicalRoot,
+            StoreBindingState.Ready);
+        StoreWorkspacePointer.Write(_root, binding);
+
+        Assert.ThrowsAny<IOException>(() => StoreRollbackExporter.ExportIfRequired(
+            _root,
+            Path.Combine(_root, ".miller", "symbols.db"),
+            new UnexpectedStoreClient()));
+
+        StoreWorkspacePointerDocument preserved = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(_root));
+        Assert.Equal(binding.FamilyId, preserved.FamilyId);
+        Assert.Equal(binding.StoreRoot, preserved.StoreRoot);
+        Assert.Equal(binding.ViewId, preserved.ViewId);
+        Assert.Equal(binding.WorkspaceRoot, preserved.WorkspaceRoot);
     }
 
     public void Dispose()

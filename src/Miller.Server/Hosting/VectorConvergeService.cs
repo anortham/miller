@@ -498,12 +498,9 @@ public sealed class VectorConvergeService : BackgroundService
     /// </remarks>
     private static bool UnfinishedPromoteAwaitsRecovery(WorkspaceContext workspace)
     {
-        if (WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
-            return false;
-
         try
         {
-            var generations = new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot);
+            VectorGenerationManager generations = VectorGenerationManagerFor(workspace);
             return File.Exists(generations.ShadowPath) && !File.Exists(generations.ActivePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
@@ -537,6 +534,9 @@ public sealed class VectorConvergeService : BackgroundService
         // A second corruption-shaped failure propagates rather than recovering in a loop.
         return _openPort(workspace);
     }
+
+    internal static VectorGenerationManager VectorGenerationManagerFor(WorkspaceContext workspace) =>
+        VectorGenerationManager.ForActivePath(VectorArtifactPathFor(workspace));
 
     private static string VectorArtifactPathFor(WorkspaceContext workspace)
     {
@@ -1280,7 +1280,7 @@ internal sealed class SqliteVectorShadowRebuilder(
             ? null
             : new SqliteVectorShadowRebuilder(
                 workspace,
-                new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot),
+                VectorConvergeService.VectorGenerationManagerFor(workspace),
                 encoder ?? SemanticEncoderSelection.Active);
     }
 
@@ -1336,7 +1336,7 @@ internal sealed class VectorGenerationGc(VectorGenerationManager manager, ILogge
     {
         ArgumentNullException.ThrowIfNull(workspace);
         return new VectorGenerationGc(
-            new VectorGenerationManager(workspace.CanonicalRoot ?? workspace.WorkspaceRoot), logger);
+            VectorConvergeService.VectorGenerationManagerFor(workspace), logger);
     }
 
     public void Collect(bool activeIsReady, DateTimeOffset now, IReadOnlySet<string> tagsWithLiveReaders)
@@ -1440,22 +1440,24 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
         // the empty file first would therefore turn a one-rename recovery into a full re-embed.
         string root = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         string activePath = VectorSidecar.PathFor(root);
+        if (!RecoverInterruptedPromoteBeforeCreate(new VectorGenerationManager(root)))
+            return null;
+
+        return TryOpenAt(workspace, activePath, encoder);
+    }
+
+    private static bool RecoverInterruptedPromoteBeforeCreate(VectorGenerationManager generations)
+    {
         try
         {
-            new VectorGenerationManager(root).RecoverInterruptedPromote();
+            generations.RecoverInterruptedPromote();
+            return true;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
-            // A transient recovery failure with no active artifact is the one case where continuing does damage:
-            // the create below would make the leftover shadow unrecognisable and force a full re-embed. Skipping
-            // this cycle costs nothing — the next converge retries recovery against an untouched shadow. With an
-            // active artifact already present there is no shadow to lose, so the failure is inert.
-            if (!File.Exists(activePath))
-                return null;
+            return File.Exists(generations.ActivePath);
         }
-
-        return TryOpenAt(workspace, activePath, encoder);
     }
 
     internal static IVectorConvergePort? TryOpenStore(
@@ -1490,6 +1492,12 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
             }
 
             string vectorsPath = VectorSidecar.PathForStore(storeRoot, session.Snapshot.ViewId);
+            var generations = VectorGenerationManager.ForActivePath(vectorsPath);
+            if (!RecoverInterruptedPromoteBeforeCreate(generations))
+            {
+                session.Dispose();
+                return null;
+            }
             Directory.CreateDirectory(Path.GetDirectoryName(vectorsPath)!);
             string artifactId = StoreArtifactId(session.Snapshot);
             if (!File.Exists(vectorsPath))

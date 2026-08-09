@@ -301,7 +301,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         reader.Close();
 
         string indexLevel = ReadIndexLevel(connection, binding.ViewId, manifestGeneration);
-        long sequence = ReadStoreLogSequence(connection);
+        long sequence = ReadStoreLogSequence(connection, binding.ViewId, manifestGeneration);
         return new StoreVisibility(
             binding.FamilyId.ToString("D", CultureInfo.InvariantCulture),
             storeRoot,
@@ -348,10 +348,27 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             : IndexLevels.SymbolsMetadataValue;
     }
 
-    private static long ReadStoreLogSequence(SqliteConnection connection)
+    private static long ReadStoreLogSequence(
+        SqliteConnection connection,
+        string viewId,
+        long manifestGeneration)
     {
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText = "SELECT COALESCE(MAX(sequence),0) FROM store_log";
+        command.CommandText =
+            """
+            SELECT COALESCE(MAX(log.sequence),0)
+            FROM store_log AS log
+            WHERE log.view_id=$view_id
+               OR (log.view_id IS NULL AND log.version_id IS NULL)
+               OR EXISTS (
+                    SELECT 1
+                    FROM manifest_entries AS entry
+                    WHERE entry.view_id=$view_id
+                      AND entry.generation=$generation
+                      AND entry.version_id=log.version_id)
+            """;
+        command.Parameters.AddWithValue("$view_id", viewId);
+        command.Parameters.AddWithValue("$generation", manifestGeneration);
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 

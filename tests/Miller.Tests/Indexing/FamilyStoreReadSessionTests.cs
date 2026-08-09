@@ -34,6 +34,20 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void StoreLogCursorIgnoresSiblingViewEventsButTracksSharedVersionChanges()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        Assert.Equal(2, ReadStoreLogSequence(fixture));
+        AppendStoreLog(fixture, 3, "view-b", versionId: null);
+        Assert.Equal(2, ReadStoreLogSequence(fixture));
+        AppendStoreLog(fixture, 4, "view-b", versionId: 2);
+        Assert.Equal(4, ReadStoreLogSequence(fixture));
+        AppendStoreLog(fixture, 5, viewId: null, versionId: null);
+        Assert.Equal(5, ReadStoreLogSequence(fixture));
+    }
+
+    [Fact]
     public void FamilyMismatchRefusesBeforeOpeningAReadSession()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -124,6 +138,28 @@ public sealed class FamilyStoreReadSessionTests
             FamilyStoreReadSession.Open(fixture.Binding));
 
         Assert.Equal(FamilyStoreReadFailure.Corrupt, error.Failure);
+    }
+
+    private static long ReadStoreLogSequence(StoreFixture fixture)
+    {
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+        return Assert.IsType<long>(session.Snapshot.Freshness.StoreLogSequence);
+    }
+
+    private static void AppendStoreLog(StoreFixture fixture, long sequence, string? viewId, long? versionId)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            "INSERT INTO store_log VALUES ($sequence,$request,'version_level_completed',$view,NULL,$version,2,0,'{}','2026-08-09T00:00:03Z')";
+        command.Parameters.AddWithValue("$sequence", sequence);
+        command.Parameters.AddWithValue("$request", $"request-{sequence}");
+        command.Parameters.AddWithValue("$view", (object?)viewId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$version", (object?)versionId ?? DBNull.Value);
+        command.ExecuteNonQuery();
     }
 
     private sealed class StoreFixture : IDisposable

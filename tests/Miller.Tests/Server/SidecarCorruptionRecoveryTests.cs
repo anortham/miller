@@ -97,6 +97,21 @@ public sealed class SidecarCorruptionRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void CorruptStoreVectors_IsDeletedAndRebuiltThroughTheVectorRecoveryPath()
+    {
+        string active = WriteArtifact("vector-" + new string('a', 64) + ".db", "corrupt");
+
+        bool recovered = SidecarCorruptionRecovery.TryRecoverCorruptVectorGeneration(
+            Corruption(),
+            active,
+            () => File.WriteAllText(active, "rebuilt"),
+            NullLogger.Instance);
+
+        Assert.True(recovered);
+        Assert.Equal("rebuilt", File.ReadAllText(active));
+    }
+
+    [Fact]
     public void CorruptRetainedGeneration_IsDeletedButNeverRebuiltAndLeavesTheActiveArtifact()
     {
         string active = WriteArtifact("vectors.db", "active generation");

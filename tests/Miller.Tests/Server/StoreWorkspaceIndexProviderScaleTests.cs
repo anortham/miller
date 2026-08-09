@@ -294,7 +294,10 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             StoreWorkspacePointer.Write(root, binding);
             string extension = SqliteVecTestSupport.RequireExtension();
             string? priorExtension = Environment.GetEnvironmentVariable(VectorStore.ExtensionPathEnvVar);
+            string? priorStoreMode = Environment.GetEnvironmentVariable(
+                WorkspaceReadSessionFactory.StoreEnvironmentVariable);
             Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, extension);
+            Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
             try
             {
                 WorkspaceContext workspace = WorkspaceContext.Create(root, AppContext.BaseDirectory, directory) with
@@ -303,48 +306,65 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                     CanonicalRoot = PathCanonicalizer.CanonicalizeRoot(root),
                     CanonicalExtractDbPath = artifact,
                 };
-                using IVectorConvergePort port = Assert.IsAssignableFrom<IVectorConvergePort>(
-                    SqliteVectorConvergePort.TryOpenStore(workspace));
-                using IVectorConvergePort legacyPort = Assert.IsAssignableFrom<IVectorConvergePort>(
-                    SqliteVectorConvergePort.TryOpenAt(
-                        workspace,
-                        Path.Combine(directory, "legacy-vectors.db")));
-                VectorConvergeSnapshot snapshot = port.Snapshot(0);
-                Assert.True(snapshot.FullPass);
-                Assert.Equal(family.Snapshot.Freshness.StoreLogSequence, snapshot.TargetRevision);
-                long manifestRevision = family.Read(connection =>
+                string vectorPath;
+                VectorGenerationManager generations;
                 {
-                    using SqliteCommand command = connection.CreateCommand();
-                    command.CommandText =
-                        "SELECT MIN(sequence) FROM store_log WHERE event_kind='manifest_flipped';";
-                    return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-                });
-                VectorConvergeSnapshot resolutionOnly = port.Snapshot(manifestRevision);
-                Assert.True(resolutionOnly.DeltaHistoryComplete);
-                Assert.False(resolutionOnly.FullPass);
-                Assert.Empty(resolutionOnly.ChangedPaths);
-                Assert.Equal(
-                    legacyPort.Units(VectorUnitKind.Symbol, paths: null),
-                    port.Units(VectorUnitKind.Symbol, paths: null));
-                Assert.NotEmpty(port.Units(VectorUnitKind.Symbol, paths: null));
+                    using IVectorConvergePort port = Assert.IsAssignableFrom<IVectorConvergePort>(
+                        SqliteVectorConvergePort.TryOpenStore(workspace));
+                    using IVectorConvergePort legacyPort = Assert.IsAssignableFrom<IVectorConvergePort>(
+                        SqliteVectorConvergePort.TryOpenAt(
+                            workspace,
+                            Path.Combine(directory, "legacy-vectors.db")));
+                    VectorConvergeSnapshot snapshot = port.Snapshot(0);
+                    Assert.True(snapshot.FullPass);
+                    Assert.Equal(family.Snapshot.Freshness.StoreLogSequence, snapshot.TargetRevision);
+                    long manifestRevision = family.Read(connection =>
+                    {
+                        using SqliteCommand command = connection.CreateCommand();
+                        command.CommandText =
+                            "SELECT MIN(sequence) FROM store_log WHERE event_kind='manifest_flipped';";
+                        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+                    });
+                    VectorConvergeSnapshot resolutionOnly = port.Snapshot(manifestRevision);
+                    Assert.True(resolutionOnly.DeltaHistoryComplete);
+                    Assert.False(resolutionOnly.FullPass);
+                    Assert.Empty(resolutionOnly.ChangedPaths);
+                    Assert.Equal(
+                        legacyPort.Units(VectorUnitKind.Symbol, paths: null),
+                        port.Units(VectorUnitKind.Symbol, paths: null));
+                    Assert.NotEmpty(port.Units(VectorUnitKind.Symbol, paths: null));
 
-                string cursor = snapshot.TargetRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                port.SetMeta(VectorConvergeService.SymbolCompletedKey, cursor);
-                port.SetMeta(VectorConvergeService.SymbolTargetKey, cursor);
-                port.SetMeta(VectorConvergeService.ChunkCompletedKey, cursor);
-                port.SetMeta(VectorConvergeService.ChunkTargetKey, cursor);
-                port.SetMeta("build_state", "ready");
-                port.PublishCompleteness();
+                    string cursor = snapshot.TargetRevision.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    port.SetMeta(VectorConvergeService.SymbolCompletedKey, cursor);
+                    port.SetMeta(VectorConvergeService.SymbolTargetKey, cursor);
+                    port.SetMeta(VectorConvergeService.ChunkCompletedKey, cursor);
+                    port.SetMeta(VectorConvergeService.ChunkTargetKey, cursor);
+                    port.SetMeta("build_state", "ready");
+                    port.PublishCompleteness();
 
-                StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
-                    StoreSidecarKind.Vector,
-                    family.Snapshot);
-                string vectorPath = VectorSidecar.PathForStore(store, family.Snapshot.ViewId);
-                Assert.True(StoreSidecarCatalog.IsCurrent(vectorPath, expected));
-                Assert.Equal("ready", new VectorSidecar(SemanticMode.On).InspectStore(store, family.Snapshot).State);
+                    StoreSidecarStamp expected = StoreSidecarStamp.FromSnapshot(
+                        StoreSidecarKind.Vector,
+                        family.Snapshot);
+                    vectorPath = VectorSidecar.PathForStore(store, family.Snapshot.ViewId);
+                    generations = VectorConvergeService.VectorGenerationManagerFor(workspace);
+                    Assert.Equal(vectorPath, generations.ActivePath);
+                    Assert.Equal(vectorPath + ".rebuild", generations.ShadowPath);
+                    Assert.True(StoreSidecarCatalog.IsCurrent(vectorPath, expected));
+                    Assert.Equal("ready", new VectorSidecar(SemanticMode.On).InspectStore(store, family.Snapshot).State);
+                }
+
+                File.Move(vectorPath, generations.ShadowPath);
+                using IVectorConvergePort recovered = Assert.IsAssignableFrom<IVectorConvergePort>(
+                    SqliteVectorConvergePort.TryOpenStore(workspace));
+                Assert.True(File.Exists(vectorPath));
+                Assert.False(File.Exists(generations.ShadowPath));
+                Assert.NotEmpty(recovered.Units(VectorUnitKind.Symbol, paths: null));
             }
             finally
             {
+                Environment.SetEnvironmentVariable(
+                    WorkspaceReadSessionFactory.StoreEnvironmentVariable,
+                    priorStoreMode);
                 Environment.SetEnvironmentVariable(VectorStore.ExtensionPathEnvVar, priorExtension);
             }
         }
