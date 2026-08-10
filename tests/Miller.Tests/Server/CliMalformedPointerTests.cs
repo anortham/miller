@@ -5,6 +5,7 @@ using Xunit;
 
 namespace Miller.Tests.Server;
 
+[Collection(StoreEnvironmentCollection.Name)]
 public sealed class CliMalformedPointerTests : IDisposable
 {
     private readonly string _root;

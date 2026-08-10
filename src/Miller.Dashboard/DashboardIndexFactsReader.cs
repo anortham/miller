@@ -356,7 +356,8 @@ public static class DashboardIndexFactsReader
         WorkspaceReadSnapshot snapshot = session.Snapshot;
         SearchSidecarFacts search = SymbolSearchSidecar.FromEnvironment().InspectStore(storeRoot, snapshot);
         ContentCorpusFacts content = ContentSidecar.InspectStore(storeRoot, snapshot);
-        long revision = snapshot.Freshness.StoreLogSequence ?? snapshot.Freshness.Revision;
+        long revision = snapshot.Freshness.StoreLogSequence
+            ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
 
         return session.Read(connection =>
         {
