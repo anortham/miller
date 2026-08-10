@@ -180,7 +180,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             relativePath,
             level,
             controls,
-            ScanControls(ExtractJobsPolicy.FromEnvironment()));
+            ScanControls(ExtractJobsPolicy.FromEnvironment(), prepareForScan: false));
         return Submit(
             request,
             before,
@@ -225,7 +225,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             _binding.WorkspaceRoot,
             level,
             controls,
-            ScanControls(jobs ?? ExtractJobsPolicy.FromEnvironment()),
+            ScanControls(jobs ?? ExtractJobsPolicy.FromEnvironment(), prepareForScan: true),
             FromArtifact: before is null ? _fromArtifact : null);
         return Submit(
             request,
@@ -370,14 +370,24 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             : StoreLevel.L1;
     }
 
-    private StoreScanControls ScanControls(int jobs)
+    private StoreScanControls ScanControls(int jobs, bool prepareForScan)
     {
+        IReadOnlyList<string> ignoreFiles;
+        if (prepareForScan)
+        {
+            JulieIgnoreSeeder.EnsureSeeded(_binding.WorkspaceRoot);
+            ignoreFiles = ScanIgnorePolicy.PrepareForScan(_binding.WorkspaceRoot);
+        }
+        else
+        {
+            ignoreFiles = ScanIgnorePolicy.ForFileUpdate(_binding.WorkspaceRoot);
+        }
         ExtractSupervision supervision = ExtractSupervisionPolicy.For(
             Path.Combine(_binding.WorkspaceRoot, ".miller", "symbols.db"));
         if (_requestJournal is not null && supervision.SpoolDirectory is { } spoolDirectory)
             Directory.CreateDirectory(spoolDirectory);
         return new StoreScanControls(
-            IgnoreFiles: [],
+            IgnoreFiles: ignoreFiles,
             Jobs: jobs,
             SpoolDirectory: supervision.SpoolDirectory,
             ProgressFile: supervision.ProgressFile,

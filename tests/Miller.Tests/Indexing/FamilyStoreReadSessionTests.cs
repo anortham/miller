@@ -434,4 +434,25 @@ public sealed class FamilyStoreReadSessionTests
             command.ExecuteNonQuery();
         }
     }
+
+    [Fact]
+    public void StoreReadSessionExposesProducerVersionForLeadershipChecks()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        Assert.Equal("2.31.0", session.Visibility.BinaryVersion);
+    }
+
+    [Fact]
+    public void StoreArtifactVersionReaderUsesTheServingStoreVersion()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
+
+        Assert.Equal("2.31.0", StoreArtifactVersionReader.TryRead(legacyPath));
+    }
 }

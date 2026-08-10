@@ -3914,10 +3914,7 @@ public static class CliDispatch
 
             return rollback.Exported && File.Exists(ctx.ExtractDbPath);
         }
-        catch (Exception ex) when (
-            ex is FileNotFoundException or DirectoryNotFoundException or IOException
-                or UnauthorizedAccessException or InvalidOperationException or ArgumentException
-                or NotSupportedException or SqliteException)
+        catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
         {
             err.WriteLine("Store rollback export failed; the CLI will not serve legacy bytes: " + ex.Message);
             return false;

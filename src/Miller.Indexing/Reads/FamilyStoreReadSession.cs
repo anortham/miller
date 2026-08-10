@@ -125,7 +125,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                     generationName,
                     storeDatabasePath,
                     coordinatorDatabasePath,
-                    workspaceRoot);
+                    workspaceRoot,
+                    Required(metadata, "binary_version"));
                 bool resolutionAttached = AttachValidatedResolutionBase(connection, visibility);
                 CreateCompatibilityProjection(connection, visibility, metadata, resolutionAttached);
                 SetQueryOnly(connection);
@@ -273,7 +274,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         string generationName,
         string storeDatabasePath,
         string coordinatorDatabasePath,
-        string workspaceRoot)
+        string workspaceRoot,
+        string binaryVersion)
     {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
@@ -331,6 +333,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             exactAt,
             sequence,
             indexLevel,
+            binaryVersion,
             StoreInstanceId(binding.FamilyId, generationName),
             levelStamps.LevelStampL1,
             levelStamps.LevelStampL2,

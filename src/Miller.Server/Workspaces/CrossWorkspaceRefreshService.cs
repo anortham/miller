@@ -83,7 +83,9 @@ public sealed class CrossWorkspaceRefreshService
             // lock-busy enqueue-to-leader path is never affected.
             dbPath => LeadershipEligibility.Evaluate(
                 runner.QueryVersion(),
-                ExtractBinaryVersionReader.TryRead(dbPath),
+                WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                    ? StoreArtifactVersionReader.TryRead(dbPath) ?? ExtractBinaryVersionReader.TryRead(dbPath)
+                    : ExtractBinaryVersionReader.TryRead(dbPath),
                 Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
             ReadArtifactId,
             governor,
@@ -264,7 +266,7 @@ public sealed class CrossWorkspaceRefreshService
         // D2 gate, AFTER winning the lock (so a busy lock still enqueues to the live leader above, which
         // enforces its own gate): an outdated extractor must never rewrite an artifact built by a newer one.
         // A refusal is not a workspace error — the index stays valid, so the registry row is left untouched.
-        if (!useStore && _eligibilityGate is { } gate)
+        if (_eligibilityGate is { } gate)
         {
             LeadershipVerdict verdict = gate(row.IndexDbPath);
             if (!verdict.Eligible)

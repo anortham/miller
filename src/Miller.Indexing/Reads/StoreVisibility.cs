@@ -16,6 +16,7 @@ public sealed record StoreVisibility(
     long? ResolutionExactAt,
     long StoreLogSequence,
     string IndexLevel,
+    string BinaryVersion,
     string StoreInstanceId,
     string LevelStampL1,
     string LevelStampL2,

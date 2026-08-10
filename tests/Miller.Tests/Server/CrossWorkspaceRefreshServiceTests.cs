@@ -320,6 +320,31 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_StoreModeStillAppliesTheEligibilityGate()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("store-ineligible");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        int scanCount = 0;
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) =>
+            {
+                scanCount++;
+                return Report(root, dbPath, "target-ws", revision: 2);
+            },
+            acquireLock: _ => new NoopLease(),
+            eligibilityGate: _ => LeadershipEligibility.Evaluate("2.0.0", "3.0.0", allowDowngrade: false),
+            storeEnabled: static () => true);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.IneligibleExtractor, result.Status);
+        Assert.Equal(0, scanCount);
+    }
+
+    [Fact]
     public void Refresh_LockBusy_DoesNotScanAndReturnsUnconfirmedWhenNoRevisionChangeAppears()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

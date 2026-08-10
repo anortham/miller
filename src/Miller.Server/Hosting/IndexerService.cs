@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Logging;
 using Miller.Server.Workspaces;
 
@@ -177,6 +178,10 @@ public sealed class IndexerService : BackgroundService
             // fast test can ever spawn the languages probe.
             fetchSupportedExtensions: static workspace =>
                 SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot),
+            readArtifactExtractorVersion: static dbPath =>
+                WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+                    ? StoreArtifactVersionReader.TryRead(dbPath) ?? ExtractBinaryVersionReader.TryRead(dbPath)
+                    : ExtractBinaryVersionReader.TryRead(dbPath),
             scanGovernor: scanGovernor)
     {
     }

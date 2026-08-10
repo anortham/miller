@@ -71,6 +71,44 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.Equal("invalid_export_artifact", error.FailureClass.Code);
     }
 
+    [Fact]
+    public void JulieStoreProcessFailuresAreOperationalRollbackFailures()
+    {
+        Assert.True(StoreRollbackExporter.IsOperationalFailure(
+            new JulieStoreProcessException("julie-extract failed", "stderr", exitCode: 1)));
+        Assert.True(StoreRollbackExporter.IsOperationalFailure(
+            new JulieStoreContractException("julie-extract returned an invalid report")));
+    }
+
+    [Fact]
+    public void PromotionFailurePreservesValidatedRebuildAndStoreBinding()
+    {
+        string workspace = Path.Combine(_root, "workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string rebuild = FullRebuildPromotion.RebuildDbPathFor(legacy);
+        File.WriteAllText(rebuild, "validated-export");
+
+        IOException error = Assert.Throws<IOException>(() => StoreRollbackExporter.CommitValidatedExport(
+            workspace,
+            legacy,
+            _ => throw new IOException("simulated promotion failure")));
+
+        Assert.Contains("simulated promotion failure", error.Message, StringComparison.Ordinal);
+        Assert.True(File.Exists(rebuild));
+        Assert.NotNull(StoreWorkspacePointer.Read(workspace));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

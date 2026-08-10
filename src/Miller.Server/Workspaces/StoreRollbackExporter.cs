@@ -17,7 +17,7 @@ public static class StoreRollbackExporter
 {
     internal static bool IsOperationalFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
-            or NotSupportedException or SqliteException;
+            or NotSupportedException or SqliteException or JulieStoreProcessException;
 
     public static StoreRollbackExportResult ExportIfRequired(
         string workspaceRoot,
@@ -110,6 +110,7 @@ public static class StoreRollbackExporter
 
         string outputPath = FullRebuildPromotion.RebuildDbPathFor(legacyDatabasePath);
         FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
+        bool exportValidated = false;
         try
         {
             StoreRequestResult result = client.Submit(new StoreExportRequest(
@@ -137,13 +138,40 @@ public static class StoreRollbackExporter
                     $"julie-extract store export reported '{exportedPath}' instead of '{outputPath}'.");
             }
             ValidateExportArtifact(outputPath);
-            FullRebuildPromotion.Promote(legacyDatabasePath);
-            StoreWorkspacePointer.Delete(workspaceRoot);
+            exportValidated = true;
+            CommitValidatedExport(workspaceRoot, legacyDatabasePath, FullRebuildPromotion.Promote);
             return new StoreRollbackExportResult(true, null);
         }
         catch
         {
-            FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
+            if (!exportValidated)
+                FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
+            throw;
+        }
+    }
+
+    internal static void CommitValidatedExport(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        Action<string> promote)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
+        ArgumentNullException.ThrowIfNull(promote);
+
+        bool promoted = false;
+        try
+        {
+            promote(legacyDatabasePath);
+            promoted = true;
+            // Keep the store binding until the promoted legacy artifact is ready; a failed delete leaves reads
+            // on the store and the next store-off attempt can safely retry the export.
+            StoreWorkspacePointer.Delete(workspaceRoot);
+        }
+        catch
+        {
+            if (promoted)
+                FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
             throw;
         }
     }

@@ -139,6 +139,77 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void NewFamilyImportPassesMillersInvariantIgnoreFile()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-ignore-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var client = new RecordingStoreClient(StoreOperation.Import);
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => new StoreWorkspaceState(1, "l1"),
+                () => "request-ignore",
+                fromArtifact: null);
+
+            coordinator.Scan(jobs: 1);
+
+            StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
+            string invariant = ScanIgnorePolicy.InvariantIgnorePathFor(root);
+            Assert.Equal([invariant], request.Scan.IgnoreFiles);
+            Assert.Contains(".worktrees/", File.ReadAllText(invariant), StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExistingInvariantIgnoreFileIsPassedToStoreUpdates()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-update-ignore-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, ".miller"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src"));
+            File.WriteAllText(Path.Combine(root, "src", "a.cs"), "class A {}");
+            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+            string invariant = ScanIgnorePolicy.InvariantIgnorePathFor(canonicalRoot);
+            File.WriteAllText(invariant, ScanIgnorePolicy.RenderInvariantContent());
+            var client = new RecordingStoreClient(StoreOperation.Update);
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = canonicalRoot,
+                    StoreRoot = Path.Combine(root, "store"),
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => new StoreWorkspaceState(1, "l1"),
+                () => "request-update-ignore");
+
+            coordinator.Update(Path.Combine(canonicalRoot, "src", "a.cs"));
+
+            StoreUpdateRequest request = Assert.IsType<StoreUpdateRequest>(client.SingleRequest);
+            Assert.Equal([invariant], request.Scan.IgnoreFiles);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void TypedStoreFailureDoesNotMasqueradeAsACompletedExtractReport()
     {
         var client = new RecordingStoreClient(
