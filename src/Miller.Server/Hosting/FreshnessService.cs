@@ -204,7 +204,7 @@ public sealed class FreshnessService : BackgroundService
         string? storeIdentity = probe.StoreInstanceId is { } instanceId
             ? string.Join('\0', instanceId, probe.ViewId)
             : null;
-        if (storeEnabled && !string.Equals(storeIdentity, _lastObservedStoreIdentity, StringComparison.Ordinal))
+        if (!storeEnabled || !string.Equals(storeIdentity, _lastObservedStoreIdentity, StringComparison.Ordinal))
         {
             using WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
                 dbPath,
