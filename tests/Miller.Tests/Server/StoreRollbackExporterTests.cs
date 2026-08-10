@@ -303,6 +303,54 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.True(File.Exists(staged));
     }
 
+    [Fact]
+    public void PreviousMarkerWithoutViewIdentityFailsClosed()
+    {
+        string workspace = Path.Combine(_root, "previous-marker-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        string storeRoot = Path.Combine(_root, "store");
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                storeRoot,
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string staged = FullRebuildPromotion.RebuildDbPathFor(legacy);
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported-previous-marker"));
+        File.Copy(exported, staged);
+        string digest;
+        using (FileStream stream = File.OpenRead(staged))
+            digest = Convert.ToHexStringLower(SHA256.HashData(stream));
+        File.WriteAllLines(
+            Path.Combine(miller, "store-rollback.pending"),
+            [
+                "2",
+                "ready",
+                "11111111-1111-1111-1111-111111111111",
+                Encode(storeRoot),
+                Encode("view-a"),
+                Encode(canonicalRoot),
+                Encode(legacy),
+                Encode(staged),
+                digest,
+            ]);
+
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            workspace,
+            legacy,
+            new UnexpectedStoreClient());
+
+        Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.Contains("view-identity", result.Warning, StringComparison.Ordinal);
+        Assert.NotNull(StoreWorkspacePointer.Read(workspace));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

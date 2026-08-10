@@ -93,6 +93,29 @@ public sealed class StoreSidecarStampTests : IDisposable
     }
 
     [Fact]
+    public void UnknownSidecarKindIsTreatedAsAnUnstampedArtifact()
+    {
+        Directory.CreateDirectory(_root);
+        string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
+        Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            connection.Open();
+        StoreSidecarCatalog.Stamp(
+            databasePath,
+            StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, Snapshot("manifest-a", sequence: 4)));
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_sidecar_stamp SET kind='future';";
+            command.ExecuteNonQuery();
+        }
+
+        Assert.Null(StoreSidecarCatalog.TryRead(databasePath));
+    }
+
+    [Fact]
     public void StoreStatusFactsReportMissingSidecarsAgainstThePinnedCursor()
     {
         Directory.CreateDirectory(_root);

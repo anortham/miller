@@ -1,6 +1,6 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.6 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+**Status: AMENDED v4.7 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
 The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, v4.4, and v4.5 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
@@ -74,6 +74,17 @@ These refinements are normative for the v1.18.0 release candidate.
 | A23 — store freshness cost | Store freshness polling uses a bounded store-log probe instead of rebuilding the temporary compatibility projection on every tick. Exact resolution-base hashes are cached only by canonical path, byte length, modification stamp, and recorded digest; a full read session still validates and attaches the base. | Implemented and verified in freshness/read-session tests |
 | A24 — process wait separation | `MILLER_STORE_REQUEST_TIMEOUT` is scoped to import/resolve producer requests. Miller's hard process cap remains the configured/default cap unless the long-operation request explicitly raises it; update/delete retain five minutes. | Implemented and verified in wait-policy/coordinator tests |
 | A25 — deterministic capped progress | Producer progress samples include nested spool/scratch/base entries up to the cap and summarize capped observations deterministically. Sampling never advances from wall-clock reads, so a wedged producer can still reach the stall verdict before the hard backstop. | Implemented and verified in local progress-stamp tests |
+
+## 0. v4.7 post-freeze amendment register
+
+The final cross-model pass found three compatibility and read-surface details that needed to be made
+explicit. These refinements are normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A26 — rollback marker compatibility | A schema-1 or schema-2 pending rollback marker lacks the v4.6 store-view identity and may not promote an artifact, even when its legacy file is structurally valid. Recovery keeps the pointer and returns source-rebuild-required; current schema-3 markers written by production carry the view identity. | Implemented and verified in rollback recovery tests |
+| A27 — session-bound onboarding | MCP and CLI onboarding resolve hot targets through the same validated workspace read-session seam as the serving facts. Store mode never falls back to `symbols.db`; a missing or unreadable store returns unresolved target rows. Legacy mode continues to resolve the standalone artifact. | Implemented and verified in onboarding tests |
+| A28 — malformed sidecar metadata | An unknown store-sidecar kind is treated as an absent stamp. Readers report the sidecar as missing/stale and convergence may rebuild it; malformed metadata must not crash the workspace read surface. | Implemented and verified in sidecar stamp tests |
 
 ---
 

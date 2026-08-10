@@ -479,11 +479,13 @@ public sealed class WorkspaceTool
     private WorkspaceOperationResult RenderCurrentOnboarding(bool json)
     {
         WorkspaceFacts facts = AssembleFacts();
-        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.CreateFromWorkspace(
             facts,
             _ledger.DbPath,
             facts.WorkspaceId,
-            facts.DbPath);
+            facts.Root,
+            facts.DbPath,
+            storeEnabled: facts.Store is not null);
         return OnboardingResult(onboarding, json);
     }
 
@@ -674,11 +676,13 @@ public sealed class WorkspaceTool
             _vectors,
             CurrentSemanticBrokerFacts(),
             _governor);
-        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.Create(
+        WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingAssembler.CreateFromWorkspace(
             statusFacts,
             _ledger.DbPath,
             row.WorkspaceId,
-            row.IndexDbPath);
+            row.CanonicalRoot,
+            row.IndexDbPath,
+            storeEnabled: statusFacts.Store is not null);
         return OnboardingResult(onboarding, json);
     }
 

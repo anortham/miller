@@ -3177,7 +3177,13 @@ public static class CliDispatch
                 sidecar,
                 contentSidecar);
             outw.WriteLine(WorkspaceRender.Onboarding(
-                WorkspaceOnboardingAssembler.Create(facts, ctx.TelemetryDbPath, row.WorkspaceId, row.IndexDbPath),
+                WorkspaceOnboardingAssembler.CreateFromWorkspace(
+                    facts,
+                    ctx.TelemetryDbPath,
+                    row.WorkspaceId,
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    storeEnabled: facts.Store is not null),
                 json));
             return 0;
         }
@@ -3192,11 +3198,13 @@ public static class CliDispatch
                 sidecar,
                 contentSidecar);
             outw.WriteLine(WorkspaceRender.Onboarding(
-                WorkspaceOnboardingAssembler.Create(
+                WorkspaceOnboardingAssembler.CreateFromWorkspace(
                     facts,
                     ctx.TelemetryDbPath,
                     currentRow.WorkspaceId,
-                    currentRow.IndexDbPath),
+                    currentRow.CanonicalRoot,
+                    currentRow.IndexDbPath,
+                    storeEnabled: facts.Store is not null),
                 json));
             return 0;
         }
@@ -3215,7 +3223,13 @@ public static class CliDispatch
             sidecar,
             contentSidecar);
         outw.WriteLine(WorkspaceRender.Onboarding(
-            WorkspaceOnboardingAssembler.Create(localFacts, ctx.TelemetryDbPath, ctx.WorkspaceId, ctx.ExtractDbPath),
+            WorkspaceOnboardingAssembler.CreateFromWorkspace(
+                localFacts,
+                ctx.TelemetryDbPath,
+                ctx.WorkspaceId,
+                localFacts.Root,
+                ctx.ExtractDbPath,
+                storeEnabled: localFacts.Store is not null),
             json));
         return 0;
     }

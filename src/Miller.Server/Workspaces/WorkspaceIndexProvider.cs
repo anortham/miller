@@ -504,19 +504,27 @@ public sealed class WorkspaceIndexProvider
         WorkspaceRefreshResult? refreshResult = state.RefreshResult;
 
         WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
-        bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-        return new WorkspaceArtifactContext(
-            readSession,
-            row.WorkspaceId,
-            row.CanonicalRoot,
-            ContextRevision(readSession.Snapshot, row.LastRevision ?? 0),
-            familyStore
-                ? null
-                : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
-            WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
-            WorkspaceFreshnessView.WarningTextFor(refreshResult),
-            row.DisplayId,
-            IndexLevel: readSession.Snapshot.IndexLevel);
+        try
+        {
+            bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+            return new WorkspaceArtifactContext(
+                readSession,
+                row.WorkspaceId,
+                row.CanonicalRoot,
+                ContextRevision(readSession.Snapshot, row.LastRevision ?? 0),
+                familyStore
+                    ? null
+                    : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
+                WorkspaceFreshnessView.FreshnessStatusFor(refreshResult, row),
+                WorkspaceFreshnessView.WarningTextFor(refreshResult),
+                row.DisplayId,
+                IndexLevel: readSession.Snapshot.IndexLevel);
+        }
+        catch
+        {
+            readSession.Dispose();
+            throw;
+        }
     }
 
     // WorkspaceContentSearchContext and WorkspaceTextContentSearchContext deliberately carry NO IndexLevel,

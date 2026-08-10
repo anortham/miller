@@ -205,7 +205,7 @@ public static class StoreSidecarCatalog
                 reader.GetString(11),
                 reader.GetString(12));
         }
-        catch (SqliteException)
+        catch (Exception ex) when (ex is SqliteException or InvalidDataException)
         {
             return null;
         }

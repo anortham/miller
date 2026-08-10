@@ -289,9 +289,16 @@ public static class StoreRollbackExporter
         if (pending is null || !pending.Matches(workspaceRoot, legacyDatabasePath, pointer))
             return null;
 
-        bool viewMatches = pending.IsLegacy ||
-            !pending.HasViewIdentity ||
-            CurrentStoreViewMatches(pointer, pending);
+        if (pending.IsLegacy || pending.IsPreviousSchema)
+        {
+            return new StoreRollbackExportResult(
+                false,
+                "The pending store rollback marker predates the view-identity binding; " +
+                "Miller will rebuild from source instead of promoting it.",
+                RequiresSourceRebuild: true);
+        }
+
+        bool viewMatches = !pending.HasViewIdentity || CurrentStoreViewMatches(pointer, pending);
         if (!viewMatches)
         {
             return new StoreRollbackExportResult(
@@ -462,7 +469,7 @@ public static class StoreRollbackExporter
                 return ReadMarkerIdentity(
                     lines[2], lines[3], lines[4], lines[5], legacyFamilyId,
                     PendingMarkerReady, null, null, length, ticks,
-                    null, null, null, isLegacy: true);
+                    null, null, null, schemaVersion: 1);
             }
 
             if ((lines.Length != 9 && lines.Length != 12) ||
@@ -495,7 +502,8 @@ public static class StoreRollbackExporter
             return ReadMarkerIdentity(
                 lines[3], lines[4], lines[5], lines[6], familyId,
                 lines[1], sourceArtifactPath, expectedSha256, null, null,
-                manifestGeneration, manifestHash, storeLogSequence, isLegacy: false);
+                manifestGeneration, manifestHash, storeLogSequence,
+                schemaVersion: lines[0] == PreviousPendingMarkerSchema ? 2 : 3);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
         {
@@ -517,7 +525,7 @@ public static class StoreRollbackExporter
         long? manifestGeneration,
         string? manifestHash,
         long? storeLogSequence,
-        bool isLegacy)
+        int schemaVersion)
     {
         string? storeRoot = Decode(storeRootEncoded);
         string? viewId = Decode(viewIdEncoded);
@@ -541,7 +549,7 @@ public static class StoreRollbackExporter
                 manifestGeneration,
                 manifestHash,
                 storeLogSequence,
-                isLegacy);
+                schemaVersion);
     }
 
     private static bool IsValidArtifact(string path, string? expectedSha256)
@@ -626,8 +634,12 @@ public static class StoreRollbackExporter
         long? ManifestGeneration,
         string? ManifestHash,
         long? StoreLogSequence,
-        bool IsLegacy)
+        int SchemaVersion)
     {
+        public bool IsLegacy => SchemaVersion == 1;
+
+        public bool IsPreviousSchema => SchemaVersion == 2;
+
         public bool HasViewIdentity =>
             ManifestGeneration is not null &&
             !string.IsNullOrWhiteSpace(ManifestHash) &&
