@@ -57,9 +57,6 @@ public sealed class ExtractWaitPolicy
 
     public static TimeSpan HardTimeoutFor(TimeSpan stallTimeout) => stallTimeout * HardCapMultiplier;
 
-    /// <summary>Creates a wait policy that keeps the absolute backstop but does not infer a hang from silence.</summary>
-    public static ExtractWaitPolicy HardCapOnly(TimeSpan hardTimeout) => new(hardTimeout, hardTimeout);
-
     /// <summary>
     /// The absolute cap for the DEFAULT production stall window, honoring
     /// <see cref="HardCapEnvironmentVariable"/>. An override at or below <paramref name="stallTimeout"/> is

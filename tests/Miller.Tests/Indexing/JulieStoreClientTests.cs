@@ -18,7 +18,7 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
-    public void FromArtifactStoreWaitUsesTheHardCapAsItsOnlyProcessBound()
+    public void FromArtifactStoreWaitUsesStoreProgressForStallDetection()
     {
         var request = new StoreImportRequest(
             StoreRoot: "/family",
@@ -35,8 +35,10 @@ public sealed class JulieStoreClientTests
             TimeSpan.FromSeconds(1),
             TimeSpan.FromSeconds(5));
 
-        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromSeconds(2), 0));
-        Assert.Equal(ExtractWaitVerdict.HardCapExceeded, policy.Observe(TimeSpan.FromSeconds(5), 0));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.Zero, 0));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromMilliseconds(750), 1));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromMilliseconds(1500), 2));
+        Assert.Equal(ExtractWaitVerdict.Stalled, policy.Observe(TimeSpan.FromMilliseconds(2500), 2));
     }
 
     [Fact]

@@ -173,9 +173,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
         TimeSpan hardTimeout)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return request is StoreImportRequest { FromArtifact: not null }
-            ? ExtractWaitPolicy.HardCapOnly(hardTimeout)
-            : new ExtractWaitPolicy(stallTimeout, hardTimeout);
+        return new ExtractWaitPolicy(stallTimeout, hardTimeout);
     }
 
     internal static long StoreProgressStamp(string storeRoot, string? progressPath, long outputActivity)
