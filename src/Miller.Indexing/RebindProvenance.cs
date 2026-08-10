@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -45,6 +46,12 @@ public static class RebindProvenanceReader
         {
             return null;
         }
+    }
+
+    public static RebindProvenanceMetadata? ReadSession(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(Read);
     }
 
     private static RebindProvenanceMetadata? Read(SqliteConnection connection)

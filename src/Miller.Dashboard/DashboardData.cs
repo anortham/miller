@@ -951,15 +951,24 @@ public static class DashboardData
         DashboardTelemetrySummary telemetry = ReadTelemetrySummary(telemetryDbPath, selectedWorkspaceId, registryDbPath);
         DashboardWorkspaceRow? selectedWorkspace = workspaces.FirstOrDefault(
             row => string.Equals(row.WorkspaceId, selectedWorkspaceId, StringComparison.Ordinal));
-        DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
-            ? null
-            : WithRebindProvenance(DashboardIndexFactsCache.Read(selectedWorkspace), workspaces);
         bool storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
-        WorkspaceReadHandle? storeSession = selectedWorkspace is null || !storeEnabled
-            ? null
-            : TryOpenStoreReadSession(selectedWorkspace);
+        WorkspaceReadHandle? storeSession = null;
+        string? storeSessionError = null;
+        if (selectedWorkspace is not null && storeEnabled)
+            storeSession = TryOpenStoreReadSession(selectedWorkspace, out storeSessionError);
+
         try
         {
+            DashboardWorkspaceFacts? selectedFacts = selectedWorkspace is null
+                ? null
+                : WithRebindProvenance(
+                    storeEnabled
+                        ? storeSession is null
+                            ? DashboardIndexFactsReader.ReadStoreUnavailable(selectedWorkspace, storeSessionError)
+                            : DashboardIndexFactsReader.Read(selectedWorkspace, storeSession)
+                        : DashboardIndexFactsCache.Read(selectedWorkspace),
+                    workspaces,
+                    storeEnabled ? storeSession : null);
             IReadOnlyList<DashboardWorkspaceFacts> workspaceFacts = selectedFacts is null
                 ? Array.Empty<DashboardWorkspaceFacts>()
                 : new[] { selectedFacts };
@@ -1008,6 +1017,8 @@ public static class DashboardData
         {
             if (storeEnabled && storeSession is null)
                 return UnavailableLocalMetrics(workspace, dashboardFacts.Message);
+            if (storeEnabled && IndexLevels.IsSymbolsLevel(storeSession!.Snapshot.IndexLevel))
+                return UnavailableLocalMetrics(workspace, "local metrics require a full-level family-store view");
 
             IReadOnlyList<ComplexityHotspot> hotspots = storeEnabled
                 ? ComplexityRankingReader.Read(
@@ -1260,9 +1271,13 @@ public static class DashboardData
     /// </summary>
     private static DashboardWorkspaceFacts WithRebindProvenance(
         DashboardWorkspaceFacts facts,
-        IReadOnlyList<DashboardWorkspaceRow> workspaces)
+        IReadOnlyList<DashboardWorkspaceRow> workspaces,
+        IWorkspaceReadSession? storeSession = null)
     {
-        if (RebindProvenanceReader.Read(facts.IndexDbPath) is not { } provenance)
+        RebindProvenanceMetadata? provenance = facts.Store is not null
+            ? storeSession is null ? null : RebindProvenanceReader.ReadSession(storeSession)
+            : RebindProvenanceReader.Read(facts.IndexDbPath);
+        if (provenance is null)
             return facts;
 
         return facts with
@@ -1282,9 +1297,13 @@ public static class DashboardData
     {
         long expectedRevision = dashboardFacts.IndexRevision ?? dashboardFacts.LastRevision ?? 0L;
         SearchSidecarFacts searchSidecar = dashboardFacts.SearchFacts
-            ?? SymbolSearchSidecar.FromEnvironment().Inspect(workspace.IndexDbPath, expectedRevision);
+            ?? (dashboardFacts.Store is null
+                ? SymbolSearchSidecar.FromEnvironment().Inspect(workspace.IndexDbPath, expectedRevision)
+                : UnavailableSearchSidecar(dashboardFacts.Store.Error ?? dashboardFacts.Message, expectedRevision));
         ContentCorpusFacts contentCorpus = dashboardFacts.ContentFacts
-            ?? new ContentCorpusSidecar().Inspect(workspace.IndexDbPath, expectedRevision);
+            ?? (dashboardFacts.Store is null
+                ? new ContentCorpusSidecar().Inspect(workspace.IndexDbPath, expectedRevision)
+                : UnavailableContentSidecar(dashboardFacts.Store.Error ?? dashboardFacts.Message));
         string freshnessStatus = dashboardFacts.Status switch
         {
             "missing" => "missing_index",
@@ -1407,8 +1426,32 @@ public static class DashboardData
             Array.Empty<DashboardMetricCloneGroup>(),
             Error: error ?? "the family-store read session is unavailable");
 
-    private static WorkspaceReadHandle? TryOpenStoreReadSession(DashboardWorkspaceRow workspace)
+    private static SearchSidecarFacts UnavailableSearchSidecar(string? error, long expectedRevision) =>
+        new(
+            "unavailable",
+            null,
+            null,
+            expectedRevision,
+            null,
+            error ?? "the family-store search sidecar facts are unavailable");
+
+    private static ContentCorpusFacts UnavailableContentSidecar(string? error) =>
+        new(
+            "unavailable",
+            null,
+            null,
+            null,
+            0,
+            0,
+            0,
+            0,
+            Error: error ?? "the family-store content sidecar facts are unavailable");
+
+    private static WorkspaceReadHandle? TryOpenStoreReadSession(
+        DashboardWorkspaceRow workspace,
+        out string? error)
     {
+        error = null;
         try
         {
             return WorkspaceReadSessionFactory.Open(
@@ -1421,6 +1464,7 @@ public static class DashboardData
             ex is IOException or SqliteException or InvalidOperationException or UnauthorizedAccessException
                 or ArgumentException or NotSupportedException)
         {
+            error = ex.Message;
             return null;
         }
     }

@@ -848,6 +848,49 @@ public sealed class DashboardRegistryReadTests : IDisposable
     }
 
     [Fact]
+    public void BuildWorkspaceFacts_StoreWithoutCapturedSidecarsDoesNotInspectLegacyPaths()
+    {
+        var workspace = new DashboardWorkspaceRow(
+            "ws-store-unavailable-sidecars",
+            "store-unavailable-abcd1234",
+            "/repo/store-unavailable",
+            "/repo/store-unavailable/.miller/symbols.db",
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+        var facts = new DashboardWorkspaceFacts(
+            workspace.WorkspaceId,
+            workspace.DisplayId,
+            workspace.CanonicalRoot,
+            workspace.IndexDbPath,
+            "unreadable",
+            "the family-store read session is unavailable",
+            0,
+            0,
+            0,
+            0,
+            null,
+            null,
+            "unknown",
+            [],
+            [],
+            "unknown",
+            Store: StoreWorkspaceFacts.Unavailable(
+                "failed",
+                "pointer_unreadable",
+                "the family-store read session is unavailable"));
+
+        WorkspaceFacts actual = DashboardData.BuildWorkspaceFacts(workspace, facts);
+
+        Assert.NotNull(actual.SearchSidecar);
+        Assert.NotNull(actual.ContentCorpus);
+        Assert.Equal("unavailable", actual.SearchSidecar!.State);
+        Assert.Equal("unavailable", actual.ContentCorpus!.State);
+    }
+
+    [Fact]
     public void ReadSnapshot_UnreadableWorkspaceDbReturnsFactsErrorNotCrash()
     {
         string corruptDb = Path.Combine(_dir, "corrupt-symbols.db");

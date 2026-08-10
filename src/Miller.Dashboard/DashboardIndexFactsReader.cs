@@ -133,6 +133,68 @@ public static class DashboardIndexFactsReader
                 workspace.CanonicalRoot,
                 workspace.WorkspaceId,
                 storeEnabled: true);
+            return ReadStoreOrEmpty(workspace, session);
+        }
+        catch (FamilyStoreReadException ex)
+        {
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null) with
+            {
+                ExtractorVersion = null,
+                Store = StoreWorkspaceFacts.Unavailable(ex),
+            };
+        }
+        catch (Exception ex) when (
+            ex is IOException or SqliteException or InvalidOperationException or UnauthorizedAccessException
+                or ArgumentException or NotSupportedException)
+        {
+            return ReadStoreUnavailable(workspace, ex.Message);
+        }
+    }
+
+    internal static DashboardWorkspaceFacts Read(
+        DashboardWorkspaceRow workspace,
+        WorkspaceReadHandle session)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(session);
+        return ReadStoreOrEmpty(workspace, session);
+    }
+
+    internal static DashboardWorkspaceFacts ReadStoreUnavailable(
+        DashboardWorkspaceRow workspace,
+        string? message)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        string error = string.IsNullOrWhiteSpace(message)
+            ? "the family-store read session is unavailable"
+            : message;
+        return Empty(
+            workspace,
+            "unreadable",
+            error,
+            searchSidecarStatus: "unknown",
+            contentSidecarStatus: "unknown",
+            indexRevision: null,
+            artifactId: null) with
+        {
+            ExtractorVersion = null,
+            Store = StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", error),
+        };
+    }
+
+    private static DashboardWorkspaceFacts ReadStoreOrEmpty(
+        DashboardWorkspaceRow workspace,
+        WorkspaceReadHandle session)
+    {
+        try
+        {
             return ReadStore(workspace, session);
         }
         catch (FamilyStoreReadException ex)
@@ -146,6 +208,7 @@ public static class DashboardIndexFactsReader
                 indexRevision: null,
                 artifactId: null) with
             {
+                ExtractorVersion = null,
                 Store = StoreWorkspaceFacts.Unavailable(ex),
             };
         }
@@ -153,17 +216,7 @@ public static class DashboardIndexFactsReader
             ex is IOException or SqliteException or InvalidOperationException or UnauthorizedAccessException
                 or ArgumentException or NotSupportedException)
         {
-            return Empty(
-                workspace,
-                "unreadable",
-                ex.Message,
-                searchSidecarStatus: "unknown",
-                contentSidecarStatus: "unknown",
-                indexRevision: null,
-                artifactId: null) with
-            {
-                Store = StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", ex.Message),
-            };
+            return ReadStoreUnavailable(workspace, ex.Message);
         }
     }
 
