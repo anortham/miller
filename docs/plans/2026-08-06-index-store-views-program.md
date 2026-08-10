@@ -20,8 +20,9 @@ contract claims did not survive unamended; the third cycle is reserved as the Ph
 contract-freeze re-attack). **User-approved 2026-08-06**, with two same-day decisions: the codename is dropped
 (plain versioned-index-store naming) and the progressive levels program is **folded into this
 program** (see the levels section below). Ph3 implementation has landed and its A1-A6 cleanup is
-recorded in the current findings and amended v4.2 contract; each later phase still requires its
-own approval to begin. The
+recorded in the current findings and amended contract. On 2026-08-10 the user accepted the disclosed
+A7/A8 boundaries and approved the existing design as Miller's default in v1.18.0; this advances the
+adoption policy without changing the family/view/store architecture. The
 deferred v1.17.0 FTS5 sidecar-copy follow-up is **cancelled** in favor of this program — copy
 choreography retires wholesale when the store ships.
 
@@ -29,8 +30,9 @@ choreography retires wholesale when the store ships.
 [`2026-08-09-index-store-ph3-acceptance.md`](../findings/2026-08-09-index-store-ph3-acceptance.md)
 and the v4.2 amendment register. The cleanup is tracked in
 [`2026-08-09-index-store-ph3-cleanup-plan.md`](2026-08-09-index-store-ph3-cleanup-plan.md)
-and A1-A6 are evidenced there. A7 lock/freshness and A8 cursor-incremental sidecars remain open;
-Ph4 owns the dashboard family-store panel and Ph5 retains the physical-byte and default-on gates.
+and A1-A6 are evidenced there. A7 durable reader pins/lock ordering and A8 cursor-incremental sidecars
+remain explicit follow-up work, not v1.18.0 release blockers. Per-view vectors remain the shipped design;
+family-shared vectors require a separate visibility and cost proof.
 
 **Provenance:** user-driven storage rethink after v1.17.0. The multi-worktree program line
 (fleet-safety → rebind) was driven by the 2026-08-01 field report on multi-agent, multi-worktree

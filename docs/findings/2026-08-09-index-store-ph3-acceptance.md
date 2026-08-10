@@ -1,10 +1,10 @@
 # Index Store Ph3 Miller Acceptance
 
-Status: CONDITIONAL FOR PH4/PH5 ENTRY 2026-08-09. The earlier local acceptance overclaimed producer
-evidence and did not match several shipped Miller paths. A1-A6 are implemented and verified; A7
-lock/freshness and A8 cursor-incremental sidecars remain open under the v4.3 amendment. Store mode
-remains explicit with `MILLER_INDEX_STORE=1`; physical-byte aggregation and default-on adoption remain
-Ph5 decisions.
+Status: ACCEPTED FOR THE v1.18.0 DEFAULT-ON RELEASE 2026-08-10. A1-A6 are implemented and verified.
+A7 durable reader pins/lock ordering and A8 cursor-incremental sidecars remain disclosed follow-up work;
+the user explicitly accepted those boundaries and approved the existing family-store design as Miller's
+default. This decision does not claim A7/A8 are closed and does not redesign the family, view, coordinator,
+rollback, or sidecar contracts.
 
 ## What landed
 
@@ -48,14 +48,14 @@ The review gaps were converted into the v4.1-v4.3 amendments and verified as fol
   incremental convergence and a local reproducible cost gate remain Ph5 work.
 - A13: **implemented.** Interactive MCP resolution consumers now refuse while the family-store resolution
   state is not exact; the guard tests use a Full-level store read snapshot and assert the expected diagnostic.
-- A14: **disclosed.** Store vectors are keyed per view in Ph3; family-shared vectors require the Ph5
-  visibility/pre-filter and cost gate before default-on adoption.
+- A14: **disclosed.** Store vectors are keyed per view in v1.18; family-shared vectors require their own
+  visibility/pre-filter design and cost gate before adoption.
 
 The earlier process-count, scale-duration, and dogfood claims remain historical notes; all elapsed
 times below are local report-only observations, not acceptance ceilings or CI performance gates. The
 commands below are the cleanup evidence captured against the 2.31.1 producer. The final Miller release pin is
-subsequently advanced to 2.31.2; the new pin and downloaded-package verification are recorded in
-`docs/findings/2026-08-09-julie-extract-2.31.2-adoption.md`.
+subsequently advanced to 2.31.3; its concurrent-writer hardening and downloaded-package verification are
+recorded in `docs/findings/2026-08-10-julie-extract-2.31.3-adoption.md`.
 
 Final branch evidence:
 
@@ -74,6 +74,14 @@ Final branch evidence:
   remains included in the full 133-test Scale pass against the restored producer.
 - `scripts/sync-agents.sh`, `cmp -s CLAUDE.md AGENTS.md`, and `git diff --check` passed.
 
+v1.18.0 default-on release-candidate evidence against published `julie-extract` 2.31.3:
+
+- Release build: zero warnings and zero errors.
+- Fast suite: 6,324 passed, four platform/runtime skips, zero failed.
+- Scale suite: 135 passed, five optional-runtime skips, zero failed.
+- Plugin and site contracts: 49/49 and 1/1 passed.
+- NuGet audit found no vulnerable packages; the secrets-like value scan found no credentials.
+
 ## Compatibility and safety position
 
 - The existing nine MCP tools and public read commands are unchanged. Store provenance is additive.
@@ -82,15 +90,15 @@ Final branch evidence:
   coordinator.
 - Dashboard store facts bypass the legacy artifact timestamp cache, so current-generation changes cannot be
   hidden behind an unchanged legacy file.
-- The explicit off-switch now forces source reconciliation for malformed pointers in bootstrap and
-  cross-workspace refresh; valid-but-unopenable stores remain not-ready. Default-on adoption remains
-  a Ph5 scale decision.
+- The explicit off-switch forces source reconciliation for malformed pointers in bootstrap and
+  cross-workspace refresh; valid-but-unopenable stores remain not-ready. Unset or blank
+  `MILLER_INDEX_STORE` uses the family store by default.
 - Security scope: no new network, credential, authorization, executable-download, or public mutation surface;
   no dependency change. Existing path containment and store compatibility validation remain the authority.
 
 ## Release dependency
 
-Resolved by the stable `julie-extract` 2.31.1 release used for the cleanup gates. The final Miller release pin
-is 2.31.2; its four published archive digests and restored binary are verified in the adoption evidence. The
-producer release line contains the canonical imported-resolution-base identity fix required by migration reuse,
-so the migration/restart acceptance claim matches the shipped producer contract.
+Resolved by stable `julie-extract` 2.31.3. Its four published archive digests, tag provenance, and restored
+binary are verified in the adoption evidence. The producer release line contains the canonical
+imported-resolution-base identity required by migration reuse plus concurrent writer and maintenance fencing,
+so the migration/restart and multi-worktree claims match the shipped producer contract.
