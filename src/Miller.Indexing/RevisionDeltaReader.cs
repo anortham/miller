@@ -147,27 +147,27 @@ public static class RevisionDeltaReader
         long fromRevision,
         string? fromArtifactId)
     {
-        long current = ScalarLong(connection, "SELECT COALESCE(MAX(sequence),0) FROM store_log;");
         string? artifactId = StoreMetadata(connection, "family_id");
+        if (string.IsNullOrWhiteSpace(artifactId))
+            return Unavailable(fromRevision, toRevision: 0, artifactId, "no_artifact_id");
+
+        using SqliteCommand session = connection.CreateCommand();
+        session.CommandText = "SELECT view_id,generation FROM temp._miller_session;";
+        using SqliteDataReader sessionReader = session.ExecuteReader();
+        if (!sessionReader.Read())
+            return Unavailable(fromRevision, toRevision: 0, artifactId, "no_store_snapshot");
+        string viewId = sessionReader.GetString(0);
+        long currentGeneration = sessionReader.GetInt64(1);
+        sessionReader.Close();
+        long current = StoreLogSequence(connection, viewId, currentGeneration);
         if (fromRevision < 0)
             return Unavailable(fromRevision, current, artifactId, "invalid_from_revision");
-        if (string.IsNullOrWhiteSpace(artifactId))
-            return Unavailable(fromRevision, current, artifactId, "no_artifact_id");
         if (string.IsNullOrWhiteSpace(fromArtifactId))
             return Unavailable(fromRevision, current, artifactId, "missing_from_artifact_id");
         if (!string.Equals(fromArtifactId, artifactId, StringComparison.Ordinal))
             return Unavailable(fromRevision, current, artifactId, "artifact_changed");
         if (fromRevision > current)
             return Unavailable(fromRevision, current, artifactId, "from_after_current");
-
-        using SqliteCommand session = connection.CreateCommand();
-        session.CommandText = "SELECT view_id,generation FROM temp._miller_session;";
-        using SqliteDataReader sessionReader = session.ExecuteReader();
-        if (!sessionReader.Read())
-            return Unavailable(fromRevision, current, artifactId, "no_store_snapshot");
-        string viewId = sessionReader.GetString(0);
-        long currentGeneration = sessionReader.GetInt64(1);
-        sessionReader.Close();
 
         using SqliteCommand baseline = connection.CreateCommand();
         baseline.CommandText = """
@@ -343,6 +343,27 @@ public static class RevisionDeltaReader
         cmd.CommandText = sql;
         object? value = cmd.ExecuteScalar();
         return value is null or DBNull ? 0L : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static long StoreLogSequence(SqliteConnection connection, string viewId, long generation)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COALESCE(MAX(log.sequence),0)
+            FROM store_log AS log
+            WHERE log.view_id=$view_id
+               OR (log.view_id IS NULL AND log.version_id IS NULL)
+               OR EXISTS (
+                    SELECT 1
+                    FROM manifest_entries AS entry
+                    WHERE entry.view_id=$view_id
+                      AND entry.generation=$generation
+                      AND entry.version_id=log.version_id)
+            """;
+        command.Parameters.AddWithValue("$view_id", viewId);
+        command.Parameters.AddWithValue("$generation", generation);
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
     }
 
     private static long? ScalarNullableLong(SqliteConnection conn, string sql)

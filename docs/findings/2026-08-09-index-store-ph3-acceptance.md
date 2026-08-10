@@ -2,7 +2,7 @@
 
 Status: CONDITIONAL FOR PH4/PH5 ENTRY 2026-08-09. The earlier local acceptance overclaimed producer
 evidence and did not match several shipped Miller paths. A1-A6 are implemented and verified; A7
-lock/freshness and A8 cursor-incremental sidecars remain open under the v4.2 amendment. Store mode
+lock/freshness and A8 cursor-incremental sidecars remain open under the v4.3 amendment. Store mode
 remains explicit with `MILLER_INDEX_STORE=1`; physical-byte aggregation and default-on adoption remain
 Ph5 decisions.
 
@@ -15,6 +15,10 @@ Ph5 decisions.
 - Search, content, vectors, usage, history, and structural-fact consumers use view-scoped compatibility
   projections. Store sidecars publish checked completeness stamps; the current search/content store path
   rebuilds the complete current view when stale and does not yet have cursor-incremental convergence.
+- Full-level store reads with inexact identifier resolution refuse usage-dependent `trace`, `context` usage,
+  `inspect` overview/full, `impact`, rename, and reference-export results until the resolution layer is exact.
+- Store vector sidecars are per-view in this Ph3 implementation. Family-shared vectors remain a marked Ph5
+  design target rather than an undocumented contract claim.
 - Turning store mode off exports the active view before legacy serving. Export failure leaves the workspace
   not ready instead of serving stale bytes.
 - Status, health, and dashboard surfaces add family, view, generation, manifest, level, resolution,
@@ -22,7 +26,7 @@ Ph5 decisions.
 
 ## Cleanup evidence
 
-The review gaps were converted into the v4.1 amendments and verified as follows:
+The review gaps were converted into the v4.1-v4.3 amendments and verified as follows:
 
 - A1/A2: producer GC steps incremental vacuum within its configured budget, reports store and
   producer-owned physical bytes before/after the final truncate checkpoint, persists physical
@@ -38,10 +42,14 @@ The review gaps were converted into the v4.1 amendments and verified as follows:
   upgrade instead of consulting the legacy artifact.
 - A7: **open.** The family-store read session records store instance, view, generation, manifest
   generation, per-level state, resolution state, manifest hash, and store-log sequence, but it does
-  not create the durable `coord.db` reader pin/heartbeat/expiry/release required by v4.2. Live Miller
+  not create the durable `coord.db` reader pin/heartbeat/expiry/release required by v4.3. Live Miller
   acquisition is `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`, not the frozen triple.
 - A8: **open.** Store search/content sidecars rebuild the complete current view when stale; cursor-
   incremental convergence and a local reproducible cost gate remain Ph5 work.
+- A13: **implemented.** Interactive MCP resolution consumers now refuse while the family-store resolution
+  state is not exact; the guard tests use a Full-level store read snapshot and assert the expected diagnostic.
+- A14: **disclosed.** Store vectors are keyed per view in Ph3; family-shared vectors require the Ph5
+  visibility/pre-filter and cost gate before default-on adoption.
 
 The earlier process-count, scale-duration, and dogfood claims remain historical notes; all elapsed
 times below are local report-only observations, not acceptance ceilings or CI performance gates. The

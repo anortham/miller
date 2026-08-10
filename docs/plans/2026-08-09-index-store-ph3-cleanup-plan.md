@@ -1,6 +1,6 @@
 # Index Store Ph3 Cleanup — Ph4/Ph5 Entry Plan
 
-**Status:** A1-A6 complete 2026-08-09; A7 lock/freshness and A8 cursor-incremental sidecars remain
+**Status:** A1-A6 and A13 complete 2026-08-10; A7 lock/freshness and A8 cursor-incremental sidecars remain
 open. The remaining work is Ph4 dashboard delivery plus the Ph5 physical-byte, cursor-cost, and
 default-on gates. This plan closes the execution drift identified by the
 2026-08-09 Miller/Julie review before Ph4 work begins. Store mode remains explicit opt-in

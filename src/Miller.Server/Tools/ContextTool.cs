@@ -110,84 +110,102 @@ public sealed partial class ContextTool
             int candidatesExamined;
             string output;
             ReferenceMode parsedReferenceMode = ParseReferenceMode(reference_mode);
+            bool resolutionConverging = parsedReferenceMode == ReferenceMode.Usage
+                && IndexLevelGuard.ResolutionLayerConverging(context.ReadSession.Snapshot);
             bool rescueExcludeTests = parsedReferenceMode == ReferenceMode.Usage
                 ? exclude_tests
                 : SearchTool.ResolveExcludeTests(null, query, SearchToolMode.Symbol);
-            IReadOnlyList<ContextSemanticSeed> semanticSeeds = LoadSemanticSeeds(
-                context,
-                query,
-                parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
-            IReadOnlyList<ContextSourceSeed> sourceSeeds = LoadSourceRescueSeeds(
-                context.Index,
-                TryResolveTextContentIndex(workspace_id, ensureFresh),
-                query,
-                rescueExcludeTests);
-            switch (parsedReferenceMode)
+            IReadOnlyList<ContextSemanticSeed> semanticSeeds = [];
+            IReadOnlyList<ContextSourceSeed> sourceSeeds = [];
+            if (!resolutionConverging)
             {
-                case ReferenceMode.Off:
-                    output = RunActionable(
-                        context.Index,
-                        context.Index.Graph,
-                        context.Resolver,
-                        query,
-                        bundleTokenBudget,
-                        max_hops,
-                        entry_symbols,
-                        edited_files,
-                        failing_test,
-                        stack_trace,
-                        semanticSeeds,
-                        sourceSeeds,
-                        readBody: symbol => ReadPivotBody(
-                            context.ReadSession,
-                            context.WorkspaceRoot,
-                            symbol),
-                        readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
-                            context.ReadSession,
-                            symbolId,
-                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                        json,
-                        out selectedCount, out candidatesExamined);
-                    break;
-                case ReferenceMode.Usage:
-                    output = RunReferenceAwareActionable(
-                        context.Index,
-                        context.Index.Graph,
-                        context.Resolver,
-                        query,
-                        bundleTokenBudget,
-                        max_hops,
-                        entry_symbols,
-                        edited_files,
-                        failing_test,
-                        stack_trace,
-                        semanticSeeds,
-                        sourceSeeds,
-                        readBody: symbol => ReadPivotBody(
-                            context.ReadSession,
-                            context.WorkspaceRoot,
-                            symbol),
-                        reference_depth, exclude_tests, json,
-                        readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
-                            context.ReadSession,
-                            symbol.SymbolId,
-                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                        readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
-                            context.ReadSession,
-                            symbol.SymbolId,
-                            new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
-                        readContentChunks: (symbols, excludeTests) => ReadContentChunks(
-                            context.ReadSession,
-                            symbols,
-                            excludeTests),
-                        out selectedCount, out candidatesExamined);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(reference_mode));
+                semanticSeeds = LoadSemanticSeeds(
+                    context,
+                    query,
+                    parsedReferenceMode == ReferenceMode.Usage && exclude_tests);
+                sourceSeeds = LoadSourceRescueSeeds(
+                    context.Index,
+                    TryResolveTextContentIndex(workspace_id, ensureFresh),
+                    query,
+                    rescueExcludeTests);
+                switch (parsedReferenceMode)
+                {
+                    case ReferenceMode.Off:
+                        output = RunActionable(
+                            context.Index,
+                            context.Index.Graph,
+                            context.Resolver,
+                            query,
+                            bundleTokenBudget,
+                            max_hops,
+                            entry_symbols,
+                            edited_files,
+                            failing_test,
+                            stack_trace,
+                            semanticSeeds,
+                            sourceSeeds,
+                            readBody: symbol => ReadPivotBody(
+                                context.ReadSession,
+                                context.WorkspaceRoot,
+                                symbol),
+                            readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
+                                context.ReadSession,
+                                symbolId,
+                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
+                            json,
+                            out selectedCount, out candidatesExamined);
+                        break;
+                    case ReferenceMode.Usage:
+                        output = RunReferenceAwareActionable(
+                            context.Index,
+                            context.Index.Graph,
+                            context.Resolver,
+                            query,
+                            bundleTokenBudget,
+                            max_hops,
+                            entry_symbols,
+                            edited_files,
+                            failing_test,
+                            stack_trace,
+                            semanticSeeds,
+                            sourceSeeds,
+                            readBody: symbol => ReadPivotBody(
+                                context.ReadSession,
+                                context.WorkspaceRoot,
+                                symbol),
+                            reference_depth, exclude_tests, json,
+                            readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
+                                context.ReadSession,
+                                symbol.SymbolId,
+                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
+                            readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
+                                context.ReadSession,
+                                symbol.SymbolId,
+                                new ReferenceEvidenceBounds(ReferenceRowsPerSymbol, ReferenceRowsPerSymbol)),
+                            readContentChunks: (symbols, excludeTests) => ReadContentChunks(
+                                context.ReadSession,
+                                symbols,
+                                excludeTests),
+                            out selectedCount, out candidatesExamined);
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(reference_mode));
+                }
+            }
+            else
+            {
+                output = string.Empty;
+                selectedCount = 0;
+                candidatesExamined = 0;
             }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic = null;
-            if (selectedCount == 0)
+            if (resolutionConverging)
+            {
+                IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
+                diagnostic = IndexLevelGuard.ResolutionConverging();
+            }
+            else if (selectedCount == 0)
             {
                 diagnostic = EmptyDiagnostic(
                     query,

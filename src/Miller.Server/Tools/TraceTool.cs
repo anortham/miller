@@ -134,34 +134,53 @@ public sealed class TraceTool
                     "invalid_reference_kind",
                     kindError!));
             }
-            string output = normalizedMode == ModePath
-                ? Run(
-                    context.Index,
-                    context.Resolver,
-                    target,
-                    scope,
-                    mode,
-                    to,
-                    depth,
-                    limit,
-                    full,
-                    json,
-                    path_kind,
-                    out int emitted,
-                    out int nodesVisited)
-                : Run(context.Index, context.Resolver,
-                    target, scope, mode, to, depth, limit, full,
-                    json, reference_kind, include_definition,
-                    (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
-                    context.WorkspaceId ?? "current",
-                    normalizedMode == ModeRefs
-                        ? ReferenceEvidenceReader.ReadSnapshot(context.ReadSession)
-                        : null,
-                    continuation,
-                    out emitted, out nodesVisited);
+            bool resolutionConverging =
+                IndexLevelGuard.ResolutionLayerConverging(context.ReadSession.Snapshot);
+            string output;
+            int emitted;
+            int nodesVisited;
+            if (resolutionConverging)
+            {
+                output = string.Empty;
+                emitted = 0;
+                nodesVisited = 0;
+            }
+            else
+            {
+                output = normalizedMode == ModePath
+                    ? Run(
+                        context.Index,
+                        context.Resolver,
+                        target,
+                        scope,
+                        mode,
+                        to,
+                        depth,
+                        limit,
+                        full,
+                        json,
+                        path_kind,
+                        out emitted,
+                        out nodesVisited)
+                    : Run(context.Index, context.Resolver,
+                        target, scope, mode, to, depth, limit, full,
+                        json, reference_kind, include_definition,
+                        (symbol, query) => ReferenceEvidenceReader.Read(context.ReadSession, symbol.SymbolId, query),
+                        context.WorkspaceId ?? "current",
+                        normalizedMode == ModeRefs
+                            ? ReferenceEvidenceReader.ReadSnapshot(context.ReadSession)
+                            : null,
+                        continuation,
+                        out emitted, out nodesVisited);
+            }
             output = ReadToolWorkspaceRouting.PrefixCompact(output, compactBanner);
             ToolDiagnostic? diagnostic;
-            if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
+            if (resolutionConverging)
+            {
+                IndexLevelGuard.MarkDegraded(telemetry, "resolution_converging");
+                diagnostic = IndexLevelGuard.ResolutionConverging();
+            }
+            else if (IndexLevelGuard.ReferenceLayerConverging(context.Index))
             {
                 // The converging explanation beats the generic empty diagnostic here: an empty (or thin) trace
                 // against a symbols-level artifact is expected, not evidence about the code.

@@ -125,6 +125,21 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void RevisionDeltaReaderUsesTheServingViewStoreCursor()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        AppendStoreLog(fixture, 3, "view-b", versionId: null);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            fromRevision: 1,
+            fromArtifactId: fixture.Binding.FamilyId.ToString("D"));
+
+        Assert.Equal(2, delta.ToRevision);
+    }
+
+    [Fact]
     public void RevisionDeltaReaderRefusesAStoreSpanWithoutARecoverableBaselineManifest()
     {
         using StoreFixture fixture = StoreFixture.Create();

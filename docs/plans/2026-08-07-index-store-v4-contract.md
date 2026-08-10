@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.2 2026-08-09** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 and v4.2 amendments record
+**Status: AMENDED v4.3 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, and v4.3 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -37,6 +37,8 @@ are normative amendments, not retrospective acceptance claims.
 | A10 — resolution authority | A Full extraction level does not imply exact identifier resolution. Usage-dependent consumers refuse or warn while `resolution_state != exact`. | Implemented and verified in reference-consumer and store Scale coverage |
 | A11 — pruned delta history | A revision delta whose baseline manifest is unavailable returns an explicit unavailable/pruned-history result; it must not claim a complete deletion set from an invented baseline. | Implemented and verified in Miller regression tests |
 | A12 — store request liveness | `store import` and `store resolve` use a one-hour default request window, configurable with `MILLER_STORE_REQUEST_TIMEOUT`; shorter update/delete operations retain the five-minute default. | Implemented and verified in coordinator tests |
+| A13 — resolution consumer coverage | Full-level store reads must refuse usage-dependent results while `resolution_state != exact` across trace, context usage, inspect overview/full, impact, edit rename, and reference exports. | Implemented and verified in interactive MCP guard tests and the store read-context seam |
+| A14 — vector sidecar locality | Ph3 store mode keys `vectors.db` per view, matching the shipped sidecar catalog. Family-shared vectors remain a Ph5 design target and require a new visibility/pre-filter and cost gate before default-on adoption. | Implemented as the shipped Ph3 behavior; family-shared vectors are deferred and explicitly disclosed |
 
 ---
 
@@ -367,11 +369,12 @@ not interchangeable.
   finding and was never instrumented (recorded gap):** the early change includes the content-arm
   audit; if content ordering also uses corpus-dependent rank where a stored key exists, it
   changes under the same gate.
-- **vectors.db** — family-shared (retrieval §7 answered: pre-filter returns the exact dedicated
-  top-K). Caveats carried: brute-force KNN scales with total store rows (retention couples,
-  §6); the byte crossover vs private copies ≈ 8× retained multiple. The embedding *cache* is
-  family-shared regardless; broker, accelerator lease, `MILLER_SEMANTIC=off` zero-work, and
-  ADR-0003 ownership stand unchanged.
+- **vectors.db** — **per-view in shipped Ph3 store mode** (A14): the sidecar catalog keys the
+  artifact by `view_id`, so each worktree gets an independently stamped vector projection. The
+  frozen family-shared design remains a Ph5 target: it needs the §7 visibility/pre-filter proof,
+  a measured multi-view cost gate, and a versioned amendment before default-on adoption. The
+  embedding *cache* is family-shared regardless; broker, accelerator lease,
+  `MILLER_SEMANTIC=off` zero-work, and ADR-0003 ownership stand unchanged.
 - **content.db** — tree-derived text keys by version; explicit external/web imports scope to the
   **family** (an import from one worktree is searchable from siblings — an upgrade over today's
   per-workspace silos).
