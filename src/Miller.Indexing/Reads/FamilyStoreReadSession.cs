@@ -84,7 +84,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             try
             {
                 Dictionary<string, string> metadata = ReadStoreMetadata(connection);
-                ValidateStoreMetadata(metadata, binding);
+                int extractionIdentityEpoch = ValidateStoreMetadata(metadata, binding);
                 StoreVisibility visibility = ReadVisibility(
                     connection,
                     binding,
@@ -95,7 +95,12 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                     workspaceRoot,
                     Required(metadata, "binary_version"));
                 bool resolutionAttached = AttachValidatedResolutionBase(connection, visibility);
-                CreateCompatibilityProjection(connection, visibility, metadata, resolutionAttached);
+                CreateCompatibilityProjection(
+                    connection,
+                    visibility,
+                    metadata,
+                    extractionIdentityEpoch,
+                    resolutionAttached);
                 SetQueryOnly(connection);
                 var freshness = new WorkspaceFreshnessToken(
                     visibility.FamilyId,
@@ -159,7 +164,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             ServingStorePaths paths = ResolveServingStorePaths(binding);
             using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
             Dictionary<string, string> metadata = ReadStoreMetadata(connection);
-            ValidateStoreMetadata(metadata, binding);
+            _ = ValidateStoreMetadata(metadata, binding);
             (long generation, string hash) = ReadManifestIdentity(connection, binding.ViewId, paths.WorkspaceRoot);
             long sequence = ReadStoreLogSequence(connection, binding.ViewId, generation);
             return new WorkspaceFreshnessProbe(
@@ -229,7 +234,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         return metadata;
     }
 
-    private static void ValidateStoreMetadata(
+    private static int ValidateStoreMetadata(
         IReadOnlyDictionary<string, string> metadata,
         StoreFamilyBinding binding)
     {
@@ -241,6 +246,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
 
         int schema = ParseInt(metadata, "store_sqlite_schema_version");
         int format = ParseInt(metadata, "store_format_epoch");
+        int extractionIdentityEpoch = ParseRequiredInt(metadata, "extraction_identity_epoch");
         if (schema != StoreSchemaVersion || format != StoreFormatEpoch ||
             !string.Equals(Required(metadata, "generation_state"), "serving", StringComparison.Ordinal))
         {
@@ -270,6 +276,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 "The family store min_reader_version is malformed.",
                 ex);
         }
+
+        return extractionIdentityEpoch;
     }
 
     private static StoreVisibility ReadVisibility(
@@ -537,6 +545,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         SqliteConnection connection,
         StoreVisibility visibility,
         IReadOnlyDictionary<string, string> metadata,
+        int extractionIdentityEpoch,
         bool resolutionAttached)
     {
         using SqliteCommand command = connection.CreateCommand();
@@ -553,6 +562,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
 
             CREATE TEMP TABLE _miller_session (
               generation INTEGER NOT NULL,
+              extraction_identity_epoch INTEGER NOT NULL,
               binary_version TEXT NOT NULL,
               contract_version TEXT NOT NULL,
               legacy_schema TEXT NOT NULL,
@@ -560,7 +570,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
               view_id TEXT NOT NULL,
               resolution_delta_generation INTEGER) STRICT;
             INSERT INTO _miller_session VALUES (
-              $generation,$binary_version,$contract_version,$legacy_schema,$root,
+              $generation,$extraction_epoch,$binary_version,$contract_version,$legacy_schema,$root,
               $view_id,$resolution_delta_generation);
             CREATE TEMP TABLE artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
             CREATE TEMP VIEW extraction_revisions AS
@@ -679,21 +689,21 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             CREATE TEMP VIEW parser_inventory AS
             SELECT language,parser_package,parser_version,grammar_version,source,metadata_json
             FROM main.parser_inventory
-            WHERE extraction_epoch=(SELECT CAST(value AS INTEGER) FROM main.store_meta WHERE key='extraction_identity_epoch');
+            WHERE extraction_epoch=(SELECT extraction_identity_epoch FROM _miller_session);
             CREATE TEMP VIEW language_capabilities AS
             SELECT language,parser_package,extensions_json,dependency_status,target_symbols,target_relationships,
                    target_pending_relationships,target_identifiers,target_types,actual_symbols,actual_relationships,
                    actual_pending_relationships,actual_identifiers,actual_types,kind_coverage_json
             FROM main.language_capabilities
-            WHERE extraction_epoch=(SELECT CAST(value AS INTEGER) FROM main.store_meta WHERE key='extraction_identity_epoch');
+            WHERE extraction_epoch=(SELECT extraction_identity_epoch FROM _miller_session);
             CREATE TEMP VIEW language_capability_fixtures AS
             SELECT language,fixture_name,source_path,expected_path
             FROM main.language_capability_fixtures
-            WHERE extraction_epoch=(SELECT CAST(value AS INTEGER) FROM main.store_meta WHERE key='extraction_identity_epoch');
+            WHERE extraction_epoch=(SELECT extraction_identity_epoch FROM _miller_session);
             CREATE TEMP VIEW language_capability_gaps AS
             SELECT gap_id,language,capability,status,reason,required_closure,evidence_json
             FROM main.language_capability_gaps
-            WHERE extraction_epoch=(SELECT CAST(value AS INTEGER) FROM main.store_meta WHERE key='extraction_identity_epoch');
+            WHERE extraction_epoch=(SELECT extraction_identity_epoch FROM _miller_session);
             CREATE TEMP VIEW revision_file_changes AS
             SELECT (SELECT generation FROM _miller_session) AS revision_id,
                    CAST(file_id AS TEXT) AS file_id,path,'upsert' AS change_kind
@@ -701,6 +711,7 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             """;
         command.Parameters.AddWithValue("$view_id", visibility.ViewId);
         command.Parameters.AddWithValue("$generation", visibility.ManifestGeneration);
+        command.Parameters.AddWithValue("$extraction_epoch", extractionIdentityEpoch);
         command.Parameters.AddWithValue("$binary_version", Required(metadata, "binary_version"));
         command.Parameters.AddWithValue(
             "$contract_version",
@@ -957,6 +968,19 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.SchemaIncompatible,
                 $"The family store metadata '{key}' value '{value}' is not an integer.");
+        return result;
+    }
+
+    private static int ParseRequiredInt(IReadOnlyDictionary<string, string> metadata, string key)
+    {
+        if (!metadata.TryGetValue(key, out string? value) || string.IsNullOrWhiteSpace(value) ||
+            !int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int result))
+        {
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.SchemaIncompatible,
+                $"The family store metadata '{key}' is missing or is not an integer.");
+        }
+
         return result;
     }
 

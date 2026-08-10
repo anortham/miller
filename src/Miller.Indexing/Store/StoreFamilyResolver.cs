@@ -113,7 +113,44 @@ public sealed class StoreFamilyResolver
         else
         {
             family = ResolveFamily(facts);
-            viewId = MintViewId();
+            StoreCatalog? catalog = ReadCatalog(family.StoreRoot);
+            if (catalog is null)
+            {
+                if (HasPublishedGeneration(family.StoreRoot))
+                {
+                    throw new StoreBindingMismatchException(
+                        "The family store has a published generation but is missing its CURRENT pointer.");
+                }
+
+                viewId = MintViewId();
+            }
+            else
+            {
+                if (catalog.FamilyId != family.FamilyId)
+                    family = _registry.ReplaceStoreFamilyIdentity(family.FamilyId, catalog.FamilyId, family.StoreRoot);
+
+                StoreCatalogView? selected = catalog.Views.SingleOrDefault(view =>
+                    ArtifactRootIdentity.Matches(view.Root, facts.WorkspaceRoot));
+                if (selected is not null)
+                {
+                    StoreMemberRegistryRow reconciled = _registry.UpsertStoreMember(
+                        facts.WorkspaceId,
+                        family.FamilyId,
+                        selected.ViewId,
+                        facts.WorkspaceRoot,
+                        facts.RootIdentity);
+                    var reconciledBinding = new StoreFamilyBinding(
+                        family.FamilyId,
+                        family.StoreRoot,
+                        reconciled.ViewId,
+                        facts.WorkspaceRoot,
+                        StoreBindingState.Ready);
+                    StoreWorkspacePointer.Write(facts.WorkspaceRoot, reconciledBinding);
+                    return reconciledBinding;
+                }
+
+                viewId = MintViewId();
+            }
         }
 
         StoreMemberRegistryRow storedMember = _registry.UpsertStoreMember(

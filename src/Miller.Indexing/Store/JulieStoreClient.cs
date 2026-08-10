@@ -342,9 +342,9 @@ public sealed class JulieStoreClient : IJulieStoreClient
         return true;
     }
 
-    private static string? ProgressPath(StoreRequest request) => request switch
+    internal static string? ProgressPath(StoreRequest request) => request switch
     {
-        StoreImportRequest import => import.Scan.ProgressFile,
+        StoreImportRequest { FromArtifact: null } import => import.Scan.ProgressFile,
         StoreUpdateRequest update => update.Scan.ProgressFile,
         _ => null,
     };

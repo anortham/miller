@@ -91,6 +91,30 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void MissingExtractionIdentityEpochRefusesBeforeBuildingCompatibilityViews()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        DeleteStoreMetadata(fixture, "extraction_identity_epoch");
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.Open(fixture.Binding));
+
+        Assert.Equal(FamilyStoreReadFailure.SchemaIncompatible, error.Failure);
+    }
+
+    [Fact]
+    public void MalformedExtractionIdentityEpochRefusesBeforeBuildingCompatibilityViews()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        UpdateStoreMetadata(fixture, "extraction_identity_epoch", "not-an-epoch");
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() =>
+            FamilyStoreReadSession.Open(fixture.Binding));
+
+        Assert.Equal(FamilyStoreReadFailure.SchemaIncompatible, error.Failure);
+    }
+
+    [Fact]
     public void SessionConnectionIsQueryOnlyAfterProjectionSetup()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -267,6 +291,31 @@ public sealed class FamilyStoreReadSessionTests
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "DELETE FROM manifests WHERE view_id='view-a' AND generation=$generation;";
         command.Parameters.AddWithValue("$generation", generation);
+        command.ExecuteNonQuery();
+    }
+
+    private static void DeleteStoreMetadata(StoreFixture fixture, string key)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM store_meta WHERE key=$key;";
+        command.Parameters.AddWithValue("$key", key);
+        command.ExecuteNonQuery();
+    }
+
+    private static void UpdateStoreMetadata(StoreFixture fixture, string key, string value)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "UPDATE store_meta SET value=$value WHERE key=$key;";
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$value", value);
         command.ExecuteNonQuery();
     }
 

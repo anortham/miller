@@ -266,6 +266,32 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void PublishedGenerationWithoutCurrentRefusesForAMemberlessWorkspace()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a", "ws-b", "root-b");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts firstFacts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding first = resolver.ResolveOrCreate(firstFacts);
+        WriteStoreCatalog(first.StoreRoot, first.FamilyId, first.ViewId, firstFacts.WorkspaceRoot);
+        File.Delete(Path.Combine(first.StoreRoot, "CURRENT"));
+
+        WorkspaceRootFacts secondFacts = Facts("ws-b", "root-b", "/repo/.git", Utc(1));
+        StoreBindingMismatchException error = Assert.Throws<StoreBindingMismatchException>(
+            () => resolver.ResolveOrCreate(secondFacts));
+
+        Assert.Contains("CURRENT", error.Message, StringComparison.Ordinal);
+        Assert.Null(registry.GetStoreMember("ws-b"));
+        Assert.False(File.Exists(Path.Combine(secondFacts.WorkspaceRoot, ".miller", "store.json")));
+    }
+
+    [Fact]
     public void ServingGenerationSymlinkEscapeRefusesWithoutRegistryMutation()
     {
         if (OperatingSystem.IsWindows())

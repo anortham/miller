@@ -227,6 +227,22 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void FromArtifactImportDoesNotUseTheLegacyScanProgressPath()
+    {
+        var request = new StoreImportRequest(
+            StoreRoot: "/family",
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-a",
+            WorkspaceRoot: "/workspace",
+            Level: StoreLevel.Full,
+            Request: Controls(),
+            Scan: new StoreScanControls([], 1, "/family/spool", "/workspace/.miller/scan.progress", 42),
+            FromArtifact: "/workspace/legacy.db");
+
+        Assert.Null(JulieStoreClient.ProgressPath(request));
+    }
+
+    [Fact]
     public void ImportArgumentsCarryIdentityLevelScanAndRequestControls()
     {
         var request = new StoreImportRequest(

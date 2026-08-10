@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.12 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.12 amendments record
+**Status: AMENDED v4.13 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.13 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -130,6 +130,18 @@ the v1.18.0 release candidate; A5 remains fail-closed for a valid pointer whose 
 | A41 — resolve replay completion | A resumed terminal `store resolve` is submitted once with its durable family/view request id and then once more with a fresh id after the journal entry is completed. The stable family/view fingerprint preserves mixed-version journal continuity while replay cannot leave resolution silently stale. | Implemented and verified in coordinator tests |
 | A44 — published generation without CURRENT | A valid workspace pointer whose family root contains a published `gen-*/store.db` but no `CURRENT` pointer fails closed without being replanned or reimported. An empty planned family root remains recoverable for its first import. | Implemented and verified in resolver tests |
 | A45 — cross-workspace rollback cleanup | Store-off cross-workspace source reconciliation removes the workspace pointer and pending/recovery markers under the held workspace writer lease before reporting the legacy artifact usable. Marker cleanup warnings remain an actionable failed refresh. | Implemented and verified in refresh tests |
+
+### v4.13 post-freeze amendment register
+
+The next paired review found four concrete execution seams. These amendments make the shipped behavior explicit
+before the v1.18.0 release candidate is reconsidered.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A46 — extraction identity validation | A store read validates \`extraction_identity_epoch\` as required integer metadata before creating compatibility views. Capability and parser projections bind to that validated session value; missing or malformed metadata is schema-incompatible, never an empty authoritative health result. | Implemented and verified in read-session tests |
+| A47 — member-less recovery | Resolver recovery applies the published-generation-without-\`CURRENT\` fail-closed guard even when the workspace has no local \`store_members\` row. When a catalog already contains the same root, recovery adopts its view before minting a new one. | Implemented and verified in resolver tests |
+| A48 — from-artifact supervision | \`store import --from-artifact\` rejects scan-only supervision flags under the producer contract. Miller does not sample the unused legacy scan heartbeat on that path; it uses coordinator, generation, spool/scratch, published-generation, and process-output activity with the absolute hard cap as the backstop. | Implemented and verified in client contract tests |
+| A49 — rollback cleanup status | A cross-workspace source reconciliation that completes the scan but cannot finish pointer/marker cleanup records the registry row as \`error\`, not \`ready\`, and returns a failed refresh until cleanup succeeds. | Implemented and verified in refresh tests |
 
 ---
 

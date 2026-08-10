@@ -410,20 +410,9 @@ public sealed class CrossWorkspaceRefreshService
 
             warning = JoinNotes(warning, pointerCleanupError);
 
-            _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
-
-            // This is the one safe writer for an external workspace's search.db — it holds the workspace
-            // single-writer lock around the scan. Rebuild the sidecar from the scanned symbols.db here (off the
-            // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
-            // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
-            // convergence.
-            if (useStore)
-                warning = JoinNotes(warning, TryConvergeStoreSidecars(row));
-            else
-                TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
-
             if (pointerCleanupError is not null)
             {
+                _registry.MarkError(row.WorkspaceId, pointerCleanupError, _utcNow());
                 return new WorkspaceRefreshResult(
                     WorkspaceRefreshStatus.Failed,
                     row.WorkspaceId,
@@ -439,6 +428,18 @@ public sealed class CrossWorkspaceRefreshService
                         ?? TryReadArtifactId(row, useStore)
                         ?? artifactIdBeforeScan);
             }
+
+            _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
+
+            // This is the one safe writer for an external workspace's search.db — it holds the workspace
+            // single-writer lock around the scan. Rebuild the sidecar from the scanned symbols.db here (off the
+            // search hot path, skipped when already revision-fresh). A sidecar failure must never undo a
+            // successful scan/refresh; reads report the sidecar unavailable/stale until the next successful
+            // convergence.
+            if (useStore)
+                warning = JoinNotes(warning, TryConvergeStoreSidecars(row));
+            else
+                TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
 
             // Refreshed-vs-unchanged comes from the REPORT, not a revision comparison: a force rebuild of an
             // incompatible artifact deletes and recreates the DB, restarting its revision counter (often on

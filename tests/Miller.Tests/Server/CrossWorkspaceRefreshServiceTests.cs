@@ -384,7 +384,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
-    public void Refresh_PointerCleanupFailureKeepsSuccessfulScanBookkeeping()
+    public void Refresh_PointerCleanupFailureDoesNotMarkTheRegistryReady()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
         string root = NewRoot("malformed-store-pointer-cleanup-failure");
@@ -413,8 +413,9 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Contains("pointer is locked", result.Error, StringComparison.Ordinal);
         Assert.Null(policy.Read());
         WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
-        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
-        Assert.Equal(2, row.LastRevision);
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal(1, row.LastRevision);
+        Assert.Contains("pointer is locked", row.LastError, StringComparison.Ordinal);
     }
 
     [Fact]
