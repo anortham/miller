@@ -545,12 +545,12 @@ public sealed class VectorConvergeService : BackgroundService
             return null;
 
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
-        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+        WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
             storeEnabled: true);
-        return session.FamilyStoreRoot
+        return probe.StoreRoot
             ?? throw new InvalidOperationException("The family-store read session has no store root.");
     }
 
@@ -560,15 +560,15 @@ public sealed class VectorConvergeService : BackgroundService
         if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
             return VectorSidecar.PathFor(workspaceRoot);
 
-        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+        WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
             workspace.CanonicalExtractDbPath ?? Path.Combine(workspaceRoot, ".miller", "symbols.db"),
             workspaceRoot,
             workspace.WorkspaceId,
             storeEnabled: true);
         return VectorSidecar.PathForStore(
-            session.FamilyStoreRoot
+            probe.StoreRoot
                 ?? throw new InvalidOperationException("The family-store read session has no store root."),
-            session.Snapshot.ViewId);
+            probe.ViewId ?? throw new InvalidOperationException("The family-store freshness probe has no view ID."));
     }
 
     /// <summary>Drains both cursors once. Each cursor is independent: one failing never blocks the other.</summary>

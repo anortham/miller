@@ -5,7 +5,9 @@ public sealed record WorkspaceFreshnessProbe(
     string? StoreInstanceId,
     string? ViewId,
     long? ManifestGeneration = null,
-    string? ManifestHash = null);
+    string? ManifestHash = null,
+    string? StoreRoot = null,
+    string? BinaryVersion = null);
 
 public enum WorkspaceReadMode
 {

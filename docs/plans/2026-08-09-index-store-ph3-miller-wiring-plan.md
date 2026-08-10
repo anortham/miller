@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A30 review fixes complete 2026-08-10. This
+**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A31 review fixes complete 2026-08-10. This
 wiring plan is retained as the implementation record; the durable lock/freshness and cursor-order
 amendments remain open, while Ph4 dashboard work and Ph5 physical validation/default-on decisions
 remain. The release candidate uses the published `julie-extract 2.31.2` patch.

@@ -74,6 +74,8 @@ public sealed class FamilyStoreReadSessionTests
         Assert.Equal("view-a", probe.ViewId);
         Assert.Equal(2, probe.ManifestGeneration);
         Assert.Equal("manifest-current", probe.ManifestHash);
+        Assert.Equal(fixture.Binding.StoreRoot, probe.StoreRoot);
+        Assert.Equal("2.31.0", probe.BinaryVersion);
     }
 
     [Fact]

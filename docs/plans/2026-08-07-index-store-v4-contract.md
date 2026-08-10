@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.8 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.8 amendments record
+**Status: AMENDED v4.9 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.9 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -95,6 +95,15 @@ These refinements are normative for the v1.18.0 release candidate.
 |---|---|---|
 | A29 — store sidecar failure isolation | Content and search sidecar work is isolated under the family lease. A lease timeout, sidecar read/write failure, or lease release failure is logged and retried on a later convergence; it must not turn a completed producer scan into a scan failure. History and vector target stamps still run after sidecar failure. | Implemented and verified in store-sidecar convergence tests |
 | A30 — durable import journal replay | A persisted import request is replayed once after restart to recover an in-flight or terminal producer request, then a fresh import request is submitted so source changes after a prior terminal commit cannot be hidden by idempotency replay. Journal cleanup cannot replace the original producer failure. | Implemented and verified in store coordinator tests |
+
+## 0. v4.9 post-freeze amendment register
+
+The final adversarial pass also identified avoidable metadata-only polling cost in leadership and vector path
+lookups. This refinement is normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A31 — metadata-only identity probes | Leadership version checks and vector store-path lookups use the bounded family-store freshness probe. They validate the serving store and view but do not materialize the compatibility projection or hash all level stamps unless a real read session is opened. | Implemented and verified in freshness/read-session tests |
 
 ---
 
@@ -911,6 +920,7 @@ implemented before the release candidate was reconsidered:
 |---|---|---|---|
 | A29 | high | A family-store sidecar lease or writer failure could escape `ConvergeStore`, making a completed scan look failed and skipping the history/vector stamps. | ACCEPTED — folded: per-sidecar containment, timeout-aware lease containment, and post-failure history/vector publication |
 | A30 | medium | A durable orphaned import journal entry could replay an already-terminal idempotency key after source changes, hiding a needed reconcile; journal cleanup could also replace the original producer error. | ACCEPTED — folded: replayed-terminal import followed by a fresh reconcile request, plus cleanup-error preservation |
+| A31 | medium | Leadership and vector path lookups opened a full family-store read session for one metadata value or a derived path. | ACCEPTED — folded: metadata-only freshness probes preserve validation while skipping compatibility projection and level-stamp hashing |
 
 ## Cross-reference: gate price list → contract sections
 

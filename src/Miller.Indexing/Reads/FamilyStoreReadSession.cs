@@ -158,7 +158,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
         {
             ServingStorePaths paths = ResolveServingStorePaths(binding);
             using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
-            ValidateStoreMetadata(ReadStoreMetadata(connection), binding);
+            Dictionary<string, string> metadata = ReadStoreMetadata(connection);
+            ValidateStoreMetadata(metadata, binding);
             (long generation, string hash) = ReadManifestIdentity(connection, binding.ViewId, paths.WorkspaceRoot);
             long sequence = ReadStoreLogSequence(connection, binding.ViewId, generation);
             return new WorkspaceFreshnessProbe(
@@ -166,7 +167,9 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 StoreInstanceId(binding.FamilyId, paths.GenerationName),
                 binding.ViewId,
                 generation,
-                hash);
+                hash,
+                paths.StoreRoot,
+                Required(metadata, "binary_version"));
         }
         catch (FamilyStoreReadException)
         {

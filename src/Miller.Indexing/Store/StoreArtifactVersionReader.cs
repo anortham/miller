@@ -78,8 +78,10 @@ public static class StoreArtifactVersionReader
                 pointer.ViewId,
                 pointer.WorkspaceRoot,
                 StoreBindingState.Ready);
-            using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding);
-            return (session.Visibility.BinaryVersion, true, null);
+            WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(binding);
+            return (probe.BinaryVersion ?? throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.Corrupt,
+                "The family-store freshness probe omitted binary_version."), true, null);
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException
