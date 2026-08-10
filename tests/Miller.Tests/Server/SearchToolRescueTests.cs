@@ -7,10 +7,12 @@ using Miller.Server.Resolution;
 using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
+[Collection(SemanticActivationEnvironmentCollection.Name)]
 public sealed class SearchToolRescueTests
 {
     private const string Root = "/ws";

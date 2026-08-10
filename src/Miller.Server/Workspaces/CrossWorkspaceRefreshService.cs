@@ -34,6 +34,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, IDisposable?> _acquireLock;
     private readonly Func<string, long> _readLatestRevision;
     private readonly Func<string, string?> _readArtifactId;
+    private readonly Func<string, string, string?, WorkspaceFreshnessProbe> _readStoreProbe;
     private readonly Action<string, string, long> _requestFullScan;
     private readonly TimeSpan _lockBusyWait;
     private readonly TimeSpan _fullScanRequestWait;
@@ -98,8 +99,9 @@ public sealed class CrossWorkspaceRefreshService
                     return new LeadershipVerdict(false, false, ex.Message);
                 }
             },
-            ReadArtifactId,
-            governor,
+            readArtifactId: ReadArtifactId,
+            readStoreProbe: null,
+            governor: governor,
             storeClient: new JulieStoreClient(runner.BinaryPath),
             storeEnabled: storeEnabled)
     {
@@ -120,6 +122,7 @@ public sealed class CrossWorkspaceRefreshService
         TimeSpan? fullScanRequestWait = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
         Func<string, string?>? readArtifactId = null,
+        Func<string, string, string?, WorkspaceFreshnessProbe>? readStoreProbe = null,
         ScanGovernor? governor = null,
         TimeSpan? governorForceWait = null,
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
@@ -148,6 +151,9 @@ public sealed class CrossWorkspaceRefreshService
         _acquireLock = acquireLock;
         _readLatestRevision = readLatestRevision;
         _readArtifactId = readArtifactId ?? ReadArtifactId;
+        _readStoreProbe = readStoreProbe
+            ?? ((dbPath, root, workspaceId) =>
+                WorkspaceReadSessionFactory.Probe(dbPath, root, workspaceId, storeEnabled: true));
         _requestFullScan = requestFullScan ?? LeaderScanRequestQueue.RequestFullScan;
         _lockBusyWait = lockBusyWait;
         _fullScanRequestWait = fullScanRequestWait ?? DefaultFullScanRequestWait;
@@ -821,7 +827,9 @@ public sealed class CrossWorkspaceRefreshService
     {
         try
         {
-            revision = ReadLatestRevision(row, useStore);
+            revision = useStore
+                ? ReadStoreProbe(row).Revision
+                : ReadLatestRevision(row, useStore: false);
             return true;
         }
         catch (Exception ex) when (ex is FileNotFoundException or IOException or InvalidOperationException
@@ -837,7 +845,7 @@ public sealed class CrossWorkspaceRefreshService
     private string? TryReadArtifactId(WorkspaceRegistryRow row, bool useStore)
     {
         if (useStore)
-            return TryReadStoreSnapshot(row)?.ArtifactOrStoreId;
+            return TryReadStoreProbe(row)?.StoreInstanceId;
         try
         {
             return _readArtifactId(row.IndexDbPath);
@@ -853,32 +861,27 @@ public sealed class CrossWorkspaceRefreshService
     {
         if (!useStore)
             return TryReadArtifactId(row, useStore: false);
-        WorkspaceReadSnapshot? snapshot = TryReadStoreSnapshot(row);
-        return snapshot is null
+        WorkspaceFreshnessProbe? probe = TryReadStoreProbe(row);
+        return probe is null
             ? null
-            : snapshot.ArtifactOrStoreId + "|" + snapshot.Freshness.ManifestHash;
+            : probe.StoreInstanceId + "|" + probe.ManifestHash;
     }
 
     private long ReadLatestRevision(WorkspaceRegistryRow row, bool useStore)
     {
         if (!useStore)
             return _readLatestRevision(row.IndexDbPath);
-        WorkspaceReadSnapshot snapshot = TryReadStoreSnapshot(row) ?? throw new FileNotFoundException(
-            $"Family-store binding for workspace '{row.WorkspaceId}' is not readable.");
-        return snapshot.Freshness.StoreLogSequence ?? throw new InvalidOperationException(
-            "The family-store snapshot has no store_log sequence.");
+        return ReadStoreProbe(row).Revision;
     }
 
-    private WorkspaceReadSnapshot? TryReadStoreSnapshot(WorkspaceRegistryRow row)
+    private WorkspaceFreshnessProbe ReadStoreProbe(WorkspaceRegistryRow row) =>
+        _readStoreProbe(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
+
+    private WorkspaceFreshnessProbe? TryReadStoreProbe(WorkspaceRegistryRow row)
     {
         try
         {
-            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
-                row.IndexDbPath,
-                row.CanonicalRoot,
-                row.WorkspaceId,
-                storeEnabled: true);
-            return session.Snapshot;
+            return ReadStoreProbe(row);
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or DirectoryNotFoundException or IOException
@@ -890,7 +893,7 @@ public sealed class CrossWorkspaceRefreshService
     }
 
     private bool HasReadableIndex(WorkspaceRegistryRow row, bool useStore) =>
-        useStore ? TryReadStoreSnapshot(row) is not null : File.Exists(row.IndexDbPath);
+        useStore ? TryReadStoreProbe(row) is not null : File.Exists(row.IndexDbPath);
 
     private WorkspaceRegistryRow GetRequiredRow(string workspaceId) =>
         _registry.Get(workspaceId) ?? throw new KeyNotFoundException(

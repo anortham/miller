@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Cli;
 using Miller.Server.Workspaces;
@@ -154,6 +155,35 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Assert.Equal(7, result.Revision);
         Assert.Equal(1, scanCount);
         Assert.Equal(7, registry.Get("target-ws")?.LastRevision);
+    }
+
+    [Fact]
+    public void Refresh_StoreLockBusy_UsesFreshnessProbeForPolling()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("busy-store-probe");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 7);
+        int probeCount = 0;
+        var clock = new FakeClock();
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan should not run while the lock is busy"),
+            acquireLock: _ => null,
+            clock: clock,
+            storeEnabled: static () => true,
+            readStoreProbe: (_, _, _) =>
+            {
+                probeCount++;
+                return new WorkspaceFreshnessProbe(7, "store-1", "view-a", 1, "manifest-a");
+            });
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.LockBusy, result.Status);
+        Assert.True(probeCount > 0);
     }
 
     [Fact]
@@ -1406,6 +1436,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Action<string, string, long>? requestFullScan = null,
         Func<string, LeadershipVerdict>? eligibilityGate = null,
         Func<string, string?>? readArtifactId = null,
+        Func<string, string, string?, WorkspaceFreshnessProbe>? readStoreProbe = null,
         ScanGovernor? governor = null,
         TimeSpan? governorForceWait = null,
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
@@ -1427,6 +1458,7 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             requestFullScan: requestFullScan,
             eligibilityGate: eligibilityGate,
             readArtifactId: readArtifactId ?? (_ => null),
+            readStoreProbe: readStoreProbe,
             governor: governor,
             governorForceWait: governorForceWait,
             failurePolicyFor: failurePolicyFor,
