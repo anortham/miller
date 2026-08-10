@@ -36,6 +36,22 @@ public static class StoreRollbackExporter
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
             or NotSupportedException or SqliteException or JulieStoreProcessException;
 
+    internal static StoreRollbackExportResult ExportForBootstrap(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        IJulieStoreClient client,
+        IDisposable? heldWriterLease = null)
+    {
+        try
+        {
+            return ExportIfRequired(workspaceRoot, legacyDatabasePath, client, heldWriterLease);
+        }
+        catch (Exception ex) when (IsOperationalFailure(ex))
+        {
+            throw new StoreRollbackRetryException(ex);
+        }
+    }
+
     public static StoreRollbackExportResult ExportIfRequired(
         string workspaceRoot,
         string legacyDatabasePath,

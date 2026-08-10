@@ -141,6 +141,30 @@ public sealed class StoreRollbackExporterTests : IDisposable
     }
 
     [Fact]
+    public void BootstrapRollbackOperationalFailuresBecomeRetryFailures()
+    {
+        Directory.CreateDirectory(_root);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(_root);
+        StoreWorkspacePointer.Write(
+            _root,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "missing-store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+
+        StoreRollbackRetryException error = Assert.Throws<StoreRollbackRetryException>(() =>
+            StoreRollbackExporter.ExportForBootstrap(
+                _root,
+                Path.Combine(_root, ".miller", "symbols.db"),
+                new UnexpectedStoreClient()));
+
+        Assert.IsAssignableFrom<IOException>(error.InnerException);
+        Assert.NotNull(StoreWorkspacePointer.Read(_root));
+    }
+
+    [Fact]
     public void PromotionFailurePreservesValidatedRebuildAndStoreBinding()
     {
         string workspace = Path.Combine(_root, "workspace");

@@ -483,18 +483,10 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     startedAt);
             }
 
-            StoreRollbackExportResult rollback;
-            try
-            {
-                rollback = StoreRollbackExporter.ExportIfRequired(
-                    canonicalRoot,
-                    canonicalDbPath,
-                    JulieStoreClient.Locate(ctx.ToolsRoot));
-            }
-            catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
-            {
-                throw new StoreRollbackRetryException(ex);
-            }
+            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportForBootstrap(
+                canonicalRoot,
+                canonicalDbPath,
+                JulieStoreClient.Locate(ctx.ToolsRoot));
             bool rollbackRequiresSourceRebuild = rollback.RequiresSourceRebuild;
             if (rollback.Warning is { } rollbackWarning)
                 _logger.LogWarning("{Warning}", rollbackWarning);
@@ -585,7 +577,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                                 "Store rollback source reconciliation could not acquire the workspace writer lock."));
                         }
 
-                        StoreRollbackExportResult currentRollback = StoreRollbackExporter.ExportIfRequired(
+                        StoreRollbackExportResult currentRollback = StoreRollbackExporter.ExportForBootstrap(
                             canonicalRoot,
                             canonicalDbPath,
                             JulieStoreClient.Locate(ctx.ToolsRoot),
