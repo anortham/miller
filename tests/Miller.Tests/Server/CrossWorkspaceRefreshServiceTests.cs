@@ -284,6 +284,50 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_MalformedStorePointer_HonorsAutomaticBackoffThenReconciles()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("malformed-store-pointer-backoff");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        string pointerPath = Path.Combine(root, ".miller", "store.json");
+        File.WriteAllText(pointerPath, "not-json");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        DateTimeOffset now = new(2026, 8, 2, 0, 0, 0, TimeSpan.Zero);
+        var policy = new InMemoryScanFailurePolicy(utcNow: () => now, jitter: static () => 0);
+        policy.RecordFailure(ScanIntent.IncrementalReconcile, ScanFailurePolicy.SigkillExitCode, jobs: 4);
+        int scanCount = 0;
+        bool? observedForce = null;
+        var service = NewService(
+            registry,
+            scan: (_, _, force, _, _) =>
+            {
+                scanCount++;
+                observedForce = force;
+                return Report(root, dbPath, "target-ws", revision: 2);
+            },
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy,
+            storeClient: new UnexpectedStoreClient());
+
+        WorkspaceRefreshResult deferred = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.MissingIndex, deferred.Status);
+        Assert.Equal(0, scanCount);
+        Assert.True(File.Exists(pointerPath));
+
+        now += ScanFailurePolicy.MaxJitteredBackoffFor(1);
+        WorkspaceRefreshResult repaired = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, repaired.Status);
+        Assert.True(observedForce);
+        Assert.Equal(1, scanCount);
+        Assert.False(File.Exists(pointerPath));
+        Assert.Null(policy.Read());
+    }
+
+    [Fact]
     public void Refresh_FailedSourceReconciliationPreservesMalformedStorePointer()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
