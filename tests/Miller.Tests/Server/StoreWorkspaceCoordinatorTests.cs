@@ -377,6 +377,53 @@ public sealed class StoreWorkspaceCoordinatorTests
         }
     }
 
+    [Fact]
+    public void InterruptedResolveIsReplayedThenSubmittedWithAFreshRequest()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-resolve-replay-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string fingerprint = $"resolve|{Binding.FamilyId:D}|{Binding.ViewId}";
+            var journal = new StoreRequestJournal(root);
+            Assert.Equal("orphan-resolve", journal.GetOrCreate(fingerprint, () => "orphan-resolve"));
+
+            var client = new RecordingStoreClient(StoreOperation.Update);
+            var snapshots = new Queue<StoreWorkspaceState>(
+            [
+                new StoreWorkspaceState(1, "full"),
+                new StoreWorkspaceState(2, "full"),
+            ]);
+            string source = Path.Combine(root, "src", "a.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+            File.WriteAllText(source, "class A {}");
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = PathCanonicalizer.CanonicalizeRoot(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                },
+                client,
+                () => IndexLevelPolicy.Full,
+                _ => snapshots.Dequeue());
+
+            coordinator.Update(source);
+
+            StoreRequest[] resolves = client.Requests
+                .Where(request => request.Operation == StoreOperation.Resolve)
+                .ToArray();
+            Assert.Equal(2, resolves.Length);
+            Assert.Equal("orphan-resolve", Assert.IsType<StoreResolveRequest>(resolves[0]).Request.RequestId);
+            Assert.NotEqual(
+                Assert.IsType<StoreResolveRequest>(resolves[0]).Request.RequestId,
+                Assert.IsType<StoreResolveRequest>(resolves[1]).Request.RequestId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class RecordingStoreClient(
         StoreOperation expectedOperation,
         StoreManifestDisposition manifestDisposition = StoreManifestDisposition.Created,

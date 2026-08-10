@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.10 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.10 amendments record
+**Status: AMENDED v4.11 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.11 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -118,6 +118,17 @@ cursor-incremental sidecar gates remain open.
 | A34 — off-mode probe parity | Store-off freshness probes apply the same active-pointer refusal as full read sessions; no probe may report a legacy cursor while a store pointer remains. | Implemented and verified in read-session tests |
 | A35 — replayed import mode | After an interrupted import is replayed and committed, the follow-up import is a fresh store-view reconcile and never repeats `--from-artifact` against the populated view. | Implemented and verified in coordinator tests |
 | A36 — request-control normalization | The hard-cap-derived import/resolve request timeout is normalized to whole producer seconds, and malformed-pointer inspection does not acquire a writer lease for a read-only result. | Implemented and verified in coordinator/rollback tests |
+
+## 0. v4.11 post-freeze amendment register
+
+The final paired review found one store-off recovery loop and one durable resolve replay seam. These amendments
+are normative for the v1.18.0 release candidate; A5 remains fail-closed for a valid pointer whose serving store
+cannot be opened.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A40 — source-reconciliation completion | When store-off bootstrap receives a source-rebuild-required rollback result, it revalidates that result under the acquired writer lease, runs the source reconciliation, then removes the workspace pointer and pending/recovery markers under that same lease before legacy binding. A pointer whose serving store is valid but unopenable still fails closed under A5; a replacement pointer observed after cleanup forces retry. | Implemented and verified in store-off bootstrap Scale coverage |
+| A41 — resolve replay completion | A resumed terminal `store resolve` is submitted once with its durable family/view request id and then once more with a fresh id after the journal entry is completed. The stable family/view fingerprint preserves mixed-version journal continuity while replay cannot leave resolution silently stale. | Implemented and verified in coordinator tests |
 
 ---
 
@@ -951,6 +962,19 @@ issues. The accepted A7/A8 design findings remain open gates rather than being f
 | A37 | high | A persistent unreadable store should bypass the fail-closed leadership gate and self-reimport. | DISMISSED — conflicts with the load-bearing A5/leadership invariant: an active pointer whose serving store cannot be read must remain not-ready and must never enter the permissive legacy-version path |
 | A38 | medium | A family-wide sidecar lease can leave sibling views stale while A8 full-view convergence is in progress. | DEFERRED — this is the explicitly disclosed A8 family lease/full-rewrite gate; no Ph5 cursor or availability design was pulled forward |
 | A39 | medium | Resolution-base cache validation could be bypassed by an out-of-contract same-size/same-mtime in-place mutation. | DISMISSED — bases are producer-published immutable files; changing the cache would reintroduce a full hash into every real read session and contradict the bounded A31 probe/read cost boundary |
+
+### v4.11 implementation recheck — 2026-08-10
+
+The final Claude/Grok pair found one dual-flagged store-off recovery loop, one resolve replay gap, one
+contract-conflicting recovery suggestion, and one latent naming hazard. Confirmed defects were fixed and the
+fail-closed A5 behavior remains intentional.
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A40 | critical | A well-formed interrupted rollback marker left the pointer in place after source reconciliation, so MCP bootstrap retried forever instead of binding the rebuilt legacy artifact. | ACCEPTED — folded: rollback is revalidated under the acquired writer lease, source reconciliation completes before pointer/marker cleanup, and replacement pointers are checked before legacy bind |
+| A41 | medium | A crashed terminal `store resolve` reused the same idempotency result without a fresh reconcile request. | ACCEPTED — folded: resumed resolve requests complete their journal entry and submit a fresh request; the family/view fingerprint remains stable for mixed-version continuity |
+| A42 | high | An unreadable valid store pointer should be deleted and reimported through the permissive legacy path. | DISMISSED — conflicts with A5 and the leadership invariant: the pointer remains preserved and not-ready rather than serving a legacy artifact of unknown store state |
+| A43 | low | Same-name `Revision` fields carry store-log and manifest-generation counters, with defensive fallbacks in unreachable absent-sequence states. | DISMISSED — no live path substitutes the manifest generation when a store snapshot is valid; changing the latent naming hazard is outside this release’s confirmed behavior and would expand the read-seam contract |
 
 ## Cross-reference: gate price list → contract sections
 

@@ -577,6 +577,32 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     bootstrapLease = scanLease.Lease;
                     scanDecision = scanLease.Decision;
 
+                    if (rollbackRequiresSourceRebuild)
+                    {
+                        if (bootstrapLease is null)
+                        {
+                            throw new StoreRollbackRetryException(new IOException(
+                                "Store rollback source reconciliation could not acquire the workspace writer lock."));
+                        }
+
+                        StoreRollbackExportResult currentRollback = StoreRollbackExporter.ExportIfRequired(
+                            canonicalRoot,
+                            canonicalDbPath,
+                            JulieStoreClient.Locate(ctx.ToolsRoot),
+                            heldWriterLease: bootstrapLease);
+                        if (currentRollback.Warning is { } currentRollbackWarning)
+                            _logger.LogWarning("{Warning}", currentRollbackWarning);
+                        if (currentRollback.RequiresPointerCleanup)
+                        {
+                            throw new StoreRollbackRetryException(
+                                new IOException(currentRollback.Warning ??
+                                    "The promoted legacy artifact still has a store pointer."));
+                        }
+
+                        rollbackRequiresSourceRebuild = currentRollback.RequiresSourceRebuild;
+                        scanDecision = ReadDecision();
+                    }
+
                     if (scanLease.Outcome == BootstrapLeaseOutcome.WinnerArtifactUsable)
                     {
                         _logger.LogInformation(
@@ -759,10 +785,33 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                         "Existing extract DB at {Db} is incompatible ({Message}); force-rebuilding once with the " +
                         "bundled julie-extract.",
                         canonicalDbPath, ex.Message),
-                    onCorrupt: ex => _logger.LogWarning(
-                        "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
-                        "julie-extract (a writer likely died mid-scan).",
-                        canonicalDbPath, ex.Message));
+                        onCorrupt: ex => _logger.LogWarning(
+                            "Existing extract DB at {Db} is corrupt ({Message}); force-rebuilding once with the bundled " +
+                            "julie-extract (a writer likely died mid-scan).",
+                            canonicalDbPath, ex.Message));
+
+                if (rollbackRequiresSourceRebuild)
+                {
+                    if ((!scanned && !loadResult.Rebuilt) || bootstrapLease is null)
+                    {
+                        throw new StoreRollbackRetryException(
+                            new IOException("Store rollback source reconciliation did not complete under the writer lock."));
+                    }
+
+                    try
+                    {
+                        string? cleanupWarning = StoreRollbackExporter.DeletePointerAfterSourceRebuild(
+                            canonicalRoot,
+                            canonicalDbPath,
+                            bootstrapLease);
+                        if (cleanupWarning is not null)
+                            _logger.LogWarning("{Warning}", cleanupWarning);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        throw new StoreRollbackRetryException(ex);
+                    }
+                }
             }
             finally
             {
@@ -780,33 +829,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             using SingleWriterLock? rollbackCleanupLease = rollbackRequiresSourceRebuild
                 ? SingleWriterLock.TryAcquire(millerDir)
                     ?? throw new StoreRollbackRetryException(new IOException(
-                        "Cannot reconcile the malformed store pointer because the workspace writer lock is held."))
+                        "Cannot verify store rollback pointer cleanup because the workspace writer lock is held."))
                 : null;
 
             if (rollbackRequiresSourceRebuild)
             {
-                if (!didScan)
+                if (StoreWorkspacePointer.Exists(canonicalRoot))
                 {
-                    throw new StoreRollbackRetryException(
-                        new IOException("The malformed store pointer was not followed by a source reconciliation scan."));
-                }
-
-                try
-                {
-                    bool deleted = StoreRollbackExporter.DeleteMalformedPointerIfStillMalformed(
-                        canonicalRoot,
-                        canonicalDbPath,
-                        rollbackCleanupLease);
-                    if (!deleted && StoreWorkspacePointer.Exists(canonicalRoot))
-                    {
-                        throw new StoreRollbackRetryException(new IOException(
-                            "The store pointer became valid while legacy reconciliation was running; " +
-                            "Miller will retry before binding the legacy artifact."));
-                    }
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    throw new StoreRollbackRetryException(ex);
+                    throw new StoreRollbackRetryException(new IOException(
+                        "The store pointer became valid while legacy reconciliation was running; " +
+                        "Miller will retry before binding the legacy artifact."));
                 }
             }
 

@@ -124,6 +124,83 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
     }
 
     [Fact]
+    public async Task StoreOffBootstrapReconcilesAnInterruptedRollbackMarkerFromSource()
+    {
+        ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-rollback-bootstrap-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(
+            Path.Combine(root, "RollbackBootstrap.cs"),
+            "namespace Example; public static class RollbackBootstrap { public static int Add(int a, int b) => a + b; }");
+        try
+        {
+            using (var store = new IndexBootstrapService(
+                       NullLogger<IndexBootstrapService>.Instance,
+                       storeEnabled: static () => true))
+            {
+                store.TestHomeDirectoryOverride = home;
+                Assert.Equal(
+                    BindOutcome.Started,
+                    store.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+                int generation = store.Snapshot.RunGeneration;
+                await store.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
+                Assert.True(store.IsBound, store.Snapshot.FailureMessage);
+            }
+
+            StoreWorkspacePointerDocument pointer = Assert.IsType<StoreWorkspacePointerDocument>(
+                StoreWorkspacePointer.Read(root));
+            string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+            string canonicalArtifact = Path.Combine(canonicalRoot, ".miller", "symbols.db");
+            var binding = new StoreFamilyBinding(
+                pointer.FamilyId,
+                pointer.StoreRoot,
+                pointer.ViewId,
+                canonicalRoot,
+                StoreBindingState.Ready);
+            using (FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding))
+            {
+                File.WriteAllLines(
+                    Path.Combine(root, ".miller", "store-rollback.pending"),
+                    [
+                        "3",
+                        "started",
+                        pointer.FamilyId.ToString("D"),
+                        Encode(pointer.StoreRoot),
+                        Encode(pointer.ViewId),
+                        Encode(canonicalRoot),
+                        Encode(canonicalArtifact),
+                        Encode(FullRebuildPromotion.RebuildDbPathFor(canonicalArtifact)),
+                        "",
+                        session.Visibility.ManifestGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        session.Visibility.ManifestHash,
+                        session.Visibility.StoreLogSequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    ]);
+            }
+
+            using var legacy = new IndexBootstrapService(
+                NullLogger<IndexBootstrapService>.Instance,
+                storeEnabled: static () => false);
+            legacy.TestHomeDirectoryOverride = home;
+            Assert.Equal(
+                BindOutcome.Started,
+                legacy.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+            int legacyGeneration = legacy.Snapshot.RunGeneration;
+            await legacy.WaitForRunAsync(legacyGeneration, TestContext.Current.CancellationToken);
+
+            Assert.True(legacy.IsBound, legacy.Snapshot.FailureMessage);
+            Assert.Null(StoreWorkspacePointer.Read(root));
+            Assert.False(File.Exists(Path.Combine(root, ".miller", "store-rollback.pending")));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BootstrapMigratesLegacyIntoTheFamilyStoreAndTheNextProcessReusesIt()
     {
         string binary = ScaleTestSupport.RequireJulieServer();
@@ -499,5 +576,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 rows.Add(reader.GetString(0));
             return rows;
         });
+
+    private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
 
 }

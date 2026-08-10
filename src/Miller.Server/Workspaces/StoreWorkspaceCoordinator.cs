@@ -33,6 +33,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<string> _mintRequestId;
     private readonly StoreRequestJournal? _requestJournal;
     private readonly HashSet<string> _replayedImportRequestIds = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _replayedResolveRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
 
     public StoreWorkspaceCoordinator(
@@ -282,12 +283,23 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         }
         if (resolveAfter)
         {
+            string resolveFingerprint = ResolveFingerprint();
+            StoreRequestControls controls = Controls(resolveFingerprint, StoreOperation.Resolve);
             var resolve = new StoreResolveRequest(
                 _binding.StoreRoot,
                 _binding.FamilyId.ToString("D"),
                 _binding.ViewId,
-                Controls($"resolve|{_binding.FamilyId:D}|{_binding.ViewId}", StoreOperation.Resolve));
+                controls);
+            bool replayedResolve = _replayedResolveRequestIds.Remove(controls.RequestId);
             RequireCommittedAndCompleteJournal(resolve, _client.Submit(resolve));
+            if (replayedResolve)
+            {
+                StoreResolveRequest freshResolve = resolve with
+                {
+                    Request = Controls(resolveFingerprint, StoreOperation.Resolve),
+                };
+                RequireCommittedAndCompleteJournal(freshResolve, _client.Submit(freshResolve));
+            }
         }
 
         StoreWorkspaceState after = ReadRequiredState();
@@ -453,11 +465,16 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId, out resumed) ?? RequestId();
         if (resumed && operation == StoreOperation.Import)
             _replayedImportRequestIds.Add(requestId);
+        if (resumed && operation == StoreOperation.Resolve)
+            _replayedResolveRequestIds.Add(requestId);
         return new StoreRequestControls(requestId, requestId, RequestTimeout(operation));
     }
 
     private string ImportFingerprint(StoreLevel level) =>
         $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}";
+
+    private string ResolveFingerprint() =>
+        $"resolve|{_binding.FamilyId:D}|{_binding.ViewId}";
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {

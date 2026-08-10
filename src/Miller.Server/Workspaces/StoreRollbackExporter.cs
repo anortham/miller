@@ -126,6 +126,18 @@ public static class StoreRollbackExporter
         }
     }
 
+    internal static string? DeletePointerAfterSourceRebuild(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        IDisposable? heldWriterLease = null)
+    {
+        using SingleWriterLock? ownedWriterLease = heldWriterLease is null
+            ? AcquireWriterLease(legacyDatabasePath)
+            : null;
+        StoreWorkspacePointer.Delete(workspaceRoot);
+        return TryDeletePendingMarker(workspaceRoot);
+    }
+
     private static StoreRollbackExportResult Export(
         string workspaceRoot,
         string legacyDatabasePath,
