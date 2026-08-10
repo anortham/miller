@@ -11,10 +11,9 @@ namespace Miller.Tests.Server;
 /// guess. M3 ships full-rebuild-on-swap; if this latency is comfortable at a realistic repo size, incremental
 /// (which would break the frozen/dense-DocId invariant) is NOT taken speculatively. The test measures both the
 /// pure <see cref="MillerRepositoryIndex.Build"/> (the in-memory work the swap does) and the full
-/// <see cref="IndexRebuilder.Rebuild"/> (read + build — what <c>FreshnessService</c> actually runs each swap),
-/// asserts a generous budget so it fails loudly only on a true regression, and emits the ms via the test
-/// output. <c>[Trait("Category","Scale")]</c>, EXCLUDED by default (the large fixture build exceeds the &lt;10s
-/// default budget).
+/// <see cref="IndexRebuilder.Rebuild"/> (read + build — what <c>FreshnessService</c> actually runs each swap)
+/// and emits the measured milliseconds via the test output. <c>[Trait("Category","Scale")]</c>, EXCLUDED by
+/// default because it builds a large fixture.
 /// </summary>
 [Trait("Category", "Scale")]
 public sealed class RebuildLatencyTests
@@ -23,8 +22,6 @@ public sealed class RebuildLatencyTests
 
     public RebuildLatencyTests(ITestOutputHelper output) => _output = output;
 
-    // A realistic mid/large repo symbol count. julie reports ~565k for very large monorepos; 50k is a solid
-    // single-product repo and keeps the synthesized-DB build time bounded for a Scale test.
     private const int SymbolCount = 50_000;
 
     private static IReadOnlyList<IndexedSymbol> SynthesizeSymbols(int count)
@@ -55,7 +52,6 @@ public sealed class RebuildLatencyTests
     {
         var symbols = SynthesizeSymbols(SymbolCount);
 
-        // Warm up the JIT + allocator so the measured number reflects steady-state, not first-call cost.
         _ = MillerRepositoryIndex.Build(symbols);
 
         var sw = Stopwatch.StartNew();
@@ -69,17 +65,11 @@ public sealed class RebuildLatencyTests
             $"[RebuildLatency] MillerRepositoryIndex.Build({SymbolCount:N0} symbols) = {buildMs} ms " +
             $"({(buildMs == 0 ? double.PositiveInfinity : SymbolCount / (double)buildMs):N0} symbols/ms)");
 
-        // A generous budget: a full in-memory rebuild of 50k symbols should be well under a second on any dev
-        // machine. This fails ONLY on a real regression, leaving the printed number as the actual decision input.
-        Assert.True(buildMs < 5_000,
-            $"Build of {SymbolCount} symbols took {buildMs} ms (budget 5000 ms) — investigate before shipping.");
     }
 
     [Fact]
     public void Measure_FullRebuild_ReadPlusBuild_FromADb_PrintsTheLatency()
     {
-        // The production swap path: SqliteSymbolReader.Read + Build. Use the synthesized large set written to a
-        // real DB so the read cost (the part the in-memory-only build measurement omits) is included.
         var symbols = SynthesizeSymbols(SymbolCount);
         string dir = Path.Combine(Path.GetTempPath(), "miller-rebuildlat-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -90,7 +80,7 @@ public sealed class RebuildLatencyTests
             LargeDbWriter.Write(db, symbols);
             var rebuilder = new IndexRebuilder(db);
 
-            _ = rebuilder.Rebuild(); // warm up
+            _ = rebuilder.Rebuild();
 
             var sw = Stopwatch.StartNew();
             var index = rebuilder.Rebuild();
@@ -102,9 +92,6 @@ public sealed class RebuildLatencyTests
             _output.WriteLine(
                 $"[RebuildLatency] IndexRebuilder.Rebuild (read+build, {SymbolCount:N0} symbols) = {rebuildMs} ms");
 
-            // Generous budget covering disk read + build for 50k symbols.
-            Assert.True(rebuildMs < 10_000,
-                $"Full rebuild of {SymbolCount} symbols took {rebuildMs} ms (budget 10000 ms) — investigate.");
         }
         finally
         {

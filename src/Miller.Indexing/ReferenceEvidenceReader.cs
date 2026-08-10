@@ -485,16 +485,9 @@ public static class ReferenceEvidenceReader
 
     private static void RequireResolutionTables(SqliteConnection connection)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT COUNT(*) FROM sqlite_master
-            WHERE type = 'table' AND name = $name;
-            """;
-        var name = command.Parameters.Add("$name", SqliteType.Text);
         foreach (string table in RequiredResolutionTables)
         {
-            name.Value = table;
-            if (Convert.ToInt32(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 0)
+            if (!SqliteSchemaObjects.Exists(connection, table))
                 throw new IncompatibleExtractException(
                     $"Reference evidence requires the '{table}' table. Restore the pinned julie-extract artifact.");
         }

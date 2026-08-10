@@ -128,20 +128,7 @@ internal static class JulieSchemaGate
 
     private static void RequireTable(SqliteConnection connection, string tableName)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT 1
-            FROM sqlite_master
-            WHERE type = 'table' AND name = $table_name
-            UNION ALL
-            SELECT 1
-            FROM sqlite_temp_master
-            WHERE type IN ('table','view') AND name = $table_name
-            LIMIT 1;
-            """;
-        command.Parameters.AddWithValue("$table_name", tableName);
-        if (command.ExecuteScalar() is null)
+        if (!SqliteSchemaObjects.Exists(connection, tableName))
             throw new IncompatibleExtractException(
                 $"DB has no '{tableName}' table; it is not a compatible julie-extract schema 5 artifact. " +
                 $"Re-run restore + `workspace full` with the pinned julie-extract.");

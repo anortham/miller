@@ -93,10 +93,7 @@ public static class DeadCodeCandidateReader
     {
         foreach (var table in RequiredResolutionTables)
         {
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$n LIMIT 1;";
-            cmd.Parameters.AddWithValue("$n", table);
-            if (cmd.ExecuteScalar() is null)
+            if (!SqliteSchemaObjects.Exists(connection, table))
                 throw new IncompatibleExtractException(
                     $"DB has no '{table}' table; it is not a schema-{MillerExtractContract.ExpectedSchemaVersion} " +
                     $"julie-extract artifact with workspace reference resolution. Re-run restore + `scan` with the " +
