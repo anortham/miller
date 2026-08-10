@@ -175,6 +175,39 @@ public sealed class BootstrapReplacedRootTests
         Assert.Equal(WorkspaceRegistryState.LoadedExisting, decision.RegistryStateAfterLoad);
     }
 
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void AWinnerArtifactCannotStandDownWhileBootstrapMustRebuild(
+        bool rootReplaced,
+        bool persistedRootReplaced,
+        bool rollbackRequiresSourceRebuild)
+    {
+        int probes = 0;
+
+        Assert.False(IndexBootstrapService.MayStandDownForWinnerArtifact(
+            rootReplaced,
+            persistedRootReplaced,
+            rollbackRequiresSourceRebuild,
+            () =>
+            {
+                probes++;
+                return true;
+            }));
+        Assert.Equal(0, probes);
+    }
+
+    [Fact]
+    public void AFinishedWinnerArtifactCanStandDownWhenNoBootstrapRepairIsRequired()
+    {
+        Assert.True(IndexBootstrapService.MayStandDownForWinnerArtifact(
+            rootReplaced: false,
+            persistedRootReplaced: false,
+            rollbackRequiresSourceRebuild: false,
+            artifactIsFinished: static () => true));
+    }
+
     [Fact]
     public void CaptureLineageReadsTheCommonDirAndGenerationOfANormalCheckout()
     {

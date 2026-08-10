@@ -48,6 +48,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string, IScanFailurePolicy> _failurePolicyFor;
     private readonly Func<bool> _storeEnabled;
     private readonly IJulieStoreClient? _storeClient;
+    private readonly Action<string> _deleteStorePointer;
     private readonly IndexerSidecarConverger _sidecarConverger;
 
     // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
@@ -113,7 +114,8 @@ public sealed class CrossWorkspaceRefreshService
         TimeSpan? governorForceWait = null,
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
         IJulieStoreClient? storeClient = null,
-        Func<bool>? storeEnabled = null)
+        Func<bool>? storeEnabled = null,
+        Action<string>? deleteStorePointer = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -152,6 +154,7 @@ public sealed class CrossWorkspaceRefreshService
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _storeClient = storeClient;
+        _deleteStorePointer = deleteStorePointer ?? StoreWorkspacePointer.Delete;
         _sidecarConverger = new IndexerSidecarConverger(
             _sidecar,
             _contentSidecar,
@@ -345,17 +348,21 @@ public sealed class CrossWorkspaceRefreshService
                 attempt.Downgraded ? ScanFailurePolicy.DescribeDowngrade(intent, attempt) : null,
                 JoinNotes(rollbackWarning, ExtractReportLog.DescribeWarning(report)));
 
+            string? pointerCleanupError = null;
             if (sourceRebuildRequired)
             {
                 try
                 {
-                    StoreWorkspacePointer.Delete(row.CanonicalRoot);
+                    _deleteStorePointer(row.CanonicalRoot);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    throw new StoreRollbackRetryException(ex);
+                    pointerCleanupError =
+                        $"Source reconciliation completed, but the store pointer could not be removed: {ex.Message}";
                 }
             }
+
+            warning = JoinNotes(warning, pointerCleanupError);
 
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
@@ -368,6 +375,24 @@ public sealed class CrossWorkspaceRefreshService
                 warning = JoinNotes(warning, TryConvergeStoreSidecars(row));
             else
                 TryConvergeSidecar(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId, revision);
+
+            if (pointerCleanupError is not null)
+            {
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Failed,
+                    row.WorkspaceId,
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    revision,
+                    Scanned: false,
+                    WarningText: warning,
+                    Error: pointerCleanupError,
+                    ScanDuration: scanClock.Elapsed,
+                    TotalDuration: total.Elapsed,
+                    ArtifactId: report.Artifact?.ArtifactId
+                        ?? TryReadArtifactId(row, useStore)
+                        ?? artifactIdBeforeScan);
+            }
 
             // Refreshed-vs-unchanged comes from the REPORT, not a revision comparison: a force rebuild of an
             // incompatible artifact deletes and recreates the DB, restarting its revision counter (often on

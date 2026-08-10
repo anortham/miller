@@ -560,7 +560,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     var scanLease = AcquireBootstrapScanLease(
                         tryAcquire: () => SingleWriterLock.TryAcquire(millerDir),
                         decide: ReadDecision,
-                        winnerArtifactUsable: winnerArtifact.IsFinished,
+                        winnerArtifactUsable: () => MayStandDownForWinnerArtifact(
+                            rootReplaced,
+                            persistedRootReplaced,
+                            rollbackRequiresSourceRebuild,
+                            winnerArtifact.IsFinished),
                         wait: BootstrapScanLockWait(),
                         pollInterval: BootstrapScanLockPollInterval,
                         utcNow: () => DateTimeOffset.UtcNow,
@@ -1459,6 +1463,16 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         stored is not null
         && WorkspaceRootIdentity.IsReplacement(
             new WorkspaceRootIdentity(stored.GitDir, stored.GitDirCreatedAtUtc), current);
+
+    internal static bool MayStandDownForWinnerArtifact(
+        bool rootReplaced,
+        bool persistedRootReplaced,
+        bool rollbackRequiresSourceRebuild,
+        Func<bool> artifactIsFinished)
+    {
+        ArgumentNullException.ThrowIfNull(artifactIsFinished);
+        return !rootReplaced && !persistedRootReplaced && !rollbackRequiresSourceRebuild && artifactIsFinished();
+    }
 
     /// <summary>
     /// The repository lineage of <paramref name="canonicalRoot"/>: the key every worktree of one repository

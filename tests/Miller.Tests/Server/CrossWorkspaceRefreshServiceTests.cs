@@ -309,6 +309,40 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_PointerCleanupFailureKeepsSuccessfulScanBookkeeping()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("malformed-store-pointer-cleanup-failure");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var policy = new InMemoryScanFailurePolicy();
+        var service = NewService(
+            registry,
+            scan: (_, _, force, _, _) =>
+            {
+                Assert.True(force);
+                return Report(root, dbPath, "target-ws", revision: 2);
+            },
+            acquireLock: _ => new NoopLease(),
+            failurePolicyFor: (_, _) => policy,
+            storeClient: new UnexpectedStoreClient(),
+            deleteStorePointer: _ => throw new IOException("pointer is locked"));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Contains("pointer is locked", result.Error, StringComparison.Ordinal);
+        Assert.Null(policy.Read());
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Ready, row.State);
+        Assert.Equal(2, row.LastRevision);
+    }
+
+    [Fact]
     public void Refresh_RollbackExportFailure_MarksRegistryErrorAndPreservesStoreBinding()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -1300,7 +1334,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         TimeSpan? governorForceWait = null,
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
         IJulieStoreClient? storeClient = null,
-        Func<bool>? storeEnabled = null)
+        Func<bool>? storeEnabled = null,
+        Action<string>? deleteStorePointer = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -1320,7 +1355,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             governorForceWait: governorForceWait,
             failurePolicyFor: failurePolicyFor,
             storeClient: storeClient,
-            storeEnabled: storeEnabled);
+            storeEnabled: storeEnabled,
+            deleteStorePointer: deleteStorePointer);
     }
 
     [Fact]
