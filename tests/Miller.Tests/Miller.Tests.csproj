@@ -15,6 +15,7 @@
          needs no extra file and fails the build LOUDLY on a typo, whereas a malformed runsettings is silently
          ignored and runs everything.) -->
     <VSTestTestCaseFilter>Category!=Scale</VSTestTestCaseFilter>
+    <RunSettingsFilePath>$(MSBuildProjectDirectory)/test.runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <ItemGroup>

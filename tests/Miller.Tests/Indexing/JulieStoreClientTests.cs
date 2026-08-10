@@ -171,7 +171,8 @@ public sealed class JulieStoreClientTests
 
             long before = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
             long unchanged = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
-            File.AppendAllBytes(Path.Combine(nested, "part-0000"), [2]);
+            for (int i = 0; i < 513; i++)
+                File.AppendAllBytes(Path.Combine(nested, $"part-{i:D4}"), [2]);
             long after = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
 
             Assert.Equal(before, unchanged);
