@@ -1724,7 +1724,9 @@ public static class CliDispatch
     private static string? ReferencesExportLevelWarning(WorkspaceReadHandle session) =>
         IndexLevelGuard.IsSymbolsLevel(session.Snapshot.IndexLevel)
             ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ReferenceExportConverging(), json: false)
-            : null;
+            : IndexLevelGuard.ResolutionLayerConverging(session.Snapshot)
+                ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ResolutionConverging(), json: false)
+                : null;
 
     // The deterministic dead-code candidate listing (`references candidates`; dead-code candidates design rev 2):
     // a fact list with NAMED suppressions, not a verdict. The Indexing reader owns all query-time work (the schema
@@ -1763,6 +1765,14 @@ public static class CliDispatch
                     "references candidates is unavailable while this workspace serves a symbols-level index: " +
                     "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
                     "after setting this workspace's level policy to full and rebuilding it.");
+                return 3;
+            }
+
+            if (IndexLevelGuard.ResolutionLayerConverging(readScope.Session.Snapshot))
+            {
+                err.WriteLine(
+                    "references candidates is unavailable while this family-store view's identifier resolution " +
+                    "is not exact; retry after the resolve operation completes.");
                 return 3;
             }
 
@@ -1967,11 +1977,12 @@ public static class CliDispatch
             if (readSession is not null)
             {
                 WorkspaceFreshnessToken sessionFreshness = readSession.Snapshot.Freshness;
+                long historyRevision = sessionFreshness.StoreLogSequence ?? sessionFreshness.Revision;
                 string sessionWorkspaceId = ctx.WorkspaceId
                     ?? readSession.Snapshot.WorkspaceId
                     ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
                 if (string.IsNullOrWhiteSpace(sessionFreshness.ArtifactOrStoreId)
-                    || sessionFreshness.Revision <= 0
+                    || historyRevision <= 0
                     || string.IsNullOrWhiteSpace(sessionWorkspaceId))
                     return null;
 
@@ -1980,7 +1991,7 @@ public static class CliDispatch
                 return new HeavyArmIdentity(
                     sessionWorkspaceId,
                     sessionFreshness.ArtifactOrStoreId,
-                    sessionFreshness.Revision,
+                    historyRevision,
                     sessionExtractorVersion);
             }
 
@@ -2065,7 +2076,8 @@ public static class CliDispatch
                     ctx.WorkspaceId);
                 return (
                     session.Snapshot.Freshness.ArtifactOrStoreId,
-                    session.Snapshot.Freshness.Revision);
+                    session.Snapshot.Freshness.StoreLogSequence
+                    ?? session.Snapshot.Freshness.Revision);
             }
 
             string extractDbPath = ctx.ExtractDbPath;

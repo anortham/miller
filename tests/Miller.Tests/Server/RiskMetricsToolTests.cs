@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Cli;
 using Miller.Server.Git;
@@ -12,6 +13,38 @@ namespace Miller.Tests.Server;
 
 public sealed class RiskMetricsToolTests
 {
+    [Fact]
+    public void CaptureHeavyArmIdentity_UsesStoreLogSequenceForFamilyStoreHistory()
+    {
+        using var fx = JulieDbFixture.CreateDefault();
+        WorkspaceContext context = Context(fx);
+        WorkspaceReadSnapshot snapshot = new(
+            fx.WorkspaceRoot,
+            "ws-test",
+            "family-a",
+            "view-a",
+            new WorkspaceFreshnessToken(
+                "family-a",
+                Revision: 7,
+                ManifestHash: "manifest-a",
+                StoreLogSequence: 91,
+                StoreInstanceId: "family-a:gen-001",
+                ViewId: "view-a",
+                GenerationName: "gen-001",
+                ManifestGeneration: 7,
+                IndexLevel: IndexLevels.FullMetadataValue,
+                LevelStampL1: "l1",
+                LevelStampL2: "l2",
+                LevelStampL3: "l3"),
+            IndexLevels.FullMetadataValue,
+            WorkspaceReadMode.FamilyStore);
+
+        using var session = new TestReadSession(snapshot, fx.DbPath);
+        CliDispatch.HeavyArmIdentity? identity = CliDispatch.CaptureHeavyArmIdentity(context, session);
+
+        Assert.Equal(91, identity?.Revision);
+    }
+
     // ---- heavy-arm metric-history: risk fact-surfacing + CLI recorder wiring (Task 3) ----------------------
 
     [Fact]
@@ -398,5 +431,26 @@ public sealed class RiskMetricsToolTests
     private sealed class StubGitHistoryReader(GitHistoryResult result) : IGitHistoryReader
     {
         public GitHistoryResult Read(GitHistoryRequest request) => result;
+    }
+
+    private sealed class TestReadSession(WorkspaceReadSnapshot snapshot, string databasePath) : IWorkspaceReadSession
+    {
+        public WorkspaceReadSnapshot Snapshot { get; } = snapshot;
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            return query(connection);
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

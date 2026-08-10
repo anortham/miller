@@ -33,6 +33,10 @@ are normative amendments, not retrospective acceptance claims.
 | A6 — store deepening | Store level-upgrade decisions read the family-store session's committed level, not the legacy artifact. Progressive L1 stores must schedule and complete the Full upgrade. | Implemented and verified in Miller Scale coverage |
 | A7 — lock/freshness contract | The coordinator enforces machine governor → store-writer → sidecar-converger acquisition order, and the freshness token includes the pinned store instance/view/generation and per-level state required by §8. | **Open.** Miller records the store identity, view, generation, manifest, level, resolution, and log stamps, but the read session creates no durable `coord.db` pin/heartbeat/expiry/release. Live Miller acquisition is `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`, not the frozen triple. |
 | A8 — store sidecar convergence | Store sidecars consume `store_log` through idempotent cursors and converge incrementally. | **Open.** `EnsureStoreCurrent` rewrites a full current-view search/content sidecar whenever its stamp is stale; cursor-incremental convergence and its local reproducible cost gate remain Ph5 work. |
+| A9 — store freshness cursor | Store-mode sidecar metadata, history, and freshness rechecks use `store_log.sequence`; legacy artifacts may continue to use the extraction revision. | Implemented and verified in Miller review-fix tests and store Scale coverage |
+| A10 — resolution authority | A Full extraction level does not imply exact identifier resolution. Usage-dependent consumers refuse or warn while `resolution_state != exact`. | Implemented and verified in reference-consumer and store Scale coverage |
+| A11 — pruned delta history | A revision delta whose baseline manifest is unavailable returns an explicit unavailable/pruned-history result; it must not claim a complete deletion set from an invented baseline. | Implemented and verified in Miller regression tests |
+| A12 — store request liveness | `store import` and `store resolve` use a one-hour default request window, configurable with `MILLER_STORE_REQUEST_TIMEOUT`; shorter update/delete operations retain the five-minute default. | Implemented and verified in coordinator tests |
 
 ---
 
@@ -300,7 +304,9 @@ obtain connections; the raw `IndexDbPath` retires from the read contract. A sess
 1. Resolves (family, view) once via pointer file + registry, validated against `views`.
 2. Resolves `CURRENT`, opens the generation read-only, pins `(store_instance_id, view_id,
    manifest_generation, per-level stamps, resolution generation)` — the **freshness token**. A
-   token component changing is the only staleness signal; revision counters are gone.
+   token component changing is the only staleness signal; revision counters are gone. A Full
+   extraction level does not certify the resolution layer: usage-dependent consumers require
+   `resolution_state=exact` and must report or refuse a converging view.
    **Pins have a lifecycle, because a pin is a GC root** (§10, §12, §14): each pin is a
    `coord.db` row `(pin_id, view_id, generation, holder_pid, heartbeat_at, expires_at)` with
    a bounded lifetime; the holder heartbeats long sessions, and an expired or dead-pid pin
@@ -342,6 +348,9 @@ retention histories.
 through an **idempotent cursor** (its own table in the sidecar: last applied log sequence) and
 publishes a completeness stamp the read session validates; a crash between store commit and
 sidecar commit replays cleanly — no cross-WAL atomicity exists to rely on (doubt-pass finding 8).
+In store mode, that sequence is also the freshness cursor for sidecar metadata, history, and
+rechecks. Legacy standalone artifacts retain their extraction-revision cursor; the two axes are
+not interchangeable.
 
 - **search.db** — FTS rows keyed `(version_id, …)`; word arm + collapsed-trigram arm carry
   forward; recall-only stays true.
@@ -790,6 +799,22 @@ the v4.1 register:
 | A8.1 | medium | Store search/content convergence materializes the current view and rewrites a full sidecar when the stamp is stale; it has no store-log cursor path. | OPEN — keep store mode opt-in and make cursor-incremental convergence plus a local reproducible cost gate a Ph5 entry criterion. |
 
 ---
+
+### v4.2 review-fix recheck — 2026-08-09
+
+The post-freeze Miller implementation recheck also found four concrete consumer-side deviations. They
+were fixed before the release candidate was reconsidered:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A9.1 | high | Store history and sidecar freshness mixed the extraction revision with the store-log sequence. | ACCEPTED — folded: store-mode capture, recheck, and search-sidecar metadata use `store_log.sequence`; legacy artifacts retain the extraction revision. |
+| A9.2 | high | A store view could report Full extraction while usage-dependent reference candidates read an inexact resolution layer. | ACCEPTED — folded: candidate export refuses a non-exact resolution view and reference export labels it as converging. |
+| A9.3 | medium | A pruned revision baseline could return a complete delta with deleted paths omitted. | ACCEPTED — folded: missing historical manifests return `Unavailable(pruned_history)` for nonzero spans. |
+| A9.4 | low | The fixed coordinator request window was too short for large import/resolve operations. | ACCEPTED — folded: import/resolve default to one hour with `MILLER_STORE_REQUEST_TIMEOUT`; update/delete retain five minutes. |
+
+These fixes do not close A7 or A8. In particular, the full-view sidecar rewrite remains an explicit
+Ph5 implementation and local-cost gate, and the durable reader pin/lock-order work remains a Ph4/Ph5
+entry condition. No GitHub Actions wall-clock threshold is an acceptance criterion.
 
 ## Cross-reference: gate price list → contract sections
 

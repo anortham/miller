@@ -976,8 +976,13 @@ public sealed class ContentTool
     {
         if (!_storeEnabled())
         {
+            ContentCorpusReadLocation location = ContentCorpusReadLocator.Resolve(
+                indexDbPath,
+                workspaceRoot,
+                workspaceId,
+                storeEnabled: false);
             return new ContentReadLocation(
-                ContentCorpusSidecar.ContentDbPathFor(indexDbPath),
+                location.ContentDbPath,
                 indexDbPath,
                 workspaceId,
                 workspaceRoot);

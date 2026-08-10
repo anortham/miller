@@ -19,7 +19,8 @@ namespace Miller.Indexing;
 /// the interior-substring arm over the separator-free <see cref="CollapseName"/> form.</item>
 /// <item><c>search_symbols(...)</c> — self-contained metadata: candidate filtering, Eros queries, AST chunk
 /// boundaries. <c>doc_len</c> is the word token count (BM25 length norm).</item>
-/// <item><c>meta(...)</c> — freshness key, sidecar options, and corpus BM25 constants.</item>
+/// <item><c>meta(...)</c> — freshness cursor, sidecar options, and corpus BM25 constants. Legacy
+/// artifacts use the extraction revision; family-store artifacts use the store-log sequence.</item>
 /// </list>
 ///
 /// Build discipline: write a sibling temp DB, then atomically <see cref="File.Move(string,string,bool)"/> it
@@ -142,7 +143,7 @@ public static class SearchIndexWriter
         WriteAtomic(
             searchDbPath,
             symbols,
-            session.Snapshot.Freshness.Revision,
+            stamp.StoreLogSequence,
             symbolsDbPath: null,
             session.Snapshot.WorkspaceRoot,
             regionOptions,

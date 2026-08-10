@@ -55,6 +55,28 @@ public sealed class WorkspaceFactsAssemblerTests : IDisposable
     }
 
     [Fact]
+    public void StoreIndexLevelFactsUseTheReadSessionLevel()
+    {
+        WorkspaceReadSnapshot snapshot = new(
+            "/repo/worktree",
+            "workspace-id",
+            "family-id",
+            "view-worktree",
+            new WorkspaceFreshnessToken(
+                "family-id",
+                7,
+                StoreLogSequence: 91,
+                IndexLevel: IndexLevels.SymbolsMetadataValue),
+            IndexLevels.SymbolsMetadataValue,
+            WorkspaceReadMode.FamilyStore);
+
+        IndexLevelFacts? facts = WorkspaceFactsAssembler.IndexLevelFactsFor(snapshot, "progressive");
+
+        Assert.Equal(IndexLevels.SymbolsMetadataValue, facts?.Level);
+        Assert.True(facts?.UpgradeOwed);
+    }
+
+    [Fact]
     public void StoreModeReportsBindingFailureInsteadOfFallingBackToTheLegacyArtifact()
     {
         using WorkspaceRegistry registry = WorkspaceRegistry.Open(Path.Combine(_temp, "store-failure.db"));

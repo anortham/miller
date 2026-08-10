@@ -1,3 +1,4 @@
+using System.Globalization;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
@@ -23,6 +24,7 @@ public sealed class StoreWorkspaceOperationException(
 public sealed class StoreWorkspaceCoordinator : IExtractOps
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultLongRequestTimeout = TimeSpan.FromHours(1);
 
     private readonly StoreFamilyBinding _binding;
     private readonly IJulieStoreClient _client;
@@ -168,7 +170,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         string relativePath = RelativePath(path);
         StoreLevel level = LevelFor(ScanIntent.IncrementalReconcile, before);
         StoreRequestControls controls = Controls(
-            $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{CurrentContentFingerprint(relativePath)}");
+            $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{CurrentContentFingerprint(relativePath)}",
+            StoreOperation.Update);
         var request = new StoreUpdateRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -191,7 +194,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         StoreWorkspaceState before = ReadRequiredState();
         string relativePath = RelativePath(path);
         StoreRequestControls controls = Controls(
-            $"delete|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}");
+            $"delete|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}",
+            StoreOperation.Delete);
         var request = new StoreDeleteRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -212,7 +216,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         StoreWorkspaceState? before = _readState(_binding);
         StoreLevel level = LevelFor(intent, before);
         StoreRequestControls controls = Controls(
-            $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}");
+            $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}",
+            StoreOperation.Import);
         var request = new StoreImportRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -245,7 +250,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
                 _binding.StoreRoot,
                 _binding.FamilyId.ToString("D"),
                 _binding.ViewId,
-                Controls($"resolve|{_binding.FamilyId:D}|{_binding.ViewId}"));
+                Controls($"resolve|{_binding.FamilyId:D}|{_binding.ViewId}", StoreOperation.Resolve));
             RequireCommittedAndCompleteJournal(resolve, _client.Submit(resolve));
         }
 
@@ -379,10 +384,25 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ParentProcessId: supervision.ParentPid);
     }
 
-    private StoreRequestControls Controls(string fingerprint)
+    private StoreRequestControls Controls(string fingerprint, StoreOperation operation)
     {
         string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId) ?? RequestId();
-        return new StoreRequestControls(requestId, requestId, DefaultRequestTimeout);
+        return new StoreRequestControls(requestId, requestId, RequestTimeout(operation));
+    }
+
+    private static TimeSpan RequestTimeout(StoreOperation operation)
+    {
+        string? configured = Environment.GetEnvironmentVariable("MILLER_STORE_REQUEST_TIMEOUT");
+        if (!string.IsNullOrWhiteSpace(configured)
+            && TimeSpan.TryParse(configured, CultureInfo.InvariantCulture, out TimeSpan parsed)
+            && parsed > TimeSpan.Zero
+            && parsed.TotalSeconds <= int.MaxValue
+            && parsed.TotalSeconds == Math.Truncate(parsed.TotalSeconds))
+            return parsed;
+
+        return operation is StoreOperation.Import or StoreOperation.Resolve
+            ? DefaultLongRequestTimeout
+            : DefaultRequestTimeout;
     }
 
     private static StoreRequestControls RequestControls(StoreRequest request) => request switch

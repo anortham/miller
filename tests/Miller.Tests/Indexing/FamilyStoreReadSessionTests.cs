@@ -125,6 +125,24 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void RevisionDeltaReaderRefusesAStoreSpanWithoutARecoverableBaselineManifest()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        DeleteManifest(fixture, generation: 1);
+        using FamilyStoreReadSession session = FamilyStoreReadSession.Open(fixture.Binding);
+
+        RevisionDeltaResult delta = RevisionDeltaReader.Read(
+            session,
+            fromRevision: 1,
+            fromArtifactId: fixture.Binding.FamilyId.ToString("D"));
+
+        Assert.Equal(RevisionDeltaStatus.Unavailable, delta.Status);
+        Assert.Equal("pruned_history", delta.Reason);
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(delta.ChangedPaths));
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(delta.DeletedPaths));
+    }
+
+    [Fact]
     public void EnabledWorkspaceFactoryUsesTheValidatedPointerInsteadOfTheLegacyArtifact()
     {
         using StoreFixture fixture = StoreFixture.Create();
@@ -190,6 +208,18 @@ public sealed class FamilyStoreReadSessionTests
         command.Parameters.AddWithValue("$request", $"request-{sequence}");
         command.Parameters.AddWithValue("$view", (object?)viewId ?? DBNull.Value);
         command.Parameters.AddWithValue("$version", (object?)versionId ?? DBNull.Value);
+        command.ExecuteNonQuery();
+    }
+
+    private static void DeleteManifest(StoreFixture fixture, long generation)
+    {
+        string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM manifests WHERE view_id='view-a' AND generation=$generation;";
+        command.Parameters.AddWithValue("$generation", generation);
         command.ExecuteNonQuery();
     }
 

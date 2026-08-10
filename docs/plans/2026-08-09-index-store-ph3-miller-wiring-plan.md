@@ -2,9 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Status:** A1-A7 cleanup complete 2026-08-09. This wiring plan is retained as the implementation
-record; the lock-order/freshness amendment is shipped, while Ph4 dashboard work and Ph5 physical
-validation/default-on decisions remain.
+**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 review fixes complete 2026-08-09. This
+wiring plan is retained as the implementation record; the durable lock/freshness and cursor-order
+amendments remain open, while Ph4 dashboard work and Ph5 physical validation/default-on decisions
+remain.
 
 **Goal:** Pin Miller to the published `julie-extract 2.31.1` release and make Miller create, refresh, and read family stores through the amended v4.1 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
 
@@ -24,7 +25,9 @@ validation/default-on decisions remain.
 
 ## Global Constraints
 
-- The published producer is `julie-extract 2.31.1`; legacy SQLite schema `6`, extraction contract `4`, report schema `3`, and JSONL schema `4` remain unchanged.
+- The published producer is `julie-extract 2.31.1` for the original wiring slice; the release candidate
+  adopts the published 2.31.2 patch without changing the legacy SQLite schema `6`, extraction contract
+  `4`, report schema `3`, or JSONL schema `4`.
 - The family store contract is store contract `1`, store SQLite schema `2`, format epoch `1`, and request/maintenance report schema `1`.
 - A family is one git common-dir lineage; a non-git workspace is a family of one.
 - `family_id` is a UUID minted at family creation and stored in store metadata, the registry family row, and each member workspace pointer file. It is never a path hash.
@@ -38,6 +41,9 @@ validation/default-on decisions remain.
 - Store writes are executed only by `julie-extract` through its coordinator. Miller never writes `store.db`, `coord.db`, manifests, resolution bases, or generation files directly.
 - Lock order is machine governor → store-writer lease → sidecar-converger lease; release in reverse order.
 - Store mode preserves L1-first serving and reports truthful per-capability degradation until L2, L3, resolution, and sidecar stamps converge.
+- A Full extraction stamp does not certify exact identifier resolution; usage-dependent consumers report
+  or refuse a store view until its resolution state is exact. Store freshness and sidecar metadata use
+  the store-log sequence, not the legacy extraction revision.
 - Disabling store mode exports the current view to a fresh legacy artifact or reports not-ready. It never serves an old per-workspace artifact as current.
 - The store default-on decision remains deferred to Ph5. Ph3 ships an explicit environment/config switch and exercises both modes.
 - `Miller.Core` remains I/O-free. No new MCP tools. Existing lexical-only output stays byte-identical.
@@ -60,7 +66,7 @@ validation/default-on decisions remain.
 
 **Security scope:** none declared; this plan adds no dependency, credential, network listener, or write surface outside existing local CLI/SQLite paths.
 
-**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing.
+**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing. The store import/resolve request window defaults to one hour and is controlled by `MILLER_STORE_REQUEST_TIMEOUT`; it is a liveness setting, not a performance gate.
 
 **Escalation triggers:** any public-output drift runs the corresponding CLI/MCP contract suite; any sidecar-key or ranking change runs search/content/vector parity; any bootstrap/refresh change runs all Scale workspace lifecycle tests; any package/pin change runs restore and release build.
 

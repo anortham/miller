@@ -115,6 +115,30 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void NewFamilyImportUsesTheLongStoreRequestTimeout()
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState?>
+        (
+        [
+            null,
+            new StoreWorkspaceState(1, "l1"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding with { State = StoreBindingState.Planned },
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-timeout",
+            fromArtifact: null);
+
+        coordinator.Scan();
+
+        StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
+        Assert.Equal(TimeSpan.FromHours(1), request.Request.Timeout);
+    }
+
+    [Fact]
     public void TypedStoreFailureDoesNotMasqueradeAsACompletedExtractReport()
     {
         var client = new RecordingStoreClient(

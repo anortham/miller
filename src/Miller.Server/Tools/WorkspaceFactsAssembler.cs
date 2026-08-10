@@ -137,6 +137,18 @@ internal static class WorkspaceFactsAssembler
             level, IndexLevels.UpgradeOwed(level, policy), IndexLevels.StorageValue(policy));
     }
 
+    internal static IndexLevelFacts? IndexLevelFactsFor(WorkspaceReadSnapshot snapshot, string? registryPolicy)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!IndexLevels.IsSymbolsLevel(snapshot.IndexLevel))
+            return null;
+        IndexLevelPolicy policy = IndexLevels.Resolve(registryPolicy);
+        return new IndexLevelFacts(
+            snapshot.IndexLevel,
+            IndexLevels.UpgradeOwed(snapshot.IndexLevel, policy),
+            IndexLevels.StorageValue(policy));
+    }
+
     /// <summary>
     /// The rebind-provenance fact for status/health, or null when the artifact carries no
     /// <c>rebound_from_root</c> key — the never-rebound state, which renders nowhere and keeps default output
@@ -222,8 +234,8 @@ internal static class WorkspaceFactsAssembler
                     Vectors: resolvedVectors.InspectStore(storeRoot, session.Snapshot),
                     SemanticBroker: semanticBroker ?? SemanticBrokerFacts.From(resolvedVectors.Mode, null),
                     ScanGovernor: ScanGovernorFacts(row.CanonicalRoot, scanGovernor),
-                    ScanFailure: null,
-                    IndexLevel: null,
+                    ScanFailure: ScanFailureFacts(row.IndexDbPath),
+                    IndexLevel: IndexLevelFactsFor(session.Snapshot, row.LevelPolicy),
                     RebindProvenance: null,
                     Store: StoreFactsFor(session.Snapshot, File.Exists(row.IndexDbPath)));
             }

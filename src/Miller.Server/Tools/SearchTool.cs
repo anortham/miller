@@ -3890,7 +3890,7 @@ public sealed class SearchTool
     {
         try
         {
-            WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspaceId, ensureFresh);
+            using WorkspaceSymbolSearchContext context = _workspaceProvider.ResolveSymbolSearch(workspaceId, ensureFresh);
             return SymbolSuggestionEngine.Suggest(context.Index, identifier, EmptySuggestionLimit);
         }
         catch (Exception ex) when (

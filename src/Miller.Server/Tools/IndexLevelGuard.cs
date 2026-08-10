@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Telemetry;
 
 namespace Miller.Server.Tools;
@@ -35,6 +36,20 @@ internal static class IndexLevelGuard
     /// <c>Miller.Indexing</c>/<c>Miller.Server</c> seam.</summary>
     public static bool IsSymbolsLevel(string? indexLevel) =>
         IndexLevels.IsSymbolsLevel(indexLevel);
+
+    public static bool ResolutionLayerConverging(WorkspaceReadSnapshot snapshot) =>
+        snapshot.Mode == WorkspaceReadMode.FamilyStore
+        && !string.Equals(snapshot.ResolutionState, "exact", StringComparison.OrdinalIgnoreCase);
+
+    public static ToolDiagnostic ResolutionConverging() =>
+        ToolDiagnostic.ExpectedEmpty(
+            "resolution_converging",
+            "This family-store view has not completed exact identifier resolution, so usage-dependent results " +
+            "are not authoritative. Retry after the resolve operation completes.",
+            [
+                new ToolDiagnosticAction("workspace(operation=\"status\")", "check resolution state"),
+                new ToolDiagnosticAction("workspace(operation=\"refresh\")", "retry store convergence"),
+            ]);
 
     /// <summary>The data-bearing "reference layer converging" diagnostic for read tools: what is missing, what
     /// still works, and how the upgrade happens. The upgrade is NOT promised as automatic — only a session

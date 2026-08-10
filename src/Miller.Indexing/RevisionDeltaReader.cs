@@ -175,7 +175,13 @@ public static class RevisionDeltaReader
             FROM store_log
             WHERE view_id=$view
               AND event_kind='manifest_flipped'
+              AND generation IS NOT NULL
               AND sequence <= $sequence
+              AND EXISTS (
+                  SELECT 1
+                  FROM manifests
+                  WHERE manifests.view_id=store_log.view_id
+                    AND manifests.generation=store_log.generation)
             ORDER BY sequence DESC
             LIMIT 1;
             """;
@@ -185,6 +191,8 @@ public static class RevisionDeltaReader
         long? baselineGeneration = baselineValue is null or DBNull
             ? null
             : Convert.ToInt64(baselineValue, CultureInfo.InvariantCulture);
+        if (fromRevision > 0 && baselineGeneration is null)
+            return Unavailable(fromRevision, current, artifactId, "pruned_history");
 
         using SqliteCommand changed = connection.CreateCommand();
         changed.CommandText = """

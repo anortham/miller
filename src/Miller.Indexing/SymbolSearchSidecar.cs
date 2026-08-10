@@ -165,7 +165,7 @@ public sealed class SymbolSearchSidecar
         {
             FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(path);
             return new SearchSidecarFacts(
-                index.Revision == snapshot.Freshness.Revision ? "current" : "stale",
+                index.Revision == expectedRevision ? "current" : "stale",
                 path,
                 index.Revision,
                 expectedRevision,
@@ -296,11 +296,11 @@ public sealed class SymbolSearchSidecar
         }
 
         FtsSymbolSearchIndex index = FtsSymbolSearchIndex.Open(searchDbPath);
-        if (index.Revision != snapshot.Freshness.Revision)
+        if (index.Revision != expected.StoreLogSequence)
         {
             throw new InvalidOperationException(
-                $"Search sidecar for view '{snapshot.ViewId}' has generation {index.Revision}, " +
-                $"expected {snapshot.Freshness.Revision}.");
+                $"Search sidecar for view '{snapshot.ViewId}' has store sequence {index.Revision}, " +
+                $"expected {expected.StoreLogSequence}.");
         }
         return index;
     }
