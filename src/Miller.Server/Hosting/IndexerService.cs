@@ -1303,7 +1303,7 @@ public sealed class IndexerService : BackgroundService
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-                or ArgumentException or NotSupportedException or IncompatibleExtractException)
+                or ArgumentException or NotSupportedException or TimeoutException or IncompatibleExtractException)
         {
             _logger.LogWarning(ex,
                 "Search sidecar freshness check failed; the sidecar will remain unavailable or stale until the next successful convergence.");

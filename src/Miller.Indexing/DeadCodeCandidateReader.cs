@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.DeadCode;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -51,7 +52,19 @@ public static class DeadCodeCandidateReader
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
 
-        using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        using var session = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(symbolsDbPath));
+        return Read(session, workspaceRoot);
+    }
+
+    public static DeadCodeCandidateReport Read(IWorkspaceReadSession session, string workspaceRoot)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        return session.Read(connection => Read(connection, workspaceRoot));
+    }
+
+    private static DeadCodeCandidateReport Read(SqliteConnection connection, string workspaceRoot)
+    {
         JulieSchemaGate.Verify(connection);
         RequireResolutionTables(connection);
 

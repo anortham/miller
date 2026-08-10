@@ -14,6 +14,31 @@ internal static class MarkerSearch
     internal const int MaxLimit = 500;
     private static readonly string[] DefaultMarkers = ["TODO", "FIXME", "HACK", "XXX"];
     private static readonly HashSet<string> AllowedMarkers = new(DefaultMarkers, StringComparer.OrdinalIgnoreCase);
+
+    internal static string Run(
+        string dbPath,
+        IReadOnlyList<string> markers,
+        int limit,
+        bool excludeTests,
+        bool json,
+        string? compactBanner,
+        string? filePattern,
+        string? language,
+        out int renderedCount)
+    {
+        using var session = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(dbPath));
+        return Run(
+            session,
+            markers,
+            limit,
+            excludeTests,
+            json,
+            compactBanner,
+            filePattern,
+            language,
+            out renderedCount);
+    }
+
     internal static string Run(
         WorkspaceReadHandle dbPath,
         IReadOnlyList<string> markers,
@@ -63,7 +88,19 @@ internal static class MarkerSearch
     }
 
     internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
-        WorkspaceReadHandle dbPath,
+        string dbPath,
+        IReadOnlyList<string> markers,
+        int limit,
+        bool excludeTests,
+        string? filePattern,
+        string? language)
+    {
+        using var session = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(dbPath));
+        return FindMarkers(session, markers, limit, excludeTests, filePattern, language);
+    }
+
+    internal static IReadOnlyList<MarkerSearchHit> FindMarkers(
+        IWorkspaceReadSession dbPath,
         IReadOnlyList<string> markers,
         int limit,
         bool excludeTests,

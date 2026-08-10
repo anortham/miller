@@ -168,7 +168,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         string relativePath = RelativePath(path);
         StoreLevel level = LevelFor(ScanIntent.IncrementalReconcile, before);
         StoreRequestControls controls = Controls(
-            $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}");
+            $"update|{_binding.FamilyId:D}|{_binding.ViewId}|{relativePath}|{level}|{CurrentContentFingerprint(relativePath)}");
         var request = new StoreUpdateRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -416,6 +416,14 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             throw new InvalidOperationException($"Path '{path}' is outside workspace root '{_binding.WorkspaceRoot}'.");
         return relative.Replace(Path.DirectorySeparatorChar, '/');
+    }
+
+    private string CurrentContentFingerprint(string relativePath)
+    {
+        string absolutePath = Path.Combine(_binding.WorkspaceRoot, relativePath);
+        return File.Exists(absolutePath)
+            ? ContentHasher.Blake3FileHex(absolutePath)
+            : "missing";
     }
 
     private static StoreWorkspaceState? ReadState(StoreFamilyBinding binding, string workspaceId)

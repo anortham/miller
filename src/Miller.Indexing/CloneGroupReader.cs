@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -21,6 +22,31 @@ public static class CloneGroupReader
         symbolsPerGroup = Math.Clamp(symbolsPerGroup, 1, MaxSymbolsPerGroup);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        return ReadConnection(connection, limit, minCount, symbolsPerGroup);
+    }
+
+    public static IReadOnlyList<CloneGroup> Read(
+        IWorkspaceReadSession session,
+        int limit = 50,
+        int minCount = 2,
+        int symbolsPerGroup = DefaultSymbolsPerGroup)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (limit < 1)
+            limit = 1;
+        if (minCount < 2)
+            minCount = 2;
+        symbolsPerGroup = Math.Clamp(symbolsPerGroup, 1, MaxSymbolsPerGroup);
+
+        return session.Read(connection => ReadConnection(connection, limit, minCount, symbolsPerGroup));
+    }
+
+    private static IReadOnlyList<CloneGroup> ReadConnection(
+        SqliteConnection connection,
+        int limit,
+        int minCount,
+        int symbolsPerGroup)
+    {
         JulieSchemaGate.Verify(connection);
 
         using SqliteCommand command = connection.CreateCommand();

@@ -232,6 +232,15 @@ internal static class SearchRouteExecutor
     }
 
     public static SearchRouteExecutionResult RunMarkers(
+        string dbPath,
+        SearchRoute route,
+        SearchRouteExecutionRequest request)
+    {
+        using var session = new WorkspaceReadHandle(LegacyArtifactReadSession.Open(dbPath));
+        return RunMarkers(session, route, request);
+    }
+
+    public static SearchRouteExecutionResult RunMarkers(
         WorkspaceReadHandle dbPath,
         SearchRoute route,
         SearchRouteExecutionRequest request)

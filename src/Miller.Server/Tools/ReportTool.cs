@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Git;
 
 namespace Miller.Server.Tools;
@@ -31,27 +32,50 @@ public static class ReportTool
         IGitHistoryReader? historyReader,
         IRegionSearchIndex? regionIndex,
         bool nearDuplicates = false,
-        int nearDuplicateCandidateCap = MetricsTool.NearDuplicateCandidateCap)
+        int nearDuplicateCandidateCap = MetricsTool.NearDuplicateCandidateCap,
+        IWorkspaceReadSession? readSession = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         int limit = Math.Clamp(sectionLimit, 1, MaxSectionLimit);
         string effectiveRange = string.IsNullOrWhiteSpace(range) ? "HEAD~20..HEAD" : range;
 
-        IndexSection index = ReadIndexSection(dbPath);
-        WorkspaceExtractionHealthFacts extraction = WorkspaceHealthReader.Read(dbPath);
-        MarkerSection markers = ReadMarkerSection(dbPath, includeTests);
-        IReadOnlyList<ComplexityHotspot> complexity = ComplexityRankingReader.Read(
-            dbPath, limit, ComplexitySeverity.Moderate, includeTests);
-        IReadOnlyList<CloneGroup> clones = CloneGroupReader.Read(
-            dbPath, limit, minCount: 2, MetricsTool.DefaultCloneSymbolsPerGroup);
-        GitSections git = ReadGitSections(dbPath, workspaceRoot, effectiveRange, limit, includeTests, historyReader);
+        IndexSection index = readSession is null
+            ? ReadIndexSection(dbPath)
+            : ReadIndexSection(readSession);
+        WorkspaceExtractionHealthFacts extraction = readSession is null
+            ? WorkspaceHealthReader.Read(dbPath)
+            : WorkspaceHealthReader.Read(readSession);
+        MarkerSection markers = readSession is null
+            ? ReadMarkerSection(dbPath, includeTests)
+            : ReadMarkerSection(readSession, includeTests);
+        IReadOnlyList<ComplexityHotspot> complexity = readSession is null
+            ? ComplexityRankingReader.Read(dbPath, limit, ComplexitySeverity.Moderate, includeTests)
+            : ComplexityRankingReader.Read(readSession, limit, ComplexitySeverity.Moderate, includeTests);
+        IReadOnlyList<CloneGroup> clones = readSession is null
+            ? CloneGroupReader.Read(dbPath, limit, minCount: 2, MetricsTool.DefaultCloneSymbolsPerGroup)
+            : CloneGroupReader.Read(readSession, limit, minCount: 2, MetricsTool.DefaultCloneSymbolsPerGroup);
+        GitSections git = ReadGitSections(
+            dbPath,
+            workspaceRoot,
+            effectiveRange,
+            limit,
+            includeTests,
+            historyReader,
+            readSession);
 
         // Opt-in for the same reason `metrics clones --near-duplicates` is: the Type-2 arm re-reads symbol bodies
         // from disk. Off ⟹ the rollup is byte-identical to the version before this section existed.
         NearDuplicateScan? nearDuplicateScan = nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
-            ? MetricsTool.ScanNearDuplicates(
-                dbPath, workspaceRoot, limit, MetricsTool.DefaultCloneSymbolsPerGroup, nearDuplicateCandidateCap)
+            ? readSession is null
+                ? MetricsTool.ScanNearDuplicates(
+                    dbPath, workspaceRoot, limit, MetricsTool.DefaultCloneSymbolsPerGroup, nearDuplicateCandidateCap)
+                : MetricsTool.ScanNearDuplicates(
+                    readSession,
+                    workspaceRoot,
+                    limit,
+                    MetricsTool.DefaultCloneSymbolsPerGroup,
+                    nearDuplicateCandidateCap)
             : null;
 
         var report = new ReportFacts(
@@ -117,6 +141,12 @@ public static class ReportTool
         return new IndexSection(counts.Symbols, counts.Files, counts.Languages);
     }
 
+    private static IndexSection ReadIndexSection(IWorkspaceReadSession session)
+    {
+        WorkspaceSymbolCounts counts = WorkspaceIndexFactsReader.ReadSymbolCounts(session);
+        return new IndexSection(counts.Symbols, counts.Files, counts.Languages);
+    }
+
     private static MarkerSection ReadMarkerSection(string dbPath, bool includeTests)
     {
         // Markers come from `structural_facts`, which a symbols-level scan leaves EMPTY — rendering the resulting
@@ -150,13 +180,45 @@ public static class ReportTool
             Total: hits.Count);
     }
 
+    private static MarkerSection ReadMarkerSection(IWorkspaceReadSession session, bool includeTests)
+    {
+        if (IndexLevelGuard.IsSymbolsLevel(session.Snapshot.IndexLevel))
+            return MarkerSection.Converging;
+
+        IReadOnlyList<string> markerNames = MarkerSearch.ParseMarkers(null);
+        IReadOnlyList<MarkerSearchHit> hits = MarkerSearch.FindMarkers(
+            session,
+            markerNames,
+            MarkerSearch.MaxLimit,
+            excludeTests: !includeTests,
+            filePattern: null,
+            language: null);
+
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (string marker in markerNames)
+            counts[marker] = 0;
+        foreach (MarkerSearchHit hit in hits)
+        {
+            foreach (string marker in hit.Markers)
+                counts[marker] = counts.GetValueOrDefault(marker) + 1;
+        }
+
+        return new MarkerSection(
+            Available: true,
+            Reason: null,
+            BoundedAt: MarkerSearch.MaxLimit,
+            Counts: markerNames.Select(marker => new MarkerCount(marker, counts[marker])).ToArray(),
+            Total: hits.Count);
+    }
+
     private static GitSections ReadGitSections(
         string dbPath,
         string? workspaceRoot,
         string range,
         int limit,
         bool includeTests,
-        IGitHistoryReader? historyReader)
+        IGitHistoryReader? historyReader,
+        IWorkspaceReadSession? readSession)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot) || historyReader is null)
             return GitSections.Unavailable("git history unavailable (no workspace root or history reader)");
@@ -164,10 +226,15 @@ public static class ReportTool
         try
         {
             // One git history parse feeds both sections: full churn for the risk join, top-N for display.
-            ChurnReport fullChurn = GitChurnAnalyzer.Read(
-                dbPath, workspaceRoot, range, limit: int.MaxValue, includeCommits: false, historyReader);
+            ChurnReport fullChurn = readSession is null
+                ? GitChurnAnalyzer.Read(
+                    dbPath, workspaceRoot, range, limit: int.MaxValue, includeCommits: false, historyReader)
+                : GitChurnAnalyzer.Read(
+                    readSession, workspaceRoot, range, limit: int.MaxValue, includeCommits: false, historyReader);
             var churn = new ChurnReport(fullChurn.Range, fullChurn.Rows.Take(limit).ToArray(), fullChurn.TotalFilesChanged);
-            RiskReport risk = RiskRanking.FromChurn(dbPath, fullChurn, limit, includeTests);
+            RiskReport risk = readSession is null
+                ? RiskRanking.FromChurn(dbPath, fullChurn, limit, includeTests)
+                : RiskRanking.FromChurn(readSession, fullChurn, limit, includeTests);
             return new GitSections(Available: true, Reason: null, churn, risk);
         }
         catch (InvalidOperationException ex)

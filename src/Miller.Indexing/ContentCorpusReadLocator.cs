@@ -1,4 +1,5 @@
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 namespace Miller.Indexing;
 
@@ -16,9 +17,22 @@ public static class ContentCorpusReadLocator
         bool? storeEnabled = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
-        if (string.IsNullOrWhiteSpace(workspaceRoot)
-            || !(storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()))
+        bool enabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        if (string.IsNullOrWhiteSpace(workspaceRoot))
         {
+            return new ContentCorpusReadLocation(ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath));
+        }
+
+        if (!enabled)
+        {
+            if (StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            {
+                throw new FamilyStoreReadException(
+                    FamilyStoreReadFailure.BindingNotReady,
+                    $"Store mode is disabled but workspace '{workspaceRoot}' still has an active store pointer; " +
+                    "export the active view before serving the legacy content corpus.");
+            }
+
             return new ContentCorpusReadLocation(ContentCorpusSidecar.ContentDbPathFor(symbolsDbPath));
         }
 

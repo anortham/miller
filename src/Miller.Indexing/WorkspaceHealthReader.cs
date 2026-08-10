@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -15,8 +16,19 @@ public static class WorkspaceHealthReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
+        return ReadConnection(connection);
+    }
+
+    public static WorkspaceExtractionHealthFacts Read(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadConnection);
+    }
+
+    private static WorkspaceExtractionHealthFacts ReadConnection(SqliteConnection connection)
+    {
         JulieSchemaGate.Verify(connection);
-        using SqliteTransaction transaction = connection.BeginTransaction();
+        using SqliteTransaction transaction = connection.BeginTransaction(deferred: true);
         bool factsLayerConverging = IndexLevels.IsSymbolsLevel(ExtractIndexLevelReader.Read(connection));
 
         return new WorkspaceExtractionHealthFacts(

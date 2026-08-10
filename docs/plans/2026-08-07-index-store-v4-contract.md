@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.1 2026-08-09** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. This v4.1 amendment records
+**Status: AMENDED v4.2 2026-08-09** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 and v4.2 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -16,12 +16,12 @@ This document is the inter-repo seam. julie-extractors implements the write side
 implements the read side and sidecars (Ph3). The v3 artifact contract remains in force until the
 store ships; `store export` (§10) preserves the copyable-artifact property afterwards.
 
-## 0. v4.1 post-freeze amendment register
+## 0. v4.2 post-freeze amendment register
 
 The following amendments are deliberately marked because the shipped code did not yet satisfy
-the corresponding v4 text. A1-A7 now have implementation and focused evidence; the remaining
-physical-byte aggregate and default-on decision stay in Ph5. These are normative amendments, not
-retrospective acceptance claims.
+the corresponding v4 text. A1-A6 have implementation and focused evidence. A7 and A8 remain
+open implementation gates; the physical-byte aggregate and default-on decision stay in Ph5. These
+are normative amendments, not retrospective acceptance claims.
 
 | Amendment | Normative correction | State on 2026-08-09 |
 |---|---|---|
@@ -31,7 +31,8 @@ retrospective acceptance claims.
 | A4 — language parity | Equivalence, crash, mixed-version, and resolution comparisons run the complete 38-language fixture matrix and assert the observed language set. | Implemented and verified against the producer catalog |
 | A5 — rollback safety | Invalid pointer metadata may be discarded only with a forced source reconciliation before legacy serving. A valid pointer whose store cannot open is preserved and remains not-ready. Cross-workspace refresh follows the same rule. | Implemented and verified in bootstrap/refresh tests |
 | A6 — store deepening | Store level-upgrade decisions read the family-store session's committed level, not the legacy artifact. Progressive L1 stores must schedule and complete the Full upgrade. | Implemented and verified in Miller Scale coverage |
-| A7 — lock/freshness contract | The coordinator enforces machine governor → store-writer → sidecar-converger acquisition order, and the freshness token includes the pinned store instance/view/generation and per-level state required by §8. | Implemented and verified in Miller read/session, cache, sidecar, shadow, creation/recovery, GC, admission, and serialization coverage |
+| A7 — lock/freshness contract | The coordinator enforces machine governor → store-writer → sidecar-converger acquisition order, and the freshness token includes the pinned store instance/view/generation and per-level state required by §8. | **Open.** Miller records the store identity, view, generation, manifest, level, resolution, and log stamps, but the read session creates no durable `coord.db` pin/heartbeat/expiry/release. Live Miller acquisition is `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`, not the frozen triple. |
+| A8 — store sidecar convergence | Store sidecars consume `store_log` through idempotent cursors and converge incrementally. | **Open.** `EnsureStoreCurrent` rewrites a full current-view search/content sidecar whenever its stamp is stale; cursor-incremental convergence and its local reproducible cost gate remain Ph5 work. |
 
 ---
 
@@ -53,9 +54,10 @@ retrospective acceptance claims.
 
 - A **generation** is the promotion unit for the repair tier only (§12): corruption heal,
   incompatible-epoch migration, compaction, secure-purge escalation. Routine writes never create
-  a generation. Readers resolve `CURRENT` once per read session and pin the generation they
-  opened; a promoted-away generation is retained until no pinned reader remains (§12 capacity
-  formula counts it).
+  a generation. The intended read contract resolves `CURRENT` once per read session and pins the
+  generation it opened; the current Miller implementation keeps the generation's read-only
+  connection open but does not yet register the durable coordinator pin required for retention.
+  Promoted-away-generation reclamation therefore remains an A7 gate, not a shipped acceptance fact.
 - `coord.db` sits outside generations: the queue's history must survive a generation promotion,
   and its WAL must never contend with bulk import transactions in `store.db`.
 
@@ -286,6 +288,11 @@ floor degrades honestly: read-only below `min_writer_version`, not-ready-with-re
 generation promotion (§12), never in place.
 
 ## 8. Read path: the view-aware read session
+
+**v4.2 implementation status:** `FamilyStoreReadSession` resolves `CURRENT` once, validates the
+view/manifest, builds the compatibility projection, and exposes a freshness token containing the
+store/view/generation and per-level state. It does not yet create or heartbeat the §8 `coord.db`
+reader-pin row. The durable pin lifecycle is deferred to the A7 Ph4/Ph5 gate.
 
 Ph3 introduces one seam — the **read session / connection factory** — as the single way readers
 obtain connections; the raw `IndexDbPath` retires from the read contract. A session:
@@ -587,6 +594,12 @@ referenced by pinned read sessions. An unreferenced retired base is a file delet
 
 ## 15. Concurrency: the family coordinator
 
+**v4.2 implementation status:** the durable coordinator-executes-queued-requests protocol and its
+global lock-order proof are contract targets, not current Miller implementation evidence. Current
+Miller paths acquire `SingleWriterLock`, then machine scan admission, then the process-local
+`_opsGate`, and finally the family sidecar lease. This differs from the normative
+machine-governor → store-writer → sidecar-converger triple and remains open under A7.
+
 **Model: coordinator-executes-queued-requests over a durable protocol** (doubt-pass finding 10 +
 cycle-2 finding 4 — today's converge queue claims by file-rename and deletes expired claims;
 acceptable for freshness nudges, not for import/repoint/GC).
@@ -762,7 +775,19 @@ bind; #9 (GC physical reclamation) closes via §10 + the C7 escalation fold; #11
 compatibility) closes via §7 + the C9 gate fold. Cycle-2 #2 (state machine) and #4 (durable
 queue) close via the grok-1/2 + C2/C3 folds; #7 (commit granularity) closes via §5 + the C2
 terminal-record fold. **The freeze itself remains blocked on C1's G3b decision — that is the
-one open item, and it is the user's.**
+one historical open item from cycle 3, and it is the user's. The v4.2 implementation gates below
+are separate current-state blockers for the corresponding Ph4/Ph5 acceptance claims.**
+
+### v4.2 implementation recheck — 2026-08-09
+
+The post-freeze Miller wiring recheck found two execution deviations that must not be hidden by
+the v4.1 register:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A7.1 | high | Family-store reads carry a rich in-memory freshness token but do not create the durable `coord.db` reader pin, heartbeat, expiry, or release protocol required by §8 and §10. | OPEN — defer durable reader lifecycle and retention proof to the Ph4/Ph5 gate; the contract remains explicit about the missing behavior. |
+| A7.2 | high | Miller's live acquisition order is `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`; it is not the frozen coordinator triple, and no Miller-side coordinator lease proof closes that gap. | OPEN — implement and test the coordinator order before claiming A7. |
+| A8.1 | medium | Store search/content convergence materializes the current view and rewrites a full sidecar when the stamp is stale; it has no store-log cursor path. | OPEN — keep store mode opt-in and make cursor-incremental convergence plus a local reproducible cost gate a Ph5 entry criterion. |
 
 ---
 

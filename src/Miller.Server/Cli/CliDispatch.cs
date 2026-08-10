@@ -197,10 +197,14 @@ public static class CliDispatch
             return Usage(err, "miller todos [--markers TODO,FIXME,HACK,XXX] [--workspace-id SELECTOR] [--workspace DIR] [--file-pattern GLOB] [--language LANG] [--limit N] [--json] [--exclude-tests]");
         }
 
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope, "todos read failed"))
+            return 3;
+
+        using (readScope)
         try
         {
             string output = MarkerSearch.Run(
-                ctx.ExtractDbPath,
+                readScope.Session,
                 markers,
                 o.Int("limit", MarkerSearch.DefaultLimit),
                 o.Has("exclude-tests"),
@@ -211,7 +215,7 @@ public static class CliDispatch
                 out _);
             // The CLI calls the marker core directly, so the MCP wrapper's level check never runs here; without
             // this a symbols-level artifact answers "no markers" about facts nobody has extracted.
-            if (SearchTool.MarkerLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)) is { } converging)
+            if (SearchTool.MarkerLevelDiagnostic(readScope.Session.Snapshot.IndexLevel) is { } converging)
                 output = ToolDiagnosticRenderer.Attach("todos", output, converging, o.Has("json"));
             outw.WriteLine(output);
             return 0;
@@ -418,19 +422,25 @@ public static class CliDispatch
 
         if (route.Kind is SearchRouteKind.Regions or SearchRouteKind.Markers)
         {
-            if (!RequireIndex(ctx, err))
-                return 3;
-
             if (route.Kind == SearchRouteKind.Markers)
             {
+                if (!TryOpenCliReadScope(
+                        ctx,
+                        err,
+                        out CliReadScope markerScope,
+                        "search read failed",
+                        requireSearchSidecar: false))
+                    return 3;
+
+                using CliReadScope markerReadScope = markerScope;
                 try
                 {
                     SearchRouteExecutionResult markerResult =
-                        SearchRouteExecutor.RunMarkers(ctx.ExtractDbPath, route, executionRequest);
+                        SearchRouteExecutor.RunMarkers(markerReadScope.Session, route, executionRequest);
                     string markerOutput = markerResult.Output;
                     // Same level decision the MCP markers route makes, reached through the same helper so the two
                     // surfaces cannot drift.
-                    if (SearchTool.MarkerLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath))
+                    if (SearchTool.MarkerLevelDiagnostic(markerReadScope.Session.Snapshot.IndexLevel)
                         is { } converging)
                     {
                         markerOutput = ToolDiagnosticRenderer.Attach("search", markerOutput, converging, json);
@@ -454,22 +464,24 @@ public static class CliDispatch
                 return 3;
             }
 
+            if (!TryOpenCliReadScope(
+                    ctx,
+                    err,
+                    out CliReadScope regionScope,
+                    "search read failed",
+                    requireSearchSidecar: false))
+                return 3;
+
+            using CliReadScope regionReadScope = regionScope;
             try
             {
-                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-                long revision = freshness.LatestRevision();
-                var identity = new SymbolsArtifactIdentity(
-                    revision,
-                    freshness.ArtifactId(),
-                    freshness.HasArtifactMetadata() ? ArtifactStampState.Present : ArtifactStampState.Absent);
-                string searchDb = SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath);
-                FtsRegionSearchIndex regionIndex = FtsRegionSearchIndex.Open(searchDb, revision, identity);
+                FtsRegionSearchIndex regionIndex = regionReadScope.OpenRegionIndex();
                 SearchRouteExecutionResult result =
                     SearchRouteExecutor.RunRegions(regionIndex, route, executionRequest);
                 string regionOutput = result.Output;
                 // Same level decision the MCP regions route makes, reached through the same helper so the two
                 // surfaces cannot drift.
-                if (SearchTool.RegionLevelDiagnostic(ExtractIndexLevelReader.Read(ctx.ExtractDbPath))
+                if (SearchTool.RegionLevelDiagnostic(regionReadScope.Session.Snapshot.IndexLevel)
                     is { } converging)
                 {
                     regionOutput = ToolDiagnosticRenderer.Attach("search", regionOutput, converging, json);
@@ -488,15 +500,18 @@ public static class CliDispatch
 
         if (route.Kind == SearchRouteKind.Content)
         {
-            if (!RequireIndex(ctx, err))
+            if (!TryOpenCliReadScope(
+                    ctx,
+                    err,
+                    out CliReadScope contentScope,
+                    "search read failed",
+                    requireSearchSidecar: false))
                 return 3;
 
+            using (contentScope)
             try
             {
-                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-                long revision = freshness.LatestRevision();
-                var contentSidecar = new ContentCorpusSidecar();
-                FtsTextContentSearchIndex contentIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
+                FtsTextContentSearchIndex contentIndex = contentScope.OpenContentIndex();
                 if (requestedArm is CliSearchArm.Lexical)
                 {
                     outw.WriteLine(SearchRouteExecutor.RunContent(contentIndex, route, executionRequest).Output);
@@ -548,15 +563,18 @@ public static class CliDispatch
 
         if (route.Kind == SearchRouteKind.TextContent)
         {
-            if (!RequireIndex(ctx, err))
+            if (!TryOpenCliReadScope(
+                    ctx,
+                    err,
+                    out CliReadScope textContentScope,
+                    "search read failed",
+                    requireSearchSidecar: false))
                 return 3;
 
+            using (textContentScope)
             try
             {
-                using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-                long revision = freshness.LatestRevision();
-                var contentSidecar = new ContentCorpusSidecar();
-                FtsTextContentSearchIndex textIndex = contentSidecar.OpenRequired(ctx.ExtractDbPath, revision);
+                FtsTextContentSearchIndex textIndex = textContentScope.OpenContentIndex();
                 outw.WriteLine(SearchRouteExecutor.RunTextContent(
                     textIndex,
                     route,
@@ -1343,7 +1361,7 @@ public static class CliDispatch
         CliOptions o = CliOptions.Parse((firstTokenIsFlag ? args : args.Skip(1)).ToArray(), "json", "include-tests", "exclude-tests", "include-commits", "near-duplicates");
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
-        if (!RequireIndex(ctx, err))
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope, "metrics failed", requireSearchSidecar: false))
             return 3;
 
         // churn/risk record the git-backed arms; a clones run records ONLY when the opt-in Type-2 arm actually ran
@@ -1360,46 +1378,49 @@ public static class CliDispatch
             || (gitArm
                 && !o.Has("range") && !o.Has("limit")
                 && !o.Has("include-tests") && !o.Has("exclude-tests") && !o.Has("include-commits"));
-        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
-
-        try
+        using (readScope)
         {
-            MetricsToolResult result = MetricsTool.Run(
-                ctx.ExtractDbPath,
-                operation,
-                o.Int("limit", MetricsTool.DefaultLimit),
-                o.Has("json"),
-                o.Int("min-count", 2),
-                o.Int("max-symbols-per-group", MetricsTool.DefaultCloneSymbolsPerGroup),
-                o.Value("min-severity", "moderate"),
-                includeTests: !o.Has("exclude-tests"),
-                workspaceRoot: ctx.WorkspaceRoot,
-                range: o.Value("range", "HEAD~20..HEAD"),
-                includeCommits: o.Has("include-commits"),
-                historyReader: new ProcessGitHistoryReader(),
-                nearDuplicates: o.Has("near-duplicates"));
-            WriteOutput(outw, result.Output);
-            if (recordable)
-                RecordHeavyArmSnapshot(
-                    ctx,
-                    identity,
-                    clonesRecordable
-                        ? MetricHistoryHeavyArm.ClonesSource
-                        : operation == "churn"
-                            ? MetricHistoryHeavyArm.ChurnSource
-                            : MetricHistoryHeavyArm.RiskSource,
-                    result.SnapshotMetrics ?? Array.Empty<MetricHistoryPoint>(),
-                    canonical,
-                    err);
-            return 0;
-        }
-        catch (Exception ex) when (
-            ex is FileNotFoundException or InvalidOperationException or IOException
-                or UnauthorizedAccessException or ArgumentException or NotSupportedException
-                or SqliteException)
-        {
-            err.WriteLine("metrics failed: " + ex.Message);
-            return 3;
+            HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx, readScope.Session) : null;
+            try
+            {
+                MetricsToolResult result = MetricsTool.Run(
+                    ctx.ExtractDbPath,
+                    operation,
+                    o.Int("limit", MetricsTool.DefaultLimit),
+                    o.Has("json"),
+                    o.Int("min-count", 2),
+                    o.Int("max-symbols-per-group", MetricsTool.DefaultCloneSymbolsPerGroup),
+                    o.Value("min-severity", "moderate"),
+                    includeTests: !o.Has("exclude-tests"),
+                    workspaceRoot: ctx.WorkspaceRoot,
+                    range: o.Value("range", "HEAD~20..HEAD"),
+                    includeCommits: o.Has("include-commits"),
+                    historyReader: new ProcessGitHistoryReader(),
+                    nearDuplicates: o.Has("near-duplicates"),
+                    readSession: readScope.Session);
+                WriteOutput(outw, result.Output);
+                if (recordable)
+                    RecordHeavyArmSnapshot(
+                        ctx,
+                        identity,
+                        clonesRecordable
+                            ? MetricHistoryHeavyArm.ClonesSource
+                            : operation == "churn"
+                                ? MetricHistoryHeavyArm.ChurnSource
+                                : MetricHistoryHeavyArm.RiskSource,
+                        result.SnapshotMetrics ?? Array.Empty<MetricHistoryPoint>(),
+                        canonical,
+                        err);
+                return 0;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                    or SqliteException)
+            {
+                err.WriteLine("metrics failed: " + ex.Message);
+                return 3;
+            }
         }
     }
 
@@ -1479,63 +1500,59 @@ public static class CliDispatch
             return Usage(err, usage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
-        if (!RequireIndex(ctx, err))
+        if (!TryOpenCliReadScope(
+                ctx,
+                err,
+                out CliReadScope readScope,
+                "report read failed",
+                requireSearchSidecar: false))
             return 3;
 
-        // Record only a default-params run (range/limit/test-filter untouched); capture identity BEFORE computing.
-        bool canonical = !o.Has("range") && !o.Has("limit") && !o.Has("exclude-tests") && !o.Has("include-tests");
-        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
-
-        try
+        using (readScope)
         {
-            // Markers ride the region search sidecar; the section reports itself unavailable when the
-            // sidecar is disabled or the search.db cannot be opened, instead of failing the report.
-            IRegionSearchIndex? regionIndex = null;
-            SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
-            if (sidecar.Enabled && sidecar.RegionOptions.Enabled)
+            bool canonical = !o.Has("range") && !o.Has("limit") && !o.Has("exclude-tests") && !o.Has("include-tests");
+            HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
+
+            try
             {
-                try
+                IRegionSearchIndex? regionIndex = null;
+                SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+                if (sidecar.Enabled && sidecar.RegionOptions.Enabled)
                 {
-                    using var freshness = new FreshnessReader(ctx.ExtractDbPath);
-                    long revision = freshness.LatestRevision();
-                    regionIndex = FtsRegionSearchIndex.Open(
-                        SymbolSearchSidecar.SearchDbPathFor(ctx.ExtractDbPath),
-                        revision,
-                        new SymbolsArtifactIdentity(
-                            revision,
-                            freshness.ArtifactId(),
-                            freshness.HasArtifactMetadata()
-                                ? ArtifactStampState.Present
-                                : ArtifactStampState.Absent));
+                    try
+                    {
+                        regionIndex = readScope.OpenRegionIndex();
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or IOException or SqliteException)
+                    {
+                        regionIndex = null;
+                    }
                 }
-                catch (Exception ex) when (ex is InvalidOperationException or IOException or SqliteException)
-                {
-                    regionIndex = null;
-                }
-            }
 
-            ReportToolResult result = ReportTool.Run(
-                ctx.ExtractDbPath,
-                ctx.WorkspaceRoot,
-                range: o.Value("range", "HEAD~20..HEAD"),
-                sectionLimit: o.Int("limit", ReportTool.DefaultSectionLimit),
-                json: o.Has("json"),
-                includeTests: !o.Has("exclude-tests"),
-                historyReader: new ProcessGitHistoryReader(),
-                regionIndex: regionIndex,
-                nearDuplicates: o.Has("near-duplicates"));
-            WriteOutput(outw, result.Output);
-            RecordHeavyArmSnapshot(
-                ctx, identity, MetricHistoryHeavyArm.ReportSource, result.SnapshotMetrics, canonical, err);
-            return 0;
-        }
-        catch (Exception ex) when (
-            ex is FileNotFoundException or InvalidOperationException or IOException
-                or UnauthorizedAccessException or ArgumentException or NotSupportedException
-                or SqliteException)
-        {
-            err.WriteLine("report failed: " + ex.Message);
-            return 3;
+                ReportToolResult result = ReportTool.Run(
+                    ctx.ExtractDbPath,
+                    ctx.WorkspaceRoot,
+                    range: o.Value("range", "HEAD~20..HEAD"),
+                    sectionLimit: o.Int("limit", ReportTool.DefaultSectionLimit),
+                    json: o.Has("json"),
+                    includeTests: !o.Has("exclude-tests"),
+                    historyReader: new ProcessGitHistoryReader(),
+                    regionIndex: regionIndex,
+                    nearDuplicates: o.Has("near-duplicates"),
+                    readSession: readScope.Session);
+                WriteOutput(outw, result.Output);
+                RecordHeavyArmSnapshot(
+                    ctx, identity, MetricHistoryHeavyArm.ReportSource, result.SnapshotMetrics, canonical, err);
+                return 0;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                    or SqliteException)
+            {
+                err.WriteLine("report failed: " + ex.Message);
+                return 3;
+            }
         }
     }
 
@@ -1667,8 +1684,8 @@ public static class CliDispatch
         TextWriter outw,
         TextWriter err,
         string usage,
-        Action<string, TextWriter> export,
-        Func<string, string?>? levelWarning = null)
+        Action<WorkspaceReadHandle, TextWriter> export,
+        Func<WorkspaceReadHandle, string?>? levelWarning = null)
     {
         if (args.Count == 0 || args[0] is "--help" or "-h" or "help")
             return Usage(err, usage);
@@ -1678,26 +1695,34 @@ public static class CliDispatch
             return Usage(err, usage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
-        if (!RequireIndex(ctx, err))
+        if (!TryOpenCliReadScope(
+                ctx,
+                err,
+                out CliReadScope readScope,
+                $"{usage["miller ".Length..].Split(' ', 2)[0]} failed",
+                requireSearchSidecar: false))
             return 3;
 
-        // Degradation is announced on stderr BEFORE the rows, never as a line inside them: stdout is a JSONL
-        // contract a fleet consumer parses line by line, so a prose or differently-shaped line there breaks it.
-        // The warning is per-feed because only some source tables are left empty by a symbols-level scan.
-        if (levelWarning?.Invoke(ctx.ExtractDbPath) is { } warning)
-            err.WriteLine(warning);
+        using (readScope)
+        {
+            // Degradation is announced on stderr BEFORE the rows, never as a line inside them: stdout is a JSONL
+            // contract a fleet consumer parses line by line, so a prose or differently-shaped line there breaks it.
+            // The warning is per-feed because only some source tables are left empty by a symbols-level scan.
+            if (levelWarning?.Invoke(readScope.Session) is { } warning)
+                err.WriteLine(warning);
 
-        export(ctx.ExtractDbPath, outw);
-        return 0;
+            export(readScope.Session, outw);
+            return 0;
+        }
     }
 
-    private static string? PatternsExportLevelWarning(string dbPath) =>
-        PatternsTool.FactsLevelDiagnostic(ExtractIndexLevelReader.Read(dbPath)) is { } converging
+    private static string? PatternsExportLevelWarning(WorkspaceReadHandle session) =>
+        PatternsTool.FactsLevelDiagnostic(session.Snapshot.IndexLevel) is { } converging
             ? ToolDiagnosticRenderer.Render("patterns", converging, json: false)
             : null;
 
-    private static string? ReferencesExportLevelWarning(string dbPath) =>
-        IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(dbPath))
+    private static string? ReferencesExportLevelWarning(WorkspaceReadHandle session) =>
+        IndexLevelGuard.IsSymbolsLevel(session.Snapshot.IndexLevel)
             ? ToolDiagnosticRenderer.Render("references", IndexLevelGuard.ReferenceExportConverging(), json: false)
             : null;
 
@@ -1720,34 +1745,44 @@ public static class CliDispatch
             return Usage(err, usage);
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
-        if (!RequireIndex(ctx, err))
+        if (!TryOpenCliReadScope(
+                ctx,
+                err,
+                out CliReadScope readScope,
+                "references failed",
+                requireSearchSidecar: false))
             return 3;
 
-        // A symbols-level artifact has no inbound identifier evidence, so EVERY symbol would read as
-        // unreferenced — an authoritative-looking list of false dead-code candidates. Refuse instead.
-        if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+        using (readScope)
         {
-            err.WriteLine(
-                "references candidates is unavailable while this workspace serves a symbols-level index: " +
-                "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
-                "after setting this workspace's level policy to full and rebuilding it.");
-            return 3;
+            // A symbols-level artifact has no inbound identifier evidence, so EVERY symbol would read as
+            // unreferenced — an authoritative-looking list of false dead-code candidates. Refuse instead.
+            if (IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
+            {
+                err.WriteLine(
+                    "references candidates is unavailable while this workspace serves a symbols-level index: " +
+                    "identifier extraction has not run yet, so every symbol would read as unreferenced. Re-run " +
+                    "after setting this workspace's level policy to full and rebuilding it.");
+                return 3;
+            }
+
+            int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
+
+            // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
+            // canonical; capture identity BEFORE the reader computes so a mid-command rebuild is caught at append time.
+            bool canonical = !o.Has("limit");
+            HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
+
+            DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(
+                readScope.Session,
+                ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
+            outw.WriteLine(o.Has("json")
+                ? RenderCandidatesJson(report, limit)
+                : RenderCandidatesCompact(report, limit));
+            RecordHeavyArmSnapshot(
+                ctx, identity, MetricHistoryHeavyArm.CandidatesSource, CandidateSnapshotMetrics(report), canonical, err);
+            return 0;
         }
-
-        int limit = o.Int("limit", DeadCodeCandidatesDefaultLimit);
-
-        // --limit bounds only the displayed list; the recorded counts are full totals. A default-limit run is
-        // canonical; capture identity BEFORE the reader computes so a mid-command rebuild is caught at append time.
-        bool canonical = !o.Has("limit");
-        HeavyArmIdentity? identity = canonical ? CaptureHeavyArmIdentity(ctx) : null;
-
-        DeadCodeCandidateReport report = DeadCodeCandidateReader.Read(ctx.ExtractDbPath, ctx.WorkspaceRoot);
-        outw.WriteLine(o.Has("json")
-            ? RenderCandidatesJson(report, limit)
-            : RenderCandidatesCompact(report, limit));
-        RecordHeavyArmSnapshot(
-            ctx, identity, MetricHistoryHeavyArm.CandidatesSource, CandidateSnapshotMetrics(report), canonical, err);
-        return 0;
     }
 
     private const int DeadCodeCandidatesDefaultLimit = 50;
@@ -1909,15 +1944,46 @@ public static class CliDispatch
         string WorkspaceId, string ArtifactId, long Revision, string ExtractorVersion);
 
     /// <summary>
-    /// Capture <c>(workspace_id, artifact_id, revision, extractor_version)</c> from the workspace's <c>symbols.db</c>
+    /// Capture <c>(workspace_id, artifact_id, revision, extractor_version)</c> from the serving read session.
     /// BEFORE the command computes, so a full-rebuild promotion mid-command is caught by the append-time re-check.
     /// Returns <c>null</c> — recording is skipped silently — when there is no stable identity to attach history to
     /// (no <c>.miller</c> index, no artifact_id, no revision yet) or the DB cannot be read. Never throws.
     /// </summary>
-    internal static HeavyArmIdentity? CaptureHeavyArmIdentity(WorkspaceContext ctx)
+    internal static HeavyArmIdentity? CaptureHeavyArmIdentity(
+        WorkspaceContext ctx,
+        IWorkspaceReadSession? readSession = null)
     {
         try
         {
+            if (readSession is null && StoreReadExpected(ctx))
+            {
+                using WorkspaceReadHandle storeSession = WorkspaceReadSessionFactory.Open(
+                    ctx.ExtractDbPath,
+                    ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+                    ctx.WorkspaceId);
+                return CaptureHeavyArmIdentity(ctx, storeSession);
+            }
+
+            if (readSession is not null)
+            {
+                WorkspaceFreshnessToken sessionFreshness = readSession.Snapshot.Freshness;
+                string sessionWorkspaceId = ctx.WorkspaceId
+                    ?? readSession.Snapshot.WorkspaceId
+                    ?? WorkspaceId.FromCanonicalRoot(Path.GetFullPath(ctx.CanonicalRoot ?? ctx.WorkspaceRoot));
+                if (string.IsNullOrWhiteSpace(sessionFreshness.ArtifactOrStoreId)
+                    || sessionFreshness.Revision <= 0
+                    || string.IsNullOrWhiteSpace(sessionWorkspaceId))
+                    return null;
+
+                string sessionExtractorVersion = readSession.Read(
+                    static connection => ExtractBinaryVersionReader.TryRead(connection)) ?? string.Empty;
+                return new HeavyArmIdentity(
+                    sessionWorkspaceId,
+                    sessionFreshness.ArtifactOrStoreId,
+                    sessionFreshness.Revision,
+                    sessionExtractorVersion);
+            }
+
             string extractDbPath = ctx.ExtractDbPath;
             if (!File.Exists(extractDbPath))
                 return null; // unregistered / no .miller ⟹ nothing to attach history to.
@@ -1975,7 +2041,7 @@ public static class CliDispatch
 
             string historyDbPath = MetricSnapshotAggregates.HistoryDbPathFor(ctx.ExtractDbPath);
             return MetricHistoryStore.RecordRun(
-                historyDbPath, snapshot, () => RecheckHeavyArmIdentity(ctx.ExtractDbPath), recordedAtUtc);
+                historyDbPath, snapshot, () => RecheckHeavyArmIdentity(ctx), recordedAtUtc);
         }
         catch (Exception ex)
         {
@@ -1987,10 +2053,22 @@ public static class CliDispatch
     // The append-time identity re-read: the live (artifact_id, revision) the store compares against the captured
     // snapshot identity. On any read failure it returns a guaranteed-mismatch sentinel so the store skips recording
     // rather than stamping the captured identity onto numbers read from a since-replaced artifact.
-    private static (string ArtifactId, long Revision) RecheckHeavyArmIdentity(string extractDbPath)
+    private static (string ArtifactId, long Revision) RecheckHeavyArmIdentity(WorkspaceContext ctx)
     {
         try
         {
+            if (StoreReadExpected(ctx))
+            {
+                using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                    ctx.ExtractDbPath,
+                    ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+                    ctx.WorkspaceId);
+                return (
+                    session.Snapshot.Freshness.ArtifactOrStoreId,
+                    session.Snapshot.Freshness.Revision);
+            }
+
+            string extractDbPath = ctx.ExtractDbPath;
             using var freshness = new FreshnessReader(extractDbPath);
             return (freshness.ArtifactId() ?? string.Empty, freshness.LatestRevision());
         }
@@ -2001,6 +2079,10 @@ public static class CliDispatch
             return (string.Empty, -1);
         }
     }
+
+    private static bool StoreReadExpected(WorkspaceContext ctx) =>
+        WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
+        || StoreWorkspacePointer.Read(ctx.CanonicalRoot ?? ctx.WorkspaceRoot) is not null;
 
     // The heavy-arm `source='candidates'` snapshot: the full dead-code candidate count and suppressed total (both
     // are full totals — `--limit` bounds only the displayed list, never these), with the per-rule suppressed
@@ -2714,7 +2796,20 @@ public static class CliDispatch
             : "default";
 
         string dbPath = row?.IndexDbPath ?? ctx.ExtractDbPath;
-        string? indexLevel = File.Exists(dbPath) ? ExtractIndexLevelReader.Read(dbPath) : null;
+        string workspaceRoot = row?.CanonicalRoot ?? ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
+        string? workspaceId = row?.WorkspaceId ?? ctx.WorkspaceId;
+        string? indexLevel = null;
+        try
+        {
+            using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
+            indexLevel = readSession.Snapshot.IndexLevel;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+                or InvalidOperationException or UnauthorizedAccessException or ArgumentException)
+        {
+            indexLevel = null;
+        }
         bool upgradeOwed = indexLevel is not null && IndexLevels.UpgradeOwed(indexLevel, effective);
 
         outw.WriteLine(WorkspaceRender.Levels(
@@ -2825,7 +2920,11 @@ public static class CliDispatch
 
         if (!RequireIndex(ctx, err))
             return 3;
-        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts facts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
             indexFacts,
@@ -2879,7 +2978,7 @@ public static class CliDispatch
                 vectors,
                 semanticBroker,
                 CliScanGovernor(ctx));
-            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row.IndexDbPath, facts.WarningText);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(row, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
@@ -2903,7 +3002,7 @@ public static class CliDispatch
                 vectors,
                 semanticBroker,
                 CliScanGovernor(ctx));
-            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow.IndexDbPath, facts.WarningText);
+            WorkspaceExtractionHealthFacts extraction = ReadHealthOrUnavailable(currentRow, facts.WarningText);
             outw.WriteLine(WorkspaceRender.Health(
                 WorkspaceHealthFacts.Create(
                     facts, TelemetrySummary.Empty, new TelemetryHealthFacts(0, 0, 0), extraction,
@@ -2915,7 +3014,11 @@ public static class CliDispatch
 
         if (!RequireIndex(ctx, err))
             return 3;
-        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
             indexFacts,
@@ -2929,7 +3032,7 @@ public static class CliDispatch
                 localFacts,
                 TelemetrySummary.Empty,
                 new TelemetryHealthFacts(0, 0, 0),
-                WorkspaceHealthReader.Read(ctx.ExtractDbPath),
+                WorkspaceHealthReader.Read(readSession),
                 CliLeaderFacts(ctx.ExtractDbPath),
                 CliHistoryStatus(ctx.ExtractDbPath)),
             format));
@@ -3020,7 +3123,11 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
-        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
             indexFacts,
@@ -3085,7 +3192,11 @@ public static class CliDispatch
         if (!RequireIndex(ctx, err))
             return 3;
 
-        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.Read(ctx.ExtractDbPath);
+        using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+            ctx.ExtractDbPath,
+            ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+            ctx.WorkspaceId);
+        WorkspaceIndexFacts indexFacts = WorkspaceIndexFactsReader.ReadSession(readSession);
         WorkspaceFacts localFacts = WorkspaceFactsAssembler.FromUnregisteredLocal(
             ctx,
             indexFacts,
@@ -3187,13 +3298,19 @@ public static class CliDispatch
         return false;
     }
 
-    private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(string dbPath, string? error)
+    private static WorkspaceExtractionHealthFacts ReadHealthOrUnavailable(WorkspaceRegistryRow row, string? error)
     {
         try
         {
-            return WorkspaceHealthReader.Read(dbPath);
+            using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                row.IndexDbPath,
+                row.CanonicalRoot,
+                row.WorkspaceId);
+            return WorkspaceHealthReader.Read(session);
         }
-        catch (Exception ex) when (ex is FileNotFoundException || IsHealthIndexReadException(ex))
+        catch (Exception ex) when (
+            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+                || IsHealthIndexReadException(ex))
         {
             return UnavailableExtraction(string.IsNullOrWhiteSpace(error) ? ex.Message : error);
         }
@@ -3613,6 +3730,49 @@ public static class CliDispatch
         public MillerRepositoryIndex LoadFullIndex() =>
             Index ??= RepositoryIndexLoader.LoadSession(Session);
 
+        public FtsTextContentSearchIndex OpenContentIndex()
+        {
+            if (IsFamilyStore)
+            {
+                return ContentCorpusSidecar.OpenStoreGenerationChecked(
+                    Session.FamilyStoreRoot
+                        ?? throw new InvalidOperationException(
+                            "The family-store read session has no family root."),
+                    Session.Snapshot);
+            }
+
+            return new ContentCorpusSidecar().OpenRequired(
+                Session.LegacyArtifactPath
+                    ?? throw new InvalidOperationException(
+                        "The legacy read session has no artifact path."),
+                Session.Snapshot.Freshness.Revision);
+        }
+
+        public FtsRegionSearchIndex OpenRegionIndex()
+        {
+            if (IsFamilyStore)
+            {
+                return FtsRegionSearchIndex.OpenStore(
+                    Session.FamilyStoreRoot
+                        ?? throw new InvalidOperationException(
+                            "The family-store read session has no family root."),
+                    Session.Snapshot);
+            }
+
+            string databasePath = Session.LegacyArtifactPath
+                ?? throw new InvalidOperationException("The legacy read session has no artifact path.");
+            using var freshness = new FreshnessReader(databasePath);
+            return FtsRegionSearchIndex.Open(
+                SymbolSearchSidecar.SearchDbPathFor(databasePath),
+                freshness.LatestRevision(),
+                new SymbolsArtifactIdentity(
+                    freshness.LatestRevision(),
+                    freshness.ArtifactId(),
+                    freshness.HasArtifactMetadata()
+                        ? ArtifactStampState.Present
+                        : ArtifactStampState.Absent));
+        }
+
         public void Dispose()
         {
             _graphOwner?.Dispose();
@@ -3624,7 +3784,8 @@ public static class CliDispatch
         WorkspaceContext ctx,
         TextWriter err,
         out CliReadScope scope,
-        string failurePrefix = "Miller read failed")
+        string failurePrefix = "Miller read failed",
+        bool requireSearchSidecar = true)
     {
         scope = null!;
         if (!TryEnsureCliReadArtifact(ctx, err))
@@ -3642,7 +3803,7 @@ public static class CliDispatch
             {
                 MillerRepositoryIndex index = RepositoryIndexLoader.LoadSession(session);
                 ISymbolLookupIndex symbolIndex = index;
-                if (sidecar.Enabled)
+                if (requireSearchSidecar && sidecar.Enabled)
                 {
                     symbolIndex = sidecar.OpenStoreRequired(
                         session.FamilyStoreRoot
@@ -3655,7 +3816,7 @@ public static class CliDispatch
             }
             else
             {
-                ISymbolLookupIndex symbolIndex = sidecar.Enabled
+                ISymbolLookupIndex symbolIndex = requireSearchSidecar && sidecar.Enabled
                     ? (ISymbolLookupIndex?)TryOpenFreshSymbolSearchSidecar(ctx.ExtractDbPath, sidecar)
                         ?? SymbolSearchProjectionLoader.LoadSession(session)
                     : SymbolSearchProjectionLoader.LoadSession(session);

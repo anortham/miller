@@ -1,7 +1,8 @@
 # Index Store Ph3 Miller Acceptance
 
-Status: READY FOR PH4 2026-08-09. The earlier local acceptance overclaimed producer evidence
-and did not match several shipped Miller paths. A1-A7 are now implemented and verified. Store mode
+Status: CONDITIONAL FOR PH4/PH5 ENTRY 2026-08-09. The earlier local acceptance overclaimed producer
+evidence and did not match several shipped Miller paths. A1-A6 are implemented and verified; A7
+lock/freshness and A8 cursor-incremental sidecars remain open under the v4.2 amendment. Store mode
 remains explicit with `MILLER_INDEX_STORE=1`; physical-byte aggregation and default-on adoption remain
 Ph5 decisions.
 
@@ -12,8 +13,8 @@ Ph5 decisions.
 - Bootstrap imports the existing artifact once, binds fresh linked worktrees without copying it, serves L1,
   deepens and resolves through `julie-extract`, and reuses committed work after restart or takeover.
 - Search, content, vectors, usage, history, and structural-fact consumers use view-scoped compatibility
-  projections. Store sidecars advance from `store_log` sequence cursors and publish checked completeness
-  stamps.
+  projections. Store sidecars publish checked completeness stamps; the current search/content store path
+  rebuilds the complete current view when stale and does not yet have cursor-incremental convergence.
 - Turning store mode off exports the active view before legacy serving. Export failure leaves the workspace
   not ready instead of serving stale bytes.
 - Status, health, and dashboard surfaces add family, view, generation, manifest, level, resolution,
@@ -35,22 +36,23 @@ The review gaps were converted into the v4.1 amendments and verified as follows:
   refresh; a valid pointer whose store cannot open is preserved and remains not-ready.
 - A6: progressive level-up reads the family-store session, so an L1 store schedules the Full
   upgrade instead of consulting the legacy artifact.
-- A7: the family-store read session pins store instance, view, generation, manifest generation,
-  per-level state, resolution state, manifest hash, and store-log sequence. Workspace cache keys and
-  sidecar completeness stamps carry the same identity. Machine-governor admission ends before
-  sidecar convergence; the family-scoped sidecar-converger lease covers content/search/vector writes,
-  vector shadow lifecycle, creation/recovery, and retained-generation GC. The coordinator and sidecar
-  serialization tests plus the focused, fast, build, and full Scale gates pass.
+- A7: **open.** The family-store read session records store instance, view, generation, manifest
+  generation, per-level state, resolution state, manifest hash, and store-log sequence, but it does
+  not create the durable `coord.db` reader pin/heartbeat/expiry/release required by v4.2. Live Miller
+  acquisition is `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`, not the frozen triple.
+- A8: **open.** Store search/content sidecars rebuild the complete current view when stale; cursor-
+  incremental convergence and a local reproducible cost gate remain Ph5 work.
 
-The earlier process-count, scale-duration, and dogfood claims remain historical notes; the commands
-below are the cleanup evidence captured against the 2.31.1 producer. The final Miller release pin is
+The earlier process-count, scale-duration, and dogfood claims remain historical notes; all elapsed
+times below are local report-only observations, not acceptance ceilings or CI performance gates. The
+commands below are the cleanup evidence captured against the 2.31.1 producer. The final Miller release pin is
 subsequently advanced to 2.31.2; the new pin and downloaded-package verification are recorded in
 `docs/findings/2026-08-09-julie-extract-2.31.2-adoption.md`.
 
 Final branch evidence:
 
-- `scripts/test.sh`: 6,224 fast tests passed, two skipped, and completed in 27 seconds under the
-  30-second ceiling.
+- `scripts/test.sh`: 6,224 fast tests passed, two skipped; local elapsed time was recorded for
+  reproducibility only.
 - `scripts/test.sh scale`: 133 Scale tests passed, five optional-runtime tests skipped, and no
   failures occurred in 3 minutes 26 seconds.
 - The Julie artifact maintenance contract passed 15/15; the full Julie CLI store contract feature

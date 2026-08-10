@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -20,6 +21,28 @@ public static class ComplexityRankingReader
             limit = 1;
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        return ReadConnection(connection, limit, minSeverity, includeTests);
+    }
+
+    public static IReadOnlyList<ComplexityHotspot> Read(
+        IWorkspaceReadSession session,
+        int limit = 50,
+        ComplexitySeverity minSeverity = ComplexitySeverity.Moderate,
+        bool includeTests = true)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(connection => ReadConnection(connection, limit, minSeverity, includeTests));
+    }
+
+    private static IReadOnlyList<ComplexityHotspot> ReadConnection(
+        SqliteConnection connection,
+        int limit,
+        ComplexitySeverity minSeverity,
+        bool includeTests)
+    {
+        if (limit < 1)
+            limit = 1;
+
         JulieSchemaGate.Verify(connection);
 
         using SqliteCommand command = connection.CreateCommand();
@@ -84,6 +107,27 @@ public static class ComplexityRankingReader
             return [];
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        return ReadForPaths(connection, paths, includeTests);
+    }
+
+    public static IReadOnlyList<ComplexityHotspot> ReadForPaths(
+        IWorkspaceReadSession session,
+        IReadOnlyCollection<string> paths,
+        bool includeTests = true)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(paths);
+        if (paths.Count == 0)
+            return [];
+
+        return session.Read(connection => ReadForPaths(connection, paths, includeTests));
+    }
+
+    private static IReadOnlyList<ComplexityHotspot> ReadForPaths(
+        SqliteConnection connection,
+        IReadOnlyCollection<string> paths,
+        bool includeTests)
+    {
         JulieSchemaGate.Verify(connection);
 
         var results = new List<ComplexityHotspot>();

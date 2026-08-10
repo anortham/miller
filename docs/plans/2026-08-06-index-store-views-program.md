@@ -20,17 +20,17 @@ contract claims did not survive unamended; the third cycle is reserved as the Ph
 contract-freeze re-attack). **User-approved 2026-08-06**, with two same-day decisions: the codename is dropped
 (plain versioned-index-store naming) and the progressive levels program is **folded into this
 program** (see the levels section below). Ph3 implementation has landed and its A1-A6 cleanup is
-recorded in the current findings and amended v4.1 contract; each later phase still requires its
+recorded in the current findings and amended v4.2 contract; each later phase still requires its
 own approval to begin. The
 deferred v1.17.0 FTS5 sidecar-copy follow-up is **cancelled** in favor of this program — copy
 choreography retires wholesale when the store ships.
 
 **Ph3 acceptance correction (2026-08-09):** the earlier checked Ph3 boxes below were reopened by
 [`2026-08-09-index-store-ph3-acceptance.md`](../findings/2026-08-09-index-store-ph3-acceptance.md)
-and the v4.1 amendment register. The cleanup is tracked in
+and the v4.2 amendment register. The cleanup is tracked in
 [`2026-08-09-index-store-ph3-cleanup-plan.md`](2026-08-09-index-store-ph3-cleanup-plan.md)
-and A1-A7 are now evidenced there. Ph4 owns the dashboard family-store panel; Ph5 default-on
-adoption remains deferred.
+and A1-A6 are evidenced there. A7 lock/freshness and A8 cursor-incremental sidecars remain open;
+Ph4 owns the dashboard family-store panel and Ph5 retains the physical-byte and default-on gates.
 
 **Provenance:** user-driven storage rethink after v1.17.0. The multi-worktree program line
 (fleet-safety → rebind) was driven by the 2026-08-01 field report on multi-agent, multi-worktree
@@ -571,10 +571,11 @@ Decisive proofs before any contract work; the program does not proceed past a re
   - [x] Fresh worktree of an indexed family serves via the store; current level-up and rollback paths are covered by focused Scale and lifecycle tests.
   - [x] Existing contract suite green; fast-suite budget intact against the amended producer/fixture.
   - [x] Off-switch degrades honestly (export or not-ready; never a stale artifact), including malformed-pointer bootstrap and cross-workspace refresh.
-  - [x] Coordinator lock order and complete freshness-token proof are implemented: governor admission
-    ends before sidecar convergence; the family lease serializes sidecar writers and vector lifecycle
-    mutations; the read-session token, cache keys, and sidecar stamps carry the pinned store identity
-    and per-level state. Focused, fast, build, and Scale evidence is recorded in the Ph3 acceptance.
+      - [ ] Coordinator lock order and complete freshness-token proof remain open under v4.2: the
+        read-session token and sidecar stamps carry store identity and per-level state, but durable
+        coordinator reader pins are not implemented and live Miller acquisition is
+        `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`. Cursor-incremental store
+        sidecar convergence is also a Ph5 gate. Focused evidence must not be reported as closure.
 
 ### Ph4 — Dashboard family-store panel. ~1 session.
 

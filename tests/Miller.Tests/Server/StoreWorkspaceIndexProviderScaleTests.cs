@@ -30,12 +30,17 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
         Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
         File.WriteAllText(
             Path.Combine(root, "StoreCliCalculator.cs"),
-            "namespace Example; public static class StoreCliCalculator { public static int Add(int a, int b) => a + b; }");
+            "namespace Example; public static class StoreCliCalculator { // TODO: keep this store-visible\n public static int Add(int a, int b) => a + b; }");
+        File.WriteAllText(
+            Path.Combine(root, "StoreCliNotes.md"),
+            "StoreCliText is served from the family-store content sidecar.");
 
         string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
         string? priorSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
+        string? priorSemantic = Environment.GetEnvironmentVariable("MILLER_SEMANTIC");
         Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
         Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, "off");
+        Environment.SetEnvironmentVariable("MILLER_SEMANTIC", "off");
         try
         {
             ScaleTestSupport.RunJulie(
@@ -54,6 +59,14 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
             Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
             Assert.NotNull(StoreWorkspacePointer.Read(root));
 
+            using (WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+                       artifact,
+                       root,
+                       bootstrap.Workspace.WorkspaceId))
+            {
+                Assert.True(new ContentCorpusSidecar().EnsureStoreCurrent(session.FamilyStoreRoot!, session));
+            }
+
             File.Delete(artifact);
             WorkspaceContext context = bootstrap.Workspace;
             foreach (string[] args in new[]
@@ -63,6 +76,18 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 new[] { "impact", "StoreCliCalculator" },
                 new[] { "trace", "StoreCliCalculator", "--mode", "path", "--to", "StoreCliCalculator" },
                 new[] { "patterns", "list" },
+                new[] { "todos" },
+                new[] { "search", "TODO", "--mode", "markers" },
+                new[] { "search", "StoreCliText", "--mode", "content" },
+                new[] { "workspace", "status" },
+                new[] { "workspace", "health" },
+                new[] { "workspace", "onboarding" },
+                new[] { "workspace", "levels" },
+                new[] { "metrics", "complexity" },
+                new[] { "metrics", "clones" },
+                new[] { "complexity", "export" },
+                new[] { "references", "export" },
+                new[] { "report" },
             })
             {
                 using var stdout = new StringWriter();
@@ -80,6 +105,7 @@ public sealed class StoreWorkspaceIndexProviderScaleTests
                 WorkspaceReadSessionFactory.StoreEnvironmentVariable,
                 priorStoreMode);
             Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, priorSearchSidecar);
+            Environment.SetEnvironmentVariable("MILLER_SEMANTIC", priorSemantic);
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }

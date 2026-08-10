@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Analysis;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Git;
 
 namespace Miller.Server.Tools;
@@ -111,7 +112,8 @@ public static class MetricsTool
         bool includeCommits = false,
         IGitHistoryReader? historyReader = null,
         bool nearDuplicates = false,
-        int nearDuplicateCandidateCap = NearDuplicateCandidateCap)
+        int nearDuplicateCandidateCap = NearDuplicateCandidateCap,
+        IWorkspaceReadSession? readSession = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
@@ -121,8 +123,8 @@ public static class MetricsTool
         {
             "clones" => RunClones(
                 dbPath, boundedLimit, json, minCount, maxSymbolsPerGroup, workspaceRoot, nearDuplicates,
-                nearDuplicateCandidateCap),
-            "complexity" => RunComplexity(dbPath, boundedLimit, json, minSeverity, includeTests),
+                nearDuplicateCandidateCap, readSession),
+            "complexity" => RunComplexity(dbPath, boundedLimit, json, minSeverity, includeTests, readSession),
             // NOTE: churn/risk carry SnapshotMetrics for the CLI heavy-arm history recorder, as does a clones run
             // whose opt-in Type-2 arm completed. complexity and the EXACT clone count stay null — the leader
             // converge arm already records clone_group_count from symbols.db.
@@ -133,7 +135,8 @@ public static class MetricsTool
                 boundedLimit,
                 json,
                 includeCommits,
-                historyReader),
+                historyReader,
+                readSession),
             "risk" => RunRisk(
                 dbPath,
                 workspaceRoot,
@@ -141,7 +144,8 @@ public static class MetricsTool
                 boundedLimit,
                 json,
                 includeTests,
-                historyReader),
+                historyReader,
+                readSession),
             _ => throw new InvalidOperationException("metrics operation must be churn, clones, complexity, or risk."),
         };
     }
@@ -163,15 +167,20 @@ public static class MetricsTool
         int maxSymbolsPerGroup,
         string? workspaceRoot,
         bool nearDuplicates,
-        int candidateCap)
+        int candidateCap,
+        IWorkspaceReadSession? readSession)
     {
         int boundedSymbolLimit = Math.Clamp(maxSymbolsPerGroup, 1, CloneGroupReader.MaxSymbolsPerGroup);
-        IReadOnlyList<CloneGroup> groups = CloneGroupReader.Read(dbPath, limit, minCount, boundedSymbolLimit);
+        IReadOnlyList<CloneGroup> groups = readSession is null
+            ? CloneGroupReader.Read(dbPath, limit, minCount, boundedSymbolLimit)
+            : CloneGroupReader.Read(readSession, limit, minCount, boundedSymbolLimit);
 
         // Off by default: the Type-2 arm re-reads symbol bodies from disk (hash-verified per file), so it must
         // never ride along on a plain `metrics clones`. With it off the output below is byte-identical to v1.
         NearDuplicateScan? scan = nearDuplicates && !string.IsNullOrWhiteSpace(workspaceRoot)
-            ? ScanNearDuplicates(dbPath, workspaceRoot, limit, boundedSymbolLimit, candidateCap)
+            ? readSession is null
+                ? ScanNearDuplicates(dbPath, workspaceRoot, limit, boundedSymbolLimit, candidateCap)
+                : ScanNearDuplicates(readSession, workspaceRoot, limit, boundedSymbolLimit, candidateCap)
             : null;
         IReadOnlyList<NearDuplicateCloneGroup> near = scan?.Groups ?? [];
 
@@ -214,6 +223,57 @@ public static class MetricsTool
         int candidateCap = NearDuplicateCandidateCap)
     {
         IReadOnlyList<NearDuplicateCandidate> candidates = ReadNearDuplicateCandidates(dbPath, candidateCap);
+        return AnalyzeNearDuplicates(
+            candidates,
+            workspaceRoot,
+            renderLimit,
+            symbolLimit,
+            candidate => ExtractReader.ReadBody(
+                dbPath,
+                workspaceRoot,
+                candidate.Symbol.Path,
+                candidate.BodyStartByte,
+                candidate.BodyEndByte,
+                candidate.BodyStartLine,
+                candidate.BodyEndLine),
+            candidateCap);
+    }
+
+    internal static NearDuplicateScan ScanNearDuplicates(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        int renderLimit,
+        int symbolLimit,
+        int candidateCap = NearDuplicateCandidateCap)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+
+        IReadOnlyList<NearDuplicateCandidate> candidates = ReadNearDuplicateCandidates(session, candidateCap);
+        return AnalyzeNearDuplicates(
+            candidates,
+            workspaceRoot,
+            renderLimit,
+            symbolLimit,
+            candidate => ExtractReader.ReadBody(
+                session,
+                workspaceRoot,
+                candidate.Symbol.Path,
+                candidate.BodyStartByte,
+                candidate.BodyEndByte,
+                candidate.BodyStartLine,
+                candidate.BodyEndLine),
+            candidateCap);
+    }
+
+    private static NearDuplicateScan AnalyzeNearDuplicates(
+        IReadOnlyList<NearDuplicateCandidate> candidates,
+        string workspaceRoot,
+        int renderLimit,
+        int symbolLimit,
+        Func<NearDuplicateCandidate, ExtractReader.BodyReadResult> readBody,
+        int candidateCap)
+    {
         bool truncated = candidates.Count >= candidateCap;
         if (candidates.Count < 2)
             return new NearDuplicateScan([], 0, truncated, candidateCap);
@@ -222,14 +282,7 @@ public static class MetricsTool
         var bySymbolId = new Dictionary<string, CloneSymbol>(StringComparer.Ordinal);
         foreach (NearDuplicateCandidate candidate in candidates)
         {
-            ExtractReader.BodyReadResult body = ExtractReader.ReadBody(
-                dbPath,
-                workspaceRoot,
-                candidate.Symbol.Path,
-                candidate.BodyStartByte,
-                candidate.BodyEndByte,
-                candidate.BodyStartLine,
-                candidate.BodyEndLine);
+            ExtractReader.BodyReadResult body = readBody(candidate);
             if (body.Text is not { Length: > 0 } text)
                 continue;
 
@@ -273,6 +326,21 @@ public static class MetricsTool
         }.ToString());
         connection.Open();
 
+        return ReadNearDuplicateCandidates(connection, candidateCap);
+    }
+
+    private static IReadOnlyList<NearDuplicateCandidate> ReadNearDuplicateCandidates(
+        IWorkspaceReadSession session,
+        int candidateCap)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(connection => ReadNearDuplicateCandidates(connection, candidateCap));
+    }
+
+    private static IReadOnlyList<NearDuplicateCandidate> ReadNearDuplicateCandidates(
+        SqliteConnection connection,
+        int candidateCap)
+    {
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """
             SELECT symbol_id, name, kind, language, path, start_line, is_test,
@@ -312,16 +380,15 @@ public static class MetricsTool
         int limit,
         bool json,
         string? minSeverity,
-        bool includeTests)
+        bool includeTests,
+        IWorkspaceReadSession? readSession)
     {
         if (!ComplexityRankingReader.TryParseSeverity(minSeverity, out ComplexitySeverity severity))
             throw new InvalidOperationException("metrics complexity min_severity must be low, moderate, or high.");
 
-        IReadOnlyList<ComplexityHotspot> hotspots = ComplexityRankingReader.Read(
-            dbPath,
-            limit,
-            severity,
-            includeTests);
+        IReadOnlyList<ComplexityHotspot> hotspots = readSession is null
+            ? ComplexityRankingReader.Read(dbPath, limit, severity, includeTests)
+            : ComplexityRankingReader.Read(readSession, limit, severity, includeTests);
         return new MetricsToolResult(
             json ? RenderComplexityJson(hotspots, severity) : RenderComplexityCompact(hotspots),
             hotspots.Count,
@@ -372,20 +439,17 @@ public static class MetricsTool
         int limit,
         bool json,
         bool includeCommits,
-        IGitHistoryReader? historyReader)
+        IGitHistoryReader? historyReader,
+        IWorkspaceReadSession? readSession)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new InvalidOperationException("metrics churn requires a workspace root.");
         if (historyReader is null)
             throw new InvalidOperationException("metrics churn requires a git history reader.");
 
-        ChurnReport report = GitChurnAnalyzer.Read(
-            dbPath,
-            workspaceRoot,
-            range,
-            limit,
-            includeCommits,
-            historyReader);
+        ChurnReport report = readSession is null
+            ? GitChurnAnalyzer.Read(dbPath, workspaceRoot, range, limit, includeCommits, historyReader)
+            : GitChurnAnalyzer.Read(readSession, workspaceRoot, range, limit, includeCommits, historyReader);
         return new MetricsToolResult(
             json ? RenderChurnJson(report) : RenderChurnCompact(report),
             report.Rows.Count,
@@ -412,14 +476,17 @@ public static class MetricsTool
         int limit,
         bool json,
         bool includeTests,
-        IGitHistoryReader? historyReader)
+        IGitHistoryReader? historyReader,
+        IWorkspaceReadSession? readSession)
     {
         if (string.IsNullOrWhiteSpace(workspaceRoot))
             throw new InvalidOperationException("metrics risk requires a workspace root.");
         if (historyReader is null)
             throw new InvalidOperationException("metrics risk requires a git history reader.");
 
-        RiskReport report = RiskRanking.Read(dbPath, workspaceRoot, range, limit, includeTests, historyReader);
+        RiskReport report = readSession is null
+            ? RiskRanking.Read(dbPath, workspaceRoot, range, limit, includeTests, historyReader)
+            : RiskRanking.Read(readSession, workspaceRoot, range, limit, includeTests, historyReader);
         return new MetricsToolResult(
             json ? RenderRiskJson(report) : RenderRiskCompact(report),
             report.Rows.Count,

@@ -1,7 +1,8 @@
 # Index Store Ph3 Cleanup — Ph4/Ph5 Entry Plan
 
-**Status:** A1-A7 complete 2026-08-09; the remaining work is Ph4 dashboard delivery and Ph5
-physical-byte validation/default-on decision. This plan closes the execution drift identified by the
+**Status:** A1-A6 complete 2026-08-09; A7 lock/freshness and A8 cursor-incremental sidecars remain
+open. The remaining work is Ph4 dashboard delivery plus the Ph5 physical-byte, cursor-cost, and
+default-on gates. This plan closes the execution drift identified by the
 2026-08-09 Miller/Julie review before Ph4 work begins. Store mode remains explicit opt-in
 (`MILLER_INDEX_STORE=1`); no new MCP tools, default-on change, release, tag, push, or publish is
 part of this plan.
@@ -111,8 +112,9 @@ part of this plan.
   tests, then the required fast/build/Scale gates.
 - Recheck every worktree's path, branch, commit, and dirty state. Leave changes uncommitted and
   do not touch the existing release-prep path.
-- Report the remaining physical-byte aggregate and default-on decision as Ph5 gates; do not reopen
-  the lock-order/freshness work after its implementation evidence is recorded.
+    - Report the remaining lock-order/freshness, cursor-cost, physical-byte aggregate, and default-on
+      decisions as explicit Ph4/Ph5 gates; do not mark them closed from token or sidecar-stamp evidence
+      alone.
 
 ## Completion evidence
 
@@ -129,9 +131,10 @@ part of this plan.
   refresh; valid-but-unopenable pointers remain bound and not-ready.
 - A6: progressive level-up reads the family-store session and schedules Full from an L1 store;
   focused Miller Scale coverage passes.
-- A7: the family-store freshness token carries store instance/view/generation, manifest generation,
-  per-level stamps, resolution state, manifest hash, and store-log sequence; cache and sidecar stamps
-  consume the same identity. The machine governor is released before sidecar convergence, and a
-  family-scoped sidecar-converger lease serializes content/search/vector writes, shadow promotion,
-  vector creation/recovery, and retained-generation GC. Focused A7 coverage, the fast suite, build,
-  and full Scale suite pass. Ph5 physical-byte aggregation and default-on adoption remain open.
+- A7: **open.** The family-store freshness token carries store instance/view/generation, manifest
+  generation, per-level stamps, resolution state, manifest hash, and store-log sequence, but no
+  durable coordinator reader pin/heartbeat/expiry/release exists. Live Miller acquisition order is
+  `SingleWriterLock → ScanGovernor → _opsGate → sidecar lease`, not the v4 triple.
+- A8: **open.** Store search/content convergence rewrites a complete current-view sidecar on a stale
+  stamp; cursor-incremental convergence and a local reproducible cost gate remain Ph5 work. Fast,
+  build, and Scale results do not close either A7 or A8.

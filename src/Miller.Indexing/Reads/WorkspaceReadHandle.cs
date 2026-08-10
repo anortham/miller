@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Reads;
 
@@ -24,10 +25,42 @@ public sealed class WorkspaceReadHandle : IWorkspaceReadSession
 
     public void Dispose() => _session.Dispose();
 
-    public static implicit operator WorkspaceReadHandle(string databasePath) =>
-        new(File.Exists(databasePath)
-            ? LegacyArtifactReadSession.Open(databasePath)
-            : LegacyArtifactReadSession.CreateDeferred(databasePath));
+    public static implicit operator WorkspaceReadHandle(string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        string absolutePath = Path.GetFullPath(databasePath);
+        string? workspaceRoot = WorkspaceRootFor(absolutePath);
+        if (workspaceRoot is not null)
+        {
+            bool storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+            if (storeEnabled || StoreWorkspacePointer.Read(workspaceRoot) is not null)
+            {
+                return WorkspaceReadSessionFactory.Open(
+                    absolutePath,
+                    workspaceRoot,
+                    workspaceId: null,
+                    storeEnabled);
+            }
+        }
+
+        return new(File.Exists(absolutePath)
+            ? LegacyArtifactReadSession.Open(absolutePath)
+            : LegacyArtifactReadSession.CreateDeferred(absolutePath));
+    }
 
     public static implicit operator WorkspaceReadHandle(LegacyArtifactReadSession session) => new(session);
+
+    private static string? WorkspaceRootFor(string databasePath)
+    {
+        string? millerDirectory = Path.GetDirectoryName(databasePath);
+        if (!string.Equals(
+                Path.GetFileName(millerDirectory),
+                ".miller",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Path.GetDirectoryName(millerDirectory);
+    }
 }

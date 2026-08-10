@@ -1245,7 +1245,7 @@ public sealed class VectorConvergeService : BackgroundService
 
     private static bool IsConvergeException(Exception ex) =>
         ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-            or ArgumentException or NotSupportedException or FormatException or VectorStoreException;
+            or ArgumentException or NotSupportedException or FormatException or TimeoutException or VectorStoreException;
 
     private sealed class EmbeddingClient(
         Func<IReadOnlyList<string>, CancellationToken, Task<SemanticEmbedOutcome>> embedBatch,

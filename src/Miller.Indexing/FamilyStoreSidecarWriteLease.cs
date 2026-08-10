@@ -23,7 +23,7 @@ public sealed class FamilyStoreSidecarWriteLease : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeRoot);
         string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(storeRoot);
-        return Path.Combine(canonicalRoot, LockFileName);
+        return Path.Combine(canonicalRoot, "sidecars", LockFileName);
     }
 
     public static FamilyStoreSidecarWriteLease AcquireFor(

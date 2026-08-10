@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
 using Miller.Server.Cli;
 using Miller.Server.Hosting;
@@ -466,7 +467,10 @@ public sealed class WorkspaceTool
             AssembleFacts(),
             _ledger.Summarize(),
             _ledger.SummarizeOutcomes(),
-            WorkspaceHealthReader.Read(_workspace.ExtractDbPath),
+            ReadExtractionHealth(
+                _workspace.ExtractDbPath,
+                _workspace.CanonicalRoot ?? _workspace.WorkspaceRoot,
+                _workspace.WorkspaceId),
             ReadLeaderFacts(_workspace.ExtractDbPath, ownWorkspace: true),
             ReadHistoryStatus(_workspace.ExtractDbPath));
     }
@@ -617,9 +621,9 @@ public sealed class WorkspaceTool
         {
             try
             {
-                extraction = WorkspaceHealthReader.Read(row.IndexDbPath);
+                extraction = ReadExtractionHealth(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
             }
-            catch (Exception ex) when (IsHealthIndexReadException(ex))
+            catch (Exception ex) when (ex is IOException || IsHealthIndexReadException(ex))
             {
                 statusFacts = WorkspaceFactsAssembler.FromRegisteredHealthReadError(
                     _registry,
@@ -1626,6 +1630,15 @@ public sealed class WorkspaceTool
         StructuralFacts: HealthFactSection<StructuralFactGroup>.Unavailable(error),
         ComplexityMetrics: HealthFactSection<ComplexityMetricGroup>.Unavailable(error),
         Files: HealthFactSection<FileStatusGroup>.Unavailable(error));
+
+    private static WorkspaceExtractionHealthFacts ReadExtractionHealth(
+        string dbPath,
+        string workspaceRoot,
+        string? workspaceId)
+    {
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(dbPath, workspaceRoot, workspaceId);
+        return WorkspaceHealthReader.Read(session);
+    }
 
     private static bool IsHealthIndexReadException(Exception ex) =>
         ex is SqliteException or InvalidOperationException;

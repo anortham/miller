@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -35,6 +36,22 @@ public static class ReferenceExportReader
         ArgumentNullException.ThrowIfNull(writer);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        WriteJsonLines(connection, writer);
+    }
+
+    public static void WriteJsonLines(IWorkspaceReadSession session, TextWriter writer)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(writer);
+        session.Read(connection =>
+        {
+            WriteJsonLines(connection, writer);
+            return true;
+        });
+    }
+
+    private static void WriteJsonLines(SqliteConnection connection, TextWriter writer)
+    {
         JulieSchemaGate.Verify(connection);
 
         string? artifactId = ReadArtifactId(connection);

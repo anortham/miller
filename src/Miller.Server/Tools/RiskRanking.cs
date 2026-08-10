@@ -1,4 +1,5 @@
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Git;
 
 namespace Miller.Server.Tools;
@@ -32,6 +33,27 @@ public static class RiskRanking
         return FromChurn(symbolsDbPath, churn, limit, includeTests);
     }
 
+    public static RiskReport Read(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        string range,
+        int limit,
+        bool includeTests,
+        IGitHistoryReader historyReader)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        ChurnReport churn = GitChurnAnalyzer.Read(
+            session,
+            workspaceRoot,
+            range,
+            limit: int.MaxValue,
+            includeCommits: false,
+            historyReader);
+
+        return FromChurn(session, churn, limit, includeTests);
+    }
+
     /// <summary>
     /// Ranks risk from an already-read churn report so callers composing several sections (e.g.
     /// `miller report`) parse git history once. The churn report must be un-limited (or limited
@@ -47,6 +69,23 @@ public static class RiskRanking
         IReadOnlyList<ComplexityHotspot> complexity = paths.Length == 0
             ? []
             : ComplexityRankingReader.ReadForPaths(symbolsDbPath, paths, includeTests);
+
+        return new RiskReport(churn.Range, Join(churn.Rows, complexity, limit));
+    }
+
+    public static RiskReport FromChurn(
+        IWorkspaceReadSession session,
+        ChurnReport churn,
+        int limit,
+        bool includeTests)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(churn);
+
+        string[] paths = churn.Rows.Select(static row => row.Path).Distinct(StringComparer.Ordinal).ToArray();
+        IReadOnlyList<ComplexityHotspot> complexity = paths.Length == 0
+            ? []
+            : ComplexityRankingReader.ReadForPaths(session, paths, includeTests);
 
         return new RiskReport(churn.Range, Join(churn.Rows, complexity, limit));
     }

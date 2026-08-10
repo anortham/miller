@@ -1,5 +1,6 @@
 using Miller.Core.Diff;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Git;
 
@@ -25,6 +26,39 @@ public static class GitChurnAnalyzer
             throw new InvalidOperationException(history.Error ?? "git history read failed.");
 
         MillerRepositoryIndex index = MillerRepositoryIndex.Build(SqliteSymbolReader.Read(symbolsDbPath));
+        return ReadCore(history, range, limit, includeCommits, index);
+    }
+
+    public static ChurnReport Read(
+        IWorkspaceReadSession session,
+        string workspaceRoot,
+        string range,
+        int limit,
+        bool includeCommits,
+        IGitHistoryReader historyReader)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(range);
+        ArgumentNullException.ThrowIfNull(historyReader);
+        if (limit < 1)
+            limit = 1;
+
+        GitHistoryResult history = historyReader.Read(new GitHistoryRequest(workspaceRoot, range));
+        if (!history.Success)
+            throw new InvalidOperationException(history.Error ?? "git history read failed.");
+
+        MillerRepositoryIndex index = MillerRepositoryIndex.Build(SqliteSymbolReader.ReadSession(session));
+        return ReadCore(history, range, limit, includeCommits, index);
+    }
+
+    private static ChurnReport ReadCore(
+        GitHistoryResult history,
+        string range,
+        int limit,
+        bool includeCommits,
+        MillerRepositoryIndex index)
+    {
         var aggregates = new Dictionary<ChurnKey, ChurnAccumulator>();
         var changedPaths = new HashSet<string>(StringComparer.Ordinal);
 

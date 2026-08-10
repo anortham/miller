@@ -60,7 +60,7 @@ validation/default-on decisions remain.
 
 **Security scope:** none declared; this plan adds no dependency, credential, network listener, or write surface outside existing local CLI/SQLite paths.
 
-**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, no stale-artifact rollback serving, and fast-suite wall time below 30 seconds. Store-open time, time-to-exact, per-query overhead, and physical bytes are recorded for Ph5 unless a contract ceiling above is violated.
+**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing.
 
 **Escalation triggers:** any public-output drift runs the corresponding CLI/MCP contract suite; any sidecar-key or ranking change runs search/content/vector parity; any bootstrap/refresh change runs all Scale workspace lifecycle tests; any package/pin change runs restore and release build.
 

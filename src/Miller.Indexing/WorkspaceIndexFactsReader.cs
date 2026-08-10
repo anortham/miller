@@ -29,6 +29,17 @@ public static class WorkspaceIndexFactsReader
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
 
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(dbPath);
+        return ReadSymbolCounts(connection);
+    }
+
+    public static WorkspaceSymbolCounts ReadSymbolCounts(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadSymbolCounts);
+    }
+
+    private static WorkspaceSymbolCounts ReadSymbolCounts(SqliteConnection connection)
+    {
         JulieSchemaGate.Verify(connection);
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = """

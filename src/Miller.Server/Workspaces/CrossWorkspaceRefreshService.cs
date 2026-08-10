@@ -574,7 +574,7 @@ public sealed class CrossWorkspaceRefreshService
         }
         catch (Exception ex) when (
             ex is SqliteException or IOException or InvalidOperationException
-                or UnauthorizedAccessException or ArgumentException)
+                or UnauthorizedAccessException or ArgumentException or TimeoutException)
         {
             return $"Store sidecar convergence is incomplete: {ex.Message}";
         }
