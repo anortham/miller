@@ -90,7 +90,7 @@ public static class WorkspaceReadSessionFactory
     {
         string? value = Environment.GetEnvironmentVariable(StoreEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
-            return false;
+            return true;
         return value.Trim().ToLowerInvariant() switch
         {
             "1" or "true" or "on" or "enabled" => true,

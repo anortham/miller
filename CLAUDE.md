@@ -26,9 +26,9 @@ orchestration.
 
 The versioned family store is a producer-owned public contract. `julie-extract` is the only writer of
 `store.db`, `coord.db`, manifests, resolution bases, and generation files; Miller reads a pinned view and
-writes only its own derived sidecars. Store mode is currently explicit with `MILLER_INDEX_STORE=1` while
-Ph3 acceptance is reviewed. Turning it off exports the current view to the legacy standalone artifact before
-serving it; Miller must never fall back to a stale legacy artifact. Default-on adoption remains a Ph5 decision.
+writes only its own derived sidecars. Store mode is default-on when `MILLER_INDEX_STORE` is unset or blank.
+`MILLER_INDEX_STORE=off` exports the current view to the legacy standalone artifact before serving it; Miller
+must never fall back to a stale legacy artifact.
 (2026-07-06 consensus, Eros not shipping: Miller absorbed the deterministic signals/hotspot workflows —
 see `docs/plans/2026-07-06-miller-standalone-bolstering-assessment.md`. Dead-code candidates SHIPPED as an
 evidence-gated CLI surface (`miller references candidates`, `docs/contracts/references-candidates-v1.md`); the

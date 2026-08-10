@@ -188,6 +188,9 @@ MCP client (Claude Code / Cursor / Codex)
 
 Design choices that follow from this:
 
+- The versioned family store is on by default: one producer-owned store serves a repository family,
+  while each checkout reads its own coherent view. Set `MILLER_INDEX_STORE=off` only for legacy
+  standalone compatibility; Miller exports the current view before rolling back.
 - Lexical ranking stays deterministic in C#. The default-on semantic arm lives in a separate
   `vectors.db` and is fused after ranking, so disabling it (`MILLER_SEMANTIC=off`) leaves lexical
   output byte-identical.

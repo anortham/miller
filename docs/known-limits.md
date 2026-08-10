@@ -1,8 +1,9 @@
 # Known limits
 
-- Family-store mode remains explicit opt-in (`MILLER_INDEX_STORE=1`). Until the Ph4/Ph5 A7 durable reader-pin
+- Family-store mode is default-on. Set `MILLER_INDEX_STORE=off` for the legacy standalone compatibility
+  and rollback path. Until the Ph4/Ph5 A7 durable reader-pin
   protocol lands, producer GC must not run concurrently with live Miller family-store readers; an unpinned
-  non-current generation may be reclaimed during a long read. The default standalone path is unaffected.
+  non-current generation may be reclaimed during a long read. The explicit standalone path is unaffected.
 - Family-store search/content sidecars still use the open A8 full-view rebuild path. Convergence is serialized by
   the family sidecar lease, so concurrent workspaces can leave a sidecar stale until a later converge succeeds;
   store reads report that stale state rather than silently falling back to a legacy artifact. Cursor-incremental
