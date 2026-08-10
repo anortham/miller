@@ -3,7 +3,7 @@ id: prove-the-value-then-show-it-2026-07-28-strategy
 title: Prove the value, then show it — 2026-07-28 strategy
 status: active
 created: 2026-07-29T00:13:39.439Z
-updated: 2026-08-10T20:12:25.140Z
+updated: 2026-08-10T23:50:36.939Z
 tags:
   - strategy
   - adoption
@@ -27,7 +27,7 @@ Miller replaces the retired Julie agent-tool core and is positioned on its measu
 - Stable Miller v1.18.0 was published 2026-08-10 from commit `13bd8a588ba2efe8ff3115420dcc65ac34cdcc53` after local, Linux/Windows CI, Scale, four-platform package, checksum, archive-content, and live-download gates passed.
 - `julie-extract` 2.31.3 is the shipped producer pin. Its stable four-platform release was published from commit `4e07f5e9`; it hardens concurrent multi-worktree writer fencing and maintenance recovery.
 - A7 durable reader pins and lock-order proof, plus A8 cursor-incremental sidecar convergence, remain the explicit next storage phases.
-- Do not modify `/home/murphy/source/julie-extractors`; another session owns it.
+- User cleared the prior separate-session ownership constraint on `/home/murphy/source/julie-extractors` on 2026-08-10; producer changes are available for coordinated follow-up when needed.
 
 ## Standing constraints
 
