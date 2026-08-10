@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Miller.Core.Editing;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -217,6 +218,41 @@ public sealed class EditToolTests : IDisposable
         Assert.Contains("return _items.Sum", result.Output);
         Assert.Equal(JulieDbFixture.OrderServiceContent, File.ReadAllText(AbsPath("orders/OrderService.cs")));
         Assert.Empty(wt.Converged);
+    }
+
+    [Fact]
+    public void Execute_UsesTheProvidedReadSessionForSpanAndFreshnessReads()
+    {
+        using var fx = JulieDbFixture.CreateForEdit();
+        LayFiles(EditFixtureFiles);
+        using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
+            fx.DbPath,
+            _root,
+            workspaceId: null,
+            storeEnabled: false);
+        var index = MillerRepositoryIndex.Build(SqliteSymbolReader.ReadSession(session));
+        var resolver = new SmartTargetResolver(index);
+        var applier = new EditApplier(() => new NoopLease());
+        var writeThrough = new RecordingWriteThrough();
+        string missingLegacyPath = Path.Combine(_root, ".miller", "symbols.db");
+        var service = new EditService(
+            index,
+            resolver,
+            missingLegacyPath,
+            _root,
+            applier,
+            writeThrough,
+            readSession: session);
+
+        EditService.EditResult result = service.Execute(Req("replace_symbol_body", "OrderService.Total") with
+        {
+            NewText = "{ return 42; }",
+            Apply = true,
+        });
+
+        Assert.True(result.Applied, result.Output);
+        Assert.Contains("return 42", File.ReadAllText(AbsPath("orders/OrderService.cs")), StringComparison.Ordinal);
+        Assert.Contains(AbsPath("orders/OrderService.cs"), writeThrough.Converged);
     }
 
     [Fact]

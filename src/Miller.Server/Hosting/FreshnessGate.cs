@@ -1,5 +1,6 @@
 using Miller.Core.Freshness;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 
 namespace Miller.Server.Hosting;
 
@@ -68,6 +69,34 @@ public static class FreshnessGate
             return new GateResult(FreshnessResult.Stale, IndexedContentFound: false);
 
         string currentHash = ContentHasher.Blake3FileHex(diskPath);
+        return Compare(indexedHash, currentHash, diskText);
+    }
+
+    public static GateResult Check(
+        IWorkspaceReadSession session,
+        string indexedFilePath,
+        string diskPath,
+        string diskText)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(indexedFilePath);
+        ArgumentNullException.ThrowIfNull(diskPath);
+        ArgumentNullException.ThrowIfNull(diskText);
+
+        string? hashAlgorithm = ExtractFileHashReader.ReadHashAlgorithm(session);
+        if (!StringComparer.Ordinal.Equals(hashAlgorithm, "blake3"))
+            return new GateResult(FreshnessResult.Stale, IndexedContentFound: false);
+
+        string? indexedHash = ExtractFileHashReader.ReadFileHash(session, indexedFilePath);
+        if (string.IsNullOrWhiteSpace(indexedHash))
+            return new GateResult(FreshnessResult.Stale, IndexedContentFound: false);
+
+        string currentHash = ContentHasher.Blake3FileHex(diskPath);
+        return Compare(indexedHash, currentHash, diskText);
+    }
+
+    private static GateResult Compare(string indexedHash, string currentHash, string diskText)
+    {
         // v1 artifacts store NO snapshot text (files.content is gone), so the indexed side is hash-only: pass
         // indexedText:null. StalenessCheck then decides on the hash compare ALONE — it runs the exact-text
         // tiebreaker only when text is present on BOTH sides (StalenessCheck.cs), so null indexedText is NOT

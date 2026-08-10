@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
 using Miller.Core.Tokenization;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -192,6 +193,25 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     }
 
     [Fact]
+    public void OpenStore_UsesStoreLogSequenceForRegionMeta()
+    {
+        const string viewId = "view-1";
+        string searchPath = StoreSidecarCatalog.PathFor(_dir, StoreSidecarKind.Search, viewId);
+        WorkspaceReadSnapshot snapshot = StoreSnapshot(viewId, storeLogSequence: 19, revision: 7);
+        Directory.CreateDirectory(Path.GetDirectoryName(searchPath)!);
+        WriteSearchDb(
+            searchPath,
+            new[] { Region("r", "comment", "src/A.cs", 1, "// store region") },
+            revision: 19,
+            schemaVersion: SearchIndexWriter.SchemaVersion);
+        StoreSidecarCatalog.Stamp(searchPath, StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, snapshot));
+
+        FtsRegionSearchIndex index = FtsRegionSearchIndex.OpenStore(_dir, snapshot);
+
+        Assert.Equal(19, index.Revision);
+    }
+
+    [Fact]
     public void Open_OldSchemaVersion_FailsClosed()
     {
         WriteSearchDb(Region("r", "comment", "src/A.cs", 1, "// old schema"), schemaVersion: 2);
@@ -294,8 +314,16 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         long revision = 7,
         int schemaVersion = SearchIndexWriter.SchemaVersion,
         IReadOnlyList<(string Id, string Name)>? symbols = null)
+        => WriteSearchDb(_dbPath, regions, revision, schemaVersion, symbols);
+
+    private void WriteSearchDb(
+        string databasePath,
+        RegionRow[] regions,
+        long revision = 7,
+        int schemaVersion = SearchIndexWriter.SchemaVersion,
+        IReadOnlyList<(string Id, string Name)>? symbols = null)
     {
-        using var connection = OpenWriteCreate();
+        using var connection = OpenWriteCreate(databasePath);
         Execute(connection, """
             CREATE VIRTUAL TABLE regions_fts USING fts5(
                 region_id UNINDEXED, body, tokenize='unicode61 remove_diacritics 0');
@@ -407,10 +435,13 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
     }
 
     private SqliteConnection OpenWriteCreate()
+        => OpenWriteCreate(_dbPath);
+
+    private static SqliteConnection OpenWriteCreate(string databasePath)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _dbPath,
+            DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Pooling = false,
         }.ToString());
@@ -424,6 +455,30 @@ public sealed class FtsRegionSearchIndexTests : IDisposable
         command.CommandText = sql;
         command.ExecuteNonQuery();
     }
+
+    private WorkspaceReadSnapshot StoreSnapshot(string viewId, long storeLogSequence, long revision) =>
+        new(
+            _dir,
+            "workspace-1",
+            "family-1",
+            viewId,
+            new WorkspaceFreshnessToken(
+                "family-1",
+                revision,
+                ManifestHash: "manifest-1",
+                StoreLogSequence: storeLogSequence,
+                StoreInstanceId: "instance-1",
+                ViewId: viewId,
+                GenerationName: "generation-1",
+                ManifestGeneration: 1,
+                IndexLevel: "full",
+                LevelStampL1: "l1",
+                LevelStampL2: "l2",
+                LevelStampL3: "l3"),
+            "full",
+            WorkspaceReadMode.FamilyStore,
+            GenerationName: "generation-1",
+            ManifestGeneration: 1);
 
     private sealed record RegionRow(
         string Id,

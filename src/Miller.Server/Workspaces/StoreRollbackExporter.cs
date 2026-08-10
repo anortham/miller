@@ -128,6 +128,7 @@ public static class StoreRollbackExporter
                     new StoreFailureClass("invalid_export_output"),
                     $"julie-extract store export reported '{exportedPath}' instead of '{outputPath}'.");
             }
+            ValidateExportArtifact(outputPath);
             FullRebuildPromotion.Promote(legacyDatabasePath);
             StoreWorkspacePointer.Delete(workspaceRoot);
             return new StoreRollbackExportResult(true, null);
@@ -136,6 +137,25 @@ public static class StoreRollbackExporter
         {
             FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
             throw;
+        }
+    }
+
+    internal static void ValidateExportArtifact(string outputPath)
+    {
+        try
+        {
+            LegacyArtifactReadSession.Validate(outputPath);
+            using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(outputPath);
+            _ = SqliteSymbolReader.ReadSession(session);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException or
+            InvalidOperationException or Microsoft.Data.Sqlite.SqliteException or IncompatibleExtractException)
+        {
+            throw new StoreWorkspaceOperationException(
+                StoreOperation.Export,
+                new StoreFailureClass("invalid_export_artifact"),
+                $"julie-extract store export produced an invalid legacy artifact: {ex.Message}");
         }
     }
 }

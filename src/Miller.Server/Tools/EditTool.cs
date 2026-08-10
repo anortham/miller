@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 using Miller.Server.Telemetry;
@@ -124,9 +125,13 @@ public sealed class EditTool
                 telemetry.SetMetadata("has_line", line is not null);
             }
 
+            using WorkspaceReadHandle readSession = WorkspaceReadSessionFactory.Open(
+                _workspace.ExtractDbPath,
+                _workspace.WorkspaceRoot,
+                _workspace.WorkspaceId);
             var service = new EditService(
                 _holder.Current, _resolver, _workspace.ExtractDbPath, _workspace.WorkspaceRoot,
-                _applier, _writeThrough);
+                _applier, _writeThrough, readSession: readSession);
 
             EditService.EditResult result = service.Execute(request);
 

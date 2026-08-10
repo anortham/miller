@@ -844,6 +844,9 @@ public sealed class WorkspaceTool
     // (identity), the indexer (leadership + queue), and the freshness service / probe (revision + freshness).
     private WorkspaceFacts AssembleFacts()
     {
+        if (TryAssembleCurrentStoreFacts() is { } storeFacts)
+            return storeFacts;
+
         var (index, builtRevision) = _holder.Snapshot();
         (string diskStatus, string? diskWarning) = CurrentIndexDiskStatus();
         bool indexAvailable = diskStatus == "current";
@@ -875,6 +878,40 @@ public sealed class WorkspaceTool
             ScanFailure: WorkspaceFactsAssembler.ScanFailureFacts(_workspace.ExtractDbPath),
             RebindProvenance: WorkspaceFactsAssembler.RebindProvenanceFactsFor(
                 _workspace.ExtractDbPath, _registry));
+    }
+
+    private WorkspaceFacts? TryAssembleCurrentStoreFacts()
+    {
+        if (!WorkspaceReadSessionFactory.StoreEnabledFromEnvironment())
+            return null;
+
+        string workspaceId = _workspace.WorkspaceId
+            ?? WorkspaceId.FromCanonicalRoot(_workspace.CanonicalRoot ?? _workspace.WorkspaceRoot);
+        WorkspaceRegistryRow? row = _registry.Get(workspaceId);
+        if (row is null)
+            return null;
+
+        WorkspaceFacts facts = WorkspaceFactsAssembler.FromRegisteredRow(
+            _registry,
+            row,
+            WorkspaceRegisteredFactsProfile.McpStatus,
+            _sidecar,
+            _contentSidecar,
+            _vectors,
+            CurrentSemanticBrokerFacts(),
+            _governor,
+            storeEnabled: true);
+        var (index, builtRevision) = _holder.Snapshot();
+        bool isStoreFacts = facts.Store is not null;
+        return facts with
+        {
+            IsLeader = _indexer.IsLeader,
+            DocumentCount = index.DocumentCount,
+            KnownExtensionsCount = index.KnownExtensions.Count,
+            BuiltRevision = isStoreFacts ? facts.BuiltRevision : builtRevision,
+            LatestObservedRevision = isStoreFacts ? facts.LatestObservedRevision : _freshness.LatestObservedRevision,
+            QueueEmpty = _indexer.QueueEmpty,
+        };
     }
 
     private SemanticBrokerFacts CurrentSemanticBrokerFacts() =>

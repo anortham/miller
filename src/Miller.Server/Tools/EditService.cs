@@ -8,6 +8,7 @@ using Miller.Core.Editing;
 using Miller.Core.Freshness;
 using Miller.Core.References;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
 
@@ -71,6 +72,7 @@ public sealed class EditService
     private readonly IndexedSourceTextReader _indexedSourceTextReader;
     private readonly IndexedEditCandidateReader _indexedEditCandidateReader;
     private readonly RecoveryOptions _recovery;
+    private readonly IWorkspaceReadSession? _readSession;
 
     /// <summary>
     /// Bounded-wait tuning for gate-time stale recovery: when the freshness gate finds a touched file stale and
@@ -101,7 +103,8 @@ public sealed class EditService
         MillerRepositoryIndex index, SmartTargetResolver resolver, string dbPath, string workspaceRoot,
         EditApplier applier, IEditWriteThrough writeThrough, IndexedSourceTextReader? indexedSourceTextReader = null,
         IndexedEditCandidateReader? indexedEditCandidateReader = null,
-        RecoveryOptions? recoveryOptions = null)
+        RecoveryOptions? recoveryOptions = null,
+        IWorkspaceReadSession? readSession = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(resolver);
@@ -119,6 +122,7 @@ public sealed class EditService
         _indexedSourceTextReader = indexedSourceTextReader ?? new IndexedSourceTextReader();
         _indexedEditCandidateReader = indexedEditCandidateReader ?? new IndexedEditCandidateReader();
         _recovery = recoveryOptions ?? RecoveryOptions.Default;
+        _readSession = readSession;
     }
 
     /// <summary>The outcome of an <c>edit</c> call: the rendered output plus the structured flags the tool/telemetry need.</summary>
@@ -250,7 +254,7 @@ public sealed class EditService
                 // julie persists doc_comment for every language, so consume that signal and refuse with guidance
                 // rather than re-deriving per-language comment syntax to detect the existing doc.
                 if (op == EditOperation.AddDoc &&
-                    !string.IsNullOrWhiteSpace(ExtractReader.ReadDetail(_dbPath, sym.Value.SymbolId)?.DocComment))
+                    !string.IsNullOrWhiteSpace(ReadDetail(sym.Value.SymbolId)?.DocComment))
                 {
                     return Error(
                         $"symbol '{sym.Value.Name}' already has a doc comment. Use replace_text to modify the " +
@@ -259,7 +263,7 @@ public sealed class EditService
                         failureReason: FailureInvalidRequest);
                 }
 
-                var span = ExtractReader.ReadEditSpan(_dbPath, sym.Value.SymbolId);
+                var span = ReadEditSpan(sym.Value.SymbolId);
                 if (span is null)
                     return Error(
                         $"symbol '{sym.Value.Name}' has no recorded span in the current index — the index is " +
@@ -382,7 +386,7 @@ public sealed class EditService
             return Preview(diff, json, renameSummary: null, siteCount: 0, evidence) with
             { StaleWaitPerformed = staleWaitPerformed };
 
-        var gate = FreshnessGate.Check(_dbPath, relativePath, planned.FilePath, planned.OldContent);
+        var gate = CheckFreshness(relativePath, planned.FilePath, planned.OldContent);
         bool fresh = gate.Result == FreshnessResult.Fresh;
         if (!fresh && (op != EditOperation.ReplaceText || !request.AllowStale))
         {
@@ -470,7 +474,8 @@ public sealed class EditService
                     matchMode == TextMatchMode.Exact ? oldText : null,
                     request.Query,
                     request.Anchor,
-                    request.Line);
+                    request.Line,
+                    storeEnabled: StoreEnabledForSidecars);
             }
             catch (Exception ex) when (
                 ex is FileNotFoundException or SqliteException or IOException or InvalidOperationException
@@ -574,7 +579,7 @@ public sealed class EditService
         if (successes.Count == 0)
         {
             string absolutePath = ToAbsolute(relativePath);
-            var gate = FreshnessGate.Check(_dbPath, relativePath, absolutePath, content);
+            var gate = CheckFreshness(relativePath, absolutePath, content);
             if (gate.Result == FreshnessResult.Fresh)
             {
                 return ReplaceTextPlanResult.Error(
@@ -650,7 +655,8 @@ public sealed class EditService
                     converged = _indexedEditCandidateReader.FindCandidatesForWorkspace(
                         _dbPath, _workspaceRoot, relativePath, ExpectedWorkspaceRevision(),
                         matchMode == TextMatchMode.Exact ? request.OldText ?? string.Empty : null,
-                        request.Query, request.Anchor, request.Line);
+                        request.Query, request.Anchor, request.Line,
+                        storeEnabled: StoreEnabledForSidecars);
                 }
                 catch (Exception ex) when (ex is SqliteException or FileNotFoundException or InvalidOperationException)
                 {
@@ -921,9 +927,38 @@ public sealed class EditService
 
     private long ExpectedWorkspaceRevision()
     {
+        if (_readSession is { } readSession)
+            return readSession.Snapshot.Freshness.StoreLogSequence ?? readSession.Snapshot.Freshness.Revision;
+
         using var reader = new FreshnessReader(_dbPath);
         return reader.LatestRevision();
     }
+
+    private SymbolDetail? ReadDetail(string symbolId) => _readSession is { } readSession
+        ? ExtractReader.ReadDetail(readSession, symbolId)
+        : ExtractReader.ReadDetail(_dbPath, symbolId);
+
+    private SymbolEditSpan? ReadEditSpan(string symbolId) => _readSession is { } readSession
+        ? ExtractReader.ReadEditSpan(readSession, symbolId)
+        : ExtractReader.ReadEditSpan(_dbPath, symbolId);
+
+    private ReferenceEvidenceSet ReadReferenceEvidence(string symbolId, ReferenceEvidenceBounds bounds) =>
+        _readSession is { } readSession
+            ? ReferenceEvidenceReader.Read(readSession, symbolId, bounds)
+            : ReferenceEvidenceReader.Read(_dbPath, symbolId, bounds);
+
+    private IReadOnlyList<IdentifierSite> ReadIdentifierSites(string name) => _readSession is { } readSession
+        ? ExtractReader.ReadIdentifierSites(readSession, name)
+        : ExtractReader.ReadIdentifierSites(_dbPath, name);
+
+    private FreshnessGate.GateResult CheckFreshness(string indexedFilePath, string diskPath, string diskText) =>
+        _readSession is { } readSession
+            ? FreshnessGate.Check(readSession, indexedFilePath, diskPath, diskText)
+            : FreshnessGate.Check(_dbPath, indexedFilePath, diskPath, diskText);
+
+    private bool? StoreEnabledForSidecars => _readSession is null
+        ? null
+        : _readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
 
     private static bool HasIndexedSelector(EditRequest request) =>
         !string.IsNullOrEmpty(request.Query) ||
@@ -1064,11 +1099,17 @@ public sealed class EditService
                 failureReason: FailureReferenceLayerConverging);
         }
 
+        if (_readSession is { } readSession && IndexLevelGuard.ResolutionLayerConverging(readSession.Snapshot))
+        {
+            return Error(
+                "rename is refused while this family-store view's identifier resolution is not exact; retry " +
+                "after the resolve operation completes.",
+                json,
+                failureReason: FailureReferenceLayerConverging);
+        }
+
         var evidenceBounds = new ReferenceEvidenceBounds(int.MaxValue, int.MaxValue);
-        ReferenceEvidenceSet evidence = ReferenceEvidenceReader.Read(
-            _dbPath,
-            target.SymbolId,
-            evidenceBounds);
+        ReferenceEvidenceSet evidence = ReadReferenceEvidence(target.SymbolId, evidenceBounds);
         int oldNameByteLength = Encoding.UTF8.GetByteCount(oldName);
         IReadOnlyList<IdentifierSite> exactSites = RenameIdentifierSites(evidence.Exact, oldNameByteLength);
         int unusableExactSites = CountUnreachableExactSites(evidence.Exact, oldNameByteLength);
@@ -1104,11 +1145,11 @@ public sealed class EditService
             var resolvedHomonymKeys = _index.FindByName(oldName)
                 .Where(symbol => !string.Equals(symbol.SymbolId, target.SymbolId, StringComparison.Ordinal))
                 .SelectMany(symbol => RenameIdentifierSites(
-                    ReferenceEvidenceReader.Read(_dbPath, symbol.SymbolId, evidenceBounds).Exact,
+                    ReadReferenceEvidence(symbol.SymbolId, evidenceBounds).Exact,
                     oldNameByteLength))
                 .Select(static site => (site.FilePath, site.StartByte, site.EndByte))
                 .ToHashSet();
-            IReadOnlyList<IdentifierSite> nameBasedSites = ExtractReader.ReadIdentifierSites(_dbPath, oldName)
+            IReadOnlyList<IdentifierSite> nameBasedSites = ReadIdentifierSites(oldName)
                 .Where(site =>
                     !exactKeys.Contains((site.FilePath, site.StartByte, site.EndByte))
                     && !resolvedHomonymKeys.Contains((site.FilePath, site.StartByte, site.EndByte)))
@@ -1140,7 +1181,7 @@ public sealed class EditService
         }
 
         IReadOnlyList<IdentifierSite> sites = exactSites.Concat(fallbackSites).ToArray();
-        var span = ExtractReader.ReadEditSpan(_dbPath, target.SymbolId);
+        var span = ReadEditSpan(target.SymbolId);
 
         var files = BuildRenameFiles(
             oldName,
@@ -1152,8 +1193,7 @@ public sealed class EditService
         if (invalidSite is not null)
         {
             string invalidPath = ToAbsolute(invalidSite.FilePath);
-            var invalidGate = FreshnessGate.Check(
-                _dbPath,
+            var invalidGate = CheckFreshness(
                 invalidSite.FilePath,
                 invalidPath,
                 ReadDisk(invalidPath));
@@ -1238,7 +1278,7 @@ public sealed class EditService
         foreach (var pe in plan.PlannedEdits)
         {
             string rel = ToRelative(pe.FilePath);
-            var gate = FreshnessGate.Check(_dbPath, rel, pe.FilePath, pe.OldContent);
+            var gate = CheckFreshness(rel, pe.FilePath, pe.OldContent);
             if (gate.Result != FreshnessResult.Fresh)
             {
                 bool recoveryWait = false;
@@ -1884,7 +1924,7 @@ public sealed class EditService
                 bool fresh;
                 try
                 {
-                    fresh = FreshnessGate.Check(_dbPath, relativePath, absPath, diskText).Result
+                    fresh = CheckFreshness(relativePath, absPath, diskText).Result
                         == FreshnessResult.Fresh;
                 }
                 catch (Exception ex) when (
@@ -2285,7 +2325,8 @@ public sealed class EditService
             _dbPath,
             _workspaceRoot,
             relativePath,
-            oldText);
+            oldText,
+            storeEnabled: StoreEnabledForSidecars);
         if (match is null)
             return error.Message;
 

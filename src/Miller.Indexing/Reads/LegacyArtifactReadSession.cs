@@ -47,6 +47,13 @@ public sealed class LegacyArtifactReadSession : IWorkspaceReadSession
         return new LegacyArtifactReadSession(absolutePath, snapshot);
     }
 
+    public static void Validate(string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        using SqliteConnection connection = SqliteReadOnlyAccess.Open(Path.GetFullPath(databasePath));
+        JulieSchemaGate.Verify(connection);
+    }
+
     internal static LegacyArtifactReadSession CreateDeferred(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);

@@ -24,6 +24,12 @@ public static class ExtractFileHashReader
         return ReadFileHash(connection, filePath);
     }
 
+    public static string? ReadHashAlgorithm(IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadHashAlgorithm);
+    }
+
     private static string? ReadFileHash(SqliteConnection connection, string filePath)
     {
         using var command = connection.CreateCommand();
@@ -42,6 +48,11 @@ public static class ExtractFileHashReader
     public static string? ReadHashAlgorithm(string dbPath)
     {
         using var connection = Open(dbPath);
+        return ReadHashAlgorithm(connection);
+    }
+
+    private static string? ReadHashAlgorithm(SqliteConnection connection)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT value FROM artifact_metadata WHERE key = 'hash_algorithm';";
 

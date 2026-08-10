@@ -58,6 +58,19 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.Equal(binding.WorkspaceRoot, preserved.WorkspaceRoot);
     }
 
+    [Fact]
+    public void InvalidExportArtifactIsRejectedBeforePromotion()
+    {
+        Directory.CreateDirectory(_root);
+        string output = Path.Combine(_root, "symbols.db.rebuild");
+        File.WriteAllText(output, "not-a-sqlite-artifact");
+
+        StoreWorkspaceOperationException error = Assert.Throws<StoreWorkspaceOperationException>(() =>
+            StoreRollbackExporter.ValidateExportArtifact(output));
+
+        Assert.Equal("invalid_export_artifact", error.FailureClass.Code);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

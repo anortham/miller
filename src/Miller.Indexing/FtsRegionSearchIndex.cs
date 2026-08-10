@@ -55,7 +55,7 @@ public sealed class FtsRegionSearchIndex : IRegionSearchIndex
                 $"Search sidecar for view '{snapshot.ViewId}' is missing or stale. " +
                 "Run `miller workspace refresh` to converge it.");
         }
-        return Open(searchDbPath, snapshot.Freshness.Revision, _ => true);
+        return Open(searchDbPath, expected.StoreLogSequence, _ => true);
     }
 
     private static FtsRegionSearchIndex Open(

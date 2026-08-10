@@ -152,6 +152,18 @@ public sealed class ExtractReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
         using var connection = Open(dbPath);
+        return ReadEditSpan(connection, symbolId);
+    }
+
+    public static SymbolEditSpan? ReadEditSpan(IWorkspaceReadSession session, string symbolId)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        return session.Read(connection => ReadEditSpan(connection, symbolId));
+    }
+
+    private static SymbolEditSpan? ReadEditSpan(SqliteConnection connection, string symbolId)
+    {
 
         using var command = connection.CreateCommand();
         // v1: keyed by symbol_id (was id). By-name reads (D6).
@@ -252,6 +264,18 @@ public sealed class ExtractReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         using var connection = Open(dbPath);
+        return ReadIdentifierSites(connection, name);
+    }
+
+    public static IReadOnlyList<IdentifierSite> ReadIdentifierSites(IWorkspaceReadSession session, string name)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return session.Read(connection => ReadIdentifierSites(connection, name));
+    }
+
+    private static IReadOnlyList<IdentifierSite> ReadIdentifierSites(SqliteConnection connection, string name)
+    {
 
         using var command = connection.CreateCommand();
         // v1: identifiers.file_path → path. By-name reads (D6).
