@@ -41,6 +41,8 @@ public sealed class JulieStoreContractException : JulieStoreProcessException
 
 public sealed class JulieStoreClient : IJulieStoreClient
 {
+    private const int MaxProgressEntries = 512;
+
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(10);
 
     private readonly string _binaryPath;
@@ -177,7 +179,10 @@ public sealed class JulieStoreClient : IJulieStoreClient
         TimeSpan hardTimeout)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return new ExtractWaitPolicy(stallTimeout, hardTimeout);
+        TimeSpan effectiveHardTimeout = request.Operation is StoreOperation.Import or StoreOperation.Resolve
+            ? Max(stallTimeout, RequestControls(request).Timeout)
+            : hardTimeout;
+        return new ExtractWaitPolicy(stallTimeout, effectiveHardTimeout);
     }
 
     internal static long StoreProgressStamp(
@@ -260,8 +265,16 @@ public sealed class JulieStoreClient : IJulieStoreClient
         {
             DirectoryInfo rootInfo = new(directory);
             stamp = unchecked(stamp * 31 + rootInfo.LastWriteTimeUtc.Ticks);
-            foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories))
+            int entryCount = 0;
+            bool samplingBounded = false;
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.TopDirectoryOnly))
             {
+                if (entryCount++ >= MaxProgressEntries)
+                {
+                    samplingBounded = true;
+                    break;
+                }
+
                 string canonicalEntry;
                 try
                 {
@@ -284,6 +297,9 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 stamp = unchecked(stamp * 31 + length);
                 stamp = unchecked(stamp * 31 + ticks);
             }
+
+            if (samplingBounded)
+                stamp = unchecked(stamp * 31 + Stopwatch.GetTimestamp());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -291,6 +307,9 @@ public sealed class JulieStoreClient : IJulieStoreClient
 
         return stamp;
     }
+
+    private static TimeSpan Max(TimeSpan first, TimeSpan second) =>
+        first >= second ? first : second;
 
     private static bool IsContained(string canonicalRoot, string candidate)
     {
@@ -516,6 +535,15 @@ public sealed class JulieStoreClient : IJulieStoreClient
             Add(arguments, "--parent-pid", parentProcessId.ToString(CultureInfo.InvariantCulture));
         }
     }
+
+    private static StoreRequestControls RequestControls(StoreRequest request) => request switch
+    {
+        StoreImportRequest import => import.Request,
+        StoreUpdateRequest update => update.Request,
+        StoreDeleteRequest delete => delete.Request,
+        StoreResolveRequest resolve => resolve.Request,
+        _ => throw new InvalidOperationException($"Store operation '{request.Operation}' has no request controls."),
+    };
 
     private static void AddRequestControls(List<string> arguments, StoreRequestControls controls)
     {

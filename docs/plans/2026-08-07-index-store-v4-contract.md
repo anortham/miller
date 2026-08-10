@@ -1,6 +1,6 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.4 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+**Status: AMENDED v4.5 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
 The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, and v4.4 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
@@ -47,10 +47,21 @@ recovery and liveness behavior. These amendments are normative for the v1.18.0 r
 
 | Amendment | Normative correction | State on 2026-08-10 |
 |---|---|---|
-| A15 — rollback cleanup durability | After a validated legacy export is promoted, Miller persists cleanup state through the primary marker or a recovery marker before removing the store pointer. Retry consumes either marker and never repeats the producer export. | Implemented and verified in rollback recovery tests |
+| A15 — rollback cleanup durability | Before a rollback producer export begins, Miller persists a prepared marker through the primary or recovery path. After validation it records the staged artifact and digest before promotion; retry recovers a valid staged or promoted artifact, and otherwise fails closed for source reconciliation instead of repeating the producer export. | Implemented and verified in rollback recovery tests |
 | A16 — family-store schema visibility | Health readers recognize producer-owned TEMP VIEW projections, including the family-store `files` view, as valid schema objects. | Implemented and verified in TEMP-view health tests |
-| A17 — producer progress coverage | From-artifact store waits include coordinator, published generation databases, root spool/scratch, and generation resolution-base activity; directory and file size/mtime changes count as progress. | Implemented and verified in local progress-stamp tests |
-| A18 — store request liveness | `store import` and `store resolve` default to the same absolute hard cap as Miller's default julie process wait (four hours by default, honoring `MILLER_EXTRACT_HARD_CAP`); `MILLER_STORE_REQUEST_TIMEOUT` remains the explicit override and update/delete retain five minutes. | Implemented and verified in coordinator tests |
+| A17 — producer progress coverage | From-artifact store waits include coordinator, published generation databases, root spool/scratch, and generation resolution-base activity through bounded shallow directory samples; a capped sample is treated as unknown activity until the absolute hard cap. | Implemented and verified in local progress-stamp tests |
+| A18 — store request liveness | `store import` and `store resolve` use the same effective timeout for the producer request and Miller's process hard cap (four hours by default, honoring `MILLER_EXTRACT_HARD_CAP`); `MILLER_STORE_REQUEST_TIMEOUT` accepts seconds or a `TimeSpan` and update/delete retain five minutes. | Implemented and verified in coordinator tests |
+
+## 0. v4.5 post-freeze amendment register
+
+The follow-up adversarial review found that the v4.4 wording still overstated three implementation details.
+These refinements are normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A19 — prepared rollback state | The rollback marker is written before producer invocation, upgraded with a SHA-256 digest after validation, and is required before promotion. An unreconcilable matching marker returns source-rebuild-required; it never silently starts another export. | Implemented and verified in rollback recovery tests |
+| A20 — bounded progress sampling | Producer-owned directory progress sampling is shallow and capped. When the cap is reached, the progress stamp advances to avoid declaring unknown activity stalled; the hard cap remains the termination bound. | Implemented and verified in local progress-stamp tests |
+| A21 — timeout alignment | Import/resolve request controls drive both the producer request timeout and Miller's hard wait cap, and bare numeric configuration is interpreted as seconds consistently. | Implemented and verified in wait-policy/coordinator tests |
 
 ---
 
@@ -433,8 +444,9 @@ exactly that).
   Switching the store off triggers a current-view `store export` per active workspace (or an
   honest not-ready until one completes) — never a silently served stale artifact. The store
   on/off switch ships v1 (default-on vs opt-in is the Ph5 validation decision, user-owned).
-  A promoted rollback export records cleanup state before pointer removal and retries pointer cleanup
-  from either durable marker path without repeating the producer export.
+  A rollback export writes a prepared marker before producer work, records the validated staged artifact before
+  promotion, and retries cleanup or staged promotion from either durable marker path without repeating the producer
+  export. A matching marker that cannot be reconciled fails closed for source rebuild.
 
 ## 12. Generation promotion and the capacity formula
 
@@ -844,6 +856,17 @@ implemented in the release candidate:
 | A16 | medium | Health table detection ignored family-store TEMP VIEWs and reported the `files` section unavailable. | ACCEPTED — folded: shared schema-object detection includes temporary tables and views |
 | A17 | medium | From-artifact progress sampling omitted producer spool, scratch, and resolution-base work. | ACCEPTED — folded: store progress includes those producer-owned paths and their file/directory activity |
 | A18 | medium | The one-hour import/resolve request window could expire before Miller's four-hour process hard cap. | ACCEPTED — folded: default request liveness follows the process hard cap; explicit store timeout remains available |
+
+### v4.5 implementation recheck — 2026-08-10
+
+The follow-up Claude and Grok adversarial review found three refinements in the v4.4 implementation. They were
+fixed before the release candidate was reconsidered:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A19 | high | Rollback state was recorded after promotion, leaving crash and marker-failure paths able to repeat the producer export. | ACCEPTED — folded: prepared/ready markers, staged-artifact digest, recovery, and fail-closed source reconciliation |
+| A20 | medium | Progress sampling recursively walked producer-owned trees on every poll. | ACCEPTED — folded: bounded shallow samples with an explicit unknown-activity stamp when capped |
+| A21 | medium | The producer request timeout and Miller hard cap could disagree, and bare numeric timeout text parsed differently across paths. | ACCEPTED — folded: request-driven process cap and shared seconds-first duration parsing |
 
 ## Cross-reference: gate price list → contract sections
 

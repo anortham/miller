@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 review fixes complete 2026-08-09. This
+**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A21 review fixes complete 2026-08-10. This
 wiring plan is retained as the implementation record; the durable lock/freshness and cursor-order
 amendments remain open, while Ph4 dashboard work and Ph5 physical validation/default-on decisions
-remain.
+remain. The release candidate uses the published `julie-extract 2.31.2` patch.
 
 **Goal:** Pin Miller to the published `julie-extract 2.31.1` release and make Miller create, refresh, and read family stores through the amended v4.1 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
 
 **Architecture:** Introduce one deep `IWorkspaceReadSession` seam in `Miller.Indexing`. A legacy adapter preserves current standalone-artifact behavior and a family-store adapter owns pointer/registry validation, generation pins, the session visibility table, attached resolution/sidecar files, and the freshness token. A separate `JulieStoreClient` owns the public `julie-extract store ... --json` protocol; `StoreWorkspaceCoordinator` composes that client with Miller's registry, governor, bootstrap, and refresh paths without reimplementing Rust store semantics.
 
-**Tech Stack:** .NET 10, C# 13, Microsoft.Data.Sqlite, SQLite WAL/FTS5, xUnit, the published `julie-extract 2.31.1` CLI and store schema v2.
+**Tech Stack:** .NET 10, C# 13, Microsoft.Data.Sqlite, SQLite WAL/FTS5, xUnit, the published `julie-extract 2.31.2` CLI and store schema v2.
 
 **Architecture Quality:**
 
@@ -52,7 +52,7 @@ remain.
 
 ## Verification Strategy
 
-**Project source of truth:** `AGENTS.md` testing/build rules, `docs/plans/2026-08-07-index-store-v4-contract.md`, `docs/plans/2026-08-06-index-store-views-program.md`, and the published `julie-extract 2.31.1` release contracts.
+**Project source of truth:** `AGENTS.md` testing/build rules, `docs/plans/2026-08-07-index-store-v4-contract.md`, `docs/plans/2026-08-06-index-store-views-program.md`, and the published `julie-extract 2.31.2` release contracts.
 
 **Worker red/green scope:** the smallest named xUnit class or method through `dotnet test tests/Miller.Tests/Miller.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~<test>`; store subprocess tests also include `Category=Scale`.
 
@@ -62,11 +62,11 @@ remain.
 
 **Lead affected-change scope:** `dotnet build Miller.slnx -c Release`, `scripts/test.sh`, and focused Scale classes for store protocol, read equivalence, coordinator takeover, migration, and rollback.
 
-**Branch gate:** `scripts/test.sh all`, `scripts/test-plugin.sh`, release build with the restored `2.31.1` binary, and the reopened Ph3 end-to-end acceptance harness.
+**Branch gate:** `scripts/test.sh all`, `scripts/test-plugin.sh`, release build with the restored `2.31.2` binary, and the reopened Ph3 end-to-end acceptance harness.
 
 **Security scope:** none declared; this plan adds no dependency, credential, network listener, or write surface outside existing local CLI/SQLite paths.
 
-**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing. The store import/resolve request window defaults to Miller's four-hour process hard cap (honoring `MILLER_EXTRACT_HARD_CAP`) and is controlled by `MILLER_STORE_REQUEST_TIMEOUT`; it is a liveness setting, not a performance gate.
+**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing. The store import/resolve request timeout drives both the producer request and Miller's process hard cap, defaults to four hours (honoring `MILLER_EXTRACT_HARD_CAP`), accepts seconds or a `TimeSpan` through `MILLER_STORE_REQUEST_TIMEOUT`, and is a liveness setting rather than a performance gate.
 
 **Escalation triggers:** any public-output drift runs the corresponding CLI/MCP contract suite; any sidecar-key or ranking change runs search/content/vector parity; any bootstrap/refresh change runs all Scale workspace lifecycle tests; any package/pin change runs restore and release build.
 

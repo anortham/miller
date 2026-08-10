@@ -42,6 +42,29 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void ImportRequestTimeoutSetsTheMillerHardCap()
+    {
+        var request = new StoreImportRequest(
+            StoreRoot: "/family",
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-a",
+            WorkspaceRoot: "/workspace",
+            Level: StoreLevel.Full,
+            Request: Controls(TimeSpan.FromSeconds(30)),
+            Scan: StoreScanControls.Default,
+            FromArtifact: null);
+
+        ExtractWaitPolicy policy = JulieStoreClient.CreateWaitPolicy(
+            request,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.Zero, 0));
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromSeconds(5), 1));
+        Assert.Equal(ExtractWaitVerdict.HardCapExceeded, policy.Observe(TimeSpan.FromSeconds(30), 2));
+    }
+
+    [Fact]
     public void StoreProgressStampIncludesPublishedGenerationsAndExportOutput()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-" + Guid.NewGuid().ToString("N"));
@@ -372,8 +395,8 @@ public sealed class JulieStoreClientTests
         Assert.Throws<OperationCanceledException>(() => client.Submit(request, canceled.Token));
     }
 
-    private static StoreRequestControls Controls() =>
-        new("request-a", "key-a", TimeSpan.FromSeconds(30));
+    private static StoreRequestControls Controls(TimeSpan? timeout = null) =>
+        new("request-a", "key-a", timeout ?? TimeSpan.FromSeconds(30));
 
     private const string SuccessReport = """
         {"report_schema_version":1,"operation":"import","request":{"id":"request-a","idempotency_key":"key-a"},"family_id":"11111111-1111-4111-8111-111111111111","view_id":"view-a","root":"/workspace","state":"committed","requested_level":"l1","completion":{"l1":true,"l2":false,"l3":false},"manifest":{"generation":4,"hash":"abc123","disposition":"created"},"row_counts":{"file_versions":2,"l1":30,"l2":0,"l3":0},"resolution":{"state":"unbound","exact_at_matches":false},"coordinator":"committed","failure_class":"none","error":null}

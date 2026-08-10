@@ -79,7 +79,7 @@ public sealed class ExtractWaitPolicy
             : HardTimeoutFor(stallTimeout);
     }
 
-    private static TimeSpan? ParseDuration(string? value)
+    public static TimeSpan? ParseDuration(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;

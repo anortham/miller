@@ -1,4 +1,3 @@
-using System.Globalization;
 using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
@@ -430,8 +429,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {
         string? configured = Environment.GetEnvironmentVariable("MILLER_STORE_REQUEST_TIMEOUT");
-        if (!string.IsNullOrWhiteSpace(configured)
-            && TimeSpan.TryParse(configured, CultureInfo.InvariantCulture, out TimeSpan parsed)
+        if (ExtractWaitPolicy.ParseDuration(configured) is { } parsed
             && parsed > TimeSpan.Zero
             && parsed.TotalSeconds <= int.MaxValue
             && parsed.TotalSeconds == Math.Truncate(parsed.TotalSeconds))

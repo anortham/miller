@@ -256,7 +256,7 @@ public static class SqliteBridgeReader
     private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(SqliteConnection connection) =>
         ReadStructuralFacts(connection, BridgeStructuralPatterns.BridgeFactPatternIds);
 
-    private static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(
+    internal static IReadOnlyList<StructuralFactRecord> ReadStructuralFacts(
         SqliteConnection connection,
         IReadOnlyList<string> patternIds)
     {
@@ -392,14 +392,8 @@ public static class SqliteBridgeReader
         }
     }
 
-    private static bool TableExists(SqliteConnection connection, string tableName)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
-        command.Parameters.AddWithValue("$name", tableName);
-        using var reader = command.ExecuteReader();
-        return reader.Read();
-    }
+    private static bool TableExists(SqliteConnection connection, string tableName) =>
+        SqliteSchemaObjects.Exists(connection, tableName);
 }
 
 /// <summary>

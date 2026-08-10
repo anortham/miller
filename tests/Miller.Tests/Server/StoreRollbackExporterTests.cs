@@ -133,7 +133,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
                 workspace,
                 legacy,
                 target => File.Copy(exported, target, overwrite: true),
-                deletePointer: _ => throw new IOException("simulated pointer cleanup failure"));
+                deletePointer: _ => throw new IOException("simulated pointer cleanup failure"),
+                stagedExportPath: exported);
 
         Assert.True(result.RequiresPointerCleanup);
         Assert.Contains("simulated pointer cleanup failure", result.Warning, StringComparison.Ordinal);
@@ -162,7 +163,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
             workspace,
             legacy,
             target => File.Copy(exported, target, overwrite: true),
-            deletePointer: _ => throw new IOException("leave cleanup pending"));
+            deletePointer: _ => throw new IOException("leave cleanup pending"),
+            stagedExportPath: exported);
 
         StoreRollbackExportResult retry = StoreRollbackExporter.ExportIfRequired(
             workspace,
@@ -198,7 +200,8 @@ public sealed class StoreRollbackExporterTests : IDisposable
                 workspace,
                 legacy,
                 target => File.Copy(exported, target, overwrite: true),
-                deletePointer: _ => throw new IOException("leave recovery cleanup pending"));
+                deletePointer: _ => throw new IOException("leave recovery cleanup pending"),
+                stagedExportPath: exported);
 
         Assert.True(first.RequiresPointerCleanup);
         Assert.True(File.Exists(Path.Combine(miller, "store-rollback.recovery")));
@@ -211,6 +214,42 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.True(retry.Exported);
         Assert.False(retry.RequiresPointerCleanup);
         Assert.Null(StoreWorkspacePointer.Read(workspace));
+    }
+
+    [Fact]
+    public void MismatchedPendingExportFailsClosedWithoutRepeatingTheProducer()
+    {
+        string workspace = Path.Combine(_root, "mismatched-pending-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported-mismatched"));
+        StoreRollbackExporter.CommitValidatedExport(
+            workspace,
+            legacy,
+            target => File.Copy(exported, target, overwrite: true),
+            deletePointer: _ => throw new IOException("leave mismatched cleanup pending"),
+            stagedExportPath: exported);
+        File.AppendAllText(legacy, "changed");
+
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            workspace,
+            legacy,
+            new UnexpectedStoreClient());
+
+        Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.Contains("will not repeat", result.Warning, StringComparison.Ordinal);
+        Assert.NotNull(StoreWorkspacePointer.Read(workspace));
     }
 
     public void Dispose()

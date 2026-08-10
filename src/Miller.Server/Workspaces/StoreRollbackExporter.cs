@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
@@ -18,7 +19,10 @@ internal sealed class StoreRollbackRetryException(Exception innerException)
 
 public static class StoreRollbackExporter
 {
-    private const string PendingMarkerSchema = "1";
+    private const string PendingMarkerSchema = "2";
+    private const string LegacyPendingMarkerSchema = "1";
+    private const string PendingMarkerStarted = "started";
+    private const string PendingMarkerReady = "ready";
     private const string PendingMarkerFileName = "store-rollback.pending";
     private const string RecoveryMarkerFileName = "store-rollback.recovery";
 
@@ -120,6 +124,13 @@ public static class StoreRollbackExporter
         bool exportValidated = false;
         try
         {
+            WritePendingMarker(
+                workspaceRoot,
+                legacyDatabasePath,
+                pointer,
+                outputPath,
+                expectedSha256: null,
+                state: PendingMarkerStarted);
             StoreRequestResult result = client.Submit(new StoreExportRequest(
                 pointer.StoreRoot,
                 pointer.FamilyId.ToString("D"),
@@ -150,7 +161,8 @@ public static class StoreRollbackExporter
                 workspaceRoot,
                 legacyDatabasePath,
                 FullRebuildPromotion.Promote,
-                pointer);
+                pointer,
+                stagedExportPath: outputPath);
             return new StoreRollbackExportResult(
                 true,
                 commit.Warning,
@@ -169,27 +181,40 @@ public static class StoreRollbackExporter
         string legacyDatabasePath,
         Action<string> promote,
         StoreWorkspacePointerDocument? pointer = null,
-        Action<string>? deletePointer = null)
+        Action<string>? deletePointer = null,
+        string? stagedExportPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentNullException.ThrowIfNull(promote);
 
-        promote(legacyDatabasePath);
-
-        string? markerWarning = null;
         StoreWorkspacePointerDocument? currentPointer = pointer ?? StoreWorkspacePointer.Read(workspaceRoot);
         if (currentPointer is not null)
         {
             try
             {
-                WritePendingMarker(workspaceRoot, legacyDatabasePath, currentPointer);
+                string? sourcePath = stagedExportPath;
+                if (sourcePath is null)
+                {
+                    string defaultSourcePath = FullRebuildPromotion.RebuildDbPathFor(legacyDatabasePath);
+                    sourcePath = File.Exists(defaultSourcePath) ? defaultSourcePath : null;
+                }
+                string? expectedSha256 = sourcePath is null ? null : ComputeArtifactHash(sourcePath);
+                WritePendingMarker(
+                    workspaceRoot,
+                    legacyDatabasePath,
+                    currentPointer,
+                    sourcePath,
+                    expectedSha256,
+                    PendingMarkerReady);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                markerWarning = "The rollback cleanup marker could not be written: " + ex.Message;
+                throw new StoreRollbackRetryException(ex);
             }
         }
+
+        promote(legacyDatabasePath);
 
         try
         {
@@ -198,14 +223,12 @@ public static class StoreRollbackExporter
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return new StoreRollbackCommitResult(
-                JoinWarnings(
-                    markerWarning,
-                    "The legacy artifact was promoted, but the store pointer could not be removed: " + ex.Message),
+                "The legacy artifact was promoted, but the store pointer could not be removed: " + ex.Message,
                 RequiresPointerCleanup: true);
         }
 
         string? markerCleanupWarning = TryDeletePendingMarker(workspaceRoot);
-        return new StoreRollbackCommitResult(JoinWarnings(markerWarning, markerCleanupWarning), false);
+        return new StoreRollbackCommitResult(markerCleanupWarning, false);
     }
 
     private static StoreRollbackExportResult? TryCompletePendingCleanup(
@@ -217,18 +240,28 @@ public static class StoreRollbackExporter
         if (pending is null || !pending.Matches(workspaceRoot, legacyDatabasePath, pointer))
             return null;
 
-        try
+        bool legacyReady = pending.IsLegacy
+            ? IsValidArtifact(legacyDatabasePath, expectedSha256: null)
+            : pending.State == PendingMarkerReady &&
+              IsValidArtifact(legacyDatabasePath, pending.ExpectedSha256);
+        if (!legacyReady && pending.SourceArtifactPath is { } sourcePath &&
+            string.Equals(
+                Path.GetFullPath(sourcePath),
+                Path.GetFullPath(FullRebuildPromotion.RebuildDbPathFor(legacyDatabasePath)),
+                StringComparison.Ordinal) &&
+            IsValidArtifact(sourcePath, pending.ExpectedSha256))
         {
-            LegacyArtifactReadSession.Validate(legacyDatabasePath);
-            FileInfo artifact = new(legacyDatabasePath);
-            if (artifact.Length != pending.Length || artifact.LastWriteTimeUtc.Ticks != pending.LastWriteUtcTicks)
-                return null;
+            FullRebuildPromotion.Promote(legacyDatabasePath);
+            legacyReady = IsValidArtifact(legacyDatabasePath, pending.ExpectedSha256);
         }
-        catch (Exception ex) when (
-            ex is ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException
-                or InvalidOperationException or SqliteException or IncompatibleExtractException)
+
+        if (!legacyReady)
         {
-            return null;
+            return new StoreRollbackExportResult(
+                false,
+                "A pending store rollback marker could not be reconciled with a valid legacy artifact; " +
+                "Miller will not repeat the producer export and will rebuild from source.",
+                RequiresSourceRebuild: true);
         }
 
         try
@@ -251,19 +284,22 @@ public static class StoreRollbackExporter
     private static void WritePendingMarker(
         string workspaceRoot,
         string legacyDatabasePath,
-        StoreWorkspacePointerDocument pointer)
+        StoreWorkspacePointerDocument pointer,
+        string? sourceArtifactPath,
+        string? expectedSha256,
+        string state)
     {
-        FileInfo artifact = new(legacyDatabasePath);
         string[] lines =
         [
             PendingMarkerSchema,
+            state,
             pointer.FamilyId.ToString("D"),
             Encode(pointer.StoreRoot),
             Encode(pointer.ViewId),
             Encode(pointer.WorkspaceRoot),
             Encode(Path.GetFullPath(legacyDatabasePath)),
-            artifact.Length.ToString(CultureInfo.InvariantCulture),
-            artifact.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+            Encode(sourceArtifactPath ?? string.Empty),
+            expectedSha256 ?? string.Empty,
         ];
         Exception? failure = null;
         foreach (string path in PendingMarkerPaths(workspaceRoot))
@@ -316,31 +352,88 @@ public static class StoreRollbackExporter
         try
         {
             string[] lines = File.ReadAllLines(path);
-            if (lines.Length != 8 || lines[0] != PendingMarkerSchema ||
-                !Guid.TryParse(lines[1], out Guid familyId) ||
-                !long.TryParse(lines[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out long length) ||
-                !long.TryParse(lines[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out long ticks))
+            if (lines.Length == 8 && lines[0] == LegacyPendingMarkerSchema &&
+                Guid.TryParse(lines[1], out Guid legacyFamilyId) &&
+                long.TryParse(lines[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out long length) &&
+                long.TryParse(lines[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out long ticks))
+            {
+                return ReadMarkerIdentity(
+                    lines[2], lines[3], lines[4], lines[5], legacyFamilyId,
+                    PendingMarkerReady, null, null, length, ticks, isLegacy: true);
+            }
+
+            if (lines.Length != 9 || lines[0] != PendingMarkerSchema ||
+                (lines[1] != PendingMarkerStarted && lines[1] != PendingMarkerReady) ||
+                !Guid.TryParse(lines[2], out Guid familyId))
                 return null;
 
-            string? storeRoot = Decode(lines[2]);
-            string? viewId = Decode(lines[3]);
-            string? markerWorkspaceRoot = Decode(lines[4]);
-            string? legacyDatabasePath = Decode(lines[5]);
-            return storeRoot is null || viewId is null || markerWorkspaceRoot is null || legacyDatabasePath is null
-                ? null
-                : new PendingRollbackMarker(
-                    familyId,
-                    storeRoot,
-                    viewId,
-                    markerWorkspaceRoot,
-                    legacyDatabasePath,
-                    length,
-                    ticks);
+            string? sourceArtifactPath = Decode(lines[7]);
+            string? expectedSha256 = string.IsNullOrWhiteSpace(lines[8]) ? null : lines[8];
+            return ReadMarkerIdentity(
+                lines[3], lines[4], lines[5], lines[6], familyId,
+                lines[1], sourceArtifactPath, expectedSha256, null, null, isLegacy: false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
         {
             return null;
         }
+    }
+
+    private static PendingRollbackMarker? ReadMarkerIdentity(
+        string storeRootEncoded,
+        string viewIdEncoded,
+        string workspaceRootEncoded,
+        string legacyDatabasePathEncoded,
+        Guid familyId,
+        string state,
+        string? sourceArtifactPath,
+        string? expectedSha256,
+        long? legacyLength,
+        long? legacyLastWriteUtcTicks,
+        bool isLegacy)
+    {
+        string? storeRoot = Decode(storeRootEncoded);
+        string? viewId = Decode(viewIdEncoded);
+        string? markerWorkspaceRoot = Decode(workspaceRootEncoded);
+        string? legacyDatabasePath = Decode(legacyDatabasePathEncoded);
+        if (sourceArtifactPath is { Length: 0 })
+            sourceArtifactPath = null;
+        return storeRoot is null || viewId is null || markerWorkspaceRoot is null || legacyDatabasePath is null
+            ? null
+            : new PendingRollbackMarker(
+                familyId,
+                storeRoot,
+                viewId,
+                markerWorkspaceRoot,
+                legacyDatabasePath,
+                state,
+                sourceArtifactPath,
+                expectedSha256,
+                legacyLength,
+                legacyLastWriteUtcTicks,
+                isLegacy);
+    }
+
+    private static bool IsValidArtifact(string path, string? expectedSha256)
+    {
+        try
+        {
+            ValidateExportArtifact(path);
+            return expectedSha256 is null ||
+                string.Equals(ComputeArtifactHash(path), expectedSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException
+                or InvalidOperationException or SqliteException or IncompatibleExtractException)
+        {
+            return false;
+        }
+    }
+
+    private static string ComputeArtifactHash(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        return Convert.ToHexStringLower(SHA256.HashData(stream));
     }
 
     private static string? TryDeletePendingMarker(string workspaceRoot)
@@ -395,8 +488,12 @@ public static class StoreRollbackExporter
         string ViewId,
         string WorkspaceRoot,
         string LegacyDatabasePath,
-        long Length,
-        long LastWriteUtcTicks)
+        string State,
+        string? SourceArtifactPath,
+        string? ExpectedSha256,
+        long? LegacyLength,
+        long? LegacyLastWriteUtcTicks,
+        bool IsLegacy)
     {
         public bool Matches(
             string workspaceRoot,

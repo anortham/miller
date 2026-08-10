@@ -137,6 +137,13 @@ public sealed class ExtractWaitPolicyTests
         Assert.Equal("MILLER_EXTRACT_HARD_CAP", asked);
     }
 
+    [Fact]
+    public void ParseDurationTreatsBareNumbersAsSeconds()
+    {
+        Assert.Equal(TimeSpan.FromHours(4), ExtractWaitPolicy.ParseDuration("14400"));
+        Assert.Equal(TimeSpan.FromMinutes(90), ExtractWaitPolicy.ParseDuration("01:30:00"));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]

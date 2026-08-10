@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Miller.Core.Contracts;
 using Miller.Core.Graph;
 using Miller.Indexing;
 using Xunit;
@@ -265,6 +266,40 @@ public sealed class SqliteBridgeReaderTests : IDisposable
         Assert.Empty(data.DbSetProperties);
         Assert.Empty(data.StructuralFacts);
         Assert.Empty(data.LiteralSites);
+    }
+
+    [Fact]
+    public void ReadStructuralFactsIncludesTemporaryViews()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        Exec(connection, """
+            CREATE TEMP VIEW structural_facts AS
+            SELECT
+                'fact-1' AS structural_fact_id,
+                'htmx.attribute.v1' AS pattern_id,
+                'csharp' AS language,
+                'Views/Home.cshtml' AS path,
+                'attribute' AS capture_name,
+                'html_attribute' AS node_kind,
+                NULL AS containing_symbol_id,
+                1 AS start_line,
+                2 AS start_column,
+                1 AS end_line,
+                15 AS end_column,
+                0 AS start_byte,
+                15 AS end_byte,
+                1.0 AS confidence,
+                '{}' AS metadata_json;
+            """);
+
+        IReadOnlyList<StructuralFactRecord> facts = SqliteBridgeReader.ReadStructuralFacts(
+            connection,
+            [BridgeStructuralPatterns.HtmxAttribute]);
+
+        var fact = Assert.Single(facts);
+        Assert.Equal("fact-1", fact.FactId);
+        Assert.Equal(BridgeStructuralPatterns.HtmxAttribute, fact.PatternId);
     }
 
     [Fact]
