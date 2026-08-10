@@ -319,6 +319,52 @@ public sealed class StoreWorkspaceCoordinatorTests
         }
     }
 
+    [Fact]
+    public void InterruptedTerminalImportIsReplayedThenReconciledWithAFreshRequest()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-request-replay-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string fingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|";
+            var journal = new StoreRequestJournal(root);
+            Assert.Equal("orphan-request", journal.GetOrCreate(fingerprint, () => "orphan-request"));
+
+            var client = new RecordingStoreClient(StoreOperation.Import);
+            var snapshots = new Queue<StoreWorkspaceState?>
+            (
+            [
+                null,
+                new StoreWorkspaceState(2, "l1"),
+            ]);
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                    State = StoreBindingState.Planned,
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => snapshots.Dequeue());
+
+            coordinator.Scan(jobs: 1);
+
+            StoreRequest[] imports = client.Requests
+                .Where(request => request.Operation == StoreOperation.Import)
+                .ToArray();
+            Assert.Equal(2, imports.Length);
+            Assert.Equal("orphan-request", Assert.IsType<StoreImportRequest>(imports[0]).Request.RequestId);
+            Assert.NotEqual(
+                Assert.IsType<StoreImportRequest>(imports[0]).Request.RequestId,
+                Assert.IsType<StoreImportRequest>(imports[1]).Request.RequestId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class RecordingStoreClient(
         StoreOperation expectedOperation,
         StoreManifestDisposition manifestDisposition = StoreManifestDisposition.Created,

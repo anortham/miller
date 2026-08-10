@@ -34,6 +34,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     private readonly Func<StoreFamilyBinding, StoreWorkspaceState?> _readState;
     private readonly Func<string> _mintRequestId;
     private readonly StoreRequestJournal? _requestJournal;
+    private readonly HashSet<string> _replayedImportRequestIds = new(StringComparer.Ordinal);
     private readonly string? _fromArtifact;
 
     public StoreWorkspaceCoordinator(
@@ -241,9 +242,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         StoreWorkspaceState? before = _readState(_binding);
         StoreLevel level = LevelFor(intent, before);
-        StoreRequestControls controls = Controls(
-            $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}",
-            StoreOperation.Import);
+        StoreRequestControls controls = Controls(ImportFingerprint(level), StoreOperation.Import);
         var request = new StoreImportRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -268,8 +267,16 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         long deletedFiles,
         bool resolveAfter)
     {
+        bool replayedImport = request is StoreImportRequest import
+            && _replayedImportRequestIds.Remove(import.Request.RequestId);
         StoreRequestResult result = _client.Submit(request);
         RequireCommittedAndCompleteJournal(request, result);
+        if (replayedImport && request is StoreImportRequest replayedRequest)
+        {
+            StoreRequestControls controls = Controls(ImportFingerprint(replayedRequest.Level), StoreOperation.Import);
+            result = _client.Submit(replayedRequest with { Request = controls });
+            RequireCommittedAndCompleteJournal(replayedRequest with { Request = controls }, result);
+        }
         if (resolveAfter)
         {
             var resolve = new StoreResolveRequest(
@@ -315,11 +322,28 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         {
             RequireCommitted(request, result);
         }
-        finally
+        catch
         {
             if (terminal)
-                _requestJournal?.Complete(RequestControls(request).RequestId);
+            {
+                try
+                {
+                    _requestJournal?.Complete(RequestControls(request).RequestId);
+                }
+                catch (Exception cleanupFailure) when (
+                    cleanupFailure is IOException
+                        or UnauthorizedAccessException
+                        or InvalidDataException
+                        or JsonException)
+                {
+                }
+            }
+
+            throw;
         }
+
+        if (terminal)
+            _requestJournal?.Complete(RequestControls(request).RequestId);
     }
 
     private ExtractReport Report(
@@ -422,9 +446,15 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private StoreRequestControls Controls(string fingerprint, StoreOperation operation)
     {
-        string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId) ?? RequestId();
+        bool resumed = false;
+        string requestId = _requestJournal?.GetOrCreate(fingerprint, RequestId, out resumed) ?? RequestId();
+        if (resumed && operation == StoreOperation.Import)
+            _replayedImportRequestIds.Add(requestId);
         return new StoreRequestControls(requestId, requestId, RequestTimeout(operation));
     }
+
+    private string ImportFingerprint(StoreLevel level) =>
+        $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}";
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {
@@ -533,15 +563,22 @@ internal sealed class StoreRequestJournal
         _directory = Path.Combine(workspaceRoot, ".miller", "store-requests");
     }
 
-    public string GetOrCreate(string fingerprint, Func<string> mintRequestId)
+    public string GetOrCreate(string fingerprint, Func<string> mintRequestId) =>
+        GetOrCreate(fingerprint, mintRequestId, out _);
+
+    public string GetOrCreate(string fingerprint, Func<string> mintRequestId, out bool resumed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
         ArgumentNullException.ThrowIfNull(mintRequestId);
+        resumed = false;
         Directory.CreateDirectory(_directory);
         using FileStream lease = AcquireLease();
         string path = Path.Combine(_directory, $"{Hash(fingerprint)}.json");
         if (File.Exists(path))
+        {
+            resumed = true;
             return Remember(path, Read(path, fingerprint));
+        }
 
         string requestId = mintRequestId();
         if (string.IsNullOrWhiteSpace(requestId))
@@ -557,6 +594,7 @@ internal sealed class StoreRequestJournal
             }
             catch (IOException) when (File.Exists(path))
             {
+                resumed = true;
                 return Remember(path, Read(path, fingerprint));
             }
             return Remember(path, entry);

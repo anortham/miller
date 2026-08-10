@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.7 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, v4.4, and v4.5 amendments record
+**Status: AMENDED v4.8 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.8 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -85,6 +85,16 @@ explicit. These refinements are normative for the v1.18.0 release candidate.
 | A26 — rollback marker compatibility | A schema-1 or schema-2 pending rollback marker lacks the v4.6 store-view identity and may not promote an artifact, even when its legacy file is structurally valid. Recovery keeps the pointer and returns source-rebuild-required; current schema-3 markers written by production carry the view identity. | Implemented and verified in rollback recovery tests |
 | A27 — session-bound onboarding | MCP and CLI onboarding resolve hot targets through the same validated workspace read-session seam as the serving facts. Store mode never falls back to `symbols.db`; a missing or unreadable store returns unresolved target rows. Legacy mode continues to resolve the standalone artifact. | Implemented and verified in onboarding tests |
 | A28 — malformed sidecar metadata | An unknown store-sidecar kind is treated as an absent stamp. Readers report the sidecar as missing/stale and convergence may rebuild it; malformed metadata must not crash the workspace read surface. | Implemented and verified in sidecar stamp tests |
+
+## 0. v4.8 post-freeze amendment register
+
+The final adversarial pass found two store-write recovery seams that needed explicit failure boundaries.
+These refinements are normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A29 — store sidecar failure isolation | Content and search sidecar work is isolated under the family lease. A lease timeout, sidecar read/write failure, or lease release failure is logged and retried on a later convergence; it must not turn a completed producer scan into a scan failure. History and vector target stamps still run after sidecar failure. | Implemented and verified in store-sidecar convergence tests |
+| A30 — durable import journal replay | A persisted import request is replayed once after restart to recover an in-flight or terminal producer request, then a fresh import request is submitted so source changes after a prior terminal commit cannot be hidden by idempotency replay. Journal cleanup cannot replace the original producer failure. | Implemented and verified in store coordinator tests |
 
 ---
 
@@ -891,6 +901,16 @@ fixed before the release candidate was reconsidered:
 | A19 | high | Rollback state was recorded after promotion, leaving crash and marker-failure paths able to repeat the producer export. | ACCEPTED — folded: prepared/ready markers, staged-artifact digest, recovery, and fail-closed source reconciliation |
 | A20 | medium | Progress sampling recursively walked producer-owned trees on every poll. | ACCEPTED — folded: bounded shallow samples with an explicit unknown-activity stamp when capped |
 | A21 | medium | The producer request timeout and Miller hard cap could disagree, and bare numeric timeout text parsed differently across paths. | ACCEPTED — folded: request-driven process cap and shared seconds-first duration parsing |
+
+### v4.8 implementation recheck — 2026-08-10
+
+The final Claude adversarial pass found two store-write recovery defects after the v4.7 fixes. Both were
+implemented before the release candidate was reconsidered:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A29 | high | A family-store sidecar lease or writer failure could escape `ConvergeStore`, making a completed scan look failed and skipping the history/vector stamps. | ACCEPTED — folded: per-sidecar containment, timeout-aware lease containment, and post-failure history/vector publication |
+| A30 | medium | A durable orphaned import journal entry could replay an already-terminal idempotency key after source changes, hiding a needed reconcile; journal cleanup could also replace the original producer error. | ACCEPTED — folded: replayed-terminal import followed by a fresh reconcile request, plus cleanup-error preservation |
 
 ## Cross-reference: gate price list → contract sections
 

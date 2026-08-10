@@ -2,12 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A28 review fixes complete 2026-08-10. This
+**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A30 review fixes complete 2026-08-10. This
 wiring plan is retained as the implementation record; the durable lock/freshness and cursor-order
 amendments remain open, while Ph4 dashboard work and Ph5 physical validation/default-on decisions
 remain. The release candidate uses the published `julie-extract 2.31.2` patch.
 
-**Goal:** Pin Miller to the published `julie-extract 2.31.1` release and make Miller create, refresh, and read family stores through the amended v4.1 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
+**Goal:** Pin Miller to the published `julie-extract 2.31.2` release and make Miller create, refresh, and read family stores through the amended v4.1 store contract while preserving every existing MCP/CLI surface and the legacy artifact off-switch.
 
 **Architecture:** Introduce one deep `IWorkspaceReadSession` seam in `Miller.Indexing`. A legacy adapter preserves current standalone-artifact behavior and a family-store adapter owns pointer/registry validation, generation pins, the session visibility table, attached resolution/sidecar files, and the freshness token. A separate `JulieStoreClient` owns the public `julie-extract store ... --json` protocol; `StoreWorkspaceCoordinator` composes that client with Miller's registry, governor, bootstrap, and refresh paths without reimplementing Rust store semantics.
 

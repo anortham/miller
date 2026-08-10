@@ -64,6 +64,44 @@ public sealed class StoreSidecarConvergerTests
     }
 
     [Fact]
+    public void ConvergeStoreContainsSidecarFailureAndStillPublishesTheVectorTarget()
+    {
+        var calls = new List<string>();
+        var signal = new VectorConvergeSignal(enabled: true);
+        using var session = new FakeStoreSession();
+        var converger = new IndexerSidecarConverger(
+            searchEnabled: true,
+            (_, _, _, _) => false,
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            (string _, long _, string _, out string? reason) => { reason = null; return false; },
+            static path => path,
+            static path => path,
+            (_, _, _) => false,
+            NullLogger.Instance,
+            signal,
+            ensureStoreContent: (_, _) => throw new TimeoutException("sidecar lease timeout"),
+            ensureStoreSearch: (_, _) =>
+            {
+                calls.Add("search");
+                return true;
+            });
+
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            converger.ConvergeStore(root, session);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        Assert.Equal(["search"], calls);
+        Assert.Equal(31, signal.TargetRevision);
+    }
+
+    [Fact]
     public async Task ConvergeStore_SerializesFamilySidecarWork()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-converger-" + Guid.NewGuid().ToString("N"));

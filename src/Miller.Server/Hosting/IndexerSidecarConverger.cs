@@ -115,11 +115,20 @@ internal sealed class IndexerSidecarConverger
         if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
             throw new ArgumentException("Store sidecar convergence requires a family-store read session.", nameof(session));
 
-        using (FamilyStoreSidecarWriteLease.AcquireFor(storeRoot))
+        try
         {
-            _ensureStoreContent?.Invoke(storeRoot, session);
-            if (_searchEnabled)
-                _ensureStoreSearch?.Invoke(storeRoot, session);
+            using (FamilyStoreSidecarWriteLease.AcquireFor(storeRoot))
+            {
+                if (_ensureStoreContent is not null)
+                    ConvergeStoreSidecar("content", () => _ensureStoreContent(storeRoot, session));
+                if (_searchEnabled && _ensureStoreSearch is not null)
+                    ConvergeStoreSidecar("search", () => _ensureStoreSearch(storeRoot, session));
+            }
+        }
+        catch (Exception ex) when (IsConvergenceException(ex))
+        {
+            _logger.LogWarning(ex,
+                "Family-store sidecar lease acquisition or release failed; derived sidecars will retry on the next convergence.");
         }
 
         long target = session.Snapshot.Freshness.StoreLogSequence
@@ -134,6 +143,20 @@ internal sealed class IndexerSidecarConverger
                 "Metric-history store converge snapshot skipped; the trend will have a gap at store sequence {Sequence}.",
                 target));
         _vectorSignal.StampTarget(target, fullRebuild: false);
+    }
+
+    private void ConvergeStoreSidecar(string kind, Action converge)
+    {
+        try
+        {
+            converge();
+        }
+        catch (Exception ex) when (IsConvergenceException(ex))
+        {
+            _logger.LogWarning(ex,
+                "Family-store {SidecarKind} sidecar convergence failed; it will retry on the next convergence.",
+                kind);
+        }
     }
 
     // Metric-history cheap arm: append one source='converge' snapshot AFTER the sidecar converge steps, independent
@@ -222,5 +245,5 @@ internal sealed class IndexerSidecarConverger
 
     private static bool IsConvergenceException(Exception ex) =>
         ex is SqliteException or IOException or InvalidOperationException or UnauthorizedAccessException
-            or ArgumentException or NotSupportedException or IncompatibleExtractException;
+            or ArgumentException or NotSupportedException or TimeoutException or IncompatibleExtractException;
 }
