@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Miller.Indexing;
 
 /// <summary>
@@ -14,7 +16,7 @@ namespace Miller.Indexing;
 /// <para><b>What this cannot detect.</b> A workspace with no resolvable git layout has no generation to compare,
 /// and so reads as <see cref="IsKnown"/> false and never counts as a replacement — missing evidence must not cost
 /// a whole-repo rebuild. Two checkouts created at the same path within the filesystem's timestamp resolution
-/// collide, as does a filesystem that records no birth time and degrades the value to a change/modify time. And a
+/// collide. A filesystem that records no birth time leaves the identity unknown. And a
 /// plain <c>git checkout other-branch</c> inside the SAME worktree is deliberately NOT a replacement: the content
 /// changed but the checkout did not, which is the <c>HEAD</c> watch's job, not this one.</para>
 /// </summary>
@@ -24,7 +26,7 @@ namespace Miller.Indexing;
 /// <param name="GitDirCreatedAtUtc">
 /// When that directory was created, or null when the platform reported no usable timestamp.
 /// </param>
-public readonly record struct WorkspaceRootIdentity(string? GitDir, DateTimeOffset? GitDirCreatedAtUtc)
+public readonly partial record struct WorkspaceRootIdentity(string? GitDir, DateTimeOffset? GitDirCreatedAtUtc)
 {
     /// <summary>The identity of a root whose git layout could not be read at all.</summary>
     public static WorkspaceRootIdentity Unknown => default;
@@ -44,16 +46,80 @@ public readonly record struct WorkspaceRootIdentity(string? GitDir, DateTimeOffs
         if (GitWorktreeLayout.Resolve(workspaceRoot)?.GitDir is not { } gitDir)
             return Unknown;
 
+        return new WorkspaceRootIdentity(gitDir, CaptureDirectoryCreationTime(gitDir));
+    }
+
+    /// <summary>Reads stable directory creation evidence, or null when the platform cannot provide it.</summary>
+    public static DateTimeOffset? CaptureDirectoryCreationTime(string? path)
+    {
+        if (path is null)
+            return null;
+        if (OperatingSystem.IsLinux())
+            return CaptureLinuxBirthTime(path);
+
         try
         {
-            DateTime created = new DirectoryInfo(gitDir).CreationTimeUtc;
-            return new WorkspaceRootIdentity(gitDir, created > UnsetCreationTimeUtc ? created : null);
+            DateTime created = new DirectoryInfo(path).CreationTimeUtc;
+            return created > UnsetCreationTimeUtc ? created : null;
         }
         catch (Exception ex) when (
             ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return new WorkspaceRootIdentity(gitDir, null);
+            return null;
         }
+    }
+
+    private static DateTimeOffset? CaptureLinuxBirthTime(string path)
+    {
+        try
+        {
+            if (Statx(AtCurrentWorkingDirectory, path, 0, StatxBirthTime, out LinuxStatx result) != 0 ||
+                (result.Mask & StatxBirthTime) == 0 ||
+                result.BirthTime.Nanoseconds >= NanosecondsPerSecond)
+            {
+                return null;
+            }
+
+            return DateTimeOffset.FromUnixTimeSeconds(result.BirthTime.Seconds)
+                .AddTicks(result.BirthTime.Nanoseconds / NanosecondsPerTick);
+        }
+        catch (Exception ex) when (
+            ex is DllNotFoundException or EntryPointNotFoundException or ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    private const int AtCurrentWorkingDirectory = -100;
+    private const uint StatxBirthTime = 0x00000800;
+    private const uint NanosecondsPerSecond = 1_000_000_000;
+    private const uint NanosecondsPerTick = 100;
+
+    [LibraryImport("libc", EntryPoint = "statx", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int Statx(
+        int directoryFileDescriptor,
+        string path,
+        int flags,
+        uint mask,
+        out LinuxStatx result);
+
+    [StructLayout(LayoutKind.Explicit, Size = 256)]
+    private struct LinuxStatx
+    {
+        [FieldOffset(0)]
+        public uint Mask;
+
+        // Linux fixes stx_btime at byte 80 in the 256-byte statx ABI on every supported architecture.
+        [FieldOffset(80)]
+        public LinuxStatxTimestamp BirthTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LinuxStatxTimestamp
+    {
+        public long Seconds;
+        public uint Nanoseconds;
+        private readonly int _reserved;
     }
 
     // .NET reports a missing entry (and a platform with no usable creation time) as the FILETIME epoch rather

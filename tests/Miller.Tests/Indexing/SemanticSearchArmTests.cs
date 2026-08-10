@@ -135,6 +135,27 @@ public sealed class SemanticSearchArmTests
     }
 
     [Fact]
+    public async Task FamilyStoreVectorIdentityMatchesThePinnedFamilyView()
+    {
+        var port = new RecordingPort { Matches = [Match(1, 0.1, "sym-1", "src/A.cs")] };
+        port.Freshness.Enqueue(("family-a:view-a", 12));
+        port.Freshness.Enqueue(("family-a:view-a", 12));
+        await using SemanticEmbeddingSession session = NewSession();
+        var arm = new SemanticSearchArm(
+            Root,
+            enabled: true,
+            port.Factory,
+            () => session,
+            liveFreshness: static () => ("family-a:view-a", 12));
+
+        SemanticQueryResult result = await arm.QuerySymbolsAsync(
+            "workspace refresh", 5, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.Served, result.UnavailableReason);
+        Assert.Single(result.Hits);
+    }
+
+    [Fact]
     public async Task GenerationChangeDuringEmbedding_IsStaleBeforeKnnServes()
     {
         string root = FreshWorkspace("artifact-1", 7);

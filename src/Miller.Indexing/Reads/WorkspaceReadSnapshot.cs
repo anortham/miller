@@ -48,6 +48,14 @@ public sealed record WorkspaceReadSnapshot(
     long? ResolutionDeltaGeneration = null,
     long? ResolutionExactAt = null)
 {
+    public string VectorArtifactId => Mode == WorkspaceReadMode.FamilyStore
+        ? $"{Freshness.StoreInstanceId ?? ArtifactOrStoreId}:{Freshness.ViewId ?? ViewId}"
+        : ArtifactOrStoreId;
+
+    public long VectorRevision => Mode == WorkspaceReadMode.FamilyStore
+        ? Freshness.StoreLogSequence ?? Freshness.Revision
+        : Freshness.Revision;
+
     public string IndexIdentity => Mode == WorkspaceReadMode.FamilyStore
         ? string.Join(
             ':',

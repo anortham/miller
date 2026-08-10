@@ -368,6 +368,10 @@ public static class DashboardIndexFactsReader
             IReadOnlyList<DashboardLanguageStat> languages = BuildLanguageStats(
                 fileFacts.Languages,
                 symbolCountsByLanguage);
+            StoreMemberSummary members = StoreMemberSummaryReader.Read(
+                connection,
+                snapshot.ViewId,
+                maxLabels: 5);
             bool current = string.Equals(search.State, "current", StringComparison.Ordinal)
                 && string.Equals(content.State, "current", StringComparison.Ordinal);
             var store = new StoreWorkspaceFacts(
@@ -388,7 +392,10 @@ public static class DashboardIndexFactsReader
                 snapshot.ResolutionExactAt,
                 File.Exists(workspace.IndexDbPath),
                 File.Exists(workspace.IndexDbPath) ? "legacy_preserved" : "native",
-                File.Exists(workspace.IndexDbPath) ? "available" : "export_required");
+                File.Exists(workspace.IndexDbPath) ? "available" : "export_required",
+                storeRoot,
+                members.DisplayLabels,
+                members.TotalCount);
 
             return new DashboardWorkspaceFacts(
                 workspace.WorkspaceId,

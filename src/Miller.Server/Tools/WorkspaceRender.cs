@@ -63,6 +63,9 @@ public sealed record StoreWorkspaceFacts(
     bool LegacyArtifactPresent,
     string MigrationState,
     string RollbackState,
+    string? StoreRoot = null,
+    IReadOnlyList<string>? MemberDisplayLabels = null,
+    int MemberCount = 0,
     string State = "ready",
     string? Failure = null,
     string? Error = null)
@@ -83,9 +86,9 @@ public sealed record StoreWorkspaceFacts(
             false,
             "unknown",
             "unavailable",
-            state,
-            failure,
-            error);
+            State: state,
+            Failure: failure,
+            Error: error);
 
     public static StoreWorkspaceFacts Unavailable(FamilyStoreReadException exception)
     {
@@ -658,12 +661,32 @@ public static class WorkspaceRender
         w.WriteEndObject();
     }
 
-    private static string StoreProvenanceLabel(StoreWorkspaceFacts facts) =>
-        string.Equals(facts.State, "ready", StringComparison.Ordinal)
-            ? $"family={facts.FamilyId}  view={facts.ViewId}  generation={facts.ManifestGeneration}  " +
-              $"manifest={facts.ManifestHash}  sequence={facts.StoreLogSequence}  level={facts.IndexLevel}  " +
-              $"resolution={facts.ResolutionState}  migration={facts.MigrationState}  rollback={facts.RollbackState}"
-            : $"state={facts.State}  failure={facts.Failure}";
+    private static string StoreProvenanceLabel(StoreWorkspaceFacts facts)
+    {
+        if (!string.Equals(facts.State, "ready", StringComparison.Ordinal))
+            return $"state={facts.State}  failure={facts.Failure}";
+
+        var label = new StringBuilder()
+            .Append("family=").Append(facts.FamilyId)
+            .Append("  view=").Append(facts.ViewId)
+            .Append("  generation=").Append(facts.ManifestGeneration)
+            .Append("  manifest=").Append(facts.ManifestHash)
+            .Append("  sequence=").Append(facts.StoreLogSequence)
+            .Append("  level=").Append(facts.IndexLevel)
+            .Append("  resolution=").Append(facts.ResolutionState)
+            .Append("  migration=").Append(facts.MigrationState)
+            .Append("  rollback=").Append(facts.RollbackState);
+        if (!string.IsNullOrWhiteSpace(facts.StoreRoot))
+            label.Append("  root=").Append(facts.StoreRoot);
+        if (facts.MemberDisplayLabels is { Count: > 0 } members)
+        {
+            label.Append("  members=").AppendJoin(',', members);
+            int omitted = Math.Max(0, facts.MemberCount - members.Count);
+            if (omitted > 0)
+                label.Append(" (+").Append(omitted).Append(" more)");
+        }
+        return label.ToString();
+    }
 
     private static void WriteStoreProvenanceJson(Utf8JsonWriter w, StoreWorkspaceFacts facts)
     {
@@ -695,6 +718,16 @@ public static class WorkspaceRender
         w.WriteBoolean("legacy_artifact_present", facts.LegacyArtifactPresent);
         w.WriteString("migration_state", facts.MigrationState);
         w.WriteString("rollback_state", facts.RollbackState);
+        if (facts.StoreRoot is null) w.WriteNull("store_root");
+        else w.WriteString("store_root", facts.StoreRoot);
+        w.WriteNumber("member_count", facts.MemberCount);
+        w.WriteNumber(
+            "members_omitted",
+            Math.Max(0, facts.MemberCount - (facts.MemberDisplayLabels?.Count ?? 0)));
+        w.WriteStartArray("member_display_labels");
+        foreach (string label in facts.MemberDisplayLabels ?? [])
+            w.WriteStringValue(label);
+        w.WriteEndArray();
         w.WriteEndObject();
     }
 

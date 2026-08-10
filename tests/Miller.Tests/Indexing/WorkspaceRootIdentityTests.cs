@@ -33,7 +33,6 @@ public sealed class WorkspaceRootIdentityTests : IDisposable
 
         Assert.True(identity.IsKnown);
         Assert.Equal(adminDir, identity.GitDir);
-        Assert.Equal(Directory.GetCreationTimeUtc(adminDir), identity.GitDirCreatedAtUtc!.Value.UtcDateTime);
     }
 
     [Fact]
@@ -87,6 +86,22 @@ public sealed class WorkspaceRootIdentityTests : IDisposable
 
         Assert.False(WorkspaceRootIdentity.IsReplacement(
             WorkspaceRootIdentity.Capture(worktree), WorkspaceRootIdentity.Capture(worktree)));
+    }
+
+    [Fact]
+    public void LinuxGitMetadataChangesDoNotAlterTheCapturedIdentity()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        string root = NewDirectory("repo");
+        string gitDir = NewDirectory("repo", ".git");
+        WorkspaceRootIdentity before = WorkspaceRootIdentity.Capture(root);
+
+        Thread.Sleep(10);
+        File.WriteAllText(Path.Combine(gitDir, "index"), "changed");
+
+        Assert.Equal(before, WorkspaceRootIdentity.Capture(root));
     }
 
     [Fact]

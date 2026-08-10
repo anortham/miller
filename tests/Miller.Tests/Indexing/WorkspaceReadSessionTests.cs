@@ -69,6 +69,8 @@ public sealed class WorkspaceReadSessionTests
         };
 
         Assert.NotEqual(first.IndexIdentity, second.IndexIdentity);
+        Assert.Equal("family-a:view-a", first.VectorArtifactId);
+        Assert.Equal(12, first.VectorRevision);
     }
 
     [Fact]

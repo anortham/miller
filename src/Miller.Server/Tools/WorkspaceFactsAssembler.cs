@@ -19,7 +19,9 @@ internal static class WorkspaceFactsAssembler
 {
     public static StoreWorkspaceFacts StoreFactsFor(
         WorkspaceReadSnapshot snapshot,
-        bool legacyArtifactPresent)
+        bool legacyArtifactPresent,
+        string? storeRoot = null,
+        StoreMemberSummary? members = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot.Mode != WorkspaceReadMode.FamilyStore ||
@@ -48,7 +50,10 @@ internal static class WorkspaceFactsAssembler
             snapshot.ResolutionExactAt,
             legacyArtifactPresent,
             legacyArtifactPresent ? "legacy_preserved" : "native",
-            legacyArtifactPresent ? "available" : "export_required");
+            legacyArtifactPresent ? "available" : "export_required",
+            storeRoot,
+            members?.DisplayLabels,
+            members?.TotalCount ?? 0);
     }
 
     /// <summary>
@@ -212,6 +217,8 @@ internal static class WorkspaceFactsAssembler
                     ?? throw new InvalidOperationException("The family-store read session has no store root.");
                 long storeRevision = session.Snapshot.Freshness.StoreLogSequence
                     ?? session.Snapshot.Freshness.Revision;
+                StoreMemberSummary members = session.Read(connection =>
+                    StoreMemberSummaryReader.Read(connection, session.Snapshot.ViewId, maxLabels: 5));
                 return new WorkspaceFacts(
                     Root: row.CanonicalRoot,
                     WorkspaceId: row.WorkspaceId,
@@ -237,7 +244,11 @@ internal static class WorkspaceFactsAssembler
                     ScanFailure: ScanFailureFacts(row.IndexDbPath),
                     IndexLevel: IndexLevelFactsFor(session.Snapshot, row.LevelPolicy),
                     RebindProvenance: null,
-                    Store: StoreFactsFor(session.Snapshot, File.Exists(row.IndexDbPath)));
+                    Store: StoreFactsFor(
+                        session.Snapshot,
+                        File.Exists(row.IndexDbPath),
+                        storeRoot,
+                        members));
             }
 
             return new WorkspaceFacts(

@@ -129,6 +129,20 @@
                         {
                             <span>@store.FamilyId / @store.ViewId</span>
                             <span class="muted">Generation @store.ManifestGeneration · @store.IndexLevel · @store.ResolutionState</span>
+                            @if (!string.IsNullOrWhiteSpace(store.StoreRoot))
+                            {
+                                <span class="muted">@store.StoreRoot</span>
+                            }
+                            @if (store.MemberDisplayLabels is { Count: > 0 } members)
+                            {
+                                <span class="muted">
+                                    @string.Join(", ", members)
+                                    @if (store.MemberCount > members.Count)
+                                    {
+                                        <text> · @(store.MemberCount - members.Count) more</text>
+                                    }
+                                </span>
+                            }
                         }
                         else
                         {

@@ -2,6 +2,7 @@ using Miller.Core.Freshness;
 using Miller.Indexing;
 using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -91,6 +92,10 @@ public sealed class StoreWorkspaceCoordinatorTests
         ScanIntent intent,
         StoreLevel expected)
     {
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
         var client = new RecordingStoreClient(StoreOperation.Import);
         var snapshots = new Queue<StoreWorkspaceState?>(
         [
@@ -103,16 +108,78 @@ public sealed class StoreWorkspaceCoordinatorTests
             () => policy,
             _ => snapshots.Dequeue(),
             () => "request-import",
-            "/workspace/.miller/symbols.db");
+            artifact.DbPath);
 
         ExtractReport report = coordinator.Scan(intent, jobs: 2);
 
         StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
         Assert.Equal(expected, request.Level);
         Assert.Equal(2, request.Scan.Jobs);
-        Assert.Equal("/workspace/.miller/symbols.db", request.FromArtifact);
+        Assert.Equal(artifact.DbPath, request.FromArtifact);
         Assert.Equal("request-import", report.Input?.Format);
         Assert.Equal(expected == StoreLevel.Full, client.Requests.Any(request => request.Operation == StoreOperation.Resolve));
+    }
+
+    [Fact]
+    public void IncompatibleLegacyArtifactFallsBackToSourceImport()
+    {
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema - 1,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+
+        StoreImportRequest request = RunNewFamilyImport(artifact.DbPath);
+
+        Assert.Null(request.FromArtifact);
+        Assert.True(File.Exists(artifact.DbPath));
+    }
+
+    [Fact]
+    public void MissingLegacyArtifactFallsBackToSourceImport()
+    {
+        string artifactPath = Path.Combine(
+            Path.GetTempPath(),
+            "miller-store-missing-seed-" + Guid.NewGuid().ToString("N"),
+            "symbols.db");
+
+        StoreImportRequest request = RunNewFamilyImport(artifactPath);
+
+        Assert.Null(request.FromArtifact);
+    }
+
+    [Fact]
+    public void NonArtifactDatabaseFallsBackToSourceImport()
+    {
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>(),
+            createMetadataTable: false);
+
+        StoreImportRequest request = RunNewFamilyImport(artifact.DbPath);
+
+        Assert.Null(request.FromArtifact);
+        Assert.True(File.Exists(artifact.DbPath));
+    }
+
+    [Fact]
+    public void CorruptLegacyArtifactFallsBackToSourceImport()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-corrupt-seed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string artifactPath = Path.Combine(root, "symbols.db");
+        File.WriteAllText(artifactPath, "not a sqlite database");
+        try
+        {
+            StoreImportRequest request = RunNewFamilyImport(artifactPath);
+
+            Assert.Null(request.FromArtifact);
+            Assert.True(File.Exists(artifactPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -332,9 +399,13 @@ public sealed class StoreWorkspaceCoordinatorTests
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-request-replay-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
         try
         {
-            string fromArtifact = Path.Combine(root, ".miller", "symbols.db");
+            string fromArtifact = artifact.DbPath;
             string fingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|{fromArtifact}";
             var journal = new StoreRequestJournal(root);
             Assert.Equal("orphan-request", journal.GetOrCreate(fingerprint, () => "orphan-request"));
@@ -370,6 +441,51 @@ public sealed class StoreWorkspaceCoordinatorTests
                 Assert.IsType<StoreImportRequest>(imports[0]).Request.RequestId,
                 Assert.IsType<StoreImportRequest>(imports[1]).Request.RequestId);
             Assert.Null(Assert.IsType<StoreImportRequest>(imports[1]).FromArtifact);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ExistingStateScanBypassesLegacySeedSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-existing-state-seed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        using var artifact = JulieDbFixture.Create(
+            JulieDbFixture.PinnedSchema,
+            JulieDbFixture.PinnedContract,
+            Array.Empty<JulieDbFixture.SymbolRow>());
+        try
+        {
+            string fingerprint = $"import|{Binding.FamilyId:D}|{Binding.ViewId}|L1|";
+            var journal = new StoreRequestJournal(root);
+            Assert.Equal("orphan-request", journal.GetOrCreate(fingerprint, () => "orphan-request"));
+            var client = new RecordingStoreClient(StoreOperation.Import);
+            var snapshots = new Queue<StoreWorkspaceState?>
+            (
+            [
+                new StoreWorkspaceState(1, "l1"),
+                new StoreWorkspaceState(2, "l1"),
+            ]);
+            var coordinator = new StoreWorkspaceCoordinator(
+                Binding with
+                {
+                    WorkspaceRoot = Path.GetFullPath(root),
+                    StoreRoot = Path.Combine(root, "store"),
+                },
+                client,
+                () => IndexLevelPolicy.Progressive,
+                _ => snapshots.Dequeue(),
+                fromArtifact: artifact.DbPath);
+
+            coordinator.Scan(jobs: 1);
+
+            StoreImportRequest[] imports = client.Requests.OfType<StoreImportRequest>().ToArray();
+            Assert.Equal(2, imports.Length);
+            Assert.All(imports, request => Assert.Null(request.FromArtifact));
+            Assert.Equal("orphan-request", imports[0].Request.RequestId);
         }
         finally
         {
@@ -422,6 +538,28 @@ public sealed class StoreWorkspaceCoordinatorTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    private static StoreImportRequest RunNewFamilyImport(string fromArtifact)
+    {
+        var client = new RecordingStoreClient(StoreOperation.Import);
+        var snapshots = new Queue<StoreWorkspaceState?>
+        (
+        [
+            null,
+            new StoreWorkspaceState(1, "l1"),
+        ]);
+        var coordinator = new StoreWorkspaceCoordinator(
+            Binding with { State = StoreBindingState.Planned },
+            client,
+            () => IndexLevelPolicy.Progressive,
+            _ => snapshots.Dequeue(),
+            () => "request-import",
+            fromArtifact);
+
+        coordinator.Scan(jobs: 1);
+
+        return Assert.IsType<StoreImportRequest>(client.SingleRequest);
     }
 
     private sealed class RecordingStoreClient(

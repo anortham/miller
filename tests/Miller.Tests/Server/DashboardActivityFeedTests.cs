@@ -704,7 +704,10 @@ public sealed class DashboardActivityFeedTests : IDisposable
             91,
             true,
             "legacy_preserved",
-            "available");
+            "available",
+            "/family/store",
+            ["alpha-111111111111", "bravo-222222222222"],
+            6);
         var facts = new DashboardWorkspaceFacts(
             "ws-a", "alpha-abcd1234", "/repo/a", "/repo/a/.miller/symbols.db",
             "ready", null, 1, 1, 1, 100, 42, "2026-06-12T09:00:00Z", "current",
@@ -720,6 +723,10 @@ public sealed class DashboardActivityFeedTests : IDisposable
         Assert.Contains("view-worktree", html);
         Assert.Contains("Generation 7", html);
         Assert.Contains("exact", html);
+        Assert.Contains("/family/store", html);
+        Assert.Contains("alpha-111111111111", html);
+        Assert.Contains("bravo-222222222222", html);
+        Assert.Contains("4 more", html);
     }
 
     [Fact]

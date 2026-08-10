@@ -215,7 +215,10 @@ public sealed class WorkspaceRenderTests
             ResolutionExactAt: 91,
             LegacyArtifactPresent: true,
             MigrationState: "legacy_preserved",
-            RollbackState: "available");
+            RollbackState: "available",
+            StoreRoot: "/family/store",
+            MemberDisplayLabels: ["alpha-111111111111", "bravo-222222222222"],
+            MemberCount: 6);
         WorkspaceFacts facts = Facts() with { Store = store };
 
         string compact = WorkspaceRender.Status(facts, TelemetrySummary.Empty, json: false);
@@ -229,7 +232,16 @@ public sealed class WorkspaceRenderTests
             "migration=legacy_preserved  rollback=available";
         Assert.Contains(expected, compact);
         Assert.Contains(expected, healthCompact);
+        Assert.Contains("root=/family/store", compact);
+        Assert.Contains("members=alpha-111111111111,bravo-222222222222 (+4 more)", compact);
         Assert.Equal("view-worktree", statusJson.GetProperty("store").GetProperty("view_id").GetString());
+        Assert.Equal("/family/store", statusJson.GetProperty("store").GetProperty("store_root").GetString());
+        Assert.Equal(6, statusJson.GetProperty("store").GetProperty("member_count").GetInt32());
+        Assert.Equal(4, statusJson.GetProperty("store").GetProperty("members_omitted").GetInt32());
+        Assert.Equal(
+            new string?[] { "alpha-111111111111", "bravo-222222222222" },
+            statusJson.GetProperty("store").GetProperty("member_display_labels")
+                .EnumerateArray().Select(static value => value.GetString()).ToArray());
         Assert.Equal(7, statusJson.GetProperty("store").GetProperty("manifest_generation").GetInt64());
         Assert.Equal("exact", statusJson.GetProperty("store").GetProperty("resolution_state").GetString());
         Assert.Equal("available", healthJson.GetProperty("store").GetProperty("rollback_state").GetString());

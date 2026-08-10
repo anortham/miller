@@ -3,6 +3,7 @@ using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Hosting;
+using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -58,6 +59,30 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             ? new StoreRequestJournal(binding.WorkspaceRoot)
             : null;
         _fromArtifact = fromArtifact;
+    }
+
+    private static string? SelectCompatibleSeedArtifact(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || !File.Exists(candidate))
+            return null;
+
+        try
+        {
+            LegacyArtifactReadSession.Validate(candidate);
+            return candidate;
+        }
+        catch (IncompatibleExtractException)
+        {
+            return null;
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
     }
 
     internal void EnsureBindingPointer()
@@ -137,7 +162,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         string millerHome = Path.GetDirectoryName(workspace.RegistryDbPath) ?? throw new InvalidOperationException(
             $"Registry path '{workspace.RegistryDbPath}' has no parent directory.");
         GitWorktreeLayout? git = GitWorktreeLayout.Resolve(canonicalRoot);
-        DateTimeOffset? commonDirCreatedAt = CreationTime(git?.CommonDir);
+        DateTimeOffset? commonDirCreatedAt = WorkspaceRootIdentity.CaptureDirectoryCreationTime(git?.CommonDir);
         using var registry = WorkspaceRegistry.Open(workspace.RegistryDbPath);
         return ResolveBinding(
             registry,
@@ -167,7 +192,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             canonicalRoot,
             rootReplacementObserved,
             git,
-            CreationTime(git?.CommonDir),
+            WorkspaceRootIdentity.CaptureDirectoryCreationTime(git?.CommonDir),
             millerHome);
     }
 
@@ -242,7 +267,10 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
     {
         StoreWorkspaceState? before = _readState(_binding);
         StoreLevel level = LevelFor(intent, before);
-        StoreRequestControls controls = Controls(ImportFingerprint(level), StoreOperation.Import);
+        string? fromArtifact = before is null
+            ? SelectCompatibleSeedArtifact(_fromArtifact)
+            : null;
+        StoreRequestControls controls = Controls(ImportFingerprint(level, fromArtifact), StoreOperation.Import);
         var request = new StoreImportRequest(
             _binding.StoreRoot,
             _binding.FamilyId.ToString("D"),
@@ -251,7 +279,7 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
             level,
             controls,
             ScanControls(jobs ?? ExtractJobsPolicy.FromEnvironment(), prepareForScan: true),
-            FromArtifact: before is null ? _fromArtifact : null);
+            FromArtifact: fromArtifact);
         return Submit(
             request,
             before,
@@ -273,7 +301,9 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         RequireCommittedAndCompleteJournal(request, result);
         if (replayedImport && request is StoreImportRequest replayedRequest)
         {
-            StoreRequestControls controls = Controls(ImportFingerprint(replayedRequest.Level), StoreOperation.Import);
+            StoreRequestControls controls = Controls(
+                ImportFingerprint(replayedRequest.Level, replayedRequest.FromArtifact),
+                StoreOperation.Import);
             StoreImportRequest freshImport = replayedRequest with
             {
                 Request = controls,
@@ -471,8 +501,8 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         return new StoreRequestControls(requestId, requestId, RequestTimeout(operation));
     }
 
-    private string ImportFingerprint(StoreLevel level) =>
-        $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{_fromArtifact ?? string.Empty}";
+    private string ImportFingerprint(StoreLevel level, string? fromArtifact) =>
+        $"import|{_binding.FamilyId:D}|{_binding.ViewId}|{level}|{fromArtifact ?? string.Empty}";
 
     private string ResolveFingerprint() =>
         $"resolve|{_binding.FamilyId:D}|{_binding.ViewId}";
@@ -561,21 +591,6 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
         return new StoreWorkspaceState(sequence, session.Snapshot.IndexLevel);
     }
 
-    private static DateTimeOffset? CreationTime(string? path)
-    {
-        if (path is null)
-            return null;
-        try
-        {
-            DateTime created = new DirectoryInfo(path).CreationTimeUtc;
-            return created > DateTime.FromFileTimeUtc(0) ? created : null;
-        }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return null;
-        }
-    }
 }
 
 internal sealed record StoreRequestJournalEntry(int SchemaVersion, string Fingerprint, string RequestId);

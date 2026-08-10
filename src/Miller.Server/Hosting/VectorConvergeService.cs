@@ -1889,7 +1889,7 @@ internal sealed class SqliteVectorConvergePort : IVectorConvergePort
     }
 
     private static string StoreArtifactId(WorkspaceReadSnapshot snapshot) =>
-        $"{snapshot.ArtifactOrStoreId}:{snapshot.ViewId}";
+        snapshot.VectorArtifactId;
 
     private IReadOnlyList<VectorCorpusUnit> SymbolUnits(IReadOnlyCollection<string>? paths)
     {

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 
 namespace Miller.Indexing.Semantic;
 
@@ -157,6 +159,7 @@ public sealed class SemanticSearchArm
     private readonly Func<SemanticEmbeddingSession?> _openSession;
     private readonly SemanticEmbeddingSessionBroker? _broker;
     private readonly VectorLiveReaderRegistry _readerRegistry;
+    private readonly Func<(string? ArtifactId, long Revision)> _liveFreshness;
 
     public SemanticSearchArm(
         string workspaceRoot,
@@ -189,7 +192,8 @@ public sealed class SemanticSearchArm
         bool enabled,
         VectorSearchPortFactory openPort,
         Func<SemanticEmbeddingSession?> openSession,
-        VectorLiveReaderRegistry? readerRegistry = null)
+        VectorLiveReaderRegistry? readerRegistry = null,
+        Func<(string? ArtifactId, long Revision)>? liveFreshness = null)
         : this(
             workspaceRoot,
             enabled,
@@ -202,7 +206,8 @@ public sealed class SemanticSearchArm
                     reason);
             },
             openSession,
-            readerRegistry)
+            readerRegistry,
+            liveFreshness)
     {
     }
 
@@ -211,7 +216,8 @@ public sealed class SemanticSearchArm
         bool enabled,
         ClassifiedVectorSearchPortFactory openPort,
         Func<SemanticEmbeddingSession?> openSession,
-        VectorLiveReaderRegistry? readerRegistry = null)
+        VectorLiveReaderRegistry? readerRegistry = null,
+        Func<(string? ArtifactId, long Revision)>? liveFreshness = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentNullException.ThrowIfNull(openPort);
@@ -223,6 +229,7 @@ public sealed class SemanticSearchArm
         _openSession = openSession;
         _broker = null;
         _readerRegistry = readerRegistry ?? VectorLiveReaderRegistry.Shared;
+        _liveFreshness = liveFreshness ?? CaptureLiveFreshness;
     }
 
     /// <summary>
@@ -410,10 +417,7 @@ public sealed class SemanticSearchArm
                        "Degrading to lexical.";
             }
 
-            string dbPath = Path.Combine(_workspaceRoot, ".miller", "symbols.db");
-            using var live = new FreshnessReader(dbPath);
-            string? liveArtifact = live.ArtifactId();
-            long liveRevision = live.LatestRevision();
+            (string? liveArtifact, long liveRevision) = _liveFreshness();
             if (string.IsNullOrEmpty(liveArtifact)
                 || !string.Equals(current.Value.ArtifactId, liveArtifact, StringComparison.Ordinal))
             {
@@ -437,6 +441,23 @@ public sealed class SemanticSearchArm
             return $"The live workspace freshness could not be verified: {ex.Message}. Degrading to lexical.";
         }
 
+    }
+
+    private (string? ArtifactId, long Revision) CaptureLiveFreshness()
+    {
+        string dbPath = Path.Combine(_workspaceRoot, ".miller", "symbols.db");
+        if (StoreWorkspacePointer.Read(_workspaceRoot) is not null)
+        {
+            using WorkspaceReadHandle live = WorkspaceReadSessionFactory.Open(
+                dbPath,
+                _workspaceRoot,
+                workspaceId: null,
+                storeEnabled: true);
+            return (live.Snapshot.VectorArtifactId, live.Snapshot.VectorRevision);
+        }
+
+        using var legacy = new FreshnessReader(dbPath);
+        return (legacy.ArtifactId(), legacy.LatestRevision());
     }
 
     private static bool TryReadPortFreshness(
