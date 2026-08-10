@@ -18,6 +18,28 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void FromArtifactStoreWaitUsesTheHardCapAsItsOnlyProcessBound()
+    {
+        var request = new StoreImportRequest(
+            StoreRoot: "/family",
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-a",
+            WorkspaceRoot: "/workspace",
+            Level: StoreLevel.Full,
+            Request: Controls(),
+            Scan: StoreScanControls.Default,
+            FromArtifact: "/workspace/legacy.db");
+
+        ExtractWaitPolicy policy = JulieStoreClient.CreateWaitPolicy(
+            request,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ExtractWaitVerdict.Continue, policy.Observe(TimeSpan.FromSeconds(2), 0));
+        Assert.Equal(ExtractWaitVerdict.HardCapExceeded, policy.Observe(TimeSpan.FromSeconds(5), 0));
+    }
+
+    [Fact]
     public void StoreProgressStampIncludesTheServingGenerationDatabase()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-" + Guid.NewGuid().ToString("N"));

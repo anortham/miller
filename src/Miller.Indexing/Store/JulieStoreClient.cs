@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 namespace Miller.Indexing.Store;
@@ -114,12 +115,12 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 string.Empty);
         }
 
-        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        long outputActivity = 0;
+        Task<string> stdoutTask = ReadOutputAsync(process.StandardOutput, count => Interlocked.Add(ref outputActivity, count));
+        Task<string> stderrTask = ReadOutputAsync(process.StandardError, count => Interlocked.Add(ref outputActivity, count));
         var elapsed = Stopwatch.StartNew();
-        var waitPolicy = new ExtractWaitPolicy(_stallTimeout, _hardTimeout);
+        ExtractWaitPolicy waitPolicy = CreateWaitPolicy(request, _stallTimeout, _hardTimeout);
         string? progressPath = ProgressPath(request);
-        string coordinatorPath = Path.Combine(request.StoreRoot, "coord.db");
         int pollSlice = (int)Math.Clamp((long)_stallTimeout.TotalMilliseconds, 50, 1000);
         bool canceled = false;
         var verdict = ExtractWaitVerdict.Continue;
@@ -132,7 +133,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
             }
             verdict = waitPolicy.Observe(
                 elapsed.Elapsed,
-                StoreProgressStamp(request.StoreRoot, progressPath, outputActivity: 0));
+                StoreProgressStamp(request.StoreRoot, progressPath, Interlocked.Read(ref outputActivity)));
             if (verdict != ExtractWaitVerdict.Continue)
                 break;
         }
@@ -165,6 +166,17 @@ public sealed class JulieStoreClient : IJulieStoreClient
 
     internal static ExtractWaitPolicy CreateWaitPolicy(TimeSpan stallTimeout) =>
         new(stallTimeout, ExtractWaitPolicy.HardTimeoutFor(stallTimeout));
+
+    internal static ExtractWaitPolicy CreateWaitPolicy(
+        StoreRequest request,
+        TimeSpan stallTimeout,
+        TimeSpan hardTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return request is StoreImportRequest { FromArtifact: not null }
+            ? ExtractWaitPolicy.HardCapOnly(hardTimeout)
+            : new ExtractWaitPolicy(stallTimeout, hardTimeout);
+    }
 
     internal static long StoreProgressStamp(string storeRoot, string? progressPath, long outputActivity)
     {
@@ -526,5 +538,18 @@ public sealed class JulieStoreClient : IJulieStoreClient
         {
             return string.Empty;
         }
+    }
+
+    private static async Task<string> ReadOutputAsync(StreamReader reader, Action<int> recordActivity)
+    {
+        var output = new StringBuilder();
+        char[] buffer = new char[4096];
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+        {
+            output.Append(buffer, 0, read);
+            recordActivity(read);
+        }
+        return output.ToString();
     }
 }

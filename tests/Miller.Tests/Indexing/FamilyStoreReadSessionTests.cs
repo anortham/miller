@@ -455,4 +455,17 @@ public sealed class FamilyStoreReadSessionTests
 
         Assert.Equal("2.31.0", StoreArtifactVersionReader.TryRead(legacyPath));
     }
+
+    [Fact]
+    public void StoreArtifactVersionReaderDoesNotUseLegacyVersionWhenTheServingStoreCannotOpen()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(
+            fixture.Binding.WorkspaceRoot,
+            fixture.Binding with { StoreRoot = Path.Combine(fixture.Binding.StoreRoot, "missing") });
+
+        string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
+
+        Assert.Null(StoreArtifactVersionReader.TryReadOrFallback(legacyPath, _ => "legacy-2.0.0"));
+    }
 }

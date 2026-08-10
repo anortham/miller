@@ -85,7 +85,7 @@ public sealed class CrossWorkspaceRefreshService
             dbPath => LeadershipEligibility.Evaluate(
                 runner.QueryVersion(),
                 WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
-                    ? StoreArtifactVersionReader.TryRead(dbPath) ?? ExtractBinaryVersionReader.TryRead(dbPath)
+                    ? StoreArtifactVersionReader.TryReadOrFallback(dbPath, ExtractBinaryVersionReader.TryRead)
                     : ExtractBinaryVersionReader.TryRead(dbPath),
                 Environment.GetEnvironmentVariable("MILLER_ALLOW_EXTRACTOR_DOWNGRADE") == "1"),
             ReadArtifactId,

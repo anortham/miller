@@ -21,6 +21,8 @@ public static class StoreWorkspacePointer
 
     public static void ValidateLocation(string workspaceRoot) => _ = PointerPath(workspaceRoot);
 
+    public static bool Exists(string workspaceRoot) => File.Exists(PointerPath(workspaceRoot));
+
     public static StoreWorkspacePointerDocument? Read(string workspaceRoot)
     {
         string path = PointerPath(workspaceRoot);

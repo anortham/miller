@@ -180,7 +180,7 @@ public sealed class IndexerService : BackgroundService
                 SupportedExtensionCatalog.ForToolsRoot(workspace.ToolsRoot),
             readArtifactExtractorVersion: static dbPath =>
                 WorkspaceReadSessionFactory.StoreEnabledFromEnvironment()
-                    ? StoreArtifactVersionReader.TryRead(dbPath) ?? ExtractBinaryVersionReader.TryRead(dbPath)
+                    ? StoreArtifactVersionReader.TryReadOrFallback(dbPath, ExtractBinaryVersionReader.TryRead)
                     : ExtractBinaryVersionReader.TryRead(dbPath),
             scanGovernor: scanGovernor)
     {
