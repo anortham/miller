@@ -344,6 +344,19 @@ public sealed class CrossWorkspaceRefreshService
             string? warning = JoinNotes(
                 attempt.Downgraded ? ScanFailurePolicy.DescribeDowngrade(intent, attempt) : null,
                 JoinNotes(rollbackWarning, ExtractReportLog.DescribeWarning(report)));
+
+            if (sourceRebuildRequired)
+            {
+                try
+                {
+                    StoreWorkspacePointer.Delete(row.CanonicalRoot);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new StoreRollbackRetryException(ex);
+                }
+            }
+
             _registry.MarkScanned(row.WorkspaceId, revision, _utcNow());
 
             // This is the one safe writer for an external workspace's search.db — it holds the workspace

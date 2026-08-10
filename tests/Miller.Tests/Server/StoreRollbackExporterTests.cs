@@ -11,7 +11,7 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Path.GetTempPath(), "miller-store-rollback-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public void MalformedPointerIsRemovedSoLegacyReconciliationCanProceed()
+    public void MalformedPointerRemainsUntilLegacyReconciliationCompletes()
     {
         string miller = Path.Combine(_root, ".miller");
         Directory.CreateDirectory(miller);
@@ -25,7 +25,7 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.False(result.Exported);
         Assert.True(result.RequiresSourceRebuild);
         Assert.NotNull(result.Warning);
-        Assert.False(File.Exists(Path.Combine(miller, "store.json")));
+        Assert.True(File.Exists(Path.Combine(miller, "store.json")));
     }
 
     [Fact]

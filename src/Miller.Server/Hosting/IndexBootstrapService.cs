@@ -628,7 +628,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     // plain scan below with the target untouched.
                     RebindBootstrapOutcome rebind = TryRebindFromMainCheckout(
                         canonicalRoot, canonicalDbPath, ctx, runner, failurePolicy, attempt, levelPolicy,
-                        rootReplaced || persistedRootReplaced);
+                        rootReplaced || persistedRootReplaced || rollbackRequiresSourceRebuild);
                     if (rebind.Result == RebindBootstrapOutcome.Kind.Promoted)
                     {
                         scanned = true;
@@ -768,6 +768,24 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             if (loadResult.Rebuilt)
                 scanRevision = loadResult.RebuiltRevision;
 
+            if (rollbackRequiresSourceRebuild)
+            {
+                if (!didScan)
+                {
+                    throw new StoreRollbackRetryException(
+                        new IOException("The malformed store pointer was not followed by a source reconciliation scan."));
+                }
+
+                try
+                {
+                    StoreWorkspacePointer.Delete(canonicalRoot);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new StoreRollbackRetryException(ex);
+                }
+            }
+
             // The workspace id is derived from the canonical root (stableWorkspaceId), NOT read back from the
             // DB: v1 stores no workspace_id, and the pre-load DecideBootstrapScan already force-rescanned any
             // DB whose recorded root_path did not match this root (reconciliation #14 — the post-load workspace_id
@@ -869,7 +887,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                 rootReplaced);
             long? scanRevision = null;
             bool didScan = false;
-            if (binding.State == StoreBindingState.Planned)
+            if (binding.State == StoreBindingState.Planned || rootReplaced)
             {
                 using ScanGovernorAdmission? admission =
                     AcquireBootstrapScanAdmission(canonicalRoot, "store-bootstrap");

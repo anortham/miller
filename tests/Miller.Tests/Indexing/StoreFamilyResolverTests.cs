@@ -142,6 +142,31 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void RootReplacementDoesNotReuseTheServingCatalogView()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("22222222-2222-4222-8222-222222222222"),
+            Guid.Parse("33333333-3333-4333-8333-333333333333"),
+            Guid.Parse("44444444-4444-4444-8444-444444444444"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts originalFacts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding original = resolver.ResolveOrCreate(originalFacts);
+        WriteStoreCatalog(original.StoreRoot, original.FamilyId, original.ViewId, originalFacts.WorkspaceRoot);
+
+        StoreFamilyBinding replacement = resolver.ResolveOrCreate(
+            Facts("ws-a", "root-a", "/other.git", Utc(2), rootReplacementObserved: true));
+
+        Assert.NotEqual(original.FamilyId, replacement.FamilyId);
+        Assert.NotEqual(original.ViewId, replacement.ViewId);
+        Assert.Equal(StoreBindingState.Planned, replacement.State);
+    }
+
+    [Fact]
     public void MismatchedStoreRootRefusesWithoutRegistryMutation()
     {
         Directory.CreateDirectory(_directory);

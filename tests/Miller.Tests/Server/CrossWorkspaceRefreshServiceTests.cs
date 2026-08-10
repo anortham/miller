@@ -284,6 +284,31 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_FailedSourceReconciliationPreservesMalformedStorePointer()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("malformed-store-pointer-failure");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        string pointerPath = Path.Combine(root, ".miller", "store.json");
+        File.WriteAllText(pointerPath, "not-json");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("source scan failed"),
+            acquireLock: _ => new NoopLease(),
+            storeClient: new UnexpectedStoreClient());
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Contains("source scan failed", result.Error, StringComparison.Ordinal);
+        Assert.True(File.Exists(pointerPath));
+    }
+
+    [Fact]
     public void Refresh_RollbackExportFailure_MarksRegistryErrorAndPreservesStoreBinding()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);

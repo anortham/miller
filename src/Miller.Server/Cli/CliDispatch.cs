@@ -3874,7 +3874,7 @@ public static class CliDispatch
         {
             err.WriteLine(
                 $"The store pointer is malformed ({ex.Message}); source reconciliation is required before any CLI read.");
-            return false;
+            return !storeEnabled && TryReconcileCliSource(ctx, err);
         }
 
         if (storeEnabled)
@@ -3917,6 +3917,46 @@ public static class CliDispatch
         catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
         {
             err.WriteLine("Store rollback export failed; the CLI will not serve legacy bytes: " + ex.Message);
+            return false;
+        }
+    }
+
+    private static bool TryReconcileCliSource(WorkspaceContext ctx, TextWriter err)
+    {
+        try
+        {
+            using WorkspaceRegistry registry = WorkspaceRegistry.Open(ctx.RegistryDbPath);
+            WorkspaceRegistryRow? row = FindCurrentWorkspaceRow(registry, ctx);
+            if (row is null)
+            {
+                err.WriteLine(
+                    "The current workspace is not registered, so Miller cannot reconcile the malformed store " +
+                    "pointer automatically. Run `miller workspace open` first.");
+                return false;
+            }
+
+            JulieExtractRunner runner = JulieExtractRunner.Locate(ctx.ToolsRoot);
+            var refresh = new CrossWorkspaceRefreshService(
+                registry,
+                runner,
+                SymbolSearchSidecar.FromEnvironment(),
+                CliScanGovernor(ctx));
+            WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force: true, bypassBackoff: true);
+            if (result.Scanned && result.Status is WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged &&
+                File.Exists(ctx.ExtractDbPath))
+            {
+                return true;
+            }
+
+            err.WriteLine(
+                $"Source reconciliation did not complete; the CLI will not serve legacy bytes: " +
+                $"{result.Error ?? result.WarningText ?? result.StatusText}.");
+            return false;
+        }
+        catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
+        {
+            err.WriteLine(
+                "Source reconciliation failed; the CLI will not serve legacy bytes: " + ex.Message);
             return false;
         }
     }

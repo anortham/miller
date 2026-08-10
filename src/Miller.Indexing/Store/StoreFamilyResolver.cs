@@ -75,8 +75,13 @@ public sealed class StoreFamilyResolver
                 $"Store member '{facts.WorkspaceId}' references a missing family.");
             StoreCatalog? catalog = ReadCatalog(family.StoreRoot);
             if (catalog is not null)
-                return ReconcileCatalog(facts, family, member, catalog);
-            if (CanPromoteUnknownLineage(family, facts))
+            {
+                if (!IsPositiveFamilyReplacement(family, member, facts))
+                    return ReconcileCatalog(facts, family, member, catalog);
+                family = ResolveFamily(facts);
+                viewId = MintViewId();
+            }
+            else if (CanPromoteUnknownLineage(family, facts))
             {
                 family = ResolveFamily(facts);
                 viewId = member.ViewId;

@@ -39,7 +39,7 @@ public static class StoreRollbackExporter
             using SingleWriterLock? ownedWriterLease = heldWriterLease is null
                 ? AcquireWriterLease(legacyDatabasePath)
                 : null;
-            return RemoveMalformedPointer(workspaceRoot, ex);
+            return RemoveMalformedPointer(ex);
         }
 
         if (pointer is null)
@@ -59,7 +59,7 @@ public static class StoreRollbackExporter
             }
             catch (StorePointerFormatException ex)
             {
-                return RemoveMalformedPointer(workspaceRoot, ex);
+                return RemoveMalformedPointer(ex);
             }
         }
     }
@@ -75,20 +75,11 @@ public static class StoreRollbackExporter
     }
 
     private static StoreRollbackExportResult RemoveMalformedPointer(
-        string workspaceRoot,
         StorePointerFormatException exception)
     {
         string warning =
             $"The family-store rollback export could not be used ({exception.Message}). " +
-            "Miller removed the stale store binding and will reconcile the legacy artifact from source.";
-        try
-        {
-            StoreWorkspacePointer.Delete(workspaceRoot);
-        }
-        catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException)
-        {
-            warning += $" The stale pointer could not be removed: {deleteError.Message}";
-        }
+            "Miller kept the store binding and will reconcile the legacy artifact from source before removing it.";
         return new StoreRollbackExportResult(false, warning, RequiresSourceRebuild: true);
     }
 
