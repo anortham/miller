@@ -59,7 +59,7 @@ part of this plan.
 - Change the Ph3 acceptance finding from accepted to reopened/conditional and remove claims that
   are not backed by the current producer fixture or Miller rollback path.
 - Correct stale producer-version references in the Ph3 wiring plan where they conflict with the
-  pinned 2.31.1 evidence.
+  pinned 2.31.1 evidence; the release pin is subsequently advanced to 2.31.2 with separate adoption evidence.
 
 ### 2. Make GC physically reclaim and report bytes
 

@@ -234,7 +234,7 @@ docs/
 
 ```bash
 dotnet build Miller.slnx -c Release   # warnings are errors
-scripts/test.sh                       # fast suite (default), <30s budget tripwire
+scripts/test.sh                       # fast suite (default), report-only local wall time
 scripts/test.sh scale                 # scale suite (spawns the real julie-extract)
 scripts/test.sh all                   # both
 ```

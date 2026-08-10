@@ -20,11 +20,6 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      # Measured hosted-Ubuntu wall times for the 5.8k fast cases span 30-58s across identical suites
-      # (runner variance, 2026-08-03 runs). Keep the local wrapper at 30s; the CI ceiling sits above the
-      # measured worst case while still catching a true runaway.
-      FAST_BUDGET_SECONDS: '90'
     steps:
       - uses: actions/checkout@v7.0.0
         with:
@@ -59,19 +54,10 @@ jobs:
         run: dotnet build Miller.slnx --no-restore -c Release
 
       # Default suite = unit + contract. Scale/integration tests are [Trait("Category","Scale")] and excluded here;
-      # they run in a separate scheduled job. Local dev-loop target is <10s; the CI ceiling below is generous to
-      # absorb runner variance while still catching the runaway-suite death spiral that nearly killed julie
-      # (julie-eros-audit §4). Tighten the ceiling as the real suite grows.
-      - name: Test (default suite, time-budgeted)
-        run: |
-          start=$(date +%s)
-          dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale"
-          elapsed=$(( $(date +%s) - start ))
-          echo "Default suite wall time: ${elapsed}s (local target <10s, CI ceiling ${FAST_BUDGET_SECONDS}s)"
-          if [ "$elapsed" -gt "$FAST_BUDGET_SECONDS" ]; then
-            echo "::error::Default test suite took ${elapsed}s (>${FAST_BUDGET_SECONDS}s CI ceiling). Investigate slow tests or tag them [Trait(\"Category\",\"Scale\")]."
-            exit 1
-          fi
+      # they run in a separate scheduled job. Wall-clock performance is measured on a controlled local machine,
+      # not inferred from hosted-runner duration.
+      - name: Test (default suite)
+        run: dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale"
 
   scale-test:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -93,9 +79,7 @@ jobs:
   windows-fast:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-2025
-    # Must exceed worst-case setup (~4 min of checkout/restore/build) plus the test step's own
-    # FAST_BUDGET_SECONDS, so the step budget is the tripwire that fires first, with evidence —
-    # at 15 the job cap cancelled a slow-but-progressing run before its budget could rule.
+    # This is a generous liveness backstop for a stuck hosted runner, not a performance budget.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.0
@@ -116,22 +100,12 @@ jobs:
 
       - name: Test (default suite via PowerShell wrapper)
         shell: pwsh
-        env:
-          # Windows hosted runners are much slower than local/Ubuntu for test discovery/execution, and restore/build
-          # consume ~4 minutes before this step starts. Identical suites have measured 322s to 690s+ across
-          # 2026-08-03 runs (runner variance), so the ceiling sits above the observed worst case while still
-          # catching a true runaway; the job timeout above stays the backstop.
-          FAST_BUDGET_SECONDS: 900
         run: |
           $ErrorActionPreference = 'Continue'
           $results = Join-Path $PWD 'TestResults'
-          $start = Get-Date
           dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale" `
-            --results-directory "$results" `
-            --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type none
+            --results-directory "$results"
           $code = $LASTEXITCODE
-          $elapsed = [int][Math]::Ceiling(((Get-Date) - $start).TotalSeconds)
-          Write-Host "Default suite wall time: ${elapsed}s (Windows CI ceiling ${env:FAST_BUDGET_SECONDS}s)"
 
           if ($code -ne 0) {
             Get-ChildItem -Path "$results" -Recurse -Filter 'Sequence*.xml' -ErrorAction SilentlyContinue |
@@ -139,13 +113,8 @@ jobs:
                 Write-Host "::group::Blame sequence $($_.FullName)"
                 Get-Content $_.FullName
                 Write-Host "::endgroup::"
-              }
+            }
             exit $code
-          }
-
-          if ($elapsed -gt [int]$env:FAST_BUDGET_SECONDS) {
-            Write-Error "Default test suite took ${elapsed}s (>${env:FAST_BUDGET_SECONDS}s Windows CI ceiling). Investigate slow tests or tag them [Trait(`"Category`",`"Scale`")]."
-            exit 1
           }
 
   # P0 HARD GATE for the semantic integration program: sqlite-vec must load and function under a

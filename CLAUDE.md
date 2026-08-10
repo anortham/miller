@@ -73,7 +73,8 @@ that, and there are guards that will fail the build if the split erodes.
 - **Default = fast suite.** A bare `dotnet test` runs ONLY `Category!=Scale` (pure logic + contract
   tests, no subprocess). This is enforced by `VSTestTestCaseFilter=Category!=Scale` in
   [`Miller.Tests.csproj`](tests/Miller.Tests/Miller.Tests.csproj) (the MSBuild default for `--filter`; a
-  command-line `--filter` overrides it). Target <10s. **Run this on every change.** (A well-formed
+  command-line `--filter` overrides it). **Run this on every change.** Wall-clock duration is report-only;
+  compare repeated runs on the same local machine when measuring performance. (A well-formed
   `.runsettings` `<TestCaseFilter>` works too; the csproj property is preferred because it needs no extra
   file and fails the build loudly on a typo instead of silently running everything.)
 - **Scale suite is opt-in.** `Category=Scale` tests spawn the real `julie-extract` or build large
@@ -84,7 +85,7 @@ that, and there are guards that will fail the build if the split erodes.
 Use the wrapper, not raw `dotnet test`, unless you have a reason:
 
 ```bash
-scripts/test.sh         # fast suite + a wall-clock budget tripwire (<30s)
+scripts/test.sh         # fast suite + report-only local wall time
 scripts/test.sh scale   # scale suite only
 scripts/test.sh all     # both
 ```

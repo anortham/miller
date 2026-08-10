@@ -43,7 +43,9 @@ The review gaps were converted into the v4.1 amendments and verified as follows:
   serialization tests plus the focused, fast, build, and full Scale gates pass.
 
 The earlier process-count, scale-duration, and dogfood claims remain historical notes; the commands
-below are the current cleanup evidence against the 2.31.1 producer.
+below are the cleanup evidence captured against the 2.31.1 producer. The final Miller release pin is
+subsequently advanced to 2.31.2; the new pin and downloaded-package verification are recorded in
+`docs/findings/2026-08-09-julie-extract-2.31.2-adoption.md`.
 
 Final branch evidence:
 
@@ -78,6 +80,7 @@ Final branch evidence:
 
 ## Release dependency
 
-Resolved by the stable `julie-extract` 2.31.1 release. Miller pins the four published archive digests and the
-restored binary reports 2.31.1. The producer release contains the canonical imported-resolution-base identity
-fix required by migration reuse, so the migration/restart acceptance claim now matches the shipped binary.
+Resolved by the stable `julie-extract` 2.31.1 release used for the cleanup gates. The final Miller release pin
+is 2.31.2; its four published archive digests and restored binary are verified in the adoption evidence. The
+producer release line contains the canonical imported-resolution-base identity fix required by migration reuse,
+so the migration/restart acceptance claim matches the shipped producer contract.

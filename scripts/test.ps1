@@ -2,10 +2,9 @@
 #
 # Usage:
 #   scripts/test.ps1            # fast suite (default)
-#   scripts/test.ps1 fast       # fast suite, with a budget tripwire
+#   scripts/test.ps1 fast       # fast suite, with report-only local timing
 #   scripts/test.ps1 scale      # scale suite only
 #   scripts/test.ps1 all        # fast + scale
-#   $env:FAST_BUDGET_SECONDS=15; scripts/test.ps1 fast
 #
 # Any extra args after the suite name are passed through to dotnet test
 # (for example: scripts/test.ps1 fast -v n).
@@ -16,12 +15,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $Solution = Join-Path $RepoRoot 'Miller.slnx'
 $Config = if ([string]::IsNullOrWhiteSpace($env:CONFIG)) { 'Release' } else { $env:CONFIG }
-$FastBudgetSeconds = if ([string]::IsNullOrWhiteSpace($env:FAST_BUDGET_SECONDS)) {
-    30
-} else {
-    [int]$env:FAST_BUDGET_SECONDS
-}
-
 $Suite = if ($args.Count -gt 0) { [string]$args[0] } else { 'fast' }
 [string[]]$DotnetArgs = @()
 if ($args.Count -gt 1) {
@@ -32,13 +25,12 @@ function Show-Help {
     Write-Host @"
 Usage:
   scripts/test.ps1            # fast suite (default)
-  scripts/test.ps1 fast       # fast suite, with a budget tripwire
+  scripts/test.ps1 fast       # fast suite, with report-only local timing
   scripts/test.ps1 scale      # scale suite only
   scripts/test.ps1 all        # fast + scale
 
 Environment:
   CONFIG=Release|Debug
-  FAST_BUDGET_SECONDS=30
 "@
 }
 
@@ -50,7 +42,7 @@ function Invoke-FastSuite {
         exit $code
     }
 
-    Write-Host "==> fast suite (Category!=Scale), budget ${FastBudgetSeconds}s"
+    Write-Host '==> fast suite (Category!=Scale)'
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     & dotnet test $Solution -c $Config --no-build --no-restore --filter 'Category!=Scale' @DotnetArgs
     $code = $LASTEXITCODE
@@ -60,12 +52,7 @@ function Invoke-FastSuite {
     }
 
     $elapsed = [int][Math]::Ceiling($sw.Elapsed.TotalSeconds)
-    Write-Host "    fast suite wall time: ${elapsed}s (local target <10s, ceiling ${FastBudgetSeconds}s)"
-    if ($elapsed -gt $FastBudgetSeconds) {
-        [Console]::Error.WriteLine("ERROR: fast suite took ${elapsed}s (> ${FastBudgetSeconds}s ceiling).")
-        [Console]::Error.WriteLine('       Move slow tests to Category=Scale.')
-        exit 1
-    }
+    Write-Host "    fast suite wall time: ${elapsed}s (report-only; compare repeated runs on the same local machine)"
 }
 
 function Invoke-ScaleSuite {
