@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.3 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, and v4.3 amendments record
+**Status: AMENDED v4.4 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, and v4.4 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -36,9 +36,21 @@ are normative amendments, not retrospective acceptance claims.
 | A9 — store freshness cursor | Store-mode sidecar metadata, history, and freshness rechecks use `store_log.sequence`; legacy artifacts may continue to use the extraction revision. | Implemented and verified in Miller review-fix tests and store Scale coverage |
 | A10 — resolution authority | A Full extraction level does not imply exact identifier resolution. Usage-dependent consumers refuse or warn while `resolution_state != exact`. | Implemented and verified in reference-consumer and store Scale coverage |
 | A11 — pruned delta history | A revision delta whose baseline manifest is unavailable returns an explicit unavailable/pruned-history result; it must not claim a complete deletion set from an invented baseline. | Implemented and verified in Miller regression tests |
-| A12 — store request liveness | `store import` and `store resolve` use a one-hour default request window, configurable with `MILLER_STORE_REQUEST_TIMEOUT`; shorter update/delete operations retain the five-minute default. | Implemented and verified in coordinator tests |
+| A12 — store request liveness | Historical v4.2 wording: `store import` and `store resolve` use a one-hour default request window, configurable with `MILLER_STORE_REQUEST_TIMEOUT`. | Superseded by A18 below; the one-hour wording was too short for the shipped process hard cap |
 | A13 — resolution consumer coverage | Full-level store reads must refuse usage-dependent results while `resolution_state != exact` across trace, context usage, inspect overview/full, impact, edit rename, and reference exports. | Implemented and verified in interactive MCP guard tests and the store read-context seam |
 | A14 — vector sidecar locality | Ph3 store mode keys `vectors.db` per view, matching the shipped sidecar catalog. Family-shared vectors remain a Ph5 design target and require a new visibility/pre-filter and cost gate before default-on adoption. | Implemented as the shipped Ph3 behavior; family-shared vectors are deferred and explicitly disclosed |
+
+## 0. v4.4 post-freeze amendment register
+
+The final Miller review found four execution seams where the v4 contract needed to name the shipped
+recovery and liveness behavior. These amendments are normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A15 — rollback cleanup durability | After a validated legacy export is promoted, Miller persists cleanup state through the primary marker or a recovery marker before removing the store pointer. Retry consumes either marker and never repeats the producer export. | Implemented and verified in rollback recovery tests |
+| A16 — family-store schema visibility | Health readers recognize producer-owned TEMP VIEW projections, including the family-store `files` view, as valid schema objects. | Implemented and verified in TEMP-view health tests |
+| A17 — producer progress coverage | From-artifact store waits include coordinator, published generation databases, root spool/scratch, and generation resolution-base activity; directory and file size/mtime changes count as progress. | Implemented and verified in local progress-stamp tests |
+| A18 — store request liveness | `store import` and `store resolve` default to the same absolute hard cap as Miller's default julie process wait (four hours by default, honoring `MILLER_EXTRACT_HARD_CAP`); `MILLER_STORE_REQUEST_TIMEOUT` remains the explicit override and update/delete retain five minutes. | Implemented and verified in coordinator tests |
 
 ---
 
@@ -421,6 +433,8 @@ exactly that).
   Switching the store off triggers a current-view `store export` per active workspace (or an
   honest not-ready until one completes) — never a silently served stale artifact. The store
   on/off switch ships v1 (default-on vs opt-in is the Ph5 validation decision, user-owned).
+  A promoted rollback export records cleanup state before pointer removal and retries pointer cleanup
+  from either durable marker path without repeating the producer export.
 
 ## 12. Generation promotion and the capacity formula
 
@@ -813,11 +827,23 @@ were fixed before the release candidate was reconsidered:
 | A9.1 | high | Store history and sidecar freshness mixed the extraction revision with the store-log sequence. | ACCEPTED — folded: store-mode capture, recheck, and search-sidecar metadata use `store_log.sequence`; legacy artifacts retain the extraction revision. |
 | A9.2 | high | A store view could report Full extraction while usage-dependent reference candidates read an inexact resolution layer. | ACCEPTED — folded: candidate export refuses a non-exact resolution view and reference export labels it as converging. |
 | A9.3 | medium | A pruned revision baseline could return a complete delta with deleted paths omitted. | ACCEPTED — folded: missing historical manifests return `Unavailable(pruned_history)` for nonzero spans. |
-| A9.4 | low | The fixed coordinator request window was too short for large import/resolve operations. | ACCEPTED — folded: import/resolve default to one hour with `MILLER_STORE_REQUEST_TIMEOUT`; update/delete retain five minutes. |
+| A9.4 | low | The fixed coordinator request window was too short for large import/resolve operations. | ACCEPTED — superseded by A18: import/resolve follow the four-hour default hard cap with `MILLER_STORE_REQUEST_TIMEOUT` as the explicit override; update/delete retain five minutes. |
 
 These fixes do not close A7 or A8. In particular, the full-view sidecar rewrite remains an explicit
 Ph5 implementation and local-cost gate, and the durable reader pin/lock-order work remains a Ph4/Ph5
 entry condition. No GitHub Actions wall-clock threshold is an acceptance criterion.
+
+### v4.4 implementation recheck — 2026-08-10
+
+The final Miller review found four additional execution deviations; each is now recorded above and
+implemented in the release candidate:
+
+| # | Sev | Finding | Disposition |
+|---|---|---|---|
+| A15 | high | A rollback marker write failure could leave a promoted legacy artifact without durable pointer-cleanup state. | ACCEPTED — folded: primary/recovery marker paths and a no-repeat-export retry regression |
+| A16 | medium | Health table detection ignored family-store TEMP VIEWs and reported the `files` section unavailable. | ACCEPTED — folded: shared schema-object detection includes temporary tables and views |
+| A17 | medium | From-artifact progress sampling omitted producer spool, scratch, and resolution-base work. | ACCEPTED — folded: store progress includes those producer-owned paths and their file/directory activity |
+| A18 | medium | The one-hour import/resolve request window could expire before Miller's four-hour process hard cap. | ACCEPTED — folded: default request liveness follows the process hard cap; explicit store timeout remains available |
 
 ## Cross-reference: gate price list → contract sections
 

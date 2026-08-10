@@ -202,6 +202,10 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 if (!IsPublishedGenerationName(generationName))
                     continue;
 
+                stamp += DirectoryProgressStamp(
+                    canonicalStoreRoot,
+                    Path.Combine(generationName, "bases"));
+
                 string generationDb;
                 try
                 {
@@ -221,15 +225,80 @@ public sealed class JulieStoreClient : IJulieStoreClient
                 {
                     continue;
                 }
-
                 stamp += JulieExtractRunner.ProgressStamp(generationDb, progressPath: null, outputActivity: 0);
             }
+
+            stamp += DirectoryProgressStamp(canonicalStoreRoot, "spool");
+            stamp += DirectoryProgressStamp(canonicalStoreRoot, "scratch");
             return stamp;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return stamp;
         }
+    }
+
+    private static long DirectoryProgressStamp(string canonicalStoreRoot, string relativeDirectory)
+    {
+        string directory;
+        try
+        {
+            directory = PathCanonicalizer.CanonicalizeFile(
+                canonicalStoreRoot,
+                Path.Combine(canonicalStoreRoot, relativeDirectory));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return 0;
+        }
+
+        if (!Directory.Exists(directory))
+            return 0;
+
+        long stamp = 1;
+        try
+        {
+            DirectoryInfo rootInfo = new(directory);
+            stamp = unchecked(stamp * 31 + rootInfo.LastWriteTimeUtc.Ticks);
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories))
+            {
+                string canonicalEntry;
+                try
+                {
+                    canonicalEntry = PathCanonicalizer.CanonicalizeFile(canonicalStoreRoot, entry);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    continue;
+                }
+
+                if (!IsContained(canonicalStoreRoot, canonicalEntry))
+                    continue;
+
+                FileSystemInfo info = Directory.Exists(canonicalEntry)
+                    ? new DirectoryInfo(canonicalEntry)
+                    : new FileInfo(canonicalEntry);
+                long length = info is FileInfo file && file.Exists ? file.Length : 0;
+                long ticks = info.Exists ? info.LastWriteTimeUtc.Ticks : 0;
+                stamp = unchecked(stamp * 31 + StringComparer.Ordinal.GetHashCode(canonicalEntry));
+                stamp = unchecked(stamp * 31 + length);
+                stamp = unchecked(stamp * 31 + ticks);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+        }
+
+        return stamp;
+    }
+
+    private static bool IsContained(string canonicalRoot, string candidate)
+    {
+        string relative = Path.GetRelativePath(canonicalRoot, candidate);
+        return !Path.IsPathRooted(relative)
+            && relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     private static bool IsPublishedGenerationName(string? name)

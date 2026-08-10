@@ -24,7 +24,10 @@ public sealed class StoreWorkspaceOperationException(
 public sealed class StoreWorkspaceCoordinator : IExtractOps
 {
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan DefaultLongRequestTimeout = TimeSpan.FromHours(1);
+    private static readonly TimeSpan DefaultLongRequestTimeout =
+        ExtractWaitPolicy.HardTimeoutForEnvironment(
+            JulieExtractRunner.DefaultTimeout,
+            Environment.GetEnvironmentVariable);
 
     private readonly StoreFamilyBinding _binding;
     private readonly IJulieStoreClient _client;

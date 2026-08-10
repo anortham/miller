@@ -20,6 +20,7 @@ public static class StoreRollbackExporter
 {
     private const string PendingMarkerSchema = "1";
     private const string PendingMarkerFileName = "store-rollback.pending";
+    private const string RecoveryMarkerFileName = "store-rollback.recovery";
 
     internal static bool IsOperationalFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
@@ -252,11 +253,7 @@ public static class StoreRollbackExporter
         string legacyDatabasePath,
         StoreWorkspacePointerDocument pointer)
     {
-        string path = PendingMarkerPath(workspaceRoot);
-        string directory = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(directory);
         FileInfo artifact = new(legacyDatabasePath);
-        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         string[] lines =
         [
             PendingMarkerSchema,
@@ -268,24 +265,54 @@ public static class StoreRollbackExporter
             artifact.Length.ToString(CultureInfo.InvariantCulture),
             artifact.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture),
         ];
-        try
+        Exception? failure = null;
+        foreach (string path in PendingMarkerPaths(workspaceRoot))
         {
-            File.WriteAllLines(temporary, lines, Encoding.UTF8);
-            File.Move(temporary, path, overwrite: true);
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllLines(temporary, lines, Encoding.UTF8);
+                File.Move(temporary, path, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failure = ex;
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temporary))
+                        File.Delete(temporary);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failure ??= ex;
+                }
+            }
         }
-        finally
-        {
-            if (File.Exists(temporary))
-                File.Delete(temporary);
-        }
+
+        throw failure ?? new IOException("No rollback cleanup marker path was writable.");
     }
 
     private static PendingRollbackMarker? ReadPendingMarker(string workspaceRoot)
     {
-        string path = PendingMarkerPath(workspaceRoot);
-        if (!File.Exists(path))
-            return null;
+        foreach (string path in PendingMarkerPaths(workspaceRoot))
+        {
+            if (!File.Exists(path))
+                continue;
 
+            if (TryReadPendingMarker(path) is { } marker)
+                return marker;
+        }
+
+        return null;
+    }
+
+    private static PendingRollbackMarker? TryReadPendingMarker(string path)
+    {
         try
         {
             string[] lines = File.ReadAllLines(path);
@@ -318,21 +345,31 @@ public static class StoreRollbackExporter
 
     private static string? TryDeletePendingMarker(string workspaceRoot)
     {
-        try
+        string? warning = null;
+        foreach (string path in PendingMarkerPaths(workspaceRoot))
         {
-            string path = PendingMarkerPath(workspaceRoot);
-            if (File.Exists(path))
-                File.Delete(path);
-            return null;
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                warning = JoinWarnings(
+                    warning,
+                    "The rollback cleanup marker could not be removed: " + ex.Message);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return "The rollback cleanup marker could not be removed: " + ex.Message;
-        }
+
+        return warning;
     }
 
-    private static string PendingMarkerPath(string workspaceRoot) =>
-        Path.Combine(PathCanonicalizer.CanonicalizeRoot(workspaceRoot), ".miller", PendingMarkerFileName);
+    private static IEnumerable<string> PendingMarkerPaths(string workspaceRoot)
+    {
+        string millerDirectory = Path.Combine(PathCanonicalizer.CanonicalizeRoot(workspaceRoot), ".miller");
+        yield return Path.Combine(millerDirectory, PendingMarkerFileName);
+        yield return Path.Combine(millerDirectory, RecoveryMarkerFileName);
+    }
 
     private static string Encode(string value) =>
         Convert.ToBase64String(Encoding.UTF8.GetBytes(value));

@@ -58,23 +58,10 @@ public static class WorkspaceHealthReader
         string tableName,
         Func<SqliteConnection, SqliteTransaction, IReadOnlyList<T>> read)
     {
-        if (!TableExists(connection, transaction, tableName))
+        if (!SqliteSchemaObjects.Exists(connection, tableName))
             return HealthFactSection<T>.Unavailable($"table '{tableName}' is missing");
 
         return HealthFactSection<T>.FromRows(read(connection, transaction));
-    }
-
-    private static bool TableExists(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string tableName)
-    {
-        using SqliteCommand command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1;";
-        command.Parameters.AddWithValue("$name", tableName);
-        object? result = command.ExecuteScalar();
-        return result is not null and not DBNull;
     }
 
     private static IReadOnlyList<ParseDiagnosticGroup> ReadParseDiagnostics(

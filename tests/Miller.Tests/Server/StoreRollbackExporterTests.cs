@@ -174,6 +174,45 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.Null(StoreWorkspacePointer.Read(workspace));
     }
 
+    [Fact]
+    public void RecoveryMarkerRetriesPointerCleanupWhenThePrimaryMarkerPathCannotBeWritten()
+    {
+        string workspace = Path.Combine(_root, "recovery-marker-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        Directory.CreateDirectory(Path.Combine(miller, "store-rollback.pending"));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported-recovery"));
+
+        StoreRollbackExporter.StoreRollbackCommitResult first =
+            StoreRollbackExporter.CommitValidatedExport(
+                workspace,
+                legacy,
+                target => File.Copy(exported, target, overwrite: true),
+                deletePointer: _ => throw new IOException("leave recovery cleanup pending"));
+
+        Assert.True(first.RequiresPointerCleanup);
+        Assert.True(File.Exists(Path.Combine(miller, "store-rollback.recovery")));
+
+        StoreRollbackExportResult retry = StoreRollbackExporter.ExportIfRequired(
+            workspace,
+            legacy,
+            new UnexpectedStoreClient());
+
+        Assert.True(retry.Exported);
+        Assert.False(retry.RequiresPointerCleanup);
+        Assert.Null(StoreWorkspacePointer.Read(workspace));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

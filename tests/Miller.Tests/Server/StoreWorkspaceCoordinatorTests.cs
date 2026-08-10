@@ -136,7 +136,11 @@ public sealed class StoreWorkspaceCoordinatorTests
         coordinator.Scan();
 
         StoreImportRequest request = Assert.IsType<StoreImportRequest>(client.SingleRequest);
-        Assert.Equal(TimeSpan.FromHours(1), request.Request.Timeout);
+        Assert.Equal(
+            ExtractWaitPolicy.HardTimeoutForEnvironment(
+                JulieExtractRunner.DefaultTimeout,
+                Environment.GetEnvironmentVariable),
+            request.Request.Timeout);
     }
 
     [Fact]

@@ -82,6 +82,38 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void StoreProgressStampIncludesProducerSpoolScratchAndResolutionBases()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-extra-" + Guid.NewGuid().ToString("N"));
+        string bases = Path.Combine(root, "gen-001", "bases");
+        string spool = Path.Combine(root, "spool");
+        string scratch = Path.Combine(root, "scratch");
+        Directory.CreateDirectory(bases);
+        Directory.CreateDirectory(spool);
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(root, "coord.db"), [1]);
+            File.WriteAllBytes(Path.Combine(bases, "base.db"), [2]);
+            File.WriteAllBytes(Path.Combine(spool, "spool.part"), [3]);
+            File.WriteAllBytes(Path.Combine(scratch, "scratch.part"), [4]);
+
+            long before = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
+            File.AppendAllBytes(Path.Combine(bases, "base.db"), [5]);
+            File.AppendAllBytes(Path.Combine(spool, "spool.part"), [6]);
+            File.AppendAllBytes(Path.Combine(scratch, "scratch.part"), [7]);
+            long after = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
+
+            Assert.NotEqual(before, after);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ContractPinsPublishedStoreVersions()
     {
         Assert.Equal(1, JulieStoreContract.StoreContractVersion);

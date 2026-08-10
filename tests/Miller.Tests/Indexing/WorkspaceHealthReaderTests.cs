@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Tests.Support;
 using Xunit;
 
@@ -197,6 +198,22 @@ public sealed class WorkspaceHealthReaderTests
     }
 
     [Fact]
+    public void Read_RecognizesTheFamilyStoreFilesTempView()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        fixture.ExecuteWrite("DROP TABLE files;");
+        using var session = new FilesTempViewSession(fixture.DbPath, fixture.WorkspaceRoot);
+
+        WorkspaceExtractionHealthFacts facts = WorkspaceHealthReader.Read(session);
+
+        Assert.True(facts.Files.Available);
+        FileStatusGroup row = Assert.Single(facts.Files.Rows);
+        Assert.Equal("csharp", row.Language);
+        Assert.Equal("indexed", row.Status);
+        Assert.Equal(1, row.Count);
+    }
+
+    [Fact]
     public void Read_MissingLanguageCapabilityGapsTable_ThrowsIncompatibleExtract()
     {
         using var fx = JulieDbFixture.Create(
@@ -365,5 +382,39 @@ public sealed class WorkspaceHealthReaderTests
     {
         object? value = row.GetType().GetProperty(propertyName)?.GetValue(row);
         return Assert.IsAssignableFrom<T>(value);
+    }
+
+    private sealed class FilesTempViewSession : IWorkspaceReadSession
+    {
+        private readonly SqliteConnection _connection;
+
+        public FilesTempViewSession(string dbPath, string workspaceRoot)
+        {
+            _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false,
+                ForeignKeys = false,
+            }.ToString());
+            _connection.Open();
+            using var command = _connection.CreateCommand();
+            command.CommandText = "CREATE TEMP VIEW files AS SELECT 'csharp' AS language, 'indexed' AS status;";
+            command.ExecuteNonQuery();
+            Snapshot = new WorkspaceReadSnapshot(
+                workspaceRoot,
+                "workspace-a",
+                "family-a",
+                "view-a",
+                new WorkspaceFreshnessToken("family-a", 1, StoreInstanceId: "family-a:gen-001"),
+                IndexLevels.FullMetadataValue,
+                WorkspaceReadMode.FamilyStore);
+        }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query) => query(_connection);
+
+        public void Dispose() => _connection.Dispose();
     }
 }
