@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -43,6 +44,27 @@ public static class WorkspaceTargetHashResolver
 
         var wantedHashes = targetHashes.Select(static row => row.TargetHash).ToHashSet(StringComparer.Ordinal);
         Dictionary<string, List<Candidate>> candidates = LoadCandidates(dbPath, wantedHashes);
+        return targetHashes
+            .OrderByDescending(static row => row.Calls)
+            .ThenBy(static row => row.TargetHash, StringComparer.Ordinal)
+            .Take(Math.Max(1, limit))
+            .Select(row => ResolveOne(row, candidates))
+            .ToArray();
+    }
+
+    public static IReadOnlyList<RecoveredTargetHash> Resolve(
+        IWorkspaceReadSession session,
+        IReadOnlyList<TargetHashFrequency> targetHashes,
+        int limit = 10)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(targetHashes);
+        if (targetHashes.Count == 0)
+            return [];
+
+        var wantedHashes = targetHashes.Select(static row => row.TargetHash).ToHashSet(StringComparer.Ordinal);
+        Dictionary<string, List<Candidate>> candidates = session.Read(
+            connection => LoadCandidates(connection, wantedHashes));
         return targetHashes
             .OrderByDescending(static row => row.Calls)
             .ThenBy(static row => row.TargetHash, StringComparer.Ordinal)
@@ -97,6 +119,16 @@ public static class WorkspaceTargetHashResolver
             Pooling = false,
         }.ToString());
         connection.Open();
+        return LoadCandidates(connection, wantedHashes);
+    }
+
+    private static Dictionary<string, List<Candidate>> LoadCandidates(
+        SqliteConnection connection,
+        HashSet<string> wantedHashes)
+    {
+        var candidates = new Dictionary<string, List<Candidate>>(StringComparer.Ordinal);
+        if (wantedHashes.Count == 0)
+            return candidates;
 
         using (var command = connection.CreateCommand())
         {

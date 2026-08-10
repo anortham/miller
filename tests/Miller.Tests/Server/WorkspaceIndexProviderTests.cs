@@ -158,8 +158,11 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
 
         using WorkspaceReadContext first = provider.Resolve("target-ws", ensureFresh: false);
         using WorkspaceReadContext second = provider.Resolve("target-ws", ensureFresh: false);
+        Assert.Equal(12, first.Revision);
         snapshot = StoreSnapshot(root, "manifest-b");
         using WorkspaceReadContext afterManifestChange = provider.Resolve("target-ws", ensureFresh: false);
+        snapshot = StoreSnapshot(root, "manifest-b", storeLogSequence: 13);
+        using WorkspaceReadContext afterStoreLogChange = provider.Resolve("target-ws", ensureFresh: false);
         snapshot = StoreSnapshot(root, "manifest-b", IndexLevels.SymbolsMetadataValue);
         using WorkspaceReadContext afterLevelChange = provider.Resolve("target-ws", ensureFresh: false);
 
@@ -167,10 +170,12 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
         Assert.Equal("manifest-a", first.Snapshot.Freshness.ManifestHash);
         Assert.Same(first.Index, second.Index);
         Assert.NotSame(first.Index, afterManifestChange.Index);
+        Assert.NotSame(afterManifestChange.Index, afterStoreLogChange.Index);
         Assert.NotSame(afterManifestChange.Index, afterLevelChange.Index);
         Assert.Equal("manifest-b", afterManifestChange.Snapshot.Freshness.ManifestHash);
+        Assert.Equal(13, afterStoreLogChange.Revision);
         Assert.Equal(IndexLevels.SymbolsMetadataValue, afterLevelChange.Snapshot.IndexLevel);
-        Assert.Equal(3, loadCount);
+        Assert.Equal(4, loadCount);
     }
 
     [Fact]
@@ -1672,7 +1677,8 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
     private static WorkspaceReadSnapshot StoreSnapshot(
         string root,
         string manifestHash,
-        string indexLevel = IndexLevels.FullMetadataValue) =>
+        string indexLevel = IndexLevels.FullMetadataValue,
+        long storeLogSequence = 12) =>
         new(
             root,
             "target-ws",
@@ -1682,7 +1688,7 @@ public sealed class WorkspaceIndexProviderTests : IDisposable
                 "family-a",
                 7,
                 manifestHash,
-                12,
+                storeLogSequence,
                 "resolution-a",
                 StoreInstanceId: "family-a:gen-001",
                 ViewId: "view-a",

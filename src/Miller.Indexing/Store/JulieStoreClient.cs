@@ -133,7 +133,11 @@ public sealed class JulieStoreClient : IJulieStoreClient
             }
             verdict = waitPolicy.Observe(
                 elapsed.Elapsed,
-                StoreProgressStamp(request.StoreRoot, progressPath, Interlocked.Read(ref outputActivity)));
+                StoreProgressStamp(
+                    request.StoreRoot,
+                    progressPath,
+                    Interlocked.Read(ref outputActivity),
+                    OutputPath(request)));
             if (verdict != ExtractWaitVerdict.Continue)
                 break;
         }
@@ -176,7 +180,11 @@ public sealed class JulieStoreClient : IJulieStoreClient
         return new ExtractWaitPolicy(stallTimeout, hardTimeout);
     }
 
-    internal static long StoreProgressStamp(string storeRoot, string? progressPath, long outputActivity)
+    internal static long StoreProgressStamp(
+        string storeRoot,
+        string? progressPath,
+        long outputActivity,
+        string? outputPath = null)
     {
         long stamp = JulieExtractRunner.ProgressStamp(
             Path.Combine(storeRoot, "coord.db"),
@@ -184,31 +192,58 @@ public sealed class JulieStoreClient : IJulieStoreClient
             outputActivity);
         try
         {
-            string generationName = File.ReadAllText(Path.Combine(storeRoot, "CURRENT")).Trim();
-            if (string.IsNullOrWhiteSpace(generationName) ||
-                generationName.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 ||
-                generationName is "." or "..")
-            {
-                return stamp;
-            }
+            if (!string.IsNullOrWhiteSpace(outputPath))
+                stamp += JulieExtractRunner.ProgressStamp(outputPath, progressPath: null, outputActivity: 0);
 
-            string canonicalStoreRoot = Path.GetFullPath(storeRoot);
-            string generationDb = Path.GetFullPath(Path.Combine(canonicalStoreRoot, generationName, "store.db"));
-            string relative = Path.GetRelativePath(canonicalStoreRoot, generationDb);
-            if (Path.IsPathRooted(relative) ||
-                relative == ".." ||
-                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-                relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            string canonicalStoreRoot = PathCanonicalizer.CanonicalizeRoot(storeRoot);
+            foreach (string generationPath in Directory.EnumerateDirectories(canonicalStoreRoot, "gen-*", SearchOption.TopDirectoryOnly))
             {
-                return stamp;
-            }
+                string? generationName = Path.GetFileName(generationPath);
+                if (!IsPublishedGenerationName(generationName))
+                    continue;
 
-            return stamp + JulieExtractRunner.ProgressStamp(generationDb, progressPath: null, outputActivity: 0);
+                string generationDb;
+                try
+                {
+                    generationDb = PathCanonicalizer.CanonicalizeFile(
+                        canonicalStoreRoot,
+                        Path.Combine(generationName, "store.db"));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    continue;
+                }
+                string relative = Path.GetRelativePath(canonicalStoreRoot, generationDb);
+                if (Path.IsPathRooted(relative) ||
+                    relative == ".." ||
+                    relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                    relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                stamp += JulieExtractRunner.ProgressStamp(generationDb, progressPath: null, outputActivity: 0);
+            }
+            return stamp;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return stamp;
         }
+    }
+
+    private static bool IsPublishedGenerationName(string? name)
+    {
+        if (name is null || name.Length < 7 || !name.StartsWith("gen-", StringComparison.Ordinal))
+            return false;
+
+        foreach (char c in name.AsSpan(4))
+        {
+            if (!char.IsAsciiDigit(c))
+                return false;
+        }
+
+        return true;
     }
 
     private static string? ProgressPath(StoreRequest request) => request switch
@@ -217,6 +252,10 @@ public sealed class JulieStoreClient : IJulieStoreClient
         StoreUpdateRequest update => update.Scan.ProgressFile,
         _ => null,
     };
+
+    private static string? OutputPath(StoreRequest request) => request is StoreExportRequest export
+        ? export.OutputPath
+        : null;
 
     public static IReadOnlyList<string> BuildArguments(StoreRequest request)
     {

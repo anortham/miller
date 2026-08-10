@@ -58,7 +58,12 @@ public static class StoreArtifactVersionReader
                 ?? throw new ArgumentException("The legacy artifact path has no parent directory.");
             string workspaceRoot = Directory.GetParent(millerDirectory)?.FullName
                 ?? throw new ArgumentException("The legacy artifact path has no workspace root.");
-            pointerPresent = StoreWorkspacePointer.Exists(workspaceRoot);
+            pointerPresent = true;
+            if (!StoreWorkspacePointer.Exists(workspaceRoot))
+            {
+                pointerPresent = false;
+                return (null, false, null);
+            }
             StoreWorkspacePointerDocument? pointer = StoreWorkspacePointer.Read(workspaceRoot);
             if (pointer is null)
             {

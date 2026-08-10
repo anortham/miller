@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Dashboard.Components;
 using Miller.Dashboard;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
 using Miller.Server.Tools;
 using Miller.Server.Telemetry;
@@ -83,6 +84,30 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("unreadable", facts.Status);
         Assert.Equal("failed", facts.Store?.State);
         Assert.Equal("pointer_unreadable", facts.Store?.Failure);
+    }
+
+    [Fact]
+    public void StoreModeDashboardPreservesTypedReadFailuresWhenTheSessionCannotOpen()
+    {
+        string root = Path.Combine(_dir, "typed-store-workspace");
+        Directory.CreateDirectory(root);
+        var workspace = new DashboardWorkspaceRow(
+            "workspace-id",
+            "typed-store-workspace",
+            root,
+            Path.Combine(root, ".miller", "symbols.db"),
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.ReadStoreUnavailable(
+            workspace,
+            "current malformed",
+            new FamilyStoreReadException(FamilyStoreReadFailure.CurrentMalformed, "current malformed"));
+
+        Assert.Equal("current_malformed", facts.Store?.Failure);
     }
 
     [Fact]

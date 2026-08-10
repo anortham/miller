@@ -202,7 +202,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
-            long revision = readSession.Snapshot.Freshness.Revision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             CachedIndex? cached = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
                 ? GetOrLoad(
                     KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
@@ -236,7 +236,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
-            long revision = readSession.Snapshot.Freshness.Revision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             return new WorkspaceArtifactContext(
                 readSession,
                 _currentWorkspace.WorkspaceId,
@@ -266,7 +266,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
-            long revision = readSession.Snapshot.Freshness.Revision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex searchIndex = ResolveCurrentSymbolSearchIndex(index, holderRevision, readSession);
             return new WorkspaceSymbolSearchContext(
                 searchIndex,
@@ -297,7 +297,7 @@ public sealed class WorkspaceIndexProvider
         WorkspaceReadHandle readSession = OpenCurrentReadSession();
         try
         {
-            long revision = readSession.Snapshot.Freshness.Revision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             ISymbolLookupIndex index = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore
                 ? GetOrAddSymbolReadCache(
                     KeyFor(_currentWorkspace.WorkspaceId, readSession.Snapshot),
@@ -368,7 +368,7 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
             CacheKey key = familyStore
                 ? KeyFor(row.WorkspaceId, readSession.Snapshot)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
@@ -409,7 +409,7 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
             CacheKey key = familyStore
                 ? KeyFor(row.WorkspaceId, readSession.Snapshot)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
@@ -466,7 +466,7 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
             CacheKey key = familyStore
                 ? KeyFor(row.WorkspaceId, readSession.Snapshot)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
@@ -509,7 +509,7 @@ public sealed class WorkspaceIndexProvider
             readSession,
             row.WorkspaceId,
             row.CanonicalRoot,
-            familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0,
+            ContextRevision(readSession.Snapshot, row.LastRevision ?? 0),
             familyStore
                 ? null
                 : WorkspaceFreshnessView.IndexFreshFor(refreshResult, row),
@@ -535,7 +535,7 @@ public sealed class WorkspaceIndexProvider
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
         using WorkspaceReadHandle readSession = OpenCurrentReadSession();
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+        long revision = ContextRevision(readSession.Snapshot, holderRevision);
         CachedContentSearch cached = familyStore
             ? GetOrLoadContentSearch(
                 KeyFor(workspaceKey, readSession.Snapshot),
@@ -561,7 +561,7 @@ public sealed class WorkspaceIndexProvider
 
         using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+        long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
         CachedContentSearch cached = familyStore
             ? GetOrLoadContentSearch(
                 KeyFor(row.WorkspaceId, readSession.Snapshot),
@@ -587,7 +587,7 @@ public sealed class WorkspaceIndexProvider
         string workspaceKey = string.IsNullOrEmpty(_currentWorkspace.WorkspaceId) ? dbPath : _currentWorkspace.WorkspaceId;
         using WorkspaceReadHandle readSession = OpenCurrentReadSession();
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+        long revision = ContextRevision(readSession.Snapshot, holderRevision);
         string sourcePath = familyStore
             ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
             : dbPath;
@@ -616,7 +616,7 @@ public sealed class WorkspaceIndexProvider
 
         using WorkspaceReadHandle readSession = OpenReadSession(row.IndexDbPath, row.CanonicalRoot, row.WorkspaceId);
         bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-        long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+        long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
         string sourcePath = familyStore
             ? StoreSidecarCatalog.PathFor(readSession.FamilyStoreRoot!, StoreSidecarKind.Content, readSession.Snapshot.ViewId)
             : row.IndexDbPath;
@@ -648,7 +648,7 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : holderRevision;
+            long revision = ContextRevision(readSession.Snapshot, holderRevision);
             CacheKey key = familyStore
                 ? KeyFor(workspaceKey, readSession.Snapshot)
                 : KeyFor(workspaceKey, dbPath, revision);
@@ -686,7 +686,7 @@ public sealed class WorkspaceIndexProvider
         try
         {
             bool familyStore = readSession.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
-            long revision = familyStore ? readSession.Snapshot.Freshness.Revision : row.LastRevision ?? 0;
+            long revision = ContextRevision(readSession.Snapshot, row.LastRevision ?? 0);
             CacheKey key = familyStore
                 ? KeyFor(row.WorkspaceId, readSession.Snapshot)
                 : KeyFor(row.WorkspaceId, row.IndexDbPath, revision);
@@ -1274,6 +1274,12 @@ public sealed class WorkspaceIndexProvider
             freshness.StoreInstanceId ?? freshness.ArtifactOrStoreId,
             ArtifactStampState.Present);
     }
+
+    private static long ContextRevision(WorkspaceReadSnapshot snapshot, long legacyRevision) =>
+        snapshot.Mode == WorkspaceReadMode.FamilyStore
+            ? snapshot.Freshness.StoreLogSequence
+                ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.")
+            : legacyRevision;
 
     private sealed record RegisteredWorkspaceState(WorkspaceRegistryRow Row, WorkspaceRefreshResult? RefreshResult);
 

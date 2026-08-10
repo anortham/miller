@@ -21,13 +21,23 @@ public static class StoreWorkspacePointer
 
     public static void ValidateLocation(string workspaceRoot) => _ = PointerPath(workspaceRoot);
 
-    public static bool Exists(string workspaceRoot) => File.Exists(PointerPath(workspaceRoot));
+    public static bool Exists(string workspaceRoot)
+    {
+        string path = PointerPath(workspaceRoot);
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     public static StoreWorkspacePointerDocument? Read(string workspaceRoot)
     {
         string path = PointerPath(workspaceRoot);
-        if (!File.Exists(path))
-            return null;
         try
         {
             StoreWorkspacePointerDocument document = JsonSerializer.Deserialize(
@@ -36,6 +46,10 @@ public static class StoreWorkspacePointer
                 throw new JsonException("Store pointer deserialized to null.");
             ValidateDocument(document, workspaceRoot);
             return document;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or FormatException)
         {
@@ -78,8 +92,7 @@ public static class StoreWorkspacePointer
     public static void Delete(string workspaceRoot)
     {
         string path = PointerPath(workspaceRoot);
-        if (File.Exists(path))
-            File.Delete(path);
+        File.Delete(path);
     }
 
     private static string PointerPath(string workspaceRoot)

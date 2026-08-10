@@ -954,8 +954,9 @@ public static class DashboardData
         bool storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
         WorkspaceReadHandle? storeSession = null;
         string? storeSessionError = null;
+        Exception? storeSessionFailure = null;
         if (selectedWorkspace is not null && storeEnabled)
-            storeSession = TryOpenStoreReadSession(selectedWorkspace, out storeSessionError);
+            storeSession = TryOpenStoreReadSession(selectedWorkspace, out storeSessionError, out storeSessionFailure);
 
         try
         {
@@ -964,7 +965,10 @@ public static class DashboardData
                 : WithRebindProvenance(
                     storeEnabled
                         ? storeSession is null
-                            ? DashboardIndexFactsReader.ReadStoreUnavailable(selectedWorkspace, storeSessionError)
+                            ? DashboardIndexFactsReader.ReadStoreUnavailable(
+                                selectedWorkspace,
+                                storeSessionError,
+                                storeSessionFailure)
                             : DashboardIndexFactsReader.Read(selectedWorkspace, storeSession)
                         : DashboardIndexFactsCache.Read(selectedWorkspace),
                     workspaces,
@@ -981,7 +985,7 @@ public static class DashboardData
                 : ReadPatternInventoryPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
             DashboardWorkspaceOnboardingPanel? onboarding = selectedWorkspace is null || selectedFacts is null
                 ? null
-                : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath);
+                : ReadWorkspaceOnboardingPanel(selectedWorkspace, selectedFacts, telemetryDbPath, storeSession);
             DashboardLocalMetricsPanel? localMetrics = selectedWorkspace is null || selectedFacts is null
                 ? null
                 : ReadLocalMetricsPanel(selectedWorkspace, selectedFacts, storeEnabled, storeSession);
@@ -1217,16 +1221,22 @@ public static class DashboardData
     private static DashboardWorkspaceOnboardingPanel? ReadWorkspaceOnboardingPanel(
         DashboardWorkspaceRow workspace,
         DashboardWorkspaceFacts dashboardFacts,
-        string telemetryDbPath)
+        string telemetryDbPath,
+        IWorkspaceReadSession? storeSession)
     {
         try
         {
             WorkspaceFacts facts = BuildWorkspaceFacts(workspace, dashboardFacts);
             TelemetryOnboardingFacts telemetry = TelemetryOnboardingReader.Read(telemetryDbPath, workspace.WorkspaceId);
+            IReadOnlyList<RecoveredTargetHash> targets = storeSession is not null
+                ? ResolveDashboardTargets(storeSession, telemetry.TargetHashes)
+                : dashboardFacts.Store is not null
+                    ? UnresolvedDashboardTargets(telemetry.TargetHashes)
+                    : ResolveDashboardTargets(workspace.IndexDbPath, telemetry.TargetHashes);
             WorkspaceOnboardingFacts onboarding = WorkspaceOnboardingFacts.Create(
                 facts,
                 telemetry,
-                ResolveDashboardTargets(workspace.IndexDbPath, telemetry.TargetHashes));
+                targets);
             return new DashboardWorkspaceOnboardingPanel(
                 facts.WorkspaceId,
                 onboarding.Telemetry.State,
@@ -1341,31 +1351,49 @@ public static class DashboardData
     private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(
         string indexDbPath,
         IReadOnlyList<TargetHashFrequency> targetHashes)
+        => ResolveDashboardTargets(
+            targetHashes,
+            () => WorkspaceTargetHashResolver.Resolve(indexDbPath, targetHashes));
+
+    private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(
+        IWorkspaceReadSession session,
+        IReadOnlyList<TargetHashFrequency> targetHashes)
+        => ResolveDashboardTargets(
+            targetHashes,
+            () => WorkspaceTargetHashResolver.Resolve(session, targetHashes));
+
+    private static IReadOnlyList<RecoveredTargetHash> ResolveDashboardTargets(
+        IReadOnlyList<TargetHashFrequency> targetHashes,
+        Func<IReadOnlyList<RecoveredTargetHash>> resolver)
     {
         if (targetHashes.Count == 0)
             return [];
 
         try
         {
-            return WorkspaceTargetHashResolver.Resolve(indexDbPath, targetHashes);
+            return resolver();
         }
         catch (Exception ex) when (
             ex is FileNotFoundException or SqliteException or IOException or InvalidOperationException
                 or UnauthorizedAccessException)
         {
-            return targetHashes
-                .Select(static hash => new RecoveredTargetHash(
-                    Confidence: "unresolved_hash",
-                    SymbolId: null,
-                    Name: null,
-                    Kind: null,
-                    Path: null,
-                    StartLine: null,
-                    Calls: hash.Calls,
-                    CandidateCount: 0))
-                .ToArray();
+            return UnresolvedDashboardTargets(targetHashes);
         }
     }
+
+    private static IReadOnlyList<RecoveredTargetHash> UnresolvedDashboardTargets(
+        IReadOnlyList<TargetHashFrequency> targetHashes) =>
+        targetHashes
+            .Select(static hash => new RecoveredTargetHash(
+                Confidence: "unresolved_hash",
+                SymbolId: null,
+                Name: null,
+                Kind: null,
+                Path: null,
+                StartLine: null,
+                Calls: hash.Calls,
+                CandidateCount: 0))
+            .ToArray();
 
     private static bool? DashboardIndexFresh(DashboardWorkspaceRow workspace, DashboardWorkspaceFacts facts)
     {
@@ -1449,9 +1477,11 @@ public static class DashboardData
 
     private static WorkspaceReadHandle? TryOpenStoreReadSession(
         DashboardWorkspaceRow workspace,
-        out string? error)
+        out string? error,
+        out Exception? failure)
     {
         error = null;
+        failure = null;
         try
         {
             return WorkspaceReadSessionFactory.Open(
@@ -1465,6 +1495,7 @@ public static class DashboardData
                 or ArgumentException or NotSupportedException)
         {
             error = ex.Message;
+            failure = ex;
             return null;
         }
     }

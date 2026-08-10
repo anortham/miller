@@ -484,4 +484,30 @@ public sealed class FamilyStoreReadSessionTests
 
         Assert.Contains("refusing to claim leadership", error.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void StoreArtifactVersionReaderDoesNotFallBackWhenThePointerCannotBeRead()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+        string pointerPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "store.json");
+        UnixFileMode originalMode = File.GetUnixFileMode(pointerPath);
+        File.SetUnixFileMode(pointerPath, UnixFileMode.None);
+        try
+        {
+            string legacyPath = Path.Combine(fixture.Binding.WorkspaceRoot, ".miller", "symbols.db");
+
+            StoreArtifactVersionReadException error = Assert.Throws<StoreArtifactVersionReadException>(() =>
+                StoreArtifactVersionReader.ReadForLeadership(legacyPath, _ => "legacy-2.0.0"));
+
+            Assert.Contains("refusing to claim leadership", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(pointerPath, originalMode);
+        }
+    }
 }

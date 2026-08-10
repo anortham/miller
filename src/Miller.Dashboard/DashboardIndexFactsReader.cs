@@ -169,7 +169,8 @@ public static class DashboardIndexFactsReader
 
     internal static DashboardWorkspaceFacts ReadStoreUnavailable(
         DashboardWorkspaceRow workspace,
-        string? message)
+        string? message,
+        Exception? failure = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         string error = string.IsNullOrWhiteSpace(message)
@@ -185,7 +186,9 @@ public static class DashboardIndexFactsReader
             artifactId: null) with
         {
             ExtractorVersion = null,
-            Store = StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", error),
+            Store = failure is FamilyStoreReadException storeFailure
+                ? StoreWorkspaceFacts.Unavailable(storeFailure)
+                : StoreWorkspaceFacts.Unavailable("failed", "pointer_unreadable", error),
         };
     }
 

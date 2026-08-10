@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Xunit;
 
 namespace Miller.Tests.Indexing;
@@ -68,6 +69,21 @@ public sealed class WorkspaceTargetHashResolverTests
         Assert.Equal("Run", recovered.Name);
         Assert.Equal(2, recovered.CandidateCount);
         Assert.Equal(9, recovered.Calls);
+    }
+
+    [Fact]
+    public void Resolve_ReadSessionUsesTheCapturedDatabase()
+    {
+        using JulieDbFixture fixture = JulieDbFixture.CreateForInspect();
+        using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(fixture.DbPath);
+
+        IReadOnlyList<RecoveredTargetHash> recovered = WorkspaceTargetHashResolver.Resolve(
+            session,
+            [new TargetHashFrequency(Hash("GetUser"), calls: 4)]);
+
+        RecoveredTargetHash target = Assert.Single(recovered);
+        Assert.Equal("symbol_name_hash", target.Confidence);
+        Assert.Equal("GetUser", target.Name);
     }
 
     private static string Hash(string raw) =>

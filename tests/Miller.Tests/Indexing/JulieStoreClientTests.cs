@@ -42,26 +42,37 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
-    public void StoreProgressStampIncludesTheServingGenerationDatabase()
+    public void StoreProgressStampIncludesPublishedGenerationsAndExportOutput()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-" + Guid.NewGuid().ToString("N"));
-        string generation = Path.Combine(root, "gen-001");
-        Directory.CreateDirectory(generation);
+        string generationOne = Path.Combine(root, "gen-001");
+        string generationTwo = Path.Combine(root, "gen-002");
+        Directory.CreateDirectory(generationOne);
+        Directory.CreateDirectory(generationTwo);
         try
         {
             File.WriteAllText(Path.Combine(root, "CURRENT"), "gen-001");
             File.WriteAllBytes(Path.Combine(root, "coord.db"), [1, 2, 3]);
-            string storeDb = Path.Combine(generation, "store.db");
-            File.WriteAllBytes(storeDb, [4, 5]);
+            string storeDbOne = Path.Combine(generationOne, "store.db");
+            string storeDbTwo = Path.Combine(generationTwo, "store.db");
+            File.WriteAllBytes(storeDbOne, [4, 5]);
+            File.WriteAllBytes(storeDbTwo, [6, 7, 8, 9]);
             string progress = Path.Combine(root, "scan.progress");
             File.WriteAllBytes(progress, [6]);
+            string output = Path.Combine(root, "symbols.db.rebuild");
+            File.WriteAllBytes(output, [10, 11, 12, 13, 14]);
 
-            long before = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0);
-            File.AppendAllBytes(storeDb, [7, 8, 9]);
-            long after = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0);
+            long before = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0, outputPath: output);
+            File.AppendAllBytes(storeDbTwo, [15, 16, 17]);
+            File.AppendAllBytes(output, [18, 19]);
+            long after = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0, outputPath: output);
+            File.Delete(Path.Combine(root, "CURRENT"));
+            File.AppendAllBytes(storeDbTwo, [20]);
+            long withoutCurrent = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0, outputPath: output);
 
-            Assert.Equal(6, before);
-            Assert.Equal(9, after);
+            Assert.Equal(15, before);
+            Assert.Equal(20, after);
+            Assert.Equal(21, withoutCurrent);
         }
         finally
         {
