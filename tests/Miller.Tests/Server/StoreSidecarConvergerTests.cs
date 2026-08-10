@@ -1,13 +1,34 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Server.Hosting;
+using Miller.Tests.Indexing;
 using Xunit;
 
 namespace Miller.Tests.Server;
 
 public sealed class StoreSidecarConvergerTests
 {
+    [Fact]
+    public void ConvergeStoreRecordsHistoryFromThePinnedFamilySession()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        string storeRoot = Path.Combine(fixture.WorkspaceRoot, "store");
+        Directory.CreateDirectory(storeRoot);
+        using var session = new FixtureStoreSession(fixture);
+        var converger = NewStoreConverger((_, _) => false);
+
+        converger.ConvergeStore(storeRoot, session);
+
+        string historyPath = Path.Combine(fixture.WorkspaceRoot, ".miller", MetricHistoryStore.HistoryDbFileName);
+        Assert.Equal(1, SnapshotCount(historyPath));
+        Assert.Equal(31L, ScalarLong(historyPath, "SELECT revision FROM snapshots LIMIT 1;"));
+        Assert.Equal(fixture.Rows.Count, ScalarDouble(
+            historyPath,
+            $"SELECT value FROM snapshot_metrics WHERE metric = '{MetricSnapshotAggregates.SymbolCount}';"));
+    }
+
     [Fact]
     public void ConvergeStoreBuildsDerivedSidecarsBeforePublishingTheVectorTarget()
     {
@@ -111,6 +132,77 @@ public sealed class StoreSidecarConvergerTests
             new VectorConvergeSignal(enabled: true),
             ensureStoreContent,
             ensureStoreSearch: null);
+
+    private static long ScalarLong(string path, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static double ScalarDouble(string path, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToDouble(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static long SnapshotCount(string path) => ScalarLong(path, "SELECT COUNT(*) FROM snapshots;");
+
+    private sealed class FixtureStoreSession : IWorkspaceReadSession
+    {
+        private readonly string _dbPath;
+
+        public FixtureStoreSession(JulieDbFixture fixture)
+        {
+            _dbPath = fixture.DbPath;
+            Snapshot = new WorkspaceReadSnapshot(
+                fixture.WorkspaceRoot,
+                "workspace-a",
+                "family-a",
+                "view-a",
+                new WorkspaceFreshnessToken(
+                    "family-a",
+                    2,
+                    "manifest-a",
+                    31,
+                    "resolution-a",
+                    StoreInstanceId: "family-a:gen-001",
+                    ViewId: "view-a",
+                    GenerationName: "gen-001",
+                    ManifestGeneration: 2,
+                    IndexLevel: "full",
+                    LevelStampL1: "l1-a",
+                    LevelStampL2: "l2-a",
+                    LevelStampL3: "l3-a"),
+                "full",
+                WorkspaceReadMode.FamilyStore,
+                GenerationName: "gen-001",
+                ManifestGeneration: 2);
+        }
+
+        public WorkspaceReadSnapshot Snapshot { get; }
+
+        public TResult Read<TResult>(Func<SqliteConnection, TResult> query)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            connection.Open();
+            return query(connection);
+        }
+
+        public void Dispose()
+        {
+        }
+    }
 
     private sealed class FakeStoreSession : IWorkspaceReadSession
     {

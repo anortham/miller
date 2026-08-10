@@ -986,7 +986,8 @@ public sealed class ContentTool
         using WorkspaceReadHandle session = WorkspaceReadSessionFactory.Open(
             indexDbPath,
             workspaceRoot,
-            workspaceId);
+            workspaceId,
+            storeEnabled: _storeEnabled());
         if (session.Snapshot.Mode != WorkspaceReadMode.FamilyStore)
         {
             return new ContentReadLocation(

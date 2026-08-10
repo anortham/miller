@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
+using Miller.Indexing.Store;
 using Miller.Server.Tools;
 
 namespace Miller.Dashboard;
@@ -169,6 +170,34 @@ public static class DashboardIndexFactsReader
     private static DashboardWorkspaceFacts ReadLegacy(DashboardWorkspaceRow workspace)
     {
         ArgumentNullException.ThrowIfNull(workspace);
+        try
+        {
+            if (Directory.Exists(workspace.CanonicalRoot) &&
+                StoreWorkspacePointer.Read(workspace.CanonicalRoot) is not null)
+            {
+                return Empty(
+                    workspace,
+                    "unreadable",
+                    "Store mode is disabled but the workspace still has an active store pointer; " +
+                    "export the active view before serving the legacy artifact.",
+                    searchSidecarStatus: "unknown",
+                    contentSidecarStatus: "unknown",
+                    indexRevision: null,
+                    artifactId: null);
+            }
+        }
+        catch (StorePointerFormatException ex)
+        {
+            return Empty(
+                workspace,
+                "unreadable",
+                ex.Message,
+                searchSidecarStatus: "unknown",
+                contentSidecarStatus: "unknown",
+                indexRevision: null,
+                artifactId: null);
+        }
+
         if (!File.Exists(workspace.IndexDbPath))
         {
             return Empty(

@@ -124,6 +124,15 @@ internal sealed class IndexerSidecarConverger
 
         long target = session.Snapshot.Freshness.StoreLogSequence
             ?? throw new InvalidOperationException("The family-store snapshot has no store_log sequence.");
+        MetricSnapshotAggregates.RecordConverge(
+            session,
+            session.Snapshot.WorkspaceId,
+            target,
+            MillerVersion.Current,
+            onError: ex => _logger.LogWarning(
+                ex,
+                "Metric-history store converge snapshot skipped; the trend will have a gap at store sequence {Sequence}.",
+                target));
         _vectorSignal.StampTarget(target, fullRebuild: false);
     }
 

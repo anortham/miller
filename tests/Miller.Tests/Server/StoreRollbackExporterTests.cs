@@ -42,10 +42,13 @@ public sealed class StoreRollbackExporterTests : IDisposable
             StoreBindingState.Ready);
         StoreWorkspacePointer.Write(_root, binding);
 
-        Assert.ThrowsAny<IOException>(() => StoreRollbackExporter.ExportIfRequired(
+        using SingleWriterLock? held = SingleWriterLock.TryAcquire(Path.Combine(_root, ".miller"));
+        Assert.NotNull(held);
+        IOException error = Assert.Throws<IOException>(() => StoreRollbackExporter.ExportIfRequired(
             _root,
             Path.Combine(_root, ".miller", "symbols.db"),
             new UnexpectedStoreClient()));
+        Assert.Contains("writer lock", error.Message, StringComparison.OrdinalIgnoreCase);
 
         StoreWorkspacePointerDocument preserved = Assert.IsType<StoreWorkspacePointerDocument>(
             StoreWorkspacePointer.Read(_root));

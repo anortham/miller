@@ -18,6 +18,35 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void StoreProgressStampIncludesTheServingGenerationDatabase()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-" + Guid.NewGuid().ToString("N"));
+        string generation = Path.Combine(root, "gen-001");
+        Directory.CreateDirectory(generation);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "CURRENT"), "gen-001");
+            File.WriteAllBytes(Path.Combine(root, "coord.db"), [1, 2, 3]);
+            string storeDb = Path.Combine(generation, "store.db");
+            File.WriteAllBytes(storeDb, [4, 5]);
+            string progress = Path.Combine(root, "scan.progress");
+            File.WriteAllBytes(progress, [6]);
+
+            long before = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0);
+            File.AppendAllBytes(storeDb, [7, 8, 9]);
+            long after = JulieStoreClient.StoreProgressStamp(root, progress, outputActivity: 0);
+
+            Assert.Equal(6, before);
+            Assert.Equal(9, after);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ContractPinsPublishedStoreVersions()
     {
         Assert.Equal(1, JulieStoreContract.StoreContractVersion);

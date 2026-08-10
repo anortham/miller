@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Core.Search;
+using Miller.Indexing.Reads;
 
 namespace Miller.Indexing;
 
@@ -43,23 +44,15 @@ public static class MetricSnapshotAggregates
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolsDbPath);
 
-        var metrics = new List<MetricHistoryPoint>();
         using (SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath))
-        {
-            JulieSchemaGate.Verify(connection);
-            AddSymbolCounts(connection, metrics);
-            AddCloneGroupCount(connection, metrics);
-            AddComplexityPercentiles(connection, metrics);
-            // Facts-derived metrics have no source at symbols level: `structural_facts` is EMPTY there, so a marker
-            // count reads 0 for "not extracted yet" rather than "no markers". history.db is APPEND-ONLY, so that 0
-            // would stay a fabricated trend point long after the artifact upgraded — a gap the reader renders as
-            // `-` is the honest answer (metrics-history-v1: absent, never a fabricated 0). Fails open to full like
-            // every other level read.
-            if (!IndexLevels.IsSymbolsLevel(ExtractIndexLevelReader.Read(connection)))
-                AddMarkerCounts(connection, metrics);
-        }
+            return ReadConvergeMetrics(connection);
+    }
 
-        return metrics;
+    public static IReadOnlyList<MetricHistoryPoint> ReadConvergeMetrics(
+        IWorkspaceReadSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return session.Read(ReadConvergeMetrics);
     }
 
     /// <summary>
@@ -114,6 +107,47 @@ public static class MetricSnapshotAggregates
         }
     }
 
+    public static MetricHistoryWriteResult? RecordConverge(
+        IWorkspaceReadSession session,
+        string? workspaceId,
+        long revision,
+        string millerVersion,
+        Action<Exception>? onError = null,
+        DateTime? recordedAtUtc = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        try
+        {
+            if (revision <= 0 || string.IsNullOrWhiteSpace(workspaceId))
+                return null;
+
+            (string? artifactId, string? extractorVersion) = session.Read(ReadIdentity);
+            if (string.IsNullOrWhiteSpace(artifactId))
+                return null;
+
+            IReadOnlyList<MetricHistoryPoint> metrics = ReadConvergeMetrics(session);
+            if (metrics.Count == 0)
+                return null;
+
+            var snapshot = new MetricHistorySnapshot(
+                WorkspaceId: workspaceId!,
+                ArtifactId: artifactId!,
+                Revision: revision,
+                ExtractorVersion: extractorVersion ?? string.Empty,
+                MillerVersion: millerVersion ?? string.Empty,
+                Source: ConvergeSource,
+                Metrics: metrics);
+            string historyPath = HistoryDbPathFor(
+                Path.Combine(session.Snapshot.WorkspaceRoot, ".miller", "symbols.db"));
+            return MetricHistoryStore.RecordConverge(historyPath, snapshot, recordedAtUtc);
+        }
+        catch (Exception ex)
+        {
+            onError?.Invoke(ex);
+            return null;
+        }
+    }
+
     /// <summary>The <c>history.db</c> path sibling to <paramref name="symbolsDbPath"/> inside the same <c>.miller</c>.</summary>
     public static string HistoryDbPathFor(string symbolsDbPath)
     {
@@ -132,9 +166,26 @@ public static class MetricSnapshotAggregates
     private static (string? ArtifactId, string? ExtractorVersion) ReadIdentity(string symbolsDbPath)
     {
         using SqliteConnection connection = SqliteReadOnlyAccess.Open(symbolsDbPath);
+        return ReadIdentity(connection);
+    }
+
+    private static (string? ArtifactId, string? ExtractorVersion) ReadIdentity(SqliteConnection connection)
+    {
         string? artifactId = ReadMetaValue(connection, "artifact_id");
         string? extractorVersion = ExtractBinaryVersionReader.TryRead(connection);
         return (artifactId, extractorVersion);
+    }
+
+    private static IReadOnlyList<MetricHistoryPoint> ReadConvergeMetrics(SqliteConnection connection)
+    {
+        var metrics = new List<MetricHistoryPoint>();
+        JulieSchemaGate.Verify(connection);
+        AddSymbolCounts(connection, metrics);
+        AddCloneGroupCount(connection, metrics);
+        AddComplexityPercentiles(connection, metrics);
+        if (!IndexLevels.IsSymbolsLevel(ExtractIndexLevelReader.Read(connection)))
+            AddMarkerCounts(connection, metrics);
+        return metrics;
     }
 
     private static string? ReadMetaValue(SqliteConnection connection, string key)

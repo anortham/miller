@@ -5,6 +5,7 @@ using Miller.Indexing.Store;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Server;
+using Miller.Server.Cli;
 using Miller.Server.Hosting;
 using Miller.Server.Tools;
 using Miller.Server.Workspaces;
@@ -17,6 +18,73 @@ namespace Miller.Tests.Server;
 [Collection(Miller.Tests.Indexing.SqliteVecEnvironment.Name)]
 public sealed class StoreWorkspaceIndexProviderScaleTests
 {
+    [Fact]
+    public async Task CliPrimaryReadsUseFamilyStoreWhenLegacyArtifactIsAbsent()
+    {
+        string binary = ScaleTestSupport.RequireJulieServer();
+        string directory = Path.Combine(Path.GetTempPath(), "miller-store-cli-" + Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(directory, "root");
+        string home = Path.Combine(directory, "home");
+        string artifact = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(artifact)!);
+        File.WriteAllText(
+            Path.Combine(root, "StoreCliCalculator.cs"),
+            "namespace Example; public static class StoreCliCalculator { public static int Add(int a, int b) => a + b; }");
+
+        string? priorStoreMode = Environment.GetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable);
+        string? priorSearchSidecar = Environment.GetEnvironmentVariable(SymbolSearchSidecar.EnvVar);
+        Environment.SetEnvironmentVariable(WorkspaceReadSessionFactory.StoreEnvironmentVariable, "on");
+        Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, "off");
+        try
+        {
+            ScaleTestSupport.RunJulie(
+                binary,
+                "scan", "--root", root, "--db", artifact, "--level", "full", "--jobs", "1", "--json");
+
+            using var bootstrap = new IndexBootstrapService(
+                NullLogger<IndexBootstrapService>.Instance,
+                storeEnabled: static () => true);
+            bootstrap.TestHomeDirectoryOverride = home;
+            Assert.Equal(
+                BindOutcome.Started,
+                bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Roots));
+            int generation = bootstrap.Snapshot.RunGeneration;
+            await bootstrap.WaitForRunAsync(generation, TestContext.Current.CancellationToken);
+            Assert.True(bootstrap.IsBound, bootstrap.Snapshot.FailureMessage);
+            Assert.NotNull(StoreWorkspacePointer.Read(root));
+
+            File.Delete(artifact);
+            WorkspaceContext context = bootstrap.Workspace;
+            foreach (string[] args in new[]
+            {
+                new[] { "search", "StoreCliCalculator" },
+                new[] { "inspect", "StoreCliCalculator" },
+                new[] { "impact", "StoreCliCalculator" },
+                new[] { "trace", "StoreCliCalculator", "--mode", "path", "--to", "StoreCliCalculator" },
+                new[] { "patterns", "list" },
+            })
+            {
+                using var stdout = new StringWriter();
+                using var stderr = new StringWriter();
+                int code = CliDispatch.Run(args, context, stdout, stderr);
+
+                Assert.True(
+                    code == 0,
+                    $"{string.Join(' ', args)} failed with code {code}: {stderr}\n{stdout}");
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                WorkspaceReadSessionFactory.StoreEnvironmentVariable,
+                priorStoreMode);
+            Environment.SetEnvironmentVariable(SymbolSearchSidecar.EnvVar, priorSearchSidecar);
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task BootstrapMigratesLegacyIntoTheFamilyStoreAndTheNextProcessReusesIt()
     {

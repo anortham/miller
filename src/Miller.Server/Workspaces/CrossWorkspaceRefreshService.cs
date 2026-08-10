@@ -236,7 +236,8 @@ public sealed class CrossWorkspaceRefreshService
             StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
                 row.CanonicalRoot,
                 row.IndexDbPath,
-                storeClient);
+                storeClient,
+                heldWriterLease: lease);
             rollbackWarning = rollback.Warning;
             sourceRebuildRequired = rollback.RequiresSourceRebuild;
         }

@@ -132,7 +132,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
             }
             verdict = waitPolicy.Observe(
                 elapsed.Elapsed,
-                JulieExtractRunner.ProgressStamp(coordinatorPath, progressPath, outputActivity: 0));
+                StoreProgressStamp(request.StoreRoot, progressPath, outputActivity: 0));
             if (verdict != ExtractWaitVerdict.Continue)
                 break;
         }
@@ -165,6 +165,41 @@ public sealed class JulieStoreClient : IJulieStoreClient
 
     internal static ExtractWaitPolicy CreateWaitPolicy(TimeSpan stallTimeout) =>
         new(stallTimeout, ExtractWaitPolicy.HardTimeoutFor(stallTimeout));
+
+    internal static long StoreProgressStamp(string storeRoot, string? progressPath, long outputActivity)
+    {
+        long stamp = JulieExtractRunner.ProgressStamp(
+            Path.Combine(storeRoot, "coord.db"),
+            progressPath,
+            outputActivity);
+        try
+        {
+            string generationName = File.ReadAllText(Path.Combine(storeRoot, "CURRENT")).Trim();
+            if (string.IsNullOrWhiteSpace(generationName) ||
+                generationName.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0 ||
+                generationName is "." or "..")
+            {
+                return stamp;
+            }
+
+            string canonicalStoreRoot = Path.GetFullPath(storeRoot);
+            string generationDb = Path.GetFullPath(Path.Combine(canonicalStoreRoot, generationName, "store.db"));
+            string relative = Path.GetRelativePath(canonicalStoreRoot, generationDb);
+            if (Path.IsPathRooted(relative) ||
+                relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return stamp;
+            }
+
+            return stamp + JulieExtractRunner.ProgressStamp(generationDb, progressPath: null, outputActivity: 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return stamp;
+        }
+    }
 
     private static string? ProgressPath(StoreRequest request) => request switch
     {

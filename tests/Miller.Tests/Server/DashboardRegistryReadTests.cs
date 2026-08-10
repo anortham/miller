@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Miller.Dashboard.Components;
 using Miller.Dashboard;
 using Miller.Indexing;
+using Miller.Indexing.Store;
 using Miller.Server.Tools;
 using Miller.Server.Telemetry;
 using Miller.Server.Workspaces;
@@ -82,6 +83,37 @@ public sealed class DashboardRegistryReadTests : IDisposable
         Assert.Equal("unreadable", facts.Status);
         Assert.Equal("failed", facts.Store?.State);
         Assert.Equal("pointer_unreadable", facts.Store?.Failure);
+    }
+
+    [Fact]
+    public void StoreOffDashboardRefusesLegacyReadsWhilePointerRemains()
+    {
+        using var fixture = JulieDbFixture.CreateDefault();
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(fixture.WorkspaceRoot);
+        StoreWorkspacePointer.Write(
+            fixture.WorkspaceRoot,
+            new StoreFamilyBinding(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                Path.Combine(fixture.WorkspaceRoot, "missing-store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        var workspace = new DashboardWorkspaceRow(
+            "workspace-id",
+            "store-off-workspace",
+            fixture.WorkspaceRoot,
+            fixture.DbPath,
+            "2026-08-09T00:00:00Z",
+            null,
+            null,
+            "ready",
+            null);
+
+        DashboardWorkspaceFacts facts = DashboardIndexFactsReader.Read(workspace, storeEnabled: false);
+
+        Assert.Equal("unreadable", facts.Status);
+        Assert.Equal(0, facts.SymbolCount);
+        Assert.Contains("Store mode is disabled", facts.Message, StringComparison.Ordinal);
     }
 
     public void Dispose()

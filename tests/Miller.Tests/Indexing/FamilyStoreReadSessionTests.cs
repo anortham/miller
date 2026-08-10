@@ -141,6 +141,22 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void DisabledWorkspaceFactoryRefusesLegacyReadsWhileStorePointerRemains()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+        StoreWorkspacePointer.Write(fixture.Binding.WorkspaceRoot, fixture.Binding);
+
+        FamilyStoreReadException error = Assert.Throws<FamilyStoreReadException>(() =>
+            WorkspaceReadSessionFactory.Open(
+                Path.Combine(fixture.Root, "legacy.db"),
+                fixture.Binding.WorkspaceRoot,
+                "workspace-a",
+                storeEnabled: false));
+
+        Assert.Equal(FamilyStoreReadFailure.BindingNotReady, error.Failure);
+    }
+
+    [Fact]
     public void ServingGenerationSymlinkOutsideTheFamilyRootIsRejected()
     {
         using StoreFixture fixture = StoreFixture.Create();

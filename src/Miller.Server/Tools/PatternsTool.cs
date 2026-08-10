@@ -274,6 +274,44 @@ public sealed class PatternsTool
             telemetry);
     }
 
+    internal static PatternToolResult Run(
+        PatternFactsReader reader,
+        IWorkspaceReadSession session,
+        string? operation,
+        string? patternId,
+        string? query,
+        string? language,
+        string? path,
+        string? where,
+        string? groupBy,
+        string? facet,
+        int limit,
+        bool json,
+        int? outputByteBudget = null,
+        string workspaceId = "current",
+        string? continuation = null,
+        TelemetryScope? telemetry = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return Run(
+            reader,
+            PatternReadTarget.ForSession(session),
+            operation,
+            patternId,
+            query,
+            language,
+            path,
+            where,
+            groupBy,
+            facet,
+            limit,
+            json,
+            outputByteBudget,
+            workspaceId,
+            continuation,
+            telemetry);
+    }
+
     private static PatternToolResult Run(
         PatternFactsReader reader,
         PatternReadTarget target,

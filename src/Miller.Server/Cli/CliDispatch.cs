@@ -5,10 +5,13 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Miller.Core.DeadCode;
+using Miller.Core.Graph;
 using Miller.Core.References;
 using Miller.Core.Search;
 using Miller.Indexing;
+using Miller.Indexing.Reads;
 using Miller.Indexing.Semantic;
+using Miller.Indexing.Store;
 using Miller.Server.Git;
 using Miller.Server.Hosting;
 using Miller.Server.Resolution;
@@ -21,9 +24,9 @@ namespace Miller.Server.Cli;
 /// <summary>
 /// Miller's command-line surface: a thin one-shot dispatch over the SAME pure tool cores the MCP server exposes
 /// (each tool's <c>Run(...)</c> + the <see cref="WorkspaceRender"/> renderers), so a shell/CI invocation and a
-/// tool call produce identical output. Read verbs load the smallest index shape they need from the current
-/// workspace's <c>.miller/symbols.db</c>: symbol search and inspect use the symbol lookup projection, graph-only
-/// verbs use on-demand SQLite graph reachability, and bridge trace still uses the full bridge graph. There is NO
+/// tool call produce identical output. Read verbs pin one workspace read session and load the store or legacy view it
+/// names: symbol search and inspect use the symbol lookup projection, graph verbs use the same session's immutable
+/// repository graph, and bridge trace still uses the full bridge graph. There is NO
 /// MCP host, NO background services, NO Serilog file logging. <c>serve</c> and no-args are NOT CLI invocations (see <see cref="IsCliInvocation"/>);
 /// they fall through to the stdio MCP server in <c>Program.cs</c>, which keeps its STDIO-purity contract. The CLI
 /// OWNS stdout here, so it writes results to the injected <c>stdout</c> writer (Console in production, a capture
@@ -569,10 +572,21 @@ public static class CliDispatch
             }
         }
 
-        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope))
             return 3;
 
-        return RunSymbolRoute(index, route, executionRequest, requestedArm, foreignWorkspace, ctx, outw, err);
+        using (readScope)
+        {
+            return RunSymbolRoute(
+                readScope.SymbolIndex,
+                route,
+                executionRequest,
+                requestedArm,
+                foreignWorkspace,
+                ctx,
+                outw,
+                err);
+        }
     }
 
     private const string SearchUsage =
@@ -1203,45 +1217,65 @@ public static class CliDispatch
 
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
-        if (!RequireIndex(ctx, err))
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope, "patterns failed"))
             return 3;
 
-        try
+        using (readScope)
         {
-            PatternToolResult result = PatternsTool.Run(
-                new PatternFactsReader(),
-                ctx.ExtractDbPath,
-                operation,
-                patternId,
-                query,
-                o.Value("language"),
-                o.Value("path", o.Value("file-pattern")),
-                where,
-                o.Value("group-by", o.Value("group_by")),
-                o.Value("facet"),
-                o.Int("limit", PatternsTool.DefaultLimit),
-                o.Has("json"),
-                workspaceId: ctx.WorkspaceId ?? "current",
-                continuation: o.Value("continuation"));
-            string output = result.LevelDiagnostic is { } converging
-                ? ToolDiagnosticRenderer.Attach("patterns", result.Output, converging, o.Has("json"))
-                : result.Output;
-            WriteOutput(outw, output);
-            return 0;
-        }
-        catch (ToolDiagnosticException ex) when (
-            ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
-        {
-            err.WriteLine(ex.Diagnostic.Message);
-            return 2;
-        }
-        catch (Exception ex) when (
-            ex is FileNotFoundException or InvalidOperationException or IOException
-                or UnauthorizedAccessException or ArgumentException or NotSupportedException
-                or SqliteException)
-        {
-            err.WriteLine("patterns failed: " + ex.Message);
-            return 3;
+            try
+            {
+                PatternFactsReader patternReader = new();
+                PatternToolResult result = readScope.IsFamilyStore
+                    ? PatternsTool.Run(
+                        patternReader,
+                        readScope.Session,
+                        operation,
+                        patternId,
+                        query,
+                        o.Value("language"),
+                        o.Value("path", o.Value("file-pattern")),
+                        where,
+                        o.Value("group-by", o.Value("group_by")),
+                        o.Value("facet"),
+                        o.Int("limit", PatternsTool.DefaultLimit),
+                        o.Has("json"),
+                        workspaceId: ctx.WorkspaceId ?? "current",
+                        continuation: o.Value("continuation"))
+                    : PatternsTool.Run(
+                        patternReader,
+                        ctx.ExtractDbPath,
+                        operation,
+                        patternId,
+                        query,
+                        o.Value("language"),
+                        o.Value("path", o.Value("file-pattern")),
+                        where,
+                        o.Value("group-by", o.Value("group_by")),
+                        o.Value("facet"),
+                        o.Int("limit", PatternsTool.DefaultLimit),
+                        o.Has("json"),
+                        workspaceId: ctx.WorkspaceId ?? "current",
+                        continuation: o.Value("continuation"));
+                string output = result.LevelDiagnostic is { } converging
+                    ? ToolDiagnosticRenderer.Attach("patterns", result.Output, converging, o.Has("json"))
+                    : result.Output;
+                WriteOutput(outw, output);
+                return 0;
+            }
+            catch (ToolDiagnosticException ex) when (
+                ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
+            {
+                err.WriteLine(ex.Diagnostic.Message);
+                return 2;
+            }
+            catch (Exception ex) when (
+                ex is FileNotFoundException or InvalidOperationException or IOException
+                    or UnauthorizedAccessException or ArgumentException or NotSupportedException
+                    or SqliteException)
+            {
+                err.WriteLine("patterns failed: " + ex.Message);
+                return 3;
+            }
         }
     }
 
@@ -2037,39 +2071,43 @@ public static class CliDispatch
         string output;
         try
         {
-            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+            if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope))
                 return 3;
-
-            bool rendersReferences =
-                string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase);
-            ToolDiagnostic? diagnostic;
-
-            if (rendersReferences)
+            using (readScope)
             {
-                output = InspectTool.RunLookup(
-                    index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                    target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic,
-                    continuation: continuation);
-            }
-            else
-            {
-                output = InspectTool.RunSummary(
-                    index, ctx.ExtractDbPath, ctx.WorkspaceRoot,
-                    target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
-                    limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic);
-            }
+                ISymbolLookupIndex index = readScope.SymbolIndex;
 
-            if (diagnostic is null
-                && rendersReferences
-                && IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
-            {
-                output = InspectTool.AttachUsageEvidenceUnavailable(output, o.Has("json"));
-            }
+                bool rendersReferences =
+                    string.Equals(depth, "full", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(depth, "overview", StringComparison.OrdinalIgnoreCase);
+                ToolDiagnostic? diagnostic;
 
-            if (diagnostic is not null)
-                output = ToolDiagnosticRenderer.Attach("inspect", output, diagnostic, o.Has("json"));
+                if (rendersReferences)
+                {
+                    output = InspectTool.RunLookup(
+                        index, readScope.Session, ctx.WorkspaceRoot,
+                        target: o.Query, depth, kind: o.Value("kind"), scope: o.Value("scope"),
+                        limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic,
+                        continuation: continuation);
+                }
+                else
+                {
+                    output = InspectTool.RunSummary(
+                        index, readScope.Session, ctx.WorkspaceRoot,
+                        target: o.Query, kind: o.Value("kind"), scope: o.Value("scope"),
+                        limit: o.Int("limit", 50), json: o.Has("json"), out _, out diagnostic);
+                }
+
+                if (diagnostic is null
+                    && rendersReferences
+                    && IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
+                {
+                    output = InspectTool.AttachUsageEvidenceUnavailable(output, o.Has("json"));
+                }
+
+                if (diagnostic is not null)
+                    output = ToolDiagnosticRenderer.Attach("inspect", output, diagnostic, o.Has("json"));
+            }
         }
         catch (ToolDiagnosticException ex) when (
             ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
@@ -2092,10 +2130,13 @@ public static class CliDispatch
         if (!TryResolveReadContext(ctx, o, err, out ctx))
             return 2;
 
-        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope))
             return 3;
 
-        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
+        using (readScope)
+        {
+        ISymbolLookupIndex index = readScope.SymbolIndex;
+        ISymbolGraphReachability graph = readScope.Graph;
         var resolver = new SmartTargetResolver(index);
         string referenceMode = o.Value("reference-mode", "off")!;
         string[]? entrySymbols = OptionValues(o.Value("entry-symbol"));
@@ -2122,18 +2163,18 @@ public static class CliDispatch
                     entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
                     sourceSeeds: sourceSeeds,
                     readBody: symbol => ContextTool.ReadPivotBody(
-                        ctx.ExtractDbPath,
+                        readScope.Session,
                         ctx.WorkspaceRoot,
                         symbol),
                     referenceDepth: o.Int("reference-depth", 1), excludeTests: excludeTestsFlag, json,
                     readReferenceEvidence: symbol => ReferenceEvidenceReader.Read(
-                        ctx.ExtractDbPath,
+                        readScope.Session,
                         symbol.SymbolId,
                         new ReferenceEvidenceBounds(
                             ContextTool.ReferenceRowsPerSymbol,
                             ContextTool.ReferenceRowsPerSymbol)),
                     readOutgoingEvidence: symbol => ReferenceEvidenceReader.ReadOutgoing(
-                        ctx.ExtractDbPath,
+                        readScope.Session,
                         symbol.SymbolId,
                         new ReferenceEvidenceBounds(
                             ContextTool.ReferenceRowsPerSymbol,
@@ -2151,11 +2192,11 @@ public static class CliDispatch
                 entrySymbols, editedFiles, failingTest, stackTrace, semanticSeeds: null,
                 sourceSeeds: sourceSeeds,
                 readBody: symbol => ContextTool.ReadPivotBody(
-                    ctx.ExtractDbPath,
+                    readScope.Session,
                     ctx.WorkspaceRoot,
                     symbol),
                 readOutgoing: symbolId => ReferenceEvidenceReader.ReadOutgoing(
-                    ctx.ExtractDbPath,
+                    readScope.Session,
                     symbolId,
                     new ReferenceEvidenceBounds(
                         ContextTool.ReferenceRowsPerSymbol,
@@ -2180,7 +2221,7 @@ public static class CliDispatch
         // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs here;
         // both reference modes read reference evidence, so a symbols-level artifact silently drops usage
         // enrichment from a bundle that otherwise looks complete.
-        else if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
+        else if (IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
         {
             output = ToolDiagnosticRenderer.Attach(
                 "context", output,
@@ -2189,6 +2230,7 @@ public static class CliDispatch
                 json);
         }
         outw.WriteLine(output);
+        }
         return 0;
     }
 
@@ -2314,23 +2356,27 @@ public static class CliDispatch
             diff = result.Diff;
         }
 
-        if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope))
             return 3;
 
-        using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
-        var resolver = new SmartTargetResolver(index);
-        string output = ImpactTool.Run(
-            index, graph, resolver, target, changedPaths, diff,
-            maxDepth: o.Int("max-depth", 2), limit: o.Int("limit", 100), json: o.Has("json"), out _, out _);
-        // The CLI calls the pure tool core directly, so the MCP wrapper's converging check never runs
-        // here; without this, a symbols-level artifact renders an authoritative-looking undercount.
-        if (IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath)))
-            output = ToolDiagnosticRenderer.Attach(
-                "impact", output,
-                IndexLevelGuard.Converging(
-                    "call-site edges are missing, so the impacted-symbol set undercounts."),
-                o.Has("json"));
-        outw.WriteLine(output);
+        using (readScope)
+        {
+            ISymbolLookupIndex index = readScope.SymbolIndex;
+            ISymbolGraphReachability graph = readScope.Graph;
+            var resolver = new SmartTargetResolver(index);
+            string output = ImpactTool.Run(
+                index, graph, resolver, target, changedPaths, diff,
+                maxDepth: o.Int("max-depth", 2), limit: o.Int("limit", 100), json: o.Has("json"), out _, out _);
+            // The CLI calls the pure tool core directly, so the MCP wrapper's converging check never runs
+            // here; without this, a symbols-level artifact renders an authoritative-looking undercount.
+            if (IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel))
+                output = ToolDiagnosticRenderer.Attach(
+                    "impact", output,
+                    IndexLevelGuard.Converging(
+                        "call-site edges are missing, so the impacted-symbol set undercounts."),
+                    o.Has("json"));
+            outw.WriteLine(output);
+        }
         return 0;
     }
 
@@ -2380,25 +2426,22 @@ public static class CliDispatch
 
         string? rawArtifactId = o.Value("from-artifact-id");
         string? fromArtifactId = string.IsNullOrWhiteSpace(rawArtifactId) ? null : rawArtifactId;
-        ImpactRevisionDeltaSnapshot snapshot = ImpactTool.PrepareIndexRevisionDelta(
-            workspaceId,
-            ctx.WorkspaceRoot,
-            ctx.ExtractDbPath,
-            fromRevision,
-            fromArtifactId);
+        if (!TryOpenCliReadScope(ctx, err, out CliReadScope? readScope))
+            return 3;
 
-        ISymbolLookupIndex? index = null;
-        SqliteSymbolGraphIndex? graph = null;
-        bool indexLoaded = false;
-        try
+        using (readScope)
         {
-            if (snapshot.Complete && snapshot.ChangedPaths.Count > 0 &&
-                TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex loaded))
-            {
-                index = loaded;
-                graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
-                indexLoaded = true;
-            }
+            ImpactRevisionDeltaSnapshot snapshot = ImpactTool.PrepareIndexRevisionDelta(
+                workspaceId,
+                ctx.WorkspaceRoot,
+                readScope.Session,
+                fromRevision,
+                fromArtifactId);
+
+            ISymbolLookupIndex? index = snapshot.Complete && snapshot.ChangedPaths.Count > 0
+                ? readScope.SymbolIndex
+                : null;
+            ISymbolGraphReachability? graph = index is null ? null : readScope.Graph;
 
             string output = ImpactTool.RunIndexRevisionDelta(
                 snapshot,
@@ -2407,13 +2450,9 @@ public static class CliDispatch
                 o.Int("max-depth", 2),
                 o.Int("limit", 100),
                 json,
-                indexAvailable: indexLoaded);
+                indexAvailable: index is not null);
             outw.WriteLine(output);
             return 0;
-        }
-        finally
-        {
-            graph?.Dispose();
         }
     }
 
@@ -2431,24 +2470,27 @@ public static class CliDispatch
         bool includeDefinition = BoolOption(o, "include-definition", fallback: true) && !o.Has("no-definition");
         // The CLI calls the pure tool cores directly, so the MCP wrapper's converging check never runs
         // here; without this, a symbols-level artifact renders authoritative-looking empty trace output.
-        bool referenceLayerConverging =
-            IndexLevelGuard.IsSymbolsLevel(ExtractIndexLevelReader.Read(ctx.ExtractDbPath));
+        bool referenceLayerConverging;
         try
         {
             if (string.Equals(mode, "bridge", StringComparison.OrdinalIgnoreCase))
             {
-                if (!TryLoadIndex(ctx, err, out MillerRepositoryIndex fullIndex))
+                if (!TryOpenCliReadScope(ctx, err, out CliReadScope bridgeScope))
                     return 3;
+                using (bridgeScope)
+                {
+                MillerRepositoryIndex fullIndex = bridgeScope.LoadFullIndex();
+                referenceLayerConverging = IndexLevelGuard.IsSymbolsLevel(bridgeScope.Session.Snapshot.IndexLevel);
 
                 var fullResolver = new SmartTargetResolver(fullIndex);
                 string bridgeOutput = TraceTool.Run(
                     fullIndex, fullResolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
                     depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
                     referenceKind, includeDefinition,
-                    (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+                    (symbol, query) => ReferenceEvidenceReader.Read(bridgeScope.Session, symbol.SymbolId, query),
                     ctx.WorkspaceId ?? "current",
                     string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
-                        ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                        ? ReferenceEvidenceReader.ReadSnapshot(bridgeScope.Session)
                         : null,
                     o.Value("continuation"),
                     out _, out _);
@@ -2460,12 +2502,17 @@ public static class CliDispatch
                         json);
                 outw.WriteLine(bridgeOutput);
                 return 0;
+                }
             }
 
-            if (!TryLoadSymbolSearchIndex(ctx, err, out ISymbolLookupIndex index))
+            if (!TryOpenCliReadScope(ctx, err, out CliReadScope readScope))
                 return 3;
+            using (readScope)
+            {
+            ISymbolLookupIndex index = readScope.SymbolIndex;
+            ISymbolGraphReachability graph = readScope.Graph;
+            referenceLayerConverging = IndexLevelGuard.IsSymbolsLevel(readScope.Session.Snapshot.IndexLevel);
 
-            using var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
             var resolver = new SmartTargetResolver(index);
             string output = string.Equals(mode, "path", StringComparison.OrdinalIgnoreCase)
                 ? TraceTool.RunGraph(
@@ -2487,10 +2534,10 @@ public static class CliDispatch
                     index, graph, resolver, target: o.Query, scope: o.Value("scope"), mode: mode, to: o.Value("to"),
                     depth: o.Int("depth", 3), limit: o.Int("limit", 20), fullFormat: o.Has("full"), json: json,
                     referenceKind, includeDefinition,
-                    (symbol, query) => ReferenceEvidenceReader.Read(ctx.ExtractDbPath, symbol.SymbolId, query),
+                    (symbol, query) => ReferenceEvidenceReader.Read(readScope.Session, symbol.SymbolId, query),
                     ctx.WorkspaceId ?? "current",
                     string.Equals(mode, "refs", StringComparison.OrdinalIgnoreCase)
-                        ? ReferenceEvidenceReader.ReadSnapshot(ctx.ExtractDbPath)
+                        ? ReferenceEvidenceReader.ReadSnapshot(readScope.Session)
                         : null,
                     o.Value("continuation"),
                     out _,
@@ -2503,6 +2550,7 @@ public static class CliDispatch
                     json);
             outw.WriteLine(output);
             return 0;
+            }
         }
         catch (ToolDiagnosticException ex) when (
             ex.Diagnostic.Class is ToolDiagnosticClass.Refusal or ToolDiagnosticClass.Unsupported)
@@ -3538,38 +3586,178 @@ public static class CliDispatch
 
     // ---------- helpers ----------
 
-    private static bool TryLoadIndex(WorkspaceContext ctx, TextWriter err, out MillerRepositoryIndex index)
+    private sealed class CliReadScope : IDisposable
     {
-        if (!RequireIndex(ctx, err))
+        public CliReadScope(
+            WorkspaceReadHandle session,
+            MillerRepositoryIndex? index,
+            ISymbolLookupIndex symbolIndex,
+            ISymbolGraphReachability graph,
+            IDisposable? graphOwner)
         {
-            index = null!;
-            return false;
+            Session = session;
+            Index = index;
+            SymbolIndex = symbolIndex;
+            Graph = graph;
+            _graphOwner = graphOwner;
         }
-        index = RepositoryIndexLoader.Load(ctx.ExtractDbPath);
-        return true;
+
+        private readonly IDisposable? _graphOwner;
+
+        public WorkspaceReadHandle Session { get; }
+        public MillerRepositoryIndex? Index { get; private set; }
+        public ISymbolLookupIndex SymbolIndex { get; }
+        public ISymbolGraphReachability Graph { get; }
+        public bool IsFamilyStore => Session.Snapshot.Mode == WorkspaceReadMode.FamilyStore;
+
+        public MillerRepositoryIndex LoadFullIndex() =>
+            Index ??= RepositoryIndexLoader.LoadSession(Session);
+
+        public void Dispose()
+        {
+            _graphOwner?.Dispose();
+            Session.Dispose();
+        }
     }
 
-    private static bool TryLoadSymbolSearchIndex(WorkspaceContext ctx, TextWriter err, out ISymbolLookupIndex index)
+    private static bool TryOpenCliReadScope(
+        WorkspaceContext ctx,
+        TextWriter err,
+        out CliReadScope scope,
+        string failurePrefix = "Miller read failed")
     {
-        if (!RequireIndex(ctx, err))
+        scope = null!;
+        if (!TryEnsureCliReadArtifact(ctx, err))
+            return false;
+
+        WorkspaceReadHandle? session = null;
+        try
         {
-            index = null!;
+            session = WorkspaceReadSessionFactory.Open(
+                ctx.ExtractDbPath,
+                ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+                ctx.WorkspaceId);
+            SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
+            if (session.Snapshot.Mode == WorkspaceReadMode.FamilyStore)
+            {
+                MillerRepositoryIndex index = RepositoryIndexLoader.LoadSession(session);
+                ISymbolLookupIndex symbolIndex = index;
+                if (sidecar.Enabled)
+                {
+                    symbolIndex = sidecar.OpenStoreRequired(
+                        session.FamilyStoreRoot
+                            ?? throw new InvalidOperationException(
+                                "The family-store read session has no family root."),
+                        session.Snapshot);
+                }
+
+                scope = new CliReadScope(session, index, symbolIndex, index.Graph, graphOwner: null);
+            }
+            else
+            {
+                ISymbolLookupIndex symbolIndex = sidecar.Enabled
+                    ? (ISymbolLookupIndex?)TryOpenFreshSymbolSearchSidecar(ctx.ExtractDbPath, sidecar)
+                        ?? SymbolSearchProjectionLoader.LoadSession(session)
+                    : SymbolSearchProjectionLoader.LoadSession(session);
+                var graph = new SqliteSymbolGraphIndex(ctx.ExtractDbPath);
+                scope = new CliReadScope(session, index: null, symbolIndex, graph, graph);
+            }
+            session = null;
+            return true;
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+                or UnauthorizedAccessException or InvalidOperationException or ArgumentException
+                or NotSupportedException or IncompatibleExtractException or SqliteException)
+        {
+            session?.Dispose();
+            err.WriteLine(failurePrefix + ": " + ex.Message);
+            return false;
+        }
+    }
+
+    private static bool TryEnsureCliReadArtifact(WorkspaceContext ctx, TextWriter err)
+    {
+        bool storeEnabled;
+        try
+        {
+            storeEnabled = WorkspaceReadSessionFactory.StoreEnabledFromEnvironment();
+        }
+        catch (InvalidOperationException ex)
+        {
+            err.WriteLine(ex.Message);
             return false;
         }
 
-        SymbolSearchSidecar sidecar = SymbolSearchSidecar.FromEnvironment();
-        if (sidecar.Enabled)
+        StoreWorkspacePointerDocument? pointer;
+        try
         {
-            FtsSymbolSearchIndex? sidecarIndex = TryOpenFreshSymbolSearchSidecar(ctx.ExtractDbPath, sidecar);
-            if (sidecarIndex is not null)
+            string workspaceRoot = ctx.CanonicalRoot ?? ctx.WorkspaceRoot;
+            pointer = Directory.Exists(workspaceRoot)
+                ? StoreWorkspacePointer.Read(workspaceRoot)
+                : null;
+        }
+        catch (StorePointerFormatException ex)
+        {
+            try
             {
-                index = sidecarIndex;
-                return true;
+                StoreWorkspacePointer.Delete(ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
             }
+            catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException)
+            {
+                err.WriteLine($"The malformed store pointer could not be removed: {deleteError.Message}");
+            }
+
+            err.WriteLine(
+                $"The store pointer is malformed ({ex.Message}); source reconciliation is required before a CLI read.");
+            return false;
         }
 
-        index = SymbolSearchProjectionLoader.Load(ctx.ExtractDbPath);
-        return true;
+        if (storeEnabled)
+        {
+            if (pointer is null)
+            {
+                err.WriteLine(
+                    $"Store mode is enabled but workspace '{ctx.CanonicalRoot ?? ctx.WorkspaceRoot}' has no store pointer.");
+                return false;
+            }
+
+            return true;
+        }
+
+        if (pointer is null)
+        {
+            if (File.Exists(ctx.ExtractDbPath))
+                return true;
+            err.WriteLine($"no Miller index at {ctx.ExtractDbPath}.");
+            err.WriteLine("Build it with `miller workspace full`, or open this folder in the Miller MCP server.");
+            return false;
+        }
+
+        try
+        {
+            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
+                ctx.CanonicalRoot ?? ctx.WorkspaceRoot,
+                ctx.ExtractDbPath,
+                JulieStoreClient.Locate(ctx.ToolsRoot));
+            if (rollback.Warning is { } warning)
+                err.WriteLine(warning);
+            if (rollback.RequiresSourceRebuild)
+            {
+                err.WriteLine("The legacy artifact is unavailable until source reconciliation completes.");
+                return false;
+            }
+
+            return rollback.Exported && File.Exists(ctx.ExtractDbPath);
+        }
+        catch (Exception ex) when (
+            ex is FileNotFoundException or DirectoryNotFoundException or IOException
+                or UnauthorizedAccessException or InvalidOperationException or ArgumentException
+                or NotSupportedException or SqliteException)
+        {
+            err.WriteLine("Store rollback export failed; the CLI will not serve legacy bytes: " + ex.Message);
+            return false;
+        }
     }
 
     private static FtsSymbolSearchIndex? TryOpenFreshSymbolSearchSidecar(string dbPath, SymbolSearchSidecar sidecar)
@@ -3677,13 +3865,7 @@ public static class CliDispatch
     }
 
     private static bool RequireIndex(WorkspaceContext ctx, TextWriter err)
-    {
-        if (File.Exists(ctx.ExtractDbPath))
-            return true;
-        err.WriteLine($"no Miller index at {ctx.ExtractDbPath}.");
-        err.WriteLine("Build it with `miller workspace full`, or open this folder in the Miller MCP server.");
-        return false;
-    }
+        => TryEnsureCliReadArtifact(ctx, err);
 
     private static long? LongOption(CliOptions options, string name)
     {
