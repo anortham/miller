@@ -1,6 +1,7 @@
 using Miller.Indexing;
 using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
+using Miller.Tests.Support;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -107,6 +108,70 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.Contains("simulated promotion failure", error.Message, StringComparison.Ordinal);
         Assert.True(File.Exists(rebuild));
         Assert.NotNull(StoreWorkspacePointer.Read(workspace));
+    }
+
+    [Fact]
+    public void PointerCleanupFailurePreservesThePromotedArtifactAndReturnsRetryState()
+    {
+        string workspace = Path.Combine(_root, "cleanup-failure-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported"));
+
+        StoreRollbackExporter.StoreRollbackCommitResult result =
+            StoreRollbackExporter.CommitValidatedExport(
+                workspace,
+                legacy,
+                target => File.Copy(exported, target, overwrite: true),
+                deletePointer: _ => throw new IOException("simulated pointer cleanup failure"));
+
+        Assert.True(result.RequiresPointerCleanup);
+        Assert.Contains("simulated pointer cleanup failure", result.Warning, StringComparison.Ordinal);
+        Assert.True(File.Exists(legacy));
+        Assert.NotNull(StoreWorkspacePointer.Read(workspace));
+    }
+
+    [Fact]
+    public void PendingPointerCleanupRetriesDeletionWithoutRepeatingTheProducerExport()
+    {
+        string workspace = Path.Combine(_root, "pending-cleanup-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported-pending"));
+        StoreRollbackExporter.CommitValidatedExport(
+            workspace,
+            legacy,
+            target => File.Copy(exported, target, overwrite: true),
+            deletePointer: _ => throw new IOException("leave cleanup pending"));
+
+        StoreRollbackExportResult retry = StoreRollbackExporter.ExportIfRequired(
+            workspace,
+            legacy,
+            new UnexpectedStoreClient());
+
+        Assert.True(retry.Exported);
+        Assert.False(retry.RequiresPointerCleanup);
+        Assert.Null(StoreWorkspacePointer.Read(workspace));
     }
 
     public void Dispose()

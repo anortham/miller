@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
@@ -8,13 +10,17 @@ namespace Miller.Server.Workspaces;
 public sealed record StoreRollbackExportResult(
     bool Exported,
     string? Warning,
-    bool RequiresSourceRebuild = false);
+    bool RequiresSourceRebuild = false,
+    bool RequiresPointerCleanup = false);
 
 internal sealed class StoreRollbackRetryException(Exception innerException)
     : IOException("Store rollback export failed; bootstrap will retry: " + innerException.Message, innerException);
 
 public static class StoreRollbackExporter
 {
+    private const string PendingMarkerSchema = "1";
+    private const string PendingMarkerFileName = "store-rollback.pending";
+
     internal static bool IsOperationalFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
             or NotSupportedException or SqliteException or JulieStoreProcessException;
@@ -43,7 +49,10 @@ public static class StoreRollbackExporter
         }
 
         if (pointer is null)
+        {
+            TryDeletePendingMarker(workspaceRoot);
             return new StoreRollbackExportResult(false, null);
+        }
 
         using (SingleWriterLock? ownedWriterLease = heldWriterLease is null
                    ? AcquireWriterLease(legacyDatabasePath)
@@ -53,7 +62,13 @@ public static class StoreRollbackExporter
             {
                 pointer = StoreWorkspacePointer.Read(workspaceRoot);
                 if (pointer is null)
+                {
+                    TryDeletePendingMarker(workspaceRoot);
                     return new StoreRollbackExportResult(false, null);
+                }
+
+                if (TryCompletePendingCleanup(workspaceRoot, legacyDatabasePath, pointer) is { } pendingResult)
+                    return pendingResult;
 
                 return Export(workspaceRoot, legacyDatabasePath, client, pointer);
             }
@@ -130,8 +145,15 @@ public static class StoreRollbackExporter
             }
             ValidateExportArtifact(outputPath);
             exportValidated = true;
-            CommitValidatedExport(workspaceRoot, legacyDatabasePath, FullRebuildPromotion.Promote);
-            return new StoreRollbackExportResult(true, null);
+            StoreRollbackCommitResult commit = CommitValidatedExport(
+                workspaceRoot,
+                legacyDatabasePath,
+                FullRebuildPromotion.Promote,
+                pointer);
+            return new StoreRollbackExportResult(
+                true,
+                commit.Warning,
+                RequiresPointerCleanup: commit.RequiresPointerCleanup);
         }
         catch
         {
@@ -141,31 +163,217 @@ public static class StoreRollbackExporter
         }
     }
 
-    internal static void CommitValidatedExport(
+    internal static StoreRollbackCommitResult CommitValidatedExport(
         string workspaceRoot,
         string legacyDatabasePath,
-        Action<string> promote)
+        Action<string> promote,
+        StoreWorkspacePointerDocument? pointer = null,
+        Action<string>? deletePointer = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
         ArgumentNullException.ThrowIfNull(promote);
 
-        bool promoted = false;
+        promote(legacyDatabasePath);
+
+        string? markerWarning = null;
+        StoreWorkspacePointerDocument? currentPointer = pointer ?? StoreWorkspacePointer.Read(workspaceRoot);
+        if (currentPointer is not null)
+        {
+            try
+            {
+                WritePendingMarker(workspaceRoot, legacyDatabasePath, currentPointer);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                markerWarning = "The rollback cleanup marker could not be written: " + ex.Message;
+            }
+        }
+
         try
         {
-            promote(legacyDatabasePath);
-            promoted = true;
-            // Keep the store binding until the promoted legacy artifact is ready; a failed delete leaves reads
-            // on the store and the next store-off attempt can safely retry the export.
+            (deletePointer ?? StoreWorkspacePointer.Delete)(workspaceRoot);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new StoreRollbackCommitResult(
+                JoinWarnings(
+                    markerWarning,
+                    "The legacy artifact was promoted, but the store pointer could not be removed: " + ex.Message),
+                RequiresPointerCleanup: true);
+        }
+
+        string? markerCleanupWarning = TryDeletePendingMarker(workspaceRoot);
+        return new StoreRollbackCommitResult(JoinWarnings(markerWarning, markerCleanupWarning), false);
+    }
+
+    private static StoreRollbackExportResult? TryCompletePendingCleanup(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        StoreWorkspacePointerDocument pointer)
+    {
+        PendingRollbackMarker? pending = ReadPendingMarker(workspaceRoot);
+        if (pending is null || !pending.Matches(workspaceRoot, legacyDatabasePath, pointer))
+            return null;
+
+        try
+        {
+            LegacyArtifactReadSession.Validate(legacyDatabasePath);
+            FileInfo artifact = new(legacyDatabasePath);
+            if (artifact.Length != pending.Length || artifact.LastWriteTimeUtc.Ticks != pending.LastWriteUtcTicks)
+                return null;
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException
+                or InvalidOperationException or SqliteException or IncompatibleExtractException)
+        {
+            return null;
+        }
+
+        try
+        {
             StoreWorkspacePointer.Delete(workspaceRoot);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            if (promoted)
-                FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
-            throw;
+            return new StoreRollbackExportResult(
+                true,
+                "The legacy artifact was already promoted, but the store pointer still could not be removed: " +
+                ex.Message,
+                RequiresPointerCleanup: true);
+        }
+
+        string? markerWarning = TryDeletePendingMarker(workspaceRoot);
+        return new StoreRollbackExportResult(true, markerWarning);
+    }
+
+    private static void WritePendingMarker(
+        string workspaceRoot,
+        string legacyDatabasePath,
+        StoreWorkspacePointerDocument pointer)
+    {
+        string path = PendingMarkerPath(workspaceRoot);
+        string directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        FileInfo artifact = new(legacyDatabasePath);
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        string[] lines =
+        [
+            PendingMarkerSchema,
+            pointer.FamilyId.ToString("D"),
+            Encode(pointer.StoreRoot),
+            Encode(pointer.ViewId),
+            Encode(pointer.WorkspaceRoot),
+            Encode(Path.GetFullPath(legacyDatabasePath)),
+            artifact.Length.ToString(CultureInfo.InvariantCulture),
+            artifact.LastWriteTimeUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+        ];
+        try
+        {
+            File.WriteAllLines(temporary, lines, Encoding.UTF8);
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
         }
     }
+
+    private static PendingRollbackMarker? ReadPendingMarker(string workspaceRoot)
+    {
+        string path = PendingMarkerPath(workspaceRoot);
+        if (!File.Exists(path))
+            return null;
+
+        try
+        {
+            string[] lines = File.ReadAllLines(path);
+            if (lines.Length != 8 || lines[0] != PendingMarkerSchema ||
+                !Guid.TryParse(lines[1], out Guid familyId) ||
+                !long.TryParse(lines[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out long length) ||
+                !long.TryParse(lines[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out long ticks))
+                return null;
+
+            string? storeRoot = Decode(lines[2]);
+            string? viewId = Decode(lines[3]);
+            string? markerWorkspaceRoot = Decode(lines[4]);
+            string? legacyDatabasePath = Decode(lines[5]);
+            return storeRoot is null || viewId is null || markerWorkspaceRoot is null || legacyDatabasePath is null
+                ? null
+                : new PendingRollbackMarker(
+                    familyId,
+                    storeRoot,
+                    viewId,
+                    markerWorkspaceRoot,
+                    legacyDatabasePath,
+                    length,
+                    ticks);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string? TryDeletePendingMarker(string workspaceRoot)
+    {
+        try
+        {
+            string path = PendingMarkerPath(workspaceRoot);
+            if (File.Exists(path))
+                File.Delete(path);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return "The rollback cleanup marker could not be removed: " + ex.Message;
+        }
+    }
+
+    private static string PendingMarkerPath(string workspaceRoot) =>
+        Path.Combine(PathCanonicalizer.CanonicalizeRoot(workspaceRoot), ".miller", PendingMarkerFileName);
+
+    private static string Encode(string value) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+
+    private static string? Decode(string value)
+    {
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(value));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static string? JoinWarnings(string? first, string? second) =>
+        first is null ? second : second is null ? first : first + " " + second;
+
+    private sealed record PendingRollbackMarker(
+        Guid FamilyId,
+        string StoreRoot,
+        string ViewId,
+        string WorkspaceRoot,
+        string LegacyDatabasePath,
+        long Length,
+        long LastWriteUtcTicks)
+    {
+        public bool Matches(
+            string workspaceRoot,
+            string legacyDatabasePath,
+            StoreWorkspacePointerDocument pointer) =>
+            FamilyId == pointer.FamilyId &&
+            ArtifactRootIdentity.Matches(StoreRoot, pointer.StoreRoot) &&
+            string.Equals(ViewId, pointer.ViewId, StringComparison.Ordinal) &&
+            ArtifactRootIdentity.Matches(WorkspaceRoot, pointer.WorkspaceRoot) &&
+            string.Equals(LegacyDatabasePath, Path.GetFullPath(legacyDatabasePath), StringComparison.Ordinal) &&
+            ArtifactRootIdentity.Matches(WorkspaceRoot, PathCanonicalizer.CanonicalizeRoot(workspaceRoot));
+    }
+
+    internal sealed record StoreRollbackCommitResult(string? Warning, bool RequiresPointerCleanup);
 
     internal static void ValidateExportArtifact(string outputPath)
     {

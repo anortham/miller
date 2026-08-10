@@ -3873,8 +3873,8 @@ public static class CliDispatch
         catch (StorePointerFormatException ex)
         {
             err.WriteLine(
-                $"The store pointer is malformed ({ex.Message}); source reconciliation is required before any CLI read.");
-            return !storeEnabled && TryReconcileCliSource(ctx, err);
+                $"The store pointer is malformed ({ex.Message}); workspace reconciliation is required before any CLI read.");
+            return TryReconcileCliSource(ctx, err, storeEnabled);
         }
 
         if (storeEnabled)
@@ -3906,6 +3906,11 @@ public static class CliDispatch
                 JulieStoreClient.Locate(ctx.ToolsRoot));
             if (rollback.Warning is { } warning)
                 err.WriteLine(warning);
+            if (rollback.RequiresPointerCleanup)
+            {
+                err.WriteLine("The legacy artifact is ready, but the store pointer cleanup must succeed before serving it.");
+                return false;
+            }
             if (rollback.RequiresSourceRebuild)
             {
                 err.WriteLine("The legacy artifact is unavailable until source reconciliation completes.");
@@ -3921,7 +3926,7 @@ public static class CliDispatch
         }
     }
 
-    private static bool TryReconcileCliSource(WorkspaceContext ctx, TextWriter err)
+    private static bool TryReconcileCliSource(WorkspaceContext ctx, TextWriter err, bool storeEnabled = false)
     {
         try
         {
@@ -3942,9 +3947,22 @@ public static class CliDispatch
                 SymbolSearchSidecar.FromEnvironment(),
                 CliScanGovernor(ctx));
             WorkspaceRefreshResult result = refresh.Refresh(row.WorkspaceId, force: true, bypassBackoff: true);
-            if (result.Scanned && result.Status is WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged &&
-                File.Exists(ctx.ExtractDbPath))
+            if (result.Scanned && result.Status is WorkspaceRefreshStatus.Refreshed or WorkspaceRefreshStatus.Unchanged)
             {
+                if (!storeEnabled)
+                    return File.Exists(ctx.ExtractDbPath);
+
+                StoreWorkspacePointerDocument? repaired = StoreWorkspacePointer.Read(
+                    ctx.CanonicalRoot ?? ctx.WorkspaceRoot);
+                if (repaired is null)
+                    return false;
+                var binding = new StoreFamilyBinding(
+                    repaired.FamilyId,
+                    repaired.StoreRoot,
+                    repaired.ViewId,
+                    repaired.WorkspaceRoot,
+                    StoreBindingState.Ready);
+                using FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding, row.WorkspaceId);
                 return true;
             }
 

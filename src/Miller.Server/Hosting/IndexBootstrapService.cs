@@ -498,6 +498,11 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             bool rollbackRequiresSourceRebuild = rollback.RequiresSourceRebuild;
             if (rollback.Warning is { } rollbackWarning)
                 _logger.LogWarning("{Warning}", rollbackWarning);
+            if (rollback.RequiresPointerCleanup)
+            {
+                throw new StoreRollbackRetryException(
+                    new IOException(rollback.Warning ?? "The promoted legacy artifact still has a store pointer."));
+            }
 
             // Locate the pinned julie-extract under the tools root (NOT the repo cwd). Absent → fail loudly
             // (FileNotFoundException carrying the restore-script message) — Miller cannot index without it.

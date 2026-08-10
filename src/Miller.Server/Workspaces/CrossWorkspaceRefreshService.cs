@@ -247,6 +247,20 @@ public sealed class CrossWorkspaceRefreshService
                     heldWriterLease: lease);
                 rollbackWarning = rollback.Warning;
                 sourceRebuildRequired = rollback.RequiresSourceRebuild;
+                if (rollback.RequiresPointerCleanup)
+                {
+                    return new WorkspaceRefreshResult(
+                        WorkspaceRefreshStatus.Failed,
+                        row.WorkspaceId,
+                        row.CanonicalRoot,
+                        row.IndexDbPath,
+                        row.LastRevision,
+                        Scanned: false,
+                        WarningText: rollback.Warning,
+                        Error: rollback.Warning,
+                        TotalDuration: total.Elapsed,
+                        ArtifactId: TryReadArtifactId(row, useStore));
+                }
             }
             catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
             {
