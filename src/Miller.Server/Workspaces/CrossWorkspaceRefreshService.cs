@@ -233,13 +233,31 @@ public sealed class CrossWorkspaceRefreshService
         bool sourceRebuildRequired = false;
         if (!useStore && _storeClient is { } storeClient)
         {
-            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
-                row.CanonicalRoot,
-                row.IndexDbPath,
-                storeClient,
-                heldWriterLease: lease);
-            rollbackWarning = rollback.Warning;
-            sourceRebuildRequired = rollback.RequiresSourceRebuild;
+            try
+            {
+                StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    storeClient,
+                    heldWriterLease: lease);
+                rollbackWarning = rollback.Warning;
+                sourceRebuildRequired = rollback.RequiresSourceRebuild;
+            }
+            catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
+            {
+                string error = $"Store rollback export failed: {ex.Message}";
+                _registry.MarkError(row.WorkspaceId, error, _utcNow());
+                return new WorkspaceRefreshResult(
+                    WorkspaceRefreshStatus.Failed,
+                    row.WorkspaceId,
+                    row.CanonicalRoot,
+                    row.IndexDbPath,
+                    row.LastRevision,
+                    Scanned: false,
+                    Error: error,
+                    TotalDuration: total.Elapsed,
+                    ArtifactId: TryReadArtifactId(row, useStore));
+            }
         }
         bool effectiveForce = force || sourceRebuildRequired;
 

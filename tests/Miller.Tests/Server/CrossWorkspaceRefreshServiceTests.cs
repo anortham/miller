@@ -284,6 +284,42 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_RollbackExportFailure_MarksRegistryErrorAndPreservesStoreBinding()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("rollback-export-failure");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(root);
+        StoreFamilyBinding binding = new(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            Path.Combine(root, "missing-store"),
+            "view-a",
+            canonicalRoot,
+            StoreBindingState.Ready);
+        StoreWorkspacePointer.Write(root, binding);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan must not run after rollback failure"),
+            acquireLock: _ => new NoopLease(),
+            readArtifactId: _ => "legacy-before",
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal("legacy-before", result.ArtifactId);
+        Assert.Contains("Store rollback export failed", result.Error, StringComparison.Ordinal);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal(result.Error, row.LastError);
+        Assert.NotNull(StoreWorkspacePointer.Read(root));
+    }
+
+    [Fact]
     public void Refresh_LockBusy_DoesNotScanAndReturnsUnconfirmedWhenNoRevisionChangeAppears()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -1213,7 +1249,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         ScanGovernor? governor = null,
         TimeSpan? governorForceWait = null,
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
-        IJulieStoreClient? storeClient = null)
+        IJulieStoreClient? storeClient = null,
+        Func<bool>? storeEnabled = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -1232,7 +1269,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             governor: governor,
             governorForceWait: governorForceWait,
             failurePolicyFor: failurePolicyFor,
-            storeClient: storeClient);
+            storeClient: storeClient,
+            storeEnabled: storeEnabled);
     }
 
     [Fact]

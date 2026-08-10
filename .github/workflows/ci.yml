@@ -104,7 +104,8 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $results = Join-Path $PWD 'TestResults'
           dotnet test Miller.slnx --no-build -c Release --filter "Category!=Scale" `
-            --results-directory "$results"
+            --results-directory "$results" `
+            --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type none
           $code = $LASTEXITCODE
 
           if ($code -ne 0) {

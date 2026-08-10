@@ -483,10 +483,18 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
                     startedAt);
             }
 
-            StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
-                canonicalRoot,
-                canonicalDbPath,
-                JulieStoreClient.Locate(ctx.ToolsRoot));
+            StoreRollbackExportResult rollback;
+            try
+            {
+                rollback = StoreRollbackExporter.ExportIfRequired(
+                    canonicalRoot,
+                    canonicalDbPath,
+                    JulieStoreClient.Locate(ctx.ToolsRoot));
+            }
+            catch (Exception ex) when (StoreRollbackExporter.IsOperationalFailure(ex))
+            {
+                throw new StoreRollbackRetryException(ex);
+            }
             bool rollbackRequiresSourceRebuild = rollback.RequiresSourceRebuild;
             if (rollback.Warning is { } rollbackWarning)
                 _logger.LogWarning("{Warning}", rollbackWarning);
@@ -1082,7 +1090,9 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             _logger.LogWarning(markError, "Failed to mark bootstrap error for {Root}.", canonicalRoot);
         }
 
-        if (error is ScanAdmissionTimeoutException)
+        if (error is StoreRollbackRetryException)
+            ScheduleRollbackRetry(canonicalRoot, source, runGeneration);
+        else if (error is ScanAdmissionTimeoutException)
             ScheduleAdmissionRetry(canonicalRoot, source, runGeneration);
     }
 
@@ -1100,6 +1110,14 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
     /// </summary>
     private void ScheduleAdmissionRetry(
         string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int failedGeneration)
+        => ScheduleBootstrapRetry(canonicalRoot, source, failedGeneration, "scan admission timeout");
+
+    private void ScheduleRollbackRetry(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int failedGeneration)
+        => ScheduleBootstrapRetry(canonicalRoot, source, failedGeneration, "store rollback export failure");
+
+    private void ScheduleBootstrapRetry(
+        string canonicalRoot, WorkspaceBindingResolver.WorkspaceSource source, int failedGeneration, string reason)
     {
         CancellationToken shutdown;
         try
@@ -1115,8 +1133,8 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
             TestAdmissionRetryDelay ?? DefaultAdmissionRetryDelay, Random.Shared.NextDouble());
 
         _logger.LogInformation(
-            "Bootstrap for {Root} timed out waiting for machine-wide scan admission; retrying in {DelaySeconds}s.",
-            canonicalRoot, Math.Round(delay.TotalSeconds, 1));
+            "Bootstrap for {Root} failed due to {Reason}; retrying in {DelaySeconds}s.",
+            canonicalRoot, reason, Math.Round(delay.TotalSeconds, 1));
 
         _ = Task.Run(async () =>
         {
@@ -1184,7 +1202,7 @@ public sealed class IndexBootstrapService : IHostedService, IDisposable
         if (rejection is null)
             return true;
 
-        _logger.LogInformation("Dropping the admission retry for {Root}: {Reason}.", canonicalRoot, rejection);
+        _logger.LogInformation("Dropping the bootstrap retry for {Root}: {Reason}.", canonicalRoot, rejection);
         return false;
     }
 

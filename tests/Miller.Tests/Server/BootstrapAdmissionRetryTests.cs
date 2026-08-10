@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Miller.Indexing;
 using Miller.Server;
 using Miller.Server.Hosting;
+using Miller.Server.Workspaces;
 using Xunit;
 
 namespace Miller.Tests.Server;
@@ -30,6 +31,31 @@ public sealed class BootstrapAdmissionRetryTests : IDisposable
         {
             if (Interlocked.Increment(ref runs) == 1)
                 throw new ScanAdmissionTimeoutException("Timed out waiting for machine-wide scan admission.");
+
+            phaseDuringRetry = bootstrap.Snapshot.Phase;
+            Bind(bootstrap, canonicalRoot, home);
+        };
+
+        bootstrap.BootstrapForRoot(root, WorkspaceBindingResolver.WorkspaceSource.Cwd);
+
+        Assert.True(WaitUntil(() => bootstrap.IsBound));
+        Assert.Equal(2, Volatile.Read(ref runs));
+        Assert.Equal(BootstrapPhase.Running, phaseDuringRetry);
+    }
+
+    [Fact]
+    public void AStoreRollbackFailureRetriesUntilTheBootstrapBinds()
+    {
+        string root = NewTempDirectory("rollback-retry-root");
+        string home = NewTempDirectory("rollback-retry-home");
+        using var bootstrap = NewBootstrap(home, TimeSpan.FromMilliseconds(20));
+
+        int runs = 0;
+        BootstrapPhase? phaseDuringRetry = null;
+        bootstrap.TestRunBootstrapOverride = canonicalRoot =>
+        {
+            if (Interlocked.Increment(ref runs) == 1)
+                throw new StoreRollbackRetryException(new IOException("store export temporarily unavailable"));
 
             phaseDuringRetry = bootstrap.Snapshot.Phase;
             Bind(bootstrap, canonicalRoot, home);

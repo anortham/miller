@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Miller.Indexing;
 using Miller.Indexing.Reads;
 using Miller.Indexing.Store;
@@ -9,8 +10,15 @@ public sealed record StoreRollbackExportResult(
     string? Warning,
     bool RequiresSourceRebuild = false);
 
+internal sealed class StoreRollbackRetryException(Exception innerException)
+    : IOException("Store rollback export failed; bootstrap will retry: " + innerException.Message, innerException);
+
 public static class StoreRollbackExporter
 {
+    internal static bool IsOperationalFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException
+            or NotSupportedException or SqliteException;
+
     public static StoreRollbackExportResult ExportIfRequired(
         string workspaceRoot,
         string legacyDatabasePath,
