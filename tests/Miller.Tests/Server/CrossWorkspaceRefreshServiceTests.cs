@@ -414,6 +414,35 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_RollbackPointerCleanupFailure_MarksRegistryError()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRootWithIndex("rollback-pointer-cleanup", out string dbPath);
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        const string cleanupWarning = "The store pointer could not be removed.";
+        var service = NewService(
+            registry,
+            scan: (_, _, _, _, _) => throw new InvalidOperationException("scan must not run after rollback cleanup failure"),
+            acquireLock: _ => new NoopLease(),
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false,
+            exportStoreRollback: (_, _, _, _) => new StoreRollbackExportResult(
+                Exported: true,
+                Warning: cleanupWarning,
+                RequiresPointerCleanup: true));
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Failed, result.Status);
+        Assert.False(result.Scanned);
+        Assert.Equal(cleanupWarning, result.Error);
+        WorkspaceRegistryRow row = Assert.IsType<WorkspaceRegistryRow>(registry.Get("target-ws"));
+        Assert.Equal(WorkspaceRegistryState.Error, row.State);
+        Assert.Equal(cleanupWarning, row.LastError);
+    }
+
+    [Fact]
     public void Refresh_PointerCleanupFailureDoesNotMarkTheRegistryReady()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
@@ -1442,7 +1471,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
         IJulieStoreClient? storeClient = null,
         Func<bool>? storeEnabled = null,
-        Action<string>? deleteStorePointer = null)
+        Action<string>? deleteStorePointer = null,
+        Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult>? exportStoreRollback = null)
     {
         clock ??= new FakeClock();
         return new CrossWorkspaceRefreshService(
@@ -1464,7 +1494,8 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
             failurePolicyFor: failurePolicyFor,
             storeClient: storeClient,
             storeEnabled: storeEnabled,
-            deleteStorePointer: deleteStorePointer);
+            deleteStorePointer: deleteStorePointer,
+            exportStoreRollback: exportStoreRollback);
     }
 
     [Fact]

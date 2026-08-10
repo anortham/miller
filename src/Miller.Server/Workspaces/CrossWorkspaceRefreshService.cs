@@ -49,6 +49,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string, IScanFailurePolicy> _failurePolicyFor;
     private readonly Func<bool> _storeEnabled;
     private readonly IJulieStoreClient? _storeClient;
+    private readonly Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult> _exportStoreRollback;
     private readonly Func<string, string, IDisposable, string?> _deleteStorePointerAfterSourceRebuild;
     private readonly IndexerSidecarConverger _sidecarConverger;
 
@@ -128,7 +129,8 @@ public sealed class CrossWorkspaceRefreshService
         Func<string, string, IScanFailurePolicy>? failurePolicyFor = null,
         IJulieStoreClient? storeClient = null,
         Func<bool>? storeEnabled = null,
-        Action<string>? deleteStorePointer = null)
+        Action<string>? deleteStorePointer = null,
+        Func<string, string, IJulieStoreClient, IDisposable?, StoreRollbackExportResult>? exportStoreRollback = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(scan);
@@ -170,6 +172,7 @@ public sealed class CrossWorkspaceRefreshService
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _storeClient = storeClient;
+        _exportStoreRollback = exportStoreRollback ?? StoreRollbackExporter.ExportIfRequired;
         if (deleteStorePointer is null)
         {
             _deleteStorePointerAfterSourceRebuild =
@@ -269,15 +272,18 @@ public sealed class CrossWorkspaceRefreshService
         {
             try
             {
-                StoreRollbackExportResult rollback = StoreRollbackExporter.ExportIfRequired(
+                StoreRollbackExportResult rollback = _exportStoreRollback(
                     row.CanonicalRoot,
                     row.IndexDbPath,
                     storeClient,
-                    heldWriterLease: lease);
+                    lease);
                 rollbackWarning = rollback.Warning;
                 sourceRebuildRequired = rollback.RequiresSourceRebuild;
                 if (rollback.RequiresPointerCleanup)
                 {
+                    string error = rollback.Warning
+                        ?? "The legacy artifact was promoted, but the store pointer could not be removed.";
+                    _registry.MarkError(row.WorkspaceId, error, _utcNow());
                     return new WorkspaceRefreshResult(
                         WorkspaceRefreshStatus.Failed,
                         row.WorkspaceId,
@@ -285,8 +291,8 @@ public sealed class CrossWorkspaceRefreshService
                         row.IndexDbPath,
                         row.LastRevision,
                         Scanned: false,
-                        WarningText: rollback.Warning,
-                        Error: rollback.Warning,
+                        WarningText: error,
+                        Error: error,
                         TotalDuration: total.Elapsed,
                         ArtifactId: TryReadArtifactId(row, useStore));
                 }
