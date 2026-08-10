@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.5 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, and v4.4 amendments record
+**Status: AMENDED v4.6 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1, v4.2, v4.3, v4.4, and v4.5 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -60,8 +60,20 @@ These refinements are normative for the v1.18.0 release candidate.
 | Amendment | Normative correction | State on 2026-08-10 |
 |---|---|---|
 | A19 — prepared rollback state | The rollback marker is written before producer invocation, upgraded with a SHA-256 digest after validation, and is required before promotion. An unreconcilable matching marker returns source-rebuild-required; it never silently starts another export. | Implemented and verified in rollback recovery tests |
-| A20 — bounded progress sampling | Producer-owned directory progress sampling is shallow and capped. When the cap is reached, the progress stamp advances to avoid declaring unknown activity stalled; the hard cap remains the termination bound. | Implemented and verified in local progress-stamp tests |
-| A21 — timeout alignment | Import/resolve request controls drive both the producer request timeout and Miller's hard wait cap, and bare numeric configuration is interpreted as seconds consistently. | Implemented and verified in wait-policy/coordinator tests |
+| A20 — bounded progress sampling | Producer-owned directory progress sampling is recursive but capped. The capped sample uses deterministic entry-count, size, and modification-time facts; nested activity is visible without a clock-based false-progress signal, and the hard cap remains the termination bound. | Implemented and verified in local progress-stamp tests |
+| A21 — timeout alignment | Import/resolve request controls drive the producer request timeout and may raise Miller's hard wait cap, but never lower the configured/default process cap; the environment override applies only to import/resolve and bare numeric configuration is interpreted as seconds consistently. | Implemented and verified in wait-policy/coordinator tests |
+
+## 0. v4.6 post-freeze amendment register
+
+The final adversarial pass found four remaining correctness and liveness seams in the v4.5 wording.
+These refinements are normative for the v1.18.0 release candidate.
+
+| Amendment | Normative correction | State on 2026-08-10 |
+|---|---|---|
+| A22 — rollback view binding | A ready rollback marker carries the exported manifest generation, manifest hash, and current-view store-log sequence. Recovery may promote only a digest-validated ready artifact whose store identity still matches; a started marker never promotes its staged file. An observed producer failure clears the marker after staged cleanup so the next attempt can retry export. | Implemented and verified in rollback recovery tests |
+| A23 — store freshness cost | Store freshness polling uses a bounded store-log probe instead of rebuilding the temporary compatibility projection on every tick. Exact resolution-base hashes are cached only by canonical path, byte length, modification stamp, and recorded digest; a full read session still validates and attaches the base. | Implemented and verified in freshness/read-session tests |
+| A24 — process wait separation | `MILLER_STORE_REQUEST_TIMEOUT` is scoped to import/resolve producer requests. Miller's hard process cap remains the configured/default cap unless the long-operation request explicitly raises it; update/delete retain five minutes. | Implemented and verified in wait-policy/coordinator tests |
+| A25 — deterministic capped progress | Producer progress samples include nested spool/scratch/base entries up to the cap and summarize capped observations deterministically. Sampling never advances from wall-clock reads, so a wedged producer can still reach the stall verdict before the hard backstop. | Implemented and verified in local progress-stamp tests |
 
 ---
 
@@ -444,9 +456,10 @@ exactly that).
   Switching the store off triggers a current-view `store export` per active workspace (or an
   honest not-ready until one completes) — never a silently served stale artifact. The store
   on/off switch ships v1 (default-on vs opt-in is the Ph5 validation decision, user-owned).
-  A rollback export writes a prepared marker before producer work, records the validated staged artifact before
-  promotion, and retries cleanup or staged promotion from either durable marker path without repeating the producer
-  export. A matching marker that cannot be reconciled fails closed for source rebuild.
+  A rollback export writes a prepared marker before producer work, records the validated staged artifact and its
+  current-view manifest/log identity before promotion, and retries cleanup or staged promotion from either durable
+  marker path without repeating the producer export. A started or view-advanced marker cannot promote a staged file;
+  a matching marker that cannot be reconciled fails closed for source rebuild.
 
 ## 12. Generation promotion and the capacity formula
 

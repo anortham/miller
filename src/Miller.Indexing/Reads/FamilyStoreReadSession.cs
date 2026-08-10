@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -39,6 +40,8 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
     private static readonly Regex GenerationName = new(
         @"^gen-[0-9]{3,}$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly ConcurrentDictionary<string, ResolutionBaseFileIdentity> ValidatedResolutionBases = new(
+        StringComparer.Ordinal);
 
     private readonly SqliteConnection _connection;
     private readonly object _gate = new();
@@ -70,48 +73,12 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
 
         try
         {
-            string storeRoot = PathCanonicalizer.CanonicalizeRoot(binding.StoreRoot);
-            string workspaceRoot = PathCanonicalizer.CanonicalizeRoot(binding.WorkspaceRoot);
-            string currentPath = CanonicalizeContained(
-                storeRoot,
-                Path.Combine(storeRoot, "CURRENT"),
-                "The family store CURRENT pointer escapes its root.");
-            if (!File.Exists(currentPath))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.CurrentMissing,
-                    "The family store is missing its CURRENT pointer.");
-
-            string generationName = File.ReadAllText(currentPath).Trim();
-            if (!GenerationName.IsMatch(generationName))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.CurrentMalformed,
-                    $"The family store CURRENT pointer '{generationName}' is malformed.");
-
-            string generationPath = CanonicalizeContained(
-                storeRoot,
-                Path.Combine(storeRoot, generationName),
-                "The serving family-store generation escapes its root.");
-            if (!Directory.Exists(generationPath))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.GenerationMissing,
-                    $"The serving family-store generation '{generationName}' is missing.");
-
-            string storeDatabasePath = CanonicalizeContained(
-                generationPath,
-                Path.Combine(generationPath, "store.db"),
-                "The serving family-store database escapes its generation.");
-            if (!File.Exists(storeDatabasePath))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.StoreMissing,
-                    "The serving family-store generation has no store.db.");
-            string coordinatorDatabasePath = CanonicalizeContained(
-                storeRoot,
-                Path.Combine(storeRoot, "coord.db"),
-                "The family-store coordinator database escapes its root.");
-            if (!File.Exists(coordinatorDatabasePath))
-                throw new FamilyStoreReadException(
-                    FamilyStoreReadFailure.CoordinatorMissing,
-                    "The family store has no coordinator database.");
+            ServingStorePaths paths = ResolveServingStorePaths(binding);
+            string storeRoot = paths.StoreRoot;
+            string workspaceRoot = paths.WorkspaceRoot;
+            string generationName = paths.GenerationName;
+            string storeDatabasePath = paths.StoreDatabasePath;
+            string coordinatorDatabasePath = paths.CoordinatorDatabasePath;
 
             SqliteConnection connection = OpenReadOnly(storeDatabasePath);
             try
@@ -175,6 +142,41 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
                 "The family store could not be opened as a validated read session.",
+                ex);
+        }
+    }
+
+    public static WorkspaceFreshnessProbe Probe(StoreFamilyBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        if (binding.State != StoreBindingState.Ready)
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.BindingNotReady,
+                "The workspace family-store binding is not ready for reads.");
+
+        try
+        {
+            ServingStorePaths paths = ResolveServingStorePaths(binding);
+            using SqliteConnection connection = OpenReadOnly(paths.StoreDatabasePath);
+            ValidateStoreMetadata(ReadStoreMetadata(connection), binding);
+            (long generation, string hash) = ReadManifestIdentity(connection, binding.ViewId, paths.WorkspaceRoot);
+            long sequence = ReadStoreLogSequence(connection, binding.ViewId, generation);
+            return new WorkspaceFreshnessProbe(
+                sequence,
+                StoreInstanceId(binding.FamilyId, paths.GenerationName),
+                binding.ViewId,
+                generation,
+                hash);
+        }
+        catch (FamilyStoreReadException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or FormatException)
+        {
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.Corrupt,
+                "The family store could not be probed for freshness.",
                 ex);
         }
     }
@@ -338,6 +340,89 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             levelStamps.LevelStampL1,
             levelStamps.LevelStampL2,
             levelStamps.LevelStampL3);
+    }
+
+    private static (long Generation, string Hash) ReadManifestIdentity(
+        SqliteConnection connection,
+        string viewId,
+        string workspaceRoot)
+    {
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT v.root,v.current_generation,m.manifest_hash
+            FROM views AS v
+            LEFT JOIN manifests AS m
+              ON m.view_id=v.view_id AND m.generation=v.current_generation
+            WHERE v.view_id=$view_id
+            """;
+        command.Parameters.AddWithValue("$view_id", viewId);
+        using SqliteDataReader reader = command.ExecuteReader();
+        if (!reader.Read())
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.ViewNotFound,
+                $"The family store has no view '{viewId}'.");
+        if (!ArtifactRootIdentity.Matches(reader.GetString(0), workspaceRoot))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.ViewRootMismatch,
+                "The family-store view root does not match the workspace root.");
+        if (reader.IsDBNull(1) || reader.IsDBNull(2))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.ManifestMissing,
+                "The family-store view has no current manifest.");
+        return (reader.GetInt64(1), reader.GetString(2));
+    }
+
+    private static ServingStorePaths ResolveServingStorePaths(StoreFamilyBinding binding)
+    {
+        string storeRoot = PathCanonicalizer.CanonicalizeRoot(binding.StoreRoot);
+        string workspaceRoot = PathCanonicalizer.CanonicalizeRoot(binding.WorkspaceRoot);
+        string currentPath = CanonicalizeContained(
+            storeRoot,
+            Path.Combine(storeRoot, "CURRENT"),
+            "The family store CURRENT pointer escapes its root.");
+        if (!File.Exists(currentPath))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.CurrentMissing,
+                "The family store is missing its CURRENT pointer.");
+
+        string generationName = File.ReadAllText(currentPath).Trim();
+        if (!GenerationName.IsMatch(generationName))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.CurrentMalformed,
+                $"The family store CURRENT pointer '{generationName}' is malformed.");
+
+        string generationPath = CanonicalizeContained(
+            storeRoot,
+            Path.Combine(storeRoot, generationName),
+            "The serving family-store generation escapes its root.");
+        if (!Directory.Exists(generationPath))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.GenerationMissing,
+                $"The serving family-store generation '{generationName}' is missing.");
+
+        string storeDatabasePath = CanonicalizeContained(
+            generationPath,
+            Path.Combine(generationPath, "store.db"),
+            "The serving family-store database escapes its generation.");
+        if (!File.Exists(storeDatabasePath))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.StoreMissing,
+                "The serving family-store generation has no store.db.");
+        string coordinatorDatabasePath = CanonicalizeContained(
+            storeRoot,
+            Path.Combine(storeRoot, "coord.db"),
+            "The family-store coordinator database escapes its root.");
+        if (!File.Exists(coordinatorDatabasePath))
+            throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.CoordinatorMissing,
+                "The family store has no coordinator database.");
+        return new ServingStorePaths(
+            storeRoot,
+            workspaceRoot,
+            generationName,
+            storeDatabasePath,
+            coordinatorDatabasePath);
     }
 
     private static string ReadIndexLevel(
@@ -706,10 +791,25 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
                 FamilyStoreReadFailure.Corrupt,
                 "The exact resolution base file is missing.");
         var info = new FileInfo(basePath);
-        if (info.Length != fileBytes || !StringComparer.OrdinalIgnoreCase.Equals(Sha256(basePath), fileSha256))
+        if (info.Length != fileBytes)
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
                 "The exact resolution base file does not match its recorded identity.");
+        ResolutionBaseFileIdentity currentIdentity = new(
+            info.Length,
+            info.LastWriteTimeUtc.Ticks,
+            fileSha256);
+        if (!ValidatedResolutionBases.TryGetValue(basePath, out ResolutionBaseFileIdentity? cached) ||
+            !cached.Matches(currentIdentity))
+        {
+            if (!StringComparer.OrdinalIgnoreCase.Equals(Sha256(basePath), fileSha256))
+                throw new FamilyStoreReadException(
+                    FamilyStoreReadFailure.Corrupt,
+                    "The exact resolution base file does not match its recorded identity.");
+            if (ValidatedResolutionBases.Count >= 512)
+                ValidatedResolutionBases.Clear();
+            ValidatedResolutionBases[basePath] = currentIdentity;
+        }
 
         using SqliteCommand attach = connection.CreateCommand();
         attach.CommandText = "ATTACH DATABASE $base_path AS resolution_base";
@@ -870,5 +970,23 @@ public sealed class FamilyStoreReadSession : IWorkspaceReadSession
             throw new FamilyStoreReadException(
                 FamilyStoreReadFailure.Corrupt,
                 "The family store query returned no aggregate row.");
+    }
+
+    private sealed record ServingStorePaths(
+        string StoreRoot,
+        string WorkspaceRoot,
+        string GenerationName,
+        string StoreDatabasePath,
+        string CoordinatorDatabasePath);
+
+    private sealed record ResolutionBaseFileIdentity(
+        long FileBytes,
+        long LastWriteUtcTicks,
+        string Sha256)
+    {
+        public bool Matches(ResolutionBaseFileIdentity other) =>
+            FileBytes == other.FileBytes &&
+            LastWriteUtcTicks == other.LastWriteUtcTicks &&
+            StringComparer.OrdinalIgnoreCase.Equals(Sha256, other.Sha256);
     }
 }

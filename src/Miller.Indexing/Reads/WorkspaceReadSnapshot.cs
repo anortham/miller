@@ -1,5 +1,12 @@
 namespace Miller.Indexing.Reads;
 
+public sealed record WorkspaceFreshnessProbe(
+    long Revision,
+    string? StoreInstanceId,
+    string? ViewId,
+    long? ManifestGeneration = null,
+    string? ManifestHash = null);
+
 public enum WorkspaceReadMode
 {
     LegacyArtifact,

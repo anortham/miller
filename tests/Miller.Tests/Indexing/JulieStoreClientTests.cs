@@ -65,6 +65,27 @@ public sealed class JulieStoreClientTests
     }
 
     [Fact]
+    public void ShortImportRequestTimeoutDoesNotLowerMillersConfiguredHardCap()
+    {
+        var request = new StoreImportRequest(
+            StoreRoot: "/family",
+            FamilyId: "11111111-1111-4111-8111-111111111111",
+            ViewId: "view-a",
+            WorkspaceRoot: "/workspace",
+            Level: StoreLevel.Full,
+            Request: Controls(TimeSpan.FromSeconds(2)),
+            Scan: StoreScanControls.Default,
+            FromArtifact: null);
+
+        ExtractWaitPolicy policy = JulieStoreClient.CreateWaitPolicy(
+            request,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(ExtractWaitVerdict.HardCapExceeded, policy.Observe(TimeSpan.FromSeconds(5), 1));
+    }
+
+    [Fact]
     public void StoreProgressStampIncludesPublishedGenerationsAndExportOutput()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-" + Guid.NewGuid().ToString("N"));
@@ -127,6 +148,33 @@ public sealed class JulieStoreClientTests
             File.AppendAllBytes(Path.Combine(scratch, "scratch.part"), [7]);
             long after = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
 
+            Assert.NotEqual(before, after);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void BoundedProgressStampIsStableAndSeesNestedActivity()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "miller-store-progress-bounded-" + Guid.NewGuid().ToString("N"));
+        string nested = Path.Combine(root, "spool", "nested");
+        Directory.CreateDirectory(nested);
+        try
+        {
+            File.WriteAllBytes(Path.Combine(root, "coord.db"), [1]);
+            for (int i = 0; i < 513; i++)
+                File.WriteAllBytes(Path.Combine(nested, $"part-{i:D4}"), [1]);
+
+            long before = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
+            long unchanged = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
+            File.AppendAllBytes(Path.Combine(nested, "part-0000"), [2]);
+            long after = JulieStoreClient.StoreProgressStamp(root, progressPath: null, outputActivity: 0);
+
+            Assert.Equal(before, unchanged);
             Assert.NotEqual(before, after);
         }
         finally

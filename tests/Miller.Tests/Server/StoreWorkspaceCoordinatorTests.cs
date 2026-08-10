@@ -144,6 +144,23 @@ public sealed class StoreWorkspaceCoordinatorTests
     }
 
     [Fact]
+    public void StoreTimeoutOverrideOnlyAppliesToLongOperations()
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Import, "30"));
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Resolve, "00:00:30"));
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Update, "30"));
+        Assert.Equal(
+            TimeSpan.FromMinutes(5),
+            StoreWorkspaceCoordinator.RequestTimeout(StoreOperation.Delete, "30"));
+    }
+
+    [Fact]
     public void NewFamilyImportPassesMillersInvariantIgnoreFile()
     {
         string root = Path.Combine(Path.GetTempPath(), "miller-store-ignore-" + Guid.NewGuid().ToString("N"));

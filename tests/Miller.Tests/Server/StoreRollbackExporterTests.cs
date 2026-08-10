@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Miller.Indexing;
 using Miller.Indexing.Store;
 using Miller.Server.Workspaces;
@@ -252,6 +253,56 @@ public sealed class StoreRollbackExporterTests : IDisposable
         Assert.NotNull(StoreWorkspacePointer.Read(workspace));
     }
 
+    [Fact]
+    public void StartedMarkerNeverPromotesAnUnvalidatedStagedArtifact()
+    {
+        string workspace = Path.Combine(_root, "started-marker-workspace");
+        string miller = Path.Combine(workspace, ".miller");
+        Directory.CreateDirectory(miller);
+        string canonicalRoot = PathCanonicalizer.CanonicalizeRoot(workspace);
+        StoreWorkspacePointer.Write(
+            workspace,
+            new StoreFamilyBinding(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                Path.Combine(_root, "store"),
+                "view-a",
+                canonicalRoot,
+                StoreBindingState.Ready));
+        string legacy = Path.Combine(miller, "symbols.db");
+        string staged = FullRebuildPromotion.RebuildDbPathFor(legacy);
+        string exported = SymbolsLevelArtifact.Create(Path.Combine(_root, "exported-started"));
+        File.Copy(exported, staged);
+        string digest;
+        using (FileStream stream = File.OpenRead(staged))
+            digest = Convert.ToHexStringLower(SHA256.HashData(stream));
+        File.WriteAllLines(
+            Path.Combine(miller, "store-rollback.pending"),
+            [
+                "3",
+                "started",
+                "11111111-1111-1111-1111-111111111111",
+                Encode(Path.Combine(_root, "store")),
+                Encode("view-a"),
+                Encode(canonicalRoot),
+                Encode(legacy),
+                Encode(staged),
+                digest,
+                "",
+                "",
+                "",
+            ]);
+
+        StoreRollbackExportResult result = StoreRollbackExporter.ExportIfRequired(
+            workspace,
+            legacy,
+            new UnexpectedStoreClient());
+
+        Assert.False(result.Exported);
+        Assert.True(result.RequiresSourceRebuild);
+        Assert.False(File.Exists(legacy));
+        Assert.True(File.Exists(staged));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
@@ -263,4 +314,6 @@ public sealed class StoreRollbackExporterTests : IDisposable
         public StoreRequestResult Submit(StoreRequest request, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("The malformed pointer must be rejected before invoking julie-extract.");
     }
+
+    private static string Encode(string value) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value));
 }

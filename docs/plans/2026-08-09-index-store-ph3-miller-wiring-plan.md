@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use razorback:subagent-driven-development when subagent delegation is available. Fall back to razorback:executing-plans for single-task, tightly-sequential, or no-delegation runs.
 
-**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A21 review fixes complete 2026-08-10. This
+**Status:** A1-A7 cleanup complete 2026-08-09; A9.1-A9.4 and A15-A25 review fixes complete 2026-08-10. This
 wiring plan is retained as the implementation record; the durable lock/freshness and cursor-order
 amendments remain open, while Ph4 dashboard work and Ph5 physical validation/default-on decisions
 remain. The release candidate uses the published `julie-extract 2.31.2` patch.
@@ -66,7 +66,7 @@ remain. The release candidate uses the published `julie-extract 2.31.2` patch.
 
 **Security scope:** none declared; this plan adds no dependency, credential, network listener, or write surface outside existing local CLI/SQLite paths.
 
-**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing. The store import/resolve request timeout drives both the producer request and Miller's process hard cap, defaults to four hours (honoring `MILLER_EXTRACT_HARD_CAP`), accepts seconds or a `TimeSpan` through `MILLER_STORE_REQUEST_TIMEOUT`, and is a liveness setting rather than a performance gate.
+**Replay/metric evidence:** hard gates are zero dedicated-vs-store row mismatches, byte-identical lexical output, exactly-once request effects, and no stale-artifact rollback serving. Fast-suite elapsed time is report-only; repeatable performance evidence and physical-byte measurements belong to a local machine, with CI checking correctness rather than timing. The store import/resolve request timeout drives the producer request and may raise Miller's process hard cap above its four-hour default (honoring `MILLER_EXTRACT_HARD_CAP`); update/delete retain five minutes, numeric values are seconds, and the setting is liveness behavior rather than a performance gate. Store-mode freshness polling uses the cheap store-log probe and local performance validation covers idle polling, base hashing, and physical-byte behavior.
 
 **Escalation triggers:** any public-output drift runs the corresponding CLI/MCP contract suite; any sidecar-key or ranking change runs search/content/vector parity; any bootstrap/refresh change runs all Scale workspace lifecycle tests; any package/pin change runs restore and release build.
 

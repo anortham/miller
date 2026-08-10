@@ -17,9 +17,15 @@ public sealed record StoreRollbackExportResult(
 internal sealed class StoreRollbackRetryException(Exception innerException)
     : IOException("Store rollback export failed; bootstrap will retry: " + innerException.Message, innerException);
 
+internal sealed record StoreRollbackViewIdentity(
+    long ManifestGeneration,
+    string ManifestHash,
+    long StoreLogSequence);
+
 public static class StoreRollbackExporter
 {
-    private const string PendingMarkerSchema = "2";
+    private const string PendingMarkerSchema = "3";
+    private const string PreviousPendingMarkerSchema = "2";
     private const string LegacyPendingMarkerSchema = "1";
     private const string PendingMarkerStarted = "started";
     private const string PendingMarkerReady = "ready";
@@ -115,8 +121,13 @@ public static class StoreRollbackExporter
             pointer.ViewId,
             pointer.WorkspaceRoot,
             StoreBindingState.Ready);
-        using (FamilyStoreReadSession.Open(binding))
+        StoreRollbackViewIdentity initialView;
+        using (FamilyStoreReadSession session = FamilyStoreReadSession.Open(binding))
         {
+            initialView = new StoreRollbackViewIdentity(
+                session.Visibility.ManifestGeneration,
+                session.Visibility.ManifestHash,
+                session.Visibility.StoreLogSequence);
         }
 
         string outputPath = FullRebuildPromotion.RebuildDbPathFor(legacyDatabasePath);
@@ -130,7 +141,8 @@ public static class StoreRollbackExporter
                 pointer,
                 outputPath,
                 expectedSha256: null,
-                state: PendingMarkerStarted);
+                state: PendingMarkerStarted,
+                viewIdentity: initialView);
             StoreRequestResult result = client.Submit(new StoreExportRequest(
                 pointer.StoreRoot,
                 pointer.FamilyId.ToString("D"),
@@ -156,13 +168,34 @@ public static class StoreRollbackExporter
                     $"julie-extract store export reported '{exportedPath}' instead of '{outputPath}'.");
             }
             ValidateExportArtifact(outputPath);
+            if (result.Manifest.Generation is not { } exportedGeneration ||
+                result.Manifest.Hash is not { Length: > 0 } exportedHash)
+            {
+                throw new StoreWorkspaceOperationException(
+                    StoreOperation.Export,
+                    new StoreFailureClass("invalid_export_report"),
+                    "julie-extract store export did not report a manifest identity.");
+            }
+            WorkspaceFreshnessProbe currentView = FamilyStoreReadSession.Probe(binding);
+            if (currentView.ManifestGeneration != exportedGeneration ||
+                !string.Equals(currentView.ManifestHash, exportedHash, StringComparison.Ordinal))
+            {
+                throw new StoreWorkspaceOperationException(
+                    StoreOperation.Export,
+                    new StoreFailureClass("store_view_advanced"),
+                    "The family-store view advanced while rollback export was materialized.");
+            }
             exportValidated = true;
             StoreRollbackCommitResult commit = CommitValidatedExport(
                 workspaceRoot,
                 legacyDatabasePath,
                 FullRebuildPromotion.Promote,
                 pointer,
-                stagedExportPath: outputPath);
+                stagedExportPath: outputPath,
+                viewIdentity: new StoreRollbackViewIdentity(
+                    exportedGeneration,
+                    exportedHash,
+                    currentView.Revision));
             return new StoreRollbackExportResult(
                 true,
                 commit.Warning,
@@ -171,7 +204,16 @@ public static class StoreRollbackExporter
         catch
         {
             if (!exportValidated)
-                FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
+            {
+                try
+                {
+                    FullRebuildPromotion.PrepareRebuildTarget(legacyDatabasePath);
+                    _ = TryDeletePendingMarker(workspaceRoot);
+                }
+                catch
+                {
+                }
+            }
             throw;
         }
     }
@@ -182,7 +224,8 @@ public static class StoreRollbackExporter
         Action<string> promote,
         StoreWorkspacePointerDocument? pointer = null,
         Action<string>? deletePointer = null,
-        string? stagedExportPath = null)
+        string? stagedExportPath = null,
+        StoreRollbackViewIdentity? viewIdentity = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
@@ -206,7 +249,13 @@ public static class StoreRollbackExporter
                     currentPointer,
                     sourcePath,
                     expectedSha256,
-                    PendingMarkerReady);
+                    PendingMarkerReady,
+                    viewIdentity);
+                if (viewIdentity is not null && !CurrentStoreViewMatches(currentPointer, viewIdentity))
+                {
+                    throw new StoreRollbackRetryException(new IOException(
+                        "The family-store view advanced before rollback promotion."));
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -240,11 +289,26 @@ public static class StoreRollbackExporter
         if (pending is null || !pending.Matches(workspaceRoot, legacyDatabasePath, pointer))
             return null;
 
+        bool viewMatches = pending.IsLegacy ||
+            !pending.HasViewIdentity ||
+            CurrentStoreViewMatches(pointer, pending);
+        if (!viewMatches)
+        {
+            return new StoreRollbackExportResult(
+                false,
+                "The pending store rollback marker names a store view that is no longer current; " +
+                "Miller will rebuild from source.",
+                RequiresSourceRebuild: true);
+        }
+
         bool legacyReady = pending.IsLegacy
             ? IsValidArtifact(legacyDatabasePath, expectedSha256: null)
             : pending.State == PendingMarkerReady &&
+              !string.IsNullOrWhiteSpace(pending.ExpectedSha256) &&
               IsValidArtifact(legacyDatabasePath, pending.ExpectedSha256);
-        if (!legacyReady && pending.SourceArtifactPath is { } sourcePath &&
+        if (!legacyReady && pending.State == PendingMarkerReady &&
+            pending.HasViewIdentity &&
+            pending.SourceArtifactPath is { } sourcePath &&
             string.Equals(
                 Path.GetFullPath(sourcePath),
                 Path.GetFullPath(FullRebuildPromotion.RebuildDbPathFor(legacyDatabasePath)),
@@ -281,13 +345,48 @@ public static class StoreRollbackExporter
         return new StoreRollbackExportResult(true, markerWarning);
     }
 
+    private static bool CurrentStoreViewMatches(
+        StoreWorkspacePointerDocument pointer,
+        PendingRollbackMarker pending)
+    {
+        return pending.HasViewIdentity && CurrentStoreViewMatches(
+            pointer,
+            new StoreRollbackViewIdentity(
+                pending.ManifestGeneration!.Value,
+                pending.ManifestHash!,
+                pending.StoreLogSequence!.Value));
+    }
+
+    private static bool CurrentStoreViewMatches(
+        StoreWorkspacePointerDocument pointer,
+        StoreRollbackViewIdentity expected)
+    {
+        try
+        {
+            WorkspaceFreshnessProbe current = FamilyStoreReadSession.Probe(new StoreFamilyBinding(
+                pointer.FamilyId,
+                pointer.StoreRoot,
+                pointer.ViewId,
+                pointer.WorkspaceRoot,
+                StoreBindingState.Ready));
+            return current.ManifestGeneration == expected.ManifestGeneration &&
+                string.Equals(current.ManifestHash, expected.ManifestHash, StringComparison.Ordinal) &&
+                current.Revision == expected.StoreLogSequence;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     private static void WritePendingMarker(
         string workspaceRoot,
         string legacyDatabasePath,
         StoreWorkspacePointerDocument pointer,
         string? sourceArtifactPath,
         string? expectedSha256,
-        string state)
+        string state,
+        StoreRollbackViewIdentity? viewIdentity = null)
     {
         string[] lines =
         [
@@ -300,6 +399,9 @@ public static class StoreRollbackExporter
             Encode(Path.GetFullPath(legacyDatabasePath)),
             Encode(sourceArtifactPath ?? string.Empty),
             expectedSha256 ?? string.Empty,
+            viewIdentity?.ManifestGeneration.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            viewIdentity?.ManifestHash ?? string.Empty,
+            viewIdentity?.StoreLogSequence.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
         ];
         Exception? failure = null;
         foreach (string path in PendingMarkerPaths(workspaceRoot))
@@ -359,19 +461,41 @@ public static class StoreRollbackExporter
             {
                 return ReadMarkerIdentity(
                     lines[2], lines[3], lines[4], lines[5], legacyFamilyId,
-                    PendingMarkerReady, null, null, length, ticks, isLegacy: true);
+                    PendingMarkerReady, null, null, length, ticks,
+                    null, null, null, isLegacy: true);
             }
 
-            if (lines.Length != 9 || lines[0] != PendingMarkerSchema ||
+            if ((lines.Length != 9 && lines.Length != 12) ||
+                (lines[0] != PreviousPendingMarkerSchema && lines[0] != PendingMarkerSchema) ||
                 (lines[1] != PendingMarkerStarted && lines[1] != PendingMarkerReady) ||
                 !Guid.TryParse(lines[2], out Guid familyId))
                 return null;
 
             string? sourceArtifactPath = Decode(lines[7]);
             string? expectedSha256 = string.IsNullOrWhiteSpace(lines[8]) ? null : lines[8];
+            long? manifestGeneration = null;
+            string? manifestHash = null;
+            long? storeLogSequence = null;
+            if (lines.Length == 12)
+            {
+                bool hasViewIdentity = !string.IsNullOrWhiteSpace(lines[9]) ||
+                    !string.IsNullOrWhiteSpace(lines[10]) ||
+                    !string.IsNullOrWhiteSpace(lines[11]);
+                if (hasViewIdentity)
+                {
+                    if (!long.TryParse(lines[9], NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedGeneration) ||
+                        string.IsNullOrWhiteSpace(lines[10]) ||
+                        !long.TryParse(lines[11], NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedSequence))
+                        return null;
+                    manifestGeneration = parsedGeneration;
+                    manifestHash = lines[10];
+                    storeLogSequence = parsedSequence;
+                }
+            }
             return ReadMarkerIdentity(
                 lines[3], lines[4], lines[5], lines[6], familyId,
-                lines[1], sourceArtifactPath, expectedSha256, null, null, isLegacy: false);
+                lines[1], sourceArtifactPath, expectedSha256, null, null,
+                manifestGeneration, manifestHash, storeLogSequence, isLegacy: false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
         {
@@ -390,6 +514,9 @@ public static class StoreRollbackExporter
         string? expectedSha256,
         long? legacyLength,
         long? legacyLastWriteUtcTicks,
+        long? manifestGeneration,
+        string? manifestHash,
+        long? storeLogSequence,
         bool isLegacy)
     {
         string? storeRoot = Decode(storeRootEncoded);
@@ -411,6 +538,9 @@ public static class StoreRollbackExporter
                 expectedSha256,
                 legacyLength,
                 legacyLastWriteUtcTicks,
+                manifestGeneration,
+                manifestHash,
+                storeLogSequence,
                 isLegacy);
     }
 
@@ -493,8 +623,16 @@ public static class StoreRollbackExporter
         string? ExpectedSha256,
         long? LegacyLength,
         long? LegacyLastWriteUtcTicks,
+        long? ManifestGeneration,
+        string? ManifestHash,
+        long? StoreLogSequence,
         bool IsLegacy)
     {
+        public bool HasViewIdentity =>
+            ManifestGeneration is not null &&
+            !string.IsNullOrWhiteSpace(ManifestHash) &&
+            StoreLogSequence is not null;
+
         public bool Matches(
             string workspaceRoot,
             string legacyDatabasePath,

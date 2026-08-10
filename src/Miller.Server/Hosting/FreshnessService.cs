@@ -10,21 +10,20 @@ namespace Miller.Server.Hosting;
 
 /// <summary>
 /// The revision poller (m3-design decision-2/-5, §Components/3, implementation-order step 9). Runs in EVERY
-/// instance (leader and readers alike). On an interval it reads the latest persisted revision + artifact
-/// identity through a TRANSIENT <see cref="FreshnessReader"/> and, when the writer moved ahead or the artifact
-/// file was replaced by a full rebuild, rebuilds a fresh <see cref="MillerRepositoryIndex"/> via
-/// <see cref="IndexRebuilder"/> and atomically <see cref="IndexHolder.Swap"/>s it in (the pure decision lives
-/// in <see cref="FreshnessPoller"/>). This is how a reader instance converges on the leader's writes — no IPC,
-/// no daemon in the read path.
+/// instance (leader and readers alike). On an interval it reads the latest persisted revision + store-generation
+/// identity through a cheap freshness probe and, when the writer moved ahead or the artifact file was replaced by
+/// a full rebuild, rebuilds a fresh <see cref="MillerRepositoryIndex"/> via <see cref="IndexRebuilder"/> and
+/// atomically <see cref="IndexHolder.Swap"/>s it in (the pure decision lives in <see cref="FreshnessPoller"/>).
+/// This is how a reader instance converges on the leader's writes — no IPC, no daemon in the read path.
 ///
-/// <para><b>The per-poll open is load-bearing.</b> A full (force) rebuild PROMOTES a fresh file over
+/// <para><b>The per-poll probe is load-bearing.</b> A full (force) rebuild PROMOTES a fresh file over
 /// <c>symbols.db</c> (<see cref="FullRebuildPromotion"/>, 2026-06-11 Eros field report #2). A long-lived
 /// connection survives that rename holding an fd to the unlinked OLD inode, so every later poll would re-read
 /// the dead artifact and freshness would silently freeze forever — the same trap that made every per-operation
-/// read open <c>Pooling=false</c> (the 2026-06-11 Eros fleet finding). Opening per poll always reads the
-/// CURRENT file; the open is microseconds against the 500ms cadence, and on Windows it also avoids pinning a
-/// near-permanent handle that would block the promote's overwrite-move (SQLite opens without
-/// FILE_SHARE_DELETE).</para>
+/// read open <c>Pooling=false</c> (the 2026-06-11 Eros fleet finding). The lightweight probe resolves CURRENT on
+/// every tick; a full store session is opened only when the generation/view identity changes or a rebuild is
+/// required. The rebuild session is still transient, so Windows never gets a near-permanent handle that blocks
+/// promotion.</para>
 ///
 /// <para>The holder is exposed (<see cref="LatestObservedRevision"/>) so the telemetry filter can compute the
 /// coarse <c>index_fresh</c> signal; the leader could also poke an immediate poll after its own extract, but
@@ -52,6 +51,7 @@ public sealed class FreshnessService : BackgroundService
     // The latest revision observed by the most recent successful poll. Cached so the per-tool-call index_fresh
     // probe does not run its own SQLite query on the hot path; refreshed every poll tick. -1 = not yet polled.
     private long _lastObservedRevision = -1;
+    private string? _lastObservedStoreIdentity;
 
     public FreshnessService(
         IndexBootstrapService bootstrap,
@@ -93,6 +93,7 @@ public sealed class FreshnessService : BackgroundService
                 }
 
                 Interlocked.Exchange(ref _lastObservedRevision, -1);
+                _lastObservedStoreIdentity = null;
 
                 while (!stoppingToken.IsCancellationRequested && generation == _bootstrap.BindingGeneration)
                 {
@@ -193,17 +194,26 @@ public sealed class FreshnessService : BackgroundService
         WorkspaceContext workspace = _bootstrap.Workspace;
         string workspaceRoot = workspace.CanonicalRoot ?? workspace.WorkspaceRoot;
         bool storeEnabled = _storeEnabled();
-        long latest;
-        string? artifactId;
-        using (WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
-                   dbPath,
-                   workspaceRoot,
-                   workspace.WorkspaceId,
-                   storeEnabled))
+        WorkspaceFreshnessProbe probe = WorkspaceReadSessionFactory.Probe(
+            dbPath,
+            workspaceRoot,
+            workspace.WorkspaceId,
+            storeEnabled);
+        long latest = probe.Revision;
+        string? artifactId = null;
+        string? storeIdentity = probe.StoreInstanceId is { } instanceId
+            ? string.Join('\0', instanceId, probe.ViewId)
+            : null;
+        if (storeEnabled && !string.Equals(storeIdentity, _lastObservedStoreIdentity, StringComparison.Ordinal))
         {
-            latest = reader.Snapshot.Freshness.StoreLogSequence ?? reader.Snapshot.Freshness.Revision;
+            using WorkspaceReadHandle reader = WorkspaceReadSessionFactory.Open(
+                dbPath,
+                workspaceRoot,
+                workspace.WorkspaceId,
+                storeEnabled);
             artifactId = reader.Snapshot.IndexIdentity;
         }
+        _lastObservedStoreIdentity = storeIdentity;
         Interlocked.Exchange(ref _lastObservedRevision, latest);
 
         // M8 §D4: the observed-vs-built comparison every poll makes — at Debug so it costs nothing at the default

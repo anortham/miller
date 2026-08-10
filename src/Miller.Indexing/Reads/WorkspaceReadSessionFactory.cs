@@ -44,6 +44,40 @@ public static class WorkspaceReadSessionFactory
         return new WorkspaceReadHandle(FamilyStoreReadSession.Open(binding, workspaceId));
     }
 
+    public static WorkspaceFreshnessProbe Probe(
+        string legacyDatabasePath,
+        string workspaceRoot,
+        string? workspaceId,
+        bool? storeEnabled = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(legacyDatabasePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        bool enabled = storeEnabled ?? StoreEnabledFromEnvironment();
+        if (!enabled)
+        {
+            using LegacyArtifactReadSession session = LegacyArtifactReadSession.Open(
+                legacyDatabasePath,
+                workspaceRoot,
+                workspaceId);
+            return new WorkspaceFreshnessProbe(
+                session.Snapshot.Freshness.Revision,
+                StoreInstanceId: null,
+                ViewId: null);
+        }
+
+        StoreWorkspacePointerDocument pointer = StoreWorkspacePointer.Read(workspaceRoot)
+            ?? throw new FamilyStoreReadException(
+                FamilyStoreReadFailure.BindingNotReady,
+                $"Store mode is enabled but workspace '{workspaceRoot}' has no .miller/store.json pointer.");
+        var binding = new StoreFamilyBinding(
+            pointer.FamilyId,
+            pointer.StoreRoot,
+            pointer.ViewId,
+            pointer.WorkspaceRoot,
+            StoreBindingState.Ready);
+        return FamilyStoreReadSession.Probe(binding);
+    }
+
     public static bool StoreEnabledFromEnvironment()
     {
         string? value = Environment.GetEnvironmentVariable(StoreEnvironmentVariable);

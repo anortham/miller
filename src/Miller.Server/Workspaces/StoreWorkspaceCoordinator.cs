@@ -428,12 +428,20 @@ public sealed class StoreWorkspaceCoordinator : IExtractOps
 
     private static TimeSpan RequestTimeout(StoreOperation operation)
     {
-        string? configured = Environment.GetEnvironmentVariable("MILLER_STORE_REQUEST_TIMEOUT");
-        if (ExtractWaitPolicy.ParseDuration(configured) is { } parsed
-            && parsed > TimeSpan.Zero
+        return RequestTimeout(
+            operation,
+            Environment.GetEnvironmentVariable("MILLER_STORE_REQUEST_TIMEOUT"));
+    }
+
+    internal static TimeSpan RequestTimeout(StoreOperation operation, string? configured)
+    {
+        if ((operation is StoreOperation.Import or StoreOperation.Resolve) &&
+            ExtractWaitPolicy.ParseDuration(configured) is { } parsed
             && parsed.TotalSeconds <= int.MaxValue
             && parsed.TotalSeconds == Math.Truncate(parsed.TotalSeconds))
+        {
             return parsed;
+        }
 
         return operation is StoreOperation.Import or StoreOperation.Resolve
             ? DefaultLongRequestTimeout

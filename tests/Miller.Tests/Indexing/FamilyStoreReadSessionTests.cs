@@ -63,6 +63,20 @@ public sealed class FamilyStoreReadSessionTests
     }
 
     [Fact]
+    public void FreshnessProbeReadsStoreCursorWithoutOpeningAProjection()
+    {
+        using StoreFixture fixture = StoreFixture.Create();
+
+        WorkspaceFreshnessProbe probe = FamilyStoreReadSession.Probe(fixture.Binding);
+
+        Assert.Equal(2, probe.Revision);
+        Assert.Equal("11111111-1111-4111-8111-111111111111:gen-001", probe.StoreInstanceId);
+        Assert.Equal("view-a", probe.ViewId);
+        Assert.Equal(2, probe.ManifestGeneration);
+        Assert.Equal("manifest-current", probe.ManifestHash);
+    }
+
+    [Fact]
     public void FamilyMismatchRefusesBeforeOpeningAReadSession()
     {
         using StoreFixture fixture = StoreFixture.Create();

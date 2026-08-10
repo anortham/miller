@@ -180,7 +180,7 @@ public sealed class JulieStoreClient : IJulieStoreClient
     {
         ArgumentNullException.ThrowIfNull(request);
         TimeSpan effectiveHardTimeout = request.Operation is StoreOperation.Import or StoreOperation.Resolve
-            ? Max(stallTimeout, RequestControls(request).Timeout)
+            ? Max(hardTimeout, RequestControls(request).Timeout)
             : hardTimeout;
         return new ExtractWaitPolicy(stallTimeout, effectiveHardTimeout);
     }
@@ -267,7 +267,9 @@ public sealed class JulieStoreClient : IJulieStoreClient
             stamp = unchecked(stamp * 31 + rootInfo.LastWriteTimeUtc.Ticks);
             int entryCount = 0;
             bool samplingBounded = false;
-            foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.TopDirectoryOnly))
+            long maxLength = 0;
+            long maxLastWriteUtcTicks = 0;
+            foreach (string entry in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories))
             {
                 if (entryCount++ >= MaxProgressEntries)
                 {
@@ -293,13 +295,19 @@ public sealed class JulieStoreClient : IJulieStoreClient
                     : new FileInfo(canonicalEntry);
                 long length = info is FileInfo file && file.Exists ? file.Length : 0;
                 long ticks = info.Exists ? info.LastWriteTimeUtc.Ticks : 0;
+                maxLength = Math.Max(maxLength, length);
+                maxLastWriteUtcTicks = Math.Max(maxLastWriteUtcTicks, ticks);
                 stamp = unchecked(stamp * 31 + StringComparer.Ordinal.GetHashCode(canonicalEntry));
                 stamp = unchecked(stamp * 31 + length);
                 stamp = unchecked(stamp * 31 + ticks);
             }
 
             if (samplingBounded)
-                stamp = unchecked(stamp * 31 + Stopwatch.GetTimestamp());
+            {
+                stamp = unchecked(stamp * 31 + entryCount);
+                stamp = unchecked(stamp * 31 + maxLength);
+                stamp = unchecked(stamp * 31 + maxLastWriteUtcTicks);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
