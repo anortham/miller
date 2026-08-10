@@ -17,7 +17,11 @@ public sealed class StoreSidecarStampTests : IDisposable
         Directory.CreateDirectory(_root);
         string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view/with/slashes");
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -51,7 +55,11 @@ public sealed class StoreSidecarStampTests : IDisposable
         Directory.CreateDirectory(_root);
         string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Vector, "view-a");
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -98,13 +106,21 @@ public sealed class StoreSidecarStampTests : IDisposable
         Directory.CreateDirectory(_root);
         string databasePath = StoreSidecarCatalog.PathFor(_root, StoreSidecarKind.Search, "view-a");
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
             connection.Open();
         StoreSidecarCatalog.Stamp(
             databasePath,
             StoreSidecarStamp.FromSnapshot(StoreSidecarKind.Search, Snapshot("manifest-a", sequence: 4)));
 
-        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -137,7 +153,11 @@ public sealed class StoreSidecarStampTests : IDisposable
         WorkspaceReadSnapshot snapshot = Snapshot("manifest-a", sequence: 17);
         string databasePath = VectorSidecar.PathForStore(_root, snapshot.ViewId);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
-        using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString()))
         {
             connection.Open();
         }

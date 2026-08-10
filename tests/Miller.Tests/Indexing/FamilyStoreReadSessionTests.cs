@@ -282,8 +282,11 @@ public sealed class FamilyStoreReadSessionTests
     private static void AppendStoreLog(StoreFixture fixture, long sequence, string? viewId, long? versionId)
     {
         string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText =
@@ -298,8 +301,11 @@ public sealed class FamilyStoreReadSessionTests
     private static void DeleteManifest(StoreFixture fixture, long generation)
     {
         string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "DELETE FROM manifests WHERE view_id='view-a' AND generation=$generation;";
@@ -310,8 +316,11 @@ public sealed class FamilyStoreReadSessionTests
     private static void DeleteStoreMetadata(StoreFixture fixture, string key)
     {
         string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "DELETE FROM store_meta WHERE key=$key;";
@@ -322,8 +331,11 @@ public sealed class FamilyStoreReadSessionTests
     private static void UpdateStoreMetadata(StoreFixture fixture, string key, string value)
     {
         string databasePath = Path.Combine(fixture.Binding.StoreRoot, "gen-001", "store.db");
-        using var connection = new SqliteConnection(
-            new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Pooling = false,
+        }.ToString());
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
         command.CommandText = "UPDATE store_meta SET value=$value WHERE key=$key;";
@@ -376,7 +388,11 @@ public sealed class FamilyStoreReadSessionTests
 
         private static void CreateCoordinator(string path)
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Pooling = false,
+            }.ToString());
             connection.Open();
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText = "CREATE TABLE consumer_cursors (consumer_id TEXT PRIMARY KEY, generation_name TEXT NOT NULL, store_log_sequence INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT;";
@@ -385,7 +401,11 @@ public sealed class FamilyStoreReadSessionTests
 
         private static void CreateStore(string path, string workspace)
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Pooling = false,
+            }.ToString());
             connection.Open();
             using SqliteCommand command = connection.CreateCommand();
             command.CommandText =

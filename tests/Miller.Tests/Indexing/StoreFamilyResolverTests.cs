@@ -452,6 +452,7 @@ public sealed class StoreFamilyResolverTests : IDisposable
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = Path.Combine(generation, "store.db"),
+            Pooling = false,
         }.ToString());
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();

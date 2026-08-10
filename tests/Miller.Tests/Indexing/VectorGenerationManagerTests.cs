@@ -15,6 +15,10 @@ public sealed class VectorGenerationManagerTests
 {
     private const string ActiveTag = "aaaaaaaaaaaaaaaa";
     private const string ShadowTag = "bbbbbbbbbbbbbbbb";
+    private static readonly string WorkspaceRoot = Path.Combine(
+        Path.GetTempPath(),
+        "miller-vector-generation-manager-tests",
+        "workspace");
 
     private static readonly DateTimeOffset Now = new(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
 
@@ -24,7 +28,7 @@ public sealed class VectorGenerationManagerTests
         (VectorGenerationManager manager, _) = Manager();
 
         Assert.Equal(
-            Path.Combine("/ws", ".miller", $"vectors.gen-{ActiveTag}.db"),
+            Path.Combine(WorkspaceRoot, ".miller", $"vectors.gen-{ActiveTag}.db"),
             manager.RetainedPathFor(ActiveTag));
     }
 
@@ -39,14 +43,18 @@ public sealed class VectorGenerationManagerTests
     [Fact]
     public void ExplicitActivePath_KeepsEveryGenerationBesideThatArtifact()
     {
-        string activePath = Path.Combine("/store", "sidecars", "vector-view.db");
+        string storeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "miller-vector-generation-manager-tests",
+            "store");
+        string activePath = Path.Combine(storeRoot, "sidecars", "vector-view.db");
 
         VectorGenerationManager manager = VectorGenerationManager.ForActivePath(activePath);
 
         Assert.Equal(activePath, manager.ActivePath);
         Assert.Equal(activePath + ".rebuild", manager.ShadowPath);
         Assert.Equal(
-            Path.Combine("/store", "sidecars", $"vector-view.gen-{ActiveTag}.db"),
+            Path.Combine(storeRoot, "sidecars", $"vector-view.gen-{ActiveTag}.db"),
             manager.RetainedPathFor(ActiveTag));
     }
 
@@ -495,7 +503,7 @@ public sealed class VectorGenerationManagerTests
     private static (VectorGenerationManager Manager, FakeGenerationFiles Files) Manager()
     {
         var files = new FakeGenerationFiles();
-        return (new VectorGenerationManager("/ws", files), files);
+        return (new VectorGenerationManager(WorkspaceRoot, files), files);
     }
 
     private static RetainedGeneration Retained(string tag, DateTimeOffset retainedAt) =>
