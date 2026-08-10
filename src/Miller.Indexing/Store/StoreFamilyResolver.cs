@@ -91,6 +91,11 @@ public sealed class StoreFamilyResolver
                 family = ResolveFamily(facts);
                 viewId = MintViewId();
             }
+            else if (HasPublishedGeneration(family.StoreRoot))
+            {
+                throw new StoreBindingMismatchException(
+                    "The family store has a published generation but is missing its CURRENT pointer.");
+            }
             else
             {
                 viewId = member.ViewId;
@@ -269,6 +274,24 @@ public sealed class StoreFamilyResolver
         while (reader.Read())
             rows.Add(new StoreCatalogView(reader.GetString(0), reader.GetString(1)));
         return new StoreCatalog(familyId, rows);
+    }
+
+    private static bool HasPublishedGeneration(string storeRoot)
+    {
+        if (!Directory.Exists(storeRoot))
+            return false;
+
+        foreach (string generationPath in Directory.EnumerateDirectories(storeRoot))
+        {
+            string generationName = Path.GetFileName(generationPath);
+            if (generationName.StartsWith("gen-", StringComparison.Ordinal) &&
+                File.Exists(Path.Combine(generationPath, "store.db")))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static Dictionary<string, string> ReadMetadata(SqliteConnection connection)

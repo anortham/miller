@@ -1,7 +1,7 @@
 # v4 Store Contract — versioned index store + views
 
-**Status: AMENDED v4.11 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
-The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.11 amendments record
+**Status: AMENDED v4.12 2026-08-10** (original freeze 2026-08-07; cycle-3 review record in §17).
+The original freeze and its G3b decision remain historical evidence. The v4.1 through v4.12 amendments record
 execution-contract corrections discovered after the first producer/Miller implementation review;
 the corrections are normative and must not be represented as completed until the named gates pass.
 Post-amendment changes require another versioned amendment and a recorded reason, not silent edits.
@@ -119,16 +119,17 @@ cursor-incremental sidecar gates remain open.
 | A35 — replayed import mode | After an interrupted import is replayed and committed, the follow-up import is a fresh store-view reconcile and never repeats `--from-artifact` against the populated view. | Implemented and verified in coordinator tests |
 | A36 — request-control normalization | The hard-cap-derived import/resolve request timeout is normalized to whole producer seconds, and malformed-pointer inspection does not acquire a writer lease for a read-only result. | Implemented and verified in coordinator/rollback tests |
 
-## 0. v4.11 post-freeze amendment register
+## 0. v4.12 post-freeze amendment register
 
-The final paired review found one store-off recovery loop and one durable resolve replay seam. These amendments
-are normative for the v1.18.0 release candidate; A5 remains fail-closed for a valid pointer whose serving store
-cannot be opened.
+The final paired review found two store recovery defects after the v4.11 fixes. These amendments are normative for
+the v1.18.0 release candidate; A5 remains fail-closed for a valid pointer whose serving store cannot be opened.
 
 | Amendment | Normative correction | State on 2026-08-10 |
 |---|---|---|
 | A40 — source-reconciliation completion | When store-off bootstrap receives a source-rebuild-required rollback result, it revalidates that result under the acquired writer lease, runs the source reconciliation, then removes the workspace pointer and pending/recovery markers under that same lease before legacy binding. A pointer whose serving store is valid but unopenable still fails closed under A5; a replacement pointer observed after cleanup forces retry. | Implemented and verified in store-off bootstrap Scale coverage |
 | A41 — resolve replay completion | A resumed terminal `store resolve` is submitted once with its durable family/view request id and then once more with a fresh id after the journal entry is completed. The stable family/view fingerprint preserves mixed-version journal continuity while replay cannot leave resolution silently stale. | Implemented and verified in coordinator tests |
+| A44 — published generation without CURRENT | A valid workspace pointer whose family root contains a published `gen-*/store.db` but no `CURRENT` pointer fails closed without being replanned or reimported. An empty planned family root remains recoverable for its first import. | Implemented and verified in resolver tests |
+| A45 — cross-workspace rollback cleanup | Store-off cross-workspace source reconciliation removes the workspace pointer and pending/recovery markers under the held workspace writer lease before reporting the legacy artifact usable. Marker cleanup warnings remain an actionable failed refresh. | Implemented and verified in refresh tests |
 
 ---
 

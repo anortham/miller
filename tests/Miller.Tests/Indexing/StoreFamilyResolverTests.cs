@@ -235,6 +235,37 @@ public sealed class StoreFamilyResolverTests : IDisposable
     }
 
     [Fact]
+    public void PublishedGenerationWithoutCurrentRefusesInsteadOfReplanningThePointer()
+    {
+        Directory.CreateDirectory(_directory);
+        using WorkspaceRegistry registry = OpenRegistry("ws-a", "root-a");
+        var ids = new Queue<Guid>(
+        [
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]);
+        var resolver = Resolver(registry, ids);
+        WorkspaceRootFacts facts = Facts("ws-a", "root-a", "/repo/.git", Utc(1));
+        StoreFamilyBinding planned = resolver.ResolveOrCreate(facts);
+        WriteStoreCatalog(planned.StoreRoot, planned.FamilyId, planned.ViewId, facts.WorkspaceRoot);
+        File.Delete(Path.Combine(planned.StoreRoot, "CURRENT"));
+        StoreFamilyRegistryRow familyBefore = Assert.IsType<StoreFamilyRegistryRow>(
+            registry.GetStoreFamily(planned.FamilyId));
+        StoreMemberRegistryRow memberBefore = Assert.IsType<StoreMemberRegistryRow>(
+            registry.GetStoreMember("ws-a"));
+        StoreWorkspacePointerDocument pointerBefore = Assert.IsType<StoreWorkspacePointerDocument>(
+            StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+
+        StoreBindingMismatchException error = Assert.Throws<StoreBindingMismatchException>(
+            () => resolver.ResolveOrCreate(facts));
+
+        Assert.Contains("CURRENT", error.Message, StringComparison.Ordinal);
+        Assert.Equal(familyBefore, registry.GetStoreFamily(planned.FamilyId));
+        Assert.Equal(memberBefore, registry.GetStoreMember("ws-a"));
+        Assert.Equal(pointerBefore, StoreWorkspacePointer.Read(facts.WorkspaceRoot));
+    }
+
+    [Fact]
     public void ServingGenerationSymlinkEscapeRefusesWithoutRegistryMutation()
     {
         if (OperatingSystem.IsWindows())

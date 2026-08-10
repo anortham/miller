@@ -48,7 +48,7 @@ public sealed class CrossWorkspaceRefreshService
     private readonly Func<string, string, IScanFailurePolicy> _failurePolicyFor;
     private readonly Func<bool> _storeEnabled;
     private readonly IJulieStoreClient? _storeClient;
-    private readonly Action<string> _deleteStorePointer;
+    private readonly Func<string, string, IDisposable, string?> _deleteStorePointerAfterSourceRebuild;
     private readonly IndexerSidecarConverger _sidecarConverger;
 
     // Appended to the eligibility verdict's reason when a one-shot refresh is refused (D2): the remedy is a
@@ -164,7 +164,20 @@ public sealed class CrossWorkspaceRefreshService
             ?? ((dbPath, canonicalRoot) => PersistedScanFailurePolicy.For(dbPath, canonicalRoot));
         _storeEnabled = storeEnabled ?? WorkspaceReadSessionFactory.StoreEnabledFromEnvironment;
         _storeClient = storeClient;
-        _deleteStorePointer = deleteStorePointer ?? StoreWorkspacePointer.Delete;
+        if (deleteStorePointer is null)
+        {
+            _deleteStorePointerAfterSourceRebuild =
+                static (root, databasePath, lease) =>
+                    StoreRollbackExporter.DeletePointerAfterSourceRebuild(root, databasePath, lease);
+        }
+        else
+        {
+            _deleteStorePointerAfterSourceRebuild = (root, _, _) =>
+            {
+                deleteStorePointer(root);
+                return null;
+            };
+        }
         _sidecarConverger = new IndexerSidecarConverger(
             _sidecar,
             _contentSidecar,
@@ -377,12 +390,21 @@ public sealed class CrossWorkspaceRefreshService
             {
                 try
                 {
-                    _deleteStorePointer(row.CanonicalRoot);
+                    string? markerCleanupWarning = _deleteStorePointerAfterSourceRebuild(
+                        row.CanonicalRoot,
+                        row.IndexDbPath,
+                        lease);
+                    if (markerCleanupWarning is not null)
+                    {
+                        pointerCleanupError =
+                            "Source reconciliation completed, but rollback cleanup was incomplete: " +
+                            markerCleanupWarning;
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     pointerCleanupError =
-                        $"Source reconciliation completed, but the store pointer could not be removed: {ex.Message}";
+                        $"Source reconciliation completed, but rollback cleanup failed: {ex.Message}";
                 }
             }
 

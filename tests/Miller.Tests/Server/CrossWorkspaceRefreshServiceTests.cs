@@ -284,6 +284,37 @@ public sealed class CrossWorkspaceRefreshServiceTests : IDisposable
     }
 
     [Fact]
+    public void Refresh_MalformedStorePointer_ClearsRollbackMarkersAfterSourceReconciliation()
+    {
+        using var registry = WorkspaceRegistry.Open(_registryDbPath);
+        string root = NewRoot("malformed-store-pointer-markers");
+        string dbPath = Path.Combine(root, ".miller", "symbols.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        File.WriteAllText(Path.Combine(root, ".miller", "store.json"), "not-json");
+        File.WriteAllText(Path.Combine(root, ".miller", "store-rollback.pending"), "stale-pending");
+        File.WriteAllText(Path.Combine(root, ".miller", "store-rollback.recovery"), "stale-recovery");
+        registry.UpsertSeen("target-ws", "target-111111111111", root, dbPath);
+        registry.MarkScanned("target-ws", revision: 1);
+        var service = NewService(
+            registry,
+            scan: (_, _, force, _, _) =>
+            {
+                Assert.True(force);
+                return Report(root, dbPath, "target-ws", revision: 2);
+            },
+            acquireLock: _ => new NoopLease(),
+            storeClient: new UnexpectedStoreClient(),
+            storeEnabled: static () => false);
+
+        WorkspaceRefreshResult result = service.Refresh("target-ws");
+
+        Assert.Equal(WorkspaceRefreshStatus.Refreshed, result.Status);
+        Assert.False(File.Exists(Path.Combine(root, ".miller", "store.json")));
+        Assert.False(File.Exists(Path.Combine(root, ".miller", "store-rollback.pending")));
+        Assert.False(File.Exists(Path.Combine(root, ".miller", "store-rollback.recovery")));
+    }
+
+    [Fact]
     public void Refresh_MalformedStorePointer_HonorsAutomaticBackoffThenReconciles()
     {
         using var registry = WorkspaceRegistry.Open(_registryDbPath);
